@@ -1,0 +1,79 @@
+import { practical } from '../knowledge/KnowledgeSystem';
+import type { HistoricalEvent, Settlement, SimulationState, TornadoState } from '../types';
+import { tornadoDamage, tornadoExposure } from './Tornado';
+
+type WeatherEvent = Omit<HistoricalEvent, 'id' | 'month'>;
+
+export function applyTornadoConsequences(state: SimulationState, tornado: TornadoState): WeatherEvent[] {
+  const events: WeatherEvent[] = [];
+  for (const settlement of state.settlements.filter((entry) => entry.alive)) {
+    let damaged = 0;
+    let destroyed = 0;
+    const resilience = practical(settlement, 'stone-composites') * 0.6 + settlement.infrastructure.workshops * 0.2;
+    for (const plot of (settlement.structurePlots ?? []).slice(0, settlement.buildings)) {
+      const exposure = tornadoExposure(tornado, { x: plot.worldX, z: plot.worldZ }, plot.radius);
+      const loss = tornadoDamage(tornado, exposure, resilience);
+      if (loss <= 0.02 || plot.condition === 0) continue;
+      const before = plot.condition;
+      plot.condition = Math.max(0, before - loss);
+      if (plot.condition < 0.15) plot.condition = 0;
+      plot.damagedMonth = state.month;
+      damaged += 1;
+      if (plot.condition === 0) destroyed += 1;
+    }
+    if (!damaged) continue;
+    settlement.weatherRecoverySince ??= state.month;
+    events.push({ type: 'natural-catastrophe', location: tornado.path[0], locationId: settlement.id,
+      actors: [settlement.id], causes: ['severe-thunderstorm', 'tornado-path'],
+      context: { weatherEventId: tornado.id, damagedStructures: damaged, destroyedStructures: destroyed, intensity: tornado.intensity },
+      outcome: 'Exposed structures require repair with local labor and materials.', affectedPopulation: 0,
+      magnitude: tornado.intensity, significance: Math.min(0.95, 0.5 + destroyed * 0.08 + damaged * 0.02),
+      tags: ['weather', 'tornado', 'local-damage'],
+      summary: `A tornado damages ${damaged} structures in ${settlement.name}; ${destroyed} are destroyed.` });
+  }
+  let damagedSegments = 0;
+  for (const segment of Object.values(state.transportation.segments)) {
+    if (segment.mode === 'water' || segment.status !== 'complete') continue;
+    let exposure = 0;
+    for (let index = 1; index < segment.points.length; index += 1) {
+      const start = segment.points[index - 1]!;
+      const end = segment.points[index]!;
+      const samples = Math.max(1, Math.ceil(Math.hypot(end.x - start.x, end.z - start.z) / Math.max(0.05, tornado.width / 3)));
+      for (let sample = 0; sample <= samples; sample += 1) {
+        exposure = Math.max(exposure, tornadoExposure(tornado, { x: start.x + (end.x - start.x) * sample / samples,
+          z: start.z + (end.z - start.z) * sample / samples }));
+      }
+    }
+    const damage = tornadoDamage(tornado, exposure, segment.mode === 'rail' ? 0.7 : 0.35);
+    if (damage < 0.08) continue;
+    segment.work = Math.max(0, segment.cost * (1 - damage));
+    segment.status = 'under-construction';
+    damagedSegments += 1;
+  }
+  if (damagedSegments) {
+    state.transportation.revision += 1;
+    events.push({ type: 'natural-catastrophe', location: tornado.path[0], actors: [], causes: ['tornado-path'],
+      context: { weatherEventId: tornado.id, damagedSegments }, outcome: 'Transport segments need reconstruction before service resumes.',
+      affectedPopulation: 0, magnitude: tornado.intensity, significance: 0.6, tags: ['weather', 'tornado', 'transport'],
+      summary: `A tornado disrupts ${damagedSegments} transport segments.` });
+  }
+  return events;
+}
+
+export function repairWeatherDamage(settlement: Settlement, builders: number, month: number): number {
+  if (builders <= 0) return 0;
+  let budget = Math.min(0.12, builders * 0.015);
+  let repaired = 0;
+  for (const plot of settlement.structurePlots ?? []) {
+    if (plot.condition >= 1 || plot.damagedMonth === month) continue;
+    const work = Math.min(budget, 1 - plot.condition, settlement.resources.wood / 8, settlement.resources.minerals / 1.5);
+    if (work <= 0) break;
+    plot.condition = Math.min(1, plot.condition + work);
+    settlement.resources.wood -= work * 8;
+    settlement.resources.minerals -= work * 1.5;
+    budget -= work;
+    repaired += work;
+    if (budget <= 0) break;
+  }
+  return repaired;
+}
