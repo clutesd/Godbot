@@ -87,6 +87,7 @@ describe('PersonMissionDirector', () => {
 
     const mission = missionForPerson(merchant);
     expect(mission?.kind).toBe('trade-delegation');
+    expect(mission?.stage).toBe('outbound');
     expect(mission?.originId).toBe('a');
     expect(mission?.targetId).toBe('b');
     expect(describeMission(merchant, state)).toContain('traveling from Natala to Aven');
