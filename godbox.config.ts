@@ -1,5 +1,4 @@
 import type { GodboxConfigInput } from './src/config';
-import { installLifeProjectHistorian } from './src/historian/LifeProjectHistorian';
 import { installWatcherHistorian } from './src/historian/WatcherHistorian';
 import { installLifeProjects } from './src/sim/people/LifeProjectSystem';
 import { installPersonMissions } from './src/sim/people/PersonMissionSystem';
@@ -12,7 +11,8 @@ import { presetConfig, timePresetConfig, type GodboxPresetName, type GodboxTimeP
 export const GODBOX_PRESET: GodboxPresetName = 'default';
 export const GODBOX_TIME_PRESET: GodboxTimePresetName = 'documentary';
 
-// Presentation-only voice layer. It never changes simulation authority or deterministic history.
+// One presentation pipeline owns Watcher narration so missions, projects, threads and memory
+// compete for attention instead of independently prepending text to the same scene.
 installWatcherHistorian();
 // A small, deterministic agency layer lets representative people embody trade, diplomacy,
 // knowledge exchange and war without replacing the aggregate systems that remain authoritative.
@@ -20,7 +20,6 @@ installPersonMissions();
 // A bounded biographical layer gives selected adults persistent, era-plausible ambitions.
 // Projects can interpret and follow authoritative history but never create discoveries or institutions themselves.
 installLifeProjects();
-installLifeProjectHistorian();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
