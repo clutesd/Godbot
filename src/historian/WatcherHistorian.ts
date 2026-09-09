@@ -1,4 +1,4 @@
-import type { HistoricalEvent, HistoricalEventType, SimulationState } from '../sim/types';
+import type { HistoricalEvent, SimulationState } from '../sim/types';
 import { describeMission, missionForPerson } from '../sim/people/PersonMissionSystem';
 import { DeepHistoricalMemory, attachDeepHistory, deepHistoryFromWatcherSnapshot } from './DeepHistoricalMemory';
 import { Historian } from './Historian';
