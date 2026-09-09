@@ -1,5 +1,6 @@
 import type { HistoricalEvent, HistoricalEventType, SimulationState } from '../sim/types';
 import { describeMission, missionForPerson } from '../sim/people/PersonMissionSystem';
+import { DeepHistoricalMemory, attachDeepHistory, deepHistoryFromWatcherSnapshot } from './DeepHistoricalMemory';
 import { Historian } from './Historian';
 import { NarrativeThreadEngine } from './NarrativeThreadEngine';
 import { WatcherMind, type WatcherMemorySnapshot } from './WatcherMind';
@@ -9,6 +10,7 @@ import type { HistorianStatement, ObservationCandidate } from './types';
 interface WatcherRuntime {
   mind: WatcherMind;
   threads: NarrativeThreadEngine;
+  deepHistory: DeepHistoricalMemory;
   hydratedState?: SimulationState;
 }
 
@@ -18,18 +20,24 @@ let installed = false;
 function runtimeFor(historian: Historian): WatcherRuntime {
   let runtime = runtimes.get(historian);
   if (!runtime) {
-    runtime = { mind: new WatcherMind(), threads: new NarrativeThreadEngine() };
+    runtime = { mind: new WatcherMind(), threads: new NarrativeThreadEngine(), deepHistory: new DeepHistoricalMemory() };
     runtimes.set(historian, runtime);
   }
   return runtime;
 }
 
+function runtimeSnapshot(runtime: WatcherRuntime): WatcherMemorySnapshot {
+  return attachDeepHistory(runtime.mind.snapshot(), runtime.deepHistory.snapshot());
+}
+
 export function restoreWatcherMemory(historian: Historian, snapshot?: WatcherMemorySnapshot): void {
-  runtimeFor(historian).mind.restore(snapshot);
+  const runtime = runtimeFor(historian);
+  runtime.mind.restore(snapshot);
+  runtime.deepHistory = deepHistoryFromWatcherSnapshot(snapshot);
 }
 
 export function snapshotWatcherMemory(historian: Historian): WatcherMemorySnapshot {
-  return runtimeFor(historian).mind.snapshot();
+  return runtimeSnapshot(runtimeFor(historian));
 }
 
 export function installWatcherHistorian(): void {
@@ -42,15 +50,24 @@ export function installWatcherHistorian(): void {
     const runtime = runtimeFor(this);
     if (runtime.hydratedState !== state) {
       const persisted = watcherMemoryForState(state);
-      if (persisted) runtime.mind.restore(persisted);
+      if (persisted) {
+        runtime.mind.restore(persisted);
+        runtime.deepHistory = deepHistoryFromWatcherSnapshot(persisted);
+      } else {
+        runtime.deepHistory = new DeepHistoricalMemory();
+      }
       runtime.hydratedState = state;
     }
+
+    runtime.deepHistory.observe(state);
     runtime.mind.observe(scene, state, this.predictions);
-    registerWatcherMemory(state, runtime.mind.snapshot());
+    registerWatcherMemory(state, runtimeSnapshot(runtime));
 
     const originalText = scene.statement.text;
     const originalSources = [...scene.statement.sourceEventIds];
     const originalEntities = [...scene.statement.sourceEntityIds];
+    const originalMemorySources = [...(scene.statement.sourceMemoryIds ?? [])];
+    const originalEpistemicStatus = scene.statement.epistemicStatus;
     const originalInterest = scene.interest;
     deepenObservation(runtime, scene, state);
 
@@ -58,8 +75,11 @@ export function installWatcherHistorian(): void {
       scene.statement.text = originalText;
       scene.statement.sourceEventIds = originalSources;
       scene.statement.sourceEntityIds = originalEntities;
+      scene.statement.sourceMemoryIds = originalMemorySources;
+      scene.statement.epistemicStatus = originalEpistemicStatus;
       scene.interest = originalInterest;
     }
+    registerWatcherMemory(state, runtimeSnapshot(runtime));
     return scene;
   };
 }
@@ -95,6 +115,7 @@ function deepenObservation(runtime: WatcherRuntime, scene: ObservationCandidate,
       threadContext.thread.entityIds,
       state.month,
     );
+    runtime.deepHistory.rememberThread(threadContext.thread);
   }
 
   if (scene.event) {
@@ -112,7 +133,19 @@ function deepenObservation(runtime: WatcherRuntime, scene: ObservationCandidate,
     additions.push(memoryRemark.text);
   }
 
-  registerWatcherMemory(state, runtime.mind.snapshot());
+  if (runtime.mind.sequence % 11 === 0 && additions.length < 2) {
+    const deepRemark = runtime.deepHistory.callbackFor(scene, state);
+    if (deepRemark && deepRemark.sourceMemoryIds.every((id) => runtime.deepHistory.hasMemoryId(id))) {
+      statement.sourceMemoryIds = unique([...(statement.sourceMemoryIds ?? []), ...deepRemark.sourceMemoryIds]);
+      if (deepRemark.provenance === 'historical-interpretation' && statement.sourceEntityIds.length > 0) {
+        statement.epistemicStatus = 'probabilistic-inference';
+      }
+      if (deepRemark.provenance !== 'historical-interpretation' || statement.epistemicStatus === 'probabilistic-inference') {
+        additions.push(deepRemark.text);
+      }
+    }
+  }
+
   if (additions.length === 0) return;
   statement.text = `${additions.slice(0, 2).join(' ')} ${statement.text}`.trim();
 }
@@ -194,9 +227,9 @@ function callbackText(event: HistoricalEvent, earlier: HistoricalEvent): string 
 }
 
 function eventNoun(type: HistoricalEventType, withArticle = false): string {
-  const readable = type.replaceAll('-', ' ');
-  if (!withArticle) return readable;
-  return `${/^[aeiou]/i.test(readable) ? 'an' : 'a'} ${readable}`;
+  const readableType = type.replaceAll('-', ' ');
+  if (!withArticle) return readableType;
+  return `${/^[aeiou]/i.test(readableType) ? 'an' : 'a'} ${readableType}`;
 }
 
 function ordinal(value: number): string {
