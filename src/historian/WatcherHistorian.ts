@@ -3,11 +3,13 @@ import { describeMission, missionForPerson } from '../sim/people/PersonMissionSy
 import { Historian } from './Historian';
 import { NarrativeThreadEngine } from './NarrativeThreadEngine';
 import { WatcherMind, type WatcherMemorySnapshot } from './WatcherMind';
+import { registerWatcherMemory, watcherMemoryForState } from './WatcherMemoryRegistry';
 import type { HistorianStatement, ObservationCandidate } from './types';
 
 interface WatcherRuntime {
   mind: WatcherMind;
   threads: NarrativeThreadEngine;
+  hydratedState?: SimulationState;
 }
 
 const runtimes = new WeakMap<Historian, WatcherRuntime>();
@@ -30,11 +32,6 @@ export function snapshotWatcherMemory(historian: Historian): WatcherMemorySnapsh
   return runtimeFor(historian).mind.snapshot();
 }
 
-/**
- * Installs a grounded narrative layer over the Historian.
- * The simulation remains authoritative; the Watcher may remember, question and revise interpretations,
- * but every rendered statement still has to pass Historian provenance validation.
- */
 export function installWatcherHistorian(): void {
   if (installed) return;
   installed = true;
@@ -43,13 +40,19 @@ export function installWatcherHistorian(): void {
   Historian.prototype.chooseScene = function watcherChooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
     const scene = chooseScene.call(this, state, focusEventId);
     const runtime = runtimeFor(this);
+    if (runtime.hydratedState !== state) {
+      const persisted = watcherMemoryForState(state);
+      if (persisted) runtime.mind.restore(persisted);
+      runtime.hydratedState = state;
+    }
     runtime.mind.observe(scene, state, this.predictions);
+    registerWatcherMemory(state, runtime.mind.snapshot());
 
     const originalText = scene.statement.text;
     const originalSources = [...scene.statement.sourceEventIds];
     const originalEntities = [...scene.statement.sourceEntityIds];
     const originalInterest = scene.interest;
-    deepenObservation(this, runtime, scene, state);
+    deepenObservation(runtime, scene, state);
 
     if (!this.validateStatement(scene.statement, state)) {
       scene.statement.text = originalText;
@@ -61,7 +64,7 @@ export function installWatcherHistorian(): void {
   };
 }
 
-function deepenObservation(historian: Historian, runtime: WatcherRuntime, scene: ObservationCandidate, state: SimulationState): void {
+function deepenObservation(runtime: WatcherRuntime, scene: ObservationCandidate, state: SimulationState): void {
   const statement = scene.statement;
   const additions: string[] = [];
 
@@ -109,6 +112,7 @@ function deepenObservation(historian: Historian, runtime: WatcherRuntime, scene:
     additions.push(memoryRemark.text);
   }
 
+  registerWatcherMemory(state, runtime.mind.snapshot());
   if (additions.length === 0) return;
   statement.text = `${additions.slice(0, 2).join(' ')} ${statement.text}`.trim();
 }
@@ -136,45 +140,28 @@ function eventPerspective(sequence: number, event: HistoricalEvent, state: Simul
 
 function thresholdPerspective(sequence: number, event: HistoricalEvent, state: SimulationState): string | undefined {
   switch (event.type) {
-    case 'atomic-threshold':
-      return 'For generations, power was limited by ordinary combustion. That boundary has now been crossed.';
-    case 'first-orbit':
-      return 'For the first time, this civilization has placed part of itself beyond the ground that made it.';
-    case 'offworld-settlement':
-      return 'The sky is no longer merely something these people look toward; it now contains a place they inhabit.';
-    case 'interplanetary-transition':
-      return 'What began as one inhabited world has become a civilization measured across worlds.';
-    case 'machine-intelligence-transition':
-      return 'A new kind of participant has entered history, and the consequences are not yet knowable.';
-    case 'nuclear-weapons-developed':
-      return 'Knowledge has become the ability to erase in moments what generations required to build.';
+    case 'atomic-threshold': return 'For generations, power was limited by ordinary combustion. That boundary has now been crossed.';
+    case 'first-orbit': return 'For the first time, this civilization has placed part of itself beyond the ground that made it.';
+    case 'offworld-settlement': return 'The sky is no longer merely something these people look toward; it now contains a place they inhabit.';
+    case 'interplanetary-transition': return 'What began as one inhabited world has become a civilization measured across worlds.';
+    case 'machine-intelligence-transition': return 'A new kind of participant has entered history, and the consequences are not yet knowable.';
+    case 'nuclear-weapons-developed': return 'Knowledge has become the ability to erase in moments what generations required to build.';
     case 'nuclear-use':
     case 'nuclear-exchange':
       return state.history.some((candidate) => candidate.type === 'war-declared' && candidate.month < event.month)
         ? 'I have recorded war before. The scale available here changes what war can mean.'
         : 'The destructive scale of this moment has no ordinary precedent in the record.';
-    case 'civilization-collapse':
-      return 'I watched generations build the systems now coming apart.';
-    case 'civilization-recovery':
-      return 'Collapse did not end this story. Something survived long enough to begin again.';
-    case 'post-biological-transition':
-      return 'The civilization remains continuous with its past, even as the beings carrying that continuity change.';
-    case 'first-contact':
-      return 'Two histories that had developed apart now become part of one another.';
-    case 'settlement-founded':
-      return sequence % 3 === 0 ? 'Another name enters the map. I will remember whether it endures.' : undefined;
-    case 'settlement-abandoned':
-      return 'A place can remain on the land after it has disappeared from ordinary life.';
-    case 'knowledge-rediscovered':
-      return 'What was lost has returned. The second discovery carries the memory of the first absence.';
-    case 'archive-destroyed':
-      return 'A civilization can lose part of itself without losing a single living body: it can lose what it remembers.';
-    case 'planetary-stability':
-      return 'Survival has lasted long enough to become a pattern rather than a moment.';
-    case 'observation-lost':
-      return 'For once, even the record cannot tell me what followed.';
-    default:
-      return undefined;
+    case 'civilization-collapse': return 'I watched generations build the systems now coming apart.';
+    case 'civilization-recovery': return 'Collapse did not end this story. Something survived long enough to begin again.';
+    case 'post-biological-transition': return 'The civilization remains continuous with its past, even as the beings carrying that continuity change.';
+    case 'first-contact': return 'Two histories that had developed apart now become part of one another.';
+    case 'settlement-founded': return sequence % 3 === 0 ? 'Another name enters the map. I will remember whether it endures.' : undefined;
+    case 'settlement-abandoned': return 'A place can remain on the land after it has disappeared from ordinary life.';
+    case 'knowledge-rediscovered': return 'What was lost has returned. The second discovery carries the memory of the first absence.';
+    case 'archive-destroyed': return 'A civilization can lose part of itself without losing a single living body: it can lose what it remembers.';
+    case 'planetary-stability': return 'Survival has lasted long enough to become a pattern rather than a moment.';
+    case 'observation-lost': return 'For once, even the record cannot tell me what followed.';
+    default: return undefined;
   }
 }
 
@@ -201,12 +188,8 @@ function relatedEarlierEvent(event: HistoricalEvent, state: SimulationState): Hi
 
 function callbackText(event: HistoricalEvent, earlier: HistoricalEvent): string {
   const years = Math.max(1, Math.floor((event.month - earlier.month) / 12));
-  if (event.causes.includes(earlier.id)) {
-    return `The roots of this moment reach back ${years.toLocaleString()} years, to ${eventNoun(earlier.type, true)}.`;
-  }
-  if (event.locationId && earlier.locationId === event.locationId) {
-    return `I remember this place ${years.toLocaleString()} years ago, when the record marked ${eventNoun(earlier.type, true)} here.`;
-  }
+  if (event.causes.includes(earlier.id)) return `The roots of this moment reach back ${years.toLocaleString()} years, to ${eventNoun(earlier.type, true)}.`;
+  if (event.locationId && earlier.locationId === event.locationId) return `I remember this place ${years.toLocaleString()} years ago, when the record marked ${eventNoun(earlier.type, true)} here.`;
   return `These lives or institutions touched the record together ${years.toLocaleString()} years ago, during ${eventNoun(earlier.type, true)}.`;
 }
 
