@@ -115,11 +115,12 @@ export class PersonMissionDirector {
   private prune(state: SimulationState): void {
     for (const [id, entry] of this.active) {
       const { person, mission } = entry;
-      if (!person.alive) {
+      if (!person.alive && !terminal(mission)) {
         mission.stage = 'aborted';
+        mission.completedMonth = state.month;
         mission.outcome = 'the traveler died before returning';
       }
-      if (terminal(mission) && state.month - (mission.completedMonth ?? state.month) >= 3) {
+      if (terminal(mission) && state.month - (mission.completedMonth ?? mission.startedMonth) >= 3) {
         missionByPerson.delete(person);
         this.active.delete(id);
       }
@@ -198,7 +199,7 @@ export class PersonMissionDirector {
       const target = this.settlement(state, relation.b);
       if (!origin || !target || this.hasMission('diplomatic-envoy', relation.id, origin.id)) continue;
       if (!relation.allied && relation.trust < 0.52 && relation.hostility > 0.38) continue;
-      const person = this.pickPerson(state, origin.id, ['administrator', 'keeper', 'priest', 'merchant'], `${relation.id}:envoy`, (candidate) =>
+      const person = this.pickPerson(state, origin.id, ['administrator', 'priest', 'merchant', 'ritual-specialist'], `${relation.id}:envoy`, (candidate) =>
         candidate.traits.sociability * 0.28 + candidate.traits.cooperation * 0.24 + candidate.traits.patience * 0.16 + candidate.prestige * 0.18);
       if (!person) continue;
       const purpose = relation.allied
@@ -223,7 +224,7 @@ export class PersonMissionDirector {
       const origin = knowledgeA > knowledgeB ? a : b;
       const target = knowledgeA > knowledgeB ? b : a;
       if (this.hasMission('knowledge-exchange', route.id, origin.id)) continue;
-      const person = this.pickPerson(state, origin.id, ['scholar', 'researcher', 'scientist', 'keeper'], `${route.id}:knowledge`, (candidate) =>
+      const person = this.pickPerson(state, origin.id, ['scholar', 'researcher', 'scientist', 'administrator'], `${route.id}:knowledge`, (candidate) =>
         candidate.traits.curiosity * 0.34 + candidate.traits.cooperation * 0.2 + candidate.traits.conscientiousness * 0.15 + candidate.prestige * 0.12);
       if (!person) continue;
       this.startMission(state, person, {
