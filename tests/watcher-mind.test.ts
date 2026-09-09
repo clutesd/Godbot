@@ -87,6 +87,26 @@ describe('Persistent Watcher mind', () => {
     }
   });
 
+  it('does not mutate authoritative history, stats, resources, relations, or wars', () => {
+    const simulation = new Simulation({ seed: 'watcher-read-only', startingPopulation: 180 });
+    simulation.step(24);
+    const settlement = simulation.state.settlements.find((item) => item.alive)!;
+    const before = {
+      history: structuredClone(simulation.state.history),
+      stats: structuredClone(simulation.state.stats),
+      settlements: structuredClone(simulation.state.settlements),
+      relations: structuredClone(simulation.state.relations),
+      wars: structuredClone(simulation.state.wars),
+    };
+    const mind = new WatcherMind();
+    mind.observe(scene(settlement.id, settlement.name, simulation.state.month), simulation.state, []);
+    expect(simulation.state.history).toEqual(before.history);
+    expect(simulation.state.stats).toEqual(before.stats);
+    expect(simulation.state.settlements).toEqual(before.settlements);
+    expect(simulation.state.relations).toEqual(before.relations);
+    expect(simulation.state.wars).toEqual(before.wars);
+  });
+
   it('round-trips through the run archive and restores memory for a resumed state', () => {
     const simulation = new Simulation({ seed: 'watcher-resume', startingPopulation: 120 });
     const settlement = simulation.state.settlements[0]!;
