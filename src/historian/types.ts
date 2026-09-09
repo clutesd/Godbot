@@ -41,6 +41,8 @@ export interface HistorianStatement {
   sourceEventIds: string[];
   sourceEntityIds: string[];
   sourceArchiveIds: string[];
+  /** Bounded compressed-history provenance. The Watcher validates these before enrichment. */
+  sourceMemoryIds?: string[];
   claims: HistorianClaimSet;
   voiceAssetId?: string;
 }
