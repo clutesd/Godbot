@@ -519,23 +519,37 @@ export class WatcherMind {
   }
 
   private sanitize(snapshot: WatcherMemorySnapshot): WatcherMemorySnapshot {
-    const base = emptyWatcherMemorySnapshot();
     const copy: WatcherMemorySnapshot = {
-      ...base,
+      ...emptyWatcherMemorySnapshot(),
       ...structuredClone(snapshot),
       version: 1,
       subjects: structuredClone(snapshot.subjects ?? []).slice(0, WATCHER_MEMORY_LIMITS.subjects),
       questions: structuredClone(snapshot.questions ?? []).slice(0, WATCHER_MEMORY_LIMITS.questions),
       beliefs: structuredClone(snapshot.beliefs ?? []).slice(0, WATCHER_MEMORY_LIMITS.beliefs),
       predictions: structuredClone(snapshot.predictions ?? []).slice(0, WATCHER_MEMORY_LIMITS.predictions),
-      processedEventIdsAtMonth: structuredClone(snapshot.processedEventIdsAtMonth ?? []).slice(-WATCHER_MEMORY_LIMITS.processedEventRefs),
+      processedEventIdsAtMonth: unique(structuredClone(snapshot.processedEventIdsAtMonth ?? [])).slice(-WATCHER_MEMORY_LIMITS.processedEventRefs),
     };
-    const prior = this.memory;
-    this.memory = copy;
-    this.compact();
-    const sanitized = this.memory;
-    this.memory = prior;
-    return sanitized;
+    copy.subjects = copy.subjects.map((subject) => ({
+      ...subject,
+      interestReasons: unique(subject.interestReasons).slice(-WATCHER_MEMORY_LIMITS.reasonsPerSubject),
+      sourceEventIds: unique(subject.sourceEventIds).slice(-WATCHER_MEMORY_LIMITS.eventRefsPerSubject),
+    }));
+    copy.questions = copy.questions.map((question) => ({
+      ...question,
+      entityIds: unique(question.entityIds).slice(-8),
+      evidenceEventIds: unique(question.evidenceEventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerQuestion),
+    }));
+    copy.beliefs = copy.beliefs.map((belief) => ({
+      ...belief,
+      entityIds: unique(belief.entityIds).slice(-8),
+      supportingEventIds: unique(belief.supportingEventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief),
+      contradictingEventIds: unique(belief.contradictingEventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief),
+    }));
+    copy.predictions = copy.predictions.map((prediction) => ({
+      ...prediction,
+      subjectIds: unique(prediction.subjectIds).slice(-WATCHER_MEMORY_LIMITS.subjectsPerPrediction),
+    }));
+    return copy;
   }
 
   private subjectKind(id: string, state: SimulationState): WatcherSubjectKind {
