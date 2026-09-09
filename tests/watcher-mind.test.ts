@@ -110,12 +110,14 @@ describe('Persistent Watcher mind', () => {
   it('round-trips through the run archive and restores memory for a resumed state', () => {
     const simulation = new Simulation({ seed: 'watcher-resume', startingPopulation: 120 });
     const settlement = simulation.state.settlements[0]!;
+    const identity = createRunIdentity(simulation.config, simulation.state, 1, '2026-01-01T00:00:00.000Z');
+    // Production constructs the run builder before the Watcher starts observing the world.
+    const builder = new RunRecordBuilder(identity, simulation.config, simulation.state);
     const mind = new WatcherMind();
     mind.observe(scene(settlement.id, settlement.name, 0), simulation.state, []);
     const snapshot = mind.snapshot();
     registerWatcherMemory(simulation.state, snapshot);
-    const identity = createRunIdentity(simulation.config, simulation.state, 1, '2026-01-01T00:00:00.000Z');
-    const record = new RunRecordBuilder(identity, simulation.config, simulation.state).update(simulation.state);
+    const record = builder.update(simulation.state);
     expect(record.watcherMemory).toEqual(snapshot);
 
     const resumed = new Simulation(record.configuration);
