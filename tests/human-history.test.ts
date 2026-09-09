@@ -235,6 +235,8 @@ describe('Human history Watcher integration', () => {
     simulation.state.month = 7 * 12;
     deep.observe(simulation.state); human.observe(simulation.state, deep);
     expect(human.themes()[0]?.kind).toBe('trade-interdependence');
+    const earlyTrade = human.themes().find((theme) => theme.kind === 'trade-interdependence');
+    expect(earlyTrade).toBeDefined();
 
     for (let index = 0; index < 60; index += 1) {
       simulation.state.history.push(historicalEvent(`war-${index}`, (20 + index) * 12, 'war-declared', simulation, { significance: 0.8 }));
@@ -242,7 +244,9 @@ describe('Human history Watcher integration', () => {
     simulation.state.month = 90 * 12;
     deep.observe(simulation.state); human.observe(simulation.state, deep);
     expect(human.themes()[0]?.kind).toBe('militarization');
-    expect(human.themes().find((theme) => theme.kind === 'trade-interdependence')?.revisionCount).toBeGreaterThan(0);
+    const laterTrade = human.themes().find((theme) => theme.kind === 'trade-interdependence');
+    expect(laterTrade).toBeDefined();
+    expect(laterTrade!.score).toBeLessThan(earlyTrade!.score);
   });
 
   it('keeps human-history derivation deterministic', () => {
