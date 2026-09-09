@@ -126,6 +126,14 @@ function deepenObservation(runtime: WatcherRuntime, scene: ObservationCandidate,
     additions.push('I have watched certainty fail too often to call this destiny.');
   }
 
+  if (scene.event && runtime.mind.sequence % 13 === 0 && additions.length < 2) {
+    const causal = causalPerspective(runtime.deepHistory, scene.event);
+    if (causal) {
+      statement.sourceMemoryIds = unique([...(statement.sourceMemoryIds ?? []), ...causal.sourceMemoryIds]);
+      additions.push(causal.text);
+    }
+  }
+
   const memoryRemark = runtime.mind.remark(scene, state);
   if (memoryRemark) {
     statement.sourceEventIds = unique([...statement.sourceEventIds, ...memoryRemark.sourceEventIds]);
@@ -148,6 +156,32 @@ function deepenObservation(runtime: WatcherRuntime, scene: ObservationCandidate,
 
   if (additions.length === 0) return;
   statement.text = `${additions.slice(0, 2).join(' ')} ${statement.text}`.trim();
+}
+
+function causalPerspective(deepHistory: DeepHistoricalMemory, event: HistoricalEvent): { text: string; sourceMemoryIds: string[] } | undefined {
+  const targetMemory = deepHistory.eventMemory(event.id);
+  if (!targetMemory) return undefined;
+  const directSources = event.causes
+    .map((causeId) => ({ assessment: deepHistory.causalAssessment(causeId, event.id), memory: deepHistory.eventMemory(causeId) }))
+    .filter((item) => item.assessment.confidence === 'recorded-direct-cause' && item.memory !== undefined);
+  if (directSources.length === 0) return undefined;
+
+  const sourceMemories = directSources.map((item) => item.memory!).filter((memory, index, all) => all.findIndex((candidate) => candidate.eventId === memory.eventId) === index);
+  const types = unique(sourceMemories.map((memory) => memory.type)).slice(0, 3);
+  const target = eventNoun(event.type);
+  const text = types.length === 1
+    ? `The record directly links an earlier ${eventNoun(types[0]!)} to this ${target}.`
+    : `The record directly links ${joinReadable(types.map((type) => eventNoun(type)))} as causes of this ${target}.`;
+  return {
+    text,
+    sourceMemoryIds: unique([...sourceMemories.map((memory) => memory.id), targetMemory.id]),
+  };
+}
+
+function joinReadable(values: readonly string[]): string {
+  if (values.length <= 1) return values[0] ?? '';
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
 }
 
 function eventPerspective(sequence: number, event: HistoricalEvent, state: SimulationState, statement: HistorianStatement): string[] {
