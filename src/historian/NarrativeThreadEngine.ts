@@ -284,8 +284,7 @@ export class NarrativeThreadEngine {
 
   private finalize(thread: WorkingThread, state: SimulationState): NarrativeThread | undefined {
     const events = [...thread.events].sort((a, b) => a.month - b.month);
-    const minimumEvents = thread.kind === 'civilizational-threshold' ? 2 : 2;
-    if (events.length < minimumEvents) return undefined;
+    if (events.length < 2) return undefined;
 
     const first = events[0];
     const last = events[events.length - 1];
@@ -333,14 +332,26 @@ export class NarrativeThreadEngine {
     const recency = clamp(1 - ageMonths / (180 * 12));
     const repetitionPenalty = Math.min(0.3, (this.shown.get(thread.id) ?? 0) * 0.055);
     const immediateRepeatPenalty = thread.id === this.lastThreadId ? 0.12 : 0;
+    const semanticFit = this.semanticFit(thread.kind, scene.event?.type);
 
     return thread.interestingness * 0.45
       + (directEvent ? 0.38 : 0)
       + (entityOverlap ? 0.22 : 0)
       + (currentEventOverlap ? 0.12 : 0)
+      + semanticFit
       + recency * 0.08
       - repetitionPenalty
       - immediateRepeatPenalty;
+  }
+
+  private semanticFit(kind: NarrativeThreadKind, eventType: HistoricalEventType | undefined): number {
+    if (!eventType) return 0;
+    if (kind === 'rivalry' && CONFLICT_EVENTS.has(eventType)) return 0.2;
+    if (kind === 'knowledge-lineage' && KNOWLEDGE_EVENTS.has(eventType)) return 0.2;
+    if (kind === 'crisis-cycle' && CRISIS_EVENTS.has(eventType)) return 0.17;
+    if (kind === 'civilizational-threshold' && THRESHOLD_EVENTS.has(eventType)) return 0.22;
+    if (kind === 'settlement-arc' && SETTLEMENT_ARC_EVENTS.has(eventType)) return 0.035;
+    return 0;
   }
 
   private explain(thread: NarrativeThread, scene: ObservationCandidate, state: SimulationState): string {
