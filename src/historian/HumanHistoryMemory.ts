@@ -145,6 +145,7 @@ export interface WorldThemeMemory {
 export interface HumanQuestionResolution {
   id: string;
   questionId: string;
+  questionText: string;
   openedMonth: number;
   resolvedMonth: number;
   text: string;
@@ -223,8 +224,8 @@ const THEME_SIGNALS: Partial<Record<HistoricalEventType, Array<[WorldThemeKind, 
   'knowledge-lost': [['knowledge-loss-recovery', 1]],
   'knowledge-rediscovered': [['knowledge-loss-recovery', 1.15], ['institutional-resilience', 0.25]],
   'archive-destroyed': [['knowledge-loss-recovery', 0.9]],
-  'alliance-ended': [['political-fragmentation', 0.9], ['trade-interdependence', -0.35]],
-  'war-declared': [['political-fragmentation', 0.55], ['militarization', 0.9], ['trade-interdependence', -0.25]],
+  'alliance-ended': [['political-fragmentation', 0.9], ['trade-interdependence', -0.55]],
+  'war-declared': [['political-fragmentation', 0.55], ['militarization', 0.9], ['trade-interdependence', -0.45]],
   'battle': [['militarization', 0.65]],
   'war-ended': [['militarization', 0.35]],
   'political-transition': [['political-fragmentation', 0.45]],
@@ -283,10 +284,6 @@ function contextString(event: HistoricalEvent, keys: readonly string[]): string 
   return undefined;
 }
 
-function relationPair(relationship: SocialRelationship): [string, string] {
-  return relationship.a.localeCompare(relationship.b) <= 0 ? [relationship.a, relationship.b] : [relationship.b, relationship.a];
-}
-
 function legacyScore(person: PersonLegacyMemory): number {
   return clamp(
     person.contemporaryFame * 0.12
@@ -310,7 +307,8 @@ export class HumanHistoryMemory {
   private memory: HumanHistorySnapshot;
 
   constructor(snapshot?: HumanHistorySnapshot) {
-    this.memory = this.sanitize(snapshot ?? emptySnapshot());
+    this.memory = emptySnapshot();
+    this.restore(snapshot);
   }
 
   snapshot(): HumanHistorySnapshot {
@@ -330,7 +328,7 @@ export class HumanHistoryMemory {
 
     for (const event of events) this.processEvent(event, state, deepHistory);
     if (events.length > 0) {
-      const latestMonth = events[events.length - 1]?.month ?? this.memory.lastProcessedMonth;
+      const latestMonth = events.at(-1)?.month ?? this.memory.lastProcessedMonth;
       this.memory.lastProcessedMonth = latestMonth;
       this.memory.processedEventIdsAtMonth = state.history
         .filter((event) => event.month === latestMonth)
@@ -342,9 +340,10 @@ export class HumanHistoryMemory {
       this.memory.lastStructuralScanMonth = state.month;
       this.scanPeople(state, deepHistory);
       this.scanRelationships(state);
-      this.scanIdeas(state, deepHistory);
-      this.scanKnowledge(state, deepHistory);
+      this.scanIdeas(state);
+      this.scanKnowledge(state);
       this.scanInstitutions(state, deepHistory);
+      this.scanPolities(state);
       this.buildMovements(state);
       this.refreshPersistence(state);
     }
@@ -362,12 +361,12 @@ export class HumanHistoryMemory {
       question.lastEvaluatedMonth = resolution.resolvedMonth;
       question.resolutionText = resolution.text;
       question.evidenceEventIds = unique([...question.evidenceEventIds, ...resolution.sourceEventIds]).slice(-16);
-      // Human-history resolutions use their own provenance-aware narrator so deep evidence is not lost
-      // merely because the original event has aged out of active state.history.
+      // The deep-resolution narrator carries compressed provenance; suppress the raw-event-only Watcher version.
       question.narrated = true;
       const record: HumanQuestionResolution = {
         id: `human:question:${question.id}`,
         questionId: question.id,
+        questionText: question.text,
         openedMonth: question.openedMonth,
         resolvedMonth: resolution.resolvedMonth,
         text: resolution.text,
@@ -404,9 +403,7 @@ export class HumanHistoryMemory {
 
   shouldNarrate(key: string, month: number, cooldownYears = 120, maxCount = 2): boolean {
     const existing = this.memory.narrationMarks.find((item) => item.key === key);
-    if (!existing) return true;
-    if (existing.count >= maxCount) return false;
-    return month - existing.lastMonth >= cooldownYears * 12;
+    return !existing || (existing.count < maxCount && month - existing.lastMonth >= cooldownYears * 12);
   }
 
   markNarrated(key: string, month: number): void {
@@ -417,6 +414,11 @@ export class HumanHistoryMemory {
     } else {
       this.memory.narrationMarks.push({ key, count: 1, lastMonth: month });
     }
+    if (key.startsWith('question:')) {
+      const questionId = key.slice('question:'.length);
+      const resolution = this.memory.questionResolutions.find((item) => item.questionId === questionId);
+      if (resolution) resolution.narrated = true;
+    }
     this.compact();
   }
 
@@ -425,12 +427,11 @@ export class HumanHistoryMemory {
       .filter((item) => !item.narrated)
       .sort((a, b) => (b.resolvedMonth - b.openedMonth) - (a.resolvedMonth - a.openedMonth) || b.resolvedMonth - a.resolvedMonth)[0];
     if (question && (question.entityIds.includes(scene.subjectId) || sequence % 19 === 0)) {
-      question.narrated = true;
       const years = Math.max(1, Math.floor((question.resolvedMonth - question.openedMonth) / 12));
       return {
         key: `question:${question.questionId}`,
         category: 'question-resolution',
-        text: `${years.toLocaleString()} years ago I left a question open. ${question.text}`,
+        text: `${years.toLocaleString()} years ago I wondered: ${question.questionText} ${question.text}`,
         priority: 0.98,
         provenance: 'historical-interpretation',
         sourceEventIds: [...question.sourceEventIds],
@@ -439,24 +440,17 @@ export class HumanHistoryMemory {
       };
     }
 
-    const institutionRemark = this.institutionRemark(scene, state);
-    if (institutionRemark) return institutionRemark;
-
-    const legacyRemark = this.legacyRemark(scene, state);
-    if (legacyRemark) return legacyRemark;
-
-    const movementRemark = this.movementRemark(scene, state);
-    if (movementRemark) return movementRemark;
-
-    if (sequence % 23 === 0) return this.themeRemark(scene, state);
-    return undefined;
+    return this.institutionRemark(scene, state)
+      ?? this.legacyRemark(scene, state)
+      ?? this.movementRemark(scene, state)
+      ?? (sequence % 23 === 0 ? this.themeRemark(scene, state) : undefined);
   }
 
   private processEvent(event: HistoricalEvent, state: SimulationState, deepHistory: DeepHistoricalMemory): void {
     this.updateThemesFromEvent(event, deepHistory);
-    const attributedId = contextString(event, ['attributedPersonId', 'originatorId', 'founderPersonId', 'founderId']);
+    const attributed = contextString(event, ['attributedPersonId', 'originatorId', 'founderPersonId', 'founderId']);
     const personIds = unique([
-      ...(attributedId ? [attributedId] : []),
+      ...(attributed ? [attributed] : []),
       ...event.actors.filter((id) => state.people.some((person) => person.id === id)),
     ]);
     for (const personId of personIds) {
@@ -469,46 +463,40 @@ export class HumanHistoryMemory {
       if (POLITICAL_EVENTS.has(event.type)) this.raise(memory, 'politicalInfluence', 0.14 + event.significance * 0.38, event, 'recorded political influence');
       if (MATERIAL_EVENTS.has(event.type)) this.raise(memory, 'materialImpact', 0.14 + event.significance * 0.4, event, 'recorded material or technical consequence');
       if (CULTURAL_EVENTS.has(event.type)) this.raise(memory, 'culturalImpact', 0.12 + event.significance * 0.35, event, 'recorded cultural consequence');
-      const eventMemory = deepHistory.eventMemory(event.id);
-      if (eventMemory) memory.sourceMemoryIds = unique([...memory.sourceMemoryIds, eventMemory.id]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
-      const knowledge = contextString(event, ['knowledge', 'knowledgeId', 'lineageId']);
-      if (knowledge) memory.knowledgeLineageIds = unique([...memory.knowledgeLineageIds, knowledge]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+      const deepEvent = deepHistory.eventMemory(event.id);
+      if (deepEvent) memory.sourceMemoryIds = unique([...memory.sourceMemoryIds, deepEvent.id]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
+      const lineage = contextString(event, ['lineageId', 'knowledge']);
+      if (lineage) memory.knowledgeLineageIds = unique([...memory.knowledgeLineageIds, lineage]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
     }
 
     if (event.type === 'death') {
-      const personId = event.actors.find((id) => this.memory.people.some((item) => item.personId === id)) ?? event.actors[0];
+      const personId = event.actors.find((id) => state.people.some((person) => person.id === id));
       const person = personId ? state.people.find((candidate) => candidate.id === personId) : undefined;
       if (person) this.rememberPerson(person, event.month).deathMonth = event.month;
     }
-
     if (event.type === 'institution-formed') this.processInstitutionFormation(event, state, deepHistory);
+    if (event.type === 'political-transition') this.processPoliticalTransition(event, state, deepHistory);
     this.promoteFromDownstreamEvent(event, deepHistory);
   }
 
   private scanPeople(state: SimulationState, deepHistory: DeepHistoricalMemory): void {
     for (const person of state.people) {
       const project = lifeProjectForPerson(person);
-      const worthRemembering = person.historical?.status !== undefined && person.historical.status !== 'ordinary'
-        || person.prestige >= 0.55
-        || (person.influence?.total ?? 0) >= 0.55
-        || Boolean(project?.relatedEventIds.length)
-        || Boolean(project?.status === 'completed');
+      const worthRemembering = person.historical?.status === 'notable' || person.historical?.status === 'historical'
+        || person.prestige >= 0.55 || (person.influence?.total ?? 0) >= 0.55
+        || Boolean(project?.relatedEventIds.length) || project?.status === 'completed';
       if (!worthRemembering) continue;
       const memory = this.rememberPerson(person, state.month);
       memory.contemporaryFame = Math.max(memory.contemporaryFame, person.prestige, person.historical?.score ?? 0, person.influence?.reputation ?? 0);
       if (project) {
-        if (project.kind === 'scientific-research' || project.kind === 'systematic-inquiry' || project.kind === 'medical-inquiry' || project.kind === 'computation') {
-          memory.intellectualInfluence = Math.max(memory.intellectualInfluence, project.status === 'completed' ? 0.55 : 0.28);
-        }
+        if (['scientific-research', 'systematic-inquiry', 'medical-inquiry', 'computation', 'preserve-knowledge'].includes(project.kind)) memory.intellectualInfluence = Math.max(memory.intellectualInfluence, project.status === 'completed' ? 0.55 : 0.28);
         if (project.kind === 'found-institution') memory.institutionalInfluence = Math.max(memory.institutionalInfluence, project.status === 'completed' ? 0.58 : 0.3);
         if (project.kind === 'political-reform') memory.politicalInfluence = Math.max(memory.politicalInfluence, project.status === 'completed' ? 0.58 : 0.3);
-        if (project.kind === 'engineering-improvement' || project.kind === 'industrial-invention' || project.kind === 'electrical-systems') memory.materialImpact = Math.max(memory.materialImpact, project.status === 'completed' ? 0.56 : 0.28);
+        if (['engineering-improvement', 'industrial-invention', 'electrical-systems', 'spaceflight'].includes(project.kind)) memory.materialImpact = Math.max(memory.materialImpact, project.status === 'completed' ? 0.56 : 0.28);
         if (project.kind === 'religious-reform') memory.culturalImpact = Math.max(memory.culturalImpact, project.status === 'completed' ? 0.56 : 0.28);
         memory.sourceEventIds = unique([...memory.sourceEventIds, ...project.relatedEventIds]).slice(-HUMAN_HISTORY_LIMITS.eventRefs);
         if (project.institutionId) memory.institutionIds = unique([...memory.institutionIds, project.institutionId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
-        if (project.status === 'completed' && project.relatedEventIds.length > 0) {
-          memory.reasons = unique([...memory.reasons, `a completed life project produced recorded evidence: ${project.purpose}`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
-        }
+        if (project.status === 'completed' && project.relatedEventIds.length > 0) memory.reasons = unique([...memory.reasons, `a completed life project produced recorded evidence: ${project.purpose}`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
       }
       for (const eventId of memory.sourceEventIds) {
         const deep = deepHistory.eventMemory(eventId);
@@ -520,82 +508,75 @@ export class HumanHistoryMemory {
 
   private scanRelationships(state: SimulationState): void {
     for (const relationship of state.socialRelationships ?? []) {
-      if (relationship.strength < 0.48) continue;
-      if (relationship.kind !== 'mentor' && relationship.kind !== 'intellectual-collaborator') continue;
-      const [a, b] = relationPair(relationship);
-      this.addGenealogy({
-        fromId: a,
-        toId: b,
-        kind: relationship.kind,
-        confidence: 'recorded',
-        month: relationship.formedMonth,
-      });
-      const personA = state.people.find((item) => item.id === relationship.a);
-      const personB = state.people.find((item) => item.id === relationship.b);
-      if (personA) {
-        const memory = this.rememberPerson(personA, state.month);
-        memory.relatedPersonIds = unique([...memory.relatedPersonIds, relationship.b]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
-      }
-      if (personB) {
-        const memory = this.rememberPerson(personB, state.month);
-        memory.relatedPersonIds = unique([...memory.relatedPersonIds, relationship.a]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+      if (relationship.strength < 0.48 || (relationship.kind !== 'mentor' && relationship.kind !== 'intellectual-collaborator')) continue;
+      // The schema does not encode direction for mentorship. Preserve the observed pair without inventing teacher/student direction.
+      const [fromId, toId] = relationship.a.localeCompare(relationship.b) <= 0
+        ? [relationship.a, relationship.b] : [relationship.b, relationship.a];
+      this.addGenealogy({ fromId, toId, kind: relationship.kind, confidence: 'recorded', month: relationship.formedMonth });
+      for (const [personId, otherId] of [[relationship.a, relationship.b], [relationship.b, relationship.a]] as const) {
+        const person = state.people.find((item) => item.id === personId);
+        if (!person) continue;
+        const memory = this.rememberPerson(person, state.month);
+        memory.relatedPersonIds = unique([...memory.relatedPersonIds, otherId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
       }
     }
   }
 
-  private scanIdeas(state: SimulationState, deepHistory: DeepHistoricalMemory): void {
+  private scanIdeas(state: SimulationState): void {
     const ideas = state.ideas ?? [];
     const byId = new Map(ideas.map((idea) => [idea.id, idea]));
     for (const idea of ideas) {
       const originator = state.people.find((person) => person.id === idea.originatorId);
       if (originator) {
-        const person = this.rememberPerson(originator, state.month);
-        person.ideaIds = unique([...person.ideaIds, idea.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+        const memory = this.rememberPerson(originator, state.month);
+        memory.ideaIds = unique([...memory.ideaIds, idea.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
         const influence = clamp(0.18 + idea.reach * 0.38 + (idea.status === 'adopted' ? 0.22 : 0) + idea.generation * 0.025);
         const dimension: LegacyDimension = idea.topic === 'religion' || idea.topic === 'tradition' ? 'culturalImpact' : 'intellectualInfluence';
-        if (influence > person[dimension]) {
-          person[dimension] = influence;
-          person.reasons = unique([...person.reasons, `${idea.name} continued beyond its originator`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
+        if (influence > memory[dimension]) {
+          memory[dimension] = influence;
+          memory.reasons = unique([...memory.reasons, `${idea.name} continued beyond its originator`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
         }
         this.addGenealogy({ fromId: originator.id, toId: `idea:${idea.id}`, kind: 'idea-originator', confidence: 'recorded', month: idea.originatedMonth });
       }
+
       if (idea.parentIdeaId && byId.has(idea.parentIdeaId)) {
         this.addGenealogy({ fromId: `idea:${idea.parentIdeaId}`, toId: `idea:${idea.id}`, kind: 'idea-descendant', confidence: 'recorded', month: idea.originatedMonth });
         const root = this.ideaRoot(idea, byId);
-        const rootPerson = root ? this.memory.people.find((person) => person.personId === root.originatorId) : undefined;
-        if (rootPerson && idea.generation > 0) {
-          rootPerson.historicalPersistence = Math.max(rootPerson.historicalPersistence, clamp(0.28 + idea.generation * 0.08 + idea.reach * 0.35));
-          rootPerson.lastEvidenceMonth = Math.max(rootPerson.lastEvidenceMonth, idea.lastChangedMonth);
-          rootPerson.reasons = unique([...rootPerson.reasons, `later ideas descend from ${root.name}`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
-          this.recalculatePerson(rootPerson);
+        if (root) {
+          const rootPerson = this.memory.people.find((person) => person.personId === root.originatorId);
+          if (rootPerson && idea.generation > 0) {
+            rootPerson.historicalPersistence = Math.max(rootPerson.historicalPersistence, clamp(0.28 + idea.generation * 0.08 + idea.reach * 0.35));
+            rootPerson.lastEvidenceMonth = Math.max(rootPerson.lastEvidenceMonth, idea.lastChangedMonth);
+            rootPerson.reasons = unique([...rootPerson.reasons, `later ideas descend from ${root.name}`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
+            this.recalculatePerson(rootPerson);
+          }
         }
       }
+
       if (idea.institutionId) {
         const institution = state.institutions.find((item) => item.id === idea.institutionId);
         if (institution) {
-          const institutional = this.rememberInstitution(institution, state.month);
-          institutional.ideaIds = unique([...institutional.ideaIds, idea.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
-          institutional.lastEvidenceMonth = Math.max(institutional.lastEvidenceMonth, idea.lastChangedMonth);
+          const memory = this.rememberInstitution(institution, state.month);
+          memory.ideaIds = unique([...memory.ideaIds, idea.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
           this.addGenealogy({ fromId: institution.id, toId: `idea:${idea.id}`, kind: 'institution-idea', confidence: 'recorded', month: idea.originatedMonth });
         }
       }
-      if (idea.topic === 'religion' && (idea.status === 'adopted' || idea.reach >= 0.5)) this.updateTheme('religious-continuity', 0.45 + idea.reach * 0.35, idea.lastChangedMonth, [], []);
+      if ((idea.topic === 'religion' || idea.topic === 'tradition') && (idea.status === 'adopted' || idea.reach >= 0.5)) this.updateTheme('religious-continuity', 0.45 + idea.reach * 0.35, idea.lastChangedMonth, [], []);
     }
-    void deepHistory;
   }
 
-  private scanKnowledge(state: SimulationState, deepHistory: DeepHistoricalMemory): void {
-    const lineageOccurrences = new Map<string, Array<{ settlementId: string; key: string; record: KnowledgeRecord }>>();
+  private scanKnowledge(state: SimulationState): void {
+    const occurrences = new Map<string, Array<{ settlementId: string; record: KnowledgeRecord }>>();
     for (const settlement of state.settlements) {
-      for (const [key, record] of Object.entries(settlement.knowledge.records)) {
-        const list = lineageOccurrences.get(record.lineageId) ?? [];
-        list.push({ settlementId: settlement.id, key, record });
-        lineageOccurrences.set(record.lineageId, list);
+      for (const record of Object.values(settlement.knowledge.records)) {
+        const group = occurrences.get(record.lineageId) ?? [];
+        group.push({ settlementId: settlement.id, record });
+        occurrences.set(record.lineageId, group);
         if (record.attributedPersonId) {
           const person = state.people.find((candidate) => candidate.id === record.attributedPersonId);
           if (person) {
-            const legacy = this.rememberPerson(person, state.month);
-            legacy.knowledgeLineageIds = unique([...legacy.knowledgeLineageIds, record.lineageId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+            const memory = this.rememberPerson(person, state.month);
+            memory.knowledgeLineageIds = unique([...memory.knowledgeLineageIds, record.lineageId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
             this.addGenealogy({ fromId: person.id, toId: `knowledge:${record.lineageId}`, kind: 'knowledge-attribution', confidence: 'recorded', month: record.discoveredMonth });
           }
         }
@@ -607,28 +588,23 @@ export class HumanHistoryMemory {
             this.addGenealogy({ fromId: institution.id, toId: `knowledge:${record.lineageId}`, kind: 'institution-knowledge', confidence: 'recorded', month: record.discoveredMonth });
           }
         }
-        for (const parent of record.parentLineages) {
-          this.addGenealogy({ fromId: `knowledge:${parent}`, toId: `knowledge:${record.lineageId}`, kind: 'knowledge-descendant', confidence: 'recorded', month: record.discoveredMonth });
-        }
+        for (const parent of record.parentLineages) this.addGenealogy({ fromId: `knowledge:${parent}`, toId: `knowledge:${record.lineageId}`, kind: 'knowledge-descendant', confidence: 'recorded', month: record.discoveredMonth });
       }
     }
 
-    for (const [lineageId, occurrences] of lineageOccurrences) {
-      const distinctSettlements = new Set(occurrences.map((item) => item.settlementId)).size;
-      const earliest = [...occurrences].sort((a, b) => a.record.discoveredMonth - b.record.discoveredMonth)[0];
-      const attributed = earliest?.record.attributedPersonId
-        ? this.memory.people.find((person) => person.personId === earliest.record.attributedPersonId)
-        : undefined;
-      if (attributed && (distinctSettlements >= 2 || occurrences.some((item) => item.record.transformedMonth !== undefined))) {
-        const transformation = occurrences.some((item) => item.record.transformedMonth !== undefined);
-        attributed.intellectualInfluence = Math.max(attributed.intellectualInfluence, transformation ? 0.78 : clamp(0.48 + distinctSettlements * 0.08));
-        attributed.historicalPersistence = Math.max(attributed.historicalPersistence, clamp(0.42 + distinctSettlements * 0.07 + (transformation ? 0.18 : 0)));
-        attributed.lastEvidenceMonth = Math.max(attributed.lastEvidenceMonth, ...occurrences.map((item) => item.record.lastUsedMonth));
-        attributed.reasons = unique([...attributed.reasons, `${readable(lineageId)} persisted across ${distinctSettlements} communities`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
-        this.recalculatePerson(attributed);
-      }
+    for (const [lineageId, group] of occurrences) {
+      const distinctSettlements = new Set(group.map((item) => item.settlementId)).size;
+      const earliest = [...group].sort((a, b) => a.record.discoveredMonth - b.record.discoveredMonth)[0];
+      if (!earliest?.record.attributedPersonId) continue;
+      const person = this.memory.people.find((item) => item.personId === earliest.record.attributedPersonId);
+      const transformed = group.some((item) => item.record.transformedMonth !== undefined);
+      if (!person || (distinctSettlements < 2 && !transformed)) continue;
+      person.intellectualInfluence = Math.max(person.intellectualInfluence, transformed ? 0.78 : clamp(0.48 + distinctSettlements * 0.08));
+      person.historicalPersistence = Math.max(person.historicalPersistence, clamp(0.42 + distinctSettlements * 0.07 + (transformed ? 0.18 : 0)));
+      person.lastEvidenceMonth = Math.max(person.lastEvidenceMonth, ...group.map((item) => item.record.lastUsedMonth));
+      person.reasons = unique([...person.reasons, `${readable(lineageId)} persisted across ${distinctSettlements} communities`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
+      this.recalculatePerson(person);
     }
-    void deepHistory;
   }
 
   private scanInstitutions(state: SimulationState, deepHistory: DeepHistoricalMemory): void {
@@ -639,8 +615,7 @@ export class HumanHistoryMemory {
       memory.significance = Math.max(memory.significance, clamp(institution.prestige * 0.5 + institution.reach * 0.3 + memory.persistence * 0.35));
       if (ageYears >= 100 && institution.support >= 0.35) this.updateTheme('institutional-resilience', 0.12, state.month, [], [memory.id]);
 
-      const members = state.people.filter((person) => person.institutionId === institution.id);
-      for (const member of members) {
+      for (const member of state.people.filter((person) => person.institutionId === institution.id)) {
         const legacy = this.memory.people.find((person) => person.personId === member.id);
         if (!legacy || legacy.retrospectiveSignificance < 0.55) continue;
         memory.famousMemberIds = unique([...memory.famousMemberIds, member.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
@@ -648,20 +623,31 @@ export class HumanHistoryMemory {
         this.addGenealogy({ fromId: member.id, toId: institution.id, kind: 'institution-member', confidence: 'recorded', month: state.month });
       }
       for (const eventId of memory.sourceEventIds) {
-        const eventMemory = deepHistory.eventMemory(eventId);
-        if (eventMemory) memory.sourceMemoryIds = unique([...memory.sourceMemoryIds, eventMemory.id]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
+        const deep = deepHistory.eventMemory(eventId);
+        if (deep) memory.sourceMemoryIds = unique([...memory.sourceMemoryIds, deep.id]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
       }
+    }
+  }
+
+  private scanPolities(state: SimulationState): void {
+    for (const polity of state.polities) {
+      if (polity.leadingPersonId) {
+        const person = state.people.find((item) => item.id === polity.leadingPersonId);
+        if (person) {
+          const memory = this.rememberPerson(person, state.month);
+          memory.politicalInfluence = Math.max(memory.politicalInfluence, clamp(0.35 + polity.legitimacy * 0.35 + polity.stability * 0.2));
+          if (state.month - polity.formedMonth >= 120 * 12) memory.historicalPersistence = Math.max(memory.historicalPersistence, 0.42);
+          this.recalculatePerson(memory);
+        }
+      }
+      // Dynasty names and household IDs are descriptive evidence, not sufficient by themselves to invent a founder genealogy.
     }
   }
 
   private buildMovements(state: SimulationState): void {
     const ideas = state.ideas ?? [];
     const groups = new Map<string, SocialIdea[]>();
-    for (const idea of ideas) {
-      const group = groups.get(idea.conceptId) ?? [];
-      group.push(idea);
-      groups.set(idea.conceptId, group);
-    }
+    for (const idea of ideas) groups.set(idea.conceptId, [...(groups.get(idea.conceptId) ?? []), idea]);
     for (const [conceptId, group] of groups) {
       if (group.length < 2) continue;
       const root = [...group].sort((a, b) => a.generation - b.generation || a.originatedMonth - b.originatedMonth || a.id.localeCompare(b.id))[0];
@@ -673,21 +659,20 @@ export class HumanHistoryMemory {
         (relationship.kind === 'mentor' || relationship.kind === 'intellectual-collaborator')
         && people.includes(relationship.a) && people.includes(relationship.b) && relationship.strength >= 0.48).length;
       if (!adopted || (people.length < 2 && institutions.length === 0) || (group.length < 3 && relationalSupport === 0)) continue;
-
-      const confidence = clamp(0.38 + Math.min(0.22, group.length * 0.04) + Math.min(0.18, people.length * 0.04) + Math.min(0.12, relationalSupport * 0.04) + (institutions.length > 0 ? 0.08 : 0));
+      const lastEvidenceMonth = Math.max(...group.map((idea) => idea.lastChangedMonth));
       const record: HistoricalMovementMemory = {
         id: `human:movement:${conceptId}`,
         conceptId,
         name: movementName(root),
         topic: root.topic,
         startedMonth: Math.min(...group.map((idea) => idea.originatedMonth)),
-        lastEvidenceMonth: Math.max(...group.map((idea) => idea.lastChangedMonth)),
+        lastEvidenceMonth,
         rootIdeaId: root.id,
         ideaIds: unique(group.map((idea) => idea.id)).slice(-HUMAN_HISTORY_LIMITS.entityRefs),
         personIds: people.slice(-HUMAN_HISTORY_LIMITS.entityRefs),
         institutionIds: institutions.slice(-HUMAN_HISTORY_LIMITS.entityRefs),
-        confidence,
-        persistence: clamp(Math.log1p(Math.max(0, Math.max(...group.map((idea) => idea.lastChangedMonth)) - root.originatedMonth) / 12) / Math.log(501)),
+        confidence: clamp(0.38 + Math.min(0.22, group.length * 0.04) + Math.min(0.18, people.length * 0.04) + Math.min(0.12, relationalSupport * 0.04) + (institutions.length > 0 ? 0.08 : 0)),
+        persistence: clamp(Math.log1p(Math.max(0, lastEvidenceMonth - root.originatedMonth) / 12) / Math.log(501)),
         sourceEventIds: [],
         sourceMemoryIds: unique([
           ...people.map((id) => `human:person:${id}`),
@@ -702,30 +687,33 @@ export class HumanHistoryMemory {
 
   private refreshPersistence(state: SimulationState): void {
     for (const person of this.memory.people) {
-      const downstreamLinks = this.memory.genealogy.filter((link) => link.fromId === person.personId && ['idea-originator', 'knowledge-attribution', 'institution-founder'].includes(link.kind));
-      const descendantLinks = this.memory.genealogy.filter((link) => downstreamLinks.some((origin) => origin.toId === link.fromId)
+      const origins = this.memory.genealogy.filter((link) => link.fromId === person.personId && ['idea-originator', 'knowledge-attribution', 'institution-founder'].includes(link.kind));
+      const descendants = this.memory.genealogy.filter((link) => origins.some((origin) => origin.toId === link.fromId)
         && ['idea-descendant', 'knowledge-descendant', 'institution-successor'].includes(link.kind));
       const survivingInstitutions = person.institutionIds.filter((id) => state.institutions.some((institution) => institution.id === id)).length;
       const spanYears = Math.max(0, (person.lastEvidenceMonth - person.firstEvidenceMonth) / 12);
-      const persistence = clamp(
+      person.historicalPersistence = Math.max(person.historicalPersistence, clamp(
         Math.min(0.42, Math.log1p(spanYears) / Math.log(2001) * 0.42)
-          + Math.min(0.28, descendantLinks.length * 0.08)
+          + Math.min(0.28, descendants.length * 0.08)
           + Math.min(0.2, survivingInstitutions * 0.08)
           + Math.min(0.18, person.knowledgeLineageIds.length * 0.035 + person.ideaIds.length * 0.025),
-      );
-      person.historicalPersistence = Math.max(person.historicalPersistence, persistence);
+      ));
       this.recalculatePerson(person);
     }
   }
 
   private processInstitutionFormation(event: HistoricalEvent, state: SimulationState, deepHistory: DeepHistoricalMemory): void {
-    const institution = state.institutions.find((candidate) => event.actors.includes(candidate.id)
-      || candidate.id === contextString(event, ['institutionId', 'newInstitutionId']));
+    const institutionId = contextString(event, ['institutionId', 'newInstitutionId'])
+      ?? event.actors.find((id) => state.institutions.some((candidate) => candidate.id === id));
+    const institution = institutionId ? state.institutions.find((candidate) => candidate.id === institutionId) : undefined;
     if (!institution) return;
     const memory = this.rememberInstitution(institution, event.month);
     memory.sourceEventIds = unique([...memory.sourceEventIds, event.id]).slice(-HUMAN_HISTORY_LIMITS.eventRefs);
     const deep = deepHistory.eventMemory(event.id);
     if (deep) memory.sourceMemoryIds = unique([...memory.sourceMemoryIds, deep.id]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
+
+    const foundingIdeaId = contextString(event, ['foundingIdeaId', 'ideaId', 'motivationIdeaId']);
+    if (foundingIdeaId) memory.foundingIdeaIds = unique([...memory.foundingIdeaIds, foundingIdeaId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
 
     const founderId = contextString(event, ['founderPersonId', 'founderId', 'attributedPersonId', 'originatorId']);
     if (founderId && state.people.some((person) => person.id === founderId)) {
@@ -743,20 +731,32 @@ export class HumanHistoryMemory {
     if (!predecessorId) {
       for (const causeId of event.causes) {
         const cause = state.history.find((candidate) => candidate.id === causeId && candidate.type === 'institution-formed');
-        const candidateInstitutionId = cause?.actors.find((id) => state.institutions.some((item) => item.id === id));
-        if (candidateInstitutionId) { predecessorId = candidateInstitutionId; break; }
+        const candidate = cause?.actors.find((id) => state.institutions.some((item) => item.id === id));
+        if (candidate) { predecessorId = candidate; break; }
       }
     }
-    if (predecessorId && predecessorId !== institution.id) {
-      memory.parentInstitutionIds = unique([...memory.parentInstitutionIds, predecessorId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
-      const predecessor = this.memory.institutions.find((item) => item.institutionId === predecessorId);
-      if (predecessor) predecessor.successorInstitutionIds = unique([...predecessor.successorInstitutionIds, institution.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
-      this.addGenealogy({ fromId: predecessorId, toId: institution.id, kind: 'institution-successor', confidence: 'recorded', month: event.month, sourceEventIds: [event.id], sourceMemoryIds: deep ? [deep.id] : [] });
-    }
+    if (!predecessorId || predecessorId === institution.id) return;
+    memory.parentInstitutionIds = unique([...memory.parentInstitutionIds, predecessorId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+    const predecessor = this.memory.institutions.find((item) => item.institutionId === predecessorId);
+    if (predecessor) predecessor.successorInstitutionIds = unique([...predecessor.successorInstitutionIds, institution.id]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+    this.addGenealogy({ fromId: predecessorId, toId: institution.id, kind: 'institution-successor', confidence: 'recorded', month: event.month, sourceEventIds: [event.id], sourceMemoryIds: deep ? [deep.id] : [] });
+  }
+
+  private processPoliticalTransition(event: HistoricalEvent, state: SimulationState, deepHistory: DeepHistoricalMemory): void {
+    const sourceInstitutionId = contextString(event, ['sourceInstitutionId', 'predecessorInstitutionId', 'originInstitutionId']);
+    if (!sourceInstitutionId) return;
+    const polityId = contextString(event, ['polityId', 'newPolityId'])
+      ?? event.actors.find((id) => state.polities.some((polity) => polity.id === id));
+    if (!polityId) return;
+    const institution = this.memory.institutions.find((item) => item.institutionId === sourceInstitutionId);
+    if (!institution) return;
+    institution.politicalDescendantIds = unique([...institution.politicalDescendantIds, polityId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
+    const deep = deepHistory.eventMemory(event.id);
+    this.addGenealogy({ fromId: sourceInstitutionId, toId: polityId, kind: 'political-descendant', confidence: 'recorded', month: event.month, sourceEventIds: [event.id], sourceMemoryIds: deep ? [deep.id] : [] });
   }
 
   private promoteFromDownstreamEvent(event: HistoricalEvent, deepHistory: DeepHistoricalMemory): void {
-    const targetMemory = deepHistory.eventMemory(event.id);
+    const target = deepHistory.eventMemory(event.id);
     for (const causeId of event.causes) {
       const cause = deepHistory.eventMemory(causeId);
       if (!cause?.attributedPersonId) continue;
@@ -770,82 +770,51 @@ export class HumanHistoryMemory {
       person.historicalPersistence = Math.max(person.historicalPersistence, clamp(0.32 + event.significance * 0.5));
       person.lastEvidenceMonth = Math.max(person.lastEvidenceMonth, event.month);
       person.sourceEventIds = unique([...person.sourceEventIds, causeId, event.id]).slice(-HUMAN_HISTORY_LIMITS.eventRefs);
-      person.sourceMemoryIds = unique([...person.sourceMemoryIds, cause.id, ...(targetMemory ? [targetMemory.id] : [])]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
-      person.reasons = unique([...person.reasons, `later recorded consequences depended on an earlier contribution`]).slice(-HUMAN_HISTORY_LIMITS.reasons);
+      person.sourceMemoryIds = unique([...person.sourceMemoryIds, cause.id, ...(target ? [target.id] : [])]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
+      person.reasons = unique([...person.reasons, 'later recorded consequences depended on an earlier contribution']).slice(-HUMAN_HISTORY_LIMITS.reasons);
       this.recalculatePerson(person);
     }
   }
 
-  private resolveQuestion(question: WatcherQuestion, state: SimulationState, deepHistory: DeepHistoricalMemory): Omit<HumanQuestionResolution, 'id' | 'questionId' | 'openedMonth' | 'narrated' | 'entityIds'> | undefined {
+  private resolveQuestion(question: WatcherQuestion, state: SimulationState, deepHistory: DeepHistoricalMemory): { resolvedMonth: number; text: string; sourceEventIds: string[]; sourceMemoryIds: string[] } | undefined {
     const deep = deepHistory.snapshot();
     if (question.kind === 'knowledge-diffusion') {
       const knowledge = String(question.metadata?.knowledge ?? '');
       if (!knowledge) return undefined;
-      const candidates = deep.events.filter((event) => event.month >= question.openedMonth && event.knowledgeId === knowledge
-        && ['knowledge-adopted', 'technology-widespread', 'technology-transformation', 'knowledge-rediscovered'].includes(event.type));
-      const chosen = candidates.sort((a, b) => b.month - a.month || b.retrospectiveSignificance - a.retrospectiveSignificance)[0];
+      const chosen = deep.events
+        .filter((event) => event.month >= question.openedMonth && event.knowledgeId === knowledge
+          && ['knowledge-adopted', 'technology-widespread', 'technology-transformation', 'knowledge-rediscovered'].includes(event.type))
+        .sort((a, b) => b.month - a.month || b.retrospectiveSignificance - a.retrospectiveSignificance)[0];
       if (!chosen) return undefined;
-      return {
-        resolvedMonth: chosen.month,
-        text: `${readable(knowledge)} did spread beyond its beginning; later records show it entering broader practice.`,
-        sourceEventIds: [chosen.eventId],
-        sourceMemoryIds: [chosen.id],
-      };
+      return { resolvedMonth: chosen.month, text: `${readable(knowledge)} did spread beyond its beginning; later records show it entering broader practice.`, sourceEventIds: [chosen.eventId], sourceMemoryIds: [chosen.id] };
     }
-
     if (question.kind === 'institution-survival') {
       const institutionId = String(question.metadata?.institutionId ?? '');
       const institution = this.memory.institutions.find((item) => item.institutionId === institutionId);
       if (!institution) return undefined;
-      const survivedGeneration = institution.lastEvidenceMonth - question.openedMonth >= 30 * 12;
-      if (!survivedGeneration && institution.successorInstitutionIds.length === 0) return undefined;
-      const lineage = institution.successorInstitutionIds.length > 0
-        ? ` It did not remain unchanged, but ${institution.successorInstitutionIds.length === 1 ? 'a documented successor carries its institutional line' : 'documented successors carry its institutional line'}.`
-        : '';
-      return {
-        resolvedMonth: Math.max(institution.lastEvidenceMonth, question.openedMonth + 30 * 12),
-        text: `${institution.name} endured beyond its founding generation.${lineage}`,
-        sourceEventIds: [...institution.sourceEventIds],
-        sourceMemoryIds: [institution.id, ...institution.sourceMemoryIds],
-      };
+      if (institution.lastEvidenceMonth - question.openedMonth < 30 * 12 && institution.successorInstitutionIds.length === 0) return undefined;
+      const lineage = institution.successorInstitutionIds.length > 0 ? ' Its form changed, but a recorded successor continued the institutional line.' : '';
+      return { resolvedMonth: Math.max(institution.lastEvidenceMonth, question.openedMonth + 30 * 12), text: `${institution.name} endured beyond its founding generation.${lineage}`, sourceEventIds: [...institution.sourceEventIds], sourceMemoryIds: [institution.id, ...institution.sourceMemoryIds] };
     }
-
     if (question.kind === 'settlement-recovery') {
       const settlementId = question.entityIds[0];
       if (!settlementId) return undefined;
-      const chosen = deep.events
-        .filter((event) => event.month >= question.openedMonth && event.locationId === settlementId && (event.type === 'recovery' || event.type === 'civilization-recovery'))
-        .sort((a, b) => a.month - b.month)[0];
+      const chosen = deep.events.filter((event) => event.month >= question.openedMonth && event.locationId === settlementId && (event.type === 'recovery' || event.type === 'civilization-recovery')).sort((a, b) => a.month - b.month)[0];
       if (!chosen) return undefined;
       const name = state.settlements.find((settlement) => settlement.id === settlementId)?.name ?? 'The settlement';
-      return {
-        resolvedMonth: chosen.month,
-        text: `${name} did recover; the later record contains a recovery rather than only the original crisis.`,
-        sourceEventIds: [chosen.eventId],
-        sourceMemoryIds: [chosen.id],
-      };
+      return { resolvedMonth: chosen.month, text: `${name} did recover; the later record contains recovery rather than only the original crisis.`, sourceEventIds: [chosen.eventId], sourceMemoryIds: [chosen.id] };
     }
     return undefined;
   }
 
   private institutionRemark(scene: ObservationCandidate, state: SimulationState): HumanHistoryRemark | undefined {
-    const institution = this.memory.institutions.find((item) => item.institutionId === scene.subjectId)
-      ?? this.memory.institutions.find((item) => item.successorInstitutionIds.includes(scene.subjectId));
+    const institution = this.memory.institutions.find((item) => item.institutionId === scene.subjectId);
     if (!institution || institution.significance < 0.55) return undefined;
     if (institution.parentInstitutionIds.length > 0) {
       const parent = this.memory.institutions.find((item) => item.institutionId === institution.parentInstitutionIds[0]);
       const key = `institution-lineage:${institution.institutionId}:${parent?.institutionId ?? institution.parentInstitutionIds[0]}`;
       if (!this.shouldNarrate(key, state.month, 200, 2)) return undefined;
-      return {
-        key,
-        category: 'institution',
-        text: `${institution.name} has a recorded institutional ancestor${parent ? ` in ${parent.name}` : ''}. It is continuity, not sameness.`,
-        priority: 0.9,
-        provenance: 'recorded-fact',
-        sourceEventIds: [...institution.sourceEventIds],
-        sourceEntityIds: [institution.institutionId, ...institution.parentInstitutionIds],
-        sourceMemoryIds: [institution.id, ...institution.sourceMemoryIds],
-      };
+      return { key, category: 'institution', text: `${institution.name} has a recorded institutional ancestor${parent ? ` in ${parent.name}` : ''}. The line continued, though the institution did not remain unchanged.`, priority: 0.9, provenance: 'recorded-fact', sourceEventIds: [...institution.sourceEventIds], sourceEntityIds: [institution.institutionId, ...institution.parentInstitutionIds], sourceMemoryIds: [institution.id, ...institution.sourceMemoryIds] };
     }
     if (institution.founderPersonIds.length > 0 && state.month - institution.foundedMonth >= 120 * 12) {
       const founder = this.memory.people.find((item) => item.personId === institution.founderPersonIds[0]);
@@ -853,65 +822,29 @@ export class HumanHistoryMemory {
         const key = `institution-founder:${institution.institutionId}:${founder.personId}`;
         if (!this.shouldNarrate(key, state.month, 200, 2)) return undefined;
         const age = founder.deathMonth === undefined ? '' : `${Math.max(1, Math.floor((state.month - founder.deathMonth) / 12)).toLocaleString()} years after ${founder.name}'s death, `;
-        return {
-          key,
-          category: 'institution',
-          text: `${age}${institution.name} still carries a recorded line back to ${founder.name}.`,
-          priority: 0.88,
-          provenance: 'historical-interpretation',
-          sourceEventIds: unique([...institution.sourceEventIds, ...founder.sourceEventIds]),
-          sourceEntityIds: [institution.institutionId, founder.personId],
-          sourceMemoryIds: [institution.id, founder.id, ...institution.sourceMemoryIds, ...founder.sourceMemoryIds],
-        };
+        return { key, category: 'institution', text: `${age}${institution.name} still has a documented line back to ${founder.name}.`, priority: 0.88, provenance: 'historical-interpretation', sourceEventIds: unique([...institution.sourceEventIds, ...founder.sourceEventIds]), sourceEntityIds: [institution.institutionId, founder.personId], sourceMemoryIds: [institution.id, founder.id, ...institution.sourceMemoryIds, ...founder.sourceMemoryIds] };
       }
     }
     return undefined;
   }
 
   private legacyRemark(scene: ObservationCandidate, state: SimulationState): HumanHistoryRemark | undefined {
-    const direct = this.memory.people.find((item) => item.personId === scene.subjectId);
-    const related = direct ?? this.memory.people
-      .filter((person) => person.retrospectiveSignificance >= 0.62
-        && (person.institutionIds.includes(scene.subjectId) || person.knowledgeLineageIds.some((lineage) => scene.title.toLowerCase().includes(readable(lineage).toLowerCase()))))
-      .sort((a, b) => b.retrospectiveSignificance - a.retrospectiveSignificance)[0];
-    if (!related || related.retrospectiveSignificance < 0.58) return undefined;
-    if (related.deathMonth === undefined || state.month - related.deathMonth < 40 * 12) return undefined;
-    if (related.historicalPersistence < 0.5) return undefined;
+    const related = this.memory.people.find((item) => item.personId === scene.subjectId)
+      ?? this.memory.people.filter((person) => person.retrospectiveSignificance >= 0.62 && person.institutionIds.includes(scene.subjectId)).sort((a, b) => b.retrospectiveSignificance - a.retrospectiveSignificance)[0];
+    if (!related || related.retrospectiveSignificance < 0.58 || related.deathMonth === undefined || state.month - related.deathMonth < 40 * 12 || related.historicalPersistence < 0.5) return undefined;
     const key = `legacy:${related.personId}:${scene.subjectId}`;
     if (!this.shouldNarrate(key, state.month, 180, 2)) return undefined;
     const yearsDead = Math.max(1, Math.floor((state.month - related.deathMonth) / 12));
-    const reason = related.reasons[related.reasons.length - 1] ?? 'later records continued to depend on the work';
-    return {
-      key,
-      category: 'legacy',
-      text: `${related.name} has been dead for ${yearsDead.toLocaleString()} years. ${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`,
-      priority: 0.92,
-      provenance: 'historical-interpretation',
-      sourceEventIds: [...related.sourceEventIds],
-      sourceEntityIds: [related.personId, ...related.institutionIds].slice(0, HUMAN_HISTORY_LIMITS.entityRefs),
-      sourceMemoryIds: [related.id, ...related.sourceMemoryIds],
-    };
+    const reason = related.reasons.at(-1) ?? 'later records continued to depend on the work';
+    return { key, category: 'legacy', text: `${related.name} has been dead for ${yearsDead.toLocaleString()} years. ${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`, priority: 0.92, provenance: 'historical-interpretation', sourceEventIds: [...related.sourceEventIds], sourceEntityIds: [related.personId, ...related.institutionIds].slice(0, HUMAN_HISTORY_LIMITS.entityRefs), sourceMemoryIds: [related.id, ...related.sourceMemoryIds] };
   }
 
   private movementRemark(scene: ObservationCandidate, state: SimulationState): HumanHistoryRemark | undefined {
-    const movement = this.memory.movements
-      .filter((item) => item.confidence >= 0.62 && item.persistence >= 0.22
-        && (item.institutionIds.includes(scene.subjectId) || item.personIds.includes(scene.subjectId) || item.ideaIds.includes(scene.subjectId)))
-      .sort((a, b) => b.confidence - a.confidence || b.persistence - a.persistence)[0];
+    const movement = this.memory.movements.filter((item) => item.confidence >= 0.62 && item.persistence >= 0.22 && (item.institutionIds.includes(scene.subjectId) || item.personIds.includes(scene.subjectId) || item.ideaIds.includes(scene.subjectId))).sort((a, b) => b.confidence - a.confidence || b.persistence - a.persistence)[0];
     if (!movement) return undefined;
     const key = `movement:${movement.id}`;
     if (!this.shouldNarrate(key, state.month, 250, 2)) return undefined;
-    const generations = Math.max(2, new Set(movement.personIds).size);
-    return {
-      key,
-      category: 'movement',
-      text: `${movement.name} is no longer one person's argument. The record now connects it across ${generations} contributors${movement.institutionIds.length ? ' and durable institutions' : ''}.`,
-      priority: 0.8,
-      provenance: 'derived-statistic',
-      sourceEventIds: [...movement.sourceEventIds],
-      sourceEntityIds: unique([...movement.personIds, ...movement.institutionIds]).slice(0, HUMAN_HISTORY_LIMITS.entityRefs),
-      sourceMemoryIds: [movement.id, ...movement.sourceMemoryIds],
-    };
+    return { key, category: 'movement', text: `${movement.name} is no longer one person's argument. The record connects it across ${Math.max(2, new Set(movement.personIds).size)} contributors${movement.institutionIds.length ? ' and durable institutions' : ''}.`, priority: 0.8, provenance: 'derived-statistic', sourceEventIds: [...movement.sourceEventIds], sourceEntityIds: unique([...movement.personIds, ...movement.institutionIds]).slice(0, HUMAN_HISTORY_LIMITS.entityRefs), sourceMemoryIds: [movement.id, ...movement.sourceMemoryIds] };
   }
 
   private themeRemark(scene: ObservationCandidate, state: SimulationState): HumanHistoryRemark | undefined {
@@ -919,23 +852,13 @@ export class HumanHistoryMemory {
     if (!theme) return undefined;
     const key = `theme:${theme.kind}:${theme.revisionCount}`;
     if (!this.shouldNarrate(key, state.month, 600, 2)) return undefined;
-    const text = this.themeText(theme.kind);
-    return {
-      key,
-      category: 'theme',
-      text,
-      priority: 0.7,
-      provenance: 'historical-interpretation',
-      sourceEventIds: [...theme.sourceEventIds],
-      sourceEntityIds: scene.subjectId ? [scene.subjectId] : [],
-      sourceMemoryIds: [...theme.sourceMemoryIds],
-    };
+    return { key, category: 'theme', text: this.themeText(theme.kind), priority: 0.7, provenance: 'historical-interpretation', sourceEventIds: [...theme.sourceEventIds], sourceEntityIds: scene.subjectId ? [scene.subjectId] : [], sourceMemoryIds: [...theme.sourceMemoryIds] };
   }
 
   private themeText(kind: WorldThemeKind): string {
     switch (kind) {
       case 'trade-interdependence': return 'Again, the durable connection is exchange rather than government.';
-      case 'knowledge-loss-recovery': return 'This world keeps losing knowledge and then rebuilding from fragments.';
+      case 'knowledge-loss-recovery': return 'This world keeps losing knowledge and rebuilding from fragments.';
       case 'political-fragmentation': return 'Political arrangements have repeatedly broken faster than the society around them.';
       case 'religious-continuity': return 'Belief has changed its language here more often than it has disappeared.';
       case 'migration': return 'Again, survival changes the map by moving people rather than holding them in place.';
@@ -947,36 +870,18 @@ export class HumanHistoryMemory {
   }
 
   private updateThemesFromEvent(event: HistoricalEvent, deepHistory: DeepHistoricalMemory): void {
-    const signals = THEME_SIGNALS[event.type] ?? [];
-    const eventMemory = deepHistory.eventMemory(event.id);
-    for (const [kind, value] of signals) {
-      const weighted = value * (0.55 + event.significance * 0.45);
-      this.updateTheme(kind, weighted, event.month, [event.id], eventMemory ? [eventMemory.id] : []);
-    }
+    const deep = deepHistory.eventMemory(event.id);
+    for (const [kind, signal] of THEME_SIGNALS[event.type] ?? []) this.updateTheme(kind, signal * (0.55 + event.significance * 0.45), event.month, [event.id], deep ? [deep.id] : []);
   }
 
   private updateTheme(kind: WorldThemeKind, signal: number, month: number, eventIds: readonly string[], memoryIds: readonly string[]): void {
     let theme = this.memory.themes.find((item) => item.kind === kind);
     if (!theme) {
       if (signal <= 0) return;
-      theme = {
-        id: `human:theme:${kind}`,
-        kind,
-        firstEvidenceMonth: month,
-        lastEvidenceMonth: month,
-        support: 0,
-        opposition: 0,
-        evidenceCount: 0,
-        confidence: 0,
-        score: 0,
-        revisionCount: 0,
-        sourceEventIds: [],
-        sourceMemoryIds: [],
-      };
+      theme = { id: `human:theme:${kind}`, kind, firstEvidenceMonth: month, lastEvidenceMonth: month, support: 0, opposition: 0, evidenceCount: 0, confidence: 0, score: 0, revisionCount: 0, sourceEventIds: [], sourceMemoryIds: [] };
       this.memory.themes.push(theme);
     }
     const oldScore = theme.score;
-    // Slow decay keeps themes revisable over very long runs without requiring unbounded event counts.
     theme.support *= 0.997;
     theme.opposition *= 0.997;
     if (signal >= 0) theme.support = Math.min(40, theme.support + signal);
@@ -986,43 +891,31 @@ export class HumanHistoryMemory {
     theme.sourceEventIds = unique([...theme.sourceEventIds, ...eventIds]).slice(-HUMAN_HISTORY_LIMITS.eventRefs);
     theme.sourceMemoryIds = unique([...theme.sourceMemoryIds, ...memoryIds]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
     const total = theme.support + theme.opposition;
-    const balance = total === 0 ? 0 : (theme.support - theme.opposition * 0.75) / Math.max(1, total);
-    theme.score = clamp(theme.support / 8 * 0.55 + Math.max(0, balance) * 0.45);
-    theme.confidence = clamp(Math.log1p(theme.evidenceCount) / Math.log(41) * 0.42 + (total === 0 ? 0 : theme.support / total) * 0.48);
-    if ((oldScore >= 0.5 && theme.score < 0.35) || (oldScore < 0.35 && theme.score >= 0.5)) theme.revisionCount += 1;
+    const supportShare = total === 0 ? 0 : theme.support / total;
+    theme.score = clamp(Math.min(1, theme.support / 8) * 0.52 + Math.max(0, supportShare - 0.35) / 0.65 * 0.48);
+    theme.confidence = clamp(Math.log1p(theme.evidenceCount) / Math.log(41) * 0.42 + supportShare * 0.48);
+    if ((oldScore >= 0.55 && theme.score < 0.4) || (oldScore < 0.4 && theme.score >= 0.55)) theme.revisionCount += 1;
   }
 
   private rememberPerson(person: Person, month: number): PersonLegacyMemory {
     let memory = this.memory.people.find((item) => item.personId === person.id);
     if (!memory) {
       memory = {
-        id: `human:person:${person.id}`,
-        personId: person.id,
-        name: person.name,
-        bornMonth: person.bornMonth,
-        firstEvidenceMonth: month,
-        lastEvidenceMonth: month,
+        id: `human:person:${person.id}`, personId: person.id, name: person.name, bornMonth: person.bornMonth,
+        firstEvidenceMonth: month, lastEvidenceMonth: month,
         contemporaryFame: Math.max(person.prestige, person.historical?.score ?? 0, person.influence?.reputation ?? 0),
         intellectualInfluence: person.influence?.scholarship ?? 0,
         institutionalInfluence: person.socialPosition?.institutionalPosition ?? 0,
         politicalInfluence: Math.max(person.influence?.office ?? 0, person.socialPosition?.politicalInfluence ?? 0),
-        materialImpact: 0,
-        culturalImpact: person.influence?.religion ?? 0,
-        historicalPersistence: 0,
-        retrospectiveSignificance: 0,
-        knowledgeLineageIds: [],
-        ideaIds: [],
-        institutionIds: person.institutionId ? [person.institutionId] : [],
-        relatedPersonIds: [],
-        sourceEventIds: unique(person.historical?.eventIds ?? []).slice(-HUMAN_HISTORY_LIMITS.eventRefs),
-        sourceMemoryIds: [],
+        materialImpact: 0, culturalImpact: person.influence?.religion ?? 0, historicalPersistence: 0, retrospectiveSignificance: 0,
+        knowledgeLineageIds: [], ideaIds: [], institutionIds: person.institutionId ? [person.institutionId] : [], relatedPersonIds: [],
+        sourceEventIds: unique(person.historical?.eventIds ?? []).slice(-HUMAN_HISTORY_LIMITS.eventRefs), sourceMemoryIds: [],
         reasons: unique(person.historical?.reasons ?? []).slice(-HUMAN_HISTORY_LIMITS.reasons),
       };
       this.memory.people.push(memory);
     }
     memory.name = person.name || memory.name;
     memory.lastEvidenceMonth = Math.max(memory.lastEvidenceMonth, month);
-    if (!person.alive && memory.deathMonth === undefined) memory.deathMonth = month;
     if (person.institutionId) memory.institutionIds = unique([...memory.institutionIds, person.institutionId]).slice(-HUMAN_HISTORY_LIMITS.entityRefs);
     this.recalculatePerson(memory);
     return memory;
@@ -1044,27 +937,11 @@ export class HumanHistoryMemory {
     let memory = this.memory.institutions.find((item) => item.institutionId === institution.id);
     if (!memory) {
       memory = {
-        id: `human:institution:${institution.id}`,
-        institutionId: institution.id,
-        name: institution.name,
-        kind: institution.kind,
-        settlementId: institution.settlementId,
-        cultureId: institution.cultureId,
-        foundedMonth: institution.foundedMonth,
-        lastEvidenceMonth: month,
-        founderPersonIds: [],
-        foundingIdeaIds: [],
-        parentInstitutionIds: [],
-        successorInstitutionIds: [],
-        famousMemberIds: [],
-        ideaIds: [],
-        knowledgeLineageIds: [],
-        politicalDescendantIds: [],
-        significance: clamp(institution.prestige * 0.55 + institution.reach * 0.3),
-        persistence: 0,
-        sourceEventIds: [],
-        sourceMemoryIds: [],
-        reasons: [],
+        id: `human:institution:${institution.id}`, institutionId: institution.id, name: institution.name, kind: institution.kind,
+        settlementId: institution.settlementId, cultureId: institution.cultureId, foundedMonth: institution.foundedMonth, lastEvidenceMonth: month,
+        founderPersonIds: [], foundingIdeaIds: [], parentInstitutionIds: [], successorInstitutionIds: [], famousMemberIds: [], ideaIds: [],
+        knowledgeLineageIds: [], politicalDescendantIds: [], significance: clamp(institution.prestige * 0.55 + institution.reach * 0.3), persistence: 0,
+        sourceEventIds: [], sourceMemoryIds: [], reasons: [],
       };
       this.memory.institutions.push(memory);
     }
@@ -1073,15 +950,7 @@ export class HumanHistoryMemory {
     return memory;
   }
 
-  private addGenealogy(input: {
-    fromId: string;
-    toId: string;
-    kind: GenealogyLinkKind;
-    confidence: GenealogyConfidence;
-    month: number;
-    sourceEventIds?: readonly string[];
-    sourceMemoryIds?: readonly string[];
-  }): void {
+  private addGenealogy(input: { fromId: string; toId: string; kind: GenealogyLinkKind; confidence: GenealogyConfidence; month: number; sourceEventIds?: readonly string[]; sourceMemoryIds?: readonly string[] }): void {
     if (!input.fromId || !input.toId || input.fromId === input.toId) return;
     const id = `human:link:${input.kind}:${input.fromId}->${input.toId}`;
     const existing = this.memory.genealogy.find((item) => item.id === id);
@@ -1091,17 +960,7 @@ export class HumanHistoryMemory {
       existing.sourceMemoryIds = unique([...existing.sourceMemoryIds, ...(input.sourceMemoryIds ?? [])]).slice(-HUMAN_HISTORY_LIMITS.memoryRefs);
       return;
     }
-    this.memory.genealogy.push({
-      id,
-      fromId: input.fromId,
-      toId: input.toId,
-      kind: input.kind,
-      confidence: input.confidence,
-      firstMonth: input.month,
-      lastMonth: input.month,
-      sourceEventIds: unique(input.sourceEventIds ?? []).slice(-HUMAN_HISTORY_LIMITS.eventRefs),
-      sourceMemoryIds: unique(input.sourceMemoryIds ?? []).slice(-HUMAN_HISTORY_LIMITS.memoryRefs),
-    });
+    this.memory.genealogy.push({ id, fromId: input.fromId, toId: input.toId, kind: input.kind, confidence: input.confidence, firstMonth: input.month, lastMonth: input.month, sourceEventIds: unique(input.sourceEventIds ?? []).slice(-HUMAN_HISTORY_LIMITS.eventRefs), sourceMemoryIds: unique(input.sourceMemoryIds ?? []).slice(-HUMAN_HISTORY_LIMITS.memoryRefs) });
   }
 
   private ideaRoot(idea: SocialIdea, byId: ReadonlyMap<string, SocialIdea>): SocialIdea | undefined {
@@ -1109,8 +968,9 @@ export class HumanHistoryMemory {
     const seen = new Set<string>();
     while (current?.parentIdeaId && !seen.has(current.id)) {
       seen.add(current.id);
-      current = byId.get(current.parentIdeaId) ?? current;
-      if (!current.parentIdeaId) break;
+      const parent = byId.get(current.parentIdeaId);
+      if (!parent) break;
+      current = parent;
     }
     return current;
   }
@@ -1144,7 +1004,6 @@ export class HumanHistoryMemory {
     }
     this.memory.institutions.sort((a, b) => (b.significance + b.persistence * 0.4) - (a.significance + a.persistence * 0.4) || b.lastEvidenceMonth - a.lastEvidenceMonth || a.institutionId.localeCompare(b.institutionId));
     this.memory.institutions = this.memory.institutions.slice(0, HUMAN_HISTORY_LIMITS.institutions);
-
     this.memory.genealogy.sort((a, b) => b.lastMonth - a.lastMonth || a.id.localeCompare(b.id));
     this.memory.genealogy = this.memory.genealogy.slice(0, HUMAN_HISTORY_LIMITS.genealogy);
     this.memory.movements.sort((a, b) => (b.confidence + b.persistence * 0.3) - (a.confidence + a.persistence * 0.3) || b.lastEvidenceMonth - a.lastEvidenceMonth || a.id.localeCompare(b.id));
@@ -1159,7 +1018,7 @@ export class HumanHistoryMemory {
   }
 
   private allMemoryIds(): Set<string> {
-    return new Set<string>([
+    return new Set([
       ...this.memory.people.map((item) => item.id),
       ...this.memory.institutions.map((item) => item.id),
       ...this.memory.genealogy.map((item) => item.id),
