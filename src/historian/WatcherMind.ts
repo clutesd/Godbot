@@ -1,7 +1,7 @@
 import type { HistoricalEvent, HistorianPrediction, ObservationCandidate } from './types';
 import type { SimulationState } from '../sim/types';
 
-export type WatcherSubjectKind = 'person' | 'settlement' | 'institution' | 'polity' | 'knowledge' | 'thread' | 'other';
+export type WatcherSubjectKind = 'person' | 'settlement' | 'institution' | 'polity' | 'knowledge' | 'idea' | 'thread' | 'other';
 export type WatcherQuestionKind = 'settlement-recovery' | 'institution-survival' | 'knowledge-diffusion';
 export type WatcherQuestionStatus = 'open' | 'resolved' | 'contradicted' | 'irrelevant';
 export type WatcherBeliefKind = 'trade-cohesion' | 'settlement-resilience';
@@ -83,6 +83,10 @@ export const WATCHER_MEMORY_LIMITS = {
   predictions: 120,
   eventRefsPerSubject: 12,
   reasonsPerSubject: 8,
+  evidenceRefsPerQuestion: 16,
+  evidenceRefsPerBelief: 24,
+  subjectsPerPrediction: 8,
+  processedEventRefs: 64,
 } as const;
 
 export function emptyWatcherMemorySnapshot(): WatcherMemorySnapshot {
@@ -245,7 +249,7 @@ export class WatcherMind {
     for (const event of events) this.processEvent(event, state);
     const latestMonth = events[events.length - 1]?.month ?? this.memory.lastProcessedMonth;
     this.memory.lastProcessedMonth = latestMonth;
-    this.memory.processedEventIdsAtMonth = state.history.filter((event) => event.month === latestMonth).map((event) => event.id).slice(-64);
+    this.memory.processedEventIdsAtMonth = state.history.filter((event) => event.month === latestMonth).map((event) => event.id).slice(-WATCHER_MEMORY_LIMITS.processedEventRefs);
   }
 
   private processEvent(event: HistoricalEvent, state: SimulationState): void {
@@ -321,7 +325,7 @@ export class WatcherMind {
       lastEvaluatedMonth: input.month,
       status: 'open',
       entityIds: unique(input.entityIds),
-      evidenceEventIds: unique(input.eventIds),
+      evidenceEventIds: unique(input.eventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerQuestion),
       ...(input.metadata ? { metadata: input.metadata } : {}),
     });
   }
@@ -332,7 +336,7 @@ export class WatcherMind {
       question.status = failed ? 'contradicted' : 'resolved';
       question.resolutionMonth = event.month;
       question.lastEvaluatedMonth = event.month;
-      question.evidenceEventIds = unique([...question.evidenceEventIds, event.id]);
+      question.evidenceEventIds = unique([...question.evidenceEventIds, event.id]).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerQuestion);
       question.resolutionText = failed
         ? `${settlement?.name ?? 'The settlement'} did not recover; it was abandoned.`
         : `${settlement?.name ?? 'The settlement'} recovered strongly enough for the record to mark a recovery.`;
@@ -344,7 +348,7 @@ export class WatcherMind {
       question.status = 'resolved';
       question.resolutionMonth = event.month;
       question.lastEvaluatedMonth = event.month;
-      question.evidenceEventIds = unique([...question.evidenceEventIds, event.id]);
+      question.evidenceEventIds = unique([...question.evidenceEventIds, event.id]).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerQuestion);
       question.resolutionText = `${knowledge.replaceAll('-', ' ')} spread widely enough to become part of the broader historical record.`;
     }
   }
@@ -393,7 +397,8 @@ export class WatcherMind {
       let belief = this.memory.beliefs.find((item) => item.id === id);
       if (!belief) {
         const supportEvents = state.history.filter((event) => ['alliance-formed', 'trade-route-established'].includes(event.type)
-          && (event.actors.includes(relation.id) || event.actors.includes(relation.a) || event.actors.includes(relation.b))).map((event) => event.id).slice(-8);
+          && (event.actors.includes(relation.id) || event.actors.includes(relation.a) || event.actors.includes(relation.b)))
+          .map((event) => event.id).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief);
         belief = {
           id,
           kind: 'trade-cohesion',
@@ -430,7 +435,7 @@ export class WatcherMind {
     const belief = this.memory.beliefs.find((item) => item.id === `belief:trade-cohesion:${pairKey(a, b)}`);
     if (!belief || ['contradicted', 'revised', 'resolved'].includes(belief.status)) return;
     const tradeStillExists = state.tradeRoutes.some((route) => route.active && ((route.a === a && route.b === b) || (route.a === b && route.b === a)));
-    belief.contradictingEventIds = unique([...belief.contradictingEventIds, event.id]);
+    belief.contradictingEventIds = unique([...belief.contradictingEventIds, event.id]).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief);
     belief.confidence = clamp(belief.confidence - 0.32);
     belief.status = tradeStillExists ? 'revised' : 'contradicted';
     belief.revisionText = tradeStillExists
@@ -449,13 +454,13 @@ export class WatcherMind {
         belief = { id, kind: 'settlement-resilience', thesis: `${settlement?.name ?? 'this settlement'} appears able to recover from severe pressure.`, formedMonth: event.month, lastEvaluatedMonth: event.month, confidence: 0.45, status: 'tentative', entityIds: [event.locationId], supportingEventIds: [event.id], contradictingEventIds: [] };
         this.memory.beliefs.push(belief);
       } else {
-        belief.supportingEventIds = unique([...belief.supportingEventIds, event.id]);
+        belief.supportingEventIds = unique([...belief.supportingEventIds, event.id]).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief);
         belief.confidence = clamp(belief.confidence + 0.16, 0, 0.9);
         belief.status = belief.confidence >= 0.62 ? 'strengthened' : 'tentative';
         belief.lastEvaluatedMonth = event.month;
       }
     } else if (belief && !['contradicted', 'revised'].includes(belief.status)) {
-      belief.contradictingEventIds = unique([...belief.contradictingEventIds, event.id]);
+      belief.contradictingEventIds = unique([...belief.contradictingEventIds, event.id]).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief);
       belief.confidence = clamp(belief.confidence - 0.4);
       belief.status = 'revised';
       belief.revisionText = 'I mistook previous recoveries for lasting resilience. This settlement was ultimately abandoned.';
@@ -467,16 +472,41 @@ export class WatcherMind {
     for (const prediction of predictions) {
       let memory = this.memory.predictions.find((item) => item.predictionId === prediction.id);
       if (!memory) {
-        memory = { predictionId: prediction.id, madeMonth: prediction.madeMonth, horizonMonth: prediction.horizonMonth, subjectIds: [...prediction.subjectIds], resolved: prediction.resolved, ...(prediction.occurred === undefined ? {} : { occurred: prediction.occurred }) };
+        memory = {
+          predictionId: prediction.id,
+          madeMonth: prediction.madeMonth,
+          horizonMonth: prediction.horizonMonth,
+          subjectIds: unique(prediction.subjectIds).slice(-WATCHER_MEMORY_LIMITS.subjectsPerPrediction),
+          resolved: prediction.resolved,
+          ...(prediction.occurred === undefined ? {} : { occurred: prediction.occurred }),
+        };
         this.memory.predictions.push(memory);
       } else {
         memory.resolved = prediction.resolved;
+        memory.subjectIds = unique(memory.subjectIds).slice(-WATCHER_MEMORY_LIMITS.subjectsPerPrediction);
         if (prediction.occurred !== undefined) memory.occurred = prediction.occurred;
       }
     }
   }
 
   private compact(): void {
+    for (const subject of this.memory.subjects) {
+      subject.interestReasons = unique(subject.interestReasons).slice(-WATCHER_MEMORY_LIMITS.reasonsPerSubject);
+      subject.sourceEventIds = unique(subject.sourceEventIds).slice(-WATCHER_MEMORY_LIMITS.eventRefsPerSubject);
+    }
+    for (const question of this.memory.questions) {
+      question.entityIds = unique(question.entityIds).slice(-8);
+      question.evidenceEventIds = unique(question.evidenceEventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerQuestion);
+    }
+    for (const belief of this.memory.beliefs) {
+      belief.entityIds = unique(belief.entityIds).slice(-8);
+      belief.supportingEventIds = unique(belief.supportingEventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief);
+      belief.contradictingEventIds = unique(belief.contradictingEventIds).slice(-WATCHER_MEMORY_LIMITS.evidenceRefsPerBelief);
+    }
+    for (const prediction of this.memory.predictions) {
+      prediction.subjectIds = unique(prediction.subjectIds).slice(-WATCHER_MEMORY_LIMITS.subjectsPerPrediction);
+    }
+
     this.memory.subjects.sort((a, b) => (b.attachment + b.meaningfulObservations * 0.04) - (a.attachment + a.meaningfulObservations * 0.04) || b.lastObservedMonth - a.lastObservedMonth);
     this.memory.subjects = this.memory.subjects.slice(0, WATCHER_MEMORY_LIMITS.subjects);
     this.memory.questions.sort((a, b) => (a.status === 'open' ? -1 : 1) - (b.status === 'open' ? -1 : 1) || b.lastEvaluatedMonth - a.lastEvaluatedMonth);
@@ -485,11 +515,12 @@ export class WatcherMind {
     this.memory.beliefs = this.memory.beliefs.slice(0, WATCHER_MEMORY_LIMITS.beliefs);
     this.memory.predictions.sort((a, b) => (a.resolved ? 1 : -1) - (b.resolved ? 1 : -1) || b.madeMonth - a.madeMonth);
     this.memory.predictions = this.memory.predictions.slice(0, WATCHER_MEMORY_LIMITS.predictions);
+    this.memory.processedEventIdsAtMonth = unique(this.memory.processedEventIdsAtMonth).slice(-WATCHER_MEMORY_LIMITS.processedEventRefs);
   }
 
   private sanitize(snapshot: WatcherMemorySnapshot): WatcherMemorySnapshot {
     const base = emptyWatcherMemorySnapshot();
-    return {
+    const copy: WatcherMemorySnapshot = {
       ...base,
       ...structuredClone(snapshot),
       version: 1,
@@ -497,8 +528,14 @@ export class WatcherMind {
       questions: structuredClone(snapshot.questions ?? []).slice(0, WATCHER_MEMORY_LIMITS.questions),
       beliefs: structuredClone(snapshot.beliefs ?? []).slice(0, WATCHER_MEMORY_LIMITS.beliefs),
       predictions: structuredClone(snapshot.predictions ?? []).slice(0, WATCHER_MEMORY_LIMITS.predictions),
-      processedEventIdsAtMonth: structuredClone(snapshot.processedEventIdsAtMonth ?? []).slice(-64),
+      processedEventIdsAtMonth: structuredClone(snapshot.processedEventIdsAtMonth ?? []).slice(-WATCHER_MEMORY_LIMITS.processedEventRefs),
     };
+    const prior = this.memory;
+    this.memory = copy;
+    this.compact();
+    const sanitized = this.memory;
+    this.memory = prior;
+    return sanitized;
   }
 
   private subjectKind(id: string, state: SimulationState): WatcherSubjectKind {
@@ -506,6 +543,7 @@ export class WatcherMind {
     if (state.settlements.some((item) => item.id === id)) return 'settlement';
     if (state.institutions.some((item) => item.id === id)) return 'institution';
     if (state.polities.some((item) => item.id === id)) return 'polity';
+    if (state.ideas?.some((item) => item.id === id)) return 'idea';
     return 'other';
   }
 
@@ -514,6 +552,7 @@ export class WatcherMind {
       ?? state.settlements.find((item) => item.id === id)?.name
       ?? state.institutions.find((item) => item.id === id)?.name
       ?? state.polities.find((item) => item.id === id)?.name
+      ?? state.ideas?.find((item) => item.id === id)?.name
       ?? id;
   }
 
@@ -523,6 +562,7 @@ export class WatcherMind {
       ...state.settlements.map((item) => item.id),
       ...state.institutions.map((item) => item.id),
       ...state.polities.map((item) => item.id),
+      ...(state.ideas?.map((item) => item.id) ?? []),
       ...state.relations.map((item) => item.id),
       ...state.tradeRoutes.map((item) => item.id),
       ...state.wars.map((item) => item.id),
