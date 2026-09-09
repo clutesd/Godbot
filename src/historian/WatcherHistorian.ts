@@ -1,4 +1,5 @@
 import type { HistoricalEvent, HistoricalEventType, SimulationState } from '../sim/types';
+import { describeMission, missionForPerson } from '../sim/people/PersonMissionSystem';
 import { Historian } from './Historian';
 import { NarrativeThreadEngine } from './NarrativeThreadEngine';
 import type { HistorianStatement, ObservationCandidate } from './types';
@@ -47,6 +48,7 @@ export function installWatcherHistorian(): void {
 
     const originalText = scene.statement.text;
     const originalSources = [...scene.statement.sourceEventIds];
+    const originalEntities = [...scene.statement.sourceEntityIds];
     const originalInterest = scene.interest;
     deepenObservation(this, memory, scene, state);
 
@@ -54,6 +56,7 @@ export function installWatcherHistorian(): void {
     if (!this.validateStatement(scene.statement, state)) {
       scene.statement.text = originalText;
       scene.statement.sourceEventIds = originalSources;
+      scene.statement.sourceEntityIds = originalEntities;
       scene.interest = originalInterest;
     }
     return scene;
@@ -63,8 +66,23 @@ export function installWatcherHistorian(): void {
 function deepenObservation(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate, state: SimulationState): void {
   const statement = scene.statement;
   const additions: string[] = [];
-  const threadContext = memory.threads.contextFor(scene, state);
 
+  const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
+  const mission = person ? missionForPerson(person) : undefined;
+  if (person && mission && !['completed', 'aborted'].includes(mission.stage)) {
+    const missionText = describeMission(person, state);
+    if (missionText) {
+      additions.push(missionText);
+      statement.sourceEntityIds = unique([...statement.sourceEntityIds, person.id, mission.originId, mission.targetId]);
+      // Purposeful journeys are more legible and worth following than generic travel.
+      const missionInterest = mission.kind === 'military-service' ? 0.84
+        : mission.kind === 'diplomatic-envoy' ? 0.76
+          : mission.kind === 'knowledge-exchange' ? 0.72 : 0.68;
+      scene.interest = Math.min(1, Math.max(scene.interest, missionInterest));
+    }
+  }
+
+  const threadContext = memory.threads.contextFor(scene, state);
   if (threadContext) {
     statement.sourceEventIds = unique([...statement.sourceEventIds, ...threadContext.sourceEventIds]);
     additions.push(threadContext.text);

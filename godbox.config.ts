@@ -1,5 +1,6 @@
 import type { GodboxConfigInput } from './src/config';
 import { installWatcherHistorian } from './src/historian/WatcherHistorian';
+import { installPersonMissions } from './src/sim/people/PersonMissionSystem';
 import { presetConfig, timePresetConfig, type GodboxPresetName, type GodboxTimePresetName } from './src/presets';
 
 /**
@@ -11,6 +12,9 @@ export const GODBOX_TIME_PRESET: GodboxTimePresetName = 'documentary';
 
 // Presentation-only voice layer. It never changes simulation authority or deterministic history.
 installWatcherHistorian();
+// A small, deterministic agency layer lets representative people embody trade, diplomacy,
+// knowledge exchange and war without replacing the aggregate systems that remain authoritative.
+installPersonMissions();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
