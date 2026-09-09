@@ -1,5 +1,6 @@
 import type { HistoricalEvent, HistoricalEventType, SimulationState } from '../sim/types';
 import { Historian } from './Historian';
+import { NarrativeThreadEngine } from './NarrativeThreadEngine';
 import type { HistorianStatement, ObservationCandidate } from './types';
 
 interface ObserverAttention {
@@ -11,6 +12,7 @@ interface ObserverMemory {
   observationSequence: number;
   attention: Map<string, ObserverAttention>;
   remarkedPredictionIds: Set<string>;
+  threads: NarrativeThreadEngine;
 }
 
 const memories = new WeakMap<Historian, ObserverMemory>();
@@ -19,7 +21,7 @@ let installed = false;
 function memoryFor(historian: Historian): ObserverMemory {
   let memory = memories.get(historian);
   if (!memory) {
-    memory = { observationSequence: 0, attention: new Map(), remarkedPredictionIds: new Set() };
+    memory = { observationSequence: 0, attention: new Map(), remarkedPredictionIds: new Set(), threads: new NarrativeThreadEngine() };
     memories.set(historian, memory);
   }
   return memory;
@@ -30,7 +32,7 @@ function memoryFor(historian: Historian): ObserverMemory {
  *
  * The base Historian remains authoritative for facts, provenance, scoring, uncertainty and
  * scene selection. This layer only deepens the chosen observation with a restrained cosmic
- * observer voice, historical callbacks, remembered subjects and calibrated surprise.
+ * observer voice, historical callbacks, remembered subjects, narrative threads and calibrated surprise.
  */
 export function installWatcherHistorian(): void {
   if (installed) return;
@@ -45,12 +47,14 @@ export function installWatcherHistorian(): void {
 
     const originalText = scene.statement.text;
     const originalSources = [...scene.statement.sourceEventIds];
+    const originalInterest = scene.interest;
     deepenObservation(this, memory, scene, state);
 
     // The observer is never allowed to trade factual grounding for dramatic language.
     if (!this.validateStatement(scene.statement, state)) {
       scene.statement.text = originalText;
       scene.statement.sourceEventIds = originalSources;
+      scene.interest = originalInterest;
     }
     return scene;
   };
@@ -59,6 +63,14 @@ export function installWatcherHistorian(): void {
 function deepenObservation(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate, state: SimulationState): void {
   const statement = scene.statement;
   const additions: string[] = [];
+  const threadContext = memory.threads.contextFor(scene, state);
+
+  if (threadContext) {
+    statement.sourceEventIds = unique([...statement.sourceEventIds, ...threadContext.sourceEventIds]);
+    additions.push(threadContext.text);
+    // A coherent long-running story deserves more viewing time, but remains presentation-only.
+    scene.interest = Math.min(1, Math.max(scene.interest, 0.34 + threadContext.thread.interestingness * 0.52));
+  }
 
   if (scene.event) {
     additions.push(...eventPerspective(memory, scene.event, state, statement));
