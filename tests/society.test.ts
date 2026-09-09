@@ -16,15 +16,17 @@ describe('Emergent society', () => {
   });
 
   it('grounds persistent trade in surveyed connections and reserves shipping for real ports', () => {
+    // A route can later close through flooding or abandonment. Keep its construction and delivery evidence.
+    const surveyedRoutes = society.state.tradeRoutes;
     const activeRoutes = society.state.tradeRoutes.filter((route) => route.active);
-    expect(activeRoutes.some((route) => route.mode === 'land')).toBe(true);
-    expect(activeRoutes.every((route) => route.transport && route.transport.projectIds.length > 0)).toBe(true);
-    for (const route of activeRoutes.filter(route => route.mode === 'water')) {
+    expect(surveyedRoutes.some((route) => route.mode === 'land')).toBe(true);
+    expect(surveyedRoutes.every((route) => route.transport && route.transport.projectIds.length > 0)).toBe(true);
+    for (const route of activeRoutes.filter(route => route.mode === 'water' && !route.weatherBlocked)) {
       expect(route.transport?.path?.mode).toBe('water');
       expect(society.state.transportation.stops[`${route.a}:water`]?.status).toBe('complete');
       expect(society.state.transportation.stops[`${route.b}:water`]?.status).toBe('complete');
     }
-    expect(activeRoutes.some((route) => route.cumulativeKnowledge > 0)).toBe(true);
+    expect(surveyedRoutes.some((route) => route.cumulativeKnowledge > 0)).toBe(true);
     expect(society.state.stats.knowledgeExchanges).toBeGreaterThan(0);
     expect(society.state.history.some((event) => event.type === 'knowledge-exchange' && event.causes.includes('persistent-trade'))).toBe(true);
     expect(society.state.settlements.some((settlement) => settlement.alive && Object.keys(settlement.cultureShares).length > 1)).toBe(true);

@@ -60,6 +60,7 @@ app.innerHTML = `
       <span id="observation">OBSERVATION 01</span>
       <span class="pulse" id="run-status"><i></i> AUTONOMOUS</span>
       <span id="seed">SEED &middot; -</span>
+      <button class="audio-toggle" id="audio-toggle" type="button" aria-pressed="false" aria-label="Mute ambient music" title="Mute ambient music">AUDIO ON</button>
       <span class="commandhint">/ &middot; COMMANDS</span>
     </footer>
     <form class="commandline" id="commandline" hidden>
@@ -86,6 +87,7 @@ const evidenceElement = requiredElement<HTMLElement>('#evidence');
 const seedElement = requiredElement<HTMLElement>('#seed');
 const observationElement = requiredElement<HTMLElement>('#observation');
 const runStatusElement = requiredElement<HTMLElement>('#run-status');
+const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
 const openingElement = requiredElement<HTMLElement>('#opening');
 const openingTitleElement = requiredElement<HTMLElement>('#opening-title');
 const openingObservationElement = requiredElement<HTMLElement>('#opening-observation');
@@ -95,7 +97,46 @@ const openingStatusElement = requiredElement<HTMLElement>('#opening-status');
 const commandLineElement = requiredElement<HTMLElement>('#commandline');
 const commandInputElement = requiredElement<HTMLInputElement>('#command-input');
 const COMMAND_PLACEHOLDER = 'restart · restart seed · restart <seed>';
+const AUDIO_MUTED_KEY = 'godbox.audio.muted';
 commandInputElement.placeholder = COMMAND_PLACEHOLDER;
+
+function readAudioMutedPreference(): boolean {
+  try {
+    return window.localStorage.getItem(AUDIO_MUTED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeAudioMutedPreference(muted: boolean): void {
+  try {
+    window.localStorage.setItem(AUDIO_MUTED_KEY, String(muted));
+  } catch {
+    // Private browsing or blocked storage should not affect the observation.
+  }
+}
+
+let activeAudio: AudioDirector | undefined;
+let audioMuted = readAudioMutedPreference();
+
+function syncAudioToggle(): void {
+  audioToggleElement.textContent = audioMuted ? 'AUDIO OFF' : 'AUDIO ON';
+  audioToggleElement.setAttribute('aria-pressed', String(!audioMuted));
+  audioToggleElement.setAttribute('aria-label', audioMuted ? 'Unmute ambient music' : 'Mute ambient music');
+  audioToggleElement.title = audioMuted ? 'Unmute ambient music' : 'Mute ambient music';
+}
+
+audioToggleElement.addEventListener('click', () => {
+  audioMuted = !audioMuted;
+  writeAudioMutedPreference(audioMuted);
+  activeAudio?.setMuted(audioMuted);
+  syncAudioToggle();
+});
+
+const unlockAudio = (): void => { activeAudio?.resume(); };
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio);
+syncAudioToggle();
 
 const monthNames = ['LATE WINTER', 'EARLY SPRING', 'SPRING', 'LATE SPRING', 'EARLY SUMMER', 'SUMMER', 'LATE SUMMER', 'EARLY AUTUMN', 'AUTUMN', 'LATE AUTUMN', 'EARLY WINTER', 'WINTER'];
 
@@ -245,6 +286,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const presentation = new PresentationDirector(simulation.config);
   window.__godboxPacing = () => presentation.telemetry();
   const audio = new AudioDirector(simulation.config);
+  activeAudio = audio;
+  audio.setMuted(audioMuted);
+  syncAudioToggle();
 
   let lastTime = performance.now();
   let elapsedSeconds = 0;
@@ -333,6 +377,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     if (!runEnded) {
       void persist();
       audio.stop();
+      if (activeAudio === audio) activeAudio = undefined;
       view.dispose();
     }
   };
@@ -344,6 +389,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     window.removeEventListener('beforeunload', persistBeforeUnload);
     await persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
     audio.stop();
+    if (activeAudio === audio) activeAudio = undefined;
     view.dispose();
   };
   activeRun = { conclude };

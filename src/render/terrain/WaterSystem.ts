@@ -4,6 +4,7 @@ import { clamp01 } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
 import { softPointTexture } from '../atmosphere/sprites';
 import { elevationToY, type TerrainSurface } from './TerrainSurface';
+import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 
 export interface WaterReport {
   lakeSurfaces: number;
@@ -21,6 +22,7 @@ export class WaterSystem {
   readonly group = new THREE.Group();
   readonly report: WaterReport;
   private readonly ocean: THREE.Mesh;
+  private readonly oceanY: number;
   private readonly foam: THREE.Points | undefined;
   private readonly foamBase: Float32Array;
   private readonly mist: THREE.Points | undefined;
@@ -36,15 +38,14 @@ export class WaterSystem {
       color: '#2a6b7a',
       roughness: 0.16,
       metalness: 0.02,
-      transparent: true,
-      opacity: 0.82,
-      transmission: 0.08,
+      depthWrite: true,
       clearcoat: 0.6,
       clearcoatRoughness: 0.25,
     });
     this.ocean = new THREE.Mesh(new THREE.PlaneGeometry(span, span, 1, 1), oceanMaterial);
     this.ocean.rotation.x = -Math.PI / 2;
-    this.ocean.position.y = surface.seaLevelY - 0.02;
+    this.oceanY = surface.seaLevelY - 0.02;
+    this.ocean.position.y = this.oceanY;
     this.ocean.receiveShadow = true;
     this.group.add(this.ocean);
 
@@ -70,7 +71,7 @@ export class WaterSystem {
 
   /** Slow swell on the open sea plus tumbling foam at the falls; both are cheap and restrained. */
   update(elapsedSeconds: number): void {
-    this.ocean.position.y += Math.sin(elapsedSeconds * 0.42) * 0.0016;
+    this.ocean.position.y = this.oceanY + Math.sin(elapsedSeconds * 0.42) * 0.0016;
     if (!this.foam) return;
     const positions = this.foam.geometry.getAttribute('position') as THREE.BufferAttribute;
     for (let index = 0; index < positions.count; index += 1) {
@@ -144,100 +145,57 @@ function collectFalls(world: WorldState): FallSite[] {
   return kept;
 }
 
-/**
- * Lakes and rivers as a single indexed mesh. Channels are only one or two samples wide in the
- * hydrology, so they are dilated by discharge into a ribbon and faded out at the banks; without
- * that a river renders as a chain of disconnected blue rectangles.
- */
-function buildInlandWater(world: WorldState): THREE.Mesh | undefined {
+/** Mesh the canonical fine hydrology cells. No visual-only widening onto dry banks. */
+export function buildInlandWater(world: WorldState): THREE.Mesh | undefined {
   const { terrain, seaLevel } = world;
-  const { resolution, step, originX, originZ, waterLevel, lake, river, flow, height } = terrain;
-  const count = resolution * resolution;
-  const level = new Float32Array(count).fill(-1);
-  const coverage = new Float32Array(count);
-
-  for (let index = 0; index < count; index += 1) {
-    if (!lake[index] && !(read(waterLevel, index) > read(height, index) && read(height, index) >= seaLevel)) continue;
-    level[index] = read(waterLevel, index);
-    coverage[index] = 1;
-  }
-
-  // Stamp channels widest-first from the headwaters down, so a lower reach always wins and the
-  // surface never climbs back uphill where two rivers meet.
-  const channels: number[] = [];
-  for (let index = 0; index < count; index += 1) if (river[index]) channels.push(index);
-  channels.sort((a, b) => read(waterLevel, b) - read(waterLevel, a) || a - b);
-  for (const index of channels) {
-    const surface = read(waterLevel, index);
-    const width = 1 + Math.round(read(flow, index) * 2.6);
-    const x = index % resolution;
-    const z = (index / resolution) | 0;
-    for (let dz = -width; dz <= width; dz += 1) {
-      const nz = z + dz;
-      if (nz < 0 || nz >= resolution) continue;
-      for (let dx = -width; dx <= width; dx += 1) {
-        const nx = x + dx;
-        if (nx < 0 || nx >= resolution) continue;
-        const distance = Math.hypot(dx, dz);
-        if (distance > width) continue;
-        const neighbour = nz * resolution + nx;
-        // Water only spreads onto ground the channel could actually reach.
-        if (read(height, neighbour) > surface + 0.012) continue;
-        level[neighbour] = surface;
-        coverage[neighbour] = Math.max(coverage[neighbour] ?? 0, 1 - (distance / (width + 0.85)) ** 2);
-      }
-    }
-  }
-
+  const { resolution, step, originX, originZ, waterLevel, flow, height } = terrain;
   const positions: number[] = [];
   const colors: number[] = [];
-  const indices: number[] = [];
-  const vertexOf = new Int32Array(count).fill(-1);
   const shallow = new THREE.Color('#4f8f92');
   const deep = new THREE.Color('#245f6d');
   const colour = new THREE.Color();
-
-  for (let index = 0; index < count; index += 1) {
-    const surface = read(level, index);
-    if (surface < 0) continue;
-    const x = index % resolution;
-    const z = (index / resolution) | 0;
-    const lift = lake[index] ? 0.04 : 0.06;
-    vertexOf[index] = positions.length / 3;
-    positions.push(originX + x * step, elevationToY(surface, seaLevel) + lift, originZ + z * step);
-    colour.copy(shallow).lerp(deep, clamp01(lake[index] ? 0.75 : read(flow, index) * 0.8));
-    const alpha = 0.28 + clamp01(coverage[index] ?? 0) * 0.6;
-    colors.push(colour.r, colour.g, colour.b, alpha);
-  }
-
-  for (let z = 0; z < resolution - 1; z += 1) {
-    for (let x = 0; x < resolution - 1; x += 1) {
-      const a = vertexOf[z * resolution + x] ?? -1;
-      const b = vertexOf[z * resolution + x + 1] ?? -1;
-      const c = vertexOf[(z + 1) * resolution + x] ?? -1;
-      const d = vertexOf[(z + 1) * resolution + x + 1] ?? -1;
-      if (a >= 0 && b >= 0 && c >= 0) indices.push(a, c, b);
-      if (b >= 0 && c >= 0 && d >= 0) indices.push(b, c, d);
+  type Vertex = { x: number; z: number; depth: number };
+  // A fine sample owns its nearest-sample square, exactly as surfaceWaterAt does.
+  for (let index = 0; index < height.length; index++) {
+    if (waterLevel[index]! < 0 || height[index]! < seaLevel) continue;
+    const x = originX + index % resolution * step;
+    const z = originZ + Math.floor(index / resolution) * step;
+    const y = elevationToY(waterLevel[index]!, seaLevel);
+    const vertex = (dx: number, dz: number): Vertex => ({ x: x + dx * step, z: z + dz * step,
+      depth: y - surfaceHeightAt(world, x + dx * step, z + dz * step) });
+    const center = vertex(0, 0);
+    const corners = [vertex(-0.5, -0.5), vertex(-0.5, 0.5), vertex(0.5, 0.5), vertex(0.5, -0.5)];
+    colour.copy(shallow).lerp(deep, clamp01(Math.max(0, center.depth) * 0.5 + flow[index]! * 0.3));
+    for (let side = 0; side < 4; side++) {
+      const triangle = [center, corners[side]!, corners[(side + 1) % 4]!];
+      const clipped: Vertex[] = [];
+      for (let i = 0; i < 3; i++) {
+        const a = triangle[i]!;
+        const b = triangle[(i + 1) % 3]!;
+        if (a.depth > 0) clipped.push(a);
+        if ((a.depth > 0) !== (b.depth > 0)) {
+          const t = a.depth / (a.depth - b.depth);
+          clipped.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, depth: 0 });
+        }
+      }
+      for (let i = 1; i < clipped.length - 1; i++) {
+        for (const p of [clipped[0]!, clipped[i]!, clipped[i + 1]!]) {
+          positions.push(p.x, y, p.z);
+          colors.push(colour.r, colour.g, colour.b);
+        }
+      }
     }
   }
-  if (indices.length === 0) return undefined;
-
+  if (!positions.length) return undefined;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4));
-  geometry.setIndex(indices);
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.24,
-    metalness: 0.04,
-    transparent: true,
-    depthWrite: false,
-  });
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.24, metalness: 0.04,
+    depthWrite: true });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'inland-water';
   mesh.receiveShadow = true;
-  mesh.renderOrder = 1;
   return mesh;
 }
 

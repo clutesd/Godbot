@@ -18,6 +18,7 @@ export class AudioDirector {
   failureReason?: string;
   private currentCategory?: AudioCategory;
   private currentEra?: AudioEra;
+  private muted = false;
   private readonly ambience: LayerState = { fadingToSilence: false };
   private readonly music: LayerState = { fadingToSilence: false };
   private event?: HTMLAudioElement;
@@ -26,18 +27,45 @@ export class AudioDirector {
 
   constructor(private readonly config: GodboxConfig, private readonly manifest: AudioManifest = AUDIO_MANIFEST) {}
 
+  get isMuted(): boolean { return this.muted; }
+
+  setMuted(muted: boolean): void {
+    if (this.muted === muted) return;
+    this.muted = muted;
+    if (muted) {
+      this.pauseLayer(this.ambience);
+      this.pauseLayer(this.music);
+      this.event?.pause();
+      this.voice?.pause();
+      return;
+    }
+    if (!this.resumeLayer(this.ambience) && this.currentCategory) this.transitionLayer(this.ambience, this.manifest.ambience[this.currentCategory]);
+    if (!this.resumeLayer(this.music) && this.currentEra) this.transitionLayer(this.music, this.manifest.music[this.currentEra]);
+  }
+
+  resume(): void {
+    if (this.muted) return;
+    this.resumeLayer(this.ambience);
+    this.resumeLayer(this.music);
+  }
+
   transitionTo(category: AudioCategory, voiceAssetId?: string, era: AudioEra = 'settlement'): void {
     if (!this.config.audio.enabled || typeof Audio === 'undefined') return;
+    const categoryChanged = category !== this.currentCategory;
+    const eraChanged = era !== this.currentEra;
+    this.currentCategory = category;
+    this.currentEra = era;
+    if (this.muted) {
+      if (categoryChanged) this.clearLayer(this.ambience);
+      if (eraChanged) this.clearLayer(this.music);
+      return;
+    }
     if (voiceAssetId) this.playVoice(voiceAssetId);
-    if (category !== this.currentCategory) {
-      this.currentCategory = category;
+    if (categoryChanged) {
       this.transitionLayer(this.ambience, this.manifest.ambience[category]);
       this.playEvent(category);
     }
-    if (era !== this.currentEra) {
-      this.currentEra = era;
-      this.transitionLayer(this.music, this.manifest.music[era]);
-    }
+    if (eraChanged) this.transitionLayer(this.music, this.manifest.music[era]);
   }
 
   update(deltaSeconds: number): void {
@@ -59,6 +87,30 @@ export class AudioDirector {
     this.voice?.pause();
     this.event = undefined;
     this.voice = undefined;
+  }
+
+  private pauseLayer(layer: LayerState): void {
+    layer.current?.audio.pause();
+    layer.incoming?.audio.pause();
+  }
+
+  private resumeLayer(layer: LayerState): boolean {
+    let resumed = false;
+    for (const track of [layer.current, layer.incoming]) {
+      if (track) {
+        if (track.audio.paused) this.play(track.audio);
+        resumed = true;
+      }
+    }
+    return resumed;
+  }
+
+  private clearLayer(layer: LayerState): void {
+    layer.current?.audio.pause();
+    layer.incoming?.audio.pause();
+    layer.current = undefined;
+    layer.incoming = undefined;
+    layer.fadingToSilence = false;
   }
 
   private transitionLayer(layer: LayerState, choices: readonly AudioTrackDefinition[]): void {
@@ -128,12 +180,14 @@ export class AudioDirector {
   }
 
   private play(audio: HTMLAudioElement): void {
+    if (this.muted) return;
     void audio.play().catch((error: unknown) => {
       this.failureReason = error instanceof Error ? error.message : String(error);
     });
   }
 
   private volume(track: PlayingTrack, layerVolume: number): number {
+    if (this.muted) return 0;
     return Math.min(1, track.gain * this.config.audio.masterVolume * layerVolume * (track.definition.volume ?? 1));
   }
 

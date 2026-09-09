@@ -11,6 +11,7 @@
 
 import type { Biome, WorldCell, WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
+import { waterAt } from '../../sim/transport/TerrainTraversal';
 import * as THREE from 'three';
 
 /**
@@ -50,7 +51,7 @@ export class TerrainQueries {
       const cached = this.propertiesCache.get(cacheKey)!;
       const cell = cellAt(this.world, worldX, worldZ);
       if (cell) {
-        cached.water = cell.water;
+        cached.water = waterAt(this.world, { x: worldX, z: worldZ }, cell);
         cached.shallow = cell.water && !this.isDeepWater(cell);
         cached.moisture = cell.moisture;
       }
@@ -64,7 +65,7 @@ export class TerrainQueries {
       elevation: cell.elevation,
       slope: this.calculateSlope(cell),
       maxSlope: this.calculateMaxSlope(cell),
-      water: cell.water,
+      water: waterAt(this.world, { x: worldX, z: worldZ }, cell),
       shallow: cell.water && !this.isDeepWater(cell),
       biome: cell.biome,
       distanceToCoast: cell.coast ? -cell.elevation * 100 : this.distanceToCoastFrom(cell),

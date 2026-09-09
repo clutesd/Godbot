@@ -528,7 +528,12 @@ export class GodboxRenderer {
       }
     }
     const terrain = this.terrainQueries.queryTerrainAt(position.x, position.z);
-    if (!terrain || terrain.water || terrain.maxSlope > 40) position = this.lastPersonGroundPosition.get(person.id) ?? this.nearestRenderableGround(person.position, person.id);
+    if (!terrain || terrain.water || terrain.maxSlope > 40) {
+      const previous = this.lastPersonGroundPosition.get(person.id);
+      const previousTerrain = previous && this.terrainQueries.queryTerrainAt(previous.x, previous.z);
+      position = previous && previousTerrain && !previousTerrain.water && previousTerrain.maxSlope <= 40
+        ? previous : this.nearestRenderableGround(person.position, person.id);
+    }
     this.lastPersonGroundPosition.set(person.id, { ...position });
     return position;
   }
@@ -1850,6 +1855,14 @@ export class GodboxRenderer {
         marker.position.set(point.x, point.y + 0.2, point.z);
         marker.userData['constructionSegmentId'] = segment.id;
         this.routeGroup.add(marker);
+        if (segment.damagedMonth !== undefined) {
+          const scar = new THREE.Mesh(transportRibbon(this.state.world, segment, segment.mode === 'rail' ? 0.85 : 0.62),
+            new THREE.MeshStandardMaterial({ color: '#615044', roughness: 1, side: THREE.DoubleSide }));
+          scar.userData['weatherSurface'] = true;
+          scar.userData['damagedSegmentId'] = segment.id;
+          scar.receiveShadow = true;
+          this.routeGroup.add(scar);
+        }
         continue;
       }
       const rail = segment.mode === 'rail';

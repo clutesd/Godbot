@@ -2,6 +2,7 @@ import type { RawHeightfield } from './Heightfield';
 import { clamp01 } from './noise';
 import { nearestIndex } from './TerrainField';
 import type { WeatherCellState, WorldState } from '../types';
+import { classifyWaterDepth, DANGEROUS_WATER_DEPTH, elevationToY, surfaceHeightAt } from './SurfaceGeometry';
 
 export class DynamicHydrology {
   private readonly baseLevel: Float32Array;
@@ -11,12 +12,14 @@ export class DynamicHydrology {
   private readonly storage: Float32Array;
   private readonly cellIndices: Int32Array;
   private readonly visited: Uint8Array;
+  private readonly cellGroundY: Float32Array;
 
   constructor(private readonly world: WorldState) {
     const terrain = world.terrain;
     this.baseLevel = terrain.waterLevel.slice();
     this.baseFlow = terrain.flow.slice();
     this.baseWater = world.cells.map((cell) => cell.water);
+    this.cellGroundY = Float32Array.from(world.cells, cell => surfaceHeightAt(world, cell.worldX, cell.worldZ));
     this.runoff = new Float32Array(terrain.height.length);
     this.storage = new Float32Array(terrain.height.length);
     this.visited = new Uint8Array(terrain.height.length);
@@ -71,8 +74,22 @@ export class DynamicHydrology {
       const cell = this.world.cells[index]!;
       const weather = conditions[index]!;
       const sample = nearestIndex(terrain, cell.worldX, cell.worldZ);
-      const depth = Math.max(0, waterLevel[sample]! - height[sample]!);
-      weather.floodDepth = this.baseWater[index] ? 0 : depth * 17.5;
+      const level = waterLevel[sample]!;
+      const depth = level < 0 ? 0 : Math.max(0, elevationToY(level, seaLevel) - this.cellGroundY[index]!);
+      weather.waterDepth = depth;
+      weather.floodDepth = this.baseWater[index] || this.baseLevel[sample]! >= 0 ? 0 : depth;
+      weather.floodState = classifyWaterDepth(depth, cell.moisture);
+      weather.floodMonths = weather.floodDepth >= DANGEROUS_WATER_DEPTH ? weather.floodMonths + 1 : 0;
+      if (weather.floodDepth > 0.02) cell.moisture = Math.max(cell.moisture, 0.9);
+      if (weather.floodDepth >= DANGEROUS_WATER_DEPTH) {
+        weather.cropDamage = clamp01(weather.cropDamage + weather.floodDepth * 0.35);
+        if (weather.floodMonths > 1) {
+          const loss = Math.min(0.2, weather.floodDepth * 0.06);
+          cell.wood *= 1 - loss;
+          weather.treeDamage = clamp01(weather.treeDamage + loss);
+          weather.lastWindthrowMonth = this.world.weather?.month ?? 0;
+        }
+      }
       weather.floodRisk = clamp01(this.storage[sample]! * (1 - cell.slope) * 3);
       cell.water = this.baseWater[index]! || weather.floodDepth > 0.035;
       cell.flow = flow[sample]!;

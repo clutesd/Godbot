@@ -1,4 +1,5 @@
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
+import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState } from './transport/types';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
@@ -92,6 +93,9 @@ export interface WeatherCellState extends WeatherDescriptor {
   runoff: number;
   floodRisk: number;
   floodDepth: number;
+  waterDepth: number;
+  floodState: WaterDepthState;
+  floodMonths: number;
   treeDamage: number;
   lastWindthrowMonth: number;
 }
@@ -512,6 +516,9 @@ export interface StructurePlot {
   condition: number;
   foundedMonth: number;
   damagedMonth?: number;
+  floodDepth?: number;
+  floodMonths?: number;
+  accessRestricted?: boolean;
 }
 
 export interface CultureDimensions {

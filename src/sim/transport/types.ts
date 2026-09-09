@@ -15,6 +15,9 @@ export interface TransportSegment {
   cost: number;
   work: number;
   completedMonth?: number;
+  floodDepth?: number;
+  floodMonths?: number;
+  damagedMonth?: number;
 }
 export interface TransportStop {
   id: string;

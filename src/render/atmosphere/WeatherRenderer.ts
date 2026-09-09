@@ -1,16 +1,23 @@
 import * as THREE from 'three';
 import { SeededRandom } from '../../sim/prng';
 import { cellAt } from '../../sim/world';
+import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import type { TornadoState, WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 
 const BUDGET = 512;
 const RANGE = 18;
+const SNOW_COVERAGE_RATE = 45;
+/** A few centimetres hide the ground colour; snow need not reach travel-blocking depth. */
+export const snowCoverageForDepth = (depth: number): number => 1 - Math.exp(-Math.max(0, depth) * SNOW_COVERAGE_RATE);
 
 export class WeatherRenderer {
   readonly group = new THREE.Group();
   readonly texture: THREE.DataTexture;
   private readonly pixels: Uint8Array;
+  private readonly waterTexture: THREE.DataTexture;
+  private readonly waterPixels: Float32Array;
+  private snowSettled = false;
   private readonly snowTargets: Float32Array;
   private readonly snowDisplay: Float32Array;
   private readonly time = { value: 0 };
@@ -44,6 +51,9 @@ export class WeatherRenderer {
     this.texture.magFilter = THREE.LinearFilter;
     this.texture.minFilter = THREE.LinearFilter;
     this.windTexture = { value: this.texture };
+    const resolution = world.terrain.resolution;
+    this.waterPixels = new Float32Array(resolution * resolution);
+    this.waterTexture = new THREE.DataTexture(this.waterPixels, resolution, resolution, THREE.RedFormat, THREE.FloatType);
     const random = new SeededRandom(`${seed}:weather-visuals`);
     this.samples = Array.from({ length: BUDGET }, () => ({ x: random.range(-RANGE, RANGE), z: random.range(-RANGE, RANGE), phase: random.float() }));
     const rainGeometry = new THREE.BufferGeometry();
@@ -87,40 +97,47 @@ export class WeatherRenderer {
   bindScene(scene: THREE.Scene): void {
     scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh) || (!['terrain', 'weather-foliage'].includes(object.name) && !object.userData['weatherSurface'])) return;
-      const material = object.material;
-      if (!(material instanceof THREE.MeshStandardMaterial)) return;
-      if (this.bound.has(material)) return;
-      this.bound.add(material);
-      const foliage = object.name === 'weather-foliage';
-      material.onBeforeCompile = (shader) => {
-        shader.uniforms.weatherMap = this.windTexture;
-        shader.uniforms.weatherTime = this.time;
-        shader.vertexShader = `uniform sampler2D weatherMap; uniform float weatherTime; varying vec4 weatherSample; varying float weatherUp;\n${shader.vertexShader}`;
-        shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
-          #include <begin_vertex>
-          vec4 weatherPosition = vec4(position, 1.0);
-          #ifdef USE_INSTANCING
-            weatherPosition = instanceMatrix * weatherPosition;
-          #endif
-          weatherPosition = modelMatrix * weatherPosition;
-          vec3 snowNormal = objectNormal;
-          #ifdef USE_INSTANCING
-            snowNormal = mat3(instanceMatrix) * snowNormal;
-          #endif
-          weatherUp = smoothstep(0.15, 0.7, normalize(mat3(modelMatrix) * snowNormal).y);
-          vec2 weatherUv = (weatherPosition.xz / ${this.world.cellSize.toFixed(6)} + ${((this.world.size + 1) / 2).toFixed(6)}) / ${this.world.size.toFixed(6)};
-          weatherSample = texture2D(weatherMap, weatherUv);
-          ${foliage ? 'transformed.xz += (weatherSample.rg * 2.0 - 1.0) * sin(weatherTime * 2.2 + weatherPosition.x * 0.3 + weatherPosition.z * 0.2) * max(position.y, 0.0) * 0.065;' : ''}
-        `);
-        shader.fragmentShader = `varying vec4 weatherSample; varying float weatherUp;\n${shader.fragmentShader}`;
-        shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `
-          #include <color_fragment>
-          diffuseColor.rgb *= 1.0 - weatherSample.a * 0.12;
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.92, 0.95), weatherSample.b * weatherUp * ${foliage ? '0.7' : '0.96'});
-        `);
-      };
-      material.customProgramCacheKey = () => `weather-${foliage}-${this.world.size}`;
-      material.needsUpdate = true;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial) || this.bound.has(material)) continue;
+        this.bound.add(material);
+        const foliage = object.name === 'weather-foliage';
+        material.onBeforeCompile = (shader) => {
+          shader.uniforms.weatherMap = this.windTexture;
+          shader.uniforms.weatherTime = this.time;
+          shader.uniforms.waterMap = { value: this.waterTexture };
+          shader.vertexShader = `uniform sampler2D weatherMap; uniform float weatherTime; varying vec4 weatherSample; varying float weatherUp; varying vec3 weatherWorldPosition;\n${shader.vertexShader}`;
+          shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
+            #include <begin_vertex>
+            vec4 weatherPosition = vec4(position, 1.0);
+            #ifdef USE_INSTANCING
+              weatherPosition = instanceMatrix * weatherPosition;
+            #endif
+            weatherPosition = modelMatrix * weatherPosition;
+            weatherWorldPosition = weatherPosition.xyz;
+            vec3 snowNormal = objectNormal;
+            #ifdef USE_INSTANCING
+              snowNormal = mat3(instanceMatrix) * snowNormal;
+            #endif
+            weatherUp = smoothstep(0.15, 0.7, normalize(mat3(modelMatrix) * snowNormal).y);
+            vec2 weatherUv = (weatherPosition.xz / ${this.world.cellSize.toFixed(6)} + ${((this.world.size + 1) / 2).toFixed(6)}) / ${this.world.size.toFixed(6)};
+            weatherSample = texture2D(weatherMap, weatherUv);
+            ${foliage ? 'transformed.xz += (weatherSample.rg * 2.0 - 1.0) * sin(weatherTime * 2.2 + weatherPosition.x * 0.3 + weatherPosition.z * 0.2) * max(position.y, 0.0) * 0.065;' : ''}
+          `);
+          shader.fragmentShader = `uniform sampler2D waterMap; varying vec4 weatherSample; varying float weatherUp; varying vec3 weatherWorldPosition;\n${shader.fragmentShader}`;
+          shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `
+            #include <color_fragment>
+            vec2 floodUv = ((weatherWorldPosition.xz - vec2(${this.world.terrain.originX.toFixed(6)}, ${this.world.terrain.originZ.toFixed(6)})) / ${this.world.terrain.step.toFixed(6)} + 0.5) / ${this.world.terrain.resolution.toFixed(6)};
+            float localWater = texture2D(waterMap, floodUv).r;
+            float immersion = 1.0 - smoothstep(localWater, localWater + 0.06, weatherWorldPosition.y);
+            float snowCover = (1.0 - exp(-max(0.0, weatherSample.b) * ${SNOW_COVERAGE_RATE.toFixed(1)})) * weatherUp * (1.0 - immersion);
+            diffuseColor.rgb *= 1.0 - max(weatherSample.a * 0.12, immersion * 0.35);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.92, 0.95), snowCover * ${foliage ? '0.86' : '0.98'});
+          `);
+        };
+        material.customProgramCacheKey = () => `weather-snow-flood-${foliage}-${this.world.size}`;
+        material.needsUpdate = true;
+      }
     });
   }
 
@@ -134,6 +151,12 @@ export class WeatherRenderer {
       this.snowTargets[index] = Math.min(255, cell.snowpack * 255);
       this.pixels[index * 4 + 3] = Math.round(this.world.cells[index]!.moisture * 255);
     }
+    for (let index = 0; index < this.waterPixels.length; index++) {
+      const level = this.world.terrain.waterLevel[index]!;
+      this.waterPixels[index] = level < 0 ? -10000 : elevationToY(level, this.world.seaLevel);
+    }
+    this.waterTexture.needsUpdate = true;
+    this.snowSettled = false;
     this.texture.needsUpdate = true;
     this.revision = this.world.environmentRevision ?? 0;
   }
@@ -183,11 +206,15 @@ export class WeatherRenderer {
     if (changed) this.syncTexture();
     let snowChanged = false;
     const blend = 1 - Math.exp(-Math.min(1, delta) * 1.5);
-    for (let index = 0; index < this.snowDisplay.length; index += 1) {
+    let settling = false;
+    if (!this.snowSettled) for (let index = 0; index < this.snowDisplay.length; index += 1) {
       this.snowDisplay[index] = this.snowDisplay[index]! + (this.snowTargets[index]! - this.snowDisplay[index]!) * blend;
+      if (Math.abs(this.snowTargets[index]! - this.snowDisplay[index]!) > 0.1) settling = true;
+      else this.snowDisplay[index] = this.snowTargets[index]!;
       const value = Math.round(this.snowDisplay[index]!);
       if (value !== this.pixels[index * 4 + 2]) { this.pixels[index * 4 + 2] = value; snowChanged = true; }
     }
+    this.snowSettled = !settling;
     if (snowChanged) this.texture.needsUpdate = true;
     if (changed || this.accumulator >= 0.25) {
       this.accumulator = 0;
@@ -248,6 +275,7 @@ export class WeatherRenderer {
 
   dispose(): void {
     this.texture.dispose();
+    this.waterTexture.dispose();
     for (const object of [this.rain, this.snow, ...this.funnels, ...this.funnelDust]) {
       object.geometry.dispose();
       if (!Array.isArray(object.material)) object.material.dispose();

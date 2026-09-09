@@ -198,6 +198,7 @@ export class TransportationSystem {
     let cursor = project.from;
     for (const id of project.segmentIds) {
       const segment = network.segments[id]!;
+      if ((segment.floodDepth ?? 0) > 0.06 || segment.damagedMonth === this.state.month) return;
       if (segment.status === 'complete') {
         cursor = segment.from === cursor ? segment.to : segment.from;
         continue;

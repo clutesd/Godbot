@@ -8,14 +8,22 @@ GODBOX is a deterministic, autonomous civilization experiment presented as a liv
 
 ## Start
 
-Use Node.js 22 or newer.
+Use Node.js 22 or newer. The checked-in lockfile is for npm, so use `npm ci` for a fresh clone or Cloudflare build.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
 Open the URL printed by Vite. The opening identifies the observation, world, and seed; the simulation then runs without interaction.
+
+Production build:
+
+```bash
+npm run build
+```
+
+The production output directory is `dist/`.
 
 Release and simulation checks:
 
@@ -171,9 +179,13 @@ The world is not a heightmap sampled once from a noise function. [`src/sim/terra
 
 **Terrain and civilisation.** Settlement siting reads flat ground, fresh water, harbours, landform and landmark proximity rather than a habitability number alone. Floodplains beside strong rivers are the fertile ground; slope raises movement cost; coastal towns far apart along one coastline trade by sea.
 
-**Surface.** [`TerrainSurface.ts`](./src/render/terrain/TerrainSurface.ts) is the single authority on where the ground is — mesh, foundations, vegetation, routes and camera all sample it, which is why nothing floats. It emits one continuous vertex-coloured mesh with smooth normals and an alternating quad diagonal, replacing the per-cell boxes that made the world read as a grid. Surface blending is driven by slope, altitude, moisture, hydrology and exposed rock, so beaches form where flat land meets the sea, silt follows the rivers, warm strata and cold stone appear on the faces, and snow caps only the summits. High ground gets an eased vertical lift so peaks read as mountains while valleys stay buildable.
+**Surface.** [`TerrainSurface.ts`](./src/render/terrain/TerrainSurface.ts) is the single authority on where the ground is — mesh, foundations, vegetation, routes and camera all sample it, which is why nothing floats. It emits one continuous vertex-coloured mesh with smooth normals and an alternating quad diagonal, replacing the per-cell boxes that made the world read as a grid. Surface blending is driven by slope, altitude, moisture, hydrology and exposed rock, so beaches form where flat land meets the sea, silt follows the rivers, warm strata and cold stone appear on the faces, and accumulated snow coats exposed ground in cold weather. High ground gets an eased vertical lift so peaks read as mountains while valleys stay buildable.
 
-**Water.** [`WaterSystem.ts`](./src/render/terrain/WaterSystem.ts) draws the ocean as one sheet beyond the fog horizon, and meshes lakes and rivers from the filled basins. Channels are dilated by discharge into ribbons and faded out at the banks, so a river reads as a river instead of a chain of blue rectangles. The strongest falls get foam and a mist cloud at their base.
+**Water and flooding.** [`WaterSystem.ts`](./src/render/terrain/WaterSystem.ts) meshes the canonical hydrology samples with shore clipping and depth-tested surfaces. Ocean swell is bounded around sea level, independent of frame rate. The monthly weather tick spreads runoff into connected low ground. Depth is measured against the shared world surface: wet below 0.12 world units, flooded at 0.12, deeply flooded at 0.45, and submerged at 0.95. Building footprints and transport decks accumulate exposure; sustained flooding damages their existing condition/work state. Residents evacuate, routes close, crops suffer, and woodland can die back. After recession, structures require labor and materials to repair and damaged transport needs reconstruction; dry ground alone never restores either.
+
+**Winter.** [`WeatherSystem.ts`](./src/sim/weather/WeatherSystem.ts) converts precipitation below the existing freezing threshold to snow and retains per-cell snowpack after snowfall stops. Blizzards accumulate more, while temperature controls gradual melt and releases runoff. [`WeatherRenderer.ts`](./src/render/atmosphere/WeatherRenderer.ts) maps that stored depth onto upward-facing terrain, roofs, foliage and roads, including meshes with multiple materials. Shallow snow gives visible coverage before it impedes travel; submerged surfaces receive no snow coating. Accumulation adds no surface draw calls. Environment scans stay on monthly revisions, and falling precipitation uses the existing bounded particle pool.
+
+The accelerated regression scenarios in `tests/environment-interactions.test.ts` cover river rise, evacuation, persistent damage, protected bridges, ocean drift, snowy days, blizzards, retention and thaw. Run them with `npm test -- tests/environment-interactions.test.ts tests/weather.test.ts tests/weather-render.test.ts`.
 
 **Forests.** [`ForestPlanner.ts`](./src/render/vegetation/ForestPlanner.ts) derives density from woodland resource, moisture, slope and treeline, then carves cores, edges and clearings with a low-frequency patch field. Species follow the land: alpine and conifer with altitude and cold, riverbank along the watercourses, dry-climate trees where moisture fails, broadleaf otherwise. Blossom groves are deliberately scarce — a rare wild grove mask, plus an orchard mask in a ring around each settlement so approaches are lined rather than smothered. Rare ancient trees are wider, older and survive the clearing a city makes around them. Cities eat the woodland inside their built radius and abandoned ground grows back.
 
@@ -215,7 +227,7 @@ Structures are not modeled meshes. They are resolved from an architectural gramm
 
 ## Adding audio
 
-GODBOX ships silent and does not call an external API at runtime. Add only audio you own or are licensed to use:
+GODBOX does not call an external audio API at runtime. Add only audio you own or are licensed to use:
 
 ```text
 public/audio/
@@ -232,15 +244,36 @@ Register relative files in [`src/audio/audio.manifest.ts`](./src/audio/audio.man
 - `events` maps categories to optional one-shots;
 - `voiceAssets` maps a Historian statement asset ID to a local narration file.
 
-The director layers ambience and music, crossfades changes, ducks both under narration, handles one-shots, and treats missing or blocked files as silence. Set `audio.enabled: false` for explicit silent mode. Suno or ElevenLabs output can be added as locally owned files; no engine rewrite or runtime service call is needed.
+The director layers ambience and music, crossfades changes, ducks both under narration, handles one-shots, and treats missing or blocked files as silence. `public/audio/music/moonlit-drift.mp3` is registered as the current subtle looped music bed for every era. The footer audio control stores mute state in `localStorage` when available, and playback resumes after a normal browser user gesture when autoplay is blocked. Set `audio.enabled: false` for explicit silent mode.
 
 ## Deployment
 
+GODBOX deploys as a static Vite site on Cloudflare Pages. It does not require Workers, Functions, a backend, remote storage, API keys, or runtime environment variables. Browser archive persistence uses IndexedDB with an in-memory fallback.
+
 ```bash
+npm ci
 npm run build
 ```
 
-Deploy the generated `dist/` directory to any static host. No backend, account, API key, remote database, or remote font is required. Serve through HTTP rather than opening `dist/index.html` directly so module and audio paths resolve correctly. If deploying below a URL subpath, set the matching Vite base and `audio.basePath`.
+Cloudflare Pages settings:
+
+| Setting | Value |
+| --- | --- |
+| Framework preset | Vite |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Root directory | repository root |
+| Node version | `22` or newer |
+| Runtime environment variables | None |
+
+The repository also includes [`wrangler.toml`](./wrangler.toml) with `pages_build_output_dir = "dist"`, so direct Pages deploys and Wrangler-based Pages deploys agree on the output directory. Serve through HTTP rather than opening `dist/index.html` directly so module and audio paths resolve correctly. If deploying below a URL subpath, set the matching Vite `base` and `audio.basePath`.
+
+Troubleshooting:
+
+- If Cloudflare installs with an older Node version, set the Pages environment variable `NODE_VERSION=22` and rebuild.
+- If `npm ci` fails, confirm `package-lock.json` is present and the Cloudflare package manager is npm.
+- If the app loads without music, click the subtle `AUDIO` control once; browsers may block autoplay until user interaction.
+- If an audio path 404s, confirm `public/audio/music/moonlit-drift.mp3` exists before building and that the deployed output contains `dist/audio/music/moonlit-drift.mp3`.
 
 ## Current limitations
 

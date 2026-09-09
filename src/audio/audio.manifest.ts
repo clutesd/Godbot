@@ -16,8 +16,10 @@ export interface AudioManifest {
   voiceAssets: Record<string, string>;
 }
 
+const MOONLIT_DRIFT: AudioTrackDefinition = { file: 'music/moonlit-drift.mp3', volume: 0.45, loop: true };
+
 /**
- * Local-only and deliberately empty by default. Paths resolve below audio.basePath.
+ * Local-only assets. Paths resolve below audio.basePath.
  * Missing layers are silent; the documentary never depends on an audio asset.
  */
 export const AUDIO_MANIFEST: AudioManifest = {
@@ -35,13 +37,13 @@ export const AUDIO_MANIFEST: AudioManifest = {
     ending: [],
   },
   music: {
-    settlement: [],
-    urban: [],
-    recorded: [],
-    industrial: [],
-    atomic: [],
-    machine: [],
-    interplanetary: [],
+    settlement: [MOONLIT_DRIFT],
+    urban: [MOONLIT_DRIFT],
+    recorded: [MOONLIT_DRIFT],
+    industrial: [MOONLIT_DRIFT],
+    atomic: [MOONLIT_DRIFT],
+    machine: [MOONLIT_DRIFT],
+    interplanetary: [MOONLIT_DRIFT],
   },
   events: {},
   voiceAssets: {},

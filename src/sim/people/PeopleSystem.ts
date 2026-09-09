@@ -13,6 +13,7 @@ import type {
   WorldState,
 } from '../types';
 import { WalkabilityLayer, type CrossingMode } from './WalkabilityLayer';
+import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../terrain/SurfaceGeometry';
 
 interface ScheduledDestination {
   kind: DestinationKind;
@@ -136,6 +137,13 @@ export class PeopleSystem {
     const cellZ = Math.round(person.position.z / this.world.cellSize + this.world.size / 2);
     const weather = state.weather.cells[cellZ * this.world.size + cellX];
     const waterTransport = ['boat', 'ferry'].includes(person.navigation?.crossingMode ?? 'walk');
+    const flooded = waterDepthAt(this.world, person.position.x, person.position.z) >= DANGEROUS_WATER_DEPTH;
+    const closedBuilding = (settlement.structurePlots ?? []).some((plot) => (plot.accessRestricted || plot.condition < 0.65)
+      && Math.hypot(person.position.x - plot.worldX, person.position.z - plot.worldZ) < plot.radius + 0.2);
+    if (!waterTransport && (flooded || closedBuilding)) {
+      this.evacuate(person, settlement);
+      return;
+    }
     if (!waterTransport && !this.walkability.isWalkable(person.position)) {
       person.position = this.walkability.nearestWalkable(person.position, `${person.id}:weather-evacuation`);
       person.target = { ...person.position };
@@ -177,6 +185,23 @@ export class PeopleSystem {
       return;
     }
     this.assignDestination(person, settlement, state, schedule, 'walk');
+  }
+
+  private evacuate(person: Person, settlement: Settlement): void {
+    // One monthly tick spans the evacuation. Never interpolate an ordinary commute through it.
+    let safe = this.walkability.nearestWalkable(person.position, `${settlement.id}:flood-refuge`);
+    for (const plot of settlement.structurePlots ?? []) {
+      if (!plot.accessRestricted && plot.condition >= 0.65) continue;
+      if (Math.hypot(safe.x - plot.worldX, safe.z - plot.worldZ) >= plot.radius + 0.3) continue;
+      safe = this.walkability.nearestWalkable({ x: plot.worldX + plot.radius + 0.5, z: plot.worldZ }, `${settlement.id}:refuge:${plot.id}`);
+    }
+    person.position = safe;
+    person.target = { ...safe };
+    person.activity = 'shelter';
+    person.navigation = { destinationKind: 'safe-area', destinationId: `${settlement.id}:flood-refuge`,
+      reason: this.walkability.isWalkable(safe) ? 'evacuated from flooding or an unsafe building' : 'stranded by flooding; awaiting rescue',
+      waypoints: [], waypointIndex: 0, schedulePhase: 'emergency', traveling: false, crossingMode: 'walk' };
+    if (!this.walkability.isWalkable(safe)) person.health = Math.max(0, person.health - 0.2);
   }
 
   beginMigration(person: Person, target: Settlement, state: SimulationState, route?: TradeRoute): boolean {
@@ -449,7 +474,16 @@ export class PeopleSystem {
     const center = kind === 'field'
       ? { x: settlement.position.x + Math.cos(angle) * layout.radius * 0.78, z: settlement.position.z + Math.sin(angle) * layout.radius * 0.78 }
       : { x: anchor.worldX, z: anchor.worldZ };
-    return this.walkability.nearestWalkable({ x: center.x + Math.cos(angle) * radius, z: center.z + Math.sin(angle) * radius }, identity);
+    let destination = this.walkability.nearestWalkable({ x: center.x + Math.cos(angle) * radius, z: center.z + Math.sin(angle) * radius }, identity);
+    // Homes and workplaces can remain unsafe after the surrounding ground dries.
+    for (let pass = 0; pass < 4; pass++) {
+      const closed = (settlement.structurePlots ?? []).find(plot => (plot.accessRestricted || plot.condition < 0.65)
+        && Math.hypot(destination.x - plot.worldX, destination.z - plot.worldZ) < plot.radius + 0.3);
+      if (!closed) break;
+      destination = this.walkability.nearestWalkable({ x: closed.worldX + Math.cos(angle) * (closed.radius + 0.6 + pass),
+        z: closed.worldZ + Math.sin(angle) * (closed.radius + 0.6 + pass) }, identity);
+    }
+    return destination;
   }
 
   private preferredRoadWaypoints(person: Person, settlement: Settlement, state: SimulationState, destination: DestinationKind): Vec2[] {

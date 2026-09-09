@@ -4,7 +4,7 @@ import { distance, gradeLimit, landAllowed, MinQueue, navigableAt, pointKey, wat
 import { surfaceWaterAt } from '../terrain/SurfaceGeometry';
 
 export function segmentUsable(world: WorldState, segment: TransportSegment): boolean {
-  if (segment.status !== 'complete' || segment.points.length < 2) return false;
+  if (segment.status !== 'complete' || segment.points.length < 2 || (segment.floodDepth ?? 0) >= 0.12) return false;
   const points = segment.points;
   if (pointKey(points[0]!) !== segment.from || pointKey(points[points.length - 1]!) !== segment.to) return false;
   if (segment.kind === 'bridge') {

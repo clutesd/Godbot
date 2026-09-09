@@ -120,7 +120,8 @@ describe('Weather presentation', () => {
     const shader = { uniforms: {}, vertexShader: '#include <begin_vertex>', fragmentShader: '#include <color_fragment>' } as unknown as Parameters<typeof callback>[0];
     callback(shader, {} as THREE.WebGLRenderer);
     expect(shader.vertexShader).toContain('weatherUp');
-    expect(shader.fragmentShader).toContain('weatherSample.b * weatherUp');
+    expect(shader.fragmentShader).toContain('snowCover');
+    expect(shader.fragmentShader).toContain('weatherUp * (1.0 - immersion)');
     weather.state.tornadoes.push({ id: 'funnel', frontId: 'storm', month: 0, intensity: 0.8, width: 1, speed: 10,
       lifetimeHours: 1, direction: { x: 1, z: 0 }, path: [{ x: -5, z: 0 }, { x: 5, z: 0 }] });
     const before = JSON.stringify(weather.state);

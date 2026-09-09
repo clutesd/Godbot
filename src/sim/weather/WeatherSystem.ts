@@ -1,6 +1,7 @@
 import { DEFAULT_CONFIG, type GodboxConfig } from '../../config';
 import { SeededRandom, stableHash } from '../prng';
 import { DynamicHydrology } from '../terrain/Hydrology';
+import { classifyWaterDepth, waterDepthAt } from '../terrain/SurfaceGeometry';
 import { cellAt } from '../world';
 import { tornadoDamage, tornadoExposure, tornadoPotential } from './Tornado';
 import type { Vec2, WeatherDescriptor, WeatherFront, WeatherKind, WeatherState, WorldCell, WorldState } from '../types';
@@ -38,13 +39,17 @@ export class WeatherSystem {
     this.state = { month: 0, wind: 0.12, windX: 1, windZ: 0, fronts: [], cells: [], tornadoes: [], forestScars: [] };
     world.weather = this.state;
     this.hydrology = new DynamicHydrology(world);
-    this.state.cells = world.cells.map((cell) => ({
+    this.state.cells = world.cells.map((cell) => {
+      const waterDepth = waterDepthAt(world, cell.worldX, cell.worldZ);
+      return {
       ...this.resolveWeatherAt(cell.worldX, cell.worldZ),
       x: cell.x, z: cell.z, confidence: 1, durationMonths: 1,
       temperature: this.temperatureAt(cell), windX: 1, windZ: 0,
       snowpack: 0, blizzard: 0, snowMonths: 0, cropDamage: 0, travelPenalty: 0, runoff: 0, floodRisk: 0, floodDepth: 0,
+      waterDepth, floodState: classifyWaterDepth(waterDepth, cell.moisture), floodMonths: 0,
       treeDamage: 0, lastWindthrowMonth: -1,
-    }));
+      };
+    });
   }
 
   private temperatureAt(cell: WorldCell): number {

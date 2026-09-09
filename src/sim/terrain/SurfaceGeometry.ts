@@ -2,6 +2,23 @@ import { fbmSeeded, octaveSeeds, smoothstep } from './noise';
 import { nearestIndex, sampleField } from './TerrainField';
 import type { WorldState } from '../types';
 
+export type WaterDepthState = 'dry' | 'wet' | 'flooded' | 'deeply-flooded' | 'submerged';
+/** World units, shared with the visible ground and water; an adult is roughly 0.7 units tall. */
+export const DANGEROUS_WATER_DEPTH = 0.12;
+
+export function classifyWaterDepth(depth: number, wetness = 0): WaterDepthState {
+  if (depth >= 0.95) return 'submerged';
+  if (depth >= 0.45) return 'deeply-flooded';
+  if (depth >= DANGEROUS_WATER_DEPTH) return 'flooded';
+  return depth > 0.005 || wetness > 0.75 ? 'wet' : 'dry';
+}
+
+export function waterDepthAt(world: WorldState, x: number, z: number, floorY?: number): number {
+  const water = surfaceWaterAt(world, x, z);
+  // Most queries are dry. Avoid terrain interpolation/noise unless water is actually present.
+  return Number.isFinite(water) ? Math.max(0, water - (floorY ?? surfaceHeightAt(world, x, z))) : 0;
+}
+
 const grainSeeds = octaveSeeds('terrain', 'surface-grain', 3);
 
 /** Shared by engineering, traversal and TerrainSurface; no presentation dependency. */

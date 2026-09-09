@@ -69,6 +69,31 @@ describe('AudioDirector', () => {
     expect(() => new AudioDirector(configWith(), manifest).transitionTo('settlement')).not.toThrow();
   });
 
+  it('mutes without constructing tracks and resumes the current era music on demand', () => {
+    vi.stubGlobal('Audio', FakeAudio);
+    const layered: AudioManifest = {
+      ...manifest,
+      music: { ...manifest.music, settlement: [{ file: 'music/moonlit.ogg', volume: 0.4 }] },
+    };
+    const director = new AudioDirector(configWith({ audio: { masterVolume: 1, musicVolume: 1, crossfadeSeconds: 1 } }), layered);
+    director.setMuted(true);
+    director.transitionTo('settlement', undefined, 'settlement');
+    expect(FakeAudio.instances).toHaveLength(0);
+
+    director.setMuted(false);
+    director.update(1);
+    const music = FakeAudio.instances.find((audio) => audio.src === '/audio/music/moonlit.ogg');
+    expect(music?.volume).toBe(0.4);
+    expect(music?.paused).toBe(false);
+
+    director.setMuted(true);
+    expect(music?.paused).toBe(true);
+    director.resume();
+    expect(music?.paused).toBe(true);
+    director.setMuted(false);
+    expect(music?.paused).toBe(false);
+  });
+
   it('layers ambience and era music, plays an event, and ducks beds under voice', () => {
     vi.stubGlobal('Audio', FakeAudio);
     const layered: AudioManifest = {

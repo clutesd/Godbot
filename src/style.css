@@ -89,6 +89,21 @@ body { min-width: 320px; }
 .pulse { color: rgba(255, 239, 219, .63); }
 .pulse i { display: inline-block; width: 5px; height: 5px; margin: 0 7px 1px 0; border-radius: 50%; background: #78a98a; box-shadow: 0 0 8px #78a98a; animation: pulse 2.4s ease-in-out infinite; }
 
+.audio-toggle {
+  appearance: none;
+  padding: 0;
+  color: rgba(255, 239, 219, .46);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-shadow: inherit;
+  cursor: pointer;
+}
+.audio-toggle:hover, .audio-toggle:focus-visible { color: rgba(239, 183, 88, .82); }
+.audio-toggle:focus-visible { outline: 1px solid rgba(239, 183, 88, .62); outline-offset: 5px; }
+.audio-toggle[aria-pressed="false"] { color: rgba(255, 239, 219, .28); }
+
 .opening {
   position: absolute;
   z-index: 10;

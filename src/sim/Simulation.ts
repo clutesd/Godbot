@@ -6,7 +6,7 @@ import { AdvancedCivilizationSystem, createAdvancedCivilizationState, represente
 import { PeopleSystem } from './people/PeopleSystem';
 import { WeatherSystem } from './weather/WeatherSystem';
 import { syncStructurePlots } from '../shared/StructurePlots';
-import { applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
+import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
 import type {
@@ -297,6 +297,7 @@ export class Simulation {
     this.weatherSystem.advanceMonth();
     this.state.weather = this.weatherSystem.state;
     syncStructurePlots(this.state);
+    for (const event of applyFloodConsequences(this.state)) this.addEvent(event);
     for (const tornado of this.state.weather.tornadoes) {
       if (tornado.month === this.state.month) {
         for (const event of applyTornadoConsequences(this.state, tornado)) this.addEvent(event);
@@ -615,8 +616,8 @@ export class Simulation {
       if (settlement.weatherRecoverySince !== undefined && damagedPlots.length === 0) {
         this.addEvent({ type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
           causes: ['weather-rebuilding'], context: { recoveryMonths: this.state.month - settlement.weatherRecoverySince },
-          outcome: 'Repairs to storm-damaged structures are complete.', significance: 0.55,
-          summary: `${settlement.name} completes repairs to its storm-damaged structures.` });
+          outcome: 'Repairs to weather-damaged structures are complete.', significance: 0.55, tags: ['weather', 'recovery'],
+          summary: `${settlement.name} completes repairs to its weather-damaged structures.` });
         settlement.weatherRecoverySince = undefined;
       }
       const artisans = count('artisan');
@@ -643,7 +644,10 @@ export class Simulation {
       settlement.conflictPressure *= 0.965;
       const structuralLoss = damagedPlots.reduce((sum, plot) => sum + 1 - plot.condition, 0) / Math.max(1, settlement.buildings);
       const safetyFactor = (1 - settlement.conflictPressure * 0.24) * (1 - structuralLoss * 0.3);
-      const exposedWork = 1 - (weather?.blizzard ?? 0) * 0.25;
+      const floodedWorkLoss = (settlement.structurePlots ?? []).slice(0, settlement.buildings)
+        .reduce((sum, plot) => sum + Math.max(plot.condition < 0.65 ? 1 - plot.condition : 0,
+          clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
+      const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
       balance.food = (farmers * (0.54 + cell.fertility * 0.7) * season * climatePulse * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.18 + cell.fertility * 0.25)) * safetyFactor * productivity.food * exposedWork - people.length * (0.31 + settlement.urbanization * 0.018);
       balance.wood = (foragers * 0.18 + builders * 0.1) * (0.42 + cell.wood) * exposedWork - settlement.buildings * 0.022;
       balance.minerals = ((artisans * 0.085 + foragers * 0.02) * (0.35 + cell.minerals) - artisans * 0.018) * productivity.materials;
