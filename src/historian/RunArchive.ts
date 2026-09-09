@@ -3,8 +3,9 @@ import { SeededRandom } from '../sim/prng';
 import { representedPopulation } from '../sim/advanced/AdvancedCivilizationSystem';
 import type { Culture, HistoricalEvent, Institution, Person, Polity, Settlement, SimulationState, War } from '../sim/types';
 import type { CrossRunContext, HistorianPrediction, HistorianStatement } from './types';
+import { emptyWatcherMemorySnapshot, type WatcherMemorySnapshot } from './WatcherMind';
 
-export const HISTORIAN_ARCHIVE_SCHEMA_VERSION = 3;
+export const HISTORIAN_ARCHIVE_SCHEMA_VERSION = 4;
 const DATABASE_NAME = 'godbox-historian';
 const DATABASE_VERSION = 1;
 
@@ -69,6 +70,7 @@ export interface RunArchiveRecord {
   significantPeople: ArchivedPerson[];
   historianStatements: HistorianStatement[];
   predictions: HistorianPrediction[];
+  watcherMemory: WatcherMemorySnapshot;
   outcome: {
     population: number;
     peakPopulation: number;
@@ -116,7 +118,6 @@ export function configurationFingerprint(config: GodboxConfig): string {
   return hash.toString(16).padStart(8, '0');
 }
 
-/** Identifies one configured experiment while allowing each observation its own seed. */
 export function experimentFingerprint(config: GodboxConfig): string {
   return configurationFingerprint({ ...config, seed: '<observation-seed>' });
 }
@@ -153,9 +154,9 @@ export class RunRecordBuilder {
   private readonly people = new Map<string, ArchivedPerson>();
   private readonly demographicMilestones: DemographicMilestone[];
   private lastPeakMilestone: number;
-
   private readonly priorStatements: HistorianStatement[];
   private readonly priorPredictions: HistorianPrediction[];
+  private readonly priorWatcherMemory: WatcherMemorySnapshot;
 
   constructor(readonly identity: RunIdentity, private readonly config: GodboxConfig, initialState: SimulationState, prior?: RunArchiveRecord) {
     const population = representedPopulation(initialState);
@@ -165,6 +166,7 @@ export class RunRecordBuilder {
     this.lastPeakMilestone = Math.max(population, ...this.demographicMilestones.map((milestone) => milestone.population));
     this.priorStatements = structuredClone(prior?.historianStatements ?? []);
     this.priorPredictions = structuredClone(prior?.predictions ?? []);
+    this.priorWatcherMemory = structuredClone(prior?.watcherMemory ?? emptyWatcherMemorySnapshot());
   }
 
   update(
@@ -173,6 +175,7 @@ export class RunRecordBuilder {
     statements: readonly HistorianStatement[] = [],
     predictions: readonly HistorianPrediction[] = [],
     completion?: { status: 'completed' | 'failed'; classification?: SimulationState['advanced']['outcome']['classification']; reason?: string },
+    watcherMemory?: WatcherMemorySnapshot,
   ): RunArchiveRecord {
     for (const event of state.history) if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
     const population = representedPopulation(state);
@@ -219,6 +222,7 @@ export class RunRecordBuilder {
       significantPeople: structuredClone([...this.people.values()]),
       historianStatements: mergeById(this.priorStatements, statements).slice(-1200),
       predictions: mergeById(this.priorPredictions, predictions).slice(-1200),
+      watcherMemory: structuredClone(watcherMemory ?? this.priorWatcherMemory),
       outcome: { population, peakPopulation: Math.max(state.stats.peakPopulation, Math.round(state.advanced.peakRepresentedPopulation)), settlementsRemaining: state.settlements.filter((settlement) => settlement.alive).length, industrialCenters, discoveries: state.stats.discoveries, knowledgeLost: state.stats.knowledgeLost, rediscoveries: state.stats.rediscoveries, knowledgeExchanges: state.stats.knowledgeExchanges, tradeRoutesEstablished: state.tradeRoutes.length, wars: state.stats.wars, classification, ...(atomicThresholdMonth === undefined ? {} : { atomicThresholdMonth }), nuclearWeapons: state.stats.nuclearWeaponsStates > 0, nuclearWar: state.stats.nuclearUses > 0, survivalYearsAfterAtomic, survivedThreeCenturiesAfterAtomic: survivalYearsAfterAtomic !== null && survivalYearsAfterAtomic >= 300 && !collapseWithinThreeCenturies, interplanetary: state.advanced.space.selfSustainingBodies >= 2, postBiological: classification === 'POST-BIOLOGICAL', unknown: classification === 'UNKNOWN', summary },
       updatedAt: new Date().toISOString(),
     };
@@ -406,6 +410,7 @@ export function migrateArchiveRecord(raw: unknown): RunArchiveRecord {
     significantPeople: source.significantPeople ?? [],
     historianStatements: source.historianStatements ?? [],
     predictions: source.predictions ?? [],
+    watcherMemory: source.watcherMemory ?? emptyWatcherMemorySnapshot(),
     outcome: {
       population: 0, peakPopulation: 0, settlementsRemaining: 0, industrialCenters: 0, discoveries: 0,
       knowledgeLost: 0, rediscoveries: 0, knowledgeExchanges: 0, tradeRoutesEstablished: 0, wars: 0, classification: null,
