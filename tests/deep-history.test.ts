@@ -5,7 +5,7 @@ import {
   attachDeepHistory,
   deepHistoryFromWatcherSnapshot,
 } from '../src/historian/DeepHistoricalMemory';
-import { RunRecordBuilder, createRunIdentity } from '../src/historian/RunArchive';
+import { RUN_ARCHIVE_LIMITS, RunRecordBuilder, createRunIdentity } from '../src/historian/RunArchive';
 import { WatcherMind } from '../src/historian/WatcherMind';
 import { registerWatcherMemory, watcherMemoryForState } from '../src/historian/WatcherMemoryRegistry';
 import type { ObservationCandidate } from '../src/historian/types';
@@ -95,6 +95,38 @@ describe('Deep historical memory', () => {
     expect(snapshot.entities.length).toBeLessThanOrEqual(DEEP_HISTORY_LIMITS.entities);
     expect(snapshot.causalLinks.length).toBeLessThanOrEqual(DEEP_HISTORY_LIMITS.causalLinks);
     expect(memory.eventMemory(atomic.id)).toBeDefined();
+  });
+
+  it('also bounds the durable raw RunArchive while retaining structural anchors', () => {
+    const simulation = new Simulation({ seed: 'archive-deep-bounds', startingPopulation: 120 });
+    simulation.state.history = [];
+    const writing = historicalEvent('archive-writing', 12, 'discovery', simulation.state, {
+      significance: 0.56,
+      context: { knowledge: 'durable-records' },
+    });
+    simulation.state.history.push(writing);
+    for (let index = 0; index < RUN_ARCHIVE_LIMITS.rawEvents + 500; index += 1) {
+      simulation.state.history.push(historicalEvent(
+        `archive-event-${index}`,
+        24 + index * 24,
+        'infrastructure-built',
+        simulation.state,
+        { significance: 0.52 + (index % 7) * 0.02 },
+      ));
+    }
+    const atomic = historicalEvent('archive-atomic', 300_000 * 12, 'atomic-threshold', simulation.state, { significance: 0.99, magnitude: 0.99 });
+    simulation.state.history.push(atomic);
+    simulation.state.month = atomic.month;
+
+    const identity = createRunIdentity(simulation.config, simulation.state, 1, '2026-01-01T00:00:00.000Z');
+    const record = new RunRecordBuilder(identity, simulation.config, simulation.state).update(simulation.state);
+
+    expect(record.schemaVersion).toBe(5);
+    expect(record.events.length).toBeLessThanOrEqual(RUN_ARCHIVE_LIMITS.rawEvents);
+    expect(record.events.some((event) => event.id === writing.id)).toBe(true);
+    expect(record.events.some((event) => event.id === atomic.id)).toBe(true);
+    expect(record.significantPeople.length).toBeLessThanOrEqual(RUN_ARCHIVE_LIMITS.significantPeople);
+    expect(record.demographicMilestones.length).toBeLessThanOrEqual(RUN_ARCHIVE_LIMITS.demographicMilestones);
   });
 
   it('discards trivia but promotes an initially minor event when later history explicitly depends on it', () => {
