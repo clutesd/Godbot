@@ -260,7 +260,7 @@ function callbackText(event: HistoricalEvent, earlier: HistoricalEvent): string 
   return `These lives or institutions touched the record together ${years.toLocaleString()} years ago, during ${eventNoun(earlier.type, true)}.`;
 }
 
-function eventNoun(type: HistoricalEventType, withArticle = false): string {
+function eventNoun(type: string, withArticle = false): string {
   const readableType = type.replaceAll('-', ' ');
   if (!withArticle) return readableType;
   return `${/^[aeiou]/i.test(readableType) ? 'an' : 'a'} ${readableType}`;
