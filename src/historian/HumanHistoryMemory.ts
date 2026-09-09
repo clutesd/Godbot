@@ -6,7 +6,6 @@ import type {
   Person,
   SimulationState,
   SocialIdea,
-  SocialRelationship,
 } from '../sim/types';
 import { lifeProjectForPerson } from '../sim/people/LifeProjectSystem';
 import type { DeepHistoricalMemory, DeepProvenanceClass } from './DeepHistoricalMemory';
@@ -361,7 +360,6 @@ export class HumanHistoryMemory {
       question.lastEvaluatedMonth = resolution.resolvedMonth;
       question.resolutionText = resolution.text;
       question.evidenceEventIds = unique([...question.evidenceEventIds, ...resolution.sourceEventIds]).slice(-16);
-      // The deep-resolution narrator carries compressed provenance; suppress the raw-event-only Watcher version.
       question.narrated = true;
       const record: HumanQuestionResolution = {
         id: `human:question:${question.id}`,
@@ -509,7 +507,6 @@ export class HumanHistoryMemory {
   private scanRelationships(state: SimulationState): void {
     for (const relationship of state.socialRelationships ?? []) {
       if (relationship.strength < 0.48 || (relationship.kind !== 'mentor' && relationship.kind !== 'intellectual-collaborator')) continue;
-      // The schema does not encode direction for mentorship. Preserve the observed pair without inventing teacher/student direction.
       const [fromId, toId] = relationship.a.localeCompare(relationship.b) <= 0
         ? [relationship.a, relationship.b] : [relationship.b, relationship.a];
       this.addGenealogy({ fromId, toId, kind: relationship.kind, confidence: 'recorded', month: relationship.formedMonth });
@@ -640,7 +637,6 @@ export class HumanHistoryMemory {
           this.recalculatePerson(memory);
         }
       }
-      // Dynasty names and household IDs are descriptive evidence, not sufficient by themselves to invent a founder genealogy.
     }
   }
 
