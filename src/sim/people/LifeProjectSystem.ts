@@ -37,7 +37,7 @@ export function describeLifeProject(person: Person, state: SimulationState): str
 export function eraForState(state: SimulationState, settlement?: Settlement): LifeProjectEra {
   const local = settlement ?? state.settlements.find((s) => s.alive);
   const advanced = state.advanced;
-  if (advanced.space.selfSustainingBodies >= 1 || (advanced.space.satellites > 0 && advanced.space.orbitalInfrastructure >= 0.55)) return 'space';
+  if (advanced.space.selfSustainingBodies >= 2 || advanced.space.offworldSettlements > 0 || advanced.space.satellites > 0) return 'space';
   if (advanced.machine.capability >= 0.35 || (local?.knowledge.records['computation']?.practice ?? 0) >= 0.42) return 'information';
   if (advanced.atomic.thresholdMonth !== undefined) return 'atomic';
   if ((local?.knowledge.records['electrical-generation']?.practice ?? 0) >= 0.35 || (local?.industry.intensity ?? 0) >= 0.62) return 'modern';
