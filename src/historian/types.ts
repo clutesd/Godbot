@@ -1,4 +1,5 @@
 import type { HistoricalEvent, HistoricalEventType, OutcomeClassification, Vec2 } from '../sim/types';
+export type { HistoricalEvent } from '../sim/types';
 
 export type EpistemicStatus = 'recorded-fact' | 'derived-statistic' | 'probabilistic-inference';
 
