@@ -6,9 +6,26 @@ import type { CrossRunContext, HistorianPrediction, HistorianStatement } from '.
 import { emptyWatcherMemorySnapshot, type WatcherMemorySnapshot } from './WatcherMind';
 import { registerWatcherMemory, watcherMemoryForState } from './WatcherMemoryRegistry';
 
-export const HISTORIAN_ARCHIVE_SCHEMA_VERSION = 4;
+export const HISTORIAN_ARCHIVE_SCHEMA_VERSION = 5;
 const DATABASE_NAME = 'godbox-historian';
 const DATABASE_VERSION = 1;
+
+/**
+ * RunArchive is the durable raw-evidence companion to compressed Watcher memory. These caps keep
+ * a 300,000-year observation from turning the IndexedDB record into a second unbounded history log.
+ */
+export const RUN_ARCHIVE_LIMITS = {
+  rawEvents: 2_400,
+  significantPeople: 512,
+  demographicMilestones: 256,
+  settlements: 512,
+  cultures: 128,
+  polities: 256,
+  institutions: 256,
+  conflicts: 256,
+  statements: 1_200,
+  predictions: 1_200,
+} as const;
 
 export interface RunIdentity {
   runId: string;
@@ -74,6 +91,12 @@ const IMPORTANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
 const POLITICAL_TYPES = new Set<HistoricalEvent['type']>(['institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'war-ended', 'political-transition', 'nuclear-restraint', 'nuclear-disarmament', 'nuclear-crisis', 'civilization-collapse', 'planetary-stability']);
 const TECHNOLOGY_TYPES = new Set<HistoricalEvent['type']>(['discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'post-biological-transition']);
 const CONFLICT_TYPES = new Set<HistoricalEvent['type']>(['war-declared', 'battle', 'war-ended', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'autonomous-weapons-crisis']);
+const ARCHIVE_LANDMARK_TYPES = new Set<HistoricalEvent['type']>([
+  'settlement-founded', 'settlement-abandoned', 'first-contact', 'discovery', 'knowledge-lost', 'knowledge-rediscovered',
+  'industrialization', 'political-transition', 'atomic-threshold', 'nuclear-use', 'nuclear-exchange',
+  'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition',
+  'civilization-collapse', 'civilization-recovery', 'planetary-stability', 'post-biological-transition', 'observation-lost', 'outcome-classified',
+]);
 
 export function configurationFingerprint(config: GodboxConfig): string {
   const stable = stableStringify(config);
@@ -118,12 +141,12 @@ export class RunRecordBuilder {
 
   constructor(readonly identity: RunIdentity, private readonly config: GodboxConfig, initialState: SimulationState, prior?: RunArchiveRecord) {
     const population = representedPopulation(initialState);
-    for (const event of prior?.events ?? []) this.events.set(event.id, structuredClone(event));
-    for (const person of prior?.significantPeople ?? []) this.people.set(person.id, structuredClone(person));
-    this.demographicMilestones = structuredClone(prior?.demographicMilestones ?? [{ month: initialState.month, population, kind: 'initial' }]);
+    for (const event of compactArchiveEvents(prior?.events ?? [])) this.events.set(event.id, structuredClone(event));
+    for (const person of compactArchivedPeople(prior?.significantPeople ?? [])) this.people.set(person.id, structuredClone(person));
+    this.demographicMilestones = compactDemographicMilestones(prior?.demographicMilestones ?? [{ month: initialState.month, population, kind: 'initial' }]);
     this.lastPeakMilestone = Math.max(population, ...this.demographicMilestones.map((milestone) => milestone.population));
-    this.priorStatements = structuredClone(prior?.historianStatements ?? []);
-    this.priorPredictions = structuredClone(prior?.predictions ?? []);
+    this.priorStatements = structuredClone(prior?.historianStatements ?? []).slice(-RUN_ARCHIVE_LIMITS.statements);
+    this.priorPredictions = structuredClone(prior?.predictions ?? []).slice(-RUN_ARCHIVE_LIMITS.predictions);
     this.priorWatcherMemory = structuredClone(prior?.watcherMemory ?? emptyWatcherMemorySnapshot());
     registerWatcherMemory(initialState, this.priorWatcherMemory);
   }
@@ -136,7 +159,13 @@ export class RunRecordBuilder {
     completion?: { status: 'completed' | 'failed'; classification?: SimulationState['advanced']['outcome']['classification']; reason?: string },
     watcherMemory?: WatcherMemorySnapshot,
   ): RunArchiveRecord {
-    for (const event of state.history) if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
+    for (const event of state.history) {
+      if (!IMPORTANT_EVENT_TYPES.has(event.type) || (event.type === 'battle' && event.significance < 0.42)) continue;
+      this.events.set(event.id, structuredClone(event));
+      if (this.events.size > RUN_ARCHIVE_LIMITS.rawEvents * 2) this.compactEventMap();
+    }
+    this.compactEventMap();
+
     const population = representedPopulation(state);
     if (population >= Math.max(this.lastPeakMilestone + 50, this.lastPeakMilestone * 1.25)) {
       this.demographicMilestones.push({ month: state.month, population, kind: 'new-peak' });
@@ -145,11 +174,18 @@ export class RunRecordBuilder {
     const initialPopulation = this.identity.initialConditions.population;
     if (population <= initialPopulation / 2 && !this.demographicMilestones.some((milestone) => milestone.kind === 'half-population')) this.demographicMilestones.push({ month: state.month, population, kind: 'half-population' });
     if (population === 0 && !this.demographicMilestones.some((milestone) => milestone.kind === 'extinction')) this.demographicMilestones.push({ month: state.month, population, kind: 'extinction' });
+    this.compactMilestones();
+
     this.captureRecordedDeaths(state, representativeIds);
     this.capturePeople(state, representativeIds);
+    this.compactPeopleMap();
+
     const status = completion?.status ?? (population === 0 ? 'completed' : 'ongoing');
     const events = [...this.events.values()].sort((a, b) => a.month - b.month || a.id.localeCompare(b.id));
-    const institutions = state.institutions.filter((institution) => institution.prestige >= 0.48 || events.some((event) => event.actors.includes(institution.id)));
+    const institutions = compactInstitutions(
+      state.institutions.filter((institution) => institution.prestige >= 0.48 || events.some((event) => event.actors.includes(institution.id))),
+      events,
+    );
     const industrialCenters = state.settlements.filter((settlement) => settlement.industry.active).length;
     const classification = completion?.classification ?? (population === 0 ? 'EXTINCT' : state.advanced.outcome.classification);
     const atomicThresholdMonth = state.advanced.atomic.thresholdMonth;
@@ -159,25 +195,47 @@ export class RunRecordBuilder {
       ? `${this.identity.worldName} ended with no surviving population after ${Math.floor(state.month / 12)} years.`
       : `${this.identity.worldName} has ${population} people in ${state.settlements.filter((settlement) => settlement.alive).length} settlements after ${Math.floor(state.month / 12)} years.`);
     const persistedWatcherMemory = watcherMemory ?? watcherMemoryForState(state) ?? this.priorWatcherMemory;
+    const settlements = compactSettlements(state.settlements, events);
+    const cultures = [...state.cultures].sort((a, b) => a.id.localeCompare(b.id)).slice(0, RUN_ARCHIVE_LIMITS.cultures);
+    const polities = compactPolities(state.polities, events);
+    const conflicts = compactWars(state.wars, events);
+
     return {
       schemaVersion: HISTORIAN_ARCHIVE_SCHEMA_VERSION, identity: structuredClone(this.identity), status,
       lastRecordedMonth: state.month, ...(status === 'completed' ? { endedMonth: state.month } : {}),
       configuration: structuredClone(this.config),
       majorEntities: {
-        settlements: structuredClone(state.settlements.filter((settlement) => settlement.alive || events.some((event) => event.actors.includes(settlement.id)))),
-        cultures: structuredClone(state.cultures), polities: structuredClone(state.polities), institutions: structuredClone(institutions),
+        settlements: structuredClone(settlements), cultures: structuredClone(cultures),
+        polities: structuredClone(polities), institutions: structuredClone(institutions),
       },
       events, demographicMilestones: structuredClone(this.demographicMilestones),
       politicalEventIds: events.filter((event) => POLITICAL_TYPES.has(event.type)).map((event) => event.id),
       technologicalEventIds: events.filter((event) => TECHNOLOGY_TYPES.has(event.type)).map((event) => event.id),
       conflictEventIds: events.filter((event) => CONFLICT_TYPES.has(event.type)).map((event) => event.id),
-      importantConflicts: structuredClone(state.wars.filter((war) => war.casualtiesA + war.casualtiesB > 0 || events.some((event) => event.actors.includes(war.id)))),
+      importantConflicts: structuredClone(conflicts),
       importantInstitutions: structuredClone(institutions), significantPeople: structuredClone([...this.people.values()]),
-      historianStatements: mergeById(this.priorStatements, statements).slice(-1200),
-      predictions: mergeById(this.priorPredictions, predictions).slice(-1200), watcherMemory: structuredClone(persistedWatcherMemory),
+      historianStatements: mergeById(this.priorStatements, statements).slice(-RUN_ARCHIVE_LIMITS.statements),
+      predictions: mergeById(this.priorPredictions, predictions).slice(-RUN_ARCHIVE_LIMITS.predictions), watcherMemory: structuredClone(persistedWatcherMemory),
       outcome: { population, peakPopulation: Math.max(state.stats.peakPopulation, Math.round(state.advanced.peakRepresentedPopulation)), settlementsRemaining: state.settlements.filter((settlement) => settlement.alive).length, industrialCenters, discoveries: state.stats.discoveries, knowledgeLost: state.stats.knowledgeLost, rediscoveries: state.stats.rediscoveries, knowledgeExchanges: state.stats.knowledgeExchanges, tradeRoutesEstablished: state.tradeRoutes.length, wars: state.stats.wars, classification, ...(atomicThresholdMonth === undefined ? {} : { atomicThresholdMonth }), nuclearWeapons: state.stats.nuclearWeaponsStates > 0, nuclearWar: state.stats.nuclearUses > 0, survivalYearsAfterAtomic, survivedThreeCenturiesAfterAtomic: survivalYearsAfterAtomic !== null && survivalYearsAfterAtomic >= 300 && !collapseWithinThreeCenturies, interplanetary: state.advanced.space.selfSustainingBodies >= 2, postBiological: classification === 'POST-BIOLOGICAL', unknown: classification === 'UNKNOWN', summary },
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  private compactEventMap(): void {
+    const retained = compactArchiveEvents([...this.events.values()]);
+    this.events.clear();
+    for (const event of retained) this.events.set(event.id, event);
+  }
+
+  private compactPeopleMap(): void {
+    const retained = compactArchivedPeople([...this.people.values()]);
+    this.people.clear();
+    for (const person of retained) this.people.set(person.id, person);
+  }
+
+  private compactMilestones(): void {
+    const retained = compactDemographicMilestones(this.demographicMilestones);
+    this.demographicMilestones.splice(0, this.demographicMilestones.length, ...retained);
   }
 
   private capturePeople(state: SimulationState, representativeIds: ReadonlySet<string>): void {
@@ -191,6 +249,7 @@ export class RunRecordBuilder {
       if (reasons.length === 0) continue;
       const existing = this.people.get(person.id);
       this.people.set(person.id, this.personRecord(person, state.month, [...(existing?.reasons ?? []), ...reasons]));
+      if (this.people.size > RUN_ARCHIVE_LIMITS.significantPeople * 2) this.compactPeopleMap();
     }
   }
 
@@ -206,6 +265,7 @@ export class RunRecordBuilder {
       if (reasons.length === 0) continue;
       const existing = this.people.get(id);
       this.people.set(id, { id, name: String(event.context.name), cultureId: String(event.context.cultureId ?? existing?.cultureId ?? ''), homeId: String(event.context.homeId ?? event.locationId ?? existing?.homeId ?? ''), occupation, bornMonth: event.month - age * 12, lastKnownMonth: event.month, lastKnownAgeYears: age, prestige, reasons: [...new Set([...(existing?.reasons ?? []), ...reasons])], aliveAtLastRecord: false });
+      if (this.people.size > RUN_ARCHIVE_LIMITS.significantPeople * 2) this.compactPeopleMap();
     }
   }
 
@@ -297,16 +357,120 @@ export function migrateArchiveRecord(raw: unknown): RunArchiveRecord {
   if ((source.schemaVersion ?? 0) > HISTORIAN_ARCHIVE_SCHEMA_VERSION) throw new Error('Archive was created by a newer GODBOX version');
   const configuration = source.configuration as GodboxConfig;
   const identity = { ...source.identity, experimentFingerprint: source.identity.experimentFingerprint ?? (configuration ? experimentFingerprint(configuration) : source.identity.configurationFingerprint ?? 'legacy'), baseSeed: source.identity.baseSeed ?? source.identity.seed ?? configuration?.seed ?? 'legacy' } as RunIdentity;
+  const events = compactArchiveEvents(source.events ?? []);
+  const institutions = compactInstitutions(source.importantInstitutions ?? source.majorEntities?.institutions ?? [], events);
   return {
     schemaVersion: HISTORIAN_ARCHIVE_SCHEMA_VERSION, identity, status: source.status ?? 'ongoing', lastRecordedMonth: source.lastRecordedMonth ?? 0,
     ...(source.endedMonth === undefined ? {} : { endedMonth: source.endedMonth }), configuration,
-    majorEntities: source.majorEntities ?? { settlements: [], cultures: [], polities: [], institutions: [] }, events: source.events ?? [],
-    demographicMilestones: source.demographicMilestones ?? [], politicalEventIds: source.politicalEventIds ?? [], technologicalEventIds: source.technologicalEventIds ?? [], conflictEventIds: source.conflictEventIds ?? [],
-    importantConflicts: source.importantConflicts ?? [], importantInstitutions: source.importantInstitutions ?? [], significantPeople: source.significantPeople ?? [],
-    historianStatements: source.historianStatements ?? [], predictions: source.predictions ?? [], watcherMemory: source.watcherMemory ?? emptyWatcherMemorySnapshot(),
+    majorEntities: {
+      settlements: compactSettlements(source.majorEntities?.settlements ?? [], events),
+      cultures: [...(source.majorEntities?.cultures ?? [])].sort((a, b) => a.id.localeCompare(b.id)).slice(0, RUN_ARCHIVE_LIMITS.cultures),
+      polities: compactPolities(source.majorEntities?.polities ?? [], events),
+      institutions,
+    },
+    events,
+    demographicMilestones: compactDemographicMilestones(source.demographicMilestones ?? []),
+    politicalEventIds: events.filter((event) => POLITICAL_TYPES.has(event.type)).map((event) => event.id),
+    technologicalEventIds: events.filter((event) => TECHNOLOGY_TYPES.has(event.type)).map((event) => event.id),
+    conflictEventIds: events.filter((event) => CONFLICT_TYPES.has(event.type)).map((event) => event.id),
+    importantConflicts: compactWars(source.importantConflicts ?? [], events), importantInstitutions: institutions,
+    significantPeople: compactArchivedPeople(source.significantPeople ?? []),
+    historianStatements: (source.historianStatements ?? []).slice(-RUN_ARCHIVE_LIMITS.statements),
+    predictions: (source.predictions ?? []).slice(-RUN_ARCHIVE_LIMITS.predictions), watcherMemory: source.watcherMemory ?? emptyWatcherMemorySnapshot(),
     outcome: { population: 0, peakPopulation: 0, settlementsRemaining: 0, industrialCenters: 0, discoveries: 0, knowledgeLost: 0, rediscoveries: 0, knowledgeExchanges: 0, tradeRoutesEstablished: 0, wars: 0, classification: null, nuclearWeapons: false, nuclearWar: false, survivalYearsAfterAtomic: null, survivedThreeCenturiesAfterAtomic: false, interplanetary: false, postBiological: false, unknown: false, summary: 'No outcome was recorded.', ...source.outcome },
     updatedAt: source.updatedAt ?? source.identity.createdAt ?? new Date(0).toISOString(),
   };
+}
+
+function compactArchiveEvents(source: readonly HistoricalEvent[]): HistoricalEvent[] {
+  if (source.length <= RUN_ARCHIVE_LIMITS.rawEvents) return [...source].sort((a, b) => a.month - b.month || a.id.localeCompare(b.id));
+  const chronological = [...source].sort((a, b) => a.month - b.month || a.id.localeCompare(b.id));
+  const firstByType = new Set<string>();
+  const seenTypes = new Set<HistoricalEvent['type']>();
+  let firstWritingId = '';
+  for (const event of chronological) {
+    if (!seenTypes.has(event.type)) { seenTypes.add(event.type); firstByType.add(event.id); }
+    if (!firstWritingId && event.type === 'discovery' && event.context.knowledge === 'durable-records') firstWritingId = event.id;
+  }
+  if (firstWritingId) firstByType.add(firstWritingId);
+  const causallyReferenced = new Set(source.flatMap((event) => event.causes));
+  const ranked = [...source].sort((a, b) => {
+    const scoreA = archiveEventPriority(a, firstByType, causallyReferenced);
+    const scoreB = archiveEventPriority(b, firstByType, causallyReferenced);
+    return scoreB - scoreA || b.month - a.month || a.id.localeCompare(b.id);
+  });
+  return ranked.slice(0, RUN_ARCHIVE_LIMITS.rawEvents).sort((a, b) => a.month - b.month || a.id.localeCompare(b.id));
+}
+
+function archiveEventPriority(event: HistoricalEvent, firstByType: ReadonlySet<string>, causallyReferenced: ReadonlySet<string>): number {
+  return event.significance * 2
+    + event.magnitude * 0.35
+    + Math.min(0.35, Math.log10(1 + Math.max(0, event.affectedPopulation)) * 0.08)
+    + (ARCHIVE_LANDMARK_TYPES.has(event.type) ? 0.75 : 0)
+    + (causallyReferenced.has(event.id) ? 0.65 : 0)
+    + (firstByType.has(event.id) ? 4 : 0)
+    - (event.type === 'battle' ? 0.15 : 0);
+}
+
+function compactArchivedPeople(source: readonly ArchivedPerson[]): ArchivedPerson[] {
+  return [...source]
+    .sort((a, b) => archivedPersonPriority(b) - archivedPersonPriority(a) || b.lastKnownMonth - a.lastKnownMonth || a.id.localeCompare(b.id))
+    .slice(0, RUN_ARCHIVE_LIMITS.significantPeople);
+}
+
+function archivedPersonPriority(person: ArchivedPerson): number {
+  const reasons = new Set(person.reasons);
+  return person.prestige
+    + (reasons.has('historically-significant') || reasons.has('historical-witness') ? 1.2 : 0)
+    + (reasons.has('representative') ? 0.45 : 0)
+    + (reasons.has('knowledge-keeper') ? 0.3 : 0)
+    + (reasons.has('long-life') ? 0.12 : 0)
+    + (!person.aliveAtLastRecord ? 0.04 : 0);
+}
+
+function compactDemographicMilestones(source: readonly DemographicMilestone[]): DemographicMilestone[] {
+  if (source.length <= RUN_ARCHIVE_LIMITS.demographicMilestones) return [...source].sort((a, b) => a.month - b.month);
+  const fixed = source.filter((milestone) => milestone.kind !== 'new-peak');
+  const capacity = Math.max(0, RUN_ARCHIVE_LIMITS.demographicMilestones - fixed.length);
+  const peaks = source.filter((milestone) => milestone.kind === 'new-peak')
+    .sort((a, b) => b.population - a.population || b.month - a.month)
+    .slice(0, capacity);
+  return [...fixed, ...peaks].sort((a, b) => a.month - b.month).slice(-RUN_ARCHIVE_LIMITS.demographicMilestones);
+}
+
+function eventEntityIds(events: readonly HistoricalEvent[]): Set<string> {
+  return new Set(events.flatMap((event) => [...event.actors, ...(event.locationId ? [event.locationId] : [])]));
+}
+
+function compactSettlements(source: readonly Settlement[], events: readonly HistoricalEvent[]): Settlement[] {
+  const referenced = eventEntityIds(events);
+  return [...source].sort((a, b) => Number(b.alive) - Number(a.alive)
+    || Number(referenced.has(b.id)) - Number(referenced.has(a.id))
+    || b.urbanization - a.urbanization || b.prosperity - a.prosperity || a.foundedMonth - b.foundedMonth || a.id.localeCompare(b.id))
+    .slice(0, RUN_ARCHIVE_LIMITS.settlements);
+}
+
+function compactInstitutions(source: readonly Institution[], events: readonly HistoricalEvent[]): Institution[] {
+  const referenced = eventEntityIds(events);
+  return [...source].sort((a, b) => Number(referenced.has(b.id)) - Number(referenced.has(a.id))
+    || b.prestige - a.prestige || b.reach - a.reach || b.members - a.members || a.foundedMonth - b.foundedMonth || a.id.localeCompare(b.id))
+    .slice(0, RUN_ARCHIVE_LIMITS.institutions);
+}
+
+function compactPolities(source: readonly Polity[], events: readonly HistoricalEvent[]): Polity[] {
+  const referenced = eventEntityIds(events);
+  return [...source].sort((a, b) => Number(referenced.has(b.id)) - Number(referenced.has(a.id))
+    || b.stability - a.stability || b.settlementIds.length - a.settlementIds.length || a.formedMonth - b.formedMonth || a.id.localeCompare(b.id))
+    .slice(0, RUN_ARCHIVE_LIMITS.polities);
+}
+
+function compactWars(source: readonly War[], events: readonly HistoricalEvent[]): War[] {
+  const referenced = eventEntityIds(events);
+  return [...source].sort((a, b) => Number(b.active) - Number(a.active)
+    || Number(referenced.has(b.id)) - Number(referenced.has(a.id))
+    || (b.casualtiesA + b.casualtiesB) - (a.casualtiesA + a.casualtiesB)
+    || (b.resolvedMonth ?? b.startMonth) - (a.resolvedMonth ?? a.startMonth) || a.id.localeCompare(b.id))
+    .slice(0, RUN_ARCHIVE_LIMITS.conflicts);
 }
 
 function mergeById<T extends { id: string }>(before: readonly T[], after: readonly T[]): T[] {
