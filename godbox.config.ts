@@ -1,4 +1,5 @@
 import type { GodboxConfigInput } from './src/config';
+import { installWatcherHistorian } from './src/historian/WatcherHistorian';
 import { presetConfig, timePresetConfig, type GodboxPresetName, type GodboxTimePresetName } from './src/presets';
 
 /**
@@ -7,6 +8,9 @@ import { presetConfig, timePresetConfig, type GodboxPresetName, type GodboxTimeP
  */
 export const GODBOX_PRESET: GodboxPresetName = 'default';
 export const GODBOX_TIME_PRESET: GodboxTimePresetName = 'documentary';
+
+// Presentation-only voice layer. It never changes simulation authority or deterministic history.
+installWatcherHistorian();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
