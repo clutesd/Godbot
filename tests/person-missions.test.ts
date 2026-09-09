@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { Simulation } from '../src/sim/Simulation';
 import { PersonMissionDirector, describeMission, missionForPerson } from '../src/sim/people/PersonMissionSystem';
 import type { Person, Settlement, SimulationState, TradeRoute } from '../src/sim/types';
+
+const referenceWorld = new Simulation({ seed: 'mission-test-world', startingPopulation: 40, settlementCount: [2, 2] }).state.world;
 
 function person(id: string, homeId: string, age = 32, role: Person['role'] = 'merchant'): Person {
   return {
@@ -71,7 +74,7 @@ function world(people: Person[]): SimulationState {
     caravanDirection: 1, mode: 'land', knowledgeFlow: 0.1, cumulativeKnowledge: 1, active: true,
   };
   return {
-    seed: 'mission-test', month: 120, people, settlements: [a, b], tradeRoutes: [route], relations: [], wars: [],
+    seed: 'mission-test', month: 120, world: referenceWorld, people, settlements: [a, b], tradeRoutes: [route], relations: [], wars: [],
   } as unknown as SimulationState;
 }
 
@@ -97,4 +100,21 @@ describe('PersonMissionDirector', () => {
     director.beforeMonth(state);
     expect(missionForPerson(child)).toBeUndefined();
   });
+
+  it('keeps authoritative history identical while mission presentation runs', () => {
+    const config = { seed: 'mission-independence', startingPopulation: 90, settlementCount: [3, 3] as [number, number] };
+    const baseline = new Simulation(config);
+    const observed = new Simulation(config);
+    const director = new PersonMissionDirector(observed.state);
+
+    baseline.step(240);
+    for (let month = 0; month < 240; month += 1) {
+      director.beforeMonth(observed.state);
+      observed.step(1);
+      director.afterMonth(observed.state);
+    }
+
+    expect(observed.state.history).toEqual(baseline.state.history);
+    expect(observed.state.stats).toEqual(baseline.state.stats);
+  }, 20_000);
 });
