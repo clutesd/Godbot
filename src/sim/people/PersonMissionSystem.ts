@@ -1,7 +1,7 @@
 import { Simulation } from '../Simulation';
 import { stableHash } from '../prng';
-import type { Activity, Person, PersonRole, Relation, Settlement, SimulationState, TradeRoute, War } from '../types';
-import { PeopleSystem } from './PeopleSystem';
+import type { Activity, Person, PersonNavigation, PersonRole, Relation, Settlement, SimulationState, TradeRoute, Vec2, War } from '../types';
+import { WalkabilityLayer } from './WalkabilityLayer';
 
 export type PersonMissionKind = 'trade-delegation' | 'diplomatic-envoy' | 'knowledge-exchange' | 'military-service';
 export type PersonMissionStage = 'outbound' | 'visiting' | 'returning' | 'completed' | 'aborted';
@@ -22,12 +22,55 @@ export interface PersonMission {
   outcome?: string;
 }
 
+interface PersonPresentationSnapshot {
+  position: Vec2;
+  target: Vec2;
+  activity: Activity;
+  navigation?: PersonNavigation;
+}
+
+interface MissionJourney {
+  stage: 'outbound' | 'returning';
+  position: Vec2;
+  waypoints: Vec2[];
+  waypointIndex: number;
+}
+
+interface ActiveMission {
+  person: Person;
+  mission: PersonMission;
+  baseline?: PersonPresentationSnapshot;
+  journey?: MissionJourney;
+  visitPosition?: Vec2;
+}
+
 const missionByPerson = new WeakMap<Person, PersonMission>();
 const directors = new WeakMap<Simulation, PersonMissionDirector>();
 let installed = false;
 
 const terminal = (mission: PersonMission): boolean => mission.stage === 'completed' || mission.stage === 'aborted';
-const distance = (a: { x: number; z: number }, b: { x: number; z: number }): number => Math.hypot(a.x - b.x, a.z - b.z);
+const distance = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.z - b.z);
+const cloneVec = (value: Vec2): Vec2 => ({ x: value.x, z: value.z });
+
+function cloneNavigation(navigation?: PersonNavigation): PersonNavigation | undefined {
+  return navigation ? { ...navigation, waypoints: navigation.waypoints.map(cloneVec) } : undefined;
+}
+
+function snapshot(person: Person): PersonPresentationSnapshot {
+  return {
+    position: cloneVec(person.position),
+    target: cloneVec(person.target),
+    activity: person.activity,
+    navigation: cloneNavigation(person.navigation),
+  };
+}
+
+function restore(person: Person, baseline: PersonPresentationSnapshot): void {
+  person.position = cloneVec(baseline.position);
+  person.target = cloneVec(baseline.target);
+  person.activity = baseline.activity;
+  person.navigation = cloneNavigation(baseline.navigation);
+}
 
 export function missionForPerson(person: Person): PersonMission | undefined {
   return missionByPerson.get(person);
@@ -46,29 +89,32 @@ export function describeMission(person: Person, state: SimulationState): string 
 }
 
 /**
- * Selects a small number of representative people to embody movements the simulation already
- * understands at the settlement/polity level. Most people keep ordinary local schedules.
- * Missions are deterministic, bounded, and never replace aggregate trade/war/diplomacy rules.
+ * Selects a small number of representative people to embody movements the authoritative
+ * settlement/polity simulation already understands. Mission movement is a presentation overlay:
+ * before every simulation month, the person's ordinary position/activity/navigation are restored;
+ * after the month resolves, the mission position is reapplied for the renderer and Historian.
+ * This keeps aggregate history identical while making its meaning visible through people.
  */
 export class PersonMissionDirector {
-  private readonly active = new Map<string, { person: Person; mission: PersonMission }>();
+  private readonly active = new Map<string, ActiveMission>();
+  private readonly walkability: WalkabilityLayer;
   private nextCivilEvaluationMonth = 0;
 
-  constructor(private readonly stateIdentity: SimulationState) {}
+  constructor(private readonly stateIdentity: SimulationState) {
+    this.walkability = new WalkabilityLayer(stateIdentity.world);
+  }
 
   matches(state: SimulationState): boolean {
     return state === this.stateIdentity;
   }
 
   beforeMonth(state: SimulationState): void {
+    this.restoreAuthoritativePresentation();
     this.prune(state);
     this.updateStages(state);
 
     const budget = this.missionBudget(state);
     if (this.active.size >= budget) return;
-
-    // War is visually important enough to be considered every month; civilian missions are
-    // deliberately slower so roads do not become permanently saturated with emissaries.
     this.assignMilitaryMissions(state, budget);
     if (state.month < this.nextCivilEvaluationMonth || this.active.size >= budget) return;
     this.nextCivilEvaluationMonth = state.month + 6;
@@ -78,37 +124,21 @@ export class PersonMissionDirector {
   }
 
   afterMonth(state: SimulationState): void {
-    for (const { person, mission } of this.active.values()) {
-      if (!person.alive || terminal(mission)) continue;
-      if (mission.stage === 'outbound') {
-        const target = this.settlement(state, mission.targetId);
-        if (target && this.arrived(person, target)) {
-          mission.stage = 'visiting';
-          mission.stayUntilMonth = state.month + this.visitDuration(mission);
-          person.target = { ...person.position };
-          person.activity = this.visitActivity(mission);
-          person.navigation = {
-            destinationKind: this.destinationKind(mission),
-            destinationId: `${mission.id}:visit:${target.id}`,
-            reason: `mission: ${mission.purpose}`,
-            waypoints: [], waypointIndex: 0, schedulePhase: 'social', traveling: false, crossingMode: 'walk',
-          };
-        }
-      } else if (mission.stage === 'returning') {
-        const origin = this.settlement(state, mission.originId);
-        if (origin && this.arrived(person, origin)) {
-          mission.stage = 'completed';
-          mission.completedMonth = state.month;
-          mission.outcome = `returned to ${origin.name}`;
-          person.target = { ...person.position };
-          person.activity = 'rest';
-          person.navigation = {
-            destinationKind: 'home', destinationId: `${mission.id}:complete`,
-            reason: `returned home after ${mission.purpose}`,
-            waypoints: [], waypointIndex: 0, schedulePhase: 'home', traveling: false, crossingMode: 'walk',
-          };
-        }
-      }
+    for (const entry of this.active.values()) {
+      const { person, mission } = entry;
+      if (!person.alive || !state.people.includes(person)) continue;
+      entry.baseline = snapshot(person);
+      if (terminal(mission)) continue;
+      this.advanceMission(entry, state);
+      this.applyMissionOverlay(entry, state);
+    }
+  }
+
+  private restoreAuthoritativePresentation(): void {
+    for (const entry of this.active.values()) {
+      if (!entry.baseline || !entry.person.alive) continue;
+      restore(entry.person, entry.baseline);
+      entry.baseline = undefined;
     }
   }
 
@@ -128,21 +158,142 @@ export class PersonMissionDirector {
   }
 
   private updateStages(state: SimulationState): void {
-    for (const { person, mission } of this.active.values()) {
+    for (const entry of this.active.values()) {
+      const { mission } = entry;
       if (terminal(mission)) continue;
       if (mission.kind === 'military-service') {
         const war = state.wars.find((candidate) => candidate.id === mission.relatedId);
         if (!war?.active && mission.stage !== 'returning') {
           mission.stage = 'returning';
-          person.navigation = undefined;
-          continue;
+          entry.journey = undefined;
         }
       }
       if (mission.stage === 'visiting' && state.month >= (mission.stayUntilMonth ?? state.month)) {
         mission.stage = 'returning';
-        person.navigation = undefined;
+        entry.journey = undefined;
       }
     }
+  }
+
+  private advanceMission(entry: ActiveMission, state: SimulationState): void {
+    const { mission, person } = entry;
+    if (mission.stage === 'visiting') return;
+    if (mission.stage !== 'outbound' && mission.stage !== 'returning') return;
+
+    const destinationId = mission.stage === 'returning' ? mission.originId : mission.targetId;
+    const destination = this.settlement(state, destinationId);
+    if (!destination) {
+      mission.stage = 'aborted';
+      mission.completedMonth = state.month;
+      mission.outcome = 'destination no longer existed';
+      entry.journey = undefined;
+      return;
+    }
+
+    if (!entry.journey || entry.journey.stage !== mission.stage) {
+      const start = mission.stage === 'returning'
+        ? cloneVec(entry.visitPosition ?? this.settlement(state, mission.targetId)?.position ?? person.position)
+        : cloneVec(person.position);
+      const endpoint = this.walkability.nearestWalkable(destination.position, `${mission.id}:${destination.id}`);
+      if (distance(start, endpoint) <= 0.05) {
+        this.finishLeg(entry, state, endpoint);
+        return;
+      }
+      const waypoints = this.walkability.route(start, endpoint, [], 'walk');
+      if (!waypoints.length) {
+        mission.stage = 'aborted';
+        mission.completedMonth = state.month;
+        mission.outcome = `no safe route to ${destination.name}`;
+        return;
+      }
+      entry.journey = { stage: mission.stage, position: start, waypoints: waypoints.map(cloneVec), waypointIndex: 0 };
+    }
+
+    const journey = entry.journey;
+    if (!journey) return;
+    let remainingStep = 2 + person.traits.conscientiousness * 0.5;
+    while (remainingStep > 0.001) {
+      const waypoint = journey.waypoints[journey.waypointIndex];
+      if (!waypoint) {
+        this.finishLeg(entry, state, journey.position);
+        return;
+      }
+      const remaining = distance(journey.position, waypoint);
+      const multiplier = this.walkability.travelMultiplier(waypoint);
+      const available = remainingStep / Math.max(0.5, multiplier);
+      if (remaining <= available) {
+        journey.position = cloneVec(waypoint);
+        remainingStep -= remaining * Math.max(0.5, multiplier);
+        journey.waypointIndex += 1;
+        if (journey.waypointIndex >= journey.waypoints.length) {
+          this.finishLeg(entry, state, journey.position);
+          return;
+        }
+      } else {
+        journey.position = {
+          x: journey.position.x + (waypoint.x - journey.position.x) / remaining * available,
+          z: journey.position.z + (waypoint.z - journey.position.z) / remaining * available,
+        };
+        remainingStep = 0;
+      }
+    }
+  }
+
+  private finishLeg(entry: ActiveMission, state: SimulationState, position: Vec2): void {
+    const { mission } = entry;
+    if (mission.stage === 'outbound') {
+      mission.stage = 'visiting';
+      mission.stayUntilMonth = state.month + this.visitDuration(mission);
+      entry.visitPosition = cloneVec(position);
+      entry.journey = undefined;
+      return;
+    }
+    if (mission.stage === 'returning') {
+      const origin = this.settlement(state, mission.originId);
+      mission.stage = 'completed';
+      mission.completedMonth = state.month;
+      mission.outcome = origin ? `returned to ${origin.name}` : 'returned home';
+      entry.journey = undefined;
+      entry.visitPosition = undefined;
+    }
+  }
+
+  private applyMissionOverlay(entry: ActiveMission, state: SimulationState): void {
+    const { person, mission } = entry;
+    if (terminal(mission)) return;
+
+    if (mission.stage === 'visiting') {
+      const position = cloneVec(entry.visitPosition ?? this.settlement(state, mission.targetId)?.position ?? person.position);
+      person.position = position;
+      person.target = cloneVec(position);
+      person.activity = this.visitActivity(mission);
+      person.navigation = {
+        destinationKind: this.destinationKind(mission),
+        destinationId: `${mission.id}:visit`,
+        reason: `mission: ${mission.purpose}`,
+        waypoints: [], waypointIndex: 0, schedulePhase: 'social', traveling: false, crossingMode: 'walk',
+      };
+      return;
+    }
+
+    const journey = entry.journey;
+    if (!journey) return;
+    const next = journey.waypoints[journey.waypointIndex] ?? journey.position;
+    person.position = cloneVec(journey.position);
+    person.target = cloneVec(next);
+    person.activity = 'travel';
+    person.navigation = {
+      destinationKind: this.destinationKind(mission),
+      destinationId: `${mission.id}:${mission.stage}`,
+      reason: mission.stage === 'returning'
+        ? `mission: returning home after ${mission.purpose}`
+        : `mission: ${mission.purpose}`,
+      waypoints: journey.waypoints.map(cloneVec),
+      waypointIndex: journey.waypointIndex,
+      schedulePhase: 'emergency',
+      traveling: true,
+      crossingMode: 'walk',
+    };
   }
 
   private assignMilitaryMissions(state: SimulationState, budget: number): void {
@@ -267,7 +418,6 @@ export class PersonMissionDirector {
     };
     missionByPerson.set(person, mission);
     this.active.set(mission.id, { person, mission });
-    person.navigation = undefined;
   }
 
   private hasMission(kind: PersonMissionKind, relatedId: string, originId: string): boolean {
@@ -294,10 +444,6 @@ export class PersonMissionDirector {
     return state.settlements.find((settlement) => settlement.id === id && settlement.alive);
   }
 
-  private arrived(person: Person, settlement: Settlement): boolean {
-    return !person.navigation?.traveling && distance(person.position, settlement.position) <= 3.5;
-  }
-
   private visitDuration(mission: PersonMission): number {
     if (mission.kind === 'military-service') return 8;
     if (mission.kind === 'knowledge-exchange') return 4;
@@ -320,87 +466,14 @@ export class PersonMissionDirector {
   }
 }
 
-function advanceMissionPerson(
-  people: PeopleSystem,
-  person: Person,
-  settlement: Settlement,
-  state: SimulationState,
-  mission: PersonMission,
-  originalAdvance: typeof PeopleSystem.prototype.advancePerson,
-): void {
-  if (terminal(mission)) {
-    originalAdvance.call(people, person, settlement, state);
-    return;
-  }
-  if (mission.stage === 'visiting') {
-    person.activity = mission.kind === 'trade-delegation' ? 'trade'
-      : mission.kind === 'knowledge-exchange' ? 'study'
-        : mission.kind === 'military-service' ? 'patrol' : 'socialize';
-    person.target = { ...person.position };
-    person.navigation = {
-      destinationKind: mission.kind === 'trade-delegation' ? 'market'
-        : mission.kind === 'knowledge-exchange' ? 'knowledge-institution'
-          : mission.kind === 'military-service' ? 'patrol-route' : 'civic-building',
-      destinationId: `${mission.id}:visit`, reason: `mission: ${mission.purpose}`,
-      waypoints: [], waypointIndex: 0, schedulePhase: 'social', traveling: false, crossingMode: 'walk',
-    };
-    return;
-  }
-
-  const destinationId = mission.stage === 'returning' ? mission.originId : mission.targetId;
-  const destination = state.settlements.find((candidate) => candidate.id === destinationId && candidate.alive);
-  if (!destination) {
-    mission.stage = 'aborted';
-    mission.completedMonth = state.month;
-    mission.outcome = 'destination no longer existed';
-    originalAdvance.call(people, person, settlement, state);
-    return;
-  }
-
-  const navigationId = `${mission.id}:${mission.stage}:${destination.id}`;
-  const needsRoute = !person.navigation?.traveling || person.navigation.destinationId !== navigationId;
-  if (needsRoute) {
-    const endpoint = people.walkability.nearestWalkable(destination.position, `${mission.id}:${destination.id}`);
-    const waypoints = people.walkability.route(person.position, endpoint, [], 'walk');
-    if (!waypoints.length) {
-      mission.stage = 'aborted';
-      mission.completedMonth = state.month;
-      mission.outcome = `no safe route to ${destination.name}`;
-      originalAdvance.call(people, person, settlement, state);
-      return;
-    }
-    person.target = { ...waypoints[0]! };
-    person.activity = 'travel';
-    person.navigation = {
-      destinationKind: mission.kind === 'trade-delegation' ? 'market'
-        : mission.kind === 'knowledge-exchange' ? 'knowledge-institution'
-          : mission.kind === 'military-service' ? 'patrol-route' : 'civic-building',
-      destinationId: navigationId,
-      reason: mission.stage === 'returning' ? `mission: returning home after ${mission.purpose}` : `mission: ${mission.purpose}`,
-      waypoints, waypointIndex: 0, schedulePhase: 'emergency', traveling: true, crossingMode: 'walk',
-    };
-  }
-  originalAdvance.call(people, person, settlement, state);
-}
-
 /**
- * Installs the agency layer without making Simulation depend on presentation-oriented person
- * missions. One deterministic director is attached per Simulation instance and automatically
- * resets when restart() replaces the authoritative state object.
+ * Installs the presentation-only agency layer. Simulation.step is still called once per month;
+ * the director restores ordinary person presentation before every authoritative tick and reapplies
+ * mission presentation afterward, so chunking and historical outcomes remain unchanged.
  */
 export function installPersonMissions(): void {
   if (installed) return;
   installed = true;
-
-  const originalAdvance = PeopleSystem.prototype.advancePerson;
-  PeopleSystem.prototype.advancePerson = function missionAwareAdvance(person: Person, settlement: Settlement, state: SimulationState): void {
-    const mission = missionForPerson(person);
-    if (!mission) {
-      originalAdvance.call(this, person, settlement, state);
-      return;
-    }
-    advanceMissionPerson(this, person, settlement, state, mission, originalAdvance);
-  };
 
   const originalStep = Simulation.prototype.step;
   Simulation.prototype.step = function missionAwareStep(months = 1): void {
@@ -413,11 +486,11 @@ export function installPersonMissions(): void {
     for (let index = 0; index < count; index += 1) {
       director.beforeMonth(this.state);
       originalStep.call(this, 1);
-      director.afterMonth(this.state);
       if (!director.matches(this.state)) {
         director = new PersonMissionDirector(this.state);
         directors.set(this, director);
       }
+      director.afterMonth(this.state);
     }
   };
 }
