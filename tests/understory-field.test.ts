@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { resolveUnderstoryAppearance, understoryDistanceScale } from '../src/render/vegetation/UnderstoryField';
 
 describe('Forest understory presentation', () => {
-  it('keeps understory readable through ordinary documentary camera framing', () => {
+  it('keeps understory fully readable beyond ordinary documentary camera framing', () => {
     expect(understoryDistanceScale(0)).toBe(1);
     expect(understoryDistanceScale(66)).toBe(1);
     expect(understoryDistanceScale(68)).toBe(1);
-    expect(understoryDistanceScale(78)).toBeGreaterThan(0);
-    expect(understoryDistanceScale(78)).toBeLessThan(1);
-    expect(understoryDistanceScale(88)).toBe(0);
-    expect(understoryDistanceScale(100)).toBe(0);
+    expect(understoryDistanceScale(78)).toBe(1);
+    expect(understoryDistanceScale(90)).toBeGreaterThan(0);
+    expect(understoryDistanceScale(90)).toBeLessThan(1);
+    expect(understoryDistanceScale(110)).toBe(0);
+    expect(understoryDistanceScale(140)).toBe(0);
   });
 
   it('lets summer ferns fill a moist forest floor', () => {
