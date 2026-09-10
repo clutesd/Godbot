@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
+import { flowerSuppressedBySettlement, resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
 
 describe('Flower growth cycle', () => {
   it('dies back completely through winter for every phase offset', () => {
@@ -41,5 +41,12 @@ describe('Flower growth cycle', () => {
     expect(resolveFlowerGrowth(4.5, 0.8).stage).toBe('bloom');
     expect(resolveFlowerGrowth(10, 0).visible).toBe(false);
     expect(resolveFlowerGrowth(10, 1).visible).toBe(false);
+  });
+
+  it('keeps the built settlement core flower-free without sterilizing the whole clearing', () => {
+    const settlement = [{ x: 0, z: 0, radius: 6 }];
+    expect(flowerSuppressedBySettlement(1, 0, settlement)).toBe(true);
+    expect(flowerSuppressedBySettlement(3.5, 0, settlement)).toBe(false);
+    expect(flowerSuppressedBySettlement(7, 0, settlement)).toBe(false);
   });
 });
