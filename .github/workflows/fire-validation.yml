@@ -1,0 +1,28 @@
+name: Structure fire validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/sim/fire/**'
+      - 'src/shared/StructurePlots.ts'
+      - 'src/render/atmosphere/StructureFireRenderer.ts'
+      - 'src/render/atmosphere/WeatherRenderer.ts'
+      - 'tests/structure-fire.test.ts'
+      - '.github/workflows/fire-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx eslint src/sim/fire/StructureFireSystem.ts src/shared/StructurePlots.ts src/render/atmosphere/StructureFireRenderer.ts src/render/atmosphere/WeatherRenderer.ts tests/structure-fire.test.ts
+      - run: npx vitest run tests/structure-fire.test.ts tests/weather-render.test.ts tests/environment-interactions.test.ts
+      - run: npm run build
