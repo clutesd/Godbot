@@ -118,4 +118,26 @@ describe('Capability-driven military mechanics', () => {
     expect(supplied).toBeGreaterThan(stranded);
     expect(stranded).toBeLessThan(0.8);
   });
+
+  it('wires the capability model into real campaign ticks without replacing the existing war state machine', () => {
+    const fixture = warFixture('military-combat-runtime');
+    industrialize(fixture.a);
+    grant(fixture.a, MODERN);
+    for (const person of fixture.state.people) person.traits.ambition = person.homeId === fixture.a.id ? 1 : 0;
+
+    const goodsBefore = fixture.a.resources.goods;
+    const war = fixture.declare();
+    expect(war.attacker).toBe(fixture.a.id);
+    for (let month = 0; month < 50 && war.campaign.battleCount === 0; month++) fixture.tick();
+    if (war.campaign.battleCount === 0 && war.active) fixture.tick(20);
+
+    const battle = fixture.state.history.find(event => event.type === 'battle' && event.actors.includes(war.id));
+    expect(battle).toBeDefined();
+    expect(battle?.context.engagementMode).toBeTruthy();
+    expect(Number(battle?.context.militaryRangeA ?? 0)).toBeGreaterThan(Number(battle?.context.militaryRangeB ?? 0));
+    expect(Number(battle?.context.militaryMismatchA ?? 0)).toBeGreaterThan(0.2);
+    expect(String(battle?.context.militaryEquipmentA ?? '')).toContain('guided-missiles');
+    expect(war.campaign.dispatches).toContain('capability-mismatch');
+    expect(fixture.a.resources.goods).toBeLessThan(goodsBefore);
+  });
 });
