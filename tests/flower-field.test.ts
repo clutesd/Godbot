@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
 
 describe('Flower growth cycle', () => {
-  it('dies back completely through winter', () => {
-    expect(resolveFlowerGrowth(0).stage).toBe('dormant');
-    expect(resolveFlowerGrowth(0).visible).toBe(false);
-    expect(resolveFlowerGrowth(11).visible).toBe(false);
+  it('dies back completely through winter for every phase offset', () => {
+    for (const month of [0, 10, 11, 12, 22, 23]) {
+      for (const phase of [0, 0.5, 1]) {
+        const state = resolveFlowerGrowth(month, phase);
+        expect(state.stage).toBe('dormant');
+        expect(state.visible).toBe(false);
+        expect(state.scale).toBe(0);
+        expect(state.bloom).toBe(0);
+      }
+    }
   });
 
-  it('progresses from spring growth into bloom', () => {
+  it('progresses from spring growth into summer bloom', () => {
     expect(resolveFlowerGrowth(1.5).stage).toBe('sprout');
     expect(resolveFlowerGrowth(2.6).stage).toBe('bud');
     const summer = resolveFlowerGrowth(5);
@@ -17,18 +23,23 @@ describe('Flower growth cycle', () => {
     expect(summer.scale).toBeGreaterThan(0.8);
   });
 
-  it('sets seed and senesces before winter dormancy', () => {
-    const seed = resolveFlowerGrowth(8);
-    expect(seed.stage).toBe('seed');
-    expect(seed.seed).toBeGreaterThan(0);
-    expect(resolveFlowerGrowth(9.4).stage).toBe('senescent');
+  it('sets seed and senesces gradually before winter dormancy', () => {
+    const earlyAutumn = resolveFlowerGrowth(8);
+    const lateAutumn = resolveFlowerGrowth(9.4);
+    expect(earlyAutumn.stage).toBe('seed');
+    expect(earlyAutumn.seed).toBeGreaterThan(0);
+    expect(lateAutumn.stage).toBe('senescent');
+    expect(lateAutumn.seed).toBe(1);
+    expect(lateAutumn.scale).toBeLessThan(earlyAutumn.scale);
     expect(resolveFlowerGrowth(10.2).stage).toBe('dormant');
   });
 
-  it('uses small deterministic phase offsets without allowing midwinter growth', () => {
-    expect(resolveFlowerGrowth(0, 0).visible).toBe(false);
-    expect(resolveFlowerGrowth(0, 1).visible).toBe(false);
+  it('uses deterministic phase offsets only inside the growing season', () => {
+    expect(resolveFlowerGrowth(2.1, 0).stage).toBe('sprout');
+    expect(resolveFlowerGrowth(2.1, 1).stage).toBe('bud');
     expect(resolveFlowerGrowth(4.5, 0.2).stage).toBe('bloom');
     expect(resolveFlowerGrowth(4.5, 0.8).stage).toBe('bloom');
+    expect(resolveFlowerGrowth(10, 0).visible).toBe(false);
+    expect(resolveFlowerGrowth(10, 1).visible).toBe(false);
   });
 });
