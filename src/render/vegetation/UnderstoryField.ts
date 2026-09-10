@@ -40,31 +40,38 @@ export interface UnderstoryReport {
   triangles: number;
 }
 
-const FULL_DETAIL_RANGE = 68;
-const VIEW_RANGE = 88;
-const TREE_ASSOCIATED_SHARE = 0.58;
-const MAX_PLAN_ATTEMPTS_MULTIPLIER = 8;
+/** Understory should be a landscape layer, not a close-up-only decoration. */
+const FULL_DETAIL_RANGE = 78;
+const VIEW_RANGE = 110;
+/** Most understory belongs to actual woodland; the rest fills gaps and forest edges. */
+const TREE_ASSOCIATED_SHARE = 0.72;
+const MAX_PLAN_ATTEMPTS_MULTIPLIER = 12;
+const DISPLAY_SCALE: Record<UnderstoryKind, number> = {
+  fern: 1.32,
+  shrub: 1.36,
+  bush: 1.45,
+};
 
 const SUMMER_COLOURS: Record<UnderstoryKind, THREE.Color> = {
-  fern: new THREE.Color('#4d7543'),
-  shrub: new THREE.Color('#65774a'),
-  bush: new THREE.Color('#3f6645'),
+  fern: new THREE.Color('#4f8b43'),
+  shrub: new THREE.Color('#71864c'),
+  bush: new THREE.Color('#416c43'),
 };
 const AUTUMN_COLOURS: Record<UnderstoryKind, THREE.Color> = {
-  fern: new THREE.Color('#9a7a45'),
-  shrub: new THREE.Color('#9a7048'),
-  bush: new THREE.Color('#7d6b43'),
+  fern: new THREE.Color('#a48245'),
+  shrub: new THREE.Color('#a27446'),
+  bush: new THREE.Color('#846a3f'),
 };
 const WINTER_COLOURS: Record<UnderstoryKind, THREE.Color> = {
   fern: new THREE.Color('#6d6547'),
-  shrub: new THREE.Color('#72674e'),
-  bush: new THREE.Color('#526047'),
+  shrub: new THREE.Color('#74694d'),
+  bush: new THREE.Color('#536347'),
 };
 const SNOW_COLOUR = new THREE.Color('#d8ded5');
 
 /**
- * Understory remains readable through ordinary documentary framing, then fades before the far
- * landscape. Keeping the same full-detail boundary as flowers avoids a visible vegetation seam.
+ * Understory remains fully readable beyond ordinary documentary framing, then fades through the
+ * far landscape. This intentionally makes thickets visible in establishing shots.
  */
 export function understoryDistanceScale(distance: number): number {
   return smoothstep(VIEW_RANGE, FULL_DETAIL_RANGE, Math.max(0, distance));
@@ -89,18 +96,18 @@ export function resolveUnderstoryAppearance(
     const emergence = smoothstep(1.1, 2.5, annualMonth) * smoothstep(10, 8.8, annualMonth);
     return {
       visible: emergence > 0.02,
-      scale: 0.48 + emergence * 0.52,
+      scale: 0.52 + emergence * 0.48,
       autumn,
       winter: 0,
     };
   }
 
   if (snowpack > 1.25) return { visible: false, scale: 0, autumn: 0, winter: winter ? 1 : 0 };
-  const winterScale = kind === 'bush' ? 0.82 : 0.72;
+  const winterScale = kind === 'bush' ? 0.84 : 0.74;
   const snowLoad = clamp01(snowpack / 0.75);
   return {
     visible: true,
-    scale: (winter ? winterScale : 1) * (1 - snowLoad * 0.18),
+    scale: (winter ? winterScale : 1) * (1 - snowLoad * 0.16),
     autumn,
     winter: winter ? 1 : 0,
   };
@@ -187,9 +194,10 @@ export class UnderstoryField {
 
       const moisture = cell.moisture;
       const moistureVigor = placement.kind === 'fern'
-        ? smoothstep(0.32, 0.62, moisture) * smoothstep(0.96, 0.76, moisture)
-        : 0.65 + smoothstep(0.18, 0.5, moisture) * smoothstep(0.98, 0.72, moisture) * 0.35;
-      const size = placement.scale * placement.vigor * appearance.scale * moistureVigor * distanceScale;
+        ? 0.72 + smoothstep(0.26, 0.6, moisture) * smoothstep(0.99, 0.78, moisture) * 0.28
+        : 0.78 + smoothstep(0.14, 0.48, moisture) * smoothstep(0.99, 0.74, moisture) * 0.22;
+      const size = placement.scale * placement.vigor * appearance.scale * moistureVigor
+        * distanceScale * DISPLAY_SCALE[placement.kind];
       if (size <= 0.04) continue;
 
       const mesh = this.meshes[placement.kind];
@@ -245,33 +253,48 @@ function planUnderstory(
   if (budget <= 0) return [];
   const random = new SeededRandom(`${seed}:plan`);
   const placements: UnderstoryPlacement[] = [];
-  const forestTrees = trees.filter((tree) => tree.family !== 'dry' && tree.family !== 'alpine');
-  const treeBudget = Math.min(Math.floor(budget * TREE_ASSOCIATED_SHARE), forestTrees.length * 2);
+  const forestTrees = trees.filter((tree) => tree.family !== 'alpine');
+  const treeTarget = Math.min(Math.floor(budget * TREE_ASSOCIATED_SHARE), forestTrees.length * 5);
 
   if (forestTrees.length > 0) {
     const offset = random.int(0, forestTrees.length);
-    for (let index = 0; index < treeBudget && placements.length < budget; index += 1) {
-      const tree = forestTrees[(offset + index * 5) % forestTrees.length];
+    let anchor = 0;
+    const maxAnchors = Math.max(forestTrees.length, treeTarget * 2);
+    while (placements.length < treeTarget && anchor < maxAnchors) {
+      const tree = forestTrees[(offset + anchor * 5) % forestTrees.length];
+      anchor += 1;
       if (!tree) continue;
-      const angle = random.range(0, Math.PI * 2);
-      const radius = random.range(0.8, 3.2);
-      tryAddUnderstory(world, surface, random, placements,
-        tree.worldX + Math.cos(angle) * radius,
-        tree.worldZ + Math.sin(angle) * radius,
-        0.88 + tree.regrowth * 0.18,
-        0.95);
+      const clusterSize = random.int(2, 6);
+      for (let member = 0; member < clusterSize && placements.length < treeTarget; member += 1) {
+        const angle = random.range(0, Math.PI * 2);
+        const radius = random.range(0.55, 3.5);
+        tryAddUnderstory(world, surface, random, placements,
+          tree.worldX + Math.cos(angle) * radius,
+          tree.worldZ + Math.sin(angle) * radius,
+          0.94 + tree.regrowth * 0.12,
+          1.18);
+      }
     }
   }
 
-  const forestCells = world.cells.filter((cell) => !cell.water && cell.wood > 0.12 && cell.temperature > 0.16);
+  const forestCells = world.cells.filter((cell) => !cell.water && cell.wood > 0.05 && cell.moisture > 0.1 && cell.temperature > 0.13);
   if (forestCells.length === 0) return placements;
   const half = world.cellSize * 0.5;
   const maxAttempts = Math.max(budget, budget * MAX_PLAN_ATTEMPTS_MULTIPLIER);
   for (let attempt = 0; attempt < maxAttempts && placements.length < budget; attempt += 1) {
     const cell = random.pick(forestCells);
-    const worldX = cell.worldX + random.range(-half, half);
-    const worldZ = cell.worldZ + random.range(-half, half);
-    tryAddUnderstory(world, surface, random, placements, worldX, worldZ, 0.8, 0.78);
+    const colonyX = cell.worldX + random.range(-half, half);
+    const colonyZ = cell.worldZ + random.range(-half, half);
+    const colonySize = random.int(2, 5);
+    for (let member = 0; member < colonySize && placements.length < budget; member += 1) {
+      const angle = random.range(0, Math.PI * 2);
+      const radius = Math.sqrt(random.float()) * 1.15;
+      tryAddUnderstory(world, surface, random, placements,
+        colonyX + Math.cos(angle) * radius,
+        colonyZ + Math.sin(angle) * radius,
+        0.9,
+        1.05);
+    }
   }
   return placements;
 }
@@ -288,17 +311,19 @@ function tryAddUnderstory(
 ): void {
   if (!insideVegetationTerrain(world, worldX, worldZ, 0.1)) return;
   const sample = surface.sample(worldX, worldZ);
-  if (sample.slope > 0.58 || sample.temperature < 0.16 || sample.moisture < 0.14 || sample.wood < 0.08) return;
+  if (sample.slope > 0.62 || sample.temperature < 0.13 || sample.moisture < 0.1 || sample.wood < 0.04) return;
   const groundY = surface.heightAt(worldX, worldZ);
   const waterY = surface.waterYAt(worldX, worldZ);
   if (Number.isFinite(waterY) && waterY > groundY - 0.035) return;
 
   const choice = chooseKind(random, sample.wood, sample.moisture, sample.temperature, sample.slope);
-  if (!choice || !random.chance(clamp01(choice.suitability * chanceScale))) return;
+  if (!choice) return;
+  const acceptance = clamp01(0.22 + choice.suitability * chanceScale);
+  if (!random.chance(acceptance)) return;
   const scaleRange: Record<UnderstoryKind, readonly [number, number]> = {
-    fern: [0.62, 1.08],
-    shrub: [0.72, 1.2],
-    bush: [0.8, 1.28],
+    fern: [0.9, 1.55],
+    shrub: [1, 1.7],
+    bush: [1.1, 1.9],
   };
   const range = scaleRange[choice.kind];
   placements.push({
@@ -307,7 +332,7 @@ function tryAddUnderstory(
     scale: random.range(range[0], range[1]),
     rotation: random.range(0, Math.PI * 2),
     kind: choice.kind,
-    vigor: clamp01(vigor * (0.78 + choice.suitability * 0.28)),
+    vigor: clamp01(vigor * (0.9 + choice.suitability * 0.18)),
   });
 }
 
@@ -318,15 +343,16 @@ function chooseKind(
   temperature: number,
   slope: number,
 ): { kind: UnderstoryKind; suitability: number } | undefined {
-  const gentle = 1 - smoothstep(0.3, 0.58, slope);
-  const shade = smoothstep(0.16, 0.66, wood);
-  const fern = shade * smoothstep(0.38, 0.72, moisture) * smoothstep(0.18, 0.4, temperature) * gentle;
-  const shrub = smoothstep(0.1, 0.48, wood) * smoothstep(0.18, 0.44, temperature)
-    * (0.55 + (1 - smoothstep(0.76, 0.98, moisture)) * 0.45) * (0.65 + gentle * 0.35);
-  const bush = smoothstep(0.18, 0.6, wood) * smoothstep(0.28, 0.58, moisture) * smoothstep(0.24, 0.46, temperature)
-    * (0.72 + (1 - smoothstep(0.82, 0.98, wood)) * 0.28) * (0.7 + gentle * 0.3);
+  const gentle = 1 - smoothstep(0.34, 0.62, slope);
+  const shade = smoothstep(0.1, 0.62, wood);
+  const forestEdge = 1 - Math.abs(clamp01(wood) - 0.48) * 1.25;
+  const fern = shade * smoothstep(0.3, 0.66, moisture) * smoothstep(0.15, 0.36, temperature) * (0.72 + gentle * 0.28);
+  const shrub = smoothstep(0.04, 0.42, wood) * smoothstep(0.14, 0.4, temperature)
+    * (0.6 + (1 - smoothstep(0.84, 1, moisture)) * 0.4) * (0.62 + gentle * 0.38);
+  const bush = smoothstep(0.1, 0.54, wood) * smoothstep(0.2, 0.52, moisture) * smoothstep(0.18, 0.42, temperature)
+    * (0.74 + clamp01(forestEdge) * 0.26) * (0.68 + gentle * 0.32);
   const total = fern + shrub + bush;
-  if (total < 0.08) return undefined;
+  if (total < 0.06) return undefined;
   const pick = random.float() * total;
   if (pick < fern) return { kind: 'fern', suitability: fern };
   if (pick < fern + shrub) return { kind: 'shrub', suitability: shrub };
@@ -341,9 +367,10 @@ function countKinds(placements: readonly UnderstoryPlacement[]): Record<Understo
 
 function buildShrubGeometry(): THREE.BufferGeometry {
   const parts = [
-    new THREE.IcosahedronGeometry(0.29, 0).scale(1, 0.82, 1).translate(0, 0.28, 0),
-    new THREE.IcosahedronGeometry(0.23, 0).scale(0.9, 0.86, 1).translate(0.18, 0.34, 0.05),
-    new THREE.IcosahedronGeometry(0.21, 0).scale(1, 0.82, 0.9).translate(-0.16, 0.32, -0.07),
+    new THREE.IcosahedronGeometry(0.34, 0).scale(1.08, 0.88, 1).translate(0, 0.34, 0),
+    new THREE.IcosahedronGeometry(0.28, 0).scale(0.92, 0.9, 1).translate(0.22, 0.42, 0.06),
+    new THREE.IcosahedronGeometry(0.26, 0).scale(1, 0.86, 0.92).translate(-0.21, 0.39, -0.08),
+    new THREE.IcosahedronGeometry(0.2, 0).scale(0.92, 0.92, 1).translate(0.02, 0.54, -0.13),
   ];
   const geometry = mergeGeometries(parts);
   for (const part of parts) part.dispose();
@@ -353,10 +380,11 @@ function buildShrubGeometry(): THREE.BufferGeometry {
 
 function buildBushGeometry(): THREE.BufferGeometry {
   const parts = [
-    new THREE.IcosahedronGeometry(0.36, 1).scale(1.05, 0.76, 1).translate(0, 0.36, 0),
-    new THREE.IcosahedronGeometry(0.29, 0).scale(1, 0.9, 0.95).translate(0.27, 0.42, 0.08),
-    new THREE.IcosahedronGeometry(0.28, 0).scale(0.95, 0.86, 1).translate(-0.26, 0.4, -0.04),
-    new THREE.IcosahedronGeometry(0.25, 0).scale(0.9, 0.9, 1).translate(0.04, 0.48, 0.25),
+    new THREE.IcosahedronGeometry(0.44, 1).scale(1.08, 0.8, 1).translate(0, 0.44, 0),
+    new THREE.IcosahedronGeometry(0.35, 0).scale(1, 0.94, 0.96).translate(0.34, 0.51, 0.1),
+    new THREE.IcosahedronGeometry(0.34, 0).scale(0.96, 0.9, 1).translate(-0.33, 0.49, -0.05),
+    new THREE.IcosahedronGeometry(0.31, 0).scale(0.92, 0.94, 1).translate(0.05, 0.61, 0.3),
+    new THREE.IcosahedronGeometry(0.27, 0).scale(1, 0.92, 0.92).translate(-0.04, 0.68, -0.27),
   ];
   const geometry = mergeGeometries(parts);
   for (const part of parts) part.dispose();
@@ -367,20 +395,20 @@ function buildBushGeometry(): THREE.BufferGeometry {
 function buildFernGeometry(): THREE.BufferGeometry {
   const positions: number[] = [];
   const indices: number[] = [];
-  const fronds = 8;
+  const fronds = 10;
   for (let frond = 0; frond < fronds; frond += 1) {
     const angle = frond / fronds * Math.PI * 2;
-    const length = 0.38 + (frond % 2) * 0.07;
-    const width = 0.075;
+    const length = 0.48 + (frond % 3) * 0.055;
+    const width = 0.1;
     const dx = Math.cos(angle);
     const dz = Math.sin(angle);
     const px = -dz;
     const pz = dx;
     const base = positions.length / 3;
-    positions.push(px * 0.018, 0.025, pz * 0.018);
-    positions.push(dx * length * 0.52 + px * width, 0.15, dz * length * 0.52 + pz * width);
-    positions.push(dx * length, 0.055, dz * length);
-    positions.push(dx * length * 0.52 - px * width, 0.15, dz * length * 0.52 - pz * width);
+    positions.push(px * 0.02, 0.03, pz * 0.02);
+    positions.push(dx * length * 0.5 + px * width, 0.21, dz * length * 0.5 + pz * width);
+    positions.push(dx * length, 0.075, dz * length);
+    positions.push(dx * length * 0.5 - px * width, 0.21, dz * length * 0.5 - pz * width);
     indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
   const geometry = new THREE.BufferGeometry();
