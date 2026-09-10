@@ -3,6 +3,7 @@ import type { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { cellAt } from '../world';
 import { deriveMilitaryProfile, type MilitaryCampaignSnapshot, type MilitaryCapabilityProfile } from './MilitaryCapability';
 import { militaryMarchMultiplier, militaryOperationalSupply } from './MilitaryCombat';
+import { installMilitaryCombatRuntime } from './MilitaryCombatRuntime';
 
 export const TRUCE_MONTHS = 60;
 const clamp = (n: number, min = 0, max = 1): number => Math.max(min, Math.min(max, n));
@@ -39,6 +40,9 @@ export function campaignFocus(war: War, origin: Vec2, destination: Vec2): Vec2 {
 }
 
 export function createCampaign(world: WorldState, walking: WalkabilityLayer, attacker: Settlement, defender: Settlement, month: number, strengthA: number, strengthB: number): WarCampaign & MilitaryCampaignSnapshot {
+  // The integration is installed lazily here, after Simulation's circular module graph has fully
+  // initialized but before the first campaign can ever advance a month.
+  installMilitaryCombatRuntime();
   const start = walking.nearestWalkable(attacker.position);
   const end = walking.nearestWalkable(defender.position);
   const waypoints = walking.route(start, end);
@@ -68,12 +72,12 @@ export function createCampaign(world: WorldState, walking: WalkabilityLayer, att
 }
 
 /**
- * Long corridors and simultaneous commitments strain the same home economy. When a mobilization
- * profile is supplied, sophisticated equipment also depends on the settlement's current ability
- * to power, repair and replace what it fielded at the start of the war.
+ * Long corridors and simultaneous commitments strain the same home economy. Sophisticated
+ * equipment also depends on the settlement's current ability to power, repair and replace its
+ * force. Existing callers that predate Step 2 receive the same capability-aware supply behavior.
  */
 export function campaignSupply(settlement: Settlement, distance: number, commitments: number, mobilized?: MilitaryCapabilityProfile): number {
   const legacy = clamp((settlement.foodSecurity * 0.65 + settlement.prosperity * 0.2 + Math.min(1, settlement.resources.food / 30) * 0.15)
     / (1 + distance / 160 + Math.max(0, commitments - 1) * 0.22), 0.06, 1);
-  return mobilized ? militaryOperationalSupply(settlement, mobilized, legacy) : legacy;
+  return militaryOperationalSupply(settlement, mobilized ?? deriveMilitaryProfile(settlement), legacy);
 }
