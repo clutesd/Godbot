@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Settlement, Vec2, War } from '../../sim/types';
+import type { Settlement, War } from '../../sim/types';
 import type { MilitaryCapabilityProfile } from '../../sim/war/MilitaryCapability';
 import { campaignPoint } from '../../sim/war/Campaign';
 import { militaryVisualStyle } from './MilitaryVisualLanguage';
@@ -7,8 +7,6 @@ import { militaryVisualStyle } from './MilitaryVisualLanguage';
 const MAX_SMOKE = 28;
 const MAX_FLASH = 16;
 const MAX_TRACERS = 14;
-const MAX_AIRCRAFT = 4;
-const MAX_MISSILES = 4;
 const clamp = THREE.MathUtils.clamp;
 
 interface Airframe {
@@ -70,7 +68,7 @@ export class BattleSpectacle {
     if (this.disposed) return;
     const frontProgress = 0.76 + clamp(war.progress, -1, 1) * 0.08;
     const front = campaignPoint(war.campaign.route, frontProgress, settlements[1].position);
-    const active = !war.resolvedMonth && war.phase === 'battle' && war.campaign.blockedMonths === 0;
+    const active = war.resolvedMonth === undefined && war.phase === 'battle' && war.campaign.blockedMonths === 0;
     const intensity = active ? Math.max(0.28, battlePulse) : 0;
     const time = reducedMotion ? 0 : elapsed;
     const styles = [militaryVisualStyle(profiles[0]), militaryVisualStyle(profiles[1])] as const;
