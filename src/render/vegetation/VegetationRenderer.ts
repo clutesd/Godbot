@@ -5,6 +5,7 @@ import { cellAt } from '../../sim/world';
 import type { Settlement, TornadoState, WorldState } from '../../sim/types';
 import { clamp01 } from '../../sim/terrain/noise';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
+import { AmbientBirds } from './AmbientBirds';
 import { planForest, resolveForestSuccession, resolveTreeLifecycle, type ResolvedTreeLifecycle, type TreePlacement } from './ForestPlanner';
 import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
@@ -77,6 +78,7 @@ export class VegetationRenderer {
   private readonly managedSettlementIds = new Set<string>();
   private readonly lifecycle: ResolvedTreeLifecycle[];
   private readonly flowers: FlowerField;
+  private readonly birds: AmbientBirds;
   private ecologyYear = 0;
   private season = 0;
   private targetSeason = 0;
@@ -115,7 +117,8 @@ export class VegetationRenderer {
     this.lifecycle = this.placements.map((placement) => resolveTreeLifecycle(placement, this.ecologyYear));
     const flowerBudget = budget <= 0 ? 0 : Math.max(400, Math.min(2800, Math.round(budget * 0.8)));
     this.flowers = new FlowerField(world, surface, `${seed}:flowers`, flowerBudget, this.placements);
-    this.group.add(this.flowers.group);
+    this.birds = new AmbientBirds(seed, this.placements);
+    this.group.add(this.flowers.group, this.birds.group);
 
     const nearLibrary = buildTreeLibrary(seed, VARIANTS_PER_FAMILY, TREE_LOD_NEAR);
     const farLibrary = buildTreeLibrary(seed, VARIANTS_PER_FAMILY, TREE_LOD_FAR);
@@ -207,6 +210,7 @@ export class VegetationRenderer {
   setEcologyYear(year: number): void {
     if (year === this.ecologyYear) return;
     this.ecologyYear = year;
+    this.birds.setEcologyYear(year);
     this.trimRecoveryZones(year);
     for (let index = 0; index < this.placements.length; index += 1) {
       const placement = this.placements[index];
@@ -217,6 +221,7 @@ export class VegetationRenderer {
 
   /** Re-sorts every placement into the near or far tier. Called at the structural update rate. */
   updateLod(camera: THREE.Vector3): void {
+    this.birds.setCamera(camera);
     this.leafSites.length = 0;
     const scars = this.world.weather?.forestScars ?? [];
     const signature = `${scars.length}:${scars[0]?.id}:${scars.at(-1)?.id}`;
@@ -330,6 +335,7 @@ export class VegetationRenderer {
     positions.needsUpdate = true;
     colours.needsUpdate = true;
     this.leaves.geometry.setDrawRange(0, this.leafSites.length);
+    this.birds.update(elapsed, wind?.wind ?? 0, [...this.disturbance, ...this.occupiedGround]);
   }
 
   private syncManagedPlantings(settlements: readonly Settlement[]): void {
