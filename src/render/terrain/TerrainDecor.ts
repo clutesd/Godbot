@@ -9,70 +9,11 @@ export interface DecorReport {
   boulders: number;
   scree: number;
   groundCover: number;
-  flowers: number;
-}
-
-export type FlowerStage = 'dormant' | 'sprout' | 'bud' | 'bloom' | 'seed';
-
-export interface FlowerSeasonState {
-  stage: FlowerStage;
-  stemScale: number;
-  bloomScale: number;
-  senescence: number;
-}
-
-interface FlowerPlacement {
-  worldX: number;
-  worldZ: number;
-  y: number;
-  scale: number;
-  rotation: number;
-  phaseOffset: number;
-  baseColour: THREE.Color;
-}
-
-const FLOWER_COLOURS = ['#d889a8', '#e8c45c', '#d8d5ef', '#a889d7', '#f0a76d', '#e9e2c4'] as const;
-const FLOWER_STEM_GREEN = new THREE.Color('#668247');
-const FLOWER_DRY = new THREE.Color('#8b7747');
-
-/**
- * Small seasonal annual/perennial presentation cycle. Winter is always dormant regardless of the
- * per-flower phase offset, so flowers cannot linger visually through snow season. The offset only
- * staggers emergence and bloom inside spring, summer and autumn.
- */
-export function resolveFlowerSeason(month: number, phaseOffset = 0): FlowerSeasonState {
-  const baseMonth = ((month % 12) + 12) % 12;
-  if (baseMonth < 1 || baseMonth >= 10) {
-    return { stage: 'dormant', stemScale: 0, bloomScale: 0, senescence: 1 };
-  }
-
-  const seasonalMonth = Math.min(9.999, Math.max(1, baseMonth + phaseOffset));
-  if (seasonalMonth < 2.2) {
-    const progress = clamp01((seasonalMonth - 1) / 1.2);
-    return { stage: 'sprout', stemScale: 0.12 + progress * 0.5, bloomScale: 0, senescence: 0 };
-  }
-  if (seasonalMonth < 3.5) {
-    const progress = clamp01((seasonalMonth - 2.2) / 1.3);
-    return { stage: 'bud', stemScale: 0.62 + progress * 0.38, bloomScale: 0.12 + progress * 0.38, senescence: 0 };
-  }
-  if (seasonalMonth < 7.2) {
-    const fullness = 0.86 + Math.sin(((seasonalMonth - 3.5) / 3.7) * Math.PI) * 0.14;
-    return { stage: 'bloom', stemScale: 1, bloomScale: fullness, senescence: 0 };
-  }
-
-  const progress = clamp01((seasonalMonth - 7.2) / 2.8);
-  return {
-    stage: 'seed',
-    stemScale: 1 - progress * 0.48,
-    bloomScale: Math.max(0, 0.72 * (1 - progress)),
-    senescence: progress,
-  };
 }
 
 /**
  * The small stuff that keeps the ground from reading as a painted surface: boulders clustered
- * along outcrops, scree under cliffs, grass and reeds softening every edge, and a bounded seasonal
- * flower layer that follows meadows and woodland edges.
+ * along outcrops, scree under cliffs, grass and reeds softening every edge.
  */
 export class TerrainDecor {
   readonly group = new THREE.Group();
@@ -84,8 +25,7 @@ export class TerrainDecor {
     const boulders = this.scatterRocks(world, surface, random, seed, Math.round(520 * density));
     const scree = this.scatterScree(world, surface, random, Math.round(900 * density));
     const groundCover = this.scatterGroundCover(world, surface, random, seed, Math.round(2600 * density));
-    const flowers = this.scatterFlowers(world, surface, random, seed, Math.round(900 * density));
-    this.report = { boulders, scree, groundCover, flowers };
+    this.report = { boulders, scree, groundCover };
   }
 
   /** Boulders follow the rock field, so they gather along ridges and cliff bases instead of dusting the map evenly. */
@@ -169,7 +109,8 @@ export class TerrainDecor {
 
   /**
    * Grass, reeds and low scrub. Density is deliberately uneven: heaviest at shorelines, riverbanks
-   * and forest edges, where a hard material boundary would otherwise show.
+   * and forest edges, where a hard material boundary would otherwise show. Flower colours are kept
+   * out of this static layer; seasonal flowers are owned by the vegetation system.
    */
   private scatterGroundCover(world: WorldState, surface: TerrainSurface, random: SeededRandom, seed: string, budget: number): number {
     const mesh = new THREE.InstancedMesh(
@@ -213,110 +154,5 @@ export class TerrainDecor {
     mesh.receiveShadow = true;
     if (placed > 0) this.group.add(mesh);
     return placed;
-  }
-
-  /**
-   * Tiny flowers concentrate in grassy meadows and along the edges of woodland. Placement is fixed
-   * and seeded; only the coarse seasonal growth presentation changes, so deep-time runs do not gain
-   * per-flower simulation state or unbounded objects.
-   */
-  private scatterFlowers(world: WorldState, surface: TerrainSurface, random: SeededRandom, seed: string, budget: number): number {
-    const stem = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(0.018, 0.2, 3).translate(0, 0.1, 0),
-      new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, vertexColors: true }),
-      Math.max(1, budget),
-    );
-    const bloom = new THREE.InstancedMesh(
-      new THREE.OctahedronGeometry(0.05, 0),
-      new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0, vertexColors: true }),
-      Math.max(1, budget),
-    );
-    stem.name = 'seasonal-flower-stems';
-    bloom.name = 'seasonal-flower-blooms';
-
-    const placements: FlowerPlacement[] = [];
-    const half = world.size * world.cellSize * 0.5;
-    for (let attempt = 0; attempt < budget * 8 && placements.length < budget; attempt += 1) {
-      const worldX = random.range(-half, half);
-      const worldZ = random.range(-half, half);
-      const sample = surface.sample(worldX, worldZ);
-      if (sample.elevation < world.seaLevel + 0.004 || sample.slope > 0.55) continue;
-      const waterY = surface.waterYAt(worldX, worldZ);
-      const y = surface.heightAt(worldX, worldZ);
-      if (Number.isFinite(waterY) && waterY > y - 0.04) continue;
-
-      const meadow = smoothstep(0.26, 0.64, sample.moisture) * smoothstep(0.56, 0.16, sample.slope);
-      const woodlandEdge = smoothstep(0.12, 0.38, sample.wood) * smoothstep(0.82, 0.38, sample.wood);
-      const warmth = 0.35 + smoothstep(0.2, 0.48, sample.temperature) * 0.65;
-      const patch = fbm(`${seed}:flower-field`, worldX * 0.16 - 31, worldZ * 0.16 + 47, 3);
-      const suitability = clamp01(meadow * 0.72 + woodlandEdge * 0.9) * warmth * smoothstep(0.34, 0.76, patch);
-      if (!random.chance(suitability)) continue;
-
-      placements.push({
-        worldX,
-        worldZ,
-        y: y + 0.006,
-        scale: random.range(0.55, 1.18),
-        rotation: random.range(0, Math.PI * 2),
-        phaseOffset: random.range(-0.48, 0.48),
-        baseColour: new THREE.Color(FLOWER_COLOURS[random.int(0, FLOWER_COLOURS.length)] ?? FLOWER_COLOURS[0]),
-      });
-    }
-
-    stem.count = placements.length;
-    bloom.count = placements.length;
-    stem.receiveShadow = true;
-    bloom.receiveShadow = true;
-
-    const matrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    const axis = new THREE.Vector3(0, 1, 0);
-    const stemColour = new THREE.Color();
-    const bloomColour = new THREE.Color();
-    let renderedMonth = Number.NaN;
-
-    const updateSeason = (): void => {
-      const month = world.weather?.month ?? 0;
-      if (month === renderedMonth) return;
-      renderedMonth = month;
-
-      for (let index = 0; index < placements.length; index += 1) {
-        const flower = placements[index];
-        if (!flower) continue;
-        const state = resolveFlowerSeason(month, flower.phaseOffset);
-        quaternion.setFromAxisAngle(axis, flower.rotation);
-
-        const stemWidth = flower.scale * (0.55 + state.stemScale * 0.45);
-        position.set(flower.worldX, flower.y, flower.worldZ);
-        scale.set(stemWidth, Math.max(0.0001, flower.scale * state.stemScale), stemWidth);
-        matrix.compose(position, quaternion, scale);
-        stem.setMatrixAt(index, matrix);
-
-        position.y = flower.y + 0.2 * flower.scale * state.stemScale;
-        const bloomScale = Math.max(0.0001, flower.scale * state.bloomScale);
-        scale.setScalar(bloomScale);
-        matrix.compose(position, quaternion, scale);
-        bloom.setMatrixAt(index, matrix);
-
-        stemColour.copy(FLOWER_STEM_GREEN).lerp(FLOWER_DRY, state.senescence * 0.82);
-        bloomColour.copy(flower.baseColour).lerp(FLOWER_DRY, state.senescence);
-        stem.setColorAt(index, stemColour);
-        bloom.setColorAt(index, bloomColour);
-      }
-      stem.instanceMatrix.needsUpdate = true;
-      bloom.instanceMatrix.needsUpdate = true;
-      if (stem.instanceColor) stem.instanceColor.needsUpdate = true;
-      if (bloom.instanceColor) bloom.instanceColor.needsUpdate = true;
-    };
-
-    // Keep the meshes renderable in winter: their instances collapse to near-zero scale instead
-    // of setting visible=false, allowing onBeforeRender to wake them again when spring arrives.
-    stem.onBeforeRender = updateSeason;
-    bloom.onBeforeRender = updateSeason;
-    updateSeason();
-    if (placements.length > 0) this.group.add(stem, bloom);
-    return placements.length;
   }
 }
