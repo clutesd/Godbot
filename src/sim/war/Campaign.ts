@@ -1,6 +1,7 @@
 import type { Settlement, Vec2, War, WarCampaign, WorldState } from '../types';
 import type { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { cellAt } from '../world';
+import { deriveMilitaryProfile, type MilitaryCampaignSnapshot } from './MilitaryCapability';
 
 export const TRUCE_MONTHS = 60;
 const clamp = (n: number, min = 0, max = 1): number => Math.max(min, Math.min(max, n));
@@ -36,7 +37,7 @@ export function campaignFocus(war: War, origin: Vec2, destination: Vec2): Vec2 {
   return campaignFront(war, destination);
 }
 
-export function createCampaign(world: WorldState, walking: WalkabilityLayer, attacker: Settlement, defender: Settlement, month: number, strengthA: number, strengthB: number): WarCampaign {
+export function createCampaign(world: WorldState, walking: WalkabilityLayer, attacker: Settlement, defender: Settlement, month: number, strengthA: number, strengthB: number): WarCampaign & MilitaryCampaignSnapshot {
   const start = walking.nearestWalkable(attacker.position);
   const end = walking.nearestWalkable(defender.position);
   const waypoints = walking.route(start, end);
@@ -55,6 +56,10 @@ export function createCampaign(world: WorldState, walking: WalkabilityLayer, att
     route, distance, marchMonths: Math.max(3, Math.min(18, Math.ceil(difficulty / (world.cellSize * 3)))),
     phaseSinceMonth: month, battleCount: 0, supplyA: campaignSupply(attacker, 0, 1), supplyB: campaignSupply(defender, 0, 1), exhaustionA: 0, exhaustionB: 0,
     blockedMonths: 0, initialStrengthA: strengthA, initialStrengthB: strengthB, dispatches: [], advantage: 0,
+    // Freeze the equipment basis at mobilization. Later knowledge can change future wars without
+    // silently rewriting the historical capabilities of a campaign already under way.
+    militaryA: deriveMilitaryProfile(attacker),
+    militaryB: deriveMilitaryProfile(defender),
   };
 }
 
