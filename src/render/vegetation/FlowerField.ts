@@ -40,23 +40,40 @@ export interface FlowerFieldReport {
 }
 
 /** Covers the documentary camera's widest ordinary ground shots without rendering the whole world. */
-const FLOWER_VIEW_RANGE = 68;
-/** Still much smaller than a person, but large enough to read from settlement/street framing. */
-const FLOWER_STEM_HEIGHT = 0.095;
-const TREE_FLOWER_SHARE = 0.52;
+const FLOWER_VIEW_RANGE = 72;
+/** Small beside a person, but readable in settlement and street framing. */
+const FLOWER_STEM_HEIGHT = 0.12;
+const TREE_FLOWER_SHARE = 0.6;
 const MAX_PLAN_ATTEMPTS_MULTIPLIER = 8;
+/** A settlement's forest-clearing radius is much larger than its truly flower-free built core. */
+const SETTLEMENT_FLOWER_FREE_SHARE = 0.52;
 const FLOWER_COLOURS = [
-  new THREE.Color('#f0d96c'),
-  new THREE.Color('#ede8dc'),
-  new THREE.Color('#d98ca7'),
-  new THREE.Color('#a58bc7'),
-  new THREE.Color('#83a9c9'),
+  new THREE.Color('#f2dd62'),
+  new THREE.Color('#f3eee2'),
+  new THREE.Color('#e68eae'),
+  new THREE.Color('#ad8bd0'),
+  new THREE.Color('#82b5da'),
 ] as const;
 const SEED_COLOUR = new THREE.Color('#a78a5c');
 const HIDDEN_SCALE = new THREE.Vector3(0.0001, 0.0001, 0.0001);
 
 function lerp(from: number, to: number, t: number): number {
   return from + (to - from) * clamp01(t);
+}
+
+/**
+ * A forest disturbance footprint represents cleared woodland, not bare pavement. Keep flowers out
+ * of the settlement's built core while allowing suitable grassy edges and commons to flower.
+ */
+export function flowerSuppressedBySettlement(
+  worldX: number,
+  worldZ: number,
+  disturbance: readonly FlowerDisturbanceZone[],
+): boolean {
+  return disturbance.some((zone) => {
+    const flowerFreeRadius = Math.max(1.6, zone.radius * SETTLEMENT_FLOWER_FREE_SHARE);
+    return Math.hypot(worldX - zone.x, worldZ - zone.z) < flowerFreeRadius;
+  });
 }
 
 /**
@@ -91,7 +108,9 @@ export function resolveFlowerGrowth(month: number, phase = 0.5): FlowerGrowth {
 
 /**
  * Cheap annual ground flora. Placements are planned once from grass/open ground and around a
- * subset of trees, then two instanced meshes express the seasonal cycle. Nothing ticks per flower.
+ * subset of trees, then two instanced meshes express the seasonal cycle. A placement is one small
+ * wildflower inside a deterministic patch; planning groups several nearby placements so patches
+ * remain legible at documentary camera distance without adding draw calls.
  */
 export class FlowerField {
   readonly group = new THREE.Group();
@@ -118,12 +137,13 @@ export class FlowerField {
     const capacity = Math.max(1, Math.floor(budget));
     this.placements = planFlowers(world, surface, seed, capacity, trees);
 
-    const stemGeometry = new THREE.CylinderGeometry(0.006, 0.009, FLOWER_STEM_HEIGHT, 4)
+    const stemGeometry = new THREE.CylinderGeometry(0.007, 0.01, FLOWER_STEM_HEIGHT, 4)
       .translate(0, FLOWER_STEM_HEIGHT * 0.5, 0);
-    const bloomGeometry = new THREE.CircleGeometry(0.045, 5);
-    bloomGeometry.rotateX(-Math.PI / 2);
-    const stemMaterial = new THREE.MeshStandardMaterial({ color: '#587348', roughness: 0.98, metalness: 0 });
-    const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+    // A tiny faceted bloom reads from both overhead and oblique documentary shots better than a
+    // single flat circle while staying comfortably smaller than a person's head.
+    const bloomGeometry = new THREE.OctahedronGeometry(0.065, 0);
+    const stemMaterial = new THREE.MeshStandardMaterial({ color: '#557544', roughness: 0.98, metalness: 0 });
+    const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.88, metalness: 0, vertexColors: true });
     this.stems = new THREE.InstancedMesh(stemGeometry, stemMaterial, capacity);
     this.blooms = new THREE.InstancedMesh(bloomGeometry, bloomMaterial, capacity);
     this.stems.name = 'seasonal-flower-stems';
@@ -154,7 +174,7 @@ export class FlowerField {
     for (const placement of this.placements) {
       if (count >= this.stems.instanceMatrix.count) break;
       if (Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z) > FLOWER_VIEW_RANGE) continue;
-      if (disturbance.some((zone) => Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) < zone.radius)) continue;
+      if (flowerSuppressedBySettlement(placement.worldX, placement.worldZ, disturbance)) continue;
 
       const growth = resolveFlowerGrowth(month, placement.phase);
       if (!growth.visible) continue;
@@ -172,7 +192,7 @@ export class FlowerField {
 
       this.position.set(placement.worldX, groundY + 0.004, placement.worldZ);
       this.quaternion.setFromAxisAngle(this.axis, placement.rotation);
-      this.scale.set(size * 0.8, size, size * 0.8);
+      this.scale.set(size * 0.82, size, size * 0.82);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       this.stems.setMatrixAt(count, this.matrix);
 
@@ -207,16 +227,28 @@ function planFlowers(
   const random = new SeededRandom(`${seed}:plan`);
   const placements: FlowerPlacement[] = [];
   const suitableTrees = trees.filter((tree) => tree.family !== 'dry' && tree.family !== 'alpine');
-  const treeBudget = Math.min(Math.floor(budget * TREE_FLOWER_SHARE), suitableTrees.length * 2);
+  const treeBudget = Math.min(Math.floor(budget * TREE_FLOWER_SHARE), suitableTrees.length * 7);
 
   if (suitableTrees.length > 0) {
     const offset = random.int(0, suitableTrees.length);
-    for (let index = 0; index < treeBudget && placements.length < budget; index += 1) {
-      const tree = suitableTrees[(offset + index * 7) % suitableTrees.length];
+    let treeIndex = 0;
+    while (placements.length < treeBudget && treeIndex < suitableTrees.length * 3) {
+      const tree = suitableTrees[(offset + treeIndex * 7) % suitableTrees.length];
+      treeIndex += 1;
       if (!tree) continue;
       const angle = random.range(0, Math.PI * 2);
-      const radius = random.range(0.6, 2.5);
-      tryAddFlower(surface, random, placements, tree.worldX + Math.cos(angle) * radius, tree.worldZ + Math.sin(angle) * radius, 0.9 + tree.regrowth * 0.18);
+      const radius = random.range(0.55, 2.35);
+      addFlowerPatch(
+        surface,
+        random,
+        placements,
+        treeBudget,
+        tree.worldX + Math.cos(angle) * radius,
+        tree.worldZ + Math.sin(angle) * radius,
+        0.92 + tree.regrowth * 0.18,
+        random.int(4, 8),
+        0.5,
+      );
     }
   }
 
@@ -234,10 +266,35 @@ function planFlowers(
     const warmth = smoothstep(0.24, 0.46, sample.temperature);
     const gentle = smoothstep(0.52, 0.2, sample.slope);
     const suitability = clamp01((0.28 + openGround * 0.72) * moisture * warmth * gentle);
-    if (!random.chance(suitability * 0.72)) continue;
-    tryAddFlower(surface, random, placements, worldX, worldZ, 0.78 + suitability * 0.3);
+    if (!random.chance(suitability * 0.76)) continue;
+    addFlowerPatch(surface, random, placements, budget, worldX, worldZ, 0.8 + suitability * 0.28, random.int(2, 5), 0.42);
   }
   return placements;
+}
+
+function addFlowerPatch(
+  surface: TerrainSurface,
+  random: SeededRandom,
+  placements: FlowerPlacement[],
+  budget: number,
+  centerX: number,
+  centerZ: number,
+  vigor: number,
+  count: number,
+  radius: number,
+): void {
+  for (let index = 0; index < count && placements.length < budget; index += 1) {
+    const angle = random.range(0, Math.PI * 2);
+    const distance = index === 0 ? 0 : random.range(0.08, radius);
+    tryAddFlower(
+      surface,
+      random,
+      placements,
+      centerX + Math.cos(angle) * distance,
+      centerZ + Math.sin(angle) * distance,
+      vigor * random.range(0.9, 1.08),
+    );
+  }
 }
 
 function tryAddFlower(
@@ -256,7 +313,7 @@ function tryAddFlower(
   placements.push({
     worldX,
     worldZ,
-    scale: random.range(0.72, 1.18),
+    scale: random.range(0.82, 1.22),
     rotation: random.range(0, Math.PI * 2),
     phase: random.float(),
     colour: random.int(0, FLOWER_COLOURS.length),
