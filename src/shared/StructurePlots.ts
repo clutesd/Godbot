@@ -1,4 +1,5 @@
 import { SeededRandom } from '../sim/prng';
+import { advanceStructureFires } from '../sim/fire/StructureFireSystem';
 import { nearestIndex, sampleHeight } from '../sim/terrain/TerrainField';
 import type { Settlement, SimulationState, StructurePlot } from '../sim/types';
 import { cellAt, TERRAIN_VERTICAL_SCALE } from '../sim/world';
@@ -57,4 +58,7 @@ export function syncStructurePlots(state: SimulationState): void {
       if (!reserveStructurePlot(state, settlement, 'residential')) break;
     }
   }
+  // Plot sync is already the once-per-month rendezvous for persistent structure state. The fire
+  // runtime guards against duplicate same-month calls, so initialization and tests remain safe.
+  advanceStructureFires(state);
 }
