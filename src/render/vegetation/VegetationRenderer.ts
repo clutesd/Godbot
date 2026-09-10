@@ -48,6 +48,7 @@ const NEAR_CAPACITY_PER_BUCKET = 220;
 const MANAGED_CHERRY_RESERVE_PER_VARIANT = 512;
 const MANAGED_TREE_SCALE = 2.5;
 const RECOVERY_ZONE_RETENTION_YEARS = 80;
+const MAX_RECOVERY_ZONES = 128;
 
 /**
  * The forest. Trees are planned once, then drawn through two instanced tiers whose membership is
@@ -162,6 +163,7 @@ export class VegetationRenderer {
       this.restartStandInside(recovery);
     }
     for (const zone of next) this.recoveryZones.delete(zone.id);
+    this.trimRecoveryZones(currentYear);
     this.disturbance = next;
   }
 
@@ -173,9 +175,7 @@ export class VegetationRenderer {
   setEcologyYear(year: number): void {
     if (year === this.ecologyYear) return;
     this.ecologyYear = year;
-    for (const [id, zone] of this.recoveryZones) {
-      if (year - zone.releasedYear > RECOVERY_ZONE_RETENTION_YEARS) this.recoveryZones.delete(id);
-    }
+    this.trimRecoveryZones(year);
     for (let index = 0; index < this.placements.length; index += 1) {
       const placement = this.placements[index];
       if (!placement) continue;
@@ -284,7 +284,22 @@ export class VegetationRenderer {
   }
 
   private syncManagedPlantings(settlements: readonly Settlement[]): void {
-    for (const settlement of settlements) {
+    const living = new Map(settlements.filter((settlement) => settlement.alive).map((settlement) => [settlement.id, settlement]));
+
+    // Managed trees are presentation state for living settlements, not an ever-growing historical
+    // registry. Abandoned ground is handed back to the bounded recovery/succession system below.
+    for (let index = this.placements.length - 1; index >= 0; index -= 1) {
+      const placement = this.placements[index];
+      if (!placement?.managedBy || living.has(placement.managedBy)) continue;
+      this.byFamily[placement.family] = Math.max(0, this.byFamily[placement.family] - 1);
+      this.placements.splice(index, 1);
+      this.lifecycle.splice(index, 1);
+    }
+    for (const settlementId of [...this.managedSettlementIds]) {
+      if (!living.has(settlementId)) this.managedSettlementIds.delete(settlementId);
+    }
+
+    for (const settlement of living.values()) {
       if (this.managedSettlementIds.has(settlement.id)) continue;
       this.managedSettlementIds.add(settlement.id);
       const random = new SeededRandom(`${this.seed}:managed-cherry:${settlement.id}`);
@@ -357,6 +372,20 @@ export class VegetationRenderer {
       return { stage: 'young', scale: placement.scale * (0.48 + progress * 0.34), foliageVisible: true, fallen: false };
     }
     return undefined;
+  }
+
+  private trimRecoveryZones(year: number): void {
+    for (const [id, zone] of this.recoveryZones) {
+      if (year - zone.releasedYear > RECOVERY_ZONE_RETENTION_YEARS) this.recoveryZones.delete(id);
+    }
+    while (this.recoveryZones.size > MAX_RECOVERY_ZONES) {
+      let oldest: RecoveryZone | undefined;
+      for (const zone of this.recoveryZones.values()) {
+        if (!oldest || zone.releasedYear < oldest.releasedYear) oldest = zone;
+      }
+      if (!oldest) break;
+      this.recoveryZones.delete(oldest.id);
+    }
   }
 
   private createBucket(family: TreeFamily, variant: number, source: TreeVariant, capacity: number): Bucket {
