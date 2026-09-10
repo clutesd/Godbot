@@ -327,9 +327,9 @@ function chooseKind(
     * (0.72 + (1 - smoothstep(0.82, 0.98, wood)) * 0.28) * (0.7 + gentle * 0.3);
   const total = fern + shrub + bush;
   if (total < 0.08) return undefined;
-  let pick = random.float() * total;
-  if ((pick -= fern) < 0) return { kind: 'fern', suitability: fern };
-  if ((pick -= shrub) < 0) return { kind: 'shrub', suitability: shrub };
+  const pick = random.float() * total;
+  if (pick < fern) return { kind: 'fern', suitability: fern };
+  if (pick < fern + shrub) return { kind: 'shrub', suitability: shrub };
   return { kind: 'bush', suitability: bush };
 }
 
