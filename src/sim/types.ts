@@ -1,6 +1,7 @@
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState } from './transport/types';
+import type { SettlementDevelopment, StructureDevelopment } from './development/types';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
 
@@ -473,6 +474,7 @@ export interface IndustrialState {
 
 export interface Settlement {
   id: string;
+  development?: SettlementDevelopment;
   structurePlots?: StructurePlot[];
   structurePlotTarget?: number;
   weatherRecoverySince?: number;
@@ -507,6 +509,7 @@ export interface Settlement {
 
 export interface StructurePlot {
   id: string;
+  development?: StructureDevelopment;
   worldX: number;
   worldZ: number;
   radius: number;

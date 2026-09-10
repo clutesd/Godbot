@@ -6,6 +6,7 @@ import { AdvancedCivilizationSystem, createAdvancedCivilizationState, represente
 import { PeopleSystem } from './people/PeopleSystem';
 import { WeatherSystem } from './weather/WeatherSystem';
 import { syncStructurePlots } from '../shared/StructurePlots';
+import { advanceSettlementDevelopment, initializeSettlementDevelopment } from './development/SettlementDevelopmentSystem';
 import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
@@ -265,6 +266,7 @@ export class Simulation {
     this.recomputeCultureShares();
     this.state.stats.peakPopulation = this.population;
     syncStructurePlots(this.state);
+    for (const settlement of this.state.settlements) initializeSettlementDevelopment(this.state, settlement, this.peopleAt(settlement.id));
     this.addEvent({
       type: 'world-awakening',
       actors: this.state.settlements.map((settlement) => settlement.id),
@@ -305,6 +307,11 @@ export class Simulation {
     }
     this.rebuildLookupIndexes();
     this.runEconomy();
+    if (this.state.month % 12 === 0) {
+      for (const settlement of this.state.settlements.filter(s => !s.alive && s.development)) {
+        for (const event of advanceSettlementDevelopment(this.state, settlement, [], 0)) this.addEvent(event);
+      }
+    }
     this.knowledgeSystem.advanceMonth(this.state);
     this.transportationSystem.advanceMonth();
     this.runTrade();
@@ -612,7 +619,7 @@ export class Simulation {
       const foragers = count('forager');
       const builders = count('builder');
       const repaired = repairWeatherDamage(settlement, builders, this.state.month);
-      const damagedPlots = (settlement.structurePlots ?? []).filter((plot) => plot.condition < 1);
+      const damagedPlots = (settlement.structurePlots ?? []).filter((plot) => plot.condition < 1 && (!plot.development || plot.development.status === 'active'));
       if (settlement.weatherRecoverySince !== undefined && damagedPlots.length === 0) {
         this.addEvent({ type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
           causes: ['weather-rebuilding'], context: { recoveryMonths: this.state.month - settlement.weatherRecoverySince },
@@ -644,7 +651,7 @@ export class Simulation {
       settlement.conflictPressure *= 0.965;
       const structuralLoss = damagedPlots.reduce((sum, plot) => sum + 1 - plot.condition, 0) / Math.max(1, settlement.buildings);
       const safetyFactor = (1 - settlement.conflictPressure * 0.24) * (1 - structuralLoss * 0.3);
-      const floodedWorkLoss = (settlement.structurePlots ?? []).slice(0, settlement.buildings)
+      const floodedWorkLoss = (settlement.structurePlots ?? []).filter(plot => !plot.development || plot.development.status === 'active')
         .reduce((sum, plot) => sum + Math.max(plot.condition < 0.65 ? 1 - plot.condition : 0,
           clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
       const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
@@ -662,27 +669,16 @@ export class Simulation {
       const monthsOfFood = settlement.resources.food / Math.max(1, people.length * 0.31);
       settlement.foodSecurity = clamp(monthsOfFood / 5 * 0.7 + (balance.food >= 0 ? 0.3 : 0));
       settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, people.length * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, people.length * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
-      const previousTarget = settlement.targetBuildings;
-      settlement.targetBuildings = Math.max(2, Math.ceil(people.length / 17) + settlement.institutionIds.length * 2 + Math.ceil(settlement.industry.intensity * 10));
-      if (!cell.water && builders > 0 && repaired === 0 && damagedPlots.length === 0 && settlement.buildings < settlement.targetBuildings && settlement.resources.wood > 9) {
-        // Preserve one construction draw per eligible month so unrelated social systems keep
-        // their deterministic random stream while completion itself follows visible progress.
-        this.random.float();
-        const builderCapacity = clamp(builders / Math.max(3, people.length * 0.055), 0.2, 1.35);
-        const constructionRate = builderCapacity * (0.45 + settlement.prosperity * 0.55) / this.config.historicalPace.smallConstructionMonths;
-        settlement.constructionProgress = Math.min(1, settlement.constructionProgress + constructionRate);
-        if (settlement.constructionProgress >= 1) {
-          settlement.resources.wood -= 8;
-          settlement.resources.minerals = Math.max(0, settlement.resources.minerals - 1.5);
-          settlement.buildings += 1;
-          settlement.constructionProgress = 0;
+      const builderCapacity = builders > 0 ? clamp(builders / Math.max(3, people.length * 0.055), 0.2, 1.35) : 0;
+      const constructionRate = !cell.water && repaired === 0 && damagedPlots.length === 0
+        ? builderCapacity * (0.45 + settlement.prosperity * 0.55) / this.config.historicalPace.smallConstructionMonths : 0;
+      for (const event of advanceSettlementDevelopment(this.state, settlement, people, constructionRate)) {
+        this.addEvent(event);
+        if (event.context?.['action'] === 'founded') {
           const culture = this.dominantCulture(settlement);
           if (culture) culture.memory.collectiveSuccess += 0.06;
         }
-      } else if (settlement.buildings >= settlement.targetBuildings) {
-        settlement.constructionProgress = 0;
       }
-      if (this.state.month % 12 === 0 && previousTarget > settlement.targetBuildings + 2 && settlement.buildings > settlement.targetBuildings) settlement.buildings -= 1;
       const balances = { agriculture: balance.food, forestry: balance.wood * 3, mining: balance.minerals * 8, craft: balance.goods * 5, exchange: balance.wealth * 6 };
       settlement.specialization = (Object.entries(balances).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'agriculture') as Settlement['specialization'];
       if (settlement.foodSecurity < 0.18) settlement.crisisMonths += 1;

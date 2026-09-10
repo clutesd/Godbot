@@ -14,10 +14,12 @@ import { ProceduralGeometry } from './ProceduralGeometry';
 import { resolveBuildingGrammar, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
+import type { DevelopmentResponse } from '../../sim/development/types';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
 export interface AssetConfig {
+  development?: DevelopmentResponse;
   seed: string;
   culture: CultureStyle;
   era: Era;
@@ -221,7 +223,7 @@ export class AssetBuilder {
     const [roleName, stageName] = (config.variant ?? 'house').split('#');
     const role = (roleName || 'house') as BuildingRole;
     const stage = stageName === undefined ? BUILD_STAGE.DETAIL : (Number(stageName) as BuildStage);
-    const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed);
+    const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage);
     composed.group.userData['buildingHeight'] = composed.height;
     composed.group.userData['footprintWidth'] = composed.extentX;
@@ -425,7 +427,8 @@ export class AssetBuilder {
    * Generate cache key
    */
   private getCacheKey(type: AssetType, config: AssetConfig): string {
-    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}`;
+    const d = config.development;
+    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}`;
   }
 
   /**

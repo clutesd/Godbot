@@ -15,7 +15,7 @@ export function applyFloodConsequences(state: SimulationState, months = 1): Weat
     let destroyed = 0;
     let newlyRestricted = 0;
     const resilience = 1 + practical(settlement, 'stone-composites') * 0.8;
-    for (const plot of (settlement.structurePlots ?? []).slice(0, settlement.buildings)) {
+    for (const plot of settlement.structurePlots ?? []) {
       let depth = 0;
       // Sample the footprint, not the settlement centre; high foundations remain safe.
       for (let z = -1; z <= 1; z++) for (let x = -1; x <= 1; x++) {
@@ -88,7 +88,7 @@ export function applyTornadoConsequences(state: SimulationState, tornado: Tornad
     let damaged = 0;
     let destroyed = 0;
     const resilience = practical(settlement, 'stone-composites') * 0.6 + settlement.infrastructure.workshops * 0.2;
-    for (const plot of (settlement.structurePlots ?? []).slice(0, settlement.buildings)) {
+    for (const plot of settlement.structurePlots ?? []) {
       const exposure = tornadoExposure(tornado, { x: plot.worldX, z: plot.worldZ }, plot.radius);
       const loss = tornadoDamage(tornado, exposure, resilience);
       if (loss <= 0.02 || plot.condition === 0) continue;
@@ -143,6 +143,7 @@ export function repairWeatherDamage(settlement: Settlement, builders: number, mo
   let budget = Math.min(0.12, builders * 0.015);
   let repaired = 0;
   for (const plot of settlement.structurePlots ?? []) {
+    if (plot.development && plot.development.status !== 'active') continue;
     if (plot.condition >= 1 || plot.damagedMonth === month || (plot.floodDepth ?? 0) > 0.06) continue;
     const work = Math.min(budget, 1 - plot.condition, settlement.resources.wood / 8, settlement.resources.minerals / 1.5);
     if (work <= 0) break;

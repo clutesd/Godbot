@@ -9,7 +9,9 @@ import { CameraDirector, type CurrentObservation } from './CameraDirector';
 import { AnimationController } from './animation/AnimationController';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
-import { eraRank, type BuildingRole } from './assets/BuildingGrammar';
+import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
+import type { DevelopmentResponse } from '../sim/development/types';
+import { districtForResponse } from '../shared/SettlementLayoutPlan';
 import { MaterialPalette, type Era } from './materials/MaterialPalette';
 import { PlacementContract } from './placement/PlacementContract';
 import { PlacementFootprint } from './placement/PlacementFootprint';
@@ -57,6 +59,7 @@ interface SmokeSource {
 }
 
 interface BuildingPlacement {
+  development?: DevelopmentResponse;
   key: string;
   localX: number;
   localZ: number;
@@ -589,7 +592,7 @@ export class GodboxRenderer {
     if (!force && signature === this.lastSettlementSignature) return;
     this.lastSettlementSignature = signature;
     for (const settlement of this.state.settlements) {
-      if (!settlement.alive) {
+      if (!settlement.alive && !settlement.development) {
         const visual = this.settlementVisuals.get(settlement.id);
         if (visual) visual.group.visible = false;
         continue;
@@ -635,19 +638,19 @@ export class GodboxRenderer {
     const profile = CultureStyleProfileFactory.createFromCulture(culture?.id ?? 'fallback', cultureStyle);
     const shownBuildings = this.shownBuildingCount(settlement);
     const layout = this.layoutForSettlement(settlement, era);
-    const hasActiveConstruction = settlement.constructionProgress > 0 && settlement.buildings < settlement.targetBuildings;
+    const hasActiveConstruction = settlement.constructionProgress > 0 && (Boolean(settlement.development?.project) || settlement.buildings < settlement.targetBuildings);
     const reservedPlacements = this.getSettlementBuildingPlacements(settlement, shownBuildings + (hasActiveConstruction ? 1 : 0), layout);
-    const placements = reservedPlacements.slice(0, shownBuildings);
+    const placements = settlement.development ? reservedPlacements.filter(p => settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shownBuildings) : reservedPlacements.slice(0, shownBuildings);
     for (const placement of placements) {
       const terrainY = this.elevationAt(placement.worldX, placement.worldZ) - settlementY;
-      const buildingEra = this.eraForBuilding(placement, era);
+      const buildingEra = placement.development ? developmentPresentationEra(placement.development) : this.eraForBuilding(placement, era);
       // Stage tracks this plot's own era, so each structure is upgraded in place on its own
       // schedule rather than the whole settlement being reskinned at once.
       const condition = settlement.structurePlots?.find((plot) => plot.id === placement.key)?.condition ?? 1;
       const event = this.visualStateResolver.trackEntity(placement.key, 'building', { stage: eraRank(buildingEra) + 1, damaged: condition < 0.85, ruined: condition === 0 }, this.state.month);
       if (event?.kind === 'building-founded') this.transitionTimeline.createBuildingConstruction(placement.key, { settlementId: settlement.id });
       if (event?.kind === 'building-upgraded') this.transitionTimeline.createBuildingUpgrade(placement.key, Number(event.associatedData['fromStage'] ?? 0), Number(event.associatedData['toStage'] ?? 1), { settlementId: settlement.id });
-      const structure = this.createPlacedBuilding(placement, cultureStyle, buildingEra, terrainY);
+      const structure = this.createPlacedBuilding(placement, placement.development?.style ?? cultureStyle, buildingEra, terrainY);
       if (condition < 1) {
         structure.scale.y *= 0.12 + condition * 0.88;
         structure.rotation.z += (1 - condition) * 0.12;
@@ -657,27 +660,29 @@ export class GodboxRenderer {
       });
       group.add(structure);
     }
-    const activeSite = hasActiveConstruction ? reservedPlacements[shownBuildings] : undefined;
+    const activeSite = hasActiveConstruction ? settlement.development ? reservedPlacements.find(p => p.key === settlement.development?.project?.plotId) : reservedPlacements[shownBuildings] : undefined;
     if (activeSite) group.add(this.createActiveConstructionSite(activeSite, palette, settlementY, settlement.constructionProgress));
-    if (eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);
+    if (!settlement.development && eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);
     this.addGroundCraft(group, era, palette, visualRandom);
     this.addRoutePortals(group, settlement, layout, era, palette);
     const axisAngle = this.random.fork(`${settlement.id}:axis`).float() * Math.PI * 2;
-    if (eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
-    this.addBanner(group, culture, settlement.institutionIds.length);
+    if (!settlement.development && eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
+    if (settlement.alive) this.addBanner(group, culture, settlement.institutionIds.length);
     this.addBlossomTree(group, visualRandom);
     const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
-    if (importance >= 1 && eraRank(era) >= 2) this.addLandmark(group, settlement, cultureStyle, era, axisAngle, settlementY);
-    if (routeCount > 0 && eraRank(era) >= 2) this.addMarket(group, settlement, layout, culture, Math.min(4, routeCount));
+    if (!settlement.development && importance >= 1 && eraRank(era) >= 2) this.addLandmark(group, settlement, cultureStyle, era, axisAngle, settlementY);
+    if (!settlement.development && routeCount > 0 && eraRank(era) >= 2) this.addMarket(group, settlement, layout, culture, Math.min(4, routeCount));
     if (politySize > 1) this.addWaystones(group, culture, Math.min(5, politySize));
     const smokeSources: SmokeSource[] = [];
-    this.addInfrastructure(group, settlement, culture, smokeSources);
-    this.addEraDressing(group, era, palette, visualRandom);
-    this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
-    this.addHearthSmoke(placements, era, smokeSources);
-    const lights = this.addSettlementLighting(group, era, palette, visualRandom);
+    if (settlement.alive) this.addInfrastructure(group, settlement, culture, smokeSources);
+    if (!settlement.development) {
+      this.addEraDressing(group, era, palette, visualRandom);
+      this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
+    }
+    if (settlement.alive) this.addHearthSmoke(placements, era, smokeSources);
+    const lights = settlement.alive ? this.addSettlementLighting(group, era, palette, visualRandom) : [];
     group.userData['settlementId'] = settlement.id;
     group.traverse((object) => { if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true; });
     return { group, buildingCount: settlement.buildings, institutionCount: settlement.institutionIds.length, routeCount, politySize, developmentSignature: this.developmentSignature(settlement), constructionSignature: this.constructionSignature(settlement.id), powerLevel: settlement.infrastructure.power, lights, smokeSources };
@@ -693,6 +698,7 @@ export class GodboxRenderer {
   }
 
   private shownBuildingCount(settlement: Settlement): number {
+    if (settlement.development) return Math.min(Math.max(12, Math.round(32 * this.config.render.visualDensity)), (settlement.structurePlots ?? []).filter(p => p.development).length);
     return Math.min(Math.max(12, Math.round(32 * this.config.render.visualDensity)), settlement.buildings + Math.floor(settlement.urbanization * 8));
   }
 
@@ -1002,6 +1008,7 @@ export class GodboxRenderer {
       culture: cultureStyle,
       era,
       variant: `${placement.role}#${stage}`,
+      development: placement.development,
     });
     const building = asset.mesh.clone(true);
 
@@ -1009,7 +1016,7 @@ export class GodboxRenderer {
     // proportions survive, and bounded by the footprint, so nothing spills onto its neighbour.
     const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
     const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
-    const fit = Math.min(placement.width / grammarWidth, placement.depth / grammarDepth);
+    const fit = Math.min(placement.width / grammarWidth, placement.depth / grammarDepth) * (placement.development ? 0.64 + placement.development.level * 0.12 : 1);
 
     building.position.set(placement.localX, terrainY, placement.localZ);
     building.rotation.y = placement.rotationY;
@@ -1076,6 +1083,10 @@ export class GodboxRenderer {
   }
 
   private eraForSettlement(settlement: Settlement): Era {
+    if (settlement.development) {
+      const structures = (settlement.structurePlots ?? []).flatMap(p => p.development?.status === 'active' ? [p.development] : []);
+      return structures.reduce<Era>((era, response) => eraRank(developmentPresentationEra(response)) > eraRank(era) ? developmentPresentationEra(response) : era, 'primitive');
+    }
     if (this.state.advanced.machine.capability > 0.55 || this.state.advanced.space.orbitalInfrastructure > 0.15) return 'advanced';
     if (settlement.industry.active || settlement.infrastructure.factories > 0.12 || settlement.infrastructure.power > 0.12) return 'industrial';
     if (settlement.infrastructure.archives > 0.2 || settlement.infrastructure.workshops > 0.28) return 'preIndustrial';
@@ -1161,6 +1172,33 @@ export class GodboxRenderer {
 
   private getSettlementBuildingPlacements(settlement: Settlement, shownBuildings: number, layout = this.layoutForSettlement(settlement)): BuildingPlacement[] {
     void layout;
+    if (settlement.development) {
+      const previous = new Map((this.settlementBuildingPlacements.get(settlement.id) ?? []).map(p => [p.key, p]));
+      const placements: BuildingPlacement[] = [];
+      // Specialized sites sort ahead of repeated homes in the bounded display sample.
+      const plots = [...(settlement.structurePlots ?? [])].sort((a, b) =>
+        Number(a.development?.need === 'housing') - Number(b.development?.need === 'housing') || a.foundedMonth - b.foundedMonth || a.id.localeCompare(b.id));
+      const selected = plots.filter(p => p.development).slice(0, shownBuildings);
+      const projectPlot = plots.find(p => p.id === settlement.development?.project?.plotId);
+      if (projectPlot && !selected.includes(projectPlot)) selected.push(projectPlot);
+      for (const plot of selected) {
+        const response = plot.development ?? settlement.development.project?.response;
+        if (!response) continue;
+        const cached = previous.get(plot.id);
+        const registered = cached || this.placementFootprints.registerFootprint({ kind: 'building', worldX: plot.worldX, worldZ: plot.worldZ, radius: plot.radius,
+          placedMonth: plot.foundedMonth, entityId: plot.id, persistent: true }).success;
+        if (!registered) continue;
+        const random = this.random.fork(plot.id);
+        const localX = plot.worldX - settlement.position.x;
+        const localZ = plot.worldZ - settlement.position.z;
+        const district = districtForResponse(response);
+        placements.push({ key: plot.id, localX, localZ, worldX: plot.worldX, worldZ: plot.worldZ, width: plot.width, depth: plot.depth, height: plot.height,
+          rotationY: cached?.rotationY ?? Math.atan2(-localX, -localZ) + random.range(-0.16, 0.16), major: ['civic', 'sacred', 'industrial'].includes(district), district,
+          role: developmentBuildingRole(response), builtEra: developmentPresentationEra(response), conservatism: 0, variation: cached?.variation ?? Math.floor(random.float() * 4), development: response });
+      }
+      this.settlementBuildingPlacements.set(settlement.id, placements);
+      return placements;
+    }
     const existing = this.settlementBuildingPlacements.get(settlement.id) ?? [];
     if (existing.length >= shownBuildings) return existing.slice(0, shownBuildings);
 
@@ -1229,7 +1267,7 @@ export class GodboxRenderer {
     const stops = Object.values(this.state.transportation.stops).filter(stop => stop.settlementId === settlement.id && stop.status === 'complete').map(stop => stop.id).join(',');
     // The era is part of the signature because its thresholds do not line up with the coarse
     // buckets below, and a missed era change would leave a settlement rendered as its past.
-    return [this.eraForSettlement(settlement), ...[infrastructure.roads, infrastructure.ports, infrastructure.bridges, infrastructure.workshops, infrastructure.archives, infrastructure.rail, infrastructure.power, infrastructure.factories, settlement.industry.intensity, settlement.urbanization, settlement.constructionProgress, this.state.advanced.atomic.applications.energy, this.state.advanced.machine.capability, this.state.advanced.space.orbitalInfrastructure]
+    return [settlement.development?.revision ?? 0, this.eraForSettlement(settlement), ...[infrastructure.roads, infrastructure.ports, infrastructure.bridges, infrastructure.workshops, infrastructure.archives, infrastructure.rail, infrastructure.power, infrastructure.factories, settlement.industry.intensity, settlement.urbanization, settlement.constructionProgress, this.state.advanced.atomic.applications.energy, this.state.advanced.machine.capability, this.state.advanced.space.orbitalInfrastructure]
       .map((value) => Math.floor(value * 5)), stops, ...(settlement.structurePlots ?? []).map((plot) => Math.floor(plot.condition * 20))].join(':');
   }
 

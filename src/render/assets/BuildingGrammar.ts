@@ -12,6 +12,7 @@
 import type { Era } from '../materials/MaterialPalette';
 import type { CultureStyleProfile, MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
+import type { DevelopmentResponse } from '../../sim/development/types';
 
 export type BuildingRole =
   | 'shelter'
@@ -53,6 +54,7 @@ export type EnclosureStyle = 'none' | 'stakes' | 'yard' | 'court';
 export type WallLayer = 'hide' | 'thatch' | 'daub' | 'plaster' | 'stone' | 'brick' | 'panel';
 
 export interface BuildingGrammar {
+  development?: Pick<DevelopmentResponse, 'form' | 'need' | 'level' | 'material'>;
   role: BuildingRole;
   era: Era;
   /** Canonical footprint. The renderer scales this to the reserved placement footprint. */
@@ -270,8 +272,9 @@ export function resolveBuildingGrammar(
   era: Era,
   requestedRole: BuildingRole,
   seed: string,
+  development?: DevelopmentResponse,
 ): BuildingGrammar {
-  const role = clampRoleToEra(requestedRole, era);
+  const role = development ? requestedRole : clampRoleToEra(requestedRole, era);
   const random = new SeededRandom(seed);
   const shape = roleShape(role);
   const rank = eraRank(era);
@@ -293,7 +296,7 @@ export function resolveBuildingGrammar(
       + (role === 'gate-tower' ? 1 : 0),
     ));
 
-  return {
+  const grammar: BuildingGrammar = {
     role,
     era,
     width: shape.width * scale * random.range(0.93, 1.08),
@@ -351,4 +354,44 @@ export function resolveBuildingGrammar(
     emissive: rank <= 1 ? 0.25 : rank === 2 ? 0.5 : rank === 3 ? 0.68 : rank === 4 ? 0.85 : 1,
     forgeGlow: role === 'foundry' ? 1 : role === 'factory' ? 0.55 : role === 'energy' ? 0.9 : role === 'workshop' ? 0.35 : 0,
   };
+  if (development) {
+    grammar.development = { form: development.form, need: development.need, level: development.level, material: development.material };
+    grammar.postStyle = development.material === 'metal' ? 'steel' : development.material === 'masonry' ? 'stone' : 'timber';
+    grammar.wallLayer = development.material === 'metal' ? 'panel' : development.material === 'masonry' ? 'stone' : development.material === 'ceramic' ? 'brick' : 'daub';
+    grammar.openings = development.material === 'metal' ? 'glazed' : development.level > 1 ? 'lattice' : 'shutter';
+    grammar.roofTiers = development.form === 'sanctuary' ? development.level : 1;
+    grammar.storeys = development.form === 'tower' ? development.level + 1 : development.level === 3 ? 2 : 1;
+    grammar.wallHeight *= 0.75 + development.level * 0.18;
+    grammar.massing = development.level === 3 ? 'court' : development.level === 2 ? 'wing' : 'single';
+    grammar.gateway = development.level > 1 && ceremonial;
+    grammar.forecourt = development.level > 1 && ceremonial;
+    grammar.enclosure = development.form === 'tower' ? 'court' : development.level > 1 && ceremonial ? 'court' : 'none';
+    if (development.material === 'earth' || development.material === 'timber') {
+      grammar.roofFamily = profile.roofLanguage === 'dome-organic' && development.material === 'earth' ? 'shell-dome' : 'thatch-hip';
+      grammar.roofPitch = profile.roofLanguage === 'pyramid-stepped' ? 0.8 : 0.48;
+    }
+    grammar.vents = development.form === 'works' ? grammar.vents : 0;
+    grammar.emissive = development.need === 'energy' && development.level === 3 ? 0.85 : 0.25;
+  }
+  return grammar;
+}
+
+export function developmentBuildingRole(response: DevelopmentResponse): BuildingRole {
+  switch (response.form) {
+    case 'dwelling': return response.level > 1 ? 'compound' : 'house';
+    case 'field': return 'granary';
+    case 'store': return response.level > 1 ? 'warehouse' : 'granary';
+    case 'gathering': return response.need === 'trade' ? 'market' : 'hall';
+    case 'hall': return 'hall';
+    case 'sanctuary': return 'shrine';
+    case 'tower': return 'gate-tower';
+    case 'workshop': return 'workshop';
+    case 'works': return response.need === 'energy' ? 'energy' : 'factory';
+    case 'marker': return 'ritual-marker';
+  }
+}
+
+/** Legacy era names are only palette/detail presets for a completed local response. */
+export function developmentPresentationEra(response: DevelopmentResponse): Era {
+  return response.form === 'works' ? 'industrial' : response.level === 3 ? 'preIndustrial' : response.level === 2 ? 'village' : 'early';
 }

@@ -115,8 +115,9 @@ describe('Purposeful represented people', () => {
       if (!settlement) continue;
       const layout = createSettlementLayoutPlan({ settlement, settlements: simulation.state.settlements, routes: simulation.state.tradeRoutes, eraRank: settlementEraRank(settlement, simulation.state), seed: simulation.state.seed });
       const destination = person.navigation?.waypoints.at(-1) ?? person.position;
-      const anchor = layout.anchors[district];
-      expect(Math.hypot(destination.x - anchor.worldX, destination.z - anchor.worldZ)).toBeLessThanOrEqual(layout.radius * 1.05);
+      const site = settlement.structurePlots?.find(plot => plot.id === person.navigation?.destinationId);
+      const anchor = site ?? layout.anchors[district];
+      expect(Math.hypot(destination.x - anchor.worldX, destination.z - anchor.worldZ)).toBeLessThanOrEqual(site ? site.radius + 0.5 : layout.radius * 1.05);
       checked += 1;
     }
     expect(checked).toBeGreaterThan(20);

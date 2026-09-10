@@ -474,6 +474,7 @@ export class Historian {
     for (const event of state.history) if (event.month <= month) for (const id of event.actors) ids.add(id);
     for (const cell of state.world.cells) ids.add(this.cellId(cell));
     for (const landmark of state.world.landmarks) ids.add(landmark.id);
+    for (const settlement of state.settlements) for (const plot of settlement.structurePlots ?? []) if (plot.foundedMonth <= month && plot.development) ids.add(plot.id);
     this.knownIdsMonth = month;
     this.knownIds = ids;
     return ids;
@@ -485,6 +486,8 @@ export class Historian {
       if (person) return person.position;
       const settlement = state.settlements.find((candidate) => candidate.id === id);
       if (settlement) return settlement.position;
+      const plot = state.settlements.flatMap(s => s.structurePlots ?? []).find(p => p.id === id);
+      if (plot) return { x: plot.worldX, z: plot.worldZ };
       const institution = state.institutions.find((candidate) => candidate.id === id);
       const home = institution ? state.settlements.find((candidate) => candidate.id === institution.settlementId) : undefined;
       if (home) return home.position;

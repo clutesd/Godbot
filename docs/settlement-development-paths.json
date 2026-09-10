@@ -1,0 +1,493 @@
+{
+  "scenario": "Controlled equal-population societies; 600 development months; no world economy or demographic stepping",
+  "months": 600,
+  "panels": [
+    {
+      "title": "Agricultural / sacred",
+      "description": "Farmsteads, storage and a temple",
+      "structures": [
+        {
+          "id": "settlement-1:building:0",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -15.721050505496358,
+            -19.684606959656385
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-1:building:1",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -17.905687190564375,
+            -18.973046303815885
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-1:building:2",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -19.380681368326034,
+            -20.997174076699093
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-1:building:3",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -16.06227754780466,
+            -22.180473231560146
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-1:building:4",
+          "name": "temple",
+          "form": "sanctuary",
+          "need": "religion",
+          "level": 2,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -17.588527282364105,
+            -14.706752520827443
+          ],
+          "history": [
+            {
+              "month": 49,
+              "action": "expanded",
+              "name": "temple",
+              "need": "religion",
+              "form": "sanctuary",
+              "level": 2,
+              "material": "timber",
+              "cultureId": "fixture-culture-0",
+              "institutionId": "settlement-1:temple",
+              "reasons": [
+                "religion-pressure",
+                "temple",
+                "settlement-1:temple",
+                "connected-exchange"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "settlement-1:building:5",
+          "name": "farmstead",
+          "form": "field",
+          "need": "food",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -22.393539830981084,
+            -20.631635895181585
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-1:building:6",
+          "name": "shrine",
+          "form": "sanctuary",
+          "need": "religion",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -11.353377355643762,
+            -19.168758777700496
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-1:building:7",
+          "name": "exchange store",
+          "form": "store",
+          "need": "trade",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -14.232838818197962,
+            -17.008778243896643
+          ],
+          "history": []
+        }
+      ]
+    },
+    {
+      "title": "Trade / civic",
+      "description": "Markets and a council building",
+      "structures": [
+        {
+          "id": "settlement-2:building:0",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            19.286268552696882,
+            -14.329804662246238
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-2:building:1",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            17.62694572776174,
+            -16.641136728146417
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-2:building:2",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            18.801368953871393,
+            -19.89185367996793
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-2:building:3",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            16.31657655223806,
+            -13.597690776139315
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-2:building:4",
+          "name": "market hall",
+          "form": "gathering",
+          "need": "trade",
+          "level": 2,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            15.132096471462532,
+            -17.754956590805193
+          ],
+          "history": [
+            {
+              "month": 37,
+              "action": "expanded",
+              "name": "market hall",
+              "need": "trade",
+              "form": "gathering",
+              "level": 2,
+              "material": "timber",
+              "cultureId": "fixture-culture-1",
+              "institutionId": "settlement-2:merchant-association",
+              "reasons": [
+                "trade-pressure",
+                "merchant-association",
+                "settlement-2:merchant-association",
+                "connected-exchange"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "settlement-2:building:5",
+          "name": "council building",
+          "form": "hall",
+          "need": "government",
+          "level": 2,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            15.641305117211624,
+            -21.53820449631825
+          ],
+          "history": [
+            {
+              "month": 109,
+              "action": "expanded",
+              "name": "council building",
+              "need": "government",
+              "form": "hall",
+              "level": 2,
+              "material": "timber",
+              "cultureId": "fixture-culture-1",
+              "institutionId": "settlement-2:council",
+              "reasons": [
+                "government-pressure",
+                "council",
+                "settlement-2:council"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "settlement-2:building:6",
+          "name": "market stalls",
+          "form": "gathering",
+          "need": "trade",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            12.788033013027654,
+            -15.761607633644303
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-2:building:7",
+          "name": "market stalls",
+          "form": "gathering",
+          "need": "trade",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            12.603375948569338,
+            -19.64469266404469
+          ],
+          "history": []
+        }
+      ]
+    },
+    {
+      "title": "Militarized frontier",
+      "description": "Watch posts and warrior barracks",
+      "structures": [
+        {
+          "id": "settlement-3:building:0",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -14.567079880831324,
+            18.0454581061217
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-3:building:1",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -17.43715347713982,
+            17.463418432208172
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-3:building:2",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -16.35093523721564,
+            20.08448662638957
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-3:building:3",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -16.759322206595733,
+            14.589924770544346
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-3:building:4",
+          "name": "warrior barracks",
+          "form": "tower",
+          "need": "security",
+          "level": 2,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -20.326906318474254,
+            10.801325422127565
+          ],
+          "history": [
+            {
+              "month": 49,
+              "action": "expanded",
+              "name": "warrior barracks",
+              "need": "security",
+              "form": "tower",
+              "level": 2,
+              "material": "timber",
+              "cultureId": "fixture-culture-2",
+              "institutionId": "settlement-3:military-order",
+              "reasons": [
+                "security-pressure",
+                "military-order",
+                "settlement-3:military-order",
+                "frontier-conflict"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "settlement-3:building:5",
+          "name": "frontier watch post",
+          "form": "tower",
+          "need": "security",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -12.691695646605686,
+            13.216987980145834
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-3:building:6",
+          "name": "frontier watch post",
+          "form": "tower",
+          "need": "security",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -10.270722044514645,
+            18.482255531184535
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-3:building:7",
+          "name": "exchange store",
+          "form": "store",
+          "need": "trade",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            -19.153981429244986,
+            15.488020454964433
+          ],
+          "history": []
+        }
+      ]
+    },
+    {
+      "title": "Decentralized clans",
+      "description": "Households and informal authority",
+      "structures": [
+        {
+          "id": "settlement-4:building:0",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            20.216301241227033,
+            17.219105869011436
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-4:building:1",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            17.39508089830873,
+            16.00925618450292
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-4:building:2",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            18.429595005279197,
+            13.407969176041378
+          ],
+          "history": []
+        },
+        {
+          "id": "settlement-4:building:3",
+          "name": "household shelter",
+          "form": "dwelling",
+          "need": "housing",
+          "level": 1,
+          "material": "timber",
+          "status": "active",
+          "position": [
+            17.980287454729545,
+            18.950637833302608
+          ],
+          "history": []
+        }
+      ]
+    }
+  ]
+}

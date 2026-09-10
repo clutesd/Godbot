@@ -1,6 +1,7 @@
 import { SeededRandom } from '../sim/prng';
 import type { Settlement, TradeRoute, Vec2 } from '../sim/types';
 import type { TransportationState } from '../sim/transport/types';
+import type { DevelopmentResponse } from '../sim/development/types';
 
 /**
  * Semantic city plan shared by simulation and presentation. It contains no render state: the
@@ -8,6 +9,15 @@ import type { TransportationState } from '../sim/transport/types';
  * same anchors for buildings, streets, gates, stations, and docks.
  */
 export type BuildingDistrict = 'civic' | 'sacred' | 'market' | 'residential' | 'craft' | 'industrial';
+
+export function districtForResponse(response: Pick<DevelopmentResponse, 'need' | 'form'>): BuildingDistrict {
+  if (response.need === 'housing') return 'residential';
+  if (response.need === 'religion' || response.need === 'memory') return 'sacred';
+  if (response.need === 'trade' || response.need === 'transport') return 'market';
+  if (response.form === 'works') return 'industrial';
+  if (response.need === 'food' || response.need === 'manufacturing' || response.need === 'energy') return 'craft';
+  return 'civic';
+}
 
 export interface LayoutAnchor {
   district: BuildingDistrict;
@@ -88,6 +98,9 @@ export function createSettlementLayoutPlan(input: SettlementLayoutInput): Settle
 }
 
 export function districtForPlot(index: number, settlement: Settlement): BuildingDistrict {
+  const structure = settlement.structurePlots?.[index]?.development;
+  if (structure) return districtForResponse(structure);
+  if (settlement.development) return 'residential';
   if (index === 0) return 'civic';
   if (index === 1) return 'sacred';
   if (index === 2) return 'market';

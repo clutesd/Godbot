@@ -2,8 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import type { CultureDimensions } from '../src/sim/types';
 
-const society = new Simulation({ seed: 'delta-two', startingPopulation: 360, society: { conflictRate: 2 } });
-society.step(200 * 12);
+const society = new Simulation({ seed: 'delta-two', startingPopulation: 360, society: { conflictRate: 1 }, knowledge: { diffusionRate: 5 } });
+// Society assertions require sustained contact. Give this integration fixture a fertile,
+// connected plain; generated archipelagos and flood failures are covered by terrain/transport.
+const ground = society.state.world.seaLevel + 0.15;
+society.state.world.terrain.height.fill(ground);
+society.state.world.terrain.waterLevel.fill(-1);
+society.state.world.terrain.river.fill(0);
+society.state.world.terrain.lake.fill(0);
+for (const cell of society.state.world.cells) Object.assign(cell, {
+  elevation: ground, water: false, river: false, lake: false, coast: false, slope: 0, relief: 0,
+  biome: 'grassland', landform: 'lowland', fertility: 0.9, moisture: 0.6, movementCost: 1,
+});
+society.state.world.environmentRevision = (society.state.world.environmentRevision ?? 0) + 1;
+// Contacts need complementary expertise to yield a knowledge milestone, not just traffic.
+society.state.settlements.forEach((settlement, index) => {
+  const records = Object.values(settlement.knowledge.records);
+  const specialty = records[index % records.length];
+  if (specialty) { specialty.theory = 0.9; specialty.practice = 0.9; }
+});
+society.step(80 * 12);
 
 describe('Emergent society', () => {
   it('forms causal institutions and gives political power persistent human actors', () => {

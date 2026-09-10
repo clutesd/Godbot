@@ -339,6 +339,29 @@ export function composeBuilding(
   stage: BuildStage,
 ): ComposedBuilding {
   const canvas = new BuildingCanvas(stage);
+  // Open institutions and productive land have their own physical silhouette, using the same
+  // surface batching and footprint contract as enclosed buildings.
+  if (grammar.development?.form === 'gathering' && grammar.development.level === 1 || grammar.development?.form === 'field') {
+    canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.012, 0, 2.2, 0.024, 1.8);
+    const field = grammar.development?.form === 'field';
+    for (let i = 0; i < (field ? 7 : 6); i++) {
+      if (field) {
+        canvas.at('timber', BUILD_STAGE.WALLS)?.addBox(-0.9 + i * 0.28, 0.045, 0, 0.08, 0.065, 1.5);
+      } else {
+        const angle = i / 6 * Math.PI * 2;
+        canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.1, Math.sin(angle) * 0.55, 0.3, 0.2, 0.22, angle);
+        if (grammar.development?.need === 'trade') {
+          canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.3, Math.sin(angle) * 0.55, 0.04, 0.6, 0.04);
+          canvas.at('cloth', BUILD_STAGE.ROOF)?.addBox(Math.cos(angle) * 0.65, 0.6, Math.sin(angle) * 0.55, 0.48, 0.04, 0.4, angle);
+        }
+      }
+    }
+    if (field) canvas.at('plaster', BUILD_STAGE.ROOF)?.addBox(0.75, 0.2 * grammar.development!.level, 0.6, 0.45, 0.4 * grammar.development!.level, 0.4);
+    const group = canvas.build(palette);
+    group.userData['grammarRole'] = grammar.role;
+    group.userData['grammarEra'] = grammar.era;
+    return { group, height: field ? 0.4 * grammar.development!.level : 0.62, extentX: 2.3, extentZ: 1.9 };
+  }
   const random = new SeededRandom(`${seed}:compose`);
   const rank = eraRank(grammar.era);
 

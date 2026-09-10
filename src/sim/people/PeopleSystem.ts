@@ -1,4 +1,5 @@
 import { createSettlementLayoutPlan, type BuildingDistrict, type SettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
+import { structureDestination } from '../../shared/StructureDestinations';
 import type {
   Activity,
   DestinationKind,
@@ -110,7 +111,7 @@ export class PeopleSystem {
     const previousRole = person.role;
     const role = this.roleFor(person, settlement, state);
     person.role = role;
-    person.workplaceId = `${settlement.id}:${WORK_DESTINATION[role]}`;
+    person.workplaceId = structureDestination(settlement, WORK_DESTINATION[role])?.id ?? `${settlement.id}:${WORK_DESTINATION[role]}`;
     const householdVariation = stableUnit(`${this.seed}:${person.householdId}:wealth`) - 0.5;
     const roleStatus = statusForRole(role);
     const householdWealth = clamp(settlement.prosperity * 0.68 + householdVariation * 0.34 + roleStatus * 0.16);
@@ -457,6 +458,8 @@ export class PeopleSystem {
   }
 
   private destinationPoint(person: Person, settlement: Settlement, state: SimulationState, kind: DestinationKind): Vec2 {
+    const site = structureDestination(settlement, kind);
+    if (site) return this.walkability.nearestWalkable({ x: site.worldX, z: site.worldZ }, `${person.id}:${site.id}`);
     const layout = this.layout(settlement, state);
     if (kind === 'dock' || kind === 'station') {
       const portal = layout.portals.find((candidate) => candidate.kind === kind);
@@ -499,6 +502,8 @@ export class PeopleSystem {
   }
 
   private destinationId(person: Person, settlement: Settlement, kind: DestinationKind): string {
+    const site = structureDestination(settlement, kind);
+    if (site) return site.id;
     return kind === 'home' ? `${person.householdId}:home` : `${settlement.id}:${kind}`;
   }
 
