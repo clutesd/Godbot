@@ -58,12 +58,15 @@ function lerp(from: number, to: number, t: number): number {
 }
 
 /**
- * One annual flower cycle. Month zero is winter in GODBOX. Individual phase offsets spread
- * germination and senescence over several weeks without creating per-flower simulation state.
+ * One annual flower cycle. Month zero is winter in GODBOX. Winter is authoritative: individual
+ * phase offsets stagger emergence and senescence inside the growing season but can never keep a
+ * flower alive into months 10, 11 or 0.
  */
 export function resolveFlowerGrowth(month: number, phase = 0.5): FlowerGrowth {
-  const localMonth = ((month + (clamp01(phase) - 0.5) * 0.8) % 12 + 12) % 12;
-  if (localMonth < 1 || localMonth >= 10) return { stage: 'dormant', visible: false, scale: 0, bloom: 0, seed: 0 };
+  const baseMonth = ((month % 12) + 12) % 12;
+  if (baseMonth < 1 || baseMonth >= 10) return { stage: 'dormant', visible: false, scale: 0, bloom: 0, seed: 0 };
+
+  const localMonth = Math.min(9.999, Math.max(1, baseMonth + (clamp01(phase) - 0.5) * 0.8));
   if (localMonth < 2.1) {
     const progress = (localMonth - 1) / 1.1;
     return { stage: 'sprout', visible: true, scale: lerp(0.16, 0.52, progress), bloom: 0, seed: 0 };
