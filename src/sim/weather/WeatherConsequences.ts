@@ -36,7 +36,7 @@ export function applyFloodConsequences(state: SimulationState, months = 1): Weat
         damaged++;
         if (plot.condition === 0) destroyed++;
       }
-      const restricted = depth > 0.06 || plot.condition < 0.65;
+      const restricted = depth > 0.06 || plot.condition < 0.65 || Boolean(plot.fire);
       if (restricted && !plot.accessRestricted) newlyRestricted++;
       plot.accessRestricted = restricted;
     }
@@ -144,10 +144,11 @@ export function repairWeatherDamage(settlement: Settlement, builders: number, mo
   let repaired = 0;
   for (const plot of settlement.structurePlots ?? []) {
     if (plot.development && plot.development.status !== 'active') continue;
-    if (plot.condition >= 1 || plot.damagedMonth === month || (plot.floodDepth ?? 0) > 0.06) continue;
+    if (plot.fire || plot.condition >= 1 || plot.damagedMonth === month || (plot.floodDepth ?? 0) > 0.06) continue;
     const work = Math.min(budget, 1 - plot.condition, settlement.resources.wood / 8, settlement.resources.minerals / 1.5);
     if (work <= 0) break;
     plot.condition = Math.min(1, plot.condition + work);
+    plot.char = Math.max(0, (plot.char ?? 0) - work * 1.5);
     plot.accessRestricted = plot.condition < 0.65;
     settlement.resources.wood -= work * 8;
     settlement.resources.minerals -= work * 1.5;

@@ -4,10 +4,10 @@ import { DynamicHydrology } from '../terrain/Hydrology';
 import { classifyWaterDepth, waterDepthAt } from '../terrain/SurfaceGeometry';
 import { cellAt } from '../world';
 import { tornadoDamage, tornadoExposure, tornadoPotential } from './Tornado';
+import { FREEZING, hasPrecipitation, precipitationPhase } from './Precipitation';
 import type { Vec2, WeatherDescriptor, WeatherFront, WeatherKind, WeatherState, WorldCell, WorldState } from '../types';
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
-const FREEZING = 0.38;
 
 function precipitationFor(kind: WeatherKind): WeatherDescriptor['precipitation'] {
   if (kind === 'snow' || kind === 'heavy-snow') return 'snow';
@@ -105,6 +105,16 @@ export class WeatherSystem {
     }
     for (const cell of this.world.cells) this.applyWeatherToCell(cell, {});
     this.advanceTornadoes();
+    this.state.lightning = [];
+    for (const front of this.state.fronts) {
+      if (front.kind !== 'thunderstorm' || front.intensity < 0.65) continue;
+      const random = new SeededRandom(`${this.config.seed}:lightning:${front.id}:${this.state.month}`);
+      if (!random.chance(0.28 * front.intensity)) continue;
+      const x = front.x + random.range(-0.65, 0.65) * front.radius;
+      const z = front.z + random.range(-0.65, 0.65) * front.radius;
+      const cell = cellAt(this.world, x, z);
+      if (cell && this.temperatureAt(cell) > FREEZING) this.state.lightning.push({ id: `lightning:${front.id}:${this.state.month}`, month: this.state.month, x, z, intensity: front.intensity });
+    }
     this.hydrology.advance(this.state.cells);
     this.world.environmentRevision = (this.world.environmentRevision ?? 0) + 1;
   }
@@ -197,14 +207,17 @@ export class WeatherSystem {
     intensity = clamp01(descriptor.intensity ?? intensity);
     wind = clamp01(descriptor.wind ?? wind);
     const temperature = this.temperatureAt(cell);
-    if (precipitationFor(kind) !== 'none') {
-      if (temperature <= FREEZING) kind = ['heavy-rain', 'thunderstorm', 'heavy-snow'].includes(kind) ? 'heavy-snow' : 'snow';
+    const phase = precipitationPhase(temperature);
+    const wet = hasPrecipitation(kind);
+    if (wet) {
+      if (phase.snowFraction >= 0.5) kind = ['heavy-rain', 'thunderstorm', 'heavy-snow', 'hurricane', 'tornado'].includes(kind) ? 'heavy-snow' : 'snow';
       else if (kind === 'snow' || kind === 'heavy-snow') kind = kind === 'heavy-snow' ? 'heavy-rain' : 'rain';
     }
     this.resolvedWeather.kind = kind;
     this.resolvedWeather.intensity = intensity;
     this.resolvedWeather.wind = wind;
-    this.resolvedWeather.precipitation = precipitationFor(kind);
+    this.resolvedWeather.precipitation = wet ? phase.precipitation : 'none';
+    this.resolvedWeather.snowFraction = wet ? phase.snowFraction : 0;
     return this.resolvedWeather;
   }
 
@@ -217,13 +230,14 @@ export class WeatherSystem {
     const temperature = this.temperatureAt(cell);
     const heavy = ['heavy-rain', 'thunderstorm', 'hurricane', 'heavy-snow'].includes(weather.kind);
     const precipitation = weather.intensity * (heavy ? 0.24 : 0.07) * months;
-    const rainfall = weather.precipitation === 'rain' ? precipitation : 0;
+    const snowFraction = weather.snowFraction ?? 0;
+    const rainfall = weather.precipitation !== 'none' ? precipitation * (1 - snowFraction) : 0;
     conditions.blizzard = weather.kind === 'heavy-snow' && weather.intensity > 0.65 && weather.wind > 0.6 && temperature < FREEZING - 0.03
       ? clamp01((weather.intensity - 0.65) / 0.35) * clamp01((weather.wind - 0.6) / 0.3)
         * clamp01((FREEZING - 0.03 - temperature) / 0.12) : 0;
-    if (weather.precipitation === 'snow' && temperature <= FREEZING) {
+    if (snowFraction > 0) {
       const retention = (0.85 + (FREEZING - temperature) * 0.5) * (1 - cell.slope * 0.2);
-      conditions.snowpack = Math.min(1.5, conditions.snowpack + precipitation * retention * (1 + conditions.blizzard * 0.35));
+      conditions.snowpack = Math.min(1.5, conditions.snowpack + precipitation * snowFraction * retention * (1 + conditions.blizzard * 0.35));
     }
     const sunlight = 0.8 + (1 - this.seasonCosine()) * 0.2;
     const melt = Math.min(conditions.snowpack, Math.max(0, temperature - FREEZING) * sunlight * months / (1 + conditions.snowpack * 0.3));
@@ -241,6 +255,7 @@ export class WeatherSystem {
     conditions.intensity = weather.intensity;
     conditions.wind = weather.wind;
     conditions.precipitation = weather.precipitation;
+    conditions.snowFraction = weather.snowFraction;
     conditions.temperature = temperature;
     conditions.windX = this.state.windX;
     conditions.windZ = this.state.windZ;

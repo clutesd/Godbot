@@ -341,7 +341,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       const needs = SETTLEMENT_NEEDS.filter(need => (dev.unmet[need] ?? 0) > 0.65)
         .sort((a, b) => (dev.unmet[b] ?? 0) * (b === 'housing' ? 1.2 : 1) - (dev.unmet[a] ?? 0) * (a === 'housing' ? 1.2 : 1));
       for (const need of needs) {
-        const plots = settlement.structurePlots ?? [];
+        const plots = (settlement.structurePlots ?? []).filter(p => !p.fire);
         const ancestor = plots.find(p => p.development?.status === 'active' && p.development.need === need && p.development.level < 3);
         const desiredLevel = ancestor ? ancestor.development!.level + 1 : 1;
         let response = responseForNeed(c, need, desiredLevel);
@@ -381,7 +381,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     const materialLost = project.response.material === 'metal' && practical(settlement, 'iron-working') < 0.45
       || project.response.material === 'ceramic' && practical(settlement, 'pottery-firing') < 0.3
       || project.response.material === 'masonry' && practical(settlement, 'leverage') < 0.25;
-    if (!plot || !supported || supported.level < project.response.level || patronLost || materialLost || (plot.floodDepth ?? 0) > 0.06) {
+    if (!plot || plot.fire || !supported || supported.level < project.response.level || patronLost || materialLost || (plot.floodDepth ?? 0) > 0.06) {
       if (state.month - project.startedMonth > 120) abandonProject();
     } else if (workRate > 0) {
       const progress = Math.min(1 - project.progress, workRate / project.response.labor,
@@ -399,6 +399,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
           transitionCount: prior?.transitionCount ?? 0, lastUsedMonth: state.month };
         if (prior) remember(plot.development, record);
         plot.condition = 1; plot.accessRestricted = false;
+        plot.char = 0;
         events.push(historyEvent(settlement, plot, record)); dev.project = undefined; dev.revision++;
       }
     }

@@ -1,12 +1,9 @@
 import * as THREE from 'three';
-import { SeededRandom } from '../../sim/prng';
-import { cellAt } from '../../sim/world';
 import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import type { TornadoState, WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
+import { PrecipitationRenderer } from './PrecipitationRenderer';
 
-const BUDGET = 512;
-const RANGE = 18;
 const SNOW_COVERAGE_RATE = 45;
 /** A few centimetres hide the ground colour; snow need not reach travel-blocking depth. */
 export const snowCoverageForDepth = (depth: number): number => 1 - Math.exp(-Math.max(0, depth) * SNOW_COVERAGE_RATE);
@@ -22,20 +19,8 @@ export class WeatherRenderer {
   private readonly snowDisplay: Float32Array;
   private readonly time = { value: 0 };
   private readonly windTexture: { value: THREE.DataTexture };
-  private readonly rain: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-  private readonly snow: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
-  private readonly samples: Array<{ x: number; z: number; phase: number }>;
-  private readonly rainSites: Array<{ x: number; z: number; floor: number; phase: number; windX: number; windZ: number; blizzard: number }> = [];
-  private readonly snowSites: typeof this.rainSites = [];
-  private blizzardTarget = 0;
-  private blizzardDisplay = 0;
-  private readonly direction = new THREE.Vector3();
-  private readonly center = new THREE.Vector3();
-  private readonly point = new THREE.Vector3();
-  private readonly frustum = new THREE.Frustum();
-  private readonly projection = new THREE.Matrix4();
+  private readonly precipitation: PrecipitationRenderer;
   private revision = -1;
-  private accumulator = 1;
   private readonly bound = new WeakSet<THREE.Material>();
   private readonly funnels: THREE.Mesh[] = [];
   private readonly funnelStarts = new Map<string, number>();
@@ -54,23 +39,8 @@ export class WeatherRenderer {
     const resolution = world.terrain.resolution;
     this.waterPixels = new Float32Array(resolution * resolution);
     this.waterTexture = new THREE.DataTexture(this.waterPixels, resolution, resolution, THREE.RedFormat, THREE.FloatType);
-    const random = new SeededRandom(`${seed}:weather-visuals`);
-    this.samples = Array.from({ length: BUDGET }, () => ({ x: random.range(-RANGE, RANGE), z: random.range(-RANGE, RANGE), phase: random.float() }));
-    const rainGeometry = new THREE.BufferGeometry();
-    rainGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BUDGET * 6), 3).setUsage(THREE.DynamicDrawUsage));
-    this.rain = new THREE.LineSegments(rainGeometry, new THREE.LineBasicMaterial({ color: '#c4dce2', transparent: true, opacity: 0.48, depthWrite: false }));
-    const snowGeometry = new THREE.BufferGeometry();
-    snowGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BUDGET * 3), 3).setUsage(THREE.DynamicDrawUsage));
-    this.snow = new THREE.Points(snowGeometry, new THREE.PointsMaterial({ color: '#f0f4f4', size: 0.13, transparent: true, opacity: 0.85, depthWrite: false }));
-    this.snow.material.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace('#include <map_particle_fragment>',
-        '#include <map_particle_fragment>\ndiffuseColor.a *= 1.0 - smoothstep(0.15, 0.5, length(gl_PointCoord - vec2(0.5)));');
-    };
-    this.rain.frustumCulled = false;
-    this.snow.frustumCulled = false;
-    this.rain.geometry.setDrawRange(0, 0);
-    this.snow.geometry.setDrawRange(0, 0);
-    this.group.add(this.rain, this.snow);
+    this.precipitation = new PrecipitationRenderer(world, surface, seed);
+    this.group.add(this.precipitation.group);
     for (let index = 0; index < 4; index += 1) {
       const funnel = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 0.15, 9, 14, 8, true),
         new THREE.MeshStandardMaterial({ color: '#777a73', transparent: true, opacity: 0.12, side: THREE.DoubleSide, roughness: 1, depthWrite: false }));
@@ -201,7 +171,6 @@ export class WeatherRenderer {
       }
       dustPositions.needsUpdate = true;
     });
-    this.accumulator += delta;
     const changed = this.revision !== (this.world.environmentRevision ?? 0);
     if (changed) this.syncTexture();
     let snowChanged = false;
@@ -216,67 +185,16 @@ export class WeatherRenderer {
     }
     this.snowSettled = !settling;
     if (snowChanged) this.texture.needsUpdate = true;
-    if (changed || this.accumulator >= 0.25) {
-      this.accumulator = 0;
-      this.rainSites.length = 0;
-      this.snowSites.length = 0;
-      camera.getWorldDirection(this.direction);
-      const distance = Math.max(5, Math.min(90, (camera.position.y - 4) / Math.max(0.1, -this.direction.y)));
-      this.center.copy(camera.position).addScaledVector(this.direction, distance);
-      const focusCell = cellAt(this.world, this.center.x, this.center.z);
-      this.blizzardTarget = focusCell ? this.world.weather?.cells[focusCell.z * this.world.size + focusCell.x]?.blizzard ?? 0 : 0;
-      camera.updateMatrixWorld();
-      this.frustum.setFromProjectionMatrix(this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-      for (const sample of this.samples) {
-        const x = this.center.x + sample.x;
-        const z = this.center.z + sample.z;
-        const cell = cellAt(this.world, x, z);
-        if (!cell) continue;
-        const weather = this.world.weather?.cells[cell.z * this.world.size + cell.x];
-        if (!weather || weather.precipitation === 'none') continue;
-        const density = weather.intensity * (weather.precipitation === 'snow' ? 0.55 + weather.blizzard * 0.45 : 1);
-        if (sample.phase > density) continue;
-        const floor = Math.max(this.surface.heightAt(x, z), this.surface.waterYAt(x, z));
-        if (!this.frustum.intersectsSphere(new THREE.Sphere(this.point.set(x, floor + 7, z), 8))) continue;
-        const sites = weather.precipitation === 'snow' ? this.snowSites : this.rainSites;
-        sites.push({ x, z, floor, phase: sample.phase, windX: weather.windX * weather.wind, windZ: weather.windZ * weather.wind, blizzard: weather.blizzard });
-      }
-      this.rain.geometry.setDrawRange(0, this.rainSites.length * 2);
-      this.snow.geometry.setDrawRange(0, this.snowSites.length);
-      this.rain.visible = this.rainSites.length > 0;
-      this.snow.visible = this.snowSites.length > 0;
-    }
-    this.blizzardDisplay += (this.blizzardTarget - this.blizzardDisplay) * blend;
-    this.snow.material.size = 0.13 + this.blizzardDisplay * 0.09;
-    const rainPositions = this.rain.geometry.getAttribute('position');
-    for (let index = 0; index < this.rainSites.length; index += 1) {
-      const site = this.rainSites[index]!;
-      const height = 0.5 + (1 - (elapsed * 0.9 + site.phase) % 1) * 14;
-      const x = site.x - height * site.windX * 0.15;
-      const z = site.z - height * site.windZ * 0.15;
-      rainPositions.setXYZ(index * 2, x, site.floor + height, z);
-      rainPositions.setXYZ(index * 2 + 1, x - site.windX * 0.15, site.floor + height + 0.7, z - site.windZ * 0.15);
-    }
-    if (this.rainSites.length) rainPositions.needsUpdate = true;
-    const snowPositions = this.snow.geometry.getAttribute('position');
-    for (let index = 0; index < this.snowSites.length; index += 1) {
-      const site = this.snowSites[index]!;
-      const height = 0.3 + (1 - (elapsed * (0.13 + site.blizzard * 0.12) + site.phase) % 1) * 14;
-      const drift = 0.4 + site.blizzard * 0.9;
-      snowPositions.setXYZ(index, site.x - height * site.windX * drift + Math.sin(elapsed + site.phase * 7) * 0.3,
-        site.floor + height, site.z - height * site.windZ * drift);
-    }
-    if (this.snowSites.length) snowPositions.needsUpdate = true;
+    this.precipitation.update(delta, elapsed, camera);
   }
 
-  get report(): { rain: number; snow: number; budget: number; blizzard: number } {
-    return { rain: this.rainSites.length, snow: this.snowSites.length, budget: BUDGET, blizzard: this.blizzardDisplay };
-  }
+  get report() { return this.precipitation.report; }
 
   dispose(): void {
+    this.precipitation.dispose();
     this.texture.dispose();
     this.waterTexture.dispose();
-    for (const object of [this.rain, this.snow, ...this.funnels, ...this.funnelDust]) {
+    for (const object of [...this.funnels, ...this.funnelDust]) {
       object.geometry.dispose();
       if (!Array.isArray(object.material)) object.material.dispose();
     }

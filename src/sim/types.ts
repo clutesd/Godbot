@@ -69,13 +69,15 @@ export interface WorldState {
 }
 
 export type WeatherKind = 'clear' | 'cloudy' | 'rain' | 'heavy-rain' | 'snow' | 'heavy-snow' | 'thunderstorm' | 'windstorm' | 'tornado' | 'hurricane';
-export type WeatherPrecipitation = 'none' | 'rain' | 'snow';
+export type WeatherPrecipitation = 'none' | 'rain' | 'snow' | 'mixed';
 
 export interface WeatherDescriptor {
   kind: WeatherKind;
   intensity: number;
   wind: number;
   precipitation: WeatherPrecipitation;
+  /** Liquid-equivalent fraction falling as snow; absent on legacy descriptors. */
+  snowFraction?: number;
 }
 
 export interface WeatherCellState extends WeatherDescriptor {
@@ -123,6 +125,7 @@ export interface WeatherState {
   cells: WeatherCellState[];
   tornadoes: TornadoState[];
   forestScars: TornadoState[];
+  lightning?: Array<{ id: string; month: number; x: number; z: number; intensity: number }>;
 }
 
 export interface TornadoState {
@@ -522,6 +525,23 @@ export interface StructurePlot {
   floodDepth?: number;
   floodMonths?: number;
   accessRestricted?: boolean;
+  fire?: StructureFire;
+  /** Retained after extinction; repair removes char, ground scars weather slowly. */
+  char?: number;
+  scorch?: number;
+}
+
+export type FireCause = 'accident' | 'lightning' | 'attack' | 'spread' | 'sabotage' | 'wildfire' | 'developer';
+export type FireStage = 'ignition' | 'growing' | 'involved' | 'weakening' | 'smouldering';
+export interface StructureFire {
+  cause: FireCause;
+  startedMonth: number;
+  age: number;
+  stage: FireStage;
+  intensity: number;
+  fuel: number;
+  initialFuel: number;
+  smoulderMonths: number;
 }
 
 export interface CultureDimensions {

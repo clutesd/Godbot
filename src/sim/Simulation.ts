@@ -8,6 +8,7 @@ import { WeatherSystem } from './weather/WeatherSystem';
 import { syncStructurePlots } from '../shared/StructurePlots';
 import { advanceSettlementDevelopment, initializeSettlementDevelopment } from './development/SettlementDevelopmentSystem';
 import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
+import { advanceStructureFires } from './fire/StructureFireSystem';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
 import { campaignFront, campaignFocus, campaignSupply, createCampaign, TRUCE_MONTHS } from './war/Campaign';
@@ -301,6 +302,7 @@ export class Simulation {
     this.state.weather = this.weatherSystem.state;
     syncStructurePlots(this.state);
     for (const event of applyFloodConsequences(this.state)) this.addEvent(event);
+    for (const event of advanceStructureFires(this.state, this.config.seed)) this.addEvent(event);
     for (const tornado of this.state.weather.tornadoes) {
       if (tornado.month === this.state.month) {
         for (const event of applyTornadoConsequences(this.state, tornado)) this.addEvent(event);
