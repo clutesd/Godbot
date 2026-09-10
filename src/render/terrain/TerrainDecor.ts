@@ -281,11 +281,6 @@ export class TerrainDecor {
       const month = world.weather?.month ?? 0;
       if (month === renderedMonth) return;
       renderedMonth = month;
-      const baseMonth = ((month % 12) + 12) % 12;
-      const activeSeason = baseMonth >= 1 && baseMonth < 10;
-      stem.visible = activeSeason;
-      bloom.visible = activeSeason;
-      if (!activeSeason) return;
 
       for (let index = 0; index < placements.length; index += 1) {
         const flower = placements[index];
@@ -316,6 +311,8 @@ export class TerrainDecor {
       if (bloom.instanceColor) bloom.instanceColor.needsUpdate = true;
     };
 
+    // Keep the meshes renderable in winter: their instances collapse to near-zero scale instead
+    // of setting visible=false, allowing onBeforeRender to wake them again when spring arrives.
     stem.onBeforeRender = updateSeason;
     bloom.onBeforeRender = updateSeason;
     updateSeason();
