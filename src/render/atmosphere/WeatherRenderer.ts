@@ -4,6 +4,7 @@ import { cellAt } from '../../sim/world';
 import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import type { TornadoState, WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
+import { StructureFireRenderer } from './StructureFireRenderer';
 
 const BUDGET = 512;
 const RANGE = 18;
@@ -24,6 +25,7 @@ export class WeatherRenderer {
   private readonly windTexture: { value: THREE.DataTexture };
   private readonly rain: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private readonly snow: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  private readonly structureFires: StructureFireRenderer;
   private readonly samples: Array<{ x: number; z: number; phase: number }>;
   private readonly rainSites: Array<{ x: number; z: number; floor: number; phase: number; windX: number; windZ: number; blizzard: number }> = [];
   private readonly snowSites: typeof this.rainSites = [];
@@ -71,6 +73,8 @@ export class WeatherRenderer {
     this.rain.geometry.setDrawRange(0, 0);
     this.snow.geometry.setDrawRange(0, 0);
     this.group.add(this.rain, this.snow);
+    this.structureFires = new StructureFireRenderer(world, surface, seed);
+    this.group.add(this.structureFires.group);
     for (let index = 0; index < 4; index += 1) {
       const funnel = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 0.15, 9, 14, 8, true),
         new THREE.MeshStandardMaterial({ color: '#777a73', transparent: true, opacity: 0.12, side: THREE.DoubleSide, roughness: 1, depthWrite: false }));
@@ -163,6 +167,7 @@ export class WeatherRenderer {
 
   update(delta: number, elapsed: number, camera: THREE.Camera): void {
     this.time.value = elapsed;
+    this.structureFires.update(delta, elapsed, camera);
     const events = this.world.weather?.tornadoes ?? [];
     for (const [id, start] of this.funnelStarts) {
       if (elapsed - start >= 8 && !events.some((event) => event.id === id)) { this.funnelStarts.delete(id); this.funnelEvents.delete(id); }
@@ -276,6 +281,7 @@ export class WeatherRenderer {
   dispose(): void {
     this.texture.dispose();
     this.waterTexture.dispose();
+    this.structureFires.dispose();
     for (const object of [this.rain, this.snow, ...this.funnels, ...this.funnelDust]) {
       object.geometry.dispose();
       if (!Array.isArray(object.material)) object.material.dispose();
