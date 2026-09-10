@@ -6,7 +6,10 @@ on:
       - 'src/config.ts'
       - 'src/sim/war/**'
       - 'src/sim/Simulation.ts'
+      - 'src/render/war/**'
+      - 'src/historian/WarStory.ts'
       - 'tests/war.test.ts'
+      - 'tests/war-presentation.test.ts'
       - 'tests/military-capability.test.ts'
       - 'tests/military-combat.test.ts'
       - 'tests/fixtures/war.ts'
@@ -16,7 +19,10 @@ on:
       - 'src/config.ts'
       - 'src/sim/war/**'
       - 'src/sim/Simulation.ts'
+      - 'src/render/war/**'
+      - 'src/historian/WarStory.ts'
       - 'tests/war.test.ts'
+      - 'tests/war-presentation.test.ts'
       - 'tests/military-capability.test.ts'
       - 'tests/military-combat.test.ts'
       - 'tests/fixtures/war.ts'
@@ -41,12 +47,17 @@ jobs:
           src/sim/war/MilitaryCapability.ts
           src/sim/war/MilitaryCombat.ts
           src/sim/war/MilitaryCombatRuntime.ts
+          src/render/war/BattleSpectacle.ts
+          src/render/war/MilitaryVisualLanguage.ts
+          src/render/war/WarRenderer.ts
+          src/historian/WarStory.ts
           tests/war.test.ts
+          tests/war-presentation.test.ts
           tests/military-capability.test.ts
           tests/military-combat.test.ts
           tests/fixtures/war.ts
       - name: Run war regression suite
-        run: npx vitest run tests/war.test.ts tests/military-capability.test.ts tests/military-combat.test.ts
+        run: npx vitest run tests/war.test.ts tests/war-presentation.test.ts tests/military-capability.test.ts tests/military-combat.test.ts
       - name: Project-wide typecheck audit
         continue-on-error: true
         run: npm run typecheck

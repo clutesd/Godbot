@@ -1,6 +1,6 @@
-# Military capability and combat
+# Military capability, combat and presentation
 
-The war model separates **what a society can field** from **what that capability does in a campaign**. Equipment is still a consequence of lived knowledge and material capacity rather than a calendar-era unlock, but Step 2 now makes those differences mechanically consequential.
+The war model separates **what a society can field**, **what that capability does in a campaign**, and **how the Watcher can see and remember it**. Equipment remains a consequence of lived knowledge and material capacity rather than a calendar-era unlock.
 
 ## Capability foundation
 
@@ -28,18 +28,36 @@ A force's equipment is frozen at mobilization, but its operational supply is che
 
 The existing economy has no dedicated liquid-fuel or ammunition stock. Step 2 therefore uses goods, minerals and wealth as documentary proxies for ammunition, fuel, maintenance and replacement parts instead of inventing an isolated resource system. A future economic expansion can replace those proxies without changing the military capability API.
 
+## Step 3: a visible language of war
+
+`MilitaryVisualLanguage.ts` maps each frozen capability profile to a bounded documentary visual style. Improvised forces appear as irregular warbands; organized melee and siege forces tighten into ranks; gunpowder forces form firing lines; industrial forces become more dispersed; modern forces read as combined-arms formations. This is not an era skin. The renderer checks the equipment actually present in the mobilization snapshot.
+
+Individual figures now carry recognizable capability cues. Spears, bows, firearms and automatic weapons use different silhouettes and ready positions. Shields and armour appear only when the force can field them. Formation spacing and rank depth also change with doctrine, so a modern formation no longer looks like an ancient formation with a different colour.
+
+Heavy capability is represented separately from the documentary infantry count. Cannon/artillery and motor vehicles accompany forces that can field them. `BattleSpectacle.ts` adds a tightly budgeted layer of smoke, muzzle flashes, tracer-like fire, aircraft passes and guided-missile arcs. The effects are deterministic from render time, obey reduced-motion mode, and never write to simulation state.
+
+The goal is legibility rather than literal one-to-one scale: a few vehicles or aircraft stand for a capability that may represent a much larger force. This keeps long-running worlds performant while making the changing character of warfare visible from the camera distances GODBOX actually uses.
+
+## The Watcher remembers military change
+
+`WarStory.ts` now reads the same frozen mobilization evidence as the renderer. Declarations can contrast the military systems each side brings to war. Battles can describe whether the fighting is close, ranged, bombardment, combined-arms or stand-off, and major capability mismatches can be described without pretending the sides are military equals.
+
+First-use narration is evidence-bounded. The Watcher only calls something the first recorded wartime appearance of a capability when the current campaign actually contains it and no earlier campaign in the record did. Historical event narration still filters against the event month, so later discoveries and later wars cannot leak backward into an older chapter.
+
 ## Integration with the established war system
 
-The existing campaign state machine remains authoritative: mobilization, surveyed dry-ground marching, blocked corridors, battle, retreat/occupation/negotiation, truces, terrain, morale, leadership and actual casualty removal still operate through the established resolver. Step 2 wraps those calculations with operational capability so the richer military profile changes battlefield strength and casualty pressure without replacing the campaign model users already recognize.
+The existing campaign state machine remains authoritative: mobilization, surveyed dry-ground marching, blocked corridors, battle, retreat/occupation/negotiation, truces, terrain, morale, leadership and actual casualty removal still operate through the established resolver. Step 2 wraps those calculations with operational capability; Step 3 only presents their consequences.
 
-War events produced during a campaign are enriched with the mobilized equipment/regime plus engagement mode, range, lethality, exposure, mismatch, prepared works and breach evidence. A major capability mismatch also creates a bounded one-time campaign dispatch, giving the Historian and Step-3 renderer factual evidence to present rather than inferring weaponry from the current year.
+War events produced during a campaign are enriched with the mobilized equipment/regime plus engagement mode, range, lethality, exposure, mismatch, prepared works and breach evidence. A major capability mismatch creates a bounded one-time campaign dispatch, giving the Historian factual evidence to present rather than inferring weaponry from the current year.
 
 ## Deliberate boundaries
 
-Step 2 remains a conventional campaign model. `stand-off` describes the character and reach of a technologically advanced engagement once a war is in contact; it does not yet let a conventional campaign ignore an otherwise impassable world route. Nuclear use remains owned by the existing advanced strategic system. Those boundaries avoid silently turning missiles into teleporting armies or duplicating the nuclear model.
+The conventional campaign model still owns physical contact and routes. `stand-off` describes the character and reach of a technologically advanced engagement once a war is in contact; it does not let a conventional campaign ignore an otherwise impassable world route. Nuclear use remains owned by the existing advanced strategic system. Those boundaries avoid silently turning missiles into teleporting armies or duplicating the nuclear model.
 
-Step 3 should make this now-causal military history visible: era-appropriate formations, weapons, siege equipment, gun smoke, artillery, vehicles, aircraft and missile effects, while the Watcher narrates first uses and major changes in the character of warfare.
+Step 3 also remains deliberately representative rather than cinematic destruction simulation. Aircraft and missile visuals communicate capability; they do not independently damage buildings or people. Any future structural destruction pass should consume explicit simulation events so the visual layer never invents casualties or damage.
 
 ## Verification
 
-The focused war validation workflow lints the war subsystem and runs the established campaign tests together with military-capability and military-combat regression tests. Coverage includes near-peer early combat, nonlinear technological mismatch, defensive works and breach, supported versus collapsed modern logistics, mobility differences, real campaign integration, frozen mobilization evidence and preservation of the existing campaign lifecycle.
+The focused war validation workflow now lints the simulation, renderer and Watcher war paths and runs the established campaign, military-capability, military-combat and military-presentation regression suites. Coverage includes near-peer early combat, nonlinear technological mismatch, defensive works and breach, supported versus collapsed modern logistics, mobility differences, real campaign integration, frozen mobilization evidence, formation/support selection, renderer state purity, first-use narration and preservation of the established campaign lifecycle.
+
+Project-wide TypeScript validation and the production Vite build are also run as audit steps. The Step 3 branch passed the focused suite, project-wide typecheck and production build before integration.
