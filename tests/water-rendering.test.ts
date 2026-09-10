@@ -117,8 +117,15 @@ describe('Water rendering foundation', () => {
 
     const shader = shaderStub();
     material.onBeforeCompile(shader as unknown as Parameters<typeof material.onBeforeCompile>[0], {} as THREE.WebGLRenderer);
-    expect(shader.vertexShader).toContain('attribute vec2 waterFlowDirection');
-    expect(shader.vertexShader).toContain('attribute vec2 waterWindDirection');
+    expect(shader.vertexShader).toContain('#define waterFlowDirection waterPacked1.xy');
+    expect(shader.vertexShader).toContain('#define waterWindDirection waterPacked2.xy');
+    expect(shader.vertexShader.match(/attribute vec4 waterPacked/g)).toHaveLength(4);
+    const packed = water.geometry.getAttribute('waterPacked0');
+    for (let i = 0; i < positions.count; i++) {
+      expect(packed.getX(i)).toBe(depths.getX(i));
+      expect(packed.getY(i)).toBe(flows.getX(i));
+      expect(packed.getZ(i)).toBe(kinds.getX(i));
+    }
     expect(shader.vertexShader).toContain('waterCurrentCoordinate');
     expect(shader.vertexShader).toContain('waterFreezePrevious');
     expect(shader.vertexShader).toContain('waterEmergence');

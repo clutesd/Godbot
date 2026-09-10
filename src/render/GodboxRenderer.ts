@@ -21,13 +21,14 @@ import { TransitionTimeline } from './presentation/TransitionTimeline';
 import { VisualStateResolver } from './presentation/VisualStateResolver';
 import { CultureStyleProfileFactory } from './style/CultureStyleProfile';
 import { SkyAtmosphere } from './atmosphere/SkyAtmosphere';
-import { softPointTexture } from './atmosphere/sprites';
 import { TerrainDecor } from './terrain/TerrainDecor';
 import { TerrainSurface } from './terrain/TerrainSurface';
 import { WaterSystem } from './terrain/WaterSystem';
 import { WeatherRenderer } from './atmosphere/WeatherRenderer';
 import { WarRenderer } from './war/WarRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
+import { EcologyField } from './ecology/EcologyField';
+import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
 interface SettlementVisual {
   group: THREE.Group;
@@ -185,13 +186,14 @@ export class GodboxRenderer {
   private readonly terrainDecor: TerrainDecor;
   private readonly vegetation: VegetationRenderer;
   private readonly skyAtmosphere: SkyAtmosphere;
+  private readonly ecology: EcologyField;
+  private readonly postProcessing: EcologyPostProcessing;
   private vegetationLodAccumulator = 0;
   private readonly routePlacementReports = new Map<string, RoutePlacementReport>();
   private readonly routeGroup = new THREE.Group();
   private readonly caravanGroup = new THREE.Group();
   private readonly warRenderer: WarRenderer;
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  private readonly atmosphere: THREE.Points;
   private readonly smoke: THREE.InstancedMesh;
   private readonly activeSmokeSources: SmokeSource[] = [];
   private visiblePeople: Person[] = [];
@@ -238,9 +240,11 @@ export class GodboxRenderer {
     this.observation = this.cameraDirector.observation;
 
     this.terrainSurface = new TerrainSurface(state.world);
+    this.ecology = new EcologyField(state.world, config.seed);
+    this.ecology.sync(state.settlements, state.month, state.advanced.environment.ecologicalPressure);
     this.setupLights();
     this.createTerrain();
-    this.waterSystem = new WaterSystem(state.world, this.terrainSurface, config.seed);
+    this.waterSystem = new WaterSystem(state.world, this.terrainSurface, config.seed, this.ecology, config.render.waterComplexity);
     this.scene.add(this.waterSystem.group);
     this.vegetation = new VegetationRenderer(
       state.world,
@@ -248,6 +252,8 @@ export class GodboxRenderer {
       config.seed,
       Math.round(3000 * config.render.visualDensity),
       state.settlements.map((settlement) => settlement.position),
+      this.ecology,
+      config.render,
     );
     this.scene.add(this.vegetation.group);
     this.vegetation.setEcologyYear(Math.floor(state.month / 12));
@@ -259,9 +265,8 @@ export class GodboxRenderer {
     this.scene.add(this.terrainDecor.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
-    this.atmosphere = this.createAmbientMotes();
     this.warRenderer = new WarRenderer(state, (x, z) => this.elevationAt(x, z));
-    this.scene.add(this.atmosphere, this.routeGroup, this.caravanGroup, this.warRenderer.group);
+    this.scene.add(this.routeGroup, this.caravanGroup, this.warRenderer.group);
     this.smoke = this.createSmokePool();
     this.scene.add(this.smoke);
     this.updateSeasonalPresentation(true);
@@ -295,6 +300,7 @@ export class GodboxRenderer {
     this.scene.add(this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo);
     this.syncSettlements(true);
     this.syncRoutes(true);
+    this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
     this.resize();
     window.addEventListener('resize', this.resizeHandler);
   }
@@ -324,15 +330,9 @@ export class GodboxRenderer {
       this.vegetationLodAccumulator = 0;
       this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
       this.vegetation.setDisturbance(this.state.settlements);
+      this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
       this.vegetation.updateLod(this.camera.position);
     }
-    this.atmosphere.rotation.y += deltaSeconds * 0.012;
-    const positions = this.atmosphere.geometry.getAttribute('position');
-    for (let index = 0; index < positions.count; index += 1) {
-      const y = positions.getY(index) - deltaSeconds * 0.11;
-      positions.setY(index, y < 1.5 ? 18 + (index % 11) : y);
-    }
-    positions.needsUpdate = true;
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
     this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
@@ -341,7 +341,7 @@ export class GodboxRenderer {
       this.scene.fog.density += blizzard * 0.035;
       this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
     }
-    this.renderer.render(this.scene, this.camera);
+    this.postProcessing.render(this.ecology.night.value);
   }
 
   private setupLights(): void {
@@ -378,33 +378,6 @@ export class GodboxRenderer {
     this.fogDayColor.set(isSpring ? '#93a5a4' : isAutumn ? '#a68f78' : isWinter ? '#a9b6bb' : '#8b9a95');
     this.horizonDayColor.set(isSpring ? '#d6dcd4' : isAutumn ? '#dcc3a1' : isWinter ? '#d3dde1' : '#cfd8d3');
     this.skyAtmosphere.setMistStrength(isAutumn ? 0.62 : isWinter ? 0.5 : isSpring ? 0.44 : 0.3);
-    if (this.atmosphere.material instanceof THREE.PointsMaterial) {
-      this.atmosphere.material.opacity = isSpring ? 0.22 : isAutumn ? 0.14 : isWinter ? 0.04 : 0.18;
-    }
-  }
-
-  private createAmbientMotes(): THREE.Points {
-    const count = Math.max(80, Math.round(520 * this.config.render.visualDensity));
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-    const color = new THREE.Color();
-    const span = this.state.world.size * this.state.world.cellSize;
-    for (let index = 0; index < count; index += 1) {
-      const x = this.random.range(-span / 2, span / 2);
-      const z = this.random.range(-span / 2, span / 2);
-      positions[index * 3] = x;
-      positions[index * 3 + 1] = this.terrainSurface.heightAt(x, z) + this.random.range(1.2, 9);
-      positions[index * 3 + 2] = z;
-      color.set(this.random.chance(0.78) ? '#e0d7b6' : '#c7be99');
-      colors[index * 3] = color.r;
-      colors[index * 3 + 1] = color.g;
-      colors[index * 3 + 2] = color.b;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const material = new THREE.PointsMaterial({ size: 0.08, map: softPointTexture(), transparent: true, opacity: 0.18, depthWrite: false, vertexColors: true, sizeAttenuation: true });
-    return new THREE.Points(geometry, material);
   }
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
@@ -1978,11 +1951,12 @@ export class GodboxRenderer {
   private updateDayNight(elapsedSeconds: number): void {
     const phase = (elapsedSeconds / 58 + 0.16) % 1;
     const daylight = THREE.MathUtils.smoothstep(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 0.12, 0.72);
+    this.ecology.animate(elapsedSeconds, daylight);
     const angle = phase * Math.PI * 2;
     this.sun.position.set(Math.cos(angle) * 72, Math.sin(angle) * 64, 24);
     this.sun.intensity = 0.08 + daylight * 3.25;
-    this.moon.intensity = 0.12 + (1 - daylight) * 0.78;
-    this.hemisphere.intensity = 0.22 + daylight * 1.3;
+    this.moon.intensity = 0.1 + (1 - daylight) * 0.38;
+    this.hemisphere.intensity = 0.16 + daylight * 1.36;
     const sky = daylight > 0.35
       ? this.skyColor.copy(this.duskColor).lerp(this.dayColor, (daylight - 0.35) / 0.65)
       : this.skyColor.copy(this.nightColor).lerp(this.duskColor, daylight / 0.35);
@@ -2034,8 +2008,7 @@ export class GodboxRenderer {
       this.scene.fog.density = 0.0072 + aftermath * 0.017;
       if (aftermath > 0) this.scene.fog.color.lerp(this.aftermathColor, aftermath * 0.68);
     }
-    const material = this.atmosphere.material;
-    if (material instanceof THREE.PointsMaterial) material.opacity = 0.55 - aftermath * 0.34;
+    this.ecology.stress.value = aftermath;
     if (event?.location) {
       this.catastropheLight.position.set(event.location.x, this.elevationAt(event.location.x, event.location.z) + 7, event.location.z);
     }
@@ -2166,6 +2139,9 @@ export class GodboxRenderer {
   }
 
   dispose(): void {
+    this.postProcessing.dispose();
+    this.ecology.dispose();
+    this.waterSystem.dispose();
     this.warRenderer.dispose();
     this.weatherRenderer.dispose();
     window.removeEventListener('resize', this.resizeHandler);
@@ -2198,6 +2174,8 @@ export class GodboxRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.postProcessing.resize(width, height);
+    this.vegetation.setViewport(height, this.renderer.getPixelRatio());
   }
 }
 

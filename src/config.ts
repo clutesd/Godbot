@@ -64,6 +64,10 @@ export interface GodboxConfig {
     readonly maxPixelRatio: number;
     readonly visualDensity: number;
     readonly structuralUpdatesPerSecond: number;
+    readonly bioluminescenceDensity: number;
+    readonly particleDensity: number;
+    readonly waterComplexity: 0 | 1 | 2;
+    readonly bloomQuality: 0 | 1 | 2;
   };
   readonly audio: {
     readonly enabled: boolean;
@@ -172,6 +176,10 @@ export const DEFAULT_CONFIG: GodboxConfig = {
     maxPixelRatio: 1.5,
     visualDensity: 1,
     structuralUpdatesPerSecond: 4,
+    bioluminescenceDensity: 1,
+    particleDensity: 1,
+    waterComplexity: 2,
+    bloomQuality: 1,
   },
   audio: {
     enabled: true,

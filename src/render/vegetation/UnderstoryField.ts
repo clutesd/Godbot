@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { SeededRandom } from '../../sim/prng';
+import { SeededRandom, stableHash } from '../../sim/prng';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
@@ -68,6 +68,9 @@ const WINTER_COLOURS: Record<UnderstoryKind, THREE.Color> = {
   bush: new THREE.Color('#536347'),
 };
 const SNOW_COLOUR = new THREE.Color('#d8ded5');
+const WET_FERN = new THREE.Color('#458b77');
+const VIOLET_SHRUB = new THREE.Color('#86799f');
+const EMERALD_BUSH = new THREE.Color('#367c5f');
 
 /**
  * Understory remains fully readable beyond ordinary documentary framing, then fades through the
@@ -210,9 +213,13 @@ export class UnderstoryField {
       mesh.setMatrixAt(index, this.matrix);
 
       this.colour.copy(SUMMER_COLOURS[placement.kind]);
+      const variation = stableHash('understory-pigment', Math.round(placement.worldX * 10), Math.round(placement.worldZ * 10));
+      const accent = placement.kind === 'fern' ? WET_FERN : variation > 0.82 ? VIOLET_SHRUB : EMERALD_BUSH;
+      this.colour.lerp(accent, (0.2 + variation * 0.6) * smoothstep(0.2, 0.7, moisture));
       this.colour.lerp(AUTUMN_COLOURS[placement.kind], appearance.autumn);
       this.colour.lerp(WINTER_COLOURS[placement.kind], appearance.winter * 0.86);
       this.colour.lerp(SNOW_COLOUR, clamp01(snowpack / 0.7) * 0.34);
+      this.colour.multiplyScalar(0.88 + variation * 0.2);
       mesh.setColorAt(index, this.colour);
       counts[placement.kind] += 1;
       visible += 1;

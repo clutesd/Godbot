@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SeededRandom, stableHash } from '../src/sim/prng';
+import { SeededRandom, stableHash, seedHash, hashedLattice } from '../src/sim/prng';
 
 describe('SeededRandom', () => {
   it('replays the same sequence from the same seed', () => {
@@ -21,5 +21,13 @@ describe('SeededRandom', () => {
   it('keeps spatial hashes stable and coordinate-sensitive', () => {
     expect(stableHash('terrain', 4, 9)).toBe(stableHash('terrain', 4, 9));
     expect(stableHash('terrain', 4, 9)).not.toBe(stableHash('terrain', 5, 9));
+  });
+
+  it('preserves legacy string-only fire hashes when coordinates are omitted', () => {
+    for (const seed of ['fire-plot', 'world:ignition:72:plot-3', 'world:spread:90:plot-1:plot-2']) {
+      // Reflect models the pre-existing JS callers that omitted the required typed arguments.
+      const legacy = Reflect.apply(hashedLattice, undefined, [seedHash(seed), undefined, undefined]);
+      expect(stableHash(seed)).toBe(legacy);
+    }
   });
 });

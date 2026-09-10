@@ -11,6 +11,8 @@ import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
 import { resolveTreePhenology, treeFoliageColour } from './TreePhenology';
 import { insideVegetationTerrain } from './VegetationPlacement';
+import { BioluminescentFlora } from './BioluminescentFlora';
+import { DEFAULT_ECOLOGY_QUALITY, type EcologyField, type EcologyQuality } from '../ecology/EcologyField';
 
 export interface VegetationReport {
   trees: number;
@@ -23,6 +25,7 @@ export interface VegetationReport {
   drawCalls: number;
   triangles: number;
   byFamily: Record<TreeFamily, number>;
+  bioluminescence?: { planned: number; flora: number; motes: number; drawCalls: number };
 }
 
 interface Bucket {
@@ -79,6 +82,7 @@ export class VegetationRenderer {
   private readonly lifecycle: ResolvedTreeLifecycle[];
   private readonly flowers: FlowerField;
   private readonly birds: AmbientBirds;
+  private readonly luminousFlora?: BioluminescentFlora;
   private ecologyYear = 0;
   private season = 0;
   private targetSeason = 0;
@@ -97,7 +101,7 @@ export class VegetationRenderer {
   private scarSignature = '';
   private readonly scarsByCell = new Map<number, TornadoState[]>();
 
-  constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, private readonly seed: string, budget: number, anchors: readonly { x: number; z: number }[] = []) {
+  constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, private readonly seed: string, budget: number, anchors: readonly { x: number; z: number }[] = [], ecology?: EcologyField, quality: EcologyQuality = DEFAULT_ECOLOGY_QUALITY) {
     this.group.name = 'vegetation';
     this.leaves.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(96 * 3), 3));
     this.leaves.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(96 * 3), 3));
@@ -119,6 +123,10 @@ export class VegetationRenderer {
     this.flowers = new FlowerField(world, surface, `${seed}:flowers`, flowerBudget, this.placements);
     this.birds = new AmbientBirds(seed, this.placements);
     this.group.add(this.flowers.group, this.birds.group);
+    if (ecology && budget > 0) {
+      this.luminousFlora = new BioluminescentFlora(world, surface, seed, this.placements, ecology, quality);
+      this.group.add(this.luminousFlora.group);
+    }
 
     const nearLibrary = buildTreeLibrary(seed, VARIANTS_PER_FAMILY, TREE_LOD_NEAR);
     const farLibrary = buildTreeLibrary(seed, VARIANTS_PER_FAMILY, TREE_LOD_FAR);
@@ -162,9 +170,10 @@ export class VegetationRenderer {
       underwater: this.placements.filter(placement => this.surface.waterYAt(placement.worldX, placement.worldZ) > placement.y).length,
       flowers: { placed: flowerReport.placements, visible: flowerReport.visible },
       drawCalls: [...this.nearBuckets.values(), ...this.farBuckets.values()].filter(bucket => bucket.count > 0).length * 2
-        + flowerReport.drawCalls + (this.leaves.geometry.drawRange.count > 0 ? 1 : 0),
-      triangles: triangles + flowerReport.triangles,
+        + flowerReport.drawCalls + (this.leaves.geometry.drawRange.count > 0 ? 1 : 0) + (this.luminousFlora?.report.drawCalls ?? 0),
+      triangles: triangles + flowerReport.triangles + (this.luminousFlora?.report.triangles ?? 0),
       byFamily: { ...this.byFamily },
+      bioluminescence: this.luminousFlora?.report,
     };
   }
 
@@ -312,7 +321,10 @@ export class VegetationRenderer {
     }
     const winter = this.targetSeason < 1 || this.targetSeason >= 10;
     this.flowers.update(camera, winter ? this.targetSeason : this.season, [...this.disturbance, ...this.occupiedGround]);
+    this.luminousFlora?.updateLod(camera, this.world.weather?.month ?? this.ecologyYear * 12 + this.targetSeason, [...this.disturbance, ...this.occupiedGround]);
   }
+
+  setViewport(height: number, pixelRatio: number): void { this.luminousFlora?.setViewport(height, pixelRatio); }
 
   updateLeaves(elapsed: number): void {
     const delta = Math.max(0, Math.min(1, elapsed - this.previousElapsed));
@@ -514,7 +526,7 @@ export class VegetationRenderer {
     const climate = cell ?? { temperature: 0.46, moisture: 0.5 };
     const variation = placement.rotation / (Math.PI * 2);
     const phase = resolveTreePhenology(this.season, climate, weather ?? climate, placement.family, variation);
-    treeFoliageColour(placement.family, phase, variation, this.tint);
+    treeFoliageColour(placement.family, phase, variation, this.tint, climate.moisture);
     const maturity = lifecycle.stage === 'sapling' ? 0.84
       : lifecycle.stage === 'young' ? 0.91
         : lifecycle.stage === 'old' ? 1.06

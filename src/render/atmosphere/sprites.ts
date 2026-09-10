@@ -9,19 +9,18 @@ let softSprite: THREE.Texture | undefined;
 export function softPointTexture(): THREE.Texture {
   if (softSprite) return softSprite;
   const size = 64;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const context = canvas.getContext('2d');
-  if (context) {
-    const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    gradient.addColorStop(0, 'rgba(255,255,255,1)');
-    gradient.addColorStop(0.45, 'rgba(255,255,255,0.7)');
-    gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, size, size);
+  // Same radial stops as the canvas version, without a DOM dependency in headless renderer tests.
+  const pixels = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const radius = Math.hypot(x + 0.5 - size / 2, y + 0.5 - size / 2) / (size / 2);
+    const alpha = radius < 0.45 ? 1 - radius / 0.45 * 0.3 : Math.max(0, (1 - radius) / 0.55 * 0.7);
+    const i = (y * size + x) * 4;
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = 255;
+    pixels[i + 3] = Math.round(alpha * 255);
   }
-  softSprite = new THREE.CanvasTexture(canvas);
+  softSprite = new THREE.DataTexture(pixels, size, size);
+  softSprite.minFilter = softSprite.magFilter = THREE.LinearFilter;
+  softSprite.needsUpdate = true;
   softSprite.colorSpace = THREE.SRGBColorSpace;
   return softSprite;
 }

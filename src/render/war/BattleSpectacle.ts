@@ -111,7 +111,7 @@ export class BattleSpectacle {
       const forward = side === 0 ? 1 : -1;
       const phase = reducedMotion ? 0.45 : (time * 1.7 + i * 0.137) % 1;
       const source = campaignPoint(war.campaign.route, frontProgress + (side === 0 ? -0.02 : 0.02), settlements[side].position);
-      const target = campaignPoint(war.campaign.route, frontProgress + (side === 0 ? 0.018 : -0.018), settlements[1 - side].position);
+      const target = campaignPoint(war.campaign.route, frontProgress + (side === 0 ? 0.018 : -0.018), settlements[side === 0 ? 1 : 0].position);
       const x = THREE.MathUtils.lerp(source.x, target.x, phase) + Math.sin(i * 3.1) * 0.12;
       const z = THREE.MathUtils.lerp(source.z, target.z, phase) + Math.cos(i * 2.7) * 0.12;
       const dx = target.x - source.x;
@@ -146,7 +146,7 @@ export class BattleSpectacle {
       const launchProgress = frontProgress + (side === 0 ? -0.08 : 0.08);
       const targetProgress = frontProgress + (side === 0 ? 0.018 : -0.018);
       const start = campaignPoint(war.campaign.route, launchProgress, settlements[side].position);
-      const end = campaignPoint(war.campaign.route, targetProgress, settlements[1 - side].position);
+      const end = campaignPoint(war.campaign.route, targetProgress, settlements[side === 0 ? 1 : 0].position);
       const phase = reducedMotion ? 0.55 : (time * 0.16 + missile.index * 0.43 + side * 0.21) % 1;
       const x = THREE.MathUtils.lerp(start.x, end.x, phase);
       const z = THREE.MathUtils.lerp(start.z, end.z, phase);

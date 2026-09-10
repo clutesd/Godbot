@@ -88,6 +88,8 @@ export function hashedLattice(seed: number, x: number, z: number): number {
   return ((value ^ (value >>> 16)) >>> 0) / 4294967296;
 }
 
-export function stableHash(seed: string, x: number, z: number): number {
+// String-only callers historically omitted the lattice coordinates. NaN preserves their exact
+// JS hash (the two Math.imul coordinate terms become zero), so typing them cannot reroll history.
+export function stableHash(seed: string, x = Number.NaN, z = Number.NaN): number {
   return hashedLattice(hashString(seed), x, z);
 }

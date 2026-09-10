@@ -6,6 +6,9 @@ import type { WeatherCellState, WorldState } from '../../sim/types';
 import { softPointTexture } from '../atmosphere/sprites';
 import { elevationToY, type TerrainSurface } from './TerrainSurface';
 import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
+import type { EcologyField } from '../ecology/EcologyField';
+import { WaterEcology } from './WaterEcology';
+import { packInlandAttributes, packInlandShader } from './WaterAttributes';
 
 export interface WaterReport {
   lakeSurfaces: number;
@@ -63,7 +66,7 @@ export class WaterSystem {
   private readonly plungeBase: Float32Array;
   private inland: THREE.Mesh | undefined;
   private rapids: THREE.Points | undefined;
-  private rapidBase = new Float32Array(0);
+  private rapidBase: Float32Array = new Float32Array(0);
   private recessionWetness: THREE.Points | undefined;
   private recessionStarted = -100;
   private transitionStarted = -100;
@@ -71,8 +74,9 @@ export class WaterSystem {
   private wetMask: Uint8Array;
   private freezeSnapshot: Float32Array;
   private revision = -1;
+  private readonly ecology?: WaterEcology;
 
-  constructor(private readonly world: WorldState, surface: TerrainSurface, private readonly seed: string) {
+  constructor(private readonly world: WorldState, surface: TerrainSurface, private readonly seed: string, ecology?: EcologyField, waterComplexity: 0 | 1 | 2 = 2) {
     const span = Math.max(world.size * world.cellSize * 6, 720);
     this.group.name = 'water';
 
@@ -88,6 +92,11 @@ export class WaterSystem {
     this.freezeSnapshot = computeFreezeSnapshot(world);
     this.inland = buildInlandWater(world, this.wetMask, this.freezeSnapshot);
     if (this.inland) this.group.add(this.inland);
+    if (ecology) {
+      this.ecology = new WaterEcology(world, ecology, waterComplexity);
+      this.ecology.bind(this.ocean, true);
+      this.ecology.bind(this.inland, false);
+    }
 
     const rapidFoam = buildRapidFoam(world, new SeededRandom(`${seed}:rapids`));
     this.rapids = rapidFoam?.points;
@@ -172,6 +181,8 @@ export class WaterSystem {
       disposeObject(this.inland);
     }
     this.inland = buildInlandWater(this.world, previousWet, previousFreeze);
+    this.ecology?.refreshTerrain();
+    this.ecology?.bind(this.inland, false);
     if (this.inland) this.group.add(this.inland);
     this.transitionStarted = this.lastElapsed;
     this.wetMask = nextWet;
@@ -192,6 +203,9 @@ export class WaterSystem {
     const material = this.ocean.material;
     if (material instanceof THREE.MeshPhysicalMaterial) material.color.copy(colour);
   }
+
+  /** Geometry/materials are disposed by the renderer's scene traversal. */
+  dispose(): void { this.ecology?.dispose(); }
 
   private updateRapidFoam(elapsedSeconds: number): void {
     if (!this.rapids) return;
@@ -437,7 +451,12 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat waterRiver = 1.0 - step(0.49, abs(vWaterKind - 1.0));\nfloat waterLake = 1.0 - step(0.49, abs(vWaterKind));\nfloat waterFlood = max(0.0, 1.0 - waterRiver - waterLake);\nfloat waterShallow = 1.0 - smoothstep(0.025, 0.20, vWaterDepth);\nfloat waterDeep = smoothstep(0.16, 0.82, vWaterDepth);\nfloat waterBank = 1.0 - smoothstep(0.008, 0.060, vWaterDepth);\nvec3 waterShallowTint = vec3(0.39, 0.64, 0.61);\nvec3 waterDeepTint = vec3(0.075, 0.25, 0.31);\nvec3 waterLakeTint = vec3(0.16, 0.39, 0.43);\nvec3 waterRiverTint = mix(vec3(0.17, 0.42, 0.43), vec3(0.08, 0.31, 0.36), vWaterHierarchy);\nvec3 waterFloodTint = vec3(0.30, 0.34, 0.24);\nvec3 lakeBankTint = vec3(0.25, 0.43, 0.38);\nvec3 riverBankTint = vec3(0.29, 0.32, 0.22);\nvec3 floodBankTint = vec3(0.34, 0.29, 0.18);\nvec3 bankTint = lakeBankTint * waterLake + riverBankTint * waterRiver + floodBankTint * waterFlood;\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterShallowTint, waterShallow * 0.18);\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterDeepTint, waterDeep * 0.24);\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterLakeTint, waterLake * 0.12);\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterRiverTint, waterRiver * (0.12 + vWaterHierarchy * 0.12));\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterFloodTint, waterFlood * 0.38);\ndiffuseColor.rgb = mix(diffuseColor.rgb, bankTint, waterBank * (0.16 + waterFlood * 0.16));\nvec2 waterDirection = length(vWaterFlowDirection) > 0.01 ? normalize(vWaterFlowDirection) : vec2(0.7071, 0.7071);\nvec2 waterAcross = vec2(-waterDirection.y, waterDirection.x);\nfloat waterCurrentCoordinate = dot(vWaterPosition.xz, waterDirection);\nfloat waterAcrossCoordinate = dot(vWaterPosition.xz, waterAcross);\nfloat lakeRipple = (sin(vWaterPosition.x * 1.55 + waterTime * (0.40 + vWaterWind * 0.45)) + sin(vWaterPosition.z * 1.39 - waterTime * 0.39)) * 0.5;\nfloat riverCurrent = sin(waterCurrentCoordinate * (2.3 + vWaterHierarchy) - waterTime * (1.7 + vWaterFlow * 2.7) + sin(waterAcrossCoordinate * 2.1) * 0.45);\nfloat currentLane = pow(max(0.0, 0.5 + 0.5 * riverCurrent), 7.0) * waterRiver;\nfloat rapidCrest = pow(max(0.0, sin(waterCurrentCoordinate * 5.2 - waterTime * (3.5 + vWaterFlow * 3.0) + waterAcrossCoordinate * 0.9)), 9.0) * vWaterRapid * waterRiver;\nfloat rainScatter = max(0.0, sin(vWaterPosition.x * 8.2 + waterTime * 8.6) * sin(vWaterPosition.z * 7.5 - waterTime * 7.9)) * vWaterRain;\nfloat waterRipple = lakeRipple * waterLake + riverCurrent * 0.55 * waterRiver + lakeRipple * 0.18 * waterFlood;\nwaterRipple *= 1.0 - vWaterIce * 0.94;\nfloat waterGlint = smoothstep(0.76, 0.98, waterRipple) * smoothstep(0.025, 0.12, vWaterDepth);\ndiffuseColor.rgb *= 1.0 + waterRipple * (0.014 + waterRiver * 0.012);\ndiffuseColor.rgb += vec3(0.10, 0.15, 0.15) * waterGlint * 0.12;\ndiffuseColor.rgb += vec3(0.10, 0.16, 0.15) * currentLane * (0.035 + vWaterFlow * 0.045) * (1.0 - vWaterIce);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.88, 0.86), rapidCrest * 0.52 * (1.0 - vWaterIce));\ndiffuseColor.rgb += vec3(0.10, 0.13, 0.13) * rainScatter * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb *= 1.0 - vWaterStorm * 0.045;\nvec3 iceTint = mix(vec3(0.43, 0.59, 0.62), vec3(0.62, 0.72, 0.73), waterLake);\ndiffuseColor.rgb = mix(diffuseColor.rgb, iceTint, vWaterIce * 0.74);\nfloat snowOnIce = smoothstep(0.72, 0.96, vWaterIce) * smoothstep(0.008, 0.07, vWaterSnow);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.88, 0.87), snowOnIce * 0.48);`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(mix(roughnessFactor, 0.68, vWaterIce * 0.78) + vWaterStorm * 0.035, 0.08, 0.92);`);
   };
-  material.customProgramCacheKey = () => 'godbox-inland-water-v3-environment';
+  const compile = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    compile.call(material, shader, renderer);
+    shader.vertexShader = packInlandShader(shader.vertexShader);
+  };
+  material.customProgramCacheKey = () => 'godbox-inland-water-v4-packed-environment';
   return material;
 }
 
@@ -690,6 +709,7 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   geometry.setAttribute('waterFreeze', new THREE.Float32BufferAttribute(freezes, 1));
   geometry.setAttribute('waterSnow', new THREE.Float32BufferAttribute(snows, 1));
   geometry.setAttribute('waterEmergence', new THREE.Float32BufferAttribute(emergences, 1));
+  packInlandAttributes(geometry);
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   const mesh = new THREE.Mesh(geometry, createInlandMaterial());

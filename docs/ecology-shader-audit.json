@@ -1,0 +1,175 @@
+﻿{
+  "shaders": [
+    {
+      "name": "water-0-quality-0-direct",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-1-quality-0-direct",
+      "linked": true,
+      "attributeSlots": 7
+    },
+    {
+      "name": "water-5-quality-0-direct",
+      "linked": true,
+      "attributeSlots": 3
+    },
+    {
+      "name": "water-0-quality-1-direct",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-1-quality-1-direct",
+      "linked": true,
+      "attributeSlots": 7
+    },
+    {
+      "name": "water-5-quality-1-direct",
+      "linked": true,
+      "attributeSlots": 3
+    },
+    {
+      "name": "water-0-quality-2-direct",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-1-quality-2-direct",
+      "linked": true,
+      "attributeSlots": 7
+    },
+    {
+      "name": "water-5-quality-2-direct",
+      "linked": true,
+      "attributeSlots": 3
+    },
+    {
+      "name": "luminous-fungus-direct",
+      "linked": true,
+      "attributeSlots": 8
+    },
+    {
+      "name": "fireflies-spores-and-pollen-direct",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-0-quality-0-hdr",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-1-quality-0-hdr",
+      "linked": true,
+      "attributeSlots": 7
+    },
+    {
+      "name": "water-5-quality-0-hdr",
+      "linked": true,
+      "attributeSlots": 3
+    },
+    {
+      "name": "water-0-quality-1-hdr",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-1-quality-1-hdr",
+      "linked": true,
+      "attributeSlots": 7
+    },
+    {
+      "name": "water-5-quality-1-hdr",
+      "linked": true,
+      "attributeSlots": 3
+    },
+    {
+      "name": "water-0-quality-2-hdr",
+      "linked": true,
+      "attributeSlots": 2
+    },
+    {
+      "name": "water-1-quality-2-hdr",
+      "linked": true,
+      "attributeSlots": 7
+    },
+    {
+      "name": "water-5-quality-2-hdr",
+      "linked": true,
+      "attributeSlots": 3
+    },
+    {
+      "name": "luminous-fungus-hdr",
+      "linked": true,
+      "attributeSlots": 8
+    },
+    {
+      "name": "fireflies-spores-and-pollen-hdr",
+      "linked": true,
+      "attributeSlots": 2
+    }
+  ],
+  "baseline": {
+    "trees": 1069,
+    "significantTrees": 5,
+    "near": 765,
+    "far": 304,
+    "cleared": 0,
+    "underwater": 0,
+    "flowers": {
+      "placed": 2400,
+      "visible": 2400
+    },
+    "drawCalls": 64,
+    "triangles": 1062966,
+    "byFamily": {
+      "cherry": 0,
+      "broadleaf": 571,
+      "conifer": 393,
+      "dry": 52,
+      "riverbank": 22,
+      "alpine": 26,
+      "ancient": 5
+    }
+  },
+  "baselineResources": {
+    "materials": 94,
+    "geometries": 94
+  },
+  "uplift": {
+    "trees": 1069,
+    "significantTrees": 5,
+    "near": 765,
+    "far": 304,
+    "cleared": 0,
+    "underwater": 0,
+    "flowers": {
+      "placed": 2400,
+      "visible": 2400
+    },
+    "drawCalls": 68,
+    "triangles": 1170293,
+    "byFamily": {
+      "cherry": 0,
+      "broadleaf": 571,
+      "conifer": 393,
+      "dry": 52,
+      "riverbank": 22,
+      "alpine": 26,
+      "ancient": 5
+    },
+    "bioluminescence": {
+      "planned": 1800,
+      "flora": 1477,
+      "motes": 1400,
+      "triangles": 107327,
+      "drawCalls": 4
+    }
+  },
+  "upliftResources": {
+    "materials": 96,
+    "geometries": 98
+  }
+}

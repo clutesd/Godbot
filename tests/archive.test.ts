@@ -3,8 +3,20 @@ import { describe, expect, it } from 'vitest';
 import { Historian } from '../src/historian/Historian';
 import { HISTORIAN_ARCHIVE_SCHEMA_VERSION, HistorianArchiveStore, RunRecordBuilder, computeCrossRunContext, createRunIdentity, experimentFingerprint, migrateArchiveRecord, seedForObservation } from '../src/historian/RunArchive';
 import { Simulation } from '../src/sim/Simulation';
+import { configWith } from '../src/config';
+import { configurationFingerprint } from '../src/historian/RunArchive';
 
 describe('Historian archive persistence', () => {
+  it('keeps existing observations resumable when the new ecological quality controls change', () => {
+    const config = configWith({ seed: 'ecology-archive-compatibility' });
+    // Captured from the untouched bbf372f configuration, before these render controls existed.
+    expect(configurationFingerprint(config)).toBe('-2b743e35');
+    const low = configWith({ seed: config.seed, render: {
+      bioluminescenceDensity: 0, particleDensity: 0, waterComplexity: 0, bloomQuality: 0,
+    } });
+    expect(configurationFingerprint(low)).toBe(configurationFingerprint(config));
+    expect(experimentFingerprint(low)).toBe(experimentFingerprint(config));
+  });
   it('round-trips a structured run through IndexedDB', async () => {
     const simulation = new Simulation({ seed: 'archived-world', startingPopulation: 180 });
     simulation.step(40 * 12);

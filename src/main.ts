@@ -251,7 +251,13 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let simulation: Simulation;
   let identity: RunArchiveRecord['identity'];
   if (resumable) {
-    simulation = new Simulation(resumable.configuration);
+    simulation = new Simulation({ ...resumable.configuration, render: {
+      ...resumable.configuration.render,
+      bioluminescenceDensity: baseConfig.render.bioluminescenceDensity,
+      particleDensity: baseConfig.render.particleDensity,
+      waterComplexity: baseConfig.render.waterComplexity,
+      bloomQuality: baseConfig.render.bloomQuality,
+    } });
     identity = resumable.identity;
   } else {
     const observationNumber = await archiveStore.nextObservationNumber();

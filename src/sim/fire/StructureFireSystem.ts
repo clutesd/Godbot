@@ -83,7 +83,7 @@ export function advanceStructureFires(state: SimulationState, seed: string): Fir
   }
   const announce = (settlement: Settlement, plot: StructurePlot, cause: FireCause) => {
     events.push({ type: 'natural-catastrophe', location: { x: plot.worldX, z: plot.worldZ }, locationId: settlement.id,
-      actors: [settlement.id, plot.id], causes: [cause, 'structure-fire'], significance: 0.6, magnitude: 0.4,
+      actors: [settlement.id, plot.id], causes: [cause, 'structure-fire'], significance: 0.6, magnitude: 0.4, affectedPopulation: 0,
       context: { plotId: plot.id, cause }, tags: ['fire', 'local-damage'],
       outcome: 'Access is closed while fire consumes the structure; damaged fabric requires repair.', summary: `A ${cause === 'spread' ? 'spreading' : cause} fire takes hold in ${settlement.name}.` });
   };

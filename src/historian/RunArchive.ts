@@ -107,7 +107,13 @@ const TECHNOLOGY_TYPES = new Set<HistoricalEvent['type']>(['discovery', 'knowled
 const CONFLICT_TYPES = new Set<HistoricalEvent['type']>(['war-declared', 'war-campaign', 'battle', 'war-ended', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'autonomous-weapons-crisis']);
 
 export function configurationFingerprint(config: GodboxConfig): string {
-  const stable = stableStringify(config);
+  // Keep the pre-ecology identity shape. New purely visual controls must neither orphan existing
+  // observations nor split one deterministic history into separate experiments.
+  const stable = stableStringify({ ...config, render: {
+    maxPixelRatio: config.render.maxPixelRatio,
+    visualDensity: config.render.visualDensity,
+    structuralUpdatesPerSecond: config.render.structuralUpdatesPerSecond,
+  } });
   let hash = 2166136261 >>> 0;
   for (let index = 0; index < stable.length; index += 1) {
     hash ^= stable.charCodeAt(index);

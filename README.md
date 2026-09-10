@@ -73,6 +73,10 @@ Edit [`godbox.config.ts`](./godbox.config.ts) and restart. Defaults and types li
 
 Set `GODBOX_PRESET` in [`godbox.config.ts`](./godbox.config.ts). Local overrides are merged on top. Presets change conditions only; none inserts an event or selects an outcome.
 
+GODBOX's living ecology reveals sparse luminous fungi, flowers, trunk colonies and drifting forest life at dusk. Water contains advected plankton points, fine currents and locally luminous shallows while retaining physical wave highlights. Moisture, temperature, season, tree damage, pollution, fire and ecological pressure govern their strength; seeded regional refuges can be exceptionally luminous. These are presentation rules over existing state and do not consume simulation randomness.
+
+The `render` overrides also expose `bioluminescenceDensity` and `particleDensity` (default `1`, `0` disables each population), `waterComplexity` (`0` off, `1` sparse plankton/shore response, `2` adds a second point field and filaments), and `bloomQuality` (`0` off, `1` quarter-resolution first mip, `2` half-resolution first mip). Bloom defaults to `1` and affects HDR scene radiance before tone mapping; the UI is outside this chain. See [the ecology implementation and verification report](./docs/ECOLOGY_REPORT.md). A development-only [acceptance scene](http://localhost:5173/tests/ecology-preview.html) offers fixed-seed day, twilight, night, storm, winter and damage views.
+
 | Preset | Exact changes from default |
 | --- | --- |
 | `default` | None |

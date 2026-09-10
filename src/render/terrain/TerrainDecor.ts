@@ -145,7 +145,7 @@ export class TerrainDecor {
       scale.set(size * (reed ? 0.7 : 1.25), size * (reed ? 1.9 : random.range(0.7, 1.2)), size * (reed ? 0.7 : 1.25));
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(placed, matrix);
-      colour.set(reed ? '#5c7548' : sample.moisture < 0.32 ? '#9d9153' : '#6d8749');
+      colour.set(reed ? '#548779' : sample.moisture < 0.32 ? '#b5ae79' : sample.moisture > 0.64 ? '#528565' : '#789752');
       colour.offsetHSL(random.range(-0.02, 0.02), random.range(-0.07, 0.07), random.range(-0.06, 0.06));
       mesh.setColorAt(placed, colour);
       placed += 1;
