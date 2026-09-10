@@ -12,11 +12,14 @@ export interface WaterReport {
   waterfalls: number;
 }
 
+interface WaterClock { value: number }
+
 const read = (values: Float32Array, index: number): number => values[index] ?? 0;
+const WATER_TIME_KEY = 'godboxWaterTime';
 
 /**
- * Everything wet. The ocean is a single sheet, inland water is meshed from the filled basins the
- * hydrology found, and the falls get their own foam so a big drop reads as an event.
+ * Everything wet. Hydrology remains authoritative; this layer only turns that truth into a
+ * coherent, animated surface. Inland water never widens beyond the canonical wet footprint.
  */
 export class WaterSystem {
   readonly group = new THREE.Group();
@@ -34,15 +37,9 @@ export class WaterSystem {
     const span = Math.max(world.size * world.cellSize * 6, 720);
     this.group.name = 'water';
 
-    const oceanMaterial = new THREE.MeshPhysicalMaterial({
-      color: '#2a6b7a',
-      roughness: 0.16,
-      metalness: 0.02,
-      depthWrite: true,
-      clearcoat: 0.6,
-      clearcoatRoughness: 0.25,
-    });
-    this.ocean = new THREE.Mesh(new THREE.PlaneGeometry(span, span, 1, 1), oceanMaterial);
+    const oceanMaterial = createOceanMaterial();
+    // Enough vertices for broad swell to bend the surface without becoming a heavy simulation mesh.
+    this.ocean = new THREE.Mesh(new THREE.PlaneGeometry(span, span, 96, 96), oceanMaterial);
     this.ocean.rotation.x = -Math.PI / 2;
     this.oceanY = surface.seaLevelY - 0.02;
     this.ocean.position.y = this.oceanY;
@@ -69,9 +66,11 @@ export class WaterSystem {
     };
   }
 
-  /** Slow swell on the open sea plus tumbling foam at the falls; both are cheap and restrained. */
+  /** Presentation-only motion; no visual animation feeds back into hydrology or placement. */
   update(elapsedSeconds: number): void {
     this.ocean.position.y = this.oceanY + Math.sin(elapsedSeconds * 0.42) * 0.0016;
+    setWaterTime(this.ocean, elapsedSeconds);
+    setWaterTime(this.inland, elapsedSeconds);
     if (!this.foam) return;
     const positions = this.foam.geometry.getAttribute('position') as THREE.BufferAttribute;
     for (let index = 0; index < positions.count; index += 1) {
@@ -107,6 +106,114 @@ function countChannel(values: Uint8Array): number {
   let total = 0;
   for (let index = 0; index < values.length; index += 1) if (values[index]) total += 1;
   return total;
+}
+
+function waterClock(material: THREE.Material): WaterClock | undefined {
+  return material.userData[WATER_TIME_KEY] as WaterClock | undefined;
+}
+
+function setWaterTime(mesh: THREE.Mesh | undefined, elapsedSeconds: number): void {
+  if (!mesh) return;
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    const clock = waterClock(material);
+    if (clock) clock.value = elapsedSeconds;
+  }
+}
+
+/** Broad ocean swell plus crossed micro-ripples. The plane stays opaque so terrain occlusion is stable. */
+function createOceanMaterial(): THREE.MeshPhysicalMaterial {
+  const material = new THREE.MeshPhysicalMaterial({
+    color: '#2b6d78',
+    roughness: 0.2,
+    metalness: 0.01,
+    depthWrite: true,
+    clearcoat: 0.78,
+    clearcoatRoughness: 0.18,
+  });
+  const clock: WaterClock = { value: 0 };
+  material.userData[WATER_TIME_KEY] = clock;
+  material.onBeforeCompile = shader => {
+    shader.uniforms['waterTime'] = clock;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
+uniform float waterTime;
+varying vec2 vWaterLocal;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+vWaterLocal = position.xy;
+float oceanWaveA = sin(position.x * 0.025 + waterTime * 0.34);
+float oceanWaveB = sin(position.y * 0.031 - waterTime * 0.27 + position.x * 0.009);
+float oceanWaveC = sin((position.x - position.y) * 0.052 + waterTime * 0.19);
+transformed.z += oceanWaveA * 0.020 + oceanWaveB * 0.013 + oceanWaveC * 0.006;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+uniform float waterTime;
+varying vec2 vWaterLocal;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+float oceanCrossA = sin(vWaterLocal.x * 0.12 + vWaterLocal.y * 0.045 + waterTime * 0.55);
+float oceanCrossB = sin(vWaterLocal.y * 0.14 - vWaterLocal.x * 0.035 - waterTime * 0.43);
+float oceanRipple = (oceanCrossA + oceanCrossB) * 0.5;
+float oceanGlint = smoothstep(0.72, 0.98, oceanRipple) * 0.11;
+diffuseColor.rgb *= 1.0 + oceanRipple * 0.025;
+diffuseColor.rgb += vec3(0.12, 0.18, 0.19) * oceanGlint;`);
+  };
+  material.customProgramCacheKey = () => 'godbox-ocean-water-v1';
+  return material;
+}
+
+/**
+ * Depth-aware inland material. Waves are damped to zero at the bank, so the geometric shoreline
+ * remains the authoritative wet/dry boundary while the interior gains life and specular variation.
+ */
+function createInlandMaterial(): THREE.MeshPhysicalMaterial {
+  const material = new THREE.MeshPhysicalMaterial({
+    vertexColors: true,
+    roughness: 0.26,
+    metalness: 0.01,
+    depthWrite: true,
+    clearcoat: 0.58,
+    clearcoatRoughness: 0.22,
+  });
+  const clock: WaterClock = { value: 0 };
+  material.userData[WATER_TIME_KEY] = clock;
+  material.onBeforeCompile = shader => {
+    shader.uniforms['waterTime'] = clock;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
+uniform float waterTime;
+attribute float waterDepth;
+attribute float waterFlow;
+varying float vWaterDepth;
+varying float vWaterFlow;
+varying vec3 vWaterPosition;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+vWaterDepth = waterDepth;
+vWaterFlow = waterFlow;
+float waterShoreDamping = smoothstep(0.012, 0.11, waterDepth);
+float waterRippleA = sin(position.x * 1.35 + position.z * 0.52 + waterTime * (0.62 + waterFlow * 0.34));
+float waterRippleB = sin(position.z * 1.18 - position.x * 0.41 - waterTime * (0.47 + waterFlow * 0.25));
+transformed.y += (waterRippleA * 0.0034 + waterRippleB * 0.0022) * waterShoreDamping;
+vWaterPosition = transformed;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+uniform float waterTime;
+varying float vWaterDepth;
+varying float vWaterFlow;
+varying vec3 vWaterPosition;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+float waterShallow = 1.0 - smoothstep(0.025, 0.20, vWaterDepth);
+float waterDeep = smoothstep(0.16, 0.82, vWaterDepth);
+float waterBank = 1.0 - smoothstep(0.008, 0.060, vWaterDepth);
+vec3 waterShallowTint = vec3(0.39, 0.64, 0.61);
+vec3 waterDeepTint = vec3(0.075, 0.25, 0.31);
+diffuseColor.rgb = mix(diffuseColor.rgb, waterShallowTint, waterShallow * 0.18);
+diffuseColor.rgb = mix(diffuseColor.rgb, waterDeepTint, waterDeep * 0.24);
+float waterCrossA = sin(vWaterPosition.x * 1.70 + vWaterPosition.z * 0.63 + waterTime * (0.72 + vWaterFlow * 0.42));
+float waterCrossB = sin(vWaterPosition.z * 1.43 - vWaterPosition.x * 0.48 - waterTime * (0.55 + vWaterFlow * 0.34));
+float waterRipple = (waterCrossA + waterCrossB) * 0.5;
+float waterGlint = smoothstep(0.78, 0.98, waterRipple) * smoothstep(0.025, 0.12, vWaterDepth);
+diffuseColor.rgb *= 1.0 + waterRipple * 0.018;
+diffuseColor.rgb += vec3(0.10, 0.15, 0.15) * waterGlint * 0.12;
+diffuseColor.rgb += vec3(0.08, 0.13, 0.11) * waterBank;`);
+  };
+  material.customProgramCacheKey = () => 'godbox-inland-water-v1';
+  return material;
 }
 
 interface FallSite {
@@ -151,6 +258,9 @@ export function buildInlandWater(world: WorldState): THREE.Mesh | undefined {
   const { resolution, step, originX, originZ, waterLevel, flow, height } = terrain;
   const positions: number[] = [];
   const colors: number[] = [];
+  const depths: number[] = [];
+  const flows: number[] = [];
+  const bank = new THREE.Color('#75aaa1');
   const shallow = new THREE.Color('#4f8f92');
   const deep = new THREE.Color('#245f6d');
   const colour = new THREE.Color();
@@ -161,11 +271,11 @@ export function buildInlandWater(world: WorldState): THREE.Mesh | undefined {
     const x = originX + index % resolution * step;
     const z = originZ + Math.floor(index / resolution) * step;
     const y = elevationToY(waterLevel[index]!, seaLevel);
+    const currentFlow = flow[index] ?? 0;
     const vertex = (dx: number, dz: number): Vertex => ({ x: x + dx * step, z: z + dz * step,
       depth: y - surfaceHeightAt(world, x + dx * step, z + dz * step) });
     const center = vertex(0, 0);
     const corners = [vertex(-0.5, -0.5), vertex(-0.5, 0.5), vertex(0.5, 0.5), vertex(0.5, -0.5)];
-    colour.copy(shallow).lerp(deep, clamp01(Math.max(0, center.depth) * 0.5 + flow[index]! * 0.3));
     for (let side = 0; side < 4; side++) {
       const triangle = [center, corners[side]!, corners[(side + 1) % 4]!];
       const clipped: Vertex[] = [];
@@ -180,8 +290,14 @@ export function buildInlandWater(world: WorldState): THREE.Mesh | undefined {
       }
       for (let i = 1; i < clipped.length - 1; i++) {
         for (const p of [clipped[0]!, clipped[i]!, clipped[i + 1]!]) {
+          const depth = Math.max(0, p.depth);
+          const bankToShallow = clamp01(depth / 0.16);
+          const shallowToDeep = clamp01(depth * 0.72 + currentFlow * 0.22);
+          colour.copy(bank).lerp(shallow, bankToShallow).lerp(deep, shallowToDeep);
           positions.push(p.x, y, p.z);
           colors.push(colour.r, colour.g, colour.b);
+          depths.push(depth);
+          flows.push(currentFlow);
         }
       }
     }
@@ -190,10 +306,11 @@ export function buildInlandWater(world: WorldState): THREE.Mesh | undefined {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute('waterDepth', new THREE.Float32BufferAttribute(depths, 1));
+  geometry.setAttribute('waterFlow', new THREE.Float32BufferAttribute(flows, 1));
   geometry.computeVertexNormals();
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.24, metalness: 0.04,
-    depthWrite: true });
-  const mesh = new THREE.Mesh(geometry, material);
+  geometry.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geometry, createInlandMaterial());
   mesh.name = 'inland-water';
   mesh.receiveShadow = true;
   return mesh;
