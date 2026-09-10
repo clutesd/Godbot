@@ -6,6 +6,7 @@ import type { WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { TreePlacement } from './ForestPlanner';
+import { UnderstoryField, type UnderstoryReport } from './UnderstoryField';
 import { insideVegetationTerrain } from './VegetationPlacement';
 
 export type FlowerStage = 'dormant' | 'sprout' | 'bud' | 'bloom' | 'seed' | 'senescent';
@@ -37,6 +38,7 @@ export interface FlowerDisturbanceZone {
 export interface FlowerFieldReport {
   placements: number;
   visible: number;
+  understory: Pick<UnderstoryReport, 'placements' | 'visible' | 'byKind'>;
   drawCalls: number;
   triangles: number;
 }
@@ -101,11 +103,13 @@ export function resolveFlowerGrowth(month: number, phase = 0.5): FlowerGrowth {
 
 /**
  * Cheap annual ground flora. Placements are planned once from grass/open ground and around a
- * subset of trees, then three instanced meshes express stems, petals and persistent seed heads.
+ * subset of trees. The same bounded layer also owns shrubs, bushes and ferns so the renderer gets
+ * a coherent forest floor without creating another simulation subsystem.
  */
 export class FlowerField {
   readonly group = new THREE.Group();
   private readonly placements: FlowerPlacement[];
+  private readonly understory: UnderstoryField;
   private readonly stems: THREE.InstancedMesh;
   private readonly blooms: THREE.InstancedMesh;
   private readonly heads: THREE.InstancedMesh;
@@ -128,6 +132,8 @@ export class FlowerField {
     const plannedBudget = Math.max(0, Math.floor(budget));
     const capacity = Math.max(1, plannedBudget);
     this.placements = planFlowers(world, surface, seed, plannedBudget, trees);
+    const understoryBudget = plannedBudget <= 0 ? 0 : Math.max(500, Math.min(3200, Math.round(plannedBudget * 1.15)));
+    this.understory = new UnderstoryField(world, surface, `${seed}:understory`, understoryBudget, trees);
 
     const stalk = new THREE.CylinderGeometry(0.004, 0.007, FLOWER_STEM_HEIGHT, 4)
       .translate(0, FLOWER_STEM_HEIGHT * 0.5, 0);
@@ -153,16 +159,22 @@ export class FlowerField {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage);
     }
-    this.group.add(this.stems, this.blooms, this.heads);
+    this.group.add(this.understory.group, this.stems, this.blooms, this.heads);
   }
 
   get report(): FlowerFieldReport {
+    const understoryReport = this.understory.report;
     return {
       placements: this.placements.length,
       visible: this.visibleCount,
-      drawCalls: [this.stems, this.blooms, this.heads].filter(mesh => mesh.count > 0).length,
+      understory: {
+        placements: understoryReport.placements,
+        visible: understoryReport.visible,
+        byKind: { ...understoryReport.byKind },
+      },
+      drawCalls: [this.stems, this.blooms, this.heads].filter(mesh => mesh.count > 0).length + understoryReport.drawCalls,
       triangles: [this.stems, this.blooms, this.heads].reduce((sum, mesh) =>
-        sum + mesh.count * (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, 0),
+        sum + mesh.count * (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, 0) + understoryReport.triangles,
     };
   }
 
@@ -226,6 +238,7 @@ export class FlowerField {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    this.understory.update(camera, month, disturbance);
   }
 }
 
