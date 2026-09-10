@@ -7,6 +7,7 @@ import type { Settlement, TornadoState, WorldState } from '../../sim/types';
 import { clamp01 } from '../../sim/terrain/noise';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { planForest, resolveForestSuccession, resolveTreeLifecycle, type ResolvedTreeLifecycle, type TreePlacement } from './ForestPlanner';
+import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
 
 export interface VegetationReport {
@@ -15,6 +16,7 @@ export interface VegetationReport {
   near: number;
   far: number;
   cleared: number;
+  flowers: { placed: number; visible: number };
   drawCalls: number;
   triangles: number;
   byFamily: Record<TreeFamily, number>;
@@ -71,6 +73,7 @@ export class VegetationRenderer {
   private readonly recoveryZones = new Map<string, RecoveryZone>();
   private readonly managedSettlementIds = new Set<string>();
   private readonly lifecycle: ResolvedTreeLifecycle[];
+  private readonly flowers: FlowerField;
   private ecologyYear = 0;
   private season = 0;
   private targetSeason = 0;
@@ -96,6 +99,9 @@ export class VegetationRenderer {
     this.placements = plan.trees;
     this.byFamily = plan.byFamily;
     this.lifecycle = this.placements.map((placement) => resolveTreeLifecycle(placement, this.ecologyYear));
+    const flowerBudget = Math.max(240, Math.min(1400, Math.round(budget * 0.42)));
+    this.flowers = new FlowerField(world, surface, `${seed}:flowers`, flowerBudget, this.placements);
+    this.group.add(this.flowers.group);
 
     const nearLibrary = buildTreeLibrary(seed, VARIANTS_PER_FAMILY, TREE_LOD_NEAR);
     const farLibrary = buildTreeLibrary(seed, VARIANTS_PER_FAMILY, TREE_LOD_FAR);
@@ -126,14 +132,16 @@ export class VegetationRenderer {
     let triangles = 0;
     for (const [key, bucket] of this.nearBuckets) triangles += bucket.count * (this.triangleCost.get(key)?.near ?? 0);
     for (const [key, bucket] of this.farBuckets) triangles += bucket.count * (this.triangleCost.get(key)?.far ?? 0);
+    const flowerReport = this.flowers.report;
     return {
       trees: this.placements.length,
       significantTrees: this.placements.filter((placement) => placement.id !== undefined).length,
       near: this.nearCount,
       far: this.farCount,
       cleared: this.clearedCount,
-      drawCalls: (this.nearBuckets.size + this.farBuckets.size) * 2,
-      triangles,
+      flowers: { placed: flowerReport.placements, visible: flowerReport.visible },
+      drawCalls: (this.nearBuckets.size + this.farBuckets.size) * 2 + flowerReport.drawCalls,
+      triangles: triangles + flowerReport.triangles,
       byFamily: this.byFamily,
     };
   }
@@ -265,6 +273,7 @@ export class VegetationRenderer {
       bucket.foliage.instanceMatrix.needsUpdate = true;
       if (bucket.foliage.instanceColor) bucket.foliage.instanceColor.needsUpdate = true;
     }
+    this.flowers.update(camera, this.season, this.disturbance);
   }
 
   updateLeaves(elapsed: number): void {
@@ -285,6 +294,7 @@ export class VegetationRenderer {
 
   private syncManagedPlantings(settlements: readonly Settlement[]): void {
     const living = new Map(settlements.filter((settlement) => settlement.alive).map((settlement) => [settlement.id, settlement]));
+    const currentYear = Math.floor((this.world.weather?.month ?? this.ecologyYear * 12) / 12);
 
     // Managed trees are presentation state for living settlements, not an ever-growing historical
     // registry. Abandoned ground is handed back to the bounded recovery/succession system below.
@@ -305,18 +315,23 @@ export class VegetationRenderer {
       const random = new SeededRandom(`${this.seed}:managed-cherry:${settlement.id}`);
       const count = 1 + (random.chance(0.55) ? 1 : 0) + (random.chance(0.25) ? 1 : 0);
       const foundedYear = Math.floor(settlement.foundedMonth / 12);
+      const settlementRadius = 3.4 + Math.sqrt(Math.max(1, settlement.buildings)) * 0.72 + settlement.urbanization * 4.2;
+      const innerRadius = Math.max(4.6, settlementRadius * 0.72);
+      const outerRadius = Math.max(innerRadius + 1.8, settlementRadius * 1.08);
       for (let tree = 0; tree < count; tree += 1) {
         let placement: TreePlacement | undefined;
         for (let attempt = 0; attempt < 32; attempt += 1) {
           const angle = random.range(0, Math.PI * 2) + attempt * 2.399;
-          const radius = random.range(4.2, 7.2) + Math.sqrt(attempt) * 0.18;
+          const radius = random.range(innerRadius, outerRadius) + Math.sqrt(attempt) * 0.18;
           const worldX = settlement.position.x + Math.cos(angle) * radius;
           const worldZ = settlement.position.z + Math.sin(angle) * radius;
           const sample = this.surface.sample(worldX, worldZ);
           if (sample.slope > 0.48) continue;
+          if ((settlement.structurePlots ?? []).some((plot) => Math.hypot(worldX - plot.worldX, worldZ - plot.worldZ) < plot.radius + 0.65)) continue;
           const y = this.surface.heightAt(worldX, worldZ);
           const waterY = this.surface.waterYAt(worldX, worldZ);
           if (Number.isFinite(waterY) && waterY > y - 0.05) continue;
+          const establishedYear = Math.min(currentYear, foundedYear + random.int(0, 3));
           placement = {
             managedBy: settlement.id,
             worldX,
@@ -327,7 +342,7 @@ export class VegetationRenderer {
             scale: MANAGED_TREE_SCALE * random.range(0.82, 1.16),
             rotation: random.range(0, Math.PI * 2),
             age: random.float() * 0.35,
-            establishedYear: foundedYear + random.int(0, 3),
+            establishedYear,
             lifespanYears: random.int(65, 116),
             regrowth: 0.9,
           };
@@ -335,7 +350,7 @@ export class VegetationRenderer {
         }
         if (!placement) continue;
         this.placements.push(placement);
-        this.lifecycle.push(resolveTreeLifecycle(placement, this.ecologyYear));
+        this.lifecycle.push(resolveTreeLifecycle(placement, currentYear));
         this.byFamily.cherry += 1;
       }
     }
