@@ -100,6 +100,12 @@ export class WeatherRenderer {
   private lightningStartedAt = Number.NEGATIVE_INFINITY;
   private lightningFlash = 0;
   private lightningVisible = false;
+  private scene?: THREE.Scene;
+  private baseFogDensity = 0.0072;
+  private readonly stormFogColor = new THREE.Color('#6f7d85');
+  private readonly lightningFogColor = new THREE.Color('#dce8f2');
+  private readonly stormSkyColor = new THREE.Color('#52616b');
+  private readonly lightningSkyColor = new THREE.Color('#d6e4ef');
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, seed: string) {
     this.group.name = 'weather';
@@ -133,6 +139,7 @@ export class WeatherRenderer {
         depthWrite: false,
       });
       const rain = new THREE.LineSegments(rainGeometry, rainMaterial);
+      rain.name = `rain-layer-${layer}`;
       rain.frustumCulled = false;
       rain.renderOrder = 3 - layer;
       rain.geometry.setDrawRange(0, 0);
@@ -153,6 +160,7 @@ export class WeatherRenderer {
           '#include <map_particle_fragment>\ndiffuseColor.a *= 1.0 - smoothstep(0.14, 0.5, length(gl_PointCoord - vec2(0.5)));');
       };
       const snow = new THREE.Points(snowGeometry, snowMaterial);
+      snow.name = `snow-layer-${layer}`;
       snow.frustumCulled = false;
       snow.renderOrder = 3 - layer;
       snow.geometry.setDrawRange(0, 0);
@@ -197,6 +205,8 @@ export class WeatherRenderer {
   }
 
   bindScene(scene: THREE.Scene): void {
+    this.scene = scene;
+    if (scene.fog instanceof THREE.FogExp2) this.baseFogDensity = scene.fog.density;
     scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh) || (!['terrain', 'weather-foliage'].includes(object.name) && !object.userData['weatherSurface'])) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -292,6 +302,7 @@ export class WeatherRenderer {
     this.updateRain(elapsed);
     this.updateSnow(elapsed);
     this.updateLightning(elapsed);
+    this.applyAtmosphere();
   }
 
   private scanWeather(camera: THREE.Camera, elapsed: number): void {
@@ -483,6 +494,23 @@ export class WeatherRenderer {
     }
     this.lightningBolt.geometry.setDrawRange(0, segment * 2);
     positions.needsUpdate = true;
+  }
+
+  private applyAtmosphere(): void {
+    if (!this.scene) return;
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      // Set from the captured baseline every frame. GodboxRenderer may add its blizzard veil
+      // afterwards, but it can no longer ratchet fog density upward frame after frame.
+      this.scene.fog.density = this.baseFogDensity + this.atmosphereDisplay * 0.011;
+      const stormTint = clamp01(this.atmosphereDisplay * 0.28 + this.stormDisplay * 0.12 + this.blizzardDisplay * 0.16);
+      this.scene.fog.color.lerp(this.stormFogColor, stormTint);
+      if (this.lightningFlash > 0) this.scene.fog.color.lerp(this.lightningFogColor, this.lightningFlash * 0.58);
+    }
+    if (this.scene.background instanceof THREE.Color) {
+      const stormTint = clamp01(this.atmosphereDisplay * 0.1 + this.stormDisplay * 0.09);
+      this.scene.background.lerp(this.stormSkyColor, stormTint);
+      if (this.lightningFlash > 0) this.scene.background.lerp(this.lightningSkyColor, this.lightningFlash * 0.44);
+    }
   }
 
   private updateTornadoes(elapsed: number): void {
