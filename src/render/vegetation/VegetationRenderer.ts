@@ -143,6 +143,7 @@ export class VegetationRenderer {
    */
   setDisturbance(settlements: readonly Settlement[]): void {
     this.syncManagedPlantings(settlements);
+    const currentYear = Math.floor((this.world.weather?.month ?? this.ecologyYear * 12) / 12);
     const previous = new Map(this.disturbance.map((zone) => [zone.id, zone]));
     const next = settlements
       .filter((settlement) => settlement.alive)
@@ -156,7 +157,7 @@ export class VegetationRenderer {
 
     for (const zone of previous.values()) {
       if (activeIds.has(zone.id)) continue;
-      const recovery: RecoveryZone = { ...zone, releasedYear: this.ecologyYear };
+      const recovery: RecoveryZone = { ...zone, releasedYear: currentYear };
       this.recoveryZones.set(zone.id, recovery);
       this.restartStandInside(recovery);
     }
@@ -332,7 +333,7 @@ export class VegetationRenderer {
       if (Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) >= zone.radius) continue;
       placement.establishedYear = zone.releasedYear;
       placement.age = 0;
-      this.lifecycle[index] = resolveTreeLifecycle(placement, this.ecologyYear);
+      this.lifecycle[index] = resolveTreeLifecycle(placement, zone.releasedYear);
     }
   }
 
