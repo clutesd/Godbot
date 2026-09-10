@@ -107,7 +107,7 @@ export type GodboxConfigInput = Omit<Partial<GodboxConfig>, 'simulation' | 'worl
 };
 
 export const DEFAULT_CONFIG: GodboxConfig = {
-  engineVersion: 'godbox-sim-0.9.0',
+  engineVersion: 'godbox-sim-0.10.0',
   seed: 'witness-the-saffron-river',
   startingPopulation: 360,
   settlementCount: [5, 7],
