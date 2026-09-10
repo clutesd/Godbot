@@ -1,0 +1,32 @@
+name: Weather validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/render/atmosphere/WeatherRenderer.ts'
+      - 'src/render/GodboxRenderer.ts'
+      - 'src/sim/weather/**'
+      - 'tests/weather-render.test.ts'
+      - 'tests/weather-presentation-quality.test.ts'
+      - '.github/workflows/weather-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: >-
+          npx eslint
+          src/render/atmosphere/WeatherRenderer.ts
+          tests/weather-render.test.ts
+          tests/weather-presentation-quality.test.ts
+      - run: npx vitest run tests/weather-render.test.ts tests/weather-presentation-quality.test.ts
+      - run: npm run build
