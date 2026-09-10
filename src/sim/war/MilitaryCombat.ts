@@ -83,7 +83,9 @@ export function militaryLogisticsBurden(profile: MilitaryCapabilityProfile): num
 
 /**
  * Applies the current home economy to equipment frozen at mobilization. Knowledge can survive a
- * shortage; the ability to feed, fuel, repair and replace a sophisticated force cannot.
+ * shortage; the ability to feed, fuel, repair and replace a sophisticated force cannot. Dependency
+ * grows with the force's logistics burden, so low-tech formations degrade gently while aircraft,
+ * artillery and guided systems can lose operational availability quickly after industrial collapse.
  */
 export function militaryOperationalSupply(
   settlement: Settlement,
@@ -93,7 +95,7 @@ export function militaryOperationalSupply(
   const current = deriveMilitaryProfile(settlement);
   const burden = militaryLogisticsBurden(mobilized);
   const currentSupport = clamp(current.sustainment * 0.48 + current.production * 0.26 + current.energy * 0.18 + current.communications * 0.08);
-  const dependencyPenalty = burden * Math.max(0, 0.76 - currentSupport) * 0.82;
+  const dependencyPenalty = clamp(burden * Math.max(0, 0.88 - currentSupport) * 1.35, 0, 0.68);
   const coordination = 0.94 + mobilized.communications * 0.05 + mobilized.institutionalSupport * 0.03;
   return clamp(legacySupply * coordination * (1 - dependencyPenalty), 0.04, 1);
 }
