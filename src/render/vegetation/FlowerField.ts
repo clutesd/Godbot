@@ -6,6 +6,7 @@ import type { WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { TreePlacement } from './ForestPlanner';
+import { UnderstoryField, type UnderstoryReport } from './UnderstoryField';
 import { insideVegetationTerrain } from './VegetationPlacement';
 
 export type FlowerStage = 'dormant' | 'sprout' | 'bud' | 'bloom' | 'seed' | 'senescent';
@@ -37,12 +38,15 @@ export interface FlowerDisturbanceZone {
 export interface FlowerFieldReport {
   placements: number;
   visible: number;
+  understory: Pick<UnderstoryReport, 'placements' | 'visible' | 'byKind'>;
   drawCalls: number;
   triangles: number;
 }
 
-/** Covers the documentary camera's widest ordinary ground shots without rendering the whole world. */
-const FLOWER_VIEW_RANGE = 68;
+/** All ordinary documentary framings stay at full flower scale, including 66-unit establishing shots. */
+const FLOWER_FULL_DETAIL_RANGE = 68;
+/** Fade only outside ordinary framing so the focal ground remains legible without rendering the whole world. */
+const FLOWER_VIEW_RANGE = 90;
 /** Still much smaller than a person, but large enough to read from settlement/street framing. */
 const FLOWER_STEM_HEIGHT = 0.18;
 const TREE_FLOWER_SHARE = 0.52;
@@ -60,6 +64,11 @@ const POLLEN_COLOUR = new THREE.Color('#d5a544');
 
 function lerp(from: number, to: number, t: number): number {
   return from + (to - from) * clamp01(t);
+}
+
+/** Keeps flowers fully readable through normal camera framing, then smoothly retires distant instances. */
+export function flowerDistanceScale(distance: number): number {
+  return smoothstep(FLOWER_VIEW_RANGE, FLOWER_FULL_DETAIL_RANGE, Math.max(0, distance));
 }
 
 /**
@@ -94,11 +103,13 @@ export function resolveFlowerGrowth(month: number, phase = 0.5): FlowerGrowth {
 
 /**
  * Cheap annual ground flora. Placements are planned once from grass/open ground and around a
- * subset of trees, then three instanced meshes express stems, petals and persistent seed heads.
+ * subset of trees. The same bounded layer also owns shrubs, bushes and ferns so the renderer gets
+ * a coherent forest floor without creating another simulation subsystem.
  */
 export class FlowerField {
   readonly group = new THREE.Group();
   private readonly placements: FlowerPlacement[];
+  private readonly understory: UnderstoryField;
   private readonly stems: THREE.InstancedMesh;
   private readonly blooms: THREE.InstancedMesh;
   private readonly heads: THREE.InstancedMesh;
@@ -121,6 +132,8 @@ export class FlowerField {
     const plannedBudget = Math.max(0, Math.floor(budget));
     const capacity = Math.max(1, plannedBudget);
     this.placements = planFlowers(world, surface, seed, plannedBudget, trees);
+    const understoryBudget = plannedBudget <= 0 ? 0 : Math.max(500, Math.min(3200, Math.round(plannedBudget * 1.15)));
+    this.understory = new UnderstoryField(world, surface, `${seed}:understory`, understoryBudget, trees);
 
     const stalk = new THREE.CylinderGeometry(0.004, 0.007, FLOWER_STEM_HEIGHT, 4)
       .translate(0, FLOWER_STEM_HEIGHT * 0.5, 0);
@@ -146,16 +159,22 @@ export class FlowerField {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage);
     }
-    this.group.add(this.stems, this.blooms, this.heads);
+    this.group.add(this.understory.group, this.stems, this.blooms, this.heads);
   }
 
   get report(): FlowerFieldReport {
+    const understoryReport = this.understory.report;
     return {
       placements: this.placements.length,
       visible: this.visibleCount,
-      drawCalls: [this.stems, this.blooms, this.heads].filter(mesh => mesh.count > 0).length,
+      understory: {
+        placements: understoryReport.placements,
+        visible: understoryReport.visible,
+        byKind: { ...understoryReport.byKind },
+      },
+      drawCalls: [this.stems, this.blooms, this.heads].filter(mesh => mesh.count > 0).length + understoryReport.drawCalls,
       triangles: [this.stems, this.blooms, this.heads].reduce((sum, mesh) =>
-        sum + mesh.count * (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, 0),
+        sum + mesh.count * (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, 0) + understoryReport.triangles,
     };
   }
 
@@ -166,7 +185,8 @@ export class FlowerField {
     for (const placement of this.placements) {
       if (count >= this.stems.instanceMatrix.count) break;
       const distance = Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z);
-      if (distance > FLOWER_VIEW_RANGE) continue;
+      const distanceScale = flowerDistanceScale(distance);
+      if (distanceScale <= 0) continue;
       if (disturbance.some((zone) => Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) < zone.radius)) continue;
 
       const growth = resolveFlowerGrowth(month, placement.phase);
@@ -183,8 +203,7 @@ export class FlowerField {
       const moistureVigor = 0.55 + smoothstep(0.18, 0.52, currentMoisture) * smoothstep(0.96, 0.62, currentMoisture) * 0.45;
       const annualMonth = ((month % 12) + 12) % 12;
       const emergence = smoothstep(1, 1.4, annualMonth) * smoothstep(10, 9.6, annualMonth);
-      const size = placement.scale * placement.vigor * moistureVigor * growth.scale * emergence
-        * smoothstep(FLOWER_VIEW_RANGE, FLOWER_VIEW_RANGE - 12, distance);
+      const size = placement.scale * placement.vigor * moistureVigor * growth.scale * emergence * distanceScale;
       if (size <= 0.01) continue;
 
       this.position.set(placement.worldX, groundY + 0.004, placement.worldZ);
@@ -219,6 +238,7 @@ export class FlowerField {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    this.understory.update(camera, month, disturbance);
   }
 }
 
