@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
 
 describe('Flower growth cycle', () => {
+  it('does not pop in size or bloom at lifecycle boundaries', () => {
+    for (const month of [2.1, 3.2, 6.8, 8.8]) {
+      const before = resolveFlowerGrowth(month - 0.0001);
+      const after = resolveFlowerGrowth(month + 0.0001);
+      expect(Math.abs(after.scale - before.scale)).toBeLessThan(0.001);
+      expect(Math.abs(after.bloom - before.bloom)).toBeLessThan(0.001);
+    }
+  });
   it('dies back completely through winter for every phase offset', () => {
     for (const month of [0, 10, 11, 12, 22, 23]) {
       for (const phase of [0, 0.5, 1]) {

@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { SeededRandom, stableHash } from '../../sim/prng';
-import { seasonalFoliage } from '../../sim/weather/SeasonalState';
 import { tornadoExposure } from '../../sim/weather/Tornado';
 import { cellAt } from '../../sim/world';
 import type { Settlement, TornadoState, WorldState } from '../../sim/types';
@@ -9,6 +8,8 @@ import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { planForest, resolveForestSuccession, resolveTreeLifecycle, type ResolvedTreeLifecycle, type TreePlacement } from './ForestPlanner';
 import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
+import { resolveTreePhenology, treeFoliageColour } from './TreePhenology';
+import { insideVegetationTerrain } from './VegetationPlacement';
 
 export interface VegetationReport {
   trees: number;
@@ -16,6 +17,7 @@ export interface VegetationReport {
   near: number;
   far: number;
   cleared: number;
+  underwater: number;
   flowers: { placed: number; visible: number };
   drawCalls: number;
   triangles: number;
@@ -29,6 +31,7 @@ interface Bucket {
   foliage: THREE.InstancedMesh;
   capacity: number;
   count: number;
+  crownHeight: number;
 }
 
 interface DisturbanceZone {
@@ -77,6 +80,7 @@ export class VegetationRenderer {
   private ecologyYear = 0;
   private season = 0;
   private targetSeason = 0;
+  private lastCalendarMonth: number | undefined;
   private previousElapsed = 0;
   private clearedCount = 0;
   private nearCount = 0;
@@ -84,14 +88,24 @@ export class VegetationRenderer {
   private readonly triangleCost = new Map<string, { near: number; far: number }>();
   private readonly byFamily: Record<TreeFamily, number>;
   private readonly leaves = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: '#c99435', size: 0.075, transparent: true, opacity: 0.8, depthWrite: false }));
-  private readonly leafSites: TreePlacement[] = [];
-  private readonly snowTint = new THREE.Color('#e8edef');
+  private readonly leafSites: { tree: TreePlacement; height: number; blossom: boolean }[] = [];
+  private readonly particleColour = new THREE.Color();
+  private readonly fallenRotation = new THREE.Quaternion().setFromAxisAngle(this.fallenAxis, Math.PI * 0.46);
+  private occupiedGround: { x: number; z: number; radius: number }[] = [];
   private scarSignature = '';
   private readonly scarsByCell = new Map<number, TornadoState[]>();
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, private readonly seed: string, budget: number, anchors: readonly { x: number; z: number }[] = []) {
     this.group.name = 'vegetation';
     this.leaves.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(96 * 3), 3));
+    this.leaves.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(96 * 3), 3));
+    this.leaves.name = 'seasonal-falling-leaves-and-petals';
+    this.leaves.material.color.set('#ffffff');
+    this.leaves.material.vertexColors = true;
+    this.leaves.material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <map_particle_fragment>',
+        '#include <map_particle_fragment>\ndiffuseColor.a *= 1.0 - smoothstep(0.25, 0.5, length(gl_PointCoord - vec2(0.5)));');
+    };
     this.leaves.geometry.setDrawRange(0, 0);
     this.leaves.frustumCulled = false;
     this.group.add(this.leaves);
@@ -99,7 +113,7 @@ export class VegetationRenderer {
     this.placements = plan.trees;
     this.byFamily = plan.byFamily;
     this.lifecycle = this.placements.map((placement) => resolveTreeLifecycle(placement, this.ecologyYear));
-    const flowerBudget = Math.max(240, Math.min(1400, Math.round(budget * 0.42)));
+    const flowerBudget = budget <= 0 ? 0 : Math.max(400, Math.min(2800, Math.round(budget * 0.8)));
     this.flowers = new FlowerField(world, surface, `${seed}:flowers`, flowerBudget, this.placements);
     this.group.add(this.flowers.group);
 
@@ -116,10 +130,13 @@ export class VegetationRenderer {
         const key = bucketKey(family, variant);
         const total = counts.get(key) ?? 0;
         const reserve = family === 'cherry' ? MANAGED_CHERRY_RESERVE_PER_VARIANT : 0;
-        if (total === 0 && reserve === 0) continue;
         const near = nearVariants[variant];
         const far = farLibrary.get(family)?.[variant];
         if (!near || !far) continue;
+        if (total === 0 && reserve === 0) {
+          near.bark.dispose(); near.foliage.dispose(); far.bark.dispose(); far.foliage.dispose();
+          continue;
+        }
         const capacity = total + reserve;
         this.nearBuckets.set(key, this.createBucket(family, variant, near, Math.min(capacity, NEAR_CAPACITY_PER_BUCKET)));
         this.farBuckets.set(key, this.createBucket(family, variant, far, capacity));
@@ -139,10 +156,12 @@ export class VegetationRenderer {
       near: this.nearCount,
       far: this.farCount,
       cleared: this.clearedCount,
+      underwater: this.placements.filter(placement => this.surface.waterYAt(placement.worldX, placement.worldZ) > placement.y).length,
       flowers: { placed: flowerReport.placements, visible: flowerReport.visible },
-      drawCalls: (this.nearBuckets.size + this.farBuckets.size) * 2 + flowerReport.drawCalls,
+      drawCalls: [...this.nearBuckets.values(), ...this.farBuckets.values()].filter(bucket => bucket.count > 0).length * 2
+        + flowerReport.drawCalls + (this.leaves.geometry.drawRange.count > 0 ? 1 : 0),
       triangles: triangles + flowerReport.triangles,
-      byFamily: this.byFamily,
+      byFamily: { ...this.byFamily },
     };
   }
 
@@ -151,6 +170,8 @@ export class VegetationRenderer {
    * new stand and visibly progresses through regrowth, young woodland and mature forest.
    */
   setDisturbance(settlements: readonly Settlement[]): void {
+    this.occupiedGround = settlements.flatMap(settlement => (settlement.structurePlots ?? []).map(plot =>
+      ({ x: plot.worldX, z: plot.worldZ, radius: plot.radius + 0.35 })));
     this.syncManagedPlantings(settlements);
     const currentYear = Math.floor((this.world.weather?.month ?? this.ecologyYear * 12) / 12);
     const previous = new Map(this.disturbance.map((zone) => [zone.id, zone]));
@@ -176,7 +197,10 @@ export class VegetationRenderer {
   }
 
   setSeason(season: number): void {
-    this.targetSeason = season;
+    this.targetSeason = ((season % 12) + 12) % 12;
+    // Resume and accelerated time jumps must show the actual season immediately.
+    if (this.lastCalendarMonth === undefined || Math.abs(season - this.lastCalendarMonth) > 3) this.season = this.targetSeason;
+    this.lastCalendarMonth = season;
   }
 
   /** A whole forest ecology pass happens at most once per simulation year. */
@@ -225,6 +249,11 @@ export class VegetationRenderer {
       const placement = this.placements[index];
       if (!placement) continue;
       if (this.isCleared(placement)) {
+        // Keep the seedbed young while occupied, including land released by a shrinking town.
+        if (!placement.id && !placement.managedBy) {
+          placement.establishedYear = this.ecologyYear;
+          this.lifecycle[index] = resolveTreeLifecycle(placement, this.ecologyYear);
+        }
         this.clearedCount += 1;
         continue;
       }
@@ -246,21 +275,24 @@ export class VegetationRenderer {
       for (const scar of cell ? this.scarsByCell.get(cell.z * this.world.size + cell.x) ?? [] : []) {
         const exposure = tornadoExposure(scar, { x: placement.worldX, z: placement.worldZ });
         if (exposure * scar.intensity < stableHash(`${this.seed}:tornado-tree`, Math.round(placement.worldX * 100), Math.round(placement.worldZ * 100))) continue;
-        const years = ((this.world.weather?.month ?? 0) - scar.month) / 12;
-        lifecycle = years < 3 ? { stage: 'fallen', scale: placement.scale, foliageVisible: false, fallen: true }
-          : { stage: years < 15 ? 'sapling' : 'young', scale: placement.scale * Math.min(1, 0.15 + years / 35), foliageVisible: true, fallen: false };
+        if (scar.month > (this.world.weather?.month ?? 0)) continue;
+        placement.disturbedYear = Math.max(placement.disturbedYear ?? -Infinity, scar.month / 12);
       }
       const windthrown = weather && stableHash(`${this.seed}:windthrow`, Math.round(placement.worldX * 100), Math.round(placement.worldZ * 100))
         < weather.treeDamage * (0.6 + placement.age * 0.4);
-      if (windthrown) {
-        const years = ((this.world.weather?.month ?? 0) - weather.lastWindthrowMonth) / 12;
-        lifecycle = years < 3 ? { ...lifecycle, stage: 'fallen', foliageVisible: false, fallen: true }
-          : { stage: years < 15 ? 'sapling' : 'young', scale: placement.scale * Math.min(1, 0.15 + years / 35), foliageVisible: true, fallen: false };
+      if (windthrown && weather.lastWindthrowMonth >= 0 && weather.lastWindthrowMonth <= (this.world.weather?.month ?? 0)) {
+        placement.disturbedYear = Math.max(placement.disturbedYear ?? -Infinity, weather.lastWindthrowMonth / 12);
       }
+      if (placement.disturbedYear !== undefined) lifecycle = resolveTreeLifecycle(placement, (this.world.weather?.month ?? this.ecologyYear * 12) / 12);
       this.write(target, placement, lifecycle);
-      if (distance < 24 && this.leafSites.length < 96 && lifecycle.foliageVisible && !windthrown && cell && weather
-        && seasonalFoliage(this.season, cell, weather, placement.family === 'conifer' || placement.family === 'alpine', placement.rotation / (Math.PI * 2)).leafFall > 0.2) {
-        this.leafSites.push(placement);
+      if (distance < 24 && this.leafSites.length < 96 && lifecycle.foliageVisible && !windthrown && cell) {
+        const phase = resolveTreePhenology(this.season, cell, weather ?? cell, placement.family, placement.rotation / (Math.PI * 2));
+        if (phase.leafFall > 0.2 || phase.blossom > 0.3) {
+          const blossom = phase.blossom > 0.3;
+          for (let particle = 0; particle < (blossom ? 4 : 2) && this.leafSites.length < 96; particle++) {
+            this.leafSites.push({ tree: placement, height: lifecycle.scale * target.crownHeight * 0.82, blossom });
+          }
+        }
       }
       if (target === nearBucket) this.nearCount += 1;
       else this.farCount += 1;
@@ -273,7 +305,8 @@ export class VegetationRenderer {
       bucket.foliage.instanceMatrix.needsUpdate = true;
       if (bucket.foliage.instanceColor) bucket.foliage.instanceColor.needsUpdate = true;
     }
-    this.flowers.update(camera, this.season, this.disturbance);
+    const winter = this.targetSeason < 1 || this.targetSeason >= 10;
+    this.flowers.update(camera, winter ? this.targetSeason : this.season, [...this.disturbance, ...this.occupiedGround]);
   }
 
   updateLeaves(elapsed: number): void {
@@ -282,13 +315,20 @@ export class VegetationRenderer {
     const difference = ((this.targetSeason - this.season + 18) % 12) - 6;
     this.season = (this.season + difference * (1 - Math.exp(-delta * 1.5)) + 12) % 12;
     const positions = this.leaves.geometry.getAttribute('position');
+    const colours = this.leaves.geometry.getAttribute('color');
+    const wind = this.world.weather;
     for (let index = 0; index < this.leafSites.length; index += 1) {
-      const tree = this.leafSites[index]!;
-      const phase = (elapsed * 0.15 + tree.rotation) % 1;
-      positions.setXYZ(index, tree.worldX + Math.sin(elapsed + index) * 0.6 + phase,
-        tree.y + tree.scale * (1 - phase), tree.worldZ + Math.cos(elapsed * 0.8 + index) * 0.5);
+      const { tree, height, blossom } = this.leafSites[index]!;
+      const phase = (elapsed * 0.15 + tree.rotation + index * 0.618) % 1;
+      const x = tree.worldX + Math.sin(elapsed + index) * 0.35 + phase * (wind?.windX ?? 1) * 0.8;
+      const z = tree.worldZ + Math.cos(elapsed * 0.8 + index) * 0.3 + phase * (wind?.windZ ?? 0) * 0.8;
+      const ground = this.surface.heightAt(x, z);
+      positions.setXYZ(index, x, Math.max(ground + 0.02, tree.y + height * (1 - phase)), z);
+      this.particleColour.set(blossom ? '#efb6c9' : '#c99435');
+      colours.setXYZ(index, this.particleColour.r, this.particleColour.g, this.particleColour.b);
     }
     positions.needsUpdate = true;
+    colours.needsUpdate = true;
     this.leaves.geometry.setDrawRange(0, this.leafSites.length);
   }
 
@@ -325,9 +365,11 @@ export class VegetationRenderer {
           const radius = random.range(innerRadius, outerRadius) + Math.sqrt(attempt) * 0.18;
           const worldX = settlement.position.x + Math.cos(angle) * radius;
           const worldZ = settlement.position.z + Math.sin(angle) * radius;
+          if (!insideVegetationTerrain(this.world, worldX, worldZ, 0.3)) continue;
           const sample = this.surface.sample(worldX, worldZ);
-          if (sample.slope > 0.48) continue;
-          if ((settlement.structurePlots ?? []).some((plot) => Math.hypot(worldX - plot.worldX, worldZ - plot.worldZ) < plot.radius + 0.65)) continue;
+          if (sample.slope > 0.48 || sample.temperature < 0.28 || sample.moisture < 0.28) continue;
+          if (this.occupiedGround.some((plot) => Math.hypot(worldX - plot.x, worldZ - plot.z) < plot.radius + 0.65)) continue;
+          if (this.placements.some(existing => Math.hypot(worldX - existing.worldX, worldZ - existing.worldZ) < 0.9)) continue;
           const y = this.surface.heightAt(worldX, worldZ);
           const waterY = this.surface.waterYAt(worldX, worldZ);
           if (Number.isFinite(waterY) && waterY > y - 0.05) continue;
@@ -362,12 +404,14 @@ export class VegetationRenderer {
       if (!placement || placement.family === 'ancient' || placement.managedBy === zone.id) continue;
       if (Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) >= zone.radius) continue;
       placement.establishedYear = zone.releasedYear;
+      delete placement.disturbedYear;
       placement.age = 0;
       this.lifecycle[index] = resolveTreeLifecycle(placement, zone.releasedYear);
     }
   }
 
   private lifecycleDuringRecovery(placement: TreePlacement): ResolvedTreeLifecycle | null | undefined {
+    if (placement.id) return undefined;
     let recovery: RecoveryZone | undefined;
     for (const zone of this.recoveryZones.values()) {
       if (placement.managedBy === zone.id) continue;
@@ -417,9 +461,12 @@ export class VegetationRenderer {
     foliage.frustumCulled = false;
     bark.count = 0;
     foliage.count = 0;
+    bark.name = `tree-bark:${family}:${variant}`;
+    bark.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    foliage.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     foliage.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, capacity) * 3), 3);
     this.group.add(bark, foliage);
-    return { family, variant, bark, foliage, capacity: Math.max(1, capacity), count: 0 };
+    return { family, variant, bark, foliage, capacity: Math.max(1, capacity), count: 0, crownHeight: source.height };
   }
 
   private write(bucket: Bucket, placement: TreePlacement, lifecycle: ResolvedTreeLifecycle): void {
@@ -427,7 +474,7 @@ export class VegetationRenderer {
     this.quaternion.setFromAxisAngle(this.axis, placement.rotation);
     if (lifecycle.fallen) {
       this.position.y += placement.scale * 0.08;
-      this.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(this.fallenAxis, Math.PI * 0.46));
+      this.quaternion.multiply(this.fallenRotation);
     }
     this.scale.setScalar(lifecycle.scale);
     this.matrix.compose(this.position, this.quaternion, this.scale);
@@ -435,8 +482,8 @@ export class VegetationRenderer {
     if (lifecycle.foliageVisible) {
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
-      const canopy = cell && weather ? seasonalFoliage(this.season, cell, weather,
-        placement.family === 'conifer' || placement.family === 'alpine', placement.rotation / (Math.PI * 2)).canopy : 1;
+      const canopy = cell ? resolveTreePhenology(this.season, cell, weather ?? cell,
+        placement.family, placement.rotation / (Math.PI * 2)).canopy : 1;
       const size = Math.max(0.0001, Math.cbrt(canopy));
       this.scale.multiplyScalar(size);
       this.position.y += lifecycle.scale * (1 - size) * 0.6;
@@ -453,36 +500,15 @@ export class VegetationRenderer {
   }
 
   /**
-   * Season and lifecycle as a multiplier over the species colour baked into the geometry, so a
-   * spring blossom grove and an autumn wood share one mesh while saplings still read as young.
+   * Seasonal color is absolute; geometry contributes only subtle crown shading.
    */
   private foliageTint(placement: TreePlacement, lifecycle: ResolvedTreeLifecycle): THREE.Color {
-    const spring = this.season >= 1 && this.season <= 3;
-    const summer = this.season >= 4 && this.season <= 6;
-    const autumn = this.season >= 7 && this.season <= 9;
-    this.tint.setRGB(1, 1, 1);
-    if (placement.family === 'cherry') {
-      if (spring) this.tint.setRGB(1.08, 0.92, 0.98);
-      else if (autumn) this.tint.setRGB(0.92, 0.66, 0.42);
-      else if (summer) this.tint.setRGB(0.66, 0.82, 0.5);
-      else this.tint.setRGB(0.58, 0.54, 0.52);
-    } else if (placement.family === 'conifer' || placement.family === 'alpine') {
-      this.tint.setRGB(0.94, 1, 0.96);
-    } else if (autumn) {
-      this.tint.setRGB(1.24, 0.98, 0.56);
-    } else if (spring) {
-      this.tint.setRGB(1.06, 1.08, 0.86);
-    }
     const cell = cellAt(this.world, placement.worldX, placement.worldZ);
     const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
-    if (cell && weather) {
-      const evergreen = placement.family === 'conifer' || placement.family === 'alpine';
-      const phase = seasonalFoliage(this.season, cell, weather, evergreen, placement.rotation / (Math.PI * 2));
-      const variation = placement.rotation / (Math.PI * 2);
-      this.tint.setRGB(1 + phase.autumn * (1.1 + variation * 0.5),
-        1 + phase.growth * 0.15 - phase.autumn * variation * 0.65, 1 - phase.autumn * 0.8);
-      this.tint.lerp(this.snowTint, Math.min(0.35, weather.snowpack * 0.2));
-    }
+    const climate = cell ?? { temperature: 0.46, moisture: 0.5 };
+    const variation = placement.rotation / (Math.PI * 2);
+    const phase = resolveTreePhenology(this.season, climate, weather ?? climate, placement.family, variation);
+    treeFoliageColour(placement.family, phase, variation, this.tint);
     const maturity = lifecycle.stage === 'sapling' ? 0.84
       : lifecycle.stage === 'young' ? 0.91
         : lifecycle.stage === 'old' ? 1.06
@@ -496,6 +522,7 @@ export class VegetationRenderer {
   }
 
   private isCleared(placement: TreePlacement): boolean {
+    if (this.occupiedGround.some(plot => Math.hypot(placement.worldX - plot.x, placement.worldZ - plot.z) < plot.radius)) return true;
     for (const zone of this.disturbance) {
       // Managed settlement trees are intentional plantings, so the settlement grows around them.
       if (placement.managedBy === zone.id) continue;

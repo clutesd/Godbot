@@ -20,11 +20,10 @@ export interface TreeLod {
   /** Hard caps, because instanced forests live or die on the triangle count of one tree. */
   maxSegments: number;
   maxClumps: number;
-  branchDepth: number;
 }
 
-export const TREE_LOD_NEAR: TreeLod = { sides: 5, clusterScale: 1, maxSegments: 44, maxClumps: 26, branchDepth: 0 };
-export const TREE_LOD_FAR: TreeLod = { sides: 3, clusterScale: 1.1, maxSegments: 14, maxClumps: 10, branchDepth: -1 };
+export const TREE_LOD_NEAR: TreeLod = { sides: 5, clusterScale: 1, maxSegments: 44, maxClumps: 26 };
+export const TREE_LOD_FAR: TreeLod = { sides: 3, clusterScale: 1.1, maxSegments: 14, maxClumps: 10 };
 
 /** Triangle accumulator with smooth-ish normals, sized for organic geometry rather than boxes. */
 class MeshAccumulator {
@@ -146,7 +145,7 @@ interface Species {
 const SPECIES: Record<TreeFamily, Species> = {
   cherry: {
     clearTrunk: 0.3, taper: 0.6, forks: [2, 3], spread: [0.7, 1.25], droop: 0.16, depth: 4, lengthDecay: 0.8,
-    clumpRadius: 0.2, clumpSquash: 0.55, clumpsPerTip: 3, lean: 0.16, bark: '#4d3a35', foliage: '#eba7bb', crownLift: 0, crownSpread: 1.5,
+    clumpRadius: 0.2, clumpSquash: 0.55, clumpsPerTip: 3, lean: 0.16, bark: '#4d3a35', foliage: '#648348', crownLift: 0, crownSpread: 1.5,
   },
   broadleaf: {
     clearTrunk: 0.36, taper: 0.64, forks: [2, 3], spread: [0.55, 1], droop: 0.06, depth: 4, lengthDecay: 0.78,
@@ -179,13 +178,15 @@ const SPECIES: Record<TreeFamily, Species> = {
  * silhouette even when they share a species and a seed lineage.
  */
 function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeVariant {
+  if (family === 'conifer' || family === 'alpine') return growEvergreen(family, random, lod);
   const species = SPECIES[family];
   const bark = new MeshAccumulator();
   const foliage = new MeshAccumulator();
   const barkColour = new THREE.Color(species.bark);
-  const foliageColour = new THREE.Color(species.foliage);
+  const foliageColour = new THREE.Color('#ffffff');
   const height = random.range(0.86, 1.18);
-  const maxDepth = Math.max(1, species.depth + lod.branchDepth);
+  // Both tiers grow the same skeleton. LOD changes tessellation, never the tree's identity.
+  const maxDepth = Math.max(1, species.depth);
   const tips: BranchState[] = [];
   let segments = 0;
 
@@ -205,9 +206,9 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
     if (!branch) break;
     const end = new THREE.Vector3().copy(branch.origin).addScaledVector(branch.direction, branch.length);
     const radiusTo = branch.radius * species.taper;
-    bark.tube(branch.origin, end, branch.radius, radiusTo, Math.max(3, lod.sides - Math.min(2, branch.depth)), barkColour);
+    if (segments < lod.maxSegments) bark.tube(branch.origin, end, branch.radius, radiusTo, Math.max(3, lod.sides - Math.min(2, branch.depth)), barkColour);
     segments += 1;
-    if (branch.depth >= maxDepth || segments + queue.length >= lod.maxSegments) {
+    if (branch.depth >= maxDepth || segments + queue.length >= TREE_LOD_NEAR.maxSegments) {
       tips.push({ ...branch, origin: end });
       continue;
     }
@@ -232,27 +233,65 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
   }
   for (const remaining of queue) tips.push({ ...remaining, origin: new THREE.Vector3().copy(remaining.origin) });
 
-  const clumpRadius = species.clumpRadius * height * lod.clusterScale;
-  const budget = Math.max(1, Math.round(lod.maxClumps / Math.max(1, tips.length)) || 1);
-  let placed = 0;
+  const clumpRadius = species.clumpRadius * height;
+  const clumpCount = Math.min(TREE_LOD_NEAR.maxClumps, tips.length * species.clumpsPerTip);
+  const selected = new Set(Array.from({ length: Math.min(clumpCount, lod.maxClumps) }, (_, index) =>
+    Math.floor(index * clumpCount / Math.min(clumpCount, lod.maxClumps))));
   let radius = 0.1;
   let crown = 0;
-  for (const tip of tips) {
-    const perTip = Math.min(species.clumpsPerTip, budget);
-    for (let index = 0; index < perTip && placed < lod.maxClumps; index += 1) {
-      const centre = new THREE.Vector3().copy(tip.origin).addScaledVector(tip.direction, clumpRadius * random.range(0.2, 1.1));
-      const drift = clumpRadius * species.crownSpread;
-      centre.x += random.range(-drift, drift);
-      centre.z += random.range(-drift, drift);
-      centre.y += random.range(-clumpRadius * 0.5, clumpRadius * 0.7) + species.crownLift * height;
-      foliage.clump(centre, clumpRadius * random.range(0.7, 1.25), species.clumpSquash, random, foliageColour);
-      radius = Math.max(radius, Math.hypot(centre.x, centre.z) + clumpRadius);
-      crown = Math.max(crown, centre.y + clumpRadius);
-      placed += 1;
+  for (let index = 0; index < clumpCount; index += 1) {
+    const tip = tips[Math.floor(index * tips.length / clumpCount)]!;
+    const centre = new THREE.Vector3().copy(tip.origin).addScaledVector(tip.direction, clumpRadius * random.range(0.2, 1.1));
+    const drift = clumpRadius * species.crownSpread;
+    centre.x += random.range(-drift, drift);
+    centre.z += random.range(-drift, drift);
+    centre.y += random.range(-clumpRadius * 0.5, clumpRadius * 0.7) + species.crownLift * height;
+    const size = clumpRadius * random.range(0.7, 1.25);
+    if (selected.has(index)) {
+      foliageColour.setScalar(random.fork(`shade:${index}`).range(0.78, 1));
+      foliage.clump(centre, size * lod.clusterScale, species.clumpSquash, random.fork(`clump:${index}`), foliageColour);
     }
+    radius = Math.max(radius, Math.hypot(centre.x, centre.z) + size * 1.3);
+    crown = Math.max(crown, centre.y + size * species.clumpSquash * 1.3);
   }
 
   return { family, bark: bark.build(), foliage: foliage.build(), height: Math.max(crown, height), radius };
+}
+
+/** A persistent leader and tapering branch whorls give needle trees their upright silhouette. */
+function growEvergreen(family: 'conifer' | 'alpine', random: SeededRandom, lod: TreeLod): TreeVariant {
+  const bark = new MeshAccumulator();
+  const foliage = new MeshAccumulator();
+  const height = random.range(1.35, 1.75) * (family === 'alpine' ? 0.8 : 1);
+  const width = height * random.range(0.25, 0.32);
+  const lean = new THREE.Vector3(random.range(-0.08, 0.08), 1, random.range(-0.08, 0.08));
+  if (family === 'alpine') lean.x += 0.14;
+  const barkColour = new THREE.Color(SPECIES[family].bark);
+  const color = new THREE.Color();
+  const layers = 5;
+  let segments = 0;
+  for (let layer = 0; layer < layers; layer++) {
+    const fraction = layer / layers;
+    const base = lean.clone().multiplyScalar(height * (0.2 + fraction * 0.68));
+    const tip = lean.clone().multiplyScalar(height * (0.55 + fraction * 0.57));
+    const radius = width * (1 - fraction * 0.9) * random.range(0.9, 1.08);
+    color.setScalar(0.78 + fraction * 0.19);
+    foliage.tube(base, tip, radius, 0.002, lod.sides + 2, color);
+    const branchCount = 3;
+    const twist = random.range(0, Math.PI * 2);
+    for (let branch = 0; branch < branchCount; branch++) {
+      const angle = twist + branch / branchCount * Math.PI * 2;
+      const end = new THREE.Vector3(base.x + Math.cos(angle) * radius * 0.86, base.y - height * 0.035,
+        base.z + Math.sin(angle) * radius * 0.86);
+      if (segments++ < lod.maxSegments - 1) bark.tube(base, end, height * 0.012, 0.003, 3, barkColour);
+      if (lod.maxClumps >= 15 || branch === 0) {
+        foliage.clump(end, radius * 0.29, 0.52, random.fork(`spray:${layer}:${branch}`), color);
+      }
+    }
+  }
+  bark.tube(new THREE.Vector3(), lean.clone().multiplyScalar(height), height * 0.045, 0.004, lod.sides, barkColour);
+  return { family, bark: bark.build(), foliage: foliage.build(), height: height * 1.08,
+    radius: width * 1.25 + height * Math.hypot(lean.x, lean.z) };
 }
 
 /**
@@ -263,7 +302,7 @@ export function buildTreeLibrary(seed: string, variantsPerFamily: number, lod: T
   const library = new Map<TreeFamily, TreeVariant[]>();
   for (const family of Object.keys(SPECIES) as TreeFamily[]) {
     const variants: TreeVariant[] = [];
-    const count = family === 'ancient' ? Math.max(2, Math.round(variantsPerFamily * 0.6)) : variantsPerFamily;
+    const count = Math.max(1, Math.floor(variantsPerFamily));
     for (let index = 0; index < count; index += 1) {
       variants.push(growTree(family, new SeededRandom(`${seed}:tree:${family}:${index}`), lod));
     }

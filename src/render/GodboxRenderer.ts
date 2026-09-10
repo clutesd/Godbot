@@ -26,7 +26,7 @@ import { TerrainDecor } from './terrain/TerrainDecor';
 import { TerrainSurface } from './terrain/TerrainSurface';
 import { WaterSystem } from './terrain/WaterSystem';
 import { WeatherRenderer } from './atmosphere/WeatherRenderer';
-import { VegetationRenderer } from './vegetation/VegetationRenderer';
+import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
 
 interface SettlementVisual {
   group: THREE.Group;
@@ -79,11 +79,6 @@ interface BuildingPlacement {
   conservatism: number;
   /** Cache bucket, so structures of the same kind share one geometry. */
   variation: number;
-}
-
-interface VegetationPlacement {
-  worldX: number;
-  worldZ: number;
 }
 
 interface RoutePlacementReport {
@@ -183,7 +178,6 @@ export class GodboxRenderer {
   private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number }>();
   private readonly infrastructurePlacements = new Map<string, { worldX: number; worldZ: number }>();
   private readonly palettesByCultureEra = new Map<string, MaterialPalette>();
-  private readonly vegetationPlacements: VegetationPlacement[] = [];
   private readonly terrainSurface: TerrainSurface;
   private readonly waterSystem: WaterSystem;
   private readonly weatherRenderer: WeatherRenderer;
@@ -255,6 +249,8 @@ export class GodboxRenderer {
       state.settlements.map((settlement) => settlement.position),
     );
     this.scene.add(this.vegetation.group);
+    this.vegetation.setEcologyYear(Math.floor(state.month / 12));
+    this.vegetation.setDisturbance(state.settlements);
     this.weatherRenderer = new WeatherRenderer(state.world, this.terrainSurface, config.seed);
     this.weatherRenderer.bindScene(this.scene);
     this.scene.add(this.weatherRenderer.group);
@@ -262,7 +258,7 @@ export class GodboxRenderer {
     this.scene.add(this.terrainDecor.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
-    this.atmosphere = this.createBlossomDrift();
+    this.atmosphere = this.createAmbientMotes();
     this.scene.add(this.atmosphere, this.routeGroup, this.caravanGroup, this.warGroup);
     this.smoke = this.createSmokePool();
     this.scene.add(this.smoke);
@@ -326,8 +322,8 @@ export class GodboxRenderer {
     this.vegetationLodAccumulator += deltaSeconds;
     if (this.vegetationLodAccumulator >= VEGETATION_LOD_INTERVAL_SECONDS) {
       this.vegetationLodAccumulator = 0;
-      this.vegetation.setDisturbance(this.state.settlements);
       this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
+      this.vegetation.setDisturbance(this.state.settlements);
       this.vegetation.updateLod(this.camera.position);
     }
     this.atmosphere.rotation.y += deltaSeconds * 0.012;
@@ -370,10 +366,10 @@ export class GodboxRenderer {
 
   private updateSeasonalPresentation(force = false): void {
     const season = this.state.month % 12;
-    if (!force && season === this.lastVisualSeason) return;
-    this.lastVisualSeason = season;
-    this.vegetation.setSeason(season);
-    this.vegetation.updateLod(this.camera.position);
+    if (!force && this.state.month === this.lastVisualSeason) return;
+    this.lastVisualSeason = this.state.month;
+    this.vegetation.setSeason(this.state.month);
+    if (force) this.vegetation.updateLod(this.camera.position);
     const isSpring = season >= 1 && season <= 3;
     const isAutumn = season >= 7 && season <= 9;
     const isWinter = season >= 10 || season === 0;
@@ -382,12 +378,11 @@ export class GodboxRenderer {
     this.horizonDayColor.set(isSpring ? '#d6dcd4' : isAutumn ? '#dcc3a1' : isWinter ? '#d3dde1' : '#cfd8d3');
     this.skyAtmosphere.setMistStrength(isAutumn ? 0.62 : isWinter ? 0.5 : isSpring ? 0.44 : 0.3);
     if (this.atmosphere.material instanceof THREE.PointsMaterial) {
-      this.atmosphere.material.opacity = isSpring ? 0.72 : isAutumn ? 0.12 : isWinter ? 0.05 : 0.22;
-      this.atmosphere.material.needsUpdate = true;
+      this.atmosphere.material.opacity = isSpring ? 0.22 : isAutumn ? 0.14 : isWinter ? 0.04 : 0.18;
     }
   }
 
-  private createBlossomDrift(): THREE.Points {
+  private createAmbientMotes(): THREE.Points {
     const count = Math.max(80, Math.round(520 * this.config.render.visualDensity));
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
@@ -399,7 +394,7 @@ export class GodboxRenderer {
       positions[index * 3] = x;
       positions[index * 3 + 1] = this.terrainSurface.heightAt(x, z) + this.random.range(1.2, 9);
       positions[index * 3 + 2] = z;
-      color.set(this.random.chance(0.78) ? '#ed9eb2' : '#e7c58f');
+      color.set(this.random.chance(0.78) ? '#e0d7b6' : '#c7be99');
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
       colors[index * 3 + 2] = color.b;
@@ -407,7 +402,7 @@ export class GodboxRenderer {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const material = new THREE.PointsMaterial({ size: 0.24, map: softPointTexture(), transparent: true, opacity: 0.55, depthWrite: false, vertexColors: true, sizeAttenuation: true });
+    const material = new THREE.PointsMaterial({ size: 0.08, map: softPointTexture(), transparent: true, opacity: 0.18, depthWrite: false, vertexColors: true, sizeAttenuation: true });
     return new THREE.Points(geometry, material);
   }
 
@@ -668,7 +663,6 @@ export class GodboxRenderer {
     const axisAngle = this.random.fork(`${settlement.id}:axis`).float() * Math.PI * 2;
     if (!settlement.development && eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
     if (settlement.alive) this.addBanner(group, culture, settlement.institutionIds.length);
-    this.addBlossomTree(group, visualRandom);
     const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
@@ -1411,35 +1405,6 @@ export class GodboxRenderer {
     }
   }
 
-  /** Blossom trees are the settlement's soft signature; count and siting are per-settlement deterministic. */
-  private addBlossomTree(group: THREE.Group, random: SeededRandom): void {
-    const count = 1 + (random.chance(0.55) ? 1 : 0) + (random.chance(0.25) ? 1 : 0);
-    const trunkMaterial = new THREE.MeshStandardMaterial({ color: '#65413f', roughness: 1 });
-    const blossomMaterial = new THREE.MeshStandardMaterial({ color: '#df829b', roughness: 0.95 });
-    const petalMaterial = new THREE.MeshStandardMaterial({ color: '#e8aabb', roughness: 1, transparent: true, opacity: 0.55 });
-    for (let tree = 0; tree < count; tree += 1) {
-      const angle = random.range(0, Math.PI * 2);
-      const radius = random.range(2.6, 5.4);
-      const x = Math.cos(angle) * radius;
-      const z = Math.sin(angle) * radius;
-      const scale = random.range(0.72, 1.28);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1 * scale, 0.16 * scale, 1.65 * scale, 7), trunkMaterial);
-      trunk.position.set(x, 0.82 * scale, z);
-      trunk.castShadow = true;
-      group.add(trunk);
-      for (let index = 0; index < 5; index += 1) {
-        const blossom = new THREE.Mesh(new THREE.IcosahedronGeometry(random.range(0.35, 0.55) * scale, 1), blossomMaterial);
-        blossom.position.set(x + random.range(-0.52, 0.52) * scale, (1.65 + random.range(-0.1, 0.65)) * scale, z + random.range(-0.45, 0.45) * scale);
-        blossom.castShadow = true;
-        group.add(blossom);
-      }
-      const petals = new THREE.Mesh(new THREE.CircleGeometry(0.62 * scale, 12), petalMaterial);
-      petals.rotation.x = -Math.PI / 2;
-      petals.position.set(x, 0.018, z);
-      group.add(petals);
-    }
-  }
-
   private addMarket(group: THREE.Group, settlement: Settlement, layout: SettlementLayoutPlan, culture: Culture | undefined, count: number): void {
     const wood = new THREE.MeshStandardMaterial({ color: '#72503b', roughness: 0.95 });
     const clothColors = [culture?.style.accent ?? '#efb758', culture?.style.primary ?? '#d96c86'];
@@ -2163,11 +2128,7 @@ export class GodboxRenderer {
       }
     }
 
-    let underwaterVegetation = 0;
-    for (const placement of this.vegetationPlacements) {
-      const terrain = this.terrainQueries.queryTerrainAt(placement.worldX, placement.worldZ);
-      if (terrain?.water) underwaterVegetation += 1;
-    }
+    const vegetation = this.vegetation.report;
 
     const routeReports = Array.from(this.routePlacementReports.values());
     const waterCrossings = routeReports.filter((report) => report.mode === 'land' && report.waterSamples > 0).length;
@@ -2202,9 +2163,13 @@ export class GodboxRenderer {
     return {
       buildings: { persistent: persistentBuildings, underwater: underwaterBuildings, drifted: driftedBuildings },
       people: { represented: this.state.people.length, visible: this.visiblePeople.length, underwater: underwaterPeople, invalidRoutes: invalidPersonRoutes, insideBuildings: peopleInsideBuildings, outOfScale: outOfScalePeople, validCrossings },
-      vegetation: { placed: this.vegetationPlacements.length, underwater: underwaterVegetation },
+      vegetation: { placed: vegetation.trees, underwater: vegetation.underwater },
       routes: { active: routeReports.length, waterCrossings, unresolvedCrossings, maxTerrainError, roadGradeViolations, railGradeViolations },
     };
+  }
+
+  getVegetationReport(): VegetationReport {
+    return this.vegetation.report;
   }
 
   private personRouteAvoidsWater(person: Person): boolean {
@@ -2258,6 +2223,7 @@ export class GodboxRenderer {
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     this.scene.traverse((object) => {
+      if (object instanceof THREE.InstancedMesh) object.dispose();
       if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.Line) {
         geometries.add(object.geometry);
         const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];

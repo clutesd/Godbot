@@ -24,6 +24,14 @@ function tree(overrides: Partial<TreePlacement> = {}): TreePlacement {
 }
 
 describe('Forest lifecycle', () => {
+  it('grows continuously across age classes without changing its planted position', () => {
+    const placement = tree();
+    expect(resolveTreeLifecycle(placement, 12).scale).toBeGreaterThan(resolveTreeLifecycle(placement, 2).scale);
+    for (const year of [15, 35, 90, 98.4, 120]) {
+      expect(Math.abs(resolveTreeLifecycle(placement, year - 0.001).scale - resolveTreeLifecycle(placement, year + 0.001).scale)).toBeLessThan(0.001);
+    }
+    expect(placement.establishedYear).toBe(0);
+  });
   it('uses sparse, deterministic age-class transitions', () => {
     const placement = tree();
     expect(resolveTreeLifecycle(placement, 5).stage).toBe('sapling');
@@ -69,5 +77,15 @@ describe('Forest lifecycle', () => {
   it('does not recycle a stable significant-tree identity into a new individual', () => {
     const ancient = tree({ id: 'tree:seed:2', family: 'ancient', lifespanYears: 100, regrowth: 1 });
     expect(resolveTreeLifecycle(ancient, 200).stage).toBe('fallen');
+  });
+
+  it('retains windthrow beyond weather scar expiry and restarts ordinary woodland from saplings', () => {
+    const placement = tree({ establishedYear: -60, lifespanYears: 200, disturbedYear: 10 });
+    expect(resolveTreeLifecycle(placement, 10).stage).toBe('fallen');
+    expect(resolveTreeLifecycle(placement, 12).stage).toBe('fallen');
+    expect(resolveTreeLifecycle(placement, 13).stage).toBe('sapling');
+    expect(resolveTreeLifecycle(placement, 40).stage).toBe('young');
+    expect(resolveTreeLifecycle(placement, 60).stage).toBe('mature');
+    expect(resolveTreeLifecycle({ ...placement, id: 'ancient:fallen' }, 1000).stage).toBe('fallen');
   });
 });

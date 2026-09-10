@@ -3,6 +3,7 @@ import { clamp01, fbm, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { TreeFamily } from './TreeLibrary';
+import { insideVegetationTerrain } from './VegetationPlacement';
 
 export interface TreePlacement {
   /** Only the rare, culturally meaningful trees receive a stable individual identity. */
@@ -24,6 +25,8 @@ export interface TreePlacement {
   lifespanYears: number;
   /** 0..1 local capacity to re-establish after clearance. */
   regrowth: number;
+  /** Latest observed windthrow; retained after short-lived weather scar records expire. */
+  disturbedYear?: number;
 }
 
 export type TreeLifecycleStage = 'sapling' | 'young' | 'mature' | 'old' | 'declining' | 'dead-standing' | 'fallen';
@@ -57,21 +60,39 @@ const MAX_REESTABLISH_YEARS = 18;
  * Stable significant-tree identities are not recycled into a different individual.
  */
 export function resolveTreeLifecycle(tree: TreePlacement, year: number, disturbed = false): ResolvedTreeLifecycle {
-  const chronologicalAge = Math.max(0, year - tree.establishedYear);
+  const damageYear = tree.disturbedYear;
+  if (damageYear !== undefined && year >= damageYear && (tree.id !== undefined || year < damageYear + 3)) {
+    return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true };
+  }
+  const establishedYear = damageYear !== undefined && year >= damageYear ? Math.max(tree.establishedYear, damageYear + 3) : tree.establishedYear;
+  const chronologicalAge = Math.max(0, year - establishedYear);
   const lifespan = tree.lifespanYears;
   const significant = tree.id !== undefined;
   const mortalityAge = disturbed && !significant ? Math.min(lifespan, 18 + Math.round((1 - tree.regrowth) * 20)) : lifespan;
   const reestablishYears = Math.round(MIN_REESTABLISH_YEARS + (1 - clamp01(tree.regrowth)) * (MAX_REESTABLISH_YEARS - MIN_REESTABLISH_YEARS));
   const generationSpan = mortalityAge + DEAD_STANDING_YEARS + reestablishYears;
   const ageYears = !significant && chronologicalAge >= generationSpan ? chronologicalAge % generationSpan : chronologicalAge;
+  const growthStops: readonly (readonly [number, number])[] = [
+    [0, 0.25], [Math.min(15, mortalityAge * 0.25), 0.7], [Math.min(35, mortalityAge * 0.5), 1],
+    [Math.min(significant ? 55 : 90, mortalityAge * 0.75), 1.2], [mortalityAge * 0.82, 1.03], [mortalityAge, 0.82],
+  ];
+  let scale = tree.scale * 0.82;
+  for (let index = 1; index < growthStops.length; index++) {
+    const [end, to] = growthStops[index]!;
+    const [start, from] = growthStops[index - 1]!;
+    if (ageYears <= end) {
+      scale = tree.scale * (from + (to - from) * smoothstep(start, end, ageYears));
+      break;
+    }
+  }
 
   if (ageYears >= mortalityAge + DEAD_STANDING_YEARS) return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true };
   if (ageYears >= mortalityAge) return { stage: 'dead-standing', scale: tree.scale * 0.82, foliageVisible: false, fallen: false };
-  if (ageYears >= mortalityAge * 0.82) return { stage: 'declining', scale: tree.scale * 1.03, foliageVisible: true, fallen: false };
-  if (ageYears >= 90 || (significant && ageYears >= 55)) return { stage: 'old', scale: tree.scale * 1.2, foliageVisible: true, fallen: false };
-  if (ageYears >= 35) return { stage: 'mature', scale: tree.scale, foliageVisible: true, fallen: false };
-  if (ageYears >= 15) return { stage: 'young', scale: tree.scale * 0.7, foliageVisible: true, fallen: false };
-  return { stage: 'sapling', scale: tree.scale * 0.34, foliageVisible: true, fallen: false };
+  if (ageYears >= mortalityAge * 0.82) return { stage: 'declining', scale, foliageVisible: true, fallen: false };
+  if (ageYears >= 90 || (significant && ageYears >= 55)) return { stage: 'old', scale, foliageVisible: true, fallen: false };
+  if (ageYears >= 35) return { stage: 'mature', scale, foliageVisible: true, fallen: false };
+  if (ageYears >= 15) return { stage: 'young', scale, foliageVisible: true, fallen: false };
+  return { stage: 'sapling', scale, foliageVisible: true, fallen: false };
 }
 
 /** Coarse stand succession: a regional rule, never an individual sapling simulation. */
@@ -160,8 +181,14 @@ export function planForest(
   const random = new SeededRandom(`${seed}:forest`);
   const trees: TreePlacement[] = [];
   const byFamily = EMPTY_COUNTS();
+  budget = Math.max(0, Math.floor(budget));
   const land = world.cells.filter((cell) => !cell.water && cell.wood > 0.18);
   if (land.length === 0) return { trees, byFamily };
+  // A budget exhausted in row order otherwise leaves the far side of a rich world bare.
+  for (let index = land.length - 1; index > 0; index -= 1) {
+    const other = random.int(0, index + 1);
+    [land[index], land[other]] = [land[other]!, land[index]!];
+  }
 
   /** Ceremonial planting: a ring of managed ground around a settlement, not the settlement itself. */
   const cultivationAt = (worldX: number, worldZ: number): number => {
@@ -184,6 +211,7 @@ export function planForest(
       quota -= 1;
       const worldX = cell.worldX + random.range(-half, half);
       const worldZ = cell.worldZ + random.range(-half, half);
+      if (!insideVegetationTerrain(world, worldX, worldZ, 0.15)) continue;
       const cultivated = cultivationAt(worldX, worldZ);
       const ecology = ecologyAt(world, surface, seed, worldX, worldZ, cultivated);
       if (!random.chance(ecology.density)) continue;

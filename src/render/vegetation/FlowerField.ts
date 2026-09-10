@@ -1,10 +1,12 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { SeededRandom } from '../../sim/prng';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { TreePlacement } from './ForestPlanner';
+import { insideVegetationTerrain } from './VegetationPlacement';
 
 export type FlowerStage = 'dormant' | 'sprout' | 'bud' | 'bloom' | 'seed' | 'senescent';
 
@@ -42,7 +44,7 @@ export interface FlowerFieldReport {
 /** Covers the documentary camera's widest ordinary ground shots without rendering the whole world. */
 const FLOWER_VIEW_RANGE = 68;
 /** Still much smaller than a person, but large enough to read from settlement/street framing. */
-const FLOWER_STEM_HEIGHT = 0.095;
+const FLOWER_STEM_HEIGHT = 0.18;
 const TREE_FLOWER_SHARE = 0.52;
 const MAX_PLAN_ATTEMPTS_MULTIPLIER = 8;
 const FLOWER_COLOURS = [
@@ -53,7 +55,8 @@ const FLOWER_COLOURS = [
   new THREE.Color('#83a9c9'),
 ] as const;
 const SEED_COLOUR = new THREE.Color('#a78a5c');
-const HIDDEN_SCALE = new THREE.Vector3(0.0001, 0.0001, 0.0001);
+const STEM_COLOUR = new THREE.Color('#587348');
+const POLLEN_COLOUR = new THREE.Color('#d5a544');
 
 function lerp(from: number, to: number, t: number): number {
   return from + (to - from) * clamp01(t);
@@ -71,11 +74,11 @@ export function resolveFlowerGrowth(month: number, phase = 0.5): FlowerGrowth {
   const localMonth = Math.min(9.999, Math.max(1, baseMonth + (clamp01(phase) - 0.5) * 0.8));
   if (localMonth < 2.1) {
     const progress = (localMonth - 1) / 1.1;
-    return { stage: 'sprout', visible: true, scale: lerp(0.16, 0.52, progress), bloom: 0, seed: 0 };
+    return { stage: 'sprout', visible: true, scale: lerp(0, 0.52, progress), bloom: 0, seed: 0 };
   }
   if (localMonth < 3.2) {
     const progress = (localMonth - 2.1) / 1.1;
-    return { stage: 'bud', visible: true, scale: lerp(0.52, 0.86, progress), bloom: lerp(0.08, 0.42, progress), seed: 0 };
+    return { stage: 'bud', visible: true, scale: lerp(0.52, 0.86, progress), bloom: smoothstep(0, 1, progress), seed: 0 };
   }
   if (localMonth < 6.8) {
     const progress = (localMonth - 3.2) / 3.6;
@@ -83,21 +86,22 @@ export function resolveFlowerGrowth(month: number, phase = 0.5): FlowerGrowth {
   }
   if (localMonth < 8.8) {
     const progress = (localMonth - 6.8) / 2;
-    return { stage: 'seed', visible: true, scale: lerp(0.96, 0.66, progress), bloom: lerp(0.62, 0.08, progress), seed: progress };
+    return { stage: 'seed', visible: true, scale: lerp(0.86, 0.66, progress), bloom: 1 - smoothstep(0, 1, progress), seed: progress };
   }
   const progress = (localMonth - 8.8) / 1.2;
-  return { stage: 'senescent', visible: true, scale: lerp(0.58, 0.12, progress), bloom: 0, seed: 1 };
+  return { stage: 'senescent', visible: true, scale: lerp(0.66, 0, progress), bloom: 0, seed: 1 };
 }
 
 /**
  * Cheap annual ground flora. Placements are planned once from grass/open ground and around a
- * subset of trees, then two instanced meshes express the seasonal cycle. Nothing ticks per flower.
+ * subset of trees, then three instanced meshes express stems, petals and persistent seed heads.
  */
 export class FlowerField {
   readonly group = new THREE.Group();
   private readonly placements: FlowerPlacement[];
   private readonly stems: THREE.InstancedMesh;
   private readonly blooms: THREE.InstancedMesh;
+  private readonly heads: THREE.InstancedMesh;
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
@@ -105,7 +109,6 @@ export class FlowerField {
   private readonly axis = new THREE.Vector3(0, 1, 0);
   private readonly colour = new THREE.Color();
   private visibleCount = 0;
-  private readonly trianglesPerFlower: number;
 
   constructor(
     private readonly world: WorldState,
@@ -115,45 +118,55 @@ export class FlowerField {
     trees: readonly TreePlacement[],
   ) {
     this.group.name = 'seasonal-flowers';
-    const capacity = Math.max(1, Math.floor(budget));
-    this.placements = planFlowers(world, surface, seed, capacity, trees);
+    const plannedBudget = Math.max(0, Math.floor(budget));
+    const capacity = Math.max(1, plannedBudget);
+    this.placements = planFlowers(world, surface, seed, plannedBudget, trees);
 
-    const stemGeometry = new THREE.CylinderGeometry(0.006, 0.009, FLOWER_STEM_HEIGHT, 4)
+    const stalk = new THREE.CylinderGeometry(0.004, 0.007, FLOWER_STEM_HEIGHT, 4)
       .translate(0, FLOWER_STEM_HEIGHT * 0.5, 0);
-    const bloomGeometry = new THREE.CircleGeometry(0.045, 5);
-    bloomGeometry.rotateX(-Math.PI / 2);
-    const stemMaterial = new THREE.MeshStandardMaterial({ color: '#587348', roughness: 0.98, metalness: 0 });
+    const leaf = new THREE.SphereGeometry(1, 4, 2).scale(0.034, 0.006, 0.012)
+      .rotateZ(0.45).translate(0.024, FLOWER_STEM_HEIGHT * 0.4, 0);
+    const secondLeaf = leaf.clone().rotateY(Math.PI).translate(0, FLOWER_STEM_HEIGHT * 0.2, 0);
+    const stemGeometry = mergeGeometries([stalk, leaf, secondLeaf]);
+    stalk.dispose(); leaf.dispose(); secondLeaf.dispose();
+    const bloomGeometry = flowerPetals();
+    const stemMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.98, metalness: 0 });
     const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
     this.stems = new THREE.InstancedMesh(stemGeometry, stemMaterial, capacity);
     this.blooms = new THREE.InstancedMesh(bloomGeometry, bloomMaterial, capacity);
+    this.heads = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.013, 0),
+      new THREE.MeshStandardMaterial({ roughness: 0.95 }), capacity);
     this.stems.name = 'seasonal-flower-stems';
     this.blooms.name = 'seasonal-flower-blooms';
-    this.stems.count = 0;
-    this.blooms.count = 0;
-    this.stems.frustumCulled = false;
-    this.blooms.frustumCulled = false;
-    this.blooms.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
-    this.group.add(this.stems, this.blooms);
-
-    const stemTriangles = (stemGeometry.getIndex()?.count ?? 0) / 3;
-    const bloomTriangles = (bloomGeometry.getIndex()?.count ?? 0) / 3;
-    this.trianglesPerFlower = stemTriangles + bloomTriangles;
+    this.heads.name = 'seasonal-flower-seed-heads';
+    for (const mesh of [this.stems, this.blooms, this.heads]) {
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      mesh.receiveShadow = true;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    }
+    this.group.add(this.stems, this.blooms, this.heads);
   }
 
   get report(): FlowerFieldReport {
     return {
       placements: this.placements.length,
       visible: this.visibleCount,
-      drawCalls: this.visibleCount > 0 ? 2 : 0,
-      triangles: this.visibleCount * this.trianglesPerFlower,
+      drawCalls: [this.stems, this.blooms, this.heads].filter(mesh => mesh.count > 0).length,
+      triangles: [this.stems, this.blooms, this.heads].reduce((sum, mesh) =>
+        sum + mesh.count * (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3, 0),
     };
   }
 
   update(camera: THREE.Vector3, month: number, disturbance: readonly FlowerDisturbanceZone[]): void {
     let count = 0;
+    let blooms = 0;
+    let heads = 0;
     for (const placement of this.placements) {
       if (count >= this.stems.instanceMatrix.count) break;
-      if (Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z) > FLOWER_VIEW_RANGE) continue;
+      const distance = Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z);
+      if (distance > FLOWER_VIEW_RANGE) continue;
       if (disturbance.some((zone) => Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) < zone.radius)) continue;
 
       const growth = resolveFlowerGrowth(month, placement.phase);
@@ -161,13 +174,17 @@ export class FlowerField {
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
       if (weather && weather.snowpack > 0.08) continue;
+      if (weather && weather.temperature < 0.2) continue;
       const waterY = this.surface.waterYAt(placement.worldX, placement.worldZ);
       const groundY = this.surface.heightAt(placement.worldX, placement.worldZ);
       if (Number.isFinite(waterY) && waterY > groundY - 0.025) continue;
 
       const currentMoisture = cell?.moisture ?? 0.5;
       const moistureVigor = 0.55 + smoothstep(0.18, 0.52, currentMoisture) * smoothstep(0.96, 0.62, currentMoisture) * 0.45;
-      const size = placement.scale * placement.vigor * moistureVigor * growth.scale;
+      const annualMonth = ((month % 12) + 12) % 12;
+      const emergence = smoothstep(1, 1.4, annualMonth) * smoothstep(10, 9.6, annualMonth);
+      const size = placement.scale * placement.vigor * moistureVigor * growth.scale * emergence
+        * smoothstep(FLOWER_VIEW_RANGE, FLOWER_VIEW_RANGE - 12, distance);
       if (size <= 0.01) continue;
 
       this.position.set(placement.worldX, groundY + 0.004, placement.worldZ);
@@ -175,25 +192,33 @@ export class FlowerField {
       this.scale.set(size * 0.8, size, size * 0.8);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       this.stems.setMatrixAt(count, this.matrix);
+      this.stems.setColorAt(count, this.colour.copy(STEM_COLOUR).lerp(SEED_COLOUR, growth.seed * 0.8));
 
-      const bloomScale = Math.max(0.0001, size * Math.max(0.05, growth.bloom));
-      this.position.y = groundY + FLOWER_STEM_HEIGHT * size;
-      if (growth.bloom <= 0.01) this.scale.copy(HIDDEN_SCALE);
-      else this.scale.setScalar(bloomScale);
-      this.matrix.compose(this.position, this.quaternion, this.scale);
-      this.blooms.setMatrixAt(count, this.matrix);
-      const baseColour = FLOWER_COLOURS[placement.colour] ?? FLOWER_COLOURS[0];
-      this.colour.copy(baseColour).lerp(SEED_COLOUR, growth.seed * 0.72);
-      this.blooms.setColorAt(count, this.colour);
+      this.position.y = groundY + 0.004 + FLOWER_STEM_HEIGHT * size;
+      if (growth.bloom > 0.01) {
+        this.scale.setScalar(size * growth.bloom);
+        this.matrix.compose(this.position, this.quaternion, this.scale);
+        this.blooms.setMatrixAt(blooms, this.matrix);
+        this.colour.copy(FLOWER_COLOURS[placement.colour] ?? FLOWER_COLOURS[0]).lerp(SEED_COLOUR, growth.seed * 0.35);
+        this.blooms.setColorAt(blooms++, this.colour);
+      }
+      if (growth.bloom > 0.05 || growth.seed > 0) {
+        this.scale.setScalar(size * (0.6 + growth.seed * 0.65));
+        this.matrix.compose(this.position, this.quaternion, this.scale);
+        this.heads.setMatrixAt(heads, this.matrix);
+        this.heads.setColorAt(heads++, this.colour.copy(POLLEN_COLOUR).lerp(SEED_COLOUR, growth.seed));
+      }
       count += 1;
     }
 
     this.visibleCount = count;
     this.stems.count = count;
-    this.blooms.count = count;
-    this.stems.instanceMatrix.needsUpdate = true;
-    this.blooms.instanceMatrix.needsUpdate = true;
-    if (this.blooms.instanceColor) this.blooms.instanceColor.needsUpdate = true;
+    this.blooms.count = blooms;
+    this.heads.count = heads;
+    for (const mesh of [this.stems, this.blooms, this.heads]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 }
 
@@ -212,11 +237,11 @@ function planFlowers(
   if (suitableTrees.length > 0) {
     const offset = random.int(0, suitableTrees.length);
     for (let index = 0; index < treeBudget && placements.length < budget; index += 1) {
-      const tree = suitableTrees[(offset + index * 7) % suitableTrees.length];
+      const tree = suitableTrees[(offset + index) % suitableTrees.length];
       if (!tree) continue;
       const angle = random.range(0, Math.PI * 2);
       const radius = random.range(0.6, 2.5);
-      tryAddFlower(surface, random, placements, tree.worldX + Math.cos(angle) * radius, tree.worldZ + Math.sin(angle) * radius, 0.9 + tree.regrowth * 0.18);
+      tryAddFlower(world, surface, random, placements, tree.worldX + Math.cos(angle) * radius, tree.worldZ + Math.sin(angle) * radius, 0.9 + tree.regrowth * 0.18);
     }
   }
 
@@ -235,19 +260,32 @@ function planFlowers(
     const gentle = smoothstep(0.52, 0.2, sample.slope);
     const suitability = clamp01((0.28 + openGround * 0.72) * moisture * warmth * gentle);
     if (!random.chance(suitability * 0.72)) continue;
-    tryAddFlower(surface, random, placements, worldX, worldZ, 0.78 + suitability * 0.3);
+    // Related colors and phases form small meadow drifts, with breathing room between colonies.
+    const colour = random.int(0, FLOWER_COLOURS.length);
+    const phase = random.float();
+    const colonySize = random.int(5, 12);
+    for (let flower = 0; flower < colonySize && placements.length < budget; flower += 1) {
+      const angle = random.range(0, Math.PI * 2);
+      const radius = Math.sqrt(random.float()) * 0.85;
+      tryAddFlower(world, surface, random, placements, worldX + Math.cos(angle) * radius,
+        worldZ + Math.sin(angle) * radius, 0.78 + suitability * 0.3, colour, clamp01(phase + random.range(-0.12, 0.12)));
+    }
   }
   return placements;
 }
 
 function tryAddFlower(
+  world: WorldState,
   surface: TerrainSurface,
   random: SeededRandom,
   placements: FlowerPlacement[],
   worldX: number,
   worldZ: number,
   vigor: number,
+  colour = random.int(0, FLOWER_COLOURS.length),
+  phase = random.float(),
 ): void {
+  if (!insideVegetationTerrain(world, worldX, worldZ, 0.08)) return;
   const sample = surface.sample(worldX, worldZ);
   if (sample.slope > 0.5 || sample.moisture < 0.18 || sample.temperature < 0.2) return;
   const y = surface.heightAt(worldX, worldZ);
@@ -258,8 +296,26 @@ function tryAddFlower(
     worldZ,
     scale: random.range(0.72, 1.18),
     rotation: random.range(0, Math.PI * 2),
-    phase: random.float(),
-    colour: random.int(0, FLOWER_COLOURS.length),
+    phase,
+    colour,
     vigor: clamp01(vigor),
   });
+}
+
+/** Five cupped, scalloped petals instead of a flat pentagonal marker. */
+function flowerPetals(): THREE.BufferGeometry {
+  const positions = [0, 0, 0];
+  const indices: number[] = [];
+  const segments = 40;
+  for (let index = 0; index < segments; index += 1) {
+    const angle = index / segments * Math.PI * 2;
+    const radius = 0.06 * (0.73 + 0.27 * Math.cos(angle * 5));
+    positions.push(Math.cos(angle) * radius, 0.01 * (radius / 0.06) ** 2, Math.sin(angle) * radius);
+    indices.push(0, (index + 1) % segments + 1, index + 1);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
