@@ -32,13 +32,9 @@ export interface StructureFireScarSnapshot {
   burnedMonth: number;
 }
 
-interface ActiveStructureFire extends StructureFireSnapshot {
-  lastDamage: number;
-}
-
 interface FireRuntime {
   lastAdvancedMonth: number;
-  fires: Map<string, ActiveStructureFire>;
+  fires: Map<string, StructureFireSnapshot>;
   scars: Map<string, StructureFireScarSnapshot>;
 }
 
@@ -100,17 +96,12 @@ function hostilityAt(state: SimulationState, settlement: Settlement): number {
   return pressure;
 }
 
-function chooseIgnitionPlot(settlement: Settlement, random: SeededRandom): StructurePlot | undefined {
-  const plots = (settlement.structurePlots ?? []).filter((plot) => plot.condition > 0.03 && !runtimeForFirePlot(plot));
+function chooseIgnitionPlot(settlement: Settlement, random: SeededRandom, runtime: FireRuntime): StructurePlot | undefined {
+  const plots = (settlement.structurePlots ?? []).filter((plot) => plot.condition > 0.03 && !runtime.fires.has(plot.id));
   if (!plots.length) return undefined;
   const weights = plots.map((plot) => 0.5 + Math.min(1.5, plot.width * 0.15) + (1 - plot.condition) * 0.25);
   return plots[random.weightedIndex(weights)];
 }
-
-// A very small indirection lets chooseIgnitionPlot remain cheap while a runtime is advancing.
-// It is rebound only during that synchronous advance call.
-let advancingFirePlots: ReadonlySet<string> | undefined;
-const runtimeForFirePlot = (plot: StructurePlot): boolean => advancingFirePlots?.has(plot.id) ?? false;
 
 function beginFire(
   state: SimulationState,
@@ -119,7 +110,7 @@ function beginFire(
   cause: StructureFireCause,
   intensity: number,
   originCause: Exclude<StructureFireCause, 'spread'>,
-): ActiveStructureFire {
+): StructureFireSnapshot {
   const runtime = runtimeFor(state.world);
   const existing = runtime.fires.get(plot.id);
   if (existing) {
@@ -129,7 +120,7 @@ function beginFire(
   }
   const random = new SeededRandom(`${state.seed}:structure-fire:${plot.id}:${state.month}:${cause}`);
   const initialChar = Math.max(0, 1 - plot.condition);
-  const fire: ActiveStructureFire = {
+  const fire: StructureFireSnapshot = {
     id: `fire:${plot.id}:${state.month}`,
     settlementId: settlement.id,
     plotId: plot.id,
@@ -145,7 +136,6 @@ function beginFire(
     ageMonths: 0,
     char: initialChar,
     startedMonth: state.month,
-    lastDamage: 0,
   };
   runtime.fires.set(plot.id, fire);
   plot.accessRestricted = true;
@@ -176,7 +166,7 @@ export function igniteStructureFire(
   return true;
 }
 
-function attemptAmbientIgnition(state: SimulationState, settlement: Settlement): void {
+function attemptAmbientIgnition(state: SimulationState, settlement: Settlement, runtime: FireRuntime): void {
   if (!settlement.alive || !(settlement.structurePlots?.some((plot) => plot.condition > 0.03))) return;
   const weather = weatherAt(state, settlement);
   const worldCell = state.world.cells[settlement.cellIndex];
@@ -214,13 +204,13 @@ function attemptAmbientIgnition(state: SimulationState, settlement: Settlement):
 
   for (const candidate of candidates) {
     if (!random.chance(candidate.probability)) continue;
-    const plot = chooseIgnitionPlot(settlement, random);
+    const plot = chooseIgnitionPlot(settlement, random, runtime);
     if (plot) beginFire(state, settlement, plot, candidate.cause, candidate.intensity, candidate.cause);
     break;
   }
 }
 
-function spreadFromFire(state: SimulationState, fire: ActiveStructureFire, settlement: Settlement, plot: StructurePlot, months: number): void {
+function spreadFromFire(state: SimulationState, fire: StructureFireSnapshot, settlement: Settlement, plot: StructurePlot, months: number): void {
   if (fire.intensity < 0.24 || fire.fuel < 0.14) return;
   const weather = weatherAt(state, settlement);
   const rain = weather?.precipitation === 'rain' ? clamp01(weather.intensity) : 0;
@@ -252,7 +242,7 @@ function spreadFromFire(state: SimulationState, fire: ActiveStructureFire, settl
   }
 }
 
-function updateScar(runtime: FireRuntime, settlement: Settlement, plot: StructurePlot, fire: ActiveStructureFire, month: number): void {
+function updateScar(runtime: FireRuntime, settlement: Settlement, plot: StructurePlot, fire: StructureFireSnapshot, month: number): void {
   const scar = runtime.scars.get(plot.id) ?? {
     plotId: plot.id,
     settlementId: settlement.id,
@@ -273,12 +263,7 @@ export function advanceStructureFires(state: SimulationState, months = 1): void 
   const runtime = runtimeFor(state.world);
   if (runtime.lastAdvancedMonth === state.month) return;
   runtime.lastAdvancedMonth = state.month;
-  advancingFirePlots = new Set(runtime.fires.keys());
-  try {
-    for (const settlement of state.settlements) attemptAmbientIgnition(state, settlement);
-  } finally {
-    advancingFirePlots = undefined;
-  }
+  for (const settlement of state.settlements) attemptAmbientIgnition(state, settlement, runtime);
 
   let changed = false;
   const current = [...runtime.fires.values()];
@@ -305,7 +290,6 @@ export function advanceStructureFires(state: SimulationState, months = 1): void 
 
     const vulnerability = structureVulnerability(settlement, plot);
     const loss = fire.intensity * (0.024 + consumed * 0.31) * vulnerability;
-    fire.lastDamage = loss;
     if (loss > 0.001 && plot.condition > 0) {
       const before = plot.condition;
       plot.condition = Math.max(0, plot.condition - loss);
@@ -341,7 +325,7 @@ export function advanceStructureFires(state: SimulationState, months = 1): void 
 export function structureFireSnapshots(world: WorldState): readonly StructureFireSnapshot[] {
   const runtime = runtimes.get(world);
   if (!runtime) return [];
-  return [...runtime.fires.values()].map(({ lastDamage: _lastDamage, ...fire }) => ({ ...fire }));
+  return [...runtime.fires.values()].map((fire) => ({ ...fire }));
 }
 
 export function structureFireScars(world: WorldState): readonly StructureFireScarSnapshot[] {
