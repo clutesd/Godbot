@@ -10,11 +10,14 @@ interface PresentationObservation {
 }
 
 export type PresentationMode = 'ordinary-life' | 'city-life' | 'major-event' | 'accelerated-quiet';
+export type CinematicTempo = 'accelerate' | 'observe' | 'focus' | 'linger';
 
 export interface PresentationTelemetry {
   readonly monthsPerSecond: number;
   readonly yearsPerRealMinute: number;
   readonly mode: PresentationMode;
+  readonly tempo: CinematicTempo;
+  readonly holdSecondsRemaining: number;
   readonly viewingSeconds: Readonly<Record<PresentationMode, number>>;
 }
 
@@ -40,12 +43,21 @@ const CITY_KINDS = new Set<ObservationKind>(['street-observation', 'settlement-a
 const MOMENTOUS_KINDS = new Set<ObservationKind>(['battle-overview', 'aftermath-pullback', 'atomic-threshold', 'civilization-ending']);
 const SIGNIFICANT_KINDS = new Set<ObservationKind>(['discovery-scene', 'infrastructure-scene', 'orbital-establishing']);
 
-/** Controls presentation cadence only. It never mutates authoritative simulation state. */
+/**
+ * Controls observer-time only. It never mutates authoritative simulation state.
+ *
+ * The director deliberately slows quickly and accelerates slowly: important history should feel
+ * as though the Watcher noticed it, while quiet centuries are allowed to breathe into timelapse.
+ */
 export class PresentationDirector {
   monthsPerSecond: number;
   mode: PresentationMode = 'ordinary-life';
   private targetMonthsPerSecond: number;
   private quietSeconds = 0;
+  private tempo: CinematicTempo = 'observe';
+  private holdSecondsRemaining = 0;
+  private lastFocusKey = '';
+  private heldUrgency = 0;
   private readonly viewingSeconds: Record<PresentationMode, number> = { 'ordinary-life': 0, 'city-life': 0, 'major-event': 0, 'accelerated-quiet': 0 };
 
   constructor(private readonly config: GodboxConfig) {
@@ -55,14 +67,41 @@ export class PresentationDirector {
 
   update(deltaSeconds: number, state: SimulationState, observation: PresentationObservation): number {
     const urgency = this.urgency(state, observation);
-    if (urgency === 0 && observation.interest < 0.48) this.quietSeconds += deltaSeconds;
-    else this.quietSeconds = Math.max(0, this.quietSeconds - deltaSeconds * (urgency >= 2 ? 4 : 2));
-    this.targetMonthsPerSecond = this.targetSpeed(state, observation);
+    const focusKey = `${observation.kind}:${observation.eventType ?? 'none'}:${observation.eventMonth ?? -1}`;
+
+    // A new important observation earns a real-time viewing window. The simulation remains free
+    // to advance, but presentation does not immediately snap back to deep-time acceleration.
+    if (urgency > 0 && focusKey !== this.lastFocusKey) {
+      this.lastFocusKey = focusKey;
+      this.heldUrgency = urgency;
+      this.holdSecondsRemaining = Math.max(this.holdSecondsRemaining, urgency >= 2 ? 11 : 6.5);
+    }
+
+    if (urgency === 0 && observation.interest < 0.48 && this.holdSecondsRemaining <= 0) this.quietSeconds += deltaSeconds;
+    else this.quietSeconds = Math.max(0, this.quietSeconds - deltaSeconds * (urgency >= 2 ? 5 : 2.5));
+
+    const directTarget = this.targetSpeed(state, observation);
+    const heldTarget = this.heldUrgency >= 2
+      ? this.config.presentation.momentousMonthsPerSecond
+      : this.config.presentation.significantMonthsPerSecond;
+    this.targetMonthsPerSecond = this.holdSecondsRemaining > 0
+      ? Math.min(directTarget, heldTarget)
+      : directTarget;
+
+    this.holdSecondsRemaining = Math.max(0, this.holdSecondsRemaining - deltaSeconds);
+    if (this.holdSecondsRemaining === 0 && urgency === 0) this.heldUrgency = 0;
+
+    // Deceleration should feel responsive; returning to fast history should feel deliberate.
     const slowing = this.targetMonthsPerSecond < this.monthsPerSecond;
-    const timeConstant = Math.max(0.2, this.config.presentation.transitionSeconds * (slowing ? 0.55 : 1));
+    const timeConstant = Math.max(
+      0.18,
+      this.config.presentation.transitionSeconds * (slowing ? 0.34 : 1.35),
+    );
     const transition = 1 - Math.exp(-deltaSeconds / timeConstant);
     this.monthsPerSecond += (this.targetMonthsPerSecond - this.monthsPerSecond) * transition;
+
     this.mode = this.modeFor(observation, this.targetMonthsPerSecond);
+    this.tempo = this.tempoFor(urgency, this.targetMonthsPerSecond);
     this.viewingSeconds[this.mode] += deltaSeconds;
     return this.monthsPerSecond;
   }
@@ -72,19 +111,27 @@ export class PresentationDirector {
     if (urgency >= 2) return this.config.presentation.momentousMonthsPerSecond;
     if (urgency >= 1) return this.config.presentation.significantMonthsPerSecond;
     if (PERSONAL_KINDS.has(observation.kind)) return Math.min(this.config.presentation.personalMonthsPerSecond, this.config.presentation.ordinaryMonthsPerSecond);
+
     const quietRamp = this.config.presentation.quietRampSeconds <= 0 ? 1 : clamp(this.quietSeconds / this.config.presentation.quietRampSeconds, 0, 1);
     const quietness = clamp((0.5 - observation.interest) / 0.5, 0, 1);
     const base = this.config.presentation.ordinaryMonthsPerSecond
       + (this.config.presentation.quietMonthsPerSecond - this.config.presentation.ordinaryMonthsPerSecond) * quietRamp * quietness;
-    // Adaptive temporal resolution: quiet, structurally simple worlds (a few foraging bands, no
-    // wars, polities, industry, or recent milestones) move through deep historical time quickly;
-    // complex periods fall back to fine observer-time steps. The boost only applies to genuinely
-    // quiet scenes, so an interesting city view never masquerades as accelerated deep time.
-    // Simulation rules never change here.
+
+    // Quiet, structurally simple worlds can cross deep time quickly. Complexity reduces the boost
+    // before an event necessarily becomes the selected scene, producing a subtle anticipatory
+    // slowdown around wars, clusters of milestones and mature industrial worlds.
     const depthBoost = 1 + (this.deepTimeFactor(state) - 1) * quietness;
-    return Math.min(
+    const accelerated = Math.min(
       this.config.presentation.quietMonthsPerSecond * this.config.presentation.deepTimeAcceleration,
       base * depthBoost,
+    );
+
+    const attention = this.attentionPressure(state, observation);
+    if (attention <= 0.18) return accelerated;
+    const attentiveCeiling = this.config.presentation.ordinaryMonthsPerSecond * (1 - attention * 0.58);
+    return Math.max(
+      this.config.presentation.significantMonthsPerSecond,
+      Math.min(accelerated, attentiveCeiling),
     );
   }
 
@@ -118,18 +165,44 @@ export class PresentationDirector {
     return Math.max(2, Math.round(base * headroom));
   }
 
-  private deepTimeFactor(state: SimulationState): number {
-    const multiplier = Math.max(1, this.config.presentation.deepTimeAcceleration);
-    return 1 + (multiplier - 1) * (1 - this.structuralComplexity(state));
-  }
-
   telemetry(): PresentationTelemetry {
     return {
       monthsPerSecond: Number(this.monthsPerSecond.toFixed(3)),
       yearsPerRealMinute: Number((this.monthsPerSecond * 5).toFixed(2)),
       mode: this.mode,
+      tempo: this.tempo,
+      holdSecondsRemaining: Number(this.holdSecondsRemaining.toFixed(2)),
       viewingSeconds: { ...this.viewingSeconds },
     };
+  }
+
+  private deepTimeFactor(state: SimulationState): number {
+    const multiplier = Math.max(1, this.config.presentation.deepTimeAcceleration);
+    return 1 + (multiplier - 1) * (1 - this.structuralComplexity(state));
+  }
+
+  /**
+   * Soft pre-event pressure. This never predicts or invents history; it only notices that the
+   * current authoritative world is becoming narratively dense before the Historian necessarily
+   * selects a specific event shot.
+   */
+  private attentionPressure(state: SimulationState, observation: PresentationObservation): number {
+    const activeWars = state.wars.filter((war) => war.active).length;
+    let recentWeight = 0;
+    for (let index = state.history.length - 1; index >= 0; index -= 1) {
+      const event = state.history[index];
+      if (!event) continue;
+      const age = state.month - event.month;
+      if (age > Math.max(6, this.config.presentation.eventMemoryMonths)) break;
+      if (event.significance >= 0.72) recentWeight += 0.22 * (1 - age / Math.max(1, this.config.presentation.eventMemoryMonths + 1));
+    }
+    return clamp(
+      Math.max(0, observation.interest - 0.58) * 0.9
+      + Math.min(0.45, activeWars * 0.18)
+      + Math.min(0.55, recentWeight),
+      0,
+      1,
+    );
   }
 
   private urgency(state: SimulationState, observation: PresentationObservation): number {
@@ -149,5 +222,12 @@ export class PresentationDirector {
     if (target > this.config.presentation.ordinaryMonthsPerSecond * 1.15) return 'accelerated-quiet';
     if (CITY_KINDS.has(observation.kind)) return 'city-life';
     return 'ordinary-life';
+  }
+
+  private tempoFor(urgency: number, target: number): CinematicTempo {
+    if (this.holdSecondsRemaining > 0) return 'linger';
+    if (urgency > 0 || target <= this.config.presentation.significantMonthsPerSecond * 1.15) return 'focus';
+    if (target > this.config.presentation.ordinaryMonthsPerSecond * 1.15) return 'accelerate';
+    return 'observe';
   }
 }
