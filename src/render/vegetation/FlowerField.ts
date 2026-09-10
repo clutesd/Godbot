@@ -39,9 +39,11 @@ export interface FlowerFieldReport {
   triangles: number;
 }
 
-const FLOWER_VIEW_RANGE = 30;
-const FLOWER_STEM_HEIGHT = 0.065;
-const TREE_FLOWER_SHARE = 0.38;
+/** Covers the documentary camera's widest ordinary ground shots without rendering the whole world. */
+const FLOWER_VIEW_RANGE = 68;
+/** Still much smaller than a person, but large enough to read from settlement/street framing. */
+const FLOWER_STEM_HEIGHT = 0.095;
+const TREE_FLOWER_SHARE = 0.52;
 const MAX_PLAN_ATTEMPTS_MULTIPLIER = 8;
 const FLOWER_COLOURS = [
   new THREE.Color('#f0d96c'),
@@ -116,9 +118,9 @@ export class FlowerField {
     const capacity = Math.max(1, Math.floor(budget));
     this.placements = planFlowers(world, surface, seed, capacity, trees);
 
-    const stemGeometry = new THREE.CylinderGeometry(0.0045, 0.0065, FLOWER_STEM_HEIGHT, 4)
+    const stemGeometry = new THREE.CylinderGeometry(0.006, 0.009, FLOWER_STEM_HEIGHT, 4)
       .translate(0, FLOWER_STEM_HEIGHT * 0.5, 0);
-    const bloomGeometry = new THREE.CircleGeometry(0.025, 5);
+    const bloomGeometry = new THREE.CircleGeometry(0.045, 5);
     bloomGeometry.rotateX(-Math.PI / 2);
     const stemMaterial = new THREE.MeshStandardMaterial({ color: '#587348', roughness: 0.98, metalness: 0 });
     const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
@@ -213,8 +215,8 @@ function planFlowers(
       const tree = suitableTrees[(offset + index * 7) % suitableTrees.length];
       if (!tree) continue;
       const angle = random.range(0, Math.PI * 2);
-      const radius = random.range(0.7, 2.2);
-      tryAddFlower(surface, random, placements, tree.worldX + Math.cos(angle) * radius, tree.worldZ + Math.sin(angle) * radius, 0.88 + tree.regrowth * 0.18);
+      const radius = random.range(0.6, 2.5);
+      tryAddFlower(surface, random, placements, tree.worldX + Math.cos(angle) * radius, tree.worldZ + Math.sin(angle) * radius, 0.9 + tree.regrowth * 0.18);
     }
   }
 
