@@ -19,7 +19,6 @@ export interface FlowerGrowth {
 interface FlowerPlacement {
   worldX: number;
   worldZ: number;
-  y: number;
   scale: number;
   rotation: number;
   phase: number;
@@ -40,7 +39,8 @@ export interface FlowerFieldReport {
   triangles: number;
 }
 
-const FLOWER_VIEW_RANGE = 34;
+const FLOWER_VIEW_RANGE = 30;
+const FLOWER_STEM_HEIGHT = 0.065;
 const TREE_FLOWER_SHARE = 0.38;
 const MAX_PLAN_ATTEMPTS_MULTIPLIER = 8;
 const FLOWER_COLOURS = [
@@ -116,8 +116,9 @@ export class FlowerField {
     const capacity = Math.max(1, Math.floor(budget));
     this.placements = planFlowers(world, surface, seed, capacity, trees);
 
-    const stemGeometry = new THREE.CylinderGeometry(0.012, 0.017, 0.17, 4).translate(0, 0.085, 0);
-    const bloomGeometry = new THREE.CircleGeometry(0.065, 5);
+    const stemGeometry = new THREE.CylinderGeometry(0.0045, 0.0065, FLOWER_STEM_HEIGHT, 4)
+      .translate(0, FLOWER_STEM_HEIGHT * 0.5, 0);
+    const bloomGeometry = new THREE.CircleGeometry(0.025, 5);
     bloomGeometry.rotateX(-Math.PI / 2);
     const stemMaterial = new THREE.MeshStandardMaterial({ color: '#587348', roughness: 0.98, metalness: 0 });
     const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
@@ -167,14 +168,14 @@ export class FlowerField {
       const size = placement.scale * placement.vigor * moistureVigor * growth.scale;
       if (size <= 0.01) continue;
 
-      this.position.set(placement.worldX, groundY + 0.008, placement.worldZ);
+      this.position.set(placement.worldX, groundY + 0.004, placement.worldZ);
       this.quaternion.setFromAxisAngle(this.axis, placement.rotation);
       this.scale.set(size * 0.8, size, size * 0.8);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       this.stems.setMatrixAt(count, this.matrix);
 
       const bloomScale = Math.max(0.0001, size * Math.max(0.05, growth.bloom));
-      this.position.y = groundY + 0.165 * size;
+      this.position.y = groundY + FLOWER_STEM_HEIGHT * size;
       if (growth.bloom <= 0.01) this.scale.copy(HIDDEN_SCALE);
       else this.scale.setScalar(bloomScale);
       this.matrix.compose(this.position, this.quaternion, this.scale);
@@ -253,7 +254,6 @@ function tryAddFlower(
   placements.push({
     worldX,
     worldZ,
-    y,
     scale: random.range(0.72, 1.18),
     rotation: random.range(0, Math.PI * 2),
     phase: random.float(),
