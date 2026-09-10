@@ -155,6 +155,8 @@ Horizon classifications are `EXTINCT`, `COLLAPSED`, `STAGNANT`, `PLANETARY STABL
 
 ## Historian
 
+Conventional wars unfold as witnessed campaigns: gathering, terrain-aware marches, contested ground and aftermath. Culture-colored formations and animated standards follow a shared surveyed corridor, and a contextual fieldnote records supply, duration, clashes and actual losses. The watcher remembers earlier encounters only when the history supports them. See [`docs/WAR_REPORT.md`](./docs/WAR_REPORT.md) for mechanics, validation and local visual previews.
+
 [`src/historian/Historian.ts`](./src/historian/Historian.ts) selects ordinary life, travel, institutions, landscapes, discoveries, conflict, aftermath, and long-run context. A beat pattern and repetition penalties prevent magnitude-only editing. Camera shots have minimum interrupt ages, eased travel, terrain clearance, varied framing, and long transitions. A consequential event slows presentation only when the current observation is actually grounded in that event; unrelated activity elsewhere cannot hold every ordinary-life shot at crisis speed.
 
 Every statement is internally labeled `recorded-fact`, `derived-statistic`, or `probabilistic-inference`. It carries source event, entity, and archive IDs plus typed claims. Display validation rejects future evidence, missing entities, invented wars or discoveries, incorrect population scopes, and unsupported archive comparisons. Predictions are explicitly uncertain and later resolved. Cross-run wording remains descriptive and never turns correlation into causation.

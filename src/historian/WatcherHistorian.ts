@@ -1,6 +1,7 @@
 import type { HistoricalEvent, HistoricalEventType, SimulationState } from '../sim/types';
 import { Historian } from './Historian';
 import type { HistorianStatement, ObservationCandidate } from './types';
+import { isWarEvent } from './WarStory';
 
 interface ObserverAttention {
   firstMonth: number;
@@ -57,6 +58,8 @@ export function installWatcherHistorian(): void {
 }
 
 function deepenObservation(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate, state: SimulationState): void {
+  // Campaign scenes already have a concise, evidence-specific watcher voice.
+  if (scene.statement.claims.warId || (scene.event && isWarEvent(scene.event))) return;
   const statement = scene.statement;
   const additions: string[] = [];
 

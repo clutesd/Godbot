@@ -169,3 +169,99 @@ body { min-width: 320px; }
   .pulse i, .opening-mark { animation: none; }
   .opening { transition-duration: .25s; }
 }
+
+.war-chronicle {
+  --banner-a: #ca886b;
+  --banner-b: #83b5b3;
+  position: absolute;
+  z-index: 4;
+  top: clamp(112px, 18vh, 172px);
+  left: clamp(22px, 5vw, 72px);
+  width: 316px;
+  padding: 22px 24px 17px;
+  color: #f1e3cf;
+  border: 1px solid rgba(219, 194, 149, .2);
+  border-top-color: rgba(219, 194, 149, .55);
+  background: linear-gradient(145deg, rgba(24, 27, 31, .93), rgba(25, 29, 33, .79));
+  box-shadow: 0 18px 55px #10121926, inset 0 1px #f7e5b808;
+  backdrop-filter: blur(16px);
+  pointer-events: none;
+  animation: fieldnote-enter .9s ease both;
+}
+.war-chronicle[hidden] { display: none; }
+.war-eyebrow { display: flex; justify-content: space-between; color: #bfa882; font-size: 8px; letter-spacing: .17em; }
+.war-heading { display: flex; align-items: baseline; gap: 13px; margin-top: 22px; }
+.war-chapter { color: #c4a56c; font: italic 24px/1 Georgia, serif; }
+.war-heading h2 { margin: 0; font: 400 26px/1.05 Georgia, serif; letter-spacing: -.025em; text-wrap: balance; }
+.war-cause { margin: 10px 0 3px; color: #c6b9a5; font: italic 12px/1.5 Georgia, serif; }
+.war-thread { margin: 7px 0 0; }
+.war-thread svg { display: block; width: 100%; height: 43px; overflow: visible; }
+.war-thread-base { stroke: #d4c09922; }
+.war-thread-a { stroke: var(--banner-a); stroke-dasharray: 3 5; animation: thread-march 7s linear infinite; }
+.war-thread-b { stroke: var(--banner-b); stroke-dasharray: 3 5; }
+.war-chronicle[data-blocked="true"] .war-thread-a { animation-play-state: paused; }
+.war-origin { fill: var(--banner-a); }
+.war-destination { fill: var(--banner-b); }
+.war-knot { stroke: #c8af7f; stroke-width: .8; }
+.war-knot-inner { fill: #d7b985; }
+.war-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.war-sides > div:last-child { text-align: right; }
+.war-side-role { color: #b5a997; font-size: 7px; letter-spacing: .13em; }
+.war-sides h3 { margin: 6px 0; font: 400 19px/1.12 Georgia, serif; overflow-wrap: anywhere; }
+.war-sides p { margin: 0; color: #bcbaae; font-size: 9px; line-height: 1.4; }
+.war-chapters { display: flex; padding: 0; margin: 23px 0 13px; list-style: none; }
+.war-chapters li { position: relative; width: 25%; padding-top: 11px; border-top: 1px solid #d5bd8829; color: #8d8c82; font-size: 8px; letter-spacing: .02em; }
+.war-chapters li::before { content: ''; position: absolute; left: 0; top: -3px; width: 5px; height: 5px; border: 1px solid #817a67; border-radius: 50%; background: #202327; }
+.war-chapters li.reached::before { background: #c4a778; border-color: #c4a778; }
+.war-chapters li.current { color: #efd5a3; }
+.war-chapters li.current::before { box-shadow: 0 0 0 3px #ccb18020; }
+.war-condition { min-height: 33px; margin: 15px 0 17px; color: #e0d2bd; font: 400 12px/1.55 Georgia, serif; text-wrap: pretty; }
+.war-ledger { display: grid; grid-template-columns: 1fr 1fr 1fr; padding-top: 14px; border-top: 1px solid #d5bd8826; }
+.war-ledger > span { display: flex; flex-direction: column; gap: 5px; }
+.war-ledger > span:last-child { text-align: right; }
+.war-ledger b { font: 400 24px/1 Georgia, serif; font-variant-numeric: tabular-nums; }
+.war-ledger small { color: #bfb29d; font-size: 8px; letter-spacing: .07em; }
+.war-source { margin: 18px 0 0; color: #a59a89; font-size: 7px; letter-spacing: .13em; }
+.war-chronicle:is([data-phase="retreat"], [data-phase="occupation"], [data-phase="negotiation"]) .war-thread-a { animation: none; stroke-dasharray: none; opacity: .45; }
+.war-chronicle:is([data-phase="retreat"], [data-phase="occupation"], [data-phase="negotiation"]) .war-thread-b { stroke-dasharray: none; opacity: .45; }
+.witnessing-war .activity { max-width: 370px; font-size: 12px; line-height: 1.65; color: #f0e1ce; letter-spacing: .025em; }
+.witnessing-war .chronicle { padding: 24px; width: min(430px, calc(100vw - 44px)); background: radial-gradient(ellipse at 80% 80%, #101720aa, transparent 78%); }
+@keyframes fieldnote-enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes thread-march { to { stroke-dashoffset: -64; } }
+@media (max-width: 900px) {
+  .war-chronicle { width: 272px; padding: 18px; top: 112px; }
+  .war-heading h2 { font-size: 23px; }
+  .witnessing-war .chronicle { width: 330px; right: 18px; padding: 15px; }
+}
+@media (max-width: 640px) {
+  .war-chronicle { width: calc(100vw - 44px); top: 85px; padding: 14px 17px; }
+  .war-heading { margin-top: 12px; }
+  .war-heading h2 { font-size: 24px; }
+  .war-thread, .war-cause, .war-chapters, .war-source, .war-side-role { display: none; }
+  .war-sides { margin-top: 10px; }
+  .war-sides h3 { font-size: 17px; }
+  .war-condition { min-height: 0; margin: 10px 0; font-size: 11px; }
+  .war-ledger { padding-top: 9px; }
+  .war-ledger b { font-size: 20px; }
+  .witnessing-war .chronicle { width: calc(100vw - 44px); right: 22px; padding: 0; bottom: 60px; }
+  .witnessing-war .population span { font-size: 39px; }
+  .witnessing-war .activity { font-size: 11px; line-height: 1.5; }
+  .witnessing-war .rule { margin: 12px 0; }
+}
+@media (max-height: 620px) and (min-width: 641px) {
+  .war-chronicle { top: 100px; padding: 14px 18px; }
+  .war-thread, .war-cause, .war-source { display: none; }
+  .war-heading { margin-top: 12px; }
+  .war-sides { margin-top: 15px; }
+  .war-chapters { margin-top: 18px; }
+}
+@media (max-height: 740px) and (max-width: 640px) {
+  .war-chronicle { top: 78px; }
+  .war-sides p, .war-condition { display: none; }
+  .war-ledger { margin-top: 10px; }
+  .witnessing-war .population { display: none; }
+  .witnessing-war .date { margin-bottom: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .war-chronicle, .war-thread-a { animation: none; }
+}

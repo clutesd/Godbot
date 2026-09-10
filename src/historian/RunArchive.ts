@@ -97,14 +97,14 @@ export interface RunArchiveRecord {
 const IMPORTANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'trade-route-established',
   'discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization',
-  'institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'battle', 'war-ended', 'political-transition', 'cultural-shift', 'harvest-crisis', 'recovery',
+  'institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended', 'political-transition', 'cultural-shift', 'harvest-crisis', 'recovery',
   'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'nuclear-restraint', 'nuclear-disarmament', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange',
   'pandemic', 'ecological-crisis', 'climate-crisis', 'resource-crisis', 'autonomous-weapons-crisis', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition',
   'fermi-question', 'fermi-hypothesis', 'natural-catastrophe', 'civilization-collapse', 'civilization-recovery', 'planetary-stability', 'post-biological-transition', 'observation-lost', 'outcome-classified',
 ]);
 const POLITICAL_TYPES = new Set<HistoricalEvent['type']>(['institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'war-ended', 'political-transition', 'nuclear-restraint', 'nuclear-disarmament', 'nuclear-crisis', 'civilization-collapse', 'planetary-stability']);
 const TECHNOLOGY_TYPES = new Set<HistoricalEvent['type']>(['discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'post-biological-transition']);
-const CONFLICT_TYPES = new Set<HistoricalEvent['type']>(['war-declared', 'battle', 'war-ended', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'autonomous-weapons-crisis']);
+const CONFLICT_TYPES = new Set<HistoricalEvent['type']>(['war-declared', 'war-campaign', 'battle', 'war-ended', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'autonomous-weapons-crisis']);
 
 export function configurationFingerprint(config: GodboxConfig): string {
   const stable = stableStringify(config);

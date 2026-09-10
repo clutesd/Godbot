@@ -28,7 +28,7 @@ const MOMENTOUS_EVENTS = new Set<HistoricalEventType>([
 
 const SIGNIFICANT_EVENTS = new Set<HistoricalEventType>([
   'settlement-founded', 'major-migration', 'first-contact', 'leadership-succession', 'political-transition',
-  'institution-formed', 'alliance-formed', 'alliance-ended', 'war-ended', 'discovery', 'knowledge-adopted',
+  'institution-formed', 'alliance-formed', 'alliance-ended', 'war-campaign', 'war-ended', 'discovery', 'knowledge-adopted',
   'technology-transformation', 'technology-widespread', 'industrialization-stage', 'industrialization', 'infrastructure-built',
   'knowledge-lost', 'knowledge-rediscovered', 'recovery', 'cultural-shift', 'statistical-transition',
   'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'nuclear-restraint', 'nuclear-disarmament',

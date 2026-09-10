@@ -26,6 +26,7 @@ import { TerrainDecor } from './terrain/TerrainDecor';
 import { TerrainSurface } from './terrain/TerrainSurface';
 import { WaterSystem } from './terrain/WaterSystem';
 import { WeatherRenderer } from './atmosphere/WeatherRenderer';
+import { WarRenderer } from './war/WarRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
 
 interface SettlementVisual {
@@ -188,7 +189,8 @@ export class GodboxRenderer {
   private readonly routePlacementReports = new Map<string, RoutePlacementReport>();
   private readonly routeGroup = new THREE.Group();
   private readonly caravanGroup = new THREE.Group();
-  private readonly warGroup = new THREE.Group();
+  private readonly warRenderer: WarRenderer;
+  private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly atmosphere: THREE.Points;
   private readonly smoke: THREE.InstancedMesh;
   private readonly activeSmokeSources: SmokeSource[] = [];
@@ -201,7 +203,6 @@ export class GodboxRenderer {
   private readonly sunLowColor = new THREE.Color('#ff9a55');
   private readonly sunHighColor = new THREE.Color('#fff1d6');
   private lastRouteSignature = '';
-  private lastWarSignature = '';
   private lastSettlementSignature = '';
   private structuralAccumulator = 0;
   private lastVisualSeason = -1;
@@ -259,7 +260,8 @@ export class GodboxRenderer {
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
     this.atmosphere = this.createAmbientMotes();
-    this.scene.add(this.atmosphere, this.routeGroup, this.caravanGroup, this.warGroup);
+    this.warRenderer = new WarRenderer(state, (x, z) => this.elevationAt(x, z));
+    this.scene.add(this.atmosphere, this.routeGroup, this.caravanGroup, this.warRenderer.group);
     this.smoke = this.createSmokePool();
     this.scene.add(this.smoke);
     this.updateSeasonalPresentation(true);
@@ -293,7 +295,6 @@ export class GodboxRenderer {
     this.scene.add(this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo);
     this.syncSettlements(true);
     this.syncRoutes(true);
-    this.syncWars(true);
     this.resize();
     window.addEventListener('resize', this.resizeHandler);
   }
@@ -311,7 +312,6 @@ export class GodboxRenderer {
       this.waterSystem.syncHydrology();
       this.syncSettlements();
       this.syncRoutes();
-      this.syncWars();
       this.transitionTimeline.pruneCompleted();
     }
     this.updateCaravans();
@@ -334,6 +334,7 @@ export class GodboxRenderer {
     }
     positions.needsUpdate = true;
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
     const blizzard = this.weatherRenderer.report.blizzard;
     if (this.scene.fog instanceof THREE.FogExp2) {
@@ -1974,59 +1975,6 @@ export class GodboxRenderer {
     return carrier;
   }
 
-  private syncWars(force = false): void {
-    const wars = this.state.wars.filter((war) => war.active);
-    const signature = wars.map((war) => `${war.id}:${war.phase}:${Math.round(war.marchProgress * 10)}:${Math.round(war.progress * 10)}`).join('|');
-    if (!force && signature === this.lastWarSignature) return;
-    this.lastWarSignature = signature;
-    this.clearGroup(this.warGroup);
-    for (const war of wars) {
-      const a = this.state.settlements.find((settlement) => settlement.id === war.attacker);
-      const b = this.state.settlements.find((settlement) => settlement.id === war.defender);
-      if (!a || !b) continue;
-      const attackerCulture = this.dominantCulture(a);
-      const defenderCulture = this.dominantCulture(b);
-      const advance = war.phase === 'mobilizing' ? 0.08 : war.phase === 'marching' ? 0.12 + war.marchProgress * 0.58 : war.phase === 'retreat' ? 0.36 : war.phase === 'occupation' ? 0.92 : 0.76;
-      const attackerX = THREE.MathUtils.lerp(a.position.x, b.position.x, advance);
-      const attackerZ = THREE.MathUtils.lerp(a.position.z, b.position.z, advance);
-      const defenderX = THREE.MathUtils.lerp(a.position.x, b.position.x, 0.9);
-      const defenderZ = THREE.MathUtils.lerp(a.position.z, b.position.z, 0.9);
-      const attackerForce = this.createForceMarker(attackerCulture?.style.primary ?? '#cf563f', attackerCulture?.style.accent ?? '#efb758', war.strengthA);
-      attackerForce.position.set(attackerX, this.elevationAt(attackerX, attackerZ) + 0.24, attackerZ);
-      attackerForce.rotation.y = Math.atan2(b.position.x - a.position.x, b.position.z - a.position.z);
-      const defenderForce = this.createForceMarker(defenderCulture?.style.primary ?? '#31506a', defenderCulture?.style.accent ?? '#43a5a0', war.strengthB);
-      defenderForce.position.set(defenderX, this.elevationAt(defenderX, defenderZ) + 0.24, defenderZ);
-      defenderForce.rotation.y = Math.atan2(a.position.x - b.position.x, a.position.z - b.position.z);
-      this.warGroup.add(attackerForce, defenderForce);
-      if (war.phase === 'battle') {
-        const x = (attackerX + defenderX) / 2;
-        const z = (attackerZ + defenderZ) / 2;
-        const marker = new THREE.Mesh(new THREE.OctahedronGeometry(0.54, 0), new THREE.MeshStandardMaterial({ color: '#cf563f', emissive: '#8c261f', emissiveIntensity: 1.1, roughness: 0.5 }));
-        marker.position.set(x, this.elevationAt(x, z) + 1.25, z);
-        marker.rotation.z = Math.PI / 4;
-        this.warGroup.add(marker);
-      }
-    }
-  }
-
-  private createForceMarker(primary: string, accent: string, strength: number): THREE.Group {
-    const force = new THREE.Group();
-    const count = Math.max(2, Math.min(6, Math.ceil(strength / 3)));
-    const bodyMaterial = new THREE.MeshStandardMaterial({ color: primary, roughness: 0.8 });
-    for (let index = 0; index < count; index += 1) {
-      const body = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.48, 5), bodyMaterial);
-      body.position.set((index % 3 - 1) * 0.34, 0.3, Math.floor(index / 3) * 0.32);
-      body.castShadow = true;
-      force.add(body);
-    }
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 1.25, 5), new THREE.MeshStandardMaterial({ color: '#3a2928', roughness: 1 }));
-    pole.position.set(-0.52, 0.63, 0.1);
-    const banner = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.5), new THREE.MeshStandardMaterial({ color: accent, side: THREE.DoubleSide, roughness: 0.82 }));
-    banner.position.set(-0.3, 0.92, 0.1);
-    force.add(pole, banner);
-    return force;
-  }
-
   private updateDayNight(elapsedSeconds: number): void {
     const phase = (elapsedSeconds / 58 + 0.16) % 1;
     const daylight = THREE.MathUtils.smoothstep(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 0.12, 0.72);
@@ -2218,6 +2166,7 @@ export class GodboxRenderer {
   }
 
   dispose(): void {
+    this.warRenderer.dispose();
     this.weatherRenderer.dispose();
     window.removeEventListener('resize', this.resizeHandler);
     const geometries = new Set<THREE.BufferGeometry>();

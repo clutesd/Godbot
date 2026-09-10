@@ -10,6 +10,7 @@ import { advanceSettlementDevelopment, initializeSettlementDevelopment } from '.
 import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
+import { campaignFront, campaignFocus, campaignSupply, createCampaign, TRUCE_MONTHS } from './war/Campaign';
 import type {
   Culture,
   CultureDimensions,
@@ -32,7 +33,7 @@ import type {
   WarCause,
   WorldCell,
 } from './types';
-import { generateWorld, strategicSettlementCells } from './world';
+import { cellAt, generateWorld, strategicSettlementCells } from './world';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const distance = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.z - b.z);
@@ -1258,6 +1259,9 @@ export class Simulation {
   }
 
   private startWar(a: Settlement, b: Settlement, relation: Relation): void {
+    // Peace leaves a real recovery interval, even when grievances survive it.
+    if (this.state.wars.some(war => ((war.attacker === a.id && war.defender === b.id) || (war.attacker === b.id && war.defender === a.id))
+      && (war.active || (war.resolvedMonth !== undefined && this.state.month - war.resolvedMonth < TRUCE_MONTHS)))) return;
     const cultureA = this.dominantCulture(a);
     const cultureB = this.dominantCulture(b);
     const ambitionA = mean(this.peopleAt(a.id).map((person) => person.traits.ambition));
@@ -1280,6 +1284,7 @@ export class Simulation {
       leadershipA: leaderA ? this.leadershipScore(leaderA, attacker) : 0.3,
       leadershipB: leaderB ? this.leadershipScore(leaderB, defender) : 0.3,
       technologyA: this.knowledgeSystem.militaryApplication(attacker), technologyB: this.knowledgeSystem.militaryApplication(defender),
+      campaign: createCampaign(this.state.world, this.peopleSystem.walkability, attacker, defender, this.state.month, this.militaryStrength(attacker), this.militaryStrength(defender)),
       ...(leaderA ? { leaderAId: leaderA.id } : {}), ...(leaderB ? { leaderBId: leaderB.id } : {}), active: true,
     };
     this.state.wars.push(war);
@@ -1287,70 +1292,114 @@ export class Simulation {
     relation.hostility = clamp(relation.hostility + 0.22);
     relation.grievances = clamp(relation.grievances + 0.18);
     const supporters = this.allianceSupportFor(defender, attacker);
-    this.addEvent({ type: 'war-declared', location: attacker.position, actors: [war.id, attacker.id, defender.id, ...(leaderA ? [leaderA.id] : []), ...(leaderB ? [leaderB.id] : []), ...supporters], causes: [cause, ...(supporters.length > 0 ? ['alliance-commitments'] : [])], context: { attackerStrength: war.strengthA, defenderStrength: war.strengthB, moraleA: war.moraleA, moraleB: war.moraleB, organizationA: war.organizationA, organizationB: war.organizationB, technologyA: war.technologyA, technologyB: war.technologyB }, outcome: `${attacker.name} mobilized against ${defender.name}.`, affectedPopulation: this.peopleAt(attacker.id).length + this.peopleAt(defender.id).length, magnitude: 0.8, significance: 0.88, tags: ['war', cause, 'mobilization'], summary: `${attacker.name} goes to war with ${defender.name} over ${cause.replace('-', ' ')}.` });
+    this.addEvent({ type: 'war-declared', location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(leaderA ? [leaderA.id] : []), ...(leaderB ? [leaderB.id] : []), ...supporters], causes: [cause, ...(supporters.length > 0 ? ['alliance-commitments'] : [])], context: { attackerStrength: war.strengthA, defenderStrength: war.strengthB, moraleA: war.moraleA, moraleB: war.moraleB, organizationA: war.organizationA, organizationB: war.organizationB, technologyA: war.technologyA, technologyB: war.technologyB, marchMonths: war.campaign.marchMonths, routeAvailable: war.campaign.route.length > 1, phase: war.phase }, outcome: `${attacker.name} mobilized against ${defender.name}.`, affectedPopulation: settlementRepresentedPopulation(this.state, attacker.id) + settlementRepresentedPopulation(this.state, defender.id), magnitude: 0.8, significance: 0.88, tags: ['war', cause, 'mobilization'], summary: `${attacker.name} goes to war with ${defender.name} over ${cause.replaceAll('-', ' ')}.` });
   }
 
   private runWars(): void {
     for (const war of this.state.wars.filter((candidate) => candidate.active)) {
       const attacker = this.settlement(war.attacker);
       const defender = this.settlement(war.defender);
-      if (!attacker?.alive || !defender?.alive) { war.active = false; continue; }
       if (war.resolvedMonth !== undefined) {
         if (this.state.month - war.resolvedMonth >= 4) war.active = false;
         continue;
       }
+      if (!attacker || !defender) { war.active = false; continue; }
+      if (!attacker.alive || !defender.alive) { this.endWar(war, attacker, defender, 'settlement-lost'); continue; }
       const age = this.state.month - war.startMonth;
+      const campaign = war.campaign;
+      const commitments = (id: string): number => this.state.wars.filter(w => w.active && w.resolvedMonth === undefined && (w.attacker === id || w.defender === id)).length;
+      const supplyA = campaign.supplyA = campaignSupply(attacker, campaign.distance * war.marchProgress, commitments(attacker.id));
+      const supplyB = campaign.supplyB = campaignSupply(defender, 0, commitments(defender.id));
+      campaign.exhaustionA = clamp(campaign.exhaustionA + 0.008 + (1 - supplyA) * 0.024);
+      campaign.exhaustionB = clamp(campaign.exhaustionB + 0.006 + (1 - supplyB) * 0.021);
       attacker.conflictPressure = clamp(attacker.conflictPressure + 0.035);
       defender.conflictPressure = clamp(defender.conflictPressure + 0.05);
       if (age < 3) {
         war.phase = 'mobilizing';
-        attacker.resources.food = Math.max(0, attacker.resources.food - war.strengthA * 0.012);
-        defender.resources.food = Math.max(0, defender.resources.food - war.strengthB * 0.008);
+        this.provisionArmy(attacker, war.strengthA, 0.012);
+        this.provisionArmy(defender, war.strengthB, 0.008);
         continue;
       }
-      if (age < 7) {
-        war.phase = 'marching';
-        war.marchProgress = clamp((age - 2) / 5);
-        attacker.resources.food = Math.max(0, attacker.resources.food - war.strengthA * 0.02);
+      // A failed or weather-broken corridor cannot carry an army across water.
+      if (campaign.route.length < 2 || !this.peopleSystem.walkability.routeIsValid(campaign.route)) {
+        campaign.blockedMonths += 1;
+        this.campaignDispatch(war, attacker, defender, 'passage-blocked', 'The campaign is held at an impassable approach.', ['terrain-barrier']);
+        if (campaign.blockedMonths >= 8) this.endWar(war, attacker, defender, 'impassable');
         continue;
       }
-      war.phase = 'battle';
-      war.marchProgress = 1;
-      const terrain = this.state.world.cells[defender.cellIndex];
+      campaign.blockedMonths = 0;
+      if (war.marchProgress < 1) {
+        if (war.phase !== 'marching') {
+          war.phase = 'marching';
+          campaign.phaseSinceMonth = this.state.month;
+          this.campaignDispatch(war, attacker, defender, 'march', `${attacker.name}'s columns leave the muster grounds.`, ['mobilization-complete']);
+        }
+        war.marchProgress = clamp(war.marchProgress + (0.55 + supplyA * 0.45) / campaign.marchMonths);
+        this.provisionArmy(attacker, war.strengthA, 0.02);
+        continue;
+      }
+      if (campaign.battleStartedMonth === undefined) {
+        war.phase = 'battle';
+        campaign.phaseSinceMonth = this.state.month;
+        campaign.battleStartedMonth = this.state.month;
+      }
+      const front = campaignFront(war, defender.position);
+      const terrain = cellAt(this.state.world, front.x, front.z);
       const defensiveAdvantage = 1 + (terrain?.elevation ?? 0.4) * 0.25 + (terrain?.movementCost ?? 1) * 0.04;
-      const supplyA = clamp(attacker.foodSecurity * 0.7 + attacker.prosperity * 0.3, 0.1, 1);
-      const supplyB = clamp(defender.foodSecurity * 0.7 + defender.prosperity * 0.3, 0.1, 1);
-      const combatA = war.strengthA * supplyA * (0.68 + war.organizationA * 0.48) * (0.8 + war.moraleA * 0.38) * (0.9 + war.technologyA * 0.22) * (0.82 + war.leadershipA * 0.34);
-      const combatB = war.strengthB * supplyB * defensiveAdvantage * (0.68 + war.organizationB * 0.48) * (0.8 + war.moraleB * 0.38) * (0.9 + war.technologyB * 0.22) * (0.82 + war.leadershipB * 0.34);
+      const combatA = war.strengthA * supplyA * (1 - campaign.exhaustionA * 0.4) * (0.68 + war.organizationA * 0.48) * (0.8 + war.moraleA * 0.38) * (0.9 + war.technologyA * 0.22) * (0.82 + war.leadershipA * 0.34);
+      const combatB = war.strengthB * supplyB * defensiveAdvantage * (1 - campaign.exhaustionB * 0.4) * (0.68 + war.organizationB * 0.48) * (0.8 + war.moraleB * 0.38) * (0.9 + war.technologyB * 0.22) * (0.82 + war.leadershipB * 0.34);
       const balance = (combatA - combatB) / Math.max(1, combatA + combatB);
       war.progress = clamp(war.progress + balance * 0.16 + this.random.gaussian(0, 0.045), -1.5, 1.5);
-      attacker.resources.food = Math.max(0, attacker.resources.food - war.strengthA * 0.018);
-      defender.resources.food = Math.max(0, defender.resources.food - war.strengthB * 0.012);
-      if ((age - 7) % 4 === 0) {
+      this.provisionArmy(attacker, war.strengthA, 0.018);
+      this.provisionArmy(defender, war.strengthB, 0.012);
+      if ((this.state.month - campaign.battleStartedMonth) % 4 === 0) {
         const requestedCasualtiesA = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthB * 0.018)));
         const requestedCasualtiesB = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthA * 0.018)));
-        const casualtiesA = this.killCombatants(attacker.id, requestedCasualtiesA);
-        const casualtiesB = this.killCombatants(defender.id, requestedCasualtiesB);
+        const casualtiesA = this.killCombatants(attacker.id, Math.min(Math.ceil(war.strengthA), requestedCasualtiesA));
+        const casualtiesB = this.killCombatants(defender.id, Math.min(Math.ceil(war.strengthB), requestedCasualtiesB));
         war.casualtiesA += casualtiesA;
         war.casualtiesB += casualtiesB;
-        war.moraleA = clamp(war.moraleA + (casualtiesB - casualtiesA) * 0.018 - (1 - supplyA) * 0.05);
-        war.moraleB = clamp(war.moraleB + (casualtiesA - casualtiesB) * 0.018 - (1 - supplyB) * 0.05);
+        const lossA = casualtiesA / Math.max(1, campaign.initialStrengthA);
+        const lossB = casualtiesB / Math.max(1, campaign.initialStrengthB);
+        war.moraleA = clamp(war.moraleA + (lossB - lossA) * 0.18 - (1 - supplyA) * 0.05);
+        war.moraleB = clamp(war.moraleB + (lossA - lossB) * 0.18 - (1 - supplyB) * 0.05);
         const leadingPerson = war.progress >= 0 ? this.person(war.leaderAId ?? '') : this.person(war.leaderBId ?? '');
         if (leadingPerson) leadingPerson.prestige = clamp(leadingPerson.prestige + 0.025);
         war.strengthA = this.militaryStrength(attacker);
         war.strengthB = this.militaryStrength(defender);
         this.state.stats.battles += 1;
-        this.addEvent({ type: 'battle', location: { x: (attacker.position.x + defender.position.x) / 2, z: (attacker.position.z + defender.position.z) / 2 }, actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { casualtiesA, casualtiesB, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown' }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
+        campaign.battleCount += 1;
+        campaign.lastBattleMonth = this.state.month;
+        this.addEvent({ type: 'battle', location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
       }
-      if (age >= 14 && (Math.abs(war.progress) > 0.72 || age > 38 || war.strengthA < 4 || war.strengthB < 4 || war.moraleA < 0.12 || war.moraleB < 0.12)) this.endWar(war, attacker, defender);
+      if (Math.min(supplyA, supplyB) < 0.25) this.campaignDispatch(war, attacker, defender, 'supply-crisis', `${supplyA <= supplyB ? attacker.name : defender.name}'s provisions are running dangerously low.`, ['supply-pressure']);
+      const advantage = war.progress > 0.22 ? 1 : war.progress < -0.22 ? -1 : 0;
+      if (advantage !== 0) {
+        if (campaign.advantage !== 0 && campaign.advantage !== advantage) this.campaignDispatch(war, attacker, defender, 'reversal', `The initiative has shifted to ${advantage > 0 ? attacker.name : defender.name}.`, ['changing-battlefield-balance']);
+        campaign.advantage = advantage;
+      }
+      const battleAge = this.state.month - campaign.battleStartedMonth;
+      if (battleAge >= 7 && (Math.abs(war.progress) > 0.72 || war.strengthA < 4 || war.strengthB < 4 || war.moraleA < 0.12 || war.moraleB < 0.12)) this.endWar(war, attacker, defender);
+      else if (battleAge >= 30 || Math.max(campaign.exhaustionA, campaign.exhaustionB) > 0.88 || age >= 60) this.endWar(war, attacker, defender, 'exhaustion');
     }
   }
 
-  private endWar(war: War, attacker: Settlement, defender: Settlement): void {
-    const attackerWon = war.progress > 0.42;
-    const defenderWon = war.progress < -0.42;
+  private campaignDispatch(war: War, attacker: Settlement, defender: Settlement, dispatch: string, summary: string, causes: string[]): void {
+    if (war.campaign.dispatches.includes(dispatch)) return;
+    war.campaign.dispatches.push(dispatch);
+    this.addEvent({ type: 'war-campaign', location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id], causes,
+      context: { dispatch, phase: war.phase, months: this.state.month - war.startMonth, supplyA: war.campaign.supplyA, supplyB: war.campaign.supplyB, progress: war.progress },
+      outcome: summary, affectedPopulation: settlementRepresentedPopulation(this.state, attacker.id) + settlementRepresentedPopulation(this.state, defender.id),
+      magnitude: 0.55, significance: dispatch === 'reversal' ? 0.8 : 0.73, tags: ['war', 'campaign', dispatch], summary });
+  }
+
+  private endWar(war: War, attacker: Settlement, defender: Settlement, reason: NonNullable<War['resolutionReason']> = 'decision'): void {
+    const attackerWon = reason === 'decision' && war.progress > 0.42 && war.moraleA >= 0.12 && war.strengthA >= 4;
+    const defenderWon = reason === 'decision' && war.progress < -0.42 && war.moraleB >= 0.12 && war.strengthB >= 4;
     war.resolvedMonth = this.state.month;
+    war.resolutionReason = reason;
     war.phase = attackerWon ? 'occupation' : defenderWon ? 'retreat' : 'negotiation';
+    war.campaign.phaseSinceMonth = this.state.month;
     const relation = this.relation(attacker.id, defender.id);
     if (relation) {
       relation.hostility = clamp(relation.hostility - 0.16);
@@ -1363,7 +1412,7 @@ export class Simulation {
     const culture = winner ? this.dominantCulture(winner) : undefined;
     if (culture) culture.memory.militarySuccess += 0.8;
     for (const candidate of [this.dominantCulture(attacker), this.dominantCulture(defender)]) if (candidate) candidate.memory.frontierViolence += 0.6;
-    const outcome = attackerWon ? `${attacker.name} imposed tribute.` : defenderWon ? `${defender.name} forced a retreat.` : 'Exhaustion produced a negotiated peace.';
+    const outcome = reason === 'impassable' ? 'The campaign ended without a passable approach.' : reason === 'settlement-lost' ? 'The campaign ended when a settlement ceased to function.' : attackerWon ? `${attacker.name} imposed tribute.` : defenderWon ? `${defender.name} forced a retreat.` : 'Exhaustion produced a negotiated peace.';
     if (winner && loser) {
       const tributeWealth = Math.min(9, loser.resources.wealth * 0.12);
       const tributeFood = Math.min(18, loser.resources.food * 0.06);
@@ -1383,11 +1432,21 @@ export class Simulation {
       attacker.conflictPressure = clamp(attacker.conflictPressure + 0.28);
       defender.conflictPressure = clamp(defender.conflictPressure + 0.28);
     }
-    this.addEvent({ type: 'war-ended', location: defender.position, actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: ['attrition', 'supply-pressure', war.moraleA < 0.2 || war.moraleB < 0.2 ? 'morale-collapse' : 'negotiation'], context: { months: this.state.month - war.startMonth, casualties: war.casualtiesA + war.casualtiesB, phase: war.phase, progress: war.progress }, outcome, affectedPopulation: war.casualtiesA + war.casualtiesB, magnitude: 0.74, significance: 0.84, tags: ['war', 'peace', war.phase], summary: `The war between ${attacker.name} and ${defender.name} ends. ${outcome}` });
+    this.addEvent({ type: 'war-ended', location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: reason === 'impassable' ? ['terrain-barrier'] : reason === 'settlement-lost' ? ['settlement-loss'] : ['attrition', 'supply-pressure', war.moraleA < 0.2 || war.moraleB < 0.2 ? 'morale-collapse' : 'negotiation'], context: { months: this.state.month - war.startMonth, casualties: war.casualtiesA + war.casualtiesB, battles: war.campaign.battleCount, phase: war.phase, progress: war.progress, reason, truceUntil: this.state.month + TRUCE_MONTHS }, outcome, affectedPopulation: war.casualtiesA + war.casualtiesB, magnitude: 0.74, significance: 0.84, tags: ['war', 'peace', war.phase], summary: `The war between ${attacker.name} and ${defender.name} ends. ${outcome}` });
   }
 
   private killCombatants(settlementId: string, requested: number): number {
-    const candidates = this.peopleAt(settlementId).filter((person) => person.ageMonths >= 16 * 12 && person.ageMonths <= 57 * 12);
+    if (this.state.advanced.scale === 'modern-statistical') {
+      const city = this.state.advanced.cities.find(c => c.settlementId === settlementId);
+      if (!city) return 0;
+      const losses = Math.max(0, Math.min(Math.floor(requested), Math.floor(city.population * this.state.advanced.cohorts.workingAge), Math.floor(this.state.advanced.representedPopulation)));
+      city.population -= losses;
+      this.state.advanced.representedPopulation -= losses;
+      this.state.stats.deaths += losses;
+      // Named documentary representatives are a sample, not an additional population pool.
+      return losses;
+    }
+    const candidates = this.peopleAt(settlementId).filter((person) => person.alive && person.ageMonths >= 16 * 12 && person.ageMonths <= 57 * 12);
     let killed = 0;
     for (let index = 0; index < requested && candidates.length > 0; index += 1) {
       const person = candidates.splice(this.random.int(0, candidates.length), 1)[0];
@@ -1618,9 +1677,18 @@ export class Simulation {
   }
 
   private militaryStrength(settlement: Settlement): number {
-    const adults = this.peopleAt(settlement.id).filter((person) => person.ageMonths > 16 * 12 && person.ageMonths < 60 * 12).length;
+    const adults = this.state.advanced.scale === 'modern-statistical'
+      ? settlementRepresentedPopulation(this.state, settlement.id) * this.state.advanced.cohorts.workingAge
+      : this.peopleAt(settlement.id).filter((person) => person.alive && person.ageMonths > 16 * 12 && person.ageMonths < 60 * 12).length;
     const culture = this.dominantCulture(settlement);
     return adults * (0.11 + settlement.politicalPower.military * 0.08 + (culture?.dimensions.militarism ?? 0.5) * 0.06) * (0.55 + settlement.foodSecurity * 0.45);
+  }
+
+  private provisionArmy(settlement: Settlement, strength: number, rate: number): void {
+    // Settlement stocks remain in the economy's documentary units after the population transition.
+    const scale = this.state.advanced.scale === 'modern-statistical'
+      ? this.peopleAt(settlement.id).length / Math.max(1, settlementRepresentedPopulation(this.state, settlement.id)) : 1;
+    settlement.resources.food = Math.max(0, settlement.resources.food - strength * scale * rate);
   }
 
   private hostilityAround(settlementId: string): number {

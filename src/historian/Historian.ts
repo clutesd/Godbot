@@ -3,12 +3,14 @@ import { SeededRandom } from '../sim/prng';
 import { representedPopulation, settlementRepresentedPopulation } from '../sim/advanced/AdvancedCivilizationSystem';
 import type { HistoricalEvent, LandmarkKind, Person, Relation, SimulationState, Vec2, WorldCell } from '../sim/types';
 import type { AudioCategory, CandidateScoreBreakdown, CrossRunContext, HistorianPrediction, HistorianStatement, ObservationCandidate, ObservationKind } from './types';
+import { campaignMemory, isWarEvent, liveWarStory, WAR_CHAPTERS, warEventStory, warForEvent } from './WarStory';
+import { campaignFocus } from '../sim/war/Campaign';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 
 const SIGNIFICANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'technology-widespread', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
-  'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'battle', 'war-ended',
+  'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended',
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'harvest-crisis', 'recovery', 'cultural-shift',
   'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'nuclear-restraint',
   'nuclear-disarmament', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'pandemic', 'ecological-crisis', 'climate-crisis',
@@ -86,7 +88,9 @@ export class Historian {
       if (beat === 'context') return candidate.kind === 'historian-context' || candidate.kind === 'world-establishing' || candidate.kind === 'city-growth-timelapse';
       return candidate.kind === 'traveler-follow' || candidate.kind === 'regional-travel' || candidate.kind === 'landscape-pause';
     });
-    const focused = focusEventId ? candidates.find((candidate) => candidate.event?.id === focusEventId) : undefined;
+    const focusEvent = focusEventId ? state.history.find(event => event.id === focusEventId && event.month <= state.month) : undefined;
+    const focusCandidate = focusEvent ? this.eventCandidate(state, focusEvent) : undefined;
+    const focused = focusCandidate && this.validateStatement(focusCandidate.statement, state) ? focusCandidate : undefined;
     const pool = preferred.length > 0 ? preferred : candidates;
     pool.sort((a, b) => b.score - a.score);
     const shortlist = pool.slice(0, Math.min(6, pool.length));
@@ -105,7 +109,14 @@ export class Historian {
   candidates(state: SimulationState): ObservationCandidate[] {
     const candidates: ObservationCandidate[] = [];
     const recentEvents = state.history.filter((event) => SIGNIFICANT_EVENT_TYPES.has(event.type) && event.month <= state.month && state.month - event.month <= 24);
-    for (const event of recentEvents) candidates.push(this.eventCandidate(state, event));
+    const latestCampaignEvents = new Map<string, HistoricalEvent>();
+    for (const event of recentEvents) {
+      const war = warForEvent(state, event);
+      if (war) latestCampaignEvents.set(war.id, event);
+      else candidates.push(this.eventCandidate(state, event));
+    }
+    for (const event of latestCampaignEvents.values()) candidates.push(this.eventCandidate(state, event));
+    candidates.push(...this.campaignCandidates(state));
     candidates.push(...this.settlementCandidates(state));
     candidates.push(...this.personCandidates(state));
     candidates.push(...this.routeCandidates(state));
@@ -152,6 +163,8 @@ export class Historian {
   }
 
   private eventCandidate(state: SimulationState, event: HistoricalEvent): ObservationCandidate {
+    const war = warForEvent(state, event);
+    const memory = campaignMemory(state, event);
     const breakdown = this.scoreEvent(state, event);
     const score = this.totalScore(breakdown);
     const kind = this.kindForEvent(event);
@@ -162,13 +175,13 @@ export class Historian {
       : '';
     const statement = this.statement({
       month: state.month,
-      text: `${this.eventText(event)}${atomicComparison}`,
+      text: `${memory ? `${memory.text} ` : ''}${warEventStory(state, event) ?? this.eventText(event)}${atomicComparison}`,
       epistemicStatus: 'recorded-fact',
-      sourceEventIds: [event.id],
+      sourceEventIds: [event.id, ...(memory ? [memory.event.id] : [])],
       sourceEntityIds: event.actors.filter((id) => this.knownEntityIds(state, state.month).has(id)),
       sourceArchiveIds: atomicComparison ? this.crossRunContext?.archiveIds ?? [] : [],
       claims: {
-        ...(event.type === 'war-declared' || event.type === 'battle' || event.type === 'war-ended' ? { warId: event.actors.find((id) => id.startsWith('war-')) } : {}),
+        ...(isWarEvent(event) ? { warId: event.actors.find((id) => id.startsWith('war-')) } : {}),
         ...(typeof event.context.knowledge === 'string' ? { knowledgeId: event.context.knowledge } : {}),
         eventType: event.type,
       },
@@ -178,7 +191,7 @@ export class Historian {
       subjectId: attributedPerson?.id ?? event.locationId ?? event.actors[0] ?? event.id,
       kind,
       position: attributedPerson?.position ?? event.location ?? this.positionForActors(state, event.actors),
-      title: this.titleForEvent(state, event),
+      title: war ? `The ${state.settlements.find(s => s.id === war.defender)?.name ?? 'frontier'} campaign` : this.titleForEvent(state, event),
       statement,
       score,
       interest: clamp(0.4 + event.significance * 0.45 + (event.month === state.month ? 0.1 : 0)),
@@ -186,6 +199,19 @@ export class Historian {
       breakdown,
       event,
     };
+  }
+
+  private campaignCandidates(state: SimulationState): ObservationCandidate[] {
+    return state.wars.filter(war => war.active && war.resolvedMonth === undefined).flatMap(war => {
+      const a = state.settlements.find(s => s.id === war.attacker);
+      const b = state.settlements.find(s => s.id === war.defender);
+      if (!a || !b) return [];
+      const statement = this.statement({ month: state.month, text: liveWarStory(state, war), epistemicStatus: 'derived-statistic', sourceEntityIds: [war.id, a.id, b.id], claims: { warId: war.id } });
+      const breakdown = { novelty: 0.6, magnitude: 0.65, populationAffected: 0.5, rarity: 0.5, technological: 0, political: 0.65, cultural: 0.2, consequence: 0.7, continuity: this.lastSubjectId === war.id ? 0.65 : 0.2, repetitionPenalty: Math.min(0.7, (this.shownSubjects.get(war.id) ?? 0) * 0.06) };
+      return [{ id: `campaign:${war.id}:${war.phase}`, subjectId: war.id, kind: 'battle-overview' as const,
+        position: campaignFocus(war, a.position, b.position), title: `${b.name} · ${WAR_CHAPTERS[war.phase].title}`, statement,
+        score: this.totalScore(breakdown), interest: 0.76, audioCategory: 'conflict' as const, breakdown }];
+    });
   }
 
   private settlementCandidates(state: SimulationState): ObservationCandidate[] {
@@ -373,7 +399,7 @@ export class Historian {
     if (event.type === 'industrialization' || event.type === 'industrialization-stage') return 'city-growth-timelapse';
     if (event.type === 'infrastructure-built' || event.type === 'archive-destroyed') return 'infrastructure-scene';
     if (event.type === 'institution-formed' || event.type === 'leadership-succession') return 'institution-exterior';
-    if (event.type === 'war-declared' || event.type === 'battle' || event.type === 'nuclear-crisis' || event.type === 'nuclear-use') return 'battle-overview';
+    if (event.type === 'war-declared' || event.type === 'war-campaign' || event.type === 'battle' || event.type === 'nuclear-crisis' || event.type === 'nuclear-use') return 'battle-overview';
     if (event.type === 'war-ended' || event.type === 'settlement-abandoned' || event.type === 'knowledge-lost' || event.type === 'nuclear-exchange' || event.type === 'pandemic' || event.type === 'natural-catastrophe' || event.type === 'ecological-crisis' || event.type === 'climate-crisis') return 'aftermath-pullback';
     if (event.type === 'major-migration') return 'regional-travel';
     return 'historian-context';
@@ -385,7 +411,7 @@ export class Historian {
     if (event.type === 'discovery' || event.type === 'knowledge-rediscovered' || event.type === 'knowledge-adopted' || event.type === 'technology-transformation') return 'discovery';
     if (event.type === 'industrialization') return 'major-threshold';
     if (event.type === 'industrialization-stage') return 'industry';
-    if (event.type === 'war-declared' || event.type === 'battle' || event.type === 'nuclear-crisis' || event.type === 'nuclear-use') return 'conflict';
+    if (event.type === 'war-declared' || event.type === 'war-campaign' || event.type === 'battle' || event.type === 'nuclear-crisis' || event.type === 'nuclear-use') return 'conflict';
     if (event.type === 'war-ended' || event.type === 'settlement-abandoned' || event.type === 'archive-destroyed' || event.type === 'knowledge-lost' || event.type === 'nuclear-exchange' || event.type === 'pandemic' || event.type === 'natural-catastrophe') return 'tragedy';
     if (event.type === 'nuclear-energy' || event.type === 'machine-intelligence-transition') return 'industry';
     if (event.type === 'cultural-shift' || event.type === 'institution-formed') return 'ritual-culture';

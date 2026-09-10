@@ -18,6 +18,7 @@ import { Simulation } from './sim/Simulation';
 import { representedPopulation } from './sim/advanced/AdvancedCivilizationSystem';
 import type { SimulationState } from './sim/types';
 import type { GodboxRenderer, PlacementSmokeReport } from './render/GodboxRenderer';
+import { WarChronicle } from './render/war/WarChronicle';
 
 declare global {
   interface Window {
@@ -79,6 +80,7 @@ app.innerHTML = `
 `;
 
 const viewport = requiredElement<HTMLElement>('#viewport');
+const warChronicle = new WarChronicle(requiredElement<HTMLElement>('.world'));
 const dateElement = requiredElement<HTMLElement>('#date');
 const populationElement = requiredElement<HTMLElement>('#population');
 const placeElement = requiredElement<HTMLElement>('#place');
@@ -274,6 +276,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
+  warChronicle.update(simulation.state);
   window.__godboxRenderer = view;
   window.__godboxPlacementReport = () => view.getPlacementSmokeReport();
   if (import.meta.env.DEV) {
@@ -350,6 +353,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       }
     }
     view.update(deltaSeconds, elapsedSeconds);
+    warChronicle.update(simulation.state, view.observation.statement?.claims.warId);
     audio.update(deltaSeconds);
     if (view.observation.revision !== lastObservationRevision) {
       lastObservationRevision = view.observation.revision;

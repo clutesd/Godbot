@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import type { AudioCategory, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
@@ -46,7 +47,7 @@ const FRAMING: Record<ObservationKind, Framing> = {
 
 const DOCUMENTARY_BREAK_TYPES = new Set([
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
-  'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'battle', 'war-ended',
+  'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended',
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'harvest-crisis', 'recovery', 'cultural-shift',
   'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-weapons-developed', 'nuclear-restraint', 'nuclear-crisis',
   'nuclear-use', 'nuclear-exchange', 'pandemic', 'ecological-crisis', 'climate-crisis', 'resource-crisis', 'autonomous-weapons-crisis',
@@ -138,6 +139,22 @@ export class CameraDirector {
   private animateShot(elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
     const scene = this.currentScene;
     if (!scene) return;
+    const war = scene.statement.claims.warId ? state.wars.find(w => w.id === scene.statement.claims.warId) : undefined;
+    if (war) {
+      const a = state.settlements.find(s => s.id === war.attacker);
+      const b = state.settlements.find(s => s.id === war.defender);
+      if (a && b) {
+        const focus = campaignFocus(war, a.position, b.position);
+        const ground = elevationAt(focus.x, focus.z);
+        const phase = this.stableAzimuth(war.id) + this.orbitPhase * 0.16;
+        const aftermath = war.resolvedMonth !== undefined;
+        const radius = aftermath ? 17 + Math.min(8, this.shotAge * 0.18) : war.phase === 'marching' ? 15 : 12;
+        this.desiredTarget.set(focus.x, ground + 0.5, focus.z);
+        this.desiredPosition.set(focus.x + Math.cos(phase) * radius, ground + (aftermath ? 16 : 10), focus.z + Math.sin(phase) * radius);
+        this.raiseForTerrain(elevationAt);
+        return;
+      }
+    }
     if (scene.kind === 'worker-follow' || scene.kind === 'traveler-follow' || scene.kind === 'discovery-scene') {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
       if (person) {

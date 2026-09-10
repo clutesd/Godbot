@@ -609,6 +609,26 @@ export interface TradeRoute {
 
 export type WarCause = 'resource-pressure' | 'territorial-dispute' | 'retaliation' | 'political-ambition' | 'alliance-commitment';
 
+export interface WarCampaign {
+  /** Surveyed dry-ground corridor, shared by simulation, camera and animation. */
+  route: Vec2[];
+  distance: number;
+  marchMonths: number;
+  phaseSinceMonth: number;
+  battleCount: number;
+  supplyA: number;
+  supplyB: number;
+  exhaustionA: number;
+  exhaustionB: number;
+  blockedMonths: number;
+  battleStartedMonth?: number;
+  lastBattleMonth?: number;
+  initialStrengthA: number;
+  initialStrengthB: number;
+  dispatches: string[];
+  advantage: -1 | 0 | 1;
+}
+
 export interface War {
   id: string;
   attacker: string;
@@ -633,6 +653,8 @@ export interface War {
   leaderAId?: string;
   leaderBId?: string;
   resolvedMonth?: number;
+  campaign: WarCampaign;
+  resolutionReason?: 'decision' | 'exhaustion' | 'impassable' | 'settlement-lost';
   active: boolean;
 }
 
@@ -827,6 +849,7 @@ export type HistoricalEventType =
   | 'alliance-formed'
   | 'alliance-ended'
   | 'war-declared'
+  | 'war-campaign'
   | 'battle'
   | 'war-ended'
   | 'political-transition'
