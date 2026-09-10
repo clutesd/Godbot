@@ -1,36 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFlowerSeason } from '../src/render/terrain/TerrainDecor';
+import { resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
 
 describe('Flower lifecycle', () => {
   it('grows from spring sprouts into summer bloom and autumn seed', () => {
-    expect(resolveFlowerSeason(1).stage).toBe('sprout');
-    expect(resolveFlowerSeason(3).stage).toBe('bud');
-    expect(resolveFlowerSeason(5).stage).toBe('bloom');
-    expect(resolveFlowerSeason(8).stage).toBe('seed');
+    expect(resolveFlowerGrowth(1).stage).toBe('sprout');
+    expect(resolveFlowerGrowth(3).stage).toBe('bud');
+    expect(resolveFlowerGrowth(5).stage).toBe('bloom');
+    expect(resolveFlowerGrowth(8).stage).toBe('seed');
+    expect(resolveFlowerGrowth(9.5).stage).toBe('senescent');
   });
 
-  it('dies back completely in winter', () => {
+  it('dies back completely in winter regardless of individual phase', () => {
     for (const month of [0, 10, 11, 12, 22, 23]) {
-      const state = resolveFlowerSeason(month, -0.48);
-      expect(state.stage).toBe('dormant');
-      expect(state.stemScale).toBe(0);
-      expect(state.bloomScale).toBe(0);
+      for (const phase of [0, 0.5, 1]) {
+        const state = resolveFlowerGrowth(month, phase);
+        expect(state.stage).toBe('dormant');
+        expect(state.visible).toBe(false);
+        expect(state.scale).toBe(0);
+        expect(state.bloom).toBe(0);
+      }
     }
   });
 
-  it('staggers emergence without allowing winter carryover', () => {
-    expect(resolveFlowerSeason(2.2, -0.4).stage).toBe('sprout');
-    expect(resolveFlowerSeason(2.2, 0.4).stage).toBe('bud');
-    expect(resolveFlowerSeason(10, -0.48).stage).toBe('dormant');
+  it('staggers emergence inside spring without allowing winter carryover', () => {
+    expect(resolveFlowerGrowth(2.1, 0).stage).toBe('sprout');
+    expect(resolveFlowerGrowth(2.1, 1).stage).toBe('bud');
+    expect(resolveFlowerGrowth(10, 0).stage).toBe('dormant');
+    expect(resolveFlowerGrowth(10, 1).stage).toBe('dormant');
   });
 
-  it('senesces through autumn instead of vanishing abruptly', () => {
-    const summer = resolveFlowerSeason(5);
-    const earlyAutumn = resolveFlowerSeason(8);
-    const lateAutumn = resolveFlowerSeason(9.5);
-    expect(summer.senescence).toBe(0);
-    expect(earlyAutumn.senescence).toBeGreaterThan(0);
-    expect(lateAutumn.senescence).toBeGreaterThan(earlyAutumn.senescence);
-    expect(lateAutumn.bloomScale).toBeLessThan(earlyAutumn.bloomScale);
+  it('senesces gradually instead of disappearing straight after bloom', () => {
+    const summer = resolveFlowerGrowth(5);
+    const earlyAutumn = resolveFlowerGrowth(8);
+    const lateAutumn = resolveFlowerGrowth(9.5);
+    expect(summer.bloom).toBe(1);
+    expect(earlyAutumn.seed).toBeGreaterThan(0);
+    expect(lateAutumn.seed).toBe(1);
+    expect(lateAutumn.scale).toBeLessThan(earlyAutumn.scale);
   });
 });
