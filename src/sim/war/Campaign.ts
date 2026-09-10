@@ -1,7 +1,8 @@
 import type { Settlement, Vec2, War, WarCampaign, WorldState } from '../types';
 import type { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { cellAt } from '../world';
-import { deriveMilitaryProfile, type MilitaryCampaignSnapshot } from './MilitaryCapability';
+import { deriveMilitaryProfile, type MilitaryCampaignSnapshot, type MilitaryCapabilityProfile } from './MilitaryCapability';
+import { militaryMarchMultiplier, militaryOperationalSupply } from './MilitaryCombat';
 
 export const TRUCE_MONTHS = 60;
 const clamp = (n: number, min = 0, max = 1): number => Math.max(min, Math.min(max, n));
@@ -44,6 +45,8 @@ export function createCampaign(world: WorldState, walking: WalkabilityLayer, att
   const reachesDestination = waypoints.length > 0 && Math.hypot(waypoints.at(-1)!.x - end.x, waypoints.at(-1)!.z - end.z) < 0.1;
   const route = reachesDestination && walking.routeIsValid([start, ...waypoints]) ? [start, ...waypoints] : [];
   const distance = campaignDistance(route);
+  const militaryA = deriveMilitaryProfile(attacker);
+  const militaryB = deriveMilitaryProfile(defender);
   let difficulty = 0;
   for (let i = 1; i < route.length; i++) {
     const a = route[i - 1]!;
@@ -52,19 +55,25 @@ export function createCampaign(world: WorldState, walking: WalkabilityLayer, att
     const cell = cellAt(world, (a.x + b.x) / 2, (a.z + b.z) / 2);
     difficulty += length * (1 + (cell?.slope ?? 0) * 2 + Math.max(0, (cell?.movementCost ?? 1) - 1) * 0.2);
   }
+  const mobility = militaryMarchMultiplier(militaryA);
   return {
-    route, distance, marchMonths: Math.max(3, Math.min(18, Math.ceil(difficulty / (world.cellSize * 3)))),
-    phaseSinceMonth: month, battleCount: 0, supplyA: campaignSupply(attacker, 0, 1), supplyB: campaignSupply(defender, 0, 1), exhaustionA: 0, exhaustionB: 0,
+    route, distance, marchMonths: Math.max(3, Math.min(18, Math.ceil(difficulty / (world.cellSize * 3 * mobility)))),
+    phaseSinceMonth: month, battleCount: 0, supplyA: campaignSupply(attacker, 0, 1, militaryA), supplyB: campaignSupply(defender, 0, 1, militaryB), exhaustionA: 0, exhaustionB: 0,
     blockedMonths: 0, initialStrengthA: strengthA, initialStrengthB: strengthB, dispatches: [], advantage: 0,
     // Freeze the equipment basis at mobilization. Later knowledge can change future wars without
     // silently rewriting the historical capabilities of a campaign already under way.
-    militaryA: deriveMilitaryProfile(attacker),
-    militaryB: deriveMilitaryProfile(defender),
+    militaryA,
+    militaryB,
   };
 }
 
-/** Long corridors and simultaneous commitments strain the same home economy. */
-export function campaignSupply(settlement: Settlement, distance: number, commitments: number): number {
-  return clamp((settlement.foodSecurity * 0.65 + settlement.prosperity * 0.2 + Math.min(1, settlement.resources.food / 30) * 0.15)
+/**
+ * Long corridors and simultaneous commitments strain the same home economy. When a mobilization
+ * profile is supplied, sophisticated equipment also depends on the settlement's current ability
+ * to power, repair and replace what it fielded at the start of the war.
+ */
+export function campaignSupply(settlement: Settlement, distance: number, commitments: number, mobilized?: MilitaryCapabilityProfile): number {
+  const legacy = clamp((settlement.foodSecurity * 0.65 + settlement.prosperity * 0.2 + Math.min(1, settlement.resources.food / 30) * 0.15)
     / (1 + distance / 160 + Math.max(0, commitments - 1) * 0.22), 0.06, 1);
+  return mobilized ? militaryOperationalSupply(settlement, mobilized, legacy) : legacy;
 }
