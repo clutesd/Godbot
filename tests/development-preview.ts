@@ -56,5 +56,5 @@ const panels = settlements.map((s, index) => {
 mkdirSync('node_modules/.tmp', { recursive: true });
 writeFileSync('node_modules/.tmp/development-preview.json', JSON.stringify(panels));
 writeFileSync('docs/settlement-development-paths.json', JSON.stringify({ scenario: 'Controlled equal-population societies; 600 development months; no world economy or demographic stepping',
-  months: state.month, panels: panels.map(({ triangles: _triangles, ...panel }) => panel) }, null, 2));
+  months: state.month, panels: panels.map(panel => ({ title: panel.title, description: panel.description, structures: panel.structures })) }, null, 2));
 console.log(`Four societies, 600 development months: ${elapsedMs.toFixed(1)} ms. Geometry and path evidence written.`);

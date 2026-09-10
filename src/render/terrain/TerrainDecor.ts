@@ -109,7 +109,8 @@ export class TerrainDecor {
 
   /**
    * Grass, reeds and low scrub. Density is deliberately uneven: heaviest at shorelines, riverbanks
-   * and forest edges, where a hard material boundary would otherwise show.
+   * and forest edges, where a hard material boundary would otherwise show. Flower colours are kept
+   * out of this static layer; seasonal flowers are owned by the vegetation system.
    */
   private scatterGroundCover(world: WorldState, surface: TerrainSurface, random: SeededRandom, seed: string, budget: number): number {
     const mesh = new THREE.InstancedMesh(
@@ -146,7 +147,6 @@ export class TerrainDecor {
       mesh.setMatrixAt(placed, matrix);
       colour.set(reed ? '#5c7548' : sample.moisture < 0.32 ? '#9d9153' : '#6d8749');
       colour.offsetHSL(random.range(-0.02, 0.02), random.range(-0.07, 0.07), random.range(-0.06, 0.06));
-      if (random.chance(0.05)) colour.set(random.chance(0.5) ? '#c9799a' : '#d8b661');
       mesh.setColorAt(placed, colour);
       placed += 1;
     }

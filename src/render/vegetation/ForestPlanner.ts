@@ -7,6 +7,8 @@ import type { TreeFamily } from './TreeLibrary';
 export interface TreePlacement {
   /** Only the rare, culturally meaningful trees receive a stable individual identity. */
   id?: string;
+  /** Settlement that intentionally planted this tree. Managed trees survive that settlement's clearing. */
+  managedBy?: string;
   worldX: number;
   worldZ: number;
   y: number;
@@ -14,7 +16,7 @@ export interface TreePlacement {
   variant: number;
   scale: number;
   rotation: number;
-  /** 0..1 maturity; old trees are wider, darker and rarer. */
+  /** 0..1 seeded visual maturity/size bias; chronological age is derived from establishedYear. */
   age: number;
   /** Year in which this tree's current stand established. Age is derived, never ticked. */
   establishedYear: number;
@@ -44,6 +46,34 @@ export function treeSeason(month: number): TreeSeason {
   return 'winter';
 }
 
+const DEAD_STANDING_YEARS = 22;
+const MIN_REESTABLISH_YEARS = 4;
+const MAX_REESTABLISH_YEARS = 18;
+
+/**
+ * Resolves the infrequent visible lifecycle class from immutable placement data and a simulation
+ * year. Ordinary forest slots represent successive generations: once deadwood has lain long enough,
+ * suitable ground deterministically starts a new sapling instead of remaining a permanent graveyard.
+ * Stable significant-tree identities are not recycled into a different individual.
+ */
+export function resolveTreeLifecycle(tree: TreePlacement, year: number, disturbed = false): ResolvedTreeLifecycle {
+  const chronologicalAge = Math.max(0, year - tree.establishedYear);
+  const lifespan = tree.lifespanYears;
+  const significant = tree.id !== undefined;
+  const mortalityAge = disturbed && !significant ? Math.min(lifespan, 18 + Math.round((1 - tree.regrowth) * 20)) : lifespan;
+  const reestablishYears = Math.round(MIN_REESTABLISH_YEARS + (1 - clamp01(tree.regrowth)) * (MAX_REESTABLISH_YEARS - MIN_REESTABLISH_YEARS));
+  const generationSpan = mortalityAge + DEAD_STANDING_YEARS + reestablishYears;
+  const ageYears = !significant && chronologicalAge >= generationSpan ? chronologicalAge % generationSpan : chronologicalAge;
+
+  if (ageYears >= mortalityAge + DEAD_STANDING_YEARS) return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true };
+  if (ageYears >= mortalityAge) return { stage: 'dead-standing', scale: tree.scale * 0.82, foliageVisible: false, fallen: false };
+  if (ageYears >= mortalityAge * 0.82) return { stage: 'declining', scale: tree.scale * 1.03, foliageVisible: true, fallen: false };
+  if (ageYears >= 90 || (significant && ageYears >= 55)) return { stage: 'old', scale: tree.scale * 1.2, foliageVisible: true, fallen: false };
+  if (ageYears >= 35) return { stage: 'mature', scale: tree.scale, foliageVisible: true, fallen: false };
+  if (ageYears >= 15) return { stage: 'young', scale: tree.scale * 0.7, foliageVisible: true, fallen: false };
+  return { stage: 'sapling', scale: tree.scale * 0.34, foliageVisible: true, fallen: false };
+}
+
 /** Coarse stand succession: a regional rule, never an individual sapling simulation. */
 export function resolveForestSuccession(yearsSinceDisturbance: number, suitability: number): ForestSuccessionStage {
   if (suitability < 0.2 || yearsSinceDisturbance <= 0) return 'cleared';
@@ -69,24 +99,6 @@ const LIFESPAN_YEARS: Record<TreeFamily, readonly [number, number]> = {
   cherry: [65, 115], broadleaf: [110, 210], conifer: [130, 280], dry: [90, 175],
   riverbank: [70, 135], alpine: [120, 240], ancient: [500, 900],
 };
-
-/**
- * Resolves the infrequent visible lifecycle class from immutable placement data and a simulation
- * year. This is intentionally pure: no tree state is advanced per frame or per simulation tick.
- */
-export function resolveTreeLifecycle(tree: TreePlacement, year: number, disturbed = false): ResolvedTreeLifecycle {
-  const ageYears = Math.max(0, year - tree.establishedYear);
-  const lifespan = tree.lifespanYears;
-  const significant = tree.id !== undefined;
-  const mortalityAge = disturbed && !significant ? Math.min(lifespan, 18 + Math.round((1 - tree.regrowth) * 20)) : lifespan;
-  if (ageYears >= mortalityAge + 22) return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true };
-  if (ageYears >= mortalityAge) return { stage: 'dead-standing', scale: tree.scale * 0.82, foliageVisible: false, fallen: false };
-  if (ageYears >= mortalityAge * 0.82) return { stage: 'declining', scale: tree.scale * 1.03, foliageVisible: true, fallen: false };
-  if (ageYears >= 90 || (significant && ageYears >= 55)) return { stage: 'old', scale: tree.scale * 1.2, foliageVisible: true, fallen: false };
-  if (ageYears >= 35) return { stage: 'mature', scale: tree.scale, foliageVisible: true, fallen: false };
-  if (ageYears >= 15) return { stage: 'young', scale: tree.scale * 0.7, foliageVisible: true, fallen: false };
-  return { stage: 'sapling', scale: tree.scale * 0.34, foliageVisible: true, fallen: false };
-}
 
 interface Ecology {
   density: number;

@@ -273,6 +273,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const historian = new Historian(simulation.config, { observationNumber: identity.observationNumber, crossRunContext: computeCrossRunContext(previousRuns) });
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
+  // VegetationRenderer now owns settlement cherry trees. Keep the legacy helper inert so every
+  // visible tree shares the same lifecycle, weather and succession authority.
+  Reflect.set(GodboxRenderer.prototype, 'addBlossomTree', () => undefined);
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
   window.__godboxRenderer = view;
   window.__godboxPlacementReport = () => view.getPlacementSmokeReport();
