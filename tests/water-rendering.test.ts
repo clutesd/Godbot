@@ -27,10 +27,10 @@ function waterWorld() {
 
 function shaderStub() {
   return {
-    uniforms: {},
+    uniforms: {} as Record<string, { value: unknown }>,
     vertexShader: '#include <common>\n#include <begin_vertex>',
     fragmentShader: '#include <common>\n#include <color_fragment>',
-  } as unknown as THREE.WebGLProgramParametersWithUniforms;
+  };
 }
 
 describe('Water rendering foundation', () => {
@@ -52,7 +52,7 @@ describe('Water rendering foundation', () => {
     expect(material.clearcoat).toBeGreaterThan(0);
 
     const shader = shaderStub();
-    material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+    material.onBeforeCompile(shader as unknown as Parameters<typeof material.onBeforeCompile>[0], {} as THREE.WebGLRenderer);
     expect(shader.vertexShader).toContain('attribute float waterDepth');
     expect(shader.vertexShader).toContain('waterShoreDamping');
     expect(shader.fragmentShader).toContain('waterShallowTint');
@@ -69,7 +69,7 @@ describe('Water rendering foundation', () => {
     expect(ocean.geometry.getAttribute('position').count).toBeGreaterThan(4);
 
     const shader = shaderStub();
-    ocean.material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+    ocean.material.onBeforeCompile(shader as unknown as Parameters<typeof ocean.material.onBeforeCompile>[0], {} as THREE.WebGLRenderer);
     renderer.update(12.5);
     expect(shader.uniforms['waterTime']!.value).toBe(12.5);
     const y = ocean.position.y;
