@@ -192,9 +192,9 @@ export class PresentationDirector {
     for (let index = state.history.length - 1; index >= 0; index -= 1) {
       const event = state.history[index];
       if (!event) continue;
-      // Initial settlement records describe the world at observation start; they are not an
+      // Origin/founding records describe the observation's starting world; they are not an
       // approaching narrative beat and should not suppress deep-time acceleration.
-      if (state.month === 0 && event.month === 0 && event.type === 'settlement-founded') continue;
+      if (state.month === 0 && event.month === 0 && (event.type === 'settlement-founded' || event.type === 'world-awakening')) continue;
       const age = state.month - event.month;
       if (age > Math.max(6, this.config.presentation.eventMemoryMonths)) break;
       if (event.significance >= 0.72) recentWeight += 0.22 * (1 - age / Math.max(1, this.config.presentation.eventMemoryMonths + 1));
