@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
+import type { StructurePlot } from '../src/sim/types';
 import {
   advanceStructureFires,
   clearStructureFireRuntime,
@@ -14,7 +15,7 @@ import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 function fireFixture(seed: string) {
   const simulation = new Simulation({ seed, startingPopulation: 40, world: { size: 20 }, settlementCount: [2, 2] });
   const settlement = simulation.state.settlements[0]!;
-  const plot = {
+  const plot: StructurePlot = {
     id: `${settlement.id}:fire-test`, worldX: settlement.position.x, worldZ: settlement.position.z,
     radius: 0.75, width: 1.4, height: 1.2, depth: 1.1, condition: 1, foundedMonth: 0,
   };
