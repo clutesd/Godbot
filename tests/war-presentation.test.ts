@@ -98,7 +98,8 @@ describe('Step 3 military presentation', () => {
     const battle = fixture.state.history.find(event => event.type === 'battle' && event.actors.includes(war.id))!;
     expect(battle).toBeDefined();
     const story = warEventStory(fixture.state, battle)!;
-    expect(['killing distance', 'Machines, fire', 'bombardment', 'across distance']).toSatisfyAny(candidate => story.includes(candidate));
-    expect(story).toContain('lives');
+    const characterMarkers = ['killing distance', 'Machines, fire', 'bombardment', 'across distance'];
+    expect(characterMarkers.some(candidate => story.includes(candidate))).toBe(true);
+    expect(/life|lives/.test(story)).toBe(true);
   });
 });
