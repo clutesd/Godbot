@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
+import { flowerDistanceScale, resolveFlowerGrowth } from '../src/render/vegetation/FlowerField';
 
 describe('Flower growth cycle', () => {
   it('does not pop in size or bloom at lifecycle boundaries', () => {
@@ -49,5 +49,15 @@ describe('Flower growth cycle', () => {
     expect(resolveFlowerGrowth(4.5, 0.8).stage).toBe('bloom');
     expect(resolveFlowerGrowth(10, 0).visible).toBe(false);
     expect(resolveFlowerGrowth(10, 1).visible).toBe(false);
+  });
+
+  it('keeps flowers readable through documentary framing before fading them out', () => {
+    for (const distance of [0, 13, 31, 45, 62, 66, 68]) {
+      expect(flowerDistanceScale(distance)).toBe(1);
+    }
+    expect(flowerDistanceScale(79)).toBeGreaterThan(0);
+    expect(flowerDistanceScale(79)).toBeLessThan(1);
+    expect(flowerDistanceScale(90)).toBe(0);
+    expect(flowerDistanceScale(200)).toBe(0);
   });
 });

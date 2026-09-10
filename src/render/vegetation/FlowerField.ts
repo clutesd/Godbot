@@ -41,8 +41,10 @@ export interface FlowerFieldReport {
   triangles: number;
 }
 
-/** Covers the documentary camera's widest ordinary ground shots without rendering the whole world. */
-const FLOWER_VIEW_RANGE = 68;
+/** All ordinary documentary framings stay at full flower scale, including 66-unit establishing shots. */
+const FLOWER_FULL_DETAIL_RANGE = 68;
+/** Fade only outside ordinary framing so the focal ground remains legible without rendering the whole world. */
+const FLOWER_VIEW_RANGE = 90;
 /** Still much smaller than a person, but large enough to read from settlement/street framing. */
 const FLOWER_STEM_HEIGHT = 0.18;
 const TREE_FLOWER_SHARE = 0.52;
@@ -60,6 +62,11 @@ const POLLEN_COLOUR = new THREE.Color('#d5a544');
 
 function lerp(from: number, to: number, t: number): number {
   return from + (to - from) * clamp01(t);
+}
+
+/** Keeps flowers fully readable through normal camera framing, then smoothly retires distant instances. */
+export function flowerDistanceScale(distance: number): number {
+  return smoothstep(FLOWER_VIEW_RANGE, FLOWER_FULL_DETAIL_RANGE, Math.max(0, distance));
 }
 
 /**
@@ -166,7 +173,8 @@ export class FlowerField {
     for (const placement of this.placements) {
       if (count >= this.stems.instanceMatrix.count) break;
       const distance = Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z);
-      if (distance > FLOWER_VIEW_RANGE) continue;
+      const distanceScale = flowerDistanceScale(distance);
+      if (distanceScale <= 0) continue;
       if (disturbance.some((zone) => Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) < zone.radius)) continue;
 
       const growth = resolveFlowerGrowth(month, placement.phase);
@@ -183,8 +191,7 @@ export class FlowerField {
       const moistureVigor = 0.55 + smoothstep(0.18, 0.52, currentMoisture) * smoothstep(0.96, 0.62, currentMoisture) * 0.45;
       const annualMonth = ((month % 12) + 12) % 12;
       const emergence = smoothstep(1, 1.4, annualMonth) * smoothstep(10, 9.6, annualMonth);
-      const size = placement.scale * placement.vigor * moistureVigor * growth.scale * emergence
-        * smoothstep(FLOWER_VIEW_RANGE, FLOWER_VIEW_RANGE - 12, distance);
+      const size = placement.scale * placement.vigor * moistureVigor * growth.scale * emergence * distanceScale;
       if (size <= 0.01) continue;
 
       this.position.set(placement.worldX, groundY + 0.004, placement.worldZ);
