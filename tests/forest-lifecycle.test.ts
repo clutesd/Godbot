@@ -39,6 +39,13 @@ describe('Forest lifecycle', () => {
     expect(resolveTreeLifecycle(placement, 100).foliageVisible).toBe(false);
   });
 
+  it('re-establishes ordinary forest slots as a new generation', () => {
+    const placement = tree({ lifespanYears: 100, regrowth: 0.8 });
+    expect(resolveTreeLifecycle(placement, 128).stage).toBe('fallen');
+    expect(resolveTreeLifecycle(placement, 129).stage).toBe('sapling');
+    expect(resolveTreeLifecycle(placement, 144).stage).toBe('young');
+  });
+
   it('maps seasonal display phases, including the cherry blossom spring', () => {
     expect(treeSeason(0)).toBe('winter');
     expect(treeSeason(2)).toBe('spring');
@@ -57,5 +64,10 @@ describe('Forest lifecycle', () => {
     const ancient = tree({ id: 'tree:seed:1', family: 'ancient', lifespanYears: 600 });
     expect(resolveTreeLifecycle(ancient, 80, true).stage).toBe('old');
     expect(ancient.id).toBe('tree:seed:1');
+  });
+
+  it('does not recycle a stable significant-tree identity into a new individual', () => {
+    const ancient = tree({ id: 'tree:seed:2', family: 'ancient', lifespanYears: 100, regrowth: 1 });
+    expect(resolveTreeLifecycle(ancient, 200).stage).toBe('fallen');
   });
 });
