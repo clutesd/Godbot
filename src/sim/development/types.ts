@@ -8,6 +8,8 @@ export type StructureMaterial = 'earth' | 'timber' | 'masonry' | 'ceramic' | 'me
 export type ServiceSupply = Partial<Record<SettlementNeed, number>>;
 
 export interface SettlementWaterState {
+  /** Simulation month in which this state was last applied. */
+  evaluatedMonth: number;
   /** 0..1 local water physically available from soil, rivers, lakes and current runoff. */
   availability: number;
   /** 0..1 ability to keep supplying water through seasonal and drought variation. */
