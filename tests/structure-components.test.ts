@@ -61,7 +61,8 @@ describe('structural component contract', () => {
     const manifest = manifestFor(response('government', 'hall', 3));
     const ids = manifest.components.map(component => component.id);
 
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
+    expect(manifest.generations).toHaveLength(1);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual(expect.arrayContaining([
       'foundation:main',
@@ -82,6 +83,7 @@ describe('structural component contract', () => {
       expect(component.bounds.size.x).toBeGreaterThan(0);
       expect(component.bounds.size.y).toBeGreaterThan(0);
       expect(component.bounds.size.z).toBeGreaterThan(0);
+      expect(component.provenance.generationId).toBeTruthy();
       for (const support of component.supportIds) expect(idSet.has(support)).toBe(true);
       if (component.parentId) expect(idSet.has(component.parentId)).toBe(true);
     }
@@ -121,8 +123,9 @@ describe('structural component contract', () => {
     const core = manifest.components.find(component => component.id === 'core:main')!;
     const annex = manifest.components.find(component => component.id === 'annex:east')!;
 
-    expect(core.provenance).toMatchObject({ phase: 'origin', material: 'timber', need: 'religion', form: 'sanctuary' });
-    expect(annex.provenance).toMatchObject({ phase: 'current', material: 'masonry', need: 'knowledge', form: 'hall' });
+    expect(core.provenance).toMatchObject({ phase: 'origin', material: 'timber', need: 'religion', form: 'sanctuary', generationId: 'g0-origin' });
+    expect(annex.provenance).toMatchObject({ material: 'masonry', need: 'knowledge', form: 'hall' });
+    expect(annex.provenance.generationOrdinal).toBeGreaterThan(0);
     expect(core.provenance.cultureId).toBe(context.culture.id);
     expect(manifest.visualSignature).not.toContain('.720.');
 
@@ -186,7 +189,8 @@ describe('structural component contract', () => {
     });
     const manifest = asset.mesh.userData['structureComponents'] as StructureComponentManifest;
 
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
+    expect(manifest.generations).toHaveLength(1);
     expect(manifest.components.some(component => component.kind === 'vent')).toBe(true);
     expect(asset.mesh.userData['structureComponentSignature']).toBe(manifest.visualSignature);
     expect(asset.mesh.children.some(child => child.name === 'core:main')).toBe(false);
@@ -201,6 +205,7 @@ describe('structural component contract', () => {
 
     expect(field.components.map(component => component.id)).toEqual(['ground:site', 'field:rows']);
     expect(market.components.map(component => component.id)).toEqual(['ground:site', 'gathering:fixtures', 'market:canopies']);
+    expect(field.developmentEnvelope.stages).toHaveLength(1);
   });
 
   it('creates globally stable placed ids by prefixing the persistent plot id', () => {
