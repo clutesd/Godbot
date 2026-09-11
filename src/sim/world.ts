@@ -132,6 +132,7 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
     originZ: raw.originZ,
     height: raw.height,
     waterLevel: hydrology.waterLevel,
+    floodDepth: new Float32Array(raw.height.length),
     flow: hydrology.flow,
     rock,
     lake: hydrology.lake,
@@ -217,7 +218,6 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
       cell.habitability = clamp01(cell.habitability + 0.1);
     }
   }
-
   const landmarks = detectLandmarks(raw, hydrology, { seaLevel, mountainLevel, verticalScale: TERRAIN_VERTICAL_SCALE });
   return { size, cellSize, cells, terrain, landmarks, seaLevel, mountainLevel };
 }
