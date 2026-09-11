@@ -13,6 +13,7 @@ import type { Era } from '../materials/MaterialPalette';
 import type { CultureStyleProfile, MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentResponse } from '../../sim/development/types';
+import { applyDevelopmentComposition } from './StructureComposition';
 
 export type BuildingRole =
   | 'shelter'
@@ -504,6 +505,7 @@ export function resolveBuildingGrammar(
     grammar.vents = development.form === 'works' ? grammar.vents : 0;
     grammar.emissive = development.need === 'energy' && development.level === 3 ? 0.85 : 0.25;
     applyDevelopmentIdentity(grammar, development);
+    applyDevelopmentComposition(grammar, development);
   }
   return grammar;
 }

@@ -1,8 +1,11 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { DevelopmentResponse, SettlementNeed, StructureForm } from '../src/sim/development/types';
 import { developmentContext } from '../src/sim/development/SettlementDevelopmentSystem';
 import { CultureStyleProfileFactory } from '../src/render/style/CultureStyleProfile';
 import { developmentBuildingRole, resolveBuildingGrammar } from '../src/render/assets/BuildingGrammar';
+import { BUILD_STAGE, composeBuilding } from '../src/render/assets/BuildingComposer';
+import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { societyFixture } from './fixtures/settlementDevelopment';
 
 describe('semantic structure identity overlays', () => {
@@ -26,9 +29,32 @@ describe('semantic structure identity overlays', () => {
     });
     const grammar = (need: SettlementNeed, form: StructureForm, level = 2) => {
       const development = response(need, form, level);
-      return resolveBuildingGrammar(profile, 'village', developmentBuildingRole(development), `identity:${need}:${level}`, development);
+      // Same form/level gets the same variation seed so semantic differences cannot be
+      // explained away by ordinary procedural jitter.
+      return resolveBuildingGrammar(profile, 'village', developmentBuildingRole(development), `identity:${form}:${level}`, development);
     };
-    return { grammar };
+    const geometry = (need: SettlementNeed, form: StructureForm, level = 2) => {
+      const g = grammar(need, form, level);
+      const palette = new MaterialPalette({ culture: context.culture.style, era: 'village' });
+      const result = composeBuilding(g, palette, `composition:${form}:${level}`, BUILD_STAGE.DETAIL);
+      const box = new THREE.Box3().setFromObject(result.group);
+      let vertices = 0;
+      result.group.traverse(object => {
+        if (object instanceof THREE.Mesh) vertices += object.geometry.getAttribute('position')?.count ?? 0;
+      });
+      const metrics = {
+        width: box.max.x - box.min.x,
+        depth: box.max.z - box.min.z,
+        height: box.max.y - box.min.y,
+        vertices,
+      };
+      result.group.traverse(object => {
+        if (object instanceof THREE.Mesh) object.geometry.dispose();
+      });
+      palette.dispose();
+      return metrics;
+    };
+    return { grammar, geometry };
   };
 
   it('keeps hall-based civic institutions visually distinguishable', () => {
@@ -50,6 +76,30 @@ describe('semantic structure identity overlays', () => {
     expect(new Set(signatures).size).toBe(4);
   });
 
+  it('changes physical proportions for hall-based institutions rather than only decoration', () => {
+    const { grammar, geometry } = setup();
+    const government = grammar('government', 'hall');
+    const knowledge = grammar('knowledge', 'hall');
+    const healthcare = grammar('healthcare', 'hall');
+    const security = grammar('security', 'hall');
+
+    expect(healthcare.width).toBeGreaterThan(knowledge.width);
+    expect(knowledge.depth).toBeGreaterThan(government.depth);
+    expect(government.wallHeight).toBeGreaterThan(knowledge.wallHeight);
+    expect(security.width).toBeLessThan(government.width);
+
+    const rendered = [
+      geometry('government', 'hall'),
+      geometry('knowledge', 'hall'),
+      geometry('healthcare', 'hall'),
+      geometry('security', 'hall'),
+    ];
+    const signatures = rendered.map(g =>
+      [g.width.toFixed(3), g.depth.toFixed(3), g.height.toFixed(3), g.vertices].join(':'),
+    );
+    expect(new Set(signatures).size).toBe(4);
+  });
+
   it('gives commerce, logistics and productive infrastructure different working cues', () => {
     const { grammar } = setup();
     const trade = grammar('trade', 'store');
@@ -60,6 +110,7 @@ describe('semantic structure identity overlays', () => {
 
     expect(trade).toMatchObject({ forecourt: true, banner: 'cloth', enclosure: 'none', massing: 'wing' });
     expect(transport).toMatchObject({ forecourt: true, banner: 'pennant', enclosure: 'yard', massing: 'wing' });
+    expect(transport.width / transport.depth).toBeGreaterThan(trade.width / trade.depth);
     expect(manufacturing.enclosure).toBe('yard');
     expect(manufacturing.chimneys).toBeGreaterThanOrEqual(1);
     expect(manufacturing.forgeGlow).toBeGreaterThanOrEqual(0.35);
@@ -67,6 +118,7 @@ describe('semantic structure identity overlays', () => {
     expect(energy.forgeGlow).toBeGreaterThanOrEqual(0.95);
     expect(water).toMatchObject({ massing: 'twin', banner: 'none', enclosure: 'yard', veranda: 'none' });
     expect(water.vents).toBeGreaterThanOrEqual(2);
+    expect(water.storeys).toBe(1);
   });
 
   it('makes sacred and commemorative sites read as intentional precincts', () => {
@@ -85,5 +137,6 @@ describe('semantic structure identity overlays', () => {
     expect(memory.enclosure).toBe('court');
     expect(memory.ornament).toBe(1);
     expect(memory.ridgeFinials).toBe(true);
+    expect(memory.wallHeight).toBeGreaterThan(grammar('memory', 'marker', 1).wallHeight);
   });
 });
