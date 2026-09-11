@@ -2,12 +2,83 @@ import { createSettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { stableHash } from '../prng';
+import {
+  chooseMaterialShipment,
+  deliverMaterialShipment,
+  dispatchMaterialShipment,
+} from '../resources/MaterialLogistics';
+import type { MaterialKind } from '../resources/MaterialEconomy';
+import { consumeMaterial } from '../resources/MaterialUse';
 import { surfaceHeightAt, surfaceWaterAt } from '../terrain/SurfaceGeometry';
 import type { Settlement, SimulationState, TradeRoute } from '../types';
 import { RoutePlanner, type PlannedEdge } from './RoutePlanner';
 import { distance, edgeKey, landAllowed, navigableAt, pointKey, snowTravelMultiplier, surveyEdge } from './TerrainTraversal';
 import { positionAlongPath, TransportNetwork } from './TransportNetwork';
-import type { FreightTrip, NetworkMode, TransportProject, TransportStop } from './types';
+import type { FreightTrip, NetworkMode, TransportProject, TransportSegment, TransportStop } from './types';
+
+interface CapitalRequirement {
+  id: string;
+  perWork: number;
+  options: readonly MaterialKind[];
+}
+
+const EPSILON = 1e-9;
+
+function capitalRequirements(segment: TransportSegment): CapitalRequirement[] {
+  if (segment.mode === 'rail') return [
+    { id: 'rail-metal', perWork: 0.58, options: ['steel', 'iron'] },
+    { id: 'rail-ties', perWork: 0.22, options: ['lumber', 'timber'] },
+    { id: 'rail-bed', perWork: 0.16, options: ['stone', 'brick'] },
+  ];
+  if (segment.kind === 'bridge') return [
+    { id: 'bridge-foundation', perWork: 0.34, options: ['stone', 'brick'] },
+    { id: 'bridge-structure', perWork: 0.18, options: ['steel', 'iron', 'bronze', 'lumber', 'timber'] },
+  ];
+  if (segment.mode === 'water') return [
+    { id: 'water-route-works', perWork: 0.08, options: ['lumber', 'timber'] },
+  ];
+  return [{ id: 'road-surface', perWork: 0.12, options: ['stone', 'brick'] }];
+}
+
+function materialAuthority(a: Settlement, b: Settlement): boolean {
+  return a.id === b.id ? Boolean(a.materials) : Boolean(a.materials && b.materials);
+}
+
+function contributors(a: Settlement, b: Settlement): Settlement[] {
+  return a.id === b.id ? [a] : [a, b];
+}
+
+function availableAcross(settlements: readonly Settlement[], options: readonly MaterialKind[]): number {
+  return settlements.reduce((total, settlement) => total + options.reduce((sum, material) =>
+    sum + (settlement.materials?.stock[material] ?? 0), 0), 0);
+}
+
+function maxCapitalWork(a: Settlement, b: Settlement, segment: TransportSegment): number {
+  if (!materialAuthority(a, b)) return Number.POSITIVE_INFINITY;
+  const settlements = contributors(a, b);
+  return Math.max(0, Math.min(...capitalRequirements(segment).map((requirement) =>
+    requirement.perWork <= EPSILON ? Number.POSITIVE_INFINITY : availableAcross(settlements, requirement.options) / requirement.perWork)));
+}
+
+function consumeCapital(a: Settlement, b: Settlement, segment: TransportSegment, work: number, month: number): void {
+  if (!materialAuthority(a, b) || work <= EPSILON) return;
+  segment.materialSpent ??= {};
+  const settlements = contributors(a, b);
+  for (const requirement of capitalRequirements(segment)) {
+    let remaining = requirement.perWork * work;
+    for (const material of requirement.options) {
+      for (const settlement of settlements) {
+        if (remaining <= EPSILON) break;
+        const used = consumeMaterial(settlement, material, remaining, month);
+        if (used <= 0) continue;
+        segment.materialSpent[material] = (segment.materialSpent[material] ?? 0) + used;
+        remaining -= used;
+      }
+      if (remaining <= EPSILON) break;
+    }
+    if (remaining > 1e-6) throw new Error(`transport material conservation violation: ${segment.id}:${requirement.id}`);
+  }
+}
 
 /** Simulation-owned investment, construction, dispatch and delivery. No random draws. */
 export class TransportationSystem {
@@ -94,7 +165,10 @@ export class TransportationSystem {
       if (trip.distance < trip.path.length) return undefined;
       trip.status = 'arrived';
       const target = trip.destination === a.id ? a : b;
-      target.resources[trip.resource] += trip.quantity * 0.96;
+      const source = trip.origin === a.id ? a : b;
+      if (trip.material) deliverMaterialShipment(source, target, trip.material, trip.quantity, 0.96, this.state.month);
+      else if (trip.resource) target.resources[trip.resource] += trip.quantity * 0.96;
+      else throw new Error(`freight trip ${trip.id} has no cargo`);
       transport.nextDispatchMonth = this.state.month + 3 + Math.floor(stableHash(route.id, this.state.month, 0) * 13);
       return trip;
     }
@@ -102,23 +176,54 @@ export class TransportationSystem {
     const population = (id: string): number => Math.max(1, this.state.people.filter(p => p.alive && p.homeId === id).length);
     const aPopulation = population(a.id);
     const bPopulation = population(b.id);
-    let shipment: { source: Settlement; target: Settlement; resource: FreightTrip['resource']; quantity: number } | undefined;
-    for (const resource of ['food', 'wood', 'minerals', 'goods'] as const) {
-      const gap = a.resources[resource] / aPopulation - b.resources[resource] / bPopulation;
-      const source = gap > 0 ? a : b;
-      const target = gap > 0 ? b : a;
-      const quantity = Math.min(Math.abs(gap) * route.volume * 1.8, source.resources[resource] * 0.04, route.volume * 6);
-      if (quantity > 0.08 && quantity > (shipment?.quantity ?? 0)) shipment = { source, target, resource, quantity };
+
+    let shipment: {
+      source: Settlement;
+      target: Settlement;
+      resource?: NonNullable<FreightTrip['resource']>;
+      material?: MaterialKind;
+      quantity: number;
+      reason: FreightTrip['reason'];
+    } | undefined;
+
+    const materialShipment = chooseMaterialShipment(a, b, route.volume);
+    if (materialShipment) {
+      const quantity = dispatchMaterialShipment(
+        materialShipment.source,
+        materialShipment.target,
+        materialShipment.material,
+        materialShipment.quantity,
+        this.state.month,
+      );
+      if (quantity > 0.08) shipment = {
+        source: materialShipment.source,
+        target: materialShipment.target,
+        material: materialShipment.material,
+        quantity,
+        reason: 'scarcity-relief',
+      };
     }
+
+    if (!shipment) {
+      for (const resource of ['food', 'wood', 'minerals', 'goods'] as const) {
+        const gap = a.resources[resource] / aPopulation - b.resources[resource] / bPopulation;
+        const source = gap > 0 ? a : b;
+        const target = gap > 0 ? b : a;
+        const quantity = Math.min(Math.abs(gap) * route.volume * 1.8, source.resources[resource] * 0.04, route.volume * 6);
+        if (quantity > 0.08 && quantity > (shipment?.quantity ?? 0)) shipment = { source, target, resource, quantity, reason: 'trade' };
+      }
+      if (shipment?.resource) shipment.source.resources[shipment.resource] -= shipment.quantity;
+    }
+
     transport.nextDispatchMonth = this.state.month + 6;
     if (!shipment) return undefined;
     const path = transport.path;
     const reverse = shipment.source.id === b.id;
     const mode = path.mode === 'road' && capabilityPractice(shipment.source, 'wheel-axle', 'adopted') < 0.22 ? 'walk' : path.mode;
-    shipment.source.resources[shipment.resource] -= shipment.quantity;
     transport.trip = {
       id: `${route.id}:freight:${this.state.month}`, origin: shipment.source.id, destination: shipment.target.id,
-      reason: 'trade', mode, resource: shipment.resource, quantity: shipment.quantity, departedMonth: this.state.month,
+      reason: shipment.reason, mode, resource: shipment.resource, material: shipment.material,
+      quantity: shipment.quantity, departedMonth: this.state.month,
       distance: 0, status: 'moving',
       path: { ...path, points: (reverse ? [...path.points].reverse() : path.points).map(p => ({ ...p })), segmentIds: reverse ? [...path.segmentIds].reverse() : [...path.segmentIds] },
     };
@@ -214,12 +319,26 @@ export class TransportationSystem {
       if (!survey) return;
       if (segment.kind === 'bridge'
         && Math.min(capabilityPractice(a, 'improved-roads', 'adopted'), capabilityPractice(b, 'improved-roads', 'adopted')) <= 0.28) return;
-      const minerals = project.mode === 'rail' ? 0.65 : segment.kind === 'bridge' ? 0.4 : 0.05;
-      const amount = Math.min(work, segment.cost - segment.work, a.resources.wealth, a.resources.wood / 0.3, a.resources.minerals / minerals);
-      if (amount <= 0.0001) return;
+
+      const typedAuthority = materialAuthority(a, b);
+      const typedWork = maxCapitalWork(a, b, segment);
+      const legacyMinerals = project.mode === 'rail' ? 0.65 : segment.kind === 'bridge' ? 0.4 : 0.05;
+      const amount = typedAuthority
+        ? Math.min(work, segment.cost - segment.work, a.resources.wealth, typedWork)
+        : Math.min(work, segment.cost - segment.work, a.resources.wealth, a.resources.wood / 0.3, a.resources.minerals / legacyMinerals);
+      if (amount <= 0.0001) {
+        if (typedAuthority && typedWork <= 0.0001) segment.materialBlockedSince ??= this.state.month;
+        return;
+      }
+
       a.resources.wealth -= amount;
-      a.resources.wood -= amount * 0.3;
-      a.resources.minerals -= amount * minerals;
+      if (typedAuthority) {
+        consumeCapital(a, b, segment, amount, this.state.month);
+        segment.materialBlockedSince = undefined;
+      } else {
+        a.resources.wood -= amount * 0.3;
+        a.resources.minerals -= amount * legacyMinerals;
+      }
       segment.work += amount;
       work -= amount;
       if (segment.status === 'planned') { segment.status = 'under-construction'; network.revision++; }
