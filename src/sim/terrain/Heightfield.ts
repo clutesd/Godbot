@@ -1,4 +1,5 @@
 import { beltSeeded, clamp01, domainWarpSeeded, fbm, fbmSeeded, octaveSeeds, ridgedSeeded, smoothstep, type OctaveSeeds } from './noise';
+import { geologySampler } from '../environment/GeologySystem';
 
 export interface HeightfieldOptions {
   readonly seed: string;
@@ -199,6 +200,7 @@ export function synthesizeHeightfield(options: HeightfieldOptions): RawHeightfie
   const originZ = (-size / 2) * cellSize;
   const height = new Float32Array(resolution * resolution);
   const seeds = geologySeeds(seed);
+  const parentRock = geologySampler(seed);
   const span = size - 1;
 
   for (let z = 0; z < resolution; z += 1) {
@@ -207,7 +209,7 @@ export function synthesizeHeightfield(options: HeightfieldOptions): RawHeightfie
     const v = gz / span;
     for (let x = 0; x < resolution; x += 1) {
       const gx = x / subdivision;
-      height[z * resolution + x] = rawElevation(seeds, gx * noiseScale + offsetX, nz, gx / span, v);
+      height[z * resolution + x] = rawElevation(seeds, gx * noiseScale + offsetX, nz, gx / span, v) + parentRock(gx, gz).uplift;
     }
   }
 

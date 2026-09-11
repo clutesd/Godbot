@@ -12,6 +12,8 @@ import { advanceStructureFires } from './fire/StructureFireSystem';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
 import { ResourceSystem, createMaterialState, type ResourceEventDraft } from './resources/ResourceSystem';
+import { discoverProvince } from './resources/ResourceDiscoverySystem';
+import { environmentalSuitability, knownResourceAttraction, waterEconomy } from './resources/SettlementEnvironment';
 import { addMaterial, materialEconomy, reconcileBulkStocks, takeMaterial } from './resources/Inventory';
 import { campaignFront, campaignFocus, campaignSupply, createCampaign, TRUCE_MONTHS } from './war/Campaign';
 import type {
@@ -485,7 +487,7 @@ export class Simulation {
       this.state.stats.settlementsFounded += 1;
       this.addEvent({
         type: 'settlement-founded', location: settlement.position, locationId: id, actors: [id, culture.id],
-        causes: ['population-pressure', 'search-for-opportunity'], context: { fertility: cell.fertility, minerals: cell.minerals },
+        causes: ['population-pressure', 'search-for-opportunity', 'local-environment'], context: { fertility: cell.fertility, woodland: cell.wood, waterAccess: cell.soil?.waterAccess ?? 0, parentRock: cell.geology?.family ?? 'unknown' },
         outcome: `${name} became a permanent settlement.`, affectedPopulation: 0, magnitude: 0.64, significance: 0.76,
         tags: ['settlement', 'migration'], summary: `${name} is founded on new ground.`,
       });
@@ -667,7 +669,8 @@ export class Simulation {
         .reduce((sum, plot) => sum + Math.max(plot.condition < 0.65 ? 1 - plot.condition : 0,
           clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
       const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
-      balance.food = (farmers * (0.54 + cell.fertility * 0.7) * season * climatePulse * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.18 + cell.fertility * 0.25)) * safetyFactor * productivity.food * exposedWork - people.length * (0.31 + settlement.urbanization * 0.018);
+      const irrigation = 1 + waterEconomy(cell, settlement).irrigation * 0.12;
+      balance.food = (farmers * (0.54 + cell.fertility * 0.7) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.18 + cell.fertility * 0.25)) * safetyFactor * productivity.food * exposedWork - people.length * (0.31 + settlement.urbanization * 0.018);
       // Raw materials arrive only through extraction or freight. Bulk stocks are inventory projections.
       balance.wood = -Math.min(settlement.resources.wood, settlement.buildings * 0.022);
       balance.minerals = 0;
@@ -954,7 +957,7 @@ export class Simulation {
         for (const [source, target] of [[a, b], [b, a]] as const) {
           const id = source.discoveredDeposits.find(id => !target.discoveredDeposits.includes(id));
           const deposit = this.state.world.resourceDeposits.find(d => d.id === id);
-          if (deposit) { target.discoveredDeposits.push(deposit.id); deposit.discoveredBy[target.id] = this.state.month; }
+          if (deposit) discoverProvince(target, deposit, this.state.month);
         }
         this.applyKnowledgeEvents(this.knowledgeSystem.diffuseTrade(this.state, a, b, route));
         this.diffuseRouteCultures(a, b, route.volume);
@@ -1543,7 +1546,9 @@ export class Simulation {
           targetPeople.push(person);
           this.peopleBySettlement.set(target.id, targetPeople);
         }
-        this.addEvent({ type: 'settlement-abandoned', location: settlement.position, locationId: settlement.id, actors: [settlement.id], causes: ['population-decline'], context: { survivors: survivorCount }, outcome: 'The remaining households departed.', affectedPopulation: survivorCount, magnitude: 0.66, significance: 0.72, tags: ['collapse', 'migration'], summary: `${settlement.name} is abandoned.` });
+        const exhaustedDistricts = this.state.world.resourceDeposits.filter(d => !d.renewable && d.depleted && d.discoveredBy[settlement.id] !== undefined
+          && (materialEconomy(settlement).experience[d.resourceId] ?? 0) > 0).length;
+        this.addEvent({ type: 'settlement-abandoned', location: settlement.position, locationId: settlement.id, actors: [settlement.id], causes: ['population-decline', ...(exhaustedDistricts ? ['local-resource-exhaustion'] : [])], context: { survivors: survivorCount, exhaustedDistricts }, outcome: 'The remaining households departed.', affectedPopulation: survivorCount, magnitude: 0.66, significance: 0.72, tags: ['collapse', 'migration'], summary: `${settlement.name} is abandoned${exhaustedDistricts ? ' after local extraction districts were exhausted' : ''}.` });
         continue;
       }
       const modern = this.state.advanced.scale === 'modern-statistical';
@@ -1555,7 +1560,8 @@ export class Simulation {
       if (this.livingSettlements().length >= settlementTarget || !growthReady || settlement.foodSecurity < 0.52 || !this.random.chance(modern ? 0.025 : 0.08)) continue;
       const candidates = this.state.world.cells
         .filter((cell) => !cell.water && cell.habitability > 0.56 && this.livingSettlements().every((other) => distance({ x: cell.worldX, z: cell.worldZ }, other.position) > 16))
-        .sort((a, b) => b.habitability + b.minerals * 0.18 - (a.habitability + a.minerals * 0.18));
+        .map(cell => ({ cell, score: environmentalSuitability(cell) + knownResourceAttraction(this.state.world, settlement, cell) }))
+        .sort((a, b) => b.score - a.score).map(entry => entry.cell);
       const cell = candidates[0];
       const culture = this.dominantCulture(settlement);
       if (!cell || !culture) continue;

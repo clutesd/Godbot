@@ -1,12 +1,14 @@
 import type { SeededRandom } from '../prng';
 import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
-import { WalkabilityLayer } from '../people/WalkabilityLayer';
-import type { MaterialInventory, ResourceDeposit, Settlement, SimulationState, Vec2 } from '../types';
+import type { MaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
-import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom } from './Inventory';
+import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom, takeMaterial } from './Inventory';
 import { processRecipes, useLabour, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
+import { ExtractionAccessibility } from './ExtractionAccessibility';
+import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
+import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, modifyLand, wearExtractionPath } from '../environment/EnvironmentalModificationSystem';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 export type ResourceEventDraft = KnowledgeEventDraft;
@@ -25,18 +27,19 @@ export function extractableQuantity(s: Settlement, deposit: ResourceDeposit): nu
   let accessible = deposit.surfaceShare ?? 1;
   if (definition.extractionKnowledge) {
     const technology = mastery(s, definition.extractionKnowledge).practice;
-    if (technology >= 0.3 && s.infrastructure.workshops >= 0.05) accessible += (1 - accessible) * clamp(technology + s.infrastructure.workshops * 0.4);
+    if (technology >= 0.3 && s.infrastructure.workshops >= 0.05) accessible += (1 - accessible) * clamp((technology + s.infrastructure.workshops * 0.4) / (1 + (deposit.depth ?? 0) * 0.3));
   }
   return deposit.capacity * Math.max(0, Math.min(deposit.abundance, accessible - (1 - deposit.abundance)));
 }
 
 export class ResourceSystem {
-  private walking?: WalkabilityLayer;
+  private access?: ExtractionAccessibility;
   private world?: SimulationState['world'];
   constructor(private readonly random: SeededRandom) {}
   advanceMonth(state: SimulationState): ResourceEventDraft[] {
-    if (this.world !== state.world) { this.world = state.world; this.walking = new WalkabilityLayer(state.world); }
+    if (this.world !== state.world) { this.world = state.world; this.access = new ExtractionAccessibility(state); }
     const events: ResourceEventDraft[] = [];
+    advanceEnvironment(state);
     advanceDeposits(state.world, state.month);
     const deposits = new Map(state.world.resourceDeposits.map(d => [d.id, d]));
     const peopleByHome = new Map<string, SimulationState['people']>();
@@ -54,7 +57,7 @@ export class ResourceSystem {
       economy.energyDemand = 0; economy.energySupplied = 0; economy.labourUsed = 0;
       economy.delivered = {};
       this.deliver(state, s, deposits);
-      const radius = (6 + s.infrastructure.roads * 6) * state.world.cellSize;
+      const radius = (7 + s.infrastructure.roads * 10 + s.infrastructure.ports * 16 + s.infrastructure.rail * 20) * state.world.cellSize;
       const nearby = state.world.resourceDeposits.filter(d => Math.hypot(d.worldX - s.position.x, d.worldZ - s.position.z) <= radius);
       this.discover(state, s, nearby, budget, events);
       events.push(...processRecipes(state, s, budget, this.random));
@@ -69,18 +72,11 @@ export class ResourceSystem {
       deposit.abandonedMonth = state.month;
       if (owner) {
         owner.workedDeposits = owner.workedDeposits.filter(id => id !== deposit.id);
-        events.push(this.siteEvent(owner, deposit, 'resource-site-abandoned', 'Abandoned after extraction ceased.', ['extraction-ceased']));
+        if (!deposit.renewable || deposit.depleted) events.push(this.siteEvent(owner, deposit, 'resource-site-abandoned', 'Abandoned after extraction ceased.', ['extraction-ceased']));
       }
       deposit.controlledBy = undefined;
     }
     return events;
-  }
-  private path(s: Settlement, deposit: ResourceDeposit): Vec2[] {
-    const end = { x: deposit.worldX, z: deposit.worldZ };
-    if (!this.walking!.isWalkable(end)) return [];
-    const path = this.walking!.route(s.position, end);
-    const last = path.at(-1);
-    return last && Math.hypot(last.x - end.x, last.z - end.z) < 0.1 ? path : [];
   }
   private discover(state: SimulationState, s: Settlement, nearby: ResourceDeposit[], budget: LabourBudget, events: ResourceEventDraft[]): void {
     const explorers = budget.forager ?? 0;
@@ -88,11 +84,17 @@ export class ResourceSystem {
     for (const deposit of nearby) {
       if (s.discoveredDeposits.includes(deposit.id) || deposit.depleted) continue;
       const distance = Math.hypot(deposit.worldX - s.position.x, deposit.worldZ - s.position.z) / state.world.cellSize;
-      if (!this.random.chance(0.06 * Math.min(2, explorers / 3) / (1 + distance * 0.25)) || !this.path(s, deposit).length) continue;
-      s.discoveredDeposits.push(deposit.id); deposit.discoveredBy[s.id] = state.month;
+      const readiness = discoveryReadiness(s, deposit);
+      if (readiness <= 0 || !this.random.chance(0.06 * readiness * Math.min(2, explorers / 3) / (1 + distance * 0.25)) || !this.access!.resolve(s, deposit)) continue;
+      discoverProvince(s, deposit, state.month);
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += 0.05;
-      events.push(this.siteEvent(s, deposit, 'resource-deposit-discovered', `${s.name} located ${definition.name.toLowerCase()}; extraction still requires labour and access.`, ['exploration']));
+      const key = `discovery:${definition.id}`;
+      const economy = materialEconomy(s);
+      if (state.month - (economy.lastEventMonth[key] ?? -120) >= 120) {
+        economy.lastEventMonth[key] = state.month;
+        events.push(this.siteEvent(s, deposit, 'resource-deposit-discovered', `${s.name} located ${definition.name.toLowerCase()}; extraction still requires labour and access.`, [readiness > (deposit.exposure ?? 1) ? 'prospecting' : 'exploration']));
+      }
     }
     materialEconomy(s).labourUsed += useLabour(budget, ['forager'], Math.min(0.2, explorers));
   }
@@ -101,7 +103,7 @@ export class ResourceSystem {
     for (const shipment of [...economy.inTransit]) {
       const deposit = deposits.get(shipment.depositId);
       if (deposit && !depositControlled(state, s, deposit)) continue;
-      if (shipment.path.some((p, i) => i > 0 && !this.walking!.isSegmentWalkable(shipment.path[i - 1]!, p))) continue;
+      if (!this.access!.valid({ accessPaths: shipment.accessPaths ?? [shipment.path], networkPath: shipment.networkPath })) continue;
       shipment.remainingMonths--;
       if (shipment.remainingMonths > 0) continue;
       economy.inTransit = economy.inTransit.filter(item => item !== shipment);
@@ -112,8 +114,11 @@ export class ResourceSystem {
   }
   private gather(state: SimulationState, s: Settlement, nearby: ResourceDeposit[], budget: LabourBudget, events: ResourceEventDraft[]): void {
     const economy = materialEconomy(s);
-    const queue = nearby.filter(d => s.discoveredDeposits.includes(d.id) && depositControlled(state, s, d))
-      .sort((a, b) => ((s.materials[a.resourceId] ?? 0) / (economy.demand[a.resourceId] ?? 6)) - ((s.materials[b.resourceId] ?? 0) / (economy.demand[b.resourceId] ?? 6)) || a.id.localeCompare(b.id));
+    const value = (d: ResourceDeposit) => d.quality * (d.accessibility ?? 1) / ((this.access!.resolve(s, d)?.cost ?? Infinity) * (1 + (d.extractionDifficulty ?? 0)));
+    const queue = nearby.filter(d => s.discoveredDeposits.includes(d.id) && depositControlled(state, s, d) && extractableQuantity(s, d) > 0
+      && (s.materials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))
+      .map(d => ({ d, value: value(d), need: (s.materials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6) }))
+      .sort((a, b) => a.need - b.need || b.value - a.value || a.d.id.localeCompare(b.d.id)).map(item => item.d);
     for (const deposit of queue) {
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       const available = extractableQuantity(s, deposit);
@@ -123,43 +128,66 @@ export class ResourceSystem {
       if ((s.materials[definition.id] ?? 0) + incoming >= desired) continue;
       const cell = state.world.cells[deposit.cellIndex]!;
       const weather = state.world.weather?.cells[deposit.cellIndex];
-      const season = definition.category === 'plant' ? harvestSeason(state.world, deposit, state.month) : 1;
+      const season = definition.category === 'plant' ? harvestSeason(state.world, deposit, state.month)
+        : definition.category === 'timber' ? 0.55 + harvestSeason(state.world, deposit, state.month) * 0.45 : 1;
       if (season <= 0 || (weather?.snowpack ?? 0) > 0.9 || (weather?.floodDepth ?? 0) > 0.1) continue;
-      const path = this.path(s, deposit);
-      if (!path.length) continue;
-      const length = path.reduce((sum, p, i) => sum + (i ? Math.hypot(p.x - path[i - 1]!.x, p.z - path[i - 1]!.z) : 0), 0) / state.world.cellSize;
-      if (length > 9 + s.infrastructure.roads * 10) continue;
-      const transportCost = 1 + length * (0.28 + cell.movementCost * 0.06) / (1 + s.infrastructure.roads * 2);
+      const access = this.access!.resolve(s, deposit);
+      if (!access || access.cost > 8) continue;
+      const { path } = access;
+      const transportCost = access.cost * (1 + (deposit.extractionDifficulty ?? 0));
       const labour = definition.gatherOccupations.reduce((sum, o) => sum + (budget[o] ?? 0), 0);
       const tools = 1 + clamp(economy.tools / 12) * 0.7;
       const primitiveWood = definition.category === 'timber' && mastery(s, 'stone-composites').practice < 0.18 ? 0.25 : 1;
       const exposed = Math.max(0, 1 - (weather?.blizzard ?? 0) * 0.5 - (weather?.snowpack ?? 0) * 0.3);
       const rate = definition.gatherYieldPerWorker * Math.max(0.12, deposit.quality) * (deposit.accessibility ?? 1) * season * tools * Math.max(0, 1 - s.conflictPressure * 0.8) * primitiveWood * exposed / transportCost;
       if (rate <= 0) continue;
-      const amount = Math.min(available, labour * rate, storageRoom(s), desired - (s.materials[definition.id] ?? 0) - incoming);
+      const surfaceRemaining = deposit.capacity * Math.max(0, (deposit.surfaceShare ?? 1) - (1 - deposit.abundance));
+      const fuel = deposit.depth !== undefined ? definition.deepEnergy : undefined;
+      const deepCapacity = fuel ? (s.materials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
+      const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.materials[definition.id] ?? 0) - incoming);
       if (amount <= 0.00001) continue;
       economy.labourUsed += useLabour(budget, definition.gatherOccupations, amount / rate);
+      if (fuel && amount > surfaceRemaining) {
+        const spent = takeMaterial(s, fuel.material, (amount - surfaceRemaining) * fuel.perUnit);
+        economy.energyDemand += spent; economy.energySupplied += spent;
+      }
       deposit.abundance = Math.max(0, deposit.abundance - amount / deposit.capacity);
+      deposit.extracted = (deposit.extracted ?? 0) + amount;
       if (definition.category === 'timber') {
-        cell.forestCapacity ??= Math.max(0.01, cell.wood);
-        cell.wood = Math.max(0, cell.wood - amount / deposit.capacity * cell.forestCapacity);
-        cell.lastLoggingMonth = state.month;
+        logProvince(state.world, deposit, amount, state.month, s.id);
       } else if (definition.ecologicalDamage) {
         cell.fertility = Math.max(0, cell.fertility - amount / deposit.capacity * definition.ecologicalDamage);
         s.pollution = clamp(s.pollution + amount * definition.ecologicalDamage * 0.0005);
+        modifyLand(cell, definition.id === 'stone' ? 'quarry' : 'mine', Math.min(1, 0.06 + deposit.extracted / Math.max(10, deposit.capacity * 0.1)), state.month, s.id);
+        const target = forestRecoveryTarget(cell);
+        if (cell.wood > target) { disturbForest(cell, (cell.wood - target) / Math.max(0.01, cell.forestCapacity ?? 1), state.month); cell.wood = target; }
+      }
+      for (const leg of access.accessPaths) wearExtractionPath(state.world, leg, amount, state.month, s.id);
+      deposit.accessTrails = access.accessPaths;
+      if (definition.category === 'timber' && deposit.abundance < 0.35 && !deposit.deforestationRecorded) {
+        deposit.deforestationRecorded = true;
+        events.push({ ...this.siteEvent(s, deposit, 'ecological-crisis', 'Sustained logging removed most of a woodland district.', ['deforestation']),
+          summary: `${s.name}'s timber district has lost most of its standing forest.`, significance: 0.7 });
+      }
+      if (!deposit.renewable && deposit.extracted > deposit.capacity * 0.12 && deposit.establishedMonth !== undefined
+        && state.month - deposit.establishedMonth < 600 && !deposit.expansionRecorded) {
+        deposit.expansionRecorded = true;
+        events.push({ ...this.siteEvent(s, deposit, 'resource-site-established', 'Extraction expanded rapidly across the mineral district.', ['mining-expansion']),
+          summary: `${s.name}'s ${definition.name.toLowerCase()} district expands rapidly.`, significance: 0.68 });
       }
       if (deposit.renewable && deposit.abundance < 0.2) deposit.overharvested = true;
       if (deposit.abundance < 1e-8) {
         deposit.abundance = 0; deposit.depleted = true;
-        events.push(this.siteEvent(s, deposit, 'resource-depleted', `Extraction exhausted the ${definition.name.toLowerCase()} at this site.`, ['depletion']));
+        if (!deposit.renewable) events.push(this.siteEvent(s, deposit, 'resource-depleted', `Extraction exhausted the ${definition.name.toLowerCase()} at this site.`, ['depletion']));
       }
       economy.inTransit.push({ depositId: deposit.id, resourceId: definition.id, quantity: amount, quality: deposit.quality, path,
-        remainingMonths: Math.max(1, Math.ceil(length / (2 + s.infrastructure.roads * 4))) });
+        accessPaths: access.accessPaths, networkPath: access.networkPath, remainingMonths: access.months });
       economy.experience[definition.id] = (economy.experience[definition.id] ?? 0) + amount;
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += amount * 0.006;
       if (!s.workedDeposits.includes(deposit.id)) {
+        const first = deposit.establishedMonth === undefined;
         s.workedDeposits.push(deposit.id); deposit.controlledBy ??= s.id; deposit.establishedMonth ??= state.month; deposit.abandonedMonth = undefined;
-        events.push(this.siteEvent(s, deposit, 'resource-site-established', `${s.name} assigned workers and a carrying route to ${definition.name.toLowerCase()}.`, ['labour-assigned', 'surveyed-access']));
+        if (first) events.push(this.siteEvent(s, deposit, 'resource-site-established', `${s.name} assigned workers and a carrying route to ${definition.name.toLowerCase()}.`, ['labour-assigned', 'surveyed-access']));
       }
       deposit.lastWorkedMonth = state.month;
     }

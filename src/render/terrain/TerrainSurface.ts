@@ -48,6 +48,7 @@ export class TerrainSurface {
   private readonly moistureField: Float32Array;
   private readonly temperatureField: Float32Array;
   private readonly woodField: Float32Array;
+  private readonly fertilityField: Float32Array;
   private readonly grainSeeds = octaveSeeds('terrain', 'surface-grain', 3);
   private readonly rockTone = new THREE.Color();
   private readonly scratch = new THREE.Color();
@@ -59,12 +60,14 @@ export class TerrainSurface {
     this.moistureField = new Float32Array(count);
     this.temperatureField = new Float32Array(count);
     this.woodField = new Float32Array(count);
+    this.fertilityField = new Float32Array(count);
     for (let index = 0; index < count; index += 1) {
       const cell = world.cells[index];
       if (!cell) continue;
       this.moistureField[index] = cell.moisture;
       this.temperatureField[index] = cell.temperature;
       this.woodField[index] = cell.wood;
+      this.fertilityField[index] = cell.fertility * (cell.soil?.waterAccess ?? 0);
     }
   }
 
@@ -254,6 +257,7 @@ export class TerrainSurface {
       colour.lerp(PALETTE.dry, smoothstep(0.44, 0.2, moisture));
       colour.lerp(PALETTE.desert, smoothstep(0.3, 0.12, moisture) * smoothstep(0.5, 0.78, temperature));
       colour.lerp(PALETTE.lush, smoothstep(0.5, 0.78, moisture));
+      colour.lerp(PALETTE.lush, this.sampleCellField(this.fertilityField, worldX, worldZ) * 0.3);
       colour.lerp(PALETTE.forestFloor, smoothstep(0.46, 0.78, wood));
       colour.lerp(PALETTE.wetland, smoothstep(0.68, 0.9, moisture) * smoothstep(seaLevel + 0.16, seaLevel, elevation));
       // Floodplain silt beside the rivers.

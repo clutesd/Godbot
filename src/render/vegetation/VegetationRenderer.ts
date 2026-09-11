@@ -286,7 +286,7 @@ export class VegetationRenderer {
       if (!target || target.count >= target.capacity) continue;
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       // Logging and regrowth use the same stand stock as extraction; hidden slots restart young.
-      if (cell?.lastLoggingMonth !== undefined && !placement.id && !placement.managedBy) {
+      if (cell && (cell.lastLoggingMonth !== undefined || cell.modifications) && !placement.id && !placement.managedBy) {
         const standing = clamp01(cell.wood / Math.max(0.01, cell.forestCapacity ?? cell.wood));
         const rank = stableHash(`${this.seed}:logging-tree`, Math.round(placement.worldX * 100), Math.round(placement.worldZ * 100));
         if (rank > standing) {

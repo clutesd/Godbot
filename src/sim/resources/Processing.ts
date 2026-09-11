@@ -46,7 +46,9 @@ export function processRecipes(state: SimulationState, s: Settlement, budget: La
     for (const [id, quantity] of Object.entries(inputs)) economy.demand[id] = Math.max(economy.demand[id] ?? 0, quantity * 3);
     const inputCycles = Math.min(...Object.entries(inputs).map(([id, quantity]) => Math.floor((s.materials[id] ?? 0) / quantity)));
     const workers = recipe.craftOccupations.reduce((sum, o) => sum + (budget[o] ?? 0), 0);
-    const labour = recipe.labour ?? 1;
+    const cell = state.world.cells[s.cellIndex];
+    const waterWork = (cell?.soil?.waterAccess ?? 0) * s.infrastructure.workshops * mastery(s, 'wheel-axle').practice;
+    const labour = (recipe.labour ?? 1) / (1 + waterWork * 0.2);
     const maxOutput = Object.values(recipe.outputs).reduce((a, b) => a + b, 0) + Object.values(recipe.byproducts ?? {}).reduce((a, b) => a + b, 0);
     const netSpace = Math.max(0, maxOutput - Object.values(inputs).reduce((a, b) => a + b, 0));
     const cycles = Math.min(3, inputCycles, Math.floor(workers / labour), netSpace ? Math.floor(storageRoom(s) / netSpace) : 3);

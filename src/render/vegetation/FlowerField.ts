@@ -203,7 +203,9 @@ export class FlowerField {
       const moistureVigor = 0.55 + smoothstep(0.18, 0.52, currentMoisture) * smoothstep(0.96, 0.62, currentMoisture) * 0.45;
       const annualMonth = ((month % 12) + 12) % 12;
       const emergence = smoothstep(1, 1.4, annualMonth) * smoothstep(10, 9.6, annualMonth);
-      const size = placement.scale * placement.vigor * moistureVigor * growth.scale * emergence * distanceScale;
+      const soilVigor = cell?.soil ? (0.55 + cell.soil.depth * 0.45) * (1 - (cell.ecology?.disturbance ?? 0) * 0.8)
+        * (1 - (cell.modifications?.farmland?.intensity ?? 0)) : 1;
+      const size = placement.scale * placement.vigor * moistureVigor * soilVigor * growth.scale * emergence * distanceScale;
       if (size <= 0.01) continue;
 
       this.position.set(placement.worldX, groundY + 0.004, placement.worldZ);

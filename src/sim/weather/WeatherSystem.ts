@@ -5,6 +5,7 @@ import { classifyWaterDepth, waterDepthAt } from '../terrain/SurfaceGeometry';
 import { cellAt } from '../world';
 import { tornadoDamage, tornadoExposure, tornadoPotential } from './Tornado';
 import { FREEZING, hasPrecipitation, precipitationPhase } from './Precipitation';
+import { disturbForest, forestRecoveryTarget } from '../environment/EnvironmentalModificationSystem';
 import type { Vec2, WeatherDescriptor, WeatherFront, WeatherKind, WeatherState, WorldCell, WorldState } from '../types';
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -284,9 +285,12 @@ export class WeatherSystem {
       conditions.treeDamage = clamp01(conditions.treeDamage + damage);
       conditions.lastWindthrowMonth = this.state.month;
       cell.wood = Math.max(0, cell.wood * (1 - damage));
+      disturbForest(cell, damage, this.state.month);
     }
     if (this.state.month - conditions.lastWindthrowMonth > 24) {
-      cell.wood += Math.max(0, this.woodlandCapacity[index]! - cell.wood) * (1 - 0.998 ** months);
+      const target = cell.soil ? forestRecoveryTarget(cell) : this.woodlandCapacity[index]!;
+      const health = cell.soil ? clamp01(cell.moisture * 1.6) * (0.4 + cell.soil.depth * 0.6) * clamp01(1 - Math.abs(temperature - 0.5) * 1.5) : 1;
+      cell.wood += Math.max(0, target - cell.wood) * (1 - 0.998 ** (months * health));
     }
   }
 }

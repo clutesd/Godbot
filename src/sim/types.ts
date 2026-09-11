@@ -2,6 +2,7 @@ import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState } from './transport/types';
 import type { SettlementDevelopment, StructureDevelopment } from './development/types';
+import type { ForestCommunity, Geology, LandModification, ModificationKind, Soil } from './environment/types';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
 
@@ -26,6 +27,10 @@ export type Landform =
   | 'canyon';
 
 export interface WorldCell {
+  geology?: Geology;
+  soil?: Soil;
+  ecology?: ForestCommunity;
+  modifications?: Partial<Record<ModificationKind, LandModification>>;
   x: number;
   z: number;
   worldX: number;
@@ -79,6 +84,17 @@ export interface WorldState {
  * must discover them before they can be worked, and non-renewable deposits are consumed by use.
  */
 export interface ResourceDeposit {
+  /** A connected province; optional only for old/custom single-cell fixtures. */
+  cells?: Array<{ cellIndex: number; capacity: number; quality: number }>;
+  provinceName?: string;
+  depth?: number;
+  exposure?: number;
+  extractionDifficulty?: number;
+  extracted?: number;
+  expansionRecorded?: boolean;
+  deforestationRecorded?: boolean;
+  /** Surveyed dry carrying paths retained after abandonment. */
+  accessTrails?: Vec2[][];
   id: string;
   resourceId: string;
   cellIndex: number;
@@ -109,6 +125,8 @@ export interface ResourceDeposit {
 export type MaterialInventory = Record<string, number>;
 
 export interface MaterialShipment {
+  networkPath?: import('./transport/types').TraversalPath;
+  accessPaths?: Vec2[][];
   depositId: string;
   resourceId: string;
   quantity: number;

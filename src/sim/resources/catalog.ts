@@ -1,4 +1,5 @@
 import type { Biome, InfrastructureState, InstitutionKind, Occupation, KnowledgeDomain } from '../types';
+import type { RockFamily } from '../environment/types';
 
 export type ResourceCategory = 'plant' | 'timber' | 'mineral';
 
@@ -20,7 +21,11 @@ export interface ResourceDefinition {
   minWood?: number;
   minMinerals?: number;
   minRockiness?: number;
-  /** 0..1; lower means rarer deposits (scarcity like tin drives trade/dependence). */
+  geology?: { families?: readonly RockFamily[]; minPotential: number };
+  minSoilDepth?: number;
+  temperatureRange?: readonly [number, number];
+  deepEnergy?: { material: string; perUnit: number };
+  /** 0..1; lower requires stronger regional enrichment, never a per-cell random draw. */
   rarity: number;
   /** Typical intrinsic richness of a deposit, 0..1. */
   baseQuality: number;
@@ -48,7 +53,8 @@ export const RESOURCE_CATALOG: readonly ResourceDefinition[] = [
   {
     id: 'wild-herbs', name: 'Wild medicinal herbs', category: 'plant', renewable: true,
     description: 'Flowering, rooted, and aromatic plants gathered from healthy ground cover; a source of medicine, dye, and poison alike.',
-    biomes: ['grassland', 'forest', 'wetland'], minFertility: 0.3, minMoisture: 0.3,
+    biomes: ['grassland', 'forest', 'wetland', 'highland', 'mountain'], minFertility: 0.3, minMoisture: 0.3,
+    minSoilDepth: 0.18, temperatureRange: [0.2, 0.7],
     rarity: 0.6, baseQuality: 0.55, regenRate: 0.025, depositCapacityRange: [40, 120], researchDomain: 'medicine',
     gatherOccupations: ['forager'], gatherYieldPerWorker: 0.9,
   },
@@ -70,7 +76,9 @@ export const RESOURCE_CATALOG: readonly ResourceDefinition[] = [
   {
     id: 'copper-ore', name: 'Copper ore', category: 'mineral', renewable: false,
     description: 'Native copper and oxidized ore bodies workable with early metallurgy.',
-    biomes: ['highland', 'mountain', 'dryland'], minMinerals: 0.4, minRockiness: 0.3,
+    biomes: ['highland', 'mountain', 'dryland', 'grassland', 'forest'], minMinerals: 0.3, minRockiness: 0.08,
+    geology: { families: ['volcanic', 'metamorphic'], minPotential: 0.35 },
+    deepEnergy: { material: 'charcoal', perUnit: 0.08 },
     rarity: 0.32, baseQuality: 0.5, regenRate: 0, depositCapacityRange: [180, 480],
     gatherOccupations: ['forager', 'artisan'], gatherYieldPerWorker: 0.55,
     understandingKnowledge: 'material-testing',
@@ -79,7 +87,9 @@ export const RESOURCE_CATALOG: readonly ResourceDefinition[] = [
   {
     id: 'tin-ore', name: 'Tin ore', category: 'mineral', renewable: false,
     description: 'Rare cassiterite deposits essential for bronze alloying; scarcity drives long-distance trade.',
-    biomes: ['highland', 'mountain'], minMinerals: 0.5, minRockiness: 0.4,
+    biomes: ['highland', 'mountain', 'grassland', 'forest'], minMinerals: 0.4, minRockiness: 0.15,
+    geology: { families: ['granite'], minPotential: 0.46 },
+    deepEnergy: { material: 'charcoal', perUnit: 0.1 },
     rarity: 0.12, baseQuality: 0.45, regenRate: 0, depositCapacityRange: [70, 220],
     gatherOccupations: ['forager', 'artisan'], gatherYieldPerWorker: 0.4,
     understandingKnowledge: 'material-testing',
@@ -88,7 +98,9 @@ export const RESOURCE_CATALOG: readonly ResourceDefinition[] = [
   {
     id: 'iron-ore', name: 'Iron ore', category: 'mineral', renewable: false,
     description: 'Iron-bearing rock that requires sustained heat and skill to reduce to usable metal.',
-    biomes: ['highland', 'mountain'], minMinerals: 0.45, minRockiness: 0.35,
+    biomes: ['highland', 'mountain', 'grassland', 'forest', 'wetland', 'dryland'], minMinerals: 0.3, minRockiness: 0.04,
+    geology: { families: ['metamorphic', 'sedimentary'], minPotential: 0.32 },
+    deepEnergy: { material: 'charcoal', perUnit: 0.1 },
     rarity: 0.28, baseQuality: 0.5, regenRate: 0, depositCapacityRange: [220, 620],
     gatherOccupations: ['forager', 'artisan'], gatherYieldPerWorker: 0.5,
     understandingKnowledge: 'material-testing',

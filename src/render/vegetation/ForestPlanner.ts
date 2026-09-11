@@ -1,4 +1,5 @@
 import { SeededRandom } from '../../sim/prng';
+import { cellAt } from '../../sim/world';
 import { clamp01, fbm, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
@@ -150,7 +151,8 @@ function ecologyAt(
   const aboveTide = smoothstep(seaLevel - 0.004, seaLevel + 0.012, sample.elevation);
   const density = clamp01(canopy * standing * treeline * aboveTide * smoothstep(0.34, 0.62, patch) * smoothstep(0.92, 0.62, clearing));
 
-  let family: TreeFamily = 'broadleaf';
+  const community = cellAt(world, worldX, worldZ)?.ecology;
+  let family: TreeFamily = community?.family ?? 'broadleaf';
   if (sample.elevation > mountainLevel - 0.06) family = 'alpine';
   else if (sample.temperature < 0.34 || sample.elevation > mountainLevel - 0.2) family = 'conifer';
   else if (sample.flow > 0.34) family = 'riverbank';
@@ -163,6 +165,7 @@ function ecologyAt(
     const orchard = cultivated > 0.5 && fbm(`${seed}:orchard`, worldX * 0.1, worldZ * 0.1, 3) > 0.63;
     if ((grove > 0.73 || orchard) && sample.moisture > 0.4 && sample.temperature > 0.4 && sample.slope < 0.36) family = 'cherry';
   }
+  if (community && family !== 'cherry') family = community.family;
   return { density, family };
 }
 
@@ -223,7 +226,7 @@ export function planForest(
       const family = ancient ? 'ancient' : ecology.family;
       const lifespan = LIFESPAN_YEARS[family];
       const lifespanYears = random.int(lifespan[0], lifespan[1] + 1);
-      const establishedYear = ancient ? -random.int(110, 420) : -Math.round(age * Math.min(80, lifespanYears * 0.7));
+      const establishedYear = ancient ? -random.int(110, 420) : -Math.round(age * Math.min(cell.ecology?.ageYears ?? 80, lifespanYears * 0.7));
       trees.push({
         id: ancient ? `tree:${seed}:${trees.length}` : undefined,
         worldX,

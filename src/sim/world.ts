@@ -225,6 +225,8 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
 
   const landmarks = detectLandmarks(raw, hydrology, { seaLevel, mountainLevel, verticalScale: TERRAIN_VERTICAL_SCALE });
   const world: WorldState = { size, cellSize, cells, terrain, landmarks, seaLevel, mountainLevel, resourceDeposits: [] };
+  initializeEnvironment(world, config.seed, resourceAbundance);
+  for (const cell of cells) cell.biome = biomeFor(cell, mountainLevel);
   world.resourceDeposits = generateResourceDeposits(world, random.fork('resource-deposits'));
   return world;
 }
@@ -269,6 +271,7 @@ export function strategicSettlementCells(world: WorldState, count: number, rando
       score:
         cell.habitability +
         cell.fertility * 0.4 +
+        cell.wood * 0.12 + (cell.soil?.waterAccess ?? 0) * 0.15 +
         (cell.coast ? 0.1 : 0) +
         (cell.flow > 0.4 ? 0.18 : 0) +
         landformBonus[cell.landform] +

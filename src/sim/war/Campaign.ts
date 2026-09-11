@@ -1,9 +1,9 @@
 import type { Settlement, Vec2, War, WarCampaign, WorldState } from '../types';
 import type { WalkabilityLayer } from '../people/WalkabilityLayer';
-import { cellAt } from '../world';
 import { deriveMilitaryProfile, type MilitaryCampaignSnapshot, type MilitaryCapabilityProfile } from './MilitaryCapability';
 import { militaryMarchMultiplier, militaryOperationalSupply } from './MilitaryCombat';
 import { installMilitaryCombatRuntime } from './MilitaryCombatRuntime';
+import { transportFriction } from '../resources/ExtractionAccessibility';
 
 export const TRUCE_MONTHS = 60;
 const clamp = (n: number, min = 0, max = 1): number => Math.max(min, Math.min(max, n));
@@ -51,14 +51,7 @@ export function createCampaign(world: WorldState, walking: WalkabilityLayer, att
   const distance = campaignDistance(route);
   const militaryA = deriveMilitaryProfile(attacker);
   const militaryB = deriveMilitaryProfile(defender);
-  let difficulty = 0;
-  for (let i = 1; i < route.length; i++) {
-    const a = route[i - 1]!;
-    const b = route[i]!;
-    const length = Math.hypot(b.x - a.x, b.z - a.z);
-    const cell = cellAt(world, (a.x + b.x) / 2, (a.z + b.z) / 2);
-    difficulty += length * (1 + (cell?.slope ?? 0) * 2 + Math.max(0, (cell?.movementCost ?? 1) - 1) * 0.2);
-  }
+  const difficulty = (transportFriction(world, route) - 1) / 0.28 * world.cellSize;
   const mobility = militaryMarchMultiplier(militaryA);
   return {
     route, distance, marchMonths: Math.max(3, Math.min(18, Math.ceil(difficulty / (world.cellSize * 3 * mobility)))),

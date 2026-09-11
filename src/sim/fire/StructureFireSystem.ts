@@ -1,6 +1,7 @@
 import { stableHash } from '../prng';
 import { cellAt } from '../world';
 import { practical } from '../knowledge/KnowledgeSystem';
+import { disturbForest, modifyLand } from '../environment/EnvironmentalModificationSystem';
 import type { FireCause, HistoricalEvent, Settlement, SimulationState, StructurePlot } from '../types';
 
 const clamp = (n: number) => Math.max(0, Math.min(1, n));
@@ -111,7 +112,16 @@ export function advanceStructureFires(state: SimulationState, seed: string): Fir
       if (env.flood < 0.06 && stableHash(`${seed}:ignition:${state.month}:${plot.id}`) < risk && igniteStructure(plot, state.month, cause)) announce(settlement, plot, cause);
     }
     if (plot.fire && plot.fire.startedMonth < state.month) advanceStructureFire(plot, env, state.month);
-    if (plot.fire) settlement.weatherRecoverySince ??= state.month;
+    if (plot.fire) {
+      settlement.weatherRecoverySince ??= state.month;
+      const cell = cellAt(state.world, plot.worldX, plot.worldZ);
+      if (cell && !cell.water) {
+        const damage = plot.fire.intensity * env.dryness * 0.006;
+        cell.wood *= 1 - damage;
+        disturbForest(cell, damage, state.month);
+        modifyLand(cell, 'ruin', (cell.modifications?.ruin?.intensity ?? 0) + damage, state.month, settlement.id);
+      }
+    }
     if (plot.condition === 0 && plot.development && plot.development.status !== 'ruin') {
       const d = plot.development;
       d.status = 'ruin';
