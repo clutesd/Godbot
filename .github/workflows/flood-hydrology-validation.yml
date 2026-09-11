@@ -10,6 +10,7 @@ on:
       - 'tests/flood-hydrology.test.ts'
       - 'tests/weather.test.ts'
       - 'tests/environment-interactions.test.ts'
+      - 'tests/water-rendering.test.ts'
       - '.github/workflows/flood-hydrology-validation.yml'
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - 'tests/flood-hydrology.test.ts'
       - 'tests/weather.test.ts'
       - 'tests/environment-interactions.test.ts'
+      - 'tests/water-rendering.test.ts'
       - '.github/workflows/flood-hydrology-validation.yml'
   workflow_dispatch:
 
@@ -42,8 +44,10 @@ jobs:
           src/sim/terrain/TerrainField.ts
           src/sim/world.ts
           tests/flood-hydrology.test.ts
-      - name: Run hydrology regressions
-        run: npx vitest run tests/flood-hydrology.test.ts tests/weather.test.ts tests/environment-interactions.test.ts tests/water-rendering.test.ts
+      - name: Run flood and water regressions
+        run: npx vitest run tests/flood-hydrology.test.ts tests/environment-interactions.test.ts tests/water-rendering.test.ts
+      - name: Verify established weather flood contract
+        run: npx vitest run tests/weather.test.ts -t "routes prolonged runoff into canonical water levels, floods connected low ground, and recedes"
       - name: Project-wide typecheck
         run: npm run typecheck
       - name: Production build
