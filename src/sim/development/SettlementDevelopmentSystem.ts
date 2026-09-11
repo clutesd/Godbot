@@ -1,5 +1,6 @@
 import type { Culture, Institution, InstitutionKind, Person, ResourceStock, Settlement, SimulationState, StructurePlot, TradeRoute } from '../types';
 import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
+import { advanceSettlementResourceExtraction } from '../resources/SettlementResourceExtraction';
 import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
@@ -287,6 +288,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
   initializeSettlementDevelopment(state, settlement, residents);
   const dev = settlement.development!;
   const events: KnowledgeEventDraft[] = [];
+  if (settlement.alive) advanceSettlementResourceExtraction(state, settlement);
   events.push(...advanceSettlementWater(state, settlement, residents));
   if (dev.project && !settlement.alive) abandonProject();
   function abandonProject(): void {

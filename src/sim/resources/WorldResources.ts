@@ -30,6 +30,8 @@ export interface DepositResourceState {
 export interface CellResourceState {
   renewables: Record<RenewableResourceKind, RenewableResourceState>;
   deposits: Partial<Record<DepositResourceKind, DepositResourceState>>;
+  /** Last simulation month through which passive renewable recovery has been applied. */
+  lastRegeneratedMonth?: number;
   /** Incremented by extraction/regeneration so observers can cheaply detect change. */
   revision: number;
 }
@@ -84,7 +86,7 @@ export function createCellResourceState(seed: string, cell: WorldCell, resourceA
   const access = terrainAccessibility(cell);
   if (cell.water) {
     const empty = (): RenewableResourceState => ({ stock: 0, capacity: 0, regenerationPerYear: 0, accessibility: 0 });
-    return { renewables: { timber: empty(), 'medicinal-flora': empty(), 'plant-fiber': empty() }, deposits: {}, revision: 0 };
+    return { renewables: { timber: empty(), 'medicinal-flora': empty(), 'plant-fiber': empty() }, deposits: {}, lastRegeneratedMonth: 0, revision: 0 };
   }
 
   const timberCapacity = round((90 + cell.wood * 1800) * abundance * (0.72 + cell.moisture * 0.42));
@@ -134,6 +136,7 @@ export function createCellResourceState(seed: string, cell: WorldCell, resourceA
       },
     },
     deposits,
+    lastRegeneratedMonth: 0,
     revision: 0,
   };
 }
