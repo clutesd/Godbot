@@ -1,5 +1,6 @@
 import type { DevelopmentResponse } from '../../sim/development/types';
 import type { BuildingGrammar } from './BuildingGrammar';
+import { applyHistoricalInheritance } from './StructureHeritage';
 
 /**
  * Step 2 structure identity: change the physical proportions of a completed response so
@@ -134,7 +135,11 @@ export function applyDevelopmentComposition(grammar: BuildingGrammar, developmen
       break;
   }
 
-  // Keep procedural detail density coherent after footprint growth.
+  // Step 3: completed structures keep visible traces of their authoritative origin and
+  // transitions. Fresh responses are unchanged because the helper is a no-op without history.
+  applyHistoricalInheritance(grammar, development);
+
+  // Keep procedural detail density coherent after footprint growth and historical accretion.
   grammar.bays = Math.max(1, Math.min(10, Math.round(grammar.bays)));
   grammar.width = Math.max(0.42, grammar.width);
   grammar.depth = Math.max(0.42, grammar.depth);
