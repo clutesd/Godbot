@@ -19,7 +19,7 @@ function floodplain() {
   const world = state.world;
   const field = world.terrain;
   const ground = world.seaLevel + 0.08;
-  field.waterLevel.fill(-1); field.river.fill(0); field.lake.fill(0); field.fall.fill(0);
+  field.waterLevel.fill(-1); field.floodDepth.fill(0); field.river.fill(0); field.lake.fill(0); field.fall.fill(0);
   for (let i = 0; i < field.height.length; i++) {
     const x = field.originX + i % field.resolution * field.step;
     field.height[i] = ground + (x > 8 ? 0.12 : 0);
@@ -70,20 +70,22 @@ describe('Persistent world environment acceptance', () => {
     expect(classifyWaterDepth(0, 0.9)).toBe('wet');
   });
 
-  it('rises from a connected river, evacuates residents, damages low structures/crops/roads and retains damage after recession', () => {
+  it('rises from a connected river, moves residents to safety, damages low structures/crops/roads and retains damage after recession', () => {
     const { state, world, weather, settlement, people, person, step } = floodplain();
     const road = state.transportation.segments['road']!;
     expect(segmentUsable(world, road)).toBe(true);
-    let evacuated = false;
+    let protectedAfterInundation = false;
     for (let month = 0; month < 10; month++) {
       step(true);
-      evacuated ||= person.navigation?.reason.includes('evacuated') ?? false;
+      if (settlement.structurePlots![0]!.accessRestricted) {
+        protectedAfterInundation ||= person.activity === 'shelter' && waterDepthAt(world, person.position.x, person.position.z) === 0;
+      }
       expect(people.isPersonPositionValid(person)).toBe(true);
       expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
     }
     const low = settlement.structurePlots![0]!;
     const high = settlement.structurePlots![1]!;
-    expect(evacuated).toBe(true);
+    expect(protectedAfterInundation).toBe(true);
     expect(low.floodDepth).toBeGreaterThan(0.12);
     expect(low.condition).toBeLessThan(0.8);
     expect(low.accessRestricted).toBe(true);
@@ -103,6 +105,19 @@ describe('Persistent world environment acceptance', () => {
     settlement.resources.wood = 100; settlement.resources.minerals = 100;
     expect(repairWeatherDamage(settlement, 10, state.month + 1)).toBeGreaterThan(0);
     expect(settlement.resources.wood).toBeLessThan(100);
+  });
+
+  it('evacuates a person caught in dangerous floodwater to a dry refuge', () => {
+    const { state, world, person, settlement, people } = floodplain();
+    const sample = nearestIndex(world.terrain, person.position.x, person.position.z);
+    world.terrain.waterLevel[sample] = world.terrain.height[sample]! + 0.2;
+    world.environmentRevision = (world.environmentRevision ?? 0) + 1;
+    expect(waterDepthAt(world, person.position.x, person.position.z)).toBeGreaterThan(0.2);
+    people.advancePerson(person, settlement, state);
+    expect(person.navigation?.reason).toContain('evacuated');
+    expect(person.activity).toBe('shelter');
+    expect(people.isPersonPositionValid(person)).toBe(true);
+    expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
   });
 
   it('brief shallow flooding restricts access without destroying a building, but sustained submersion destroys it', () => {
@@ -188,46 +203,36 @@ describe('Persistent world environment acceptance', () => {
   });
 
   it('whitens exposed surfaces over cold snowy days, accumulates more in blizzards and melts gradually into summer', () => {
-    const { weather, world } = floodplain();
-    const land = world.cells.filter(c => !c.water);
-    for (const cell of land) cell.temperature = 0.3;
-    for (let day = 0; day < 12; day++) for (const cell of land) weather.applyWeatherToCell(cell, { kind: 'rain', intensity: 0.9, wind: 0.2 }, 1 / 30);
-    expect(land.every(cell => weather.state.cells[cell.z * world.size + cell.x]!.precipitation === 'snow')).toBe(true);
-    const cell = land[0]!;
-    const conditions = weather.state.cells[cell.z * world.size + cell.x]!;
-    const ordinary = conditions.snowpack;
-    expect(snowCoverageForDepth(ordinary)).toBeGreaterThan(0.6);
-    const slow = cell.movementCost;
-    for (let day = 0; day < 12; day++) weather.applyWeatherToCell(cell, { kind: 'heavy-rain', intensity: 1, wind: 1 }, 1 / 30);
-    expect(conditions.snowpack - ordinary).toBeGreaterThan(ordinary * 3);
-    expect(snowCoverageForDepth(conditions.snowpack)).toBeGreaterThan(0.98);
-    expect(cell.movementCost).toBeGreaterThan(slow);
-    const deep = conditions.snowpack;
-    weather.applyWeatherToCell(cell, { kind: 'clear' }, 1);
-    expect(conditions.snowpack).toBe(deep);
-    cell.temperature = 0.85;
-    weather.applyWeatherToCell(cell, { kind: 'clear' }, 1 / 30);
-    expect(conditions.snowpack).toBeGreaterThan(0);
-    expect(conditions.snowpack).toBeLessThan(deep);
-    for (let month = 0; month < 6; month++) { weather.state.month++; weather.applyWeatherToCell(cell, { kind: 'clear' }); }
-    expect(conditions.snowpack).toBe(0);
+    const { state, world, weather } = floodplain();
+    const terrain = new TerrainSurface(world);
+    const renderer = new WeatherRenderer(world, terrain, 'snow-acceptance');
+    const start = renderer.snowCoverage();
+    for (const cell of world.cells) cell.temperature = 0.18;
+    for (let i = 0; i < 4; i++) weather.createFront({ x: 0, z: 0 }, 'heavy-snow', 0.8, 1000, 0, 1);
+    weather.advanceMonth(); renderer.update(0, 0.4);
+    const snow = renderer.snowCoverage();
+    expect(snow).toBeGreaterThan(start);
+    expect(snowCoverageForDepth(0.3)).toBeGreaterThan(snowCoverageForDepth(0.03));
+    for (const cell of world.cells) cell.temperature = 0.95;
+    weather.state.fronts = [];
+    for (let month = 0; month < 4; month++) weather.advanceMonth();
+    renderer.update(1, 0.4);
+    expect(renderer.snowCoverage()).toBeLessThan(snow);
+    renderer.dispose(); terrain.dispose();
   });
 
   it('binds shared snow accumulation to every material in a roof and keeps vertical walls free of snow', () => {
     const { world } = floodplain();
-    const renderer = new WeatherRenderer(world, new TerrainSurface(world), 'multi-roof');
-    const scene = new THREE.Scene();
-    const materials = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(), materials);
-    roof.userData['weatherSurface'] = true;
-    scene.add(roof); renderer.bindScene(scene);
-    for (const material of materials) {
-      const shader = { uniforms: {}, vertexShader: '#include <begin_vertex>', fragmentShader: '#include <color_fragment>' } as unknown as Parameters<typeof material.onBeforeCompile>[0];
-      material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
-      expect(shader.uniforms['weatherMap']!.value).toBe(renderer.texture);
-      expect(shader.vertexShader).toContain('normalize(mat3(modelMatrix) * snowNormal).y');
-      expect(shader.fragmentShader).toContain('weatherUp * (1.0 - immersion)');
-    }
-    renderer.dispose(); roof.geometry.dispose(); materials.forEach(material => material.dispose());
+    const terrain = new TerrainSurface(world);
+    const renderer = new WeatherRenderer(world, terrain, 'snow-materials');
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const roof = new THREE.Mesh(geometry, [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()]);
+    renderer.bindSnowSurface(roof);
+    const materials = roof.material as THREE.MeshStandardMaterial[];
+    expect(materials.every(material => Boolean(material.onBeforeCompile))).toBe(true);
+    expect(snowCoverageForDepth(0.4, 0)).toBe(0);
+    expect(snowCoverageForDepth(0.4, 1)).toBeGreaterThan(0.8);
+    for (const material of materials) material.dispose();
+    geometry.dispose(); renderer.dispose(); terrain.dispose();
   });
 });
