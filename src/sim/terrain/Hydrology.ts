@@ -67,8 +67,6 @@ export class DynamicHydrology {
       if (height[index]! < seaLevel) { floodDepth[index] = 0; continue; }
       const cell = this.world.cells[this.cellIndices[index]!]!;
       const baseRetention = Math.max(0.46, Math.min(0.78, 0.55 + (1 - cell.slope) * 0.14 + cell.moisture * 0.07));
-      // Water stored in a channel drains downstream, but its stage must persist long enough for a
-      // multi-month exceptional storm to overtop banks. Floodplain water itself recedes faster.
       const retention = this.baseLevel[index]! >= 0 ? Math.max(0.91, baseRetention) : baseRetention;
       floodDepth[index] = Math.max(0, floodDepth[index]! * retention - 0.0025);
     }
@@ -79,9 +77,24 @@ export class DynamicHydrology {
       const basinWetness = this.runoff[index]! / contributing;
       this.storage[index] = Math.min(1, this.storage[index]! * 0.58 + basinWetness);
       flow[index] = clamp01(this.baseFlow[index]! + this.storage[index]! * 0.26);
-      if (this.baseLevel[index]! < 0 || height[index]! < seaLevel) continue;
+      if (height[index]! < seaLevel) continue;
+
       const hierarchy = accumulationLog > 0 ? clamp01(Math.log1p(contributing) / accumulationLog) : 0;
       const cell = this.world.cells[this.cellIndices[index]!]!;
+
+      if (this.baseLevel[index]! < 0) {
+        // Long-lived extreme rain can saturate flat floodplains and produce shallow pluvial
+        // ponding even before a river's lateral front reaches them. The high storage threshold
+        // keeps ordinary rain dry, while slope raises the threshold so hills do not become ponds.
+        const pondingThreshold = 0.20 + cell.slope * 0.42 + Math.max(0, 0.72 - cell.moisture) * 0.18;
+        const pondingExcess = Math.max(0, this.storage[index]! - pondingThreshold);
+        if (pondingExcess > 0 && cell.slope < 0.32) {
+          const ponding = Math.min(0.085, pondingExcess * 0.70 * (1 - cell.slope));
+          floodDepth[index] = Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[index]! + ponding);
+        }
+        continue;
+      }
+
       // Normalized basin wetness means hierarchy only modestly raises bankfull capacity. Repeated
       // ordinary rain remains below it; sustained heavy rain can overtop even a mature river.
       const capacity = terrain.lake[index]
