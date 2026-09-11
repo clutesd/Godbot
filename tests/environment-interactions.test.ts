@@ -70,18 +70,28 @@ describe('Persistent world environment acceptance', () => {
     expect(classifyWaterDepth(0, 0.9)).toBe('wet');
   });
 
-  it('rises from a connected river, evacuates residents, damages low structures/crops/roads and retains damage after recession', () => {
+  it('rises from a connected river, evacuates exposed residents, damages low structures/crops/roads and retains damage after recession', () => {
     const { state, world, weather, settlement, people, person, step } = floodplain();
     const road = state.transportation.segments['road']!;
+    const low = settlement.structurePlots![0]!;
     expect(segmentUsable(world, road)).toBe(true);
     let evacuated = false;
     for (let month = 0; month < 10; month++) {
       step(true);
       evacuated ||= person.navigation?.reason.includes('evacuated') ?? false;
+      // Purposeful schedules can move this particular resident before the flood crest. Once the
+      // low home actually closes, explicitly place the acceptance subject in the exposed home so
+      // the test exercises the evacuation contract rather than a lucky absence from danger.
+      if (!evacuated && low.accessRestricted) {
+        person.position = { x: low.worldX, z: low.worldZ };
+        person.target = { ...person.position };
+        person.navigation = undefined;
+        people.advancePerson(person, settlement, state);
+        evacuated ||= person.navigation?.reason.includes('evacuated') ?? false;
+      }
       expect(people.isPersonPositionValid(person)).toBe(true);
       expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
     }
-    const low = settlement.structurePlots![0]!;
     const high = settlement.structurePlots![1]!;
     expect(evacuated).toBe(true);
     expect(low.floodDepth).toBeGreaterThan(0.12);
