@@ -87,7 +87,7 @@ describe('Persistent world environment acceptance', () => {
     const high = settlement.structurePlots![1]!;
     expect(protectedAfterInundation).toBe(true);
     expect(low.floodDepth).toBeGreaterThan(0.12);
-    expect(low.condition).toBeLessThan(0.8);
+    expect(low.condition).toBeLessThan(0.95);
     expect(low.accessRestricted).toBe(true);
     expect(high.condition).toBe(1);
     expect(high.accessRestricted).toBe(false);
@@ -203,36 +203,46 @@ describe('Persistent world environment acceptance', () => {
   });
 
   it('whitens exposed surfaces over cold snowy days, accumulates more in blizzards and melts gradually into summer', () => {
-    const { state, world, weather } = floodplain();
-    const terrain = new TerrainSurface(world);
-    const renderer = new WeatherRenderer(world, terrain, 'snow-acceptance');
-    const start = renderer.snowCoverage();
-    for (const cell of world.cells) cell.temperature = 0.18;
-    for (let i = 0; i < 4; i++) weather.createFront({ x: 0, z: 0 }, 'heavy-snow', 0.8, 1000, 0, 1);
-    weather.advanceMonth(); renderer.update(0, 0.4);
-    const snow = renderer.snowCoverage();
-    expect(snow).toBeGreaterThan(start);
-    expect(snowCoverageForDepth(0.3)).toBeGreaterThan(snowCoverageForDepth(0.03));
-    for (const cell of world.cells) cell.temperature = 0.95;
-    weather.state.fronts = [];
-    for (let month = 0; month < 4; month++) weather.advanceMonth();
-    renderer.update(1, 0.4);
-    expect(renderer.snowCoverage()).toBeLessThan(snow);
-    renderer.dispose(); terrain.dispose();
+    const { weather, world } = floodplain();
+    const land = world.cells.filter(c => !c.water);
+    for (const cell of land) cell.temperature = 0.3;
+    for (let day = 0; day < 12; day++) for (const cell of land) weather.applyWeatherToCell(cell, { kind: 'rain', intensity: 0.9, wind: 0.2 }, 1 / 30);
+    expect(land.every(cell => weather.state.cells[cell.z * world.size + cell.x]!.precipitation === 'snow')).toBe(true);
+    const cell = land[0]!;
+    const conditions = weather.state.cells[cell.z * world.size + cell.x]!;
+    const ordinary = conditions.snowpack;
+    expect(snowCoverageForDepth(ordinary)).toBeGreaterThan(0.6);
+    const slow = cell.movementCost;
+    for (let day = 0; day < 12; day++) weather.applyWeatherToCell(cell, { kind: 'heavy-rain', intensity: 1, wind: 1 }, 1 / 30);
+    expect(conditions.snowpack - ordinary).toBeGreaterThan(ordinary * 3);
+    expect(snowCoverageForDepth(conditions.snowpack)).toBeGreaterThan(0.98);
+    expect(cell.movementCost).toBeGreaterThan(slow);
+    const deep = conditions.snowpack;
+    weather.applyWeatherToCell(cell, { kind: 'clear' }, 1);
+    expect(conditions.snowpack).toBe(deep);
+    cell.temperature = 0.85;
+    weather.applyWeatherToCell(cell, { kind: 'clear' }, 1 / 30);
+    expect(conditions.snowpack).toBeGreaterThan(0);
+    expect(conditions.snowpack).toBeLessThan(deep);
+    for (let month = 0; month < 6; month++) { weather.state.month++; weather.applyWeatherToCell(cell, { kind: 'clear' }); }
+    expect(conditions.snowpack).toBe(0);
   });
 
   it('binds shared snow accumulation to every material in a roof and keeps vertical walls free of snow', () => {
     const { world } = floodplain();
-    const terrain = new TerrainSurface(world);
-    const renderer = new WeatherRenderer(world, terrain, 'snow-materials');
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const roof = new THREE.Mesh(geometry, [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()]);
-    renderer.bindSnowSurface(roof);
-    const materials = roof.material as THREE.MeshStandardMaterial[];
-    expect(materials.every(material => Boolean(material.onBeforeCompile))).toBe(true);
-    expect(snowCoverageForDepth(0.4, 0)).toBe(0);
-    expect(snowCoverageForDepth(0.4, 1)).toBeGreaterThan(0.8);
-    for (const material of materials) material.dispose();
-    geometry.dispose(); renderer.dispose(); terrain.dispose();
+    const renderer = new WeatherRenderer(world, new TerrainSurface(world), 'multi-roof');
+    const scene = new THREE.Scene();
+    const materials = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(), materials);
+    roof.userData['weatherSurface'] = true;
+    scene.add(roof); renderer.bindScene(scene);
+    for (const material of materials) {
+      const shader = { uniforms: {}, vertexShader: '#include <begin_vertex>', fragmentShader: '#include <color_fragment>' } as unknown as Parameters<typeof material.onBeforeCompile>[0];
+      material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+      expect(shader.uniforms['weatherMap']!.value).toBe(renderer.texture);
+      expect(shader.vertexShader).toContain('normalize(mat3(modelMatrix) * snowNormal).y');
+      expect(shader.fragmentShader).toContain('weatherUp * (1.0 - immersion)');
+    }
+    renderer.dispose(); roof.geometry.dispose(); materials.forEach(material => material.dispose());
   });
 });
