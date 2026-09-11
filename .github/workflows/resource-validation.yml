@@ -8,6 +8,7 @@ on:
       - 'src/sim/world.ts'
       - 'tests/world-resources.test.ts'
       - 'tests/resource-extraction.test.ts'
+      - 'tests/material-economy.test.ts'
       - 'tests/knowledge.test.ts'
       - '.github/workflows/resource-validation.yml'
   workflow_dispatch:
@@ -24,6 +25,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/sim/resources/WorldResources.ts src/sim/resources/SettlementResourceExtraction.ts src/sim/development/SettlementDevelopmentSystem.ts src/sim/world.ts tests/world-resources.test.ts tests/resource-extraction.test.ts
-      - run: npx vitest run tests/world-resources.test.ts tests/resource-extraction.test.ts tests/knowledge.test.ts
+      - run: npx eslint src/sim/resources/WorldResources.ts src/sim/resources/SettlementResourceExtraction.ts src/sim/resources/MaterialEconomy.ts src/sim/development/SettlementDevelopmentSystem.ts src/sim/world.ts tests/world-resources.test.ts tests/resource-extraction.test.ts tests/material-economy.test.ts
+      - run: npx vitest run tests/world-resources.test.ts tests/resource-extraction.test.ts tests/material-economy.test.ts tests/knowledge.test.ts
       - run: npm run build
