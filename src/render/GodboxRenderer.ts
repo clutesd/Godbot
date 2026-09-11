@@ -27,6 +27,7 @@ import { WaterSystem } from './terrain/WaterSystem';
 import { WeatherRenderer } from './atmosphere/WeatherRenderer';
 import { WarRenderer } from './war/WarRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
+import { ResourceSiteRenderer } from './resources/ResourceSiteRenderer';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -185,6 +186,7 @@ export class GodboxRenderer {
   private readonly weatherRenderer: WeatherRenderer;
   private readonly terrainDecor: TerrainDecor;
   private readonly vegetation: VegetationRenderer;
+  private readonly resourceSites: ResourceSiteRenderer;
   private readonly skyAtmosphere: SkyAtmosphere;
   private readonly ecology: EcologyField;
   private readonly postProcessing: EcologyPostProcessing;
@@ -263,6 +265,8 @@ export class GodboxRenderer {
     this.scene.add(this.weatherRenderer.group);
     this.terrainDecor = new TerrainDecor(state.world, this.terrainSurface, config.seed, config.render.visualDensity);
     this.scene.add(this.terrainDecor.group);
+    this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface);
+    this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
     this.warRenderer = new WarRenderer(state, (x, z) => this.elevationAt(x, z));
@@ -370,6 +374,7 @@ export class GodboxRenderer {
     if (!force && this.state.month === this.lastVisualSeason) return;
     this.lastVisualSeason = this.state.month;
     this.vegetation.setSeason(this.state.month);
+    this.resourceSites.update();
     if (force) this.vegetation.updateLod(this.camera.position);
     const isSpring = season >= 1 && season <= 3;
     const isAutumn = season >= 7 && season <= 9;

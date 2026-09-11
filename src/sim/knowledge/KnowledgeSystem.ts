@@ -460,6 +460,8 @@ export class KnowledgeSystem {
   }
 
   private requirementsMet(state: SimulationState, settlement: Settlement, conditions: DiscoveryConditions): boolean {
+    if (Object.entries(conditions.materials ?? {}).some(([id, amount]) => (settlement.materials[id] ?? 0) < amount)) return false;
+    if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([id, amount]) => (settlement.materials[id] ?? 0) >= amount)) return false;
     const people = this.peopleAt(state, settlement.id);
     const cell = state.world.cells[settlement.cellIndex];
     if ((conditions.minPopulation ?? 0) > people.length) return false;

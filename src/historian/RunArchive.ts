@@ -95,6 +95,7 @@ export interface RunArchiveRecord {
 }
 
 const IMPORTANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
+  'resource-deposit-discovered', 'resource-site-established', 'resource-site-abandoned', 'resource-depleted', 'recipe-learned', 'resource-trade',
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'trade-route-established',
   'discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization',
   'institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended', 'political-transition', 'cultural-shift', 'harvest-crisis', 'recovery',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { visiblePersonBudgetForDensity } from '../src/render/GodboxRenderer';
 import { Simulation } from '../src/sim/Simulation';
+import { addMaterial } from '../src/sim/resources/Inventory';
 import { PeopleSystem, settlementEraRank } from '../src/sim/people/PeopleSystem';
 import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { createSettlementLayoutPlan, type BuildingDistrict } from '../src/shared/SettlementLayoutPlan';
@@ -67,7 +68,7 @@ describe('Purposeful represented people', () => {
     for (const settlement of simulation.state.settlements) {
       settlement.targetBuildings = settlement.buildings + 2;
       settlement.constructionProgress = 0.12;
-      settlement.resources.wood += 80;
+      addMaterial(settlement, 'timber', 80); addMaterial(settlement, 'stone', 80);
     }
     simulation.step(18);
     const destinations = new Set(simulation.state.people.map((person) => person.navigation?.destinationKind));
@@ -101,7 +102,7 @@ describe('Purposeful represented people', () => {
     for (const settlement of simulation.state.settlements) {
       settlement.targetBuildings = settlement.buildings + 2;
       settlement.constructionProgress = 0.12;
-      settlement.resources.wood += 80;
+      addMaterial(settlement, 'timber', 80); addMaterial(settlement, 'stone', 80);
     }
     simulation.step(18);
     const districts: Partial<Record<string, BuildingDistrict>> = {

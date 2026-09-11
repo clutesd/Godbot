@@ -285,6 +285,17 @@ export class VegetationRenderer {
       const target = distance < NEAR_RANGE && nearBucket && nearBucket.count < nearBucket.capacity ? nearBucket : this.farBuckets.get(key);
       if (!target || target.count >= target.capacity) continue;
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
+      // Logging and regrowth use the same stand stock as extraction; hidden slots restart young.
+      if (cell?.lastLoggingMonth !== undefined && !placement.id && !placement.managedBy) {
+        const standing = clamp01(cell.wood / Math.max(0.01, cell.forestCapacity ?? cell.wood));
+        const rank = stableHash(`${this.seed}:logging-tree`, Math.round(placement.worldX * 100), Math.round(placement.worldZ * 100));
+        if (rank > standing) {
+          placement.establishedYear = this.ecologyYear;
+          this.lifecycle[index] = resolveTreeLifecycle(placement, this.ecologyYear);
+          this.clearedCount++;
+          continue;
+        }
+      }
       const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
       for (const scar of cell ? this.scarsByCell.get(cell.z * this.world.size + cell.x) ?? [] : []) {
         const exposure = tornadoExposure(scar, { x: placement.worldX, z: placement.worldZ });

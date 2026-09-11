@@ -147,11 +147,12 @@ export class TransportationSystem {
 
   /** Returns delivered cargo exactly once. Cargo in transit has already left the source. */
   advanceFreight(route: TradeRoute, a: Settlement, b: Settlement): FreightTrip | undefined {
+    const blockaded = this.state.wars.some(w => w.active && ((w.attacker === a.id && w.defender === b.id) || (w.attacker === b.id && w.defender === a.id)));
     const transport = route.transport;
     if (!transport) return undefined;
     const trip = transport.trip;
     if (trip && trip.status !== 'arrived') {
-      if (!route.active || !a.alive || !b.alive || !this.network.pathValid(trip.path)) {
+      if (blockaded || !route.active || !a.alive || !b.alive || !this.network.pathValid(trip.path)) {
         trip.status = 'blocked';
         return undefined;
       }
@@ -163,7 +164,6 @@ export class TransportationSystem {
       trip.distance = Math.min(trip.path.length, trip.distance + speed / weatherCost);
       route.caravanProgress = trip.path.length ? trip.distance / trip.path.length : 0;
       if (trip.distance < trip.path.length) return undefined;
-      trip.status = 'arrived';
       const target = trip.destination === a.id ? a : b;
       const source = trip.origin === a.id ? a : b;
       if (trip.material) deliverMaterialShipment(source, target, trip.material, trip.quantity, 0.96, this.state.month);
@@ -172,7 +172,7 @@ export class TransportationSystem {
       transport.nextDispatchMonth = this.state.month + 3 + Math.floor(stableHash(route.id, this.state.month, 0) * 13);
       return trip;
     }
-    if (!route.active || !a.alive || !b.alive || this.state.month < transport.nextDispatchMonth || !transport.path || !this.network.pathValid(transport.path)) return undefined;
+    if (blockaded || !route.active || !a.alive || !b.alive || this.state.month < transport.nextDispatchMonth || !transport.path || !this.network.pathValid(transport.path)) return undefined;
     const population = (id: string): number => Math.max(1, this.state.people.filter(p => p.alive && p.homeId === id).length);
     const aPopulation = population(a.id);
     const bPopulation = population(b.id);

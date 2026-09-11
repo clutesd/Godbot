@@ -8,14 +8,16 @@ import { configurationFingerprint } from '../src/historian/RunArchive';
 
 describe('Historian archive persistence', () => {
   it('keeps existing observations resumable when the new ecological quality controls change', () => {
-    const config = configWith({ seed: 'ecology-archive-compatibility' });
+    const config = configWith({ seed: 'ecology-archive-compatibility', engineVersion: 'godbox-sim-0.10.0' });
     // Captured from the untouched bbf372f configuration, before these render controls existed.
     expect(configurationFingerprint(config)).toBe('-2b743e35');
-    const low = configWith({ seed: config.seed, render: {
+    const low = configWith({ seed: config.seed, engineVersion: config.engineVersion, render: {
       bioluminescenceDensity: 0, particleDensity: 0, waterComplexity: 0, bloomQuality: 0,
     } });
     expect(configurationFingerprint(low)).toBe(configurationFingerprint(config));
     expect(experimentFingerprint(low)).toBe(experimentFingerprint(config));
+    // A change to material simulation rules is a new history, unlike a render-quality change.
+    expect(configurationFingerprint(configWith({ seed: config.seed }))).not.toBe(configurationFingerprint(config));
   });
   it('round-trips a structured run through IndexedDB', async () => {
     const simulation = new Simulation({ seed: 'archived-world', startingPopulation: 180 });

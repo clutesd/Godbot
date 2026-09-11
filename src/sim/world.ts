@@ -187,6 +187,7 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
         temperature,
         fertility,
         wood,
+        forestCapacity: wood,
         minerals,
         habitability,
         movementCost,
@@ -223,7 +224,9 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
   }
 
   const landmarks = detectLandmarks(raw, hydrology, { seaLevel, mountainLevel, verticalScale: TERRAIN_VERTICAL_SCALE });
-  return { size, cellSize, cells, terrain, landmarks, seaLevel, mountainLevel };
+  const world: WorldState = { size, cellSize, cells, terrain, landmarks, seaLevel, mountainLevel, resourceDeposits: [] };
+  world.resourceDeposits = generateResourceDeposits(world, random.fork('resource-deposits'));
+  return world;
 }
 
 export function cellAt(world: WorldState, x: number, z: number): WorldCell | undefined {

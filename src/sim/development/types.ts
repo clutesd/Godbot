@@ -47,6 +47,8 @@ export interface DevelopmentResponse {
   /** Practical capabilities observed when the response was selected. */
   capabilities: string[];
   cost: ResourceStock;
+  /** Processed materials paid alongside ordinary construction budgets. */
+  materialCost?: Record<string, number>;
   labor: number;
 }
 

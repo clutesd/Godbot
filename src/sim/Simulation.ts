@@ -11,6 +11,8 @@ import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage }
 import { advanceStructureFires } from './fire/StructureFireSystem';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
+import { ResourceSystem, createMaterialState, type ResourceEventDraft } from './resources/ResourceSystem';
+import { addMaterial, materialEconomy, reconcileBulkStocks, takeMaterial } from './resources/Inventory';
 import { campaignFront, campaignFocus, campaignSupply, createCampaign, TRUCE_MONTHS } from './war/Campaign';
 import type {
   Culture,
@@ -178,6 +180,7 @@ export class Simulation {
   private readonly personById = new Map<string, Person>();
   private readonly routesBySettlement = new Map<string, TradeRoute[]>();
   private transportationSystem!: TransportationSystem;
+  private resourceSystem!: ResourceSystem;
   private readonly widespreadAdoptions = new Set<string>();
   private readonly baseOverrides: GodboxConfigInput;
 
@@ -208,6 +211,7 @@ export class Simulation {
     this.advancedSystem = new AdvancedCivilizationSystem(this.config, this.random.fork('advanced-civilization'));
     const world = generateWorld(this.config, this.random.fork('world'));
     this.weatherSystem = new WeatherSystem(world, this.config, this.random.fork('weather'));
+    this.resourceSystem = new ResourceSystem(this.random.fork('resource-system'));
     this.nextPersonId = 1;
     this.nextSettlementId = 1;
     this.nextEventId = 1;
@@ -309,6 +313,7 @@ export class Simulation {
       }
     }
     this.rebuildLookupIndexes();
+    this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
     this.runEconomy();
     if (this.state.month % 12 === 0) {
       for (const settlement of this.state.settlements.filter(s => !s.alive && s.development)) {
@@ -344,6 +349,7 @@ export class Simulation {
       this.recomputeCultureShares();
     }
     this.state.stats.peakPopulation = Math.max(this.state.stats.peakPopulation, this.population);
+    for (const settlement of this.state.settlements) reconcileBulkStocks(settlement);
     if (this.state.history.length > this.config.simulation.historyLimit) this.trimHistory();
   }
 
@@ -435,7 +441,7 @@ export class Simulation {
       cellIndex: cell.z * this.state.world.size + cell.x,
       foundedMonth,
       cultureShares: { [culture.id]: 1 },
-      resources: { food: 210, wood: 65, minerals: 18, goods: 22, wealth: 14 },
+      resources: { food: 210, wood: 0, minerals: 0, goods: 22, wealth: 14 },
       monthlyBalance: emptyStock(),
       buildings: 4,
       targetBuildings: 4,
@@ -456,7 +462,10 @@ export class Simulation {
       polityId,
       institutionIds: [],
       alive: true,
+      ...createMaterialState(),
     };
+    // Founding groups bring a finite starting kit; later colonies receive supplies from their parent.
+    if (foundedMonth === 0) { addMaterial(settlement, 'timber', 8); addMaterial(settlement, 'stone', 3); }
     this.state.settlements.push(settlement);
     this.state.polities.push({
       id: polityId,
@@ -619,9 +628,9 @@ export class Simulation {
       if (!cell) continue;
       const count = (occupation: Occupation): number => people.filter((person) => person.occupation === occupation).length;
       const farmers = count('farmer');
-      const foragers = count('forager');
+      const foragers = count('forager') * 0.5;
       const builders = count('builder');
-      const repaired = repairWeatherDamage(settlement, builders, this.state.month);
+      const repaired = repairWeatherDamage(settlement, builders * 0.65, this.state.month);
       const damagedPlots = (settlement.structurePlots ?? []).filter((plot) => plot.condition < 1 && (!plot.development || plot.development.status === 'active'));
       if (settlement.weatherRecoverySince !== undefined && damagedPlots.length === 0) {
         this.addEvent({ type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
@@ -659,20 +668,24 @@ export class Simulation {
           clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
       const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
       balance.food = (farmers * (0.54 + cell.fertility * 0.7) * season * climatePulse * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.18 + cell.fertility * 0.25)) * safetyFactor * productivity.food * exposedWork - people.length * (0.31 + settlement.urbanization * 0.018);
-      balance.wood = (foragers * 0.18 + builders * 0.1) * (0.42 + cell.wood) * exposedWork - settlement.buildings * 0.022;
-      balance.minerals = ((artisans * 0.085 + foragers * 0.02) * (0.35 + cell.minerals) - artisans * 0.018) * productivity.materials;
-      balance.goods = (artisans * 0.18 + keepers * 0.038) * productivity.goods - people.length * (0.016 + settlement.urbanization * 0.006);
+      // Raw materials arrive only through extraction or freight. Bulk stocks are inventory projections.
+      balance.wood = -Math.min(settlement.resources.wood, settlement.buildings * 0.022);
+      balance.minerals = 0;
+      balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods - people.length * (0.016 + settlement.urbanization * 0.006);
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
       for (const key of ['food', 'wood', 'minerals', 'goods', 'wealth'] as const) {
         settlement.resources[key] = Math.max(0, settlement.resources[key] + balance[key]);
       }
+      balance.wood += materialEconomy(settlement).delivered.timber ?? 0;
+      balance.minerals += materialEconomy(settlement).delivered.stone ?? 0;
       const foodStorage = Math.max(180, people.length * 6 + settlement.buildings * 24);
       settlement.resources.food = Math.min(settlement.resources.food, foodStorage);
       settlement.monthlyBalance = balance;
       const monthsOfFood = settlement.resources.food / Math.max(1, people.length * 0.31);
       settlement.foodSecurity = clamp(monthsOfFood / 5 * 0.7 + (balance.food >= 0 ? 0.3 : 0));
       settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, people.length * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, people.length * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
-      const builderCapacity = builders > 0 ? clamp(builders / Math.max(3, people.length * 0.055), 0.2, 1.35) : 0;
+      settlement.prosperity *= 1 - Math.min(0.3, materialEconomy(settlement).shortageMonths * 0.001);
+      const builderCapacity = builders > 0 ? clamp(builders * 0.65 / Math.max(3, people.length * 0.055), 0.2, 1.35) : 0;
       const constructionRate = !cell.water && repaired === 0 && damagedPlots.length === 0
         ? builderCapacity * (0.45 + settlement.prosperity * 0.55) / this.config.historicalPace.smallConstructionMonths : 0;
       for (const event of advanceSettlementDevelopment(this.state, settlement, people, constructionRate)) {
@@ -922,6 +935,27 @@ export class Simulation {
         }
       }
       if (delivered) {
+        if (delivered.materialId) {
+          const target = delivered.destination === a.id ? a : b;
+          const economy = materialEconomy(target);
+          const key = `import:${route.id}:${delivered.materialId}`;
+          if (economy.lastEventMonth[key] === undefined) {
+            economy.lastEventMonth[key] = this.state.month;
+            this.addEvent({ type: 'resource-trade', location: target.position, locationId: target.id, actors: [a.id, b.id],
+              causes: ['material-shortage', 'completed-freight-route'], context: { resource: delivered.materialId, route: route.id, quantity: delivered.quantity },
+              outcome: 'Delivered imports supplied a missing material through a working trade connection.', significance: 0.55,
+              tags: ['resource', 'trade'], summary: `${target.name} begins importing ${delivered.materialId}.` });
+          }
+        }
+        for (const [source, target] of [[a, b], [b, a]] as const) for (const id of source.knownRecipes) {
+          const research = materialEconomy(target).recipeResearch;
+          research[id] = Math.min(10, (research[id] ?? 0) + route.volume * 0.5);
+        }
+        for (const [source, target] of [[a, b], [b, a]] as const) {
+          const id = source.discoveredDeposits.find(id => !target.discoveredDeposits.includes(id));
+          const deposit = this.state.world.resourceDeposits.find(d => d.id === id);
+          if (deposit) { target.discoveredDeposits.push(deposit.id); deposit.discoveredBy[target.id] = this.state.month; }
+        }
         this.applyKnowledgeEvents(this.knowledgeSystem.diffuseTrade(this.state, a, b, route));
         this.diffuseRouteCultures(a, b, route.volume);
       }
@@ -953,6 +987,10 @@ export class Simulation {
       const politicalAmbition = mean([...this.peopleAt(a.id), ...this.peopleAt(b.id)].map((person) => person.traits.ambition));
       const rivalry = ((cultureA?.dimensions.militarism ?? 0.5) + (cultureB?.dimensions.militarism ?? 0.5) + politicalAmbition) / 3 * (1 - relation.trust) * proximity;
       relation.territorialTension = clamp(relation.territorialTension * 0.86 + proximity * Math.max(pressureA, pressureB) * 0.2 + rivalry * 0.12);
+      const contested = this.state.world.resourceDeposits.some(d => !d.depleted && ((d.controlledBy === a.id && b.discoveredDeposits.includes(d.id)
+        && (materialEconomy(b).demand[d.resourceId] ?? 0) > (b.materials[d.resourceId] ?? 0)) || (d.controlledBy === b.id && a.discoveredDeposits.includes(d.id)
+        && (materialEconomy(a).demand[d.resourceId] ?? 0) > (a.materials[d.resourceId] ?? 0))));
+      if (contested && a.polityId !== b.polityId) relation.territorialTension = clamp(relation.territorialTension + (connected ? 0.005 : 0.025));
       const wealthGap = Math.abs(a.resources.wealth - b.resources.wealth) / Math.max(25, a.resources.wealth + b.resources.wealth);
       const polityRivalry = a.polityId !== b.polityId ? politicalAmbition * proximity * 0.018 : 0;
       relation.grievances = clamp(relation.grievances * 0.94 + (connected ? wealthGap * 0.012 : Math.max(pressureA, pressureB) * 0.018) + polityRivalry);
@@ -1270,7 +1308,9 @@ export class Simulation {
     const ambitionB = mean(this.peopleAt(b.id).map((person) => person.traits.ambition));
     const attacker = ambitionA + (cultureA?.dimensions.militarism ?? 0.5) >= ambitionB + (cultureB?.dimensions.militarism ?? 0.5) ? a : b;
     const defender = attacker === a ? b : a;
-    const cause: WarCause = relation.grievances > 0.62 ? 'retaliation' : relation.territorialTension > 0.62 ? 'territorial-dispute' : Math.min(a.foodSecurity, b.foodSecurity) < 0.3 ? 'resource-pressure' : 'political-ambition';
+    const strategicDeposit = this.state.world.resourceDeposits.find(d => d.controlledBy === defender.id && !d.depleted
+      && attacker.discoveredDeposits.includes(d.id) && (materialEconomy(attacker).demand[d.resourceId] ?? 0) > (attacker.materials[d.resourceId] ?? 0));
+    const cause: WarCause = strategicDeposit ? 'resource-pressure' : relation.grievances > 0.62 ? 'retaliation' : relation.territorialTension > 0.62 ? 'territorial-dispute' : Math.min(a.foodSecurity, b.foodSecurity) < 0.3 ? 'resource-pressure' : 'political-ambition';
     const leaderA = this.leaderFor(attacker);
     const leaderB = this.leaderFor(defender);
     const attackerCulture = this.dominantCulture(attacker);
@@ -1290,6 +1330,10 @@ export class Simulation {
       ...(leaderA ? { leaderAId: leaderA.id } : {}), ...(leaderB ? { leaderBId: leaderB.id } : {}), active: true,
     };
     this.state.wars.push(war);
+    if (strategicDeposit) this.addEvent({ type: 'war-campaign', location: { x: strategicDeposit.worldX, z: strategicDeposit.worldZ },
+      actors: [war.id, attacker.id, defender.id], causes: ['strategic-resource-shortage'], context: { deposit: strategicDeposit.id, resource: strategicDeposit.resourceId },
+      outcome: 'Access to a worked deposit became a campaign objective.', significance: 0.7, tags: ['war', 'resource'],
+      summary: `${attacker.name} contests ${defender.name}'s ${strategicDeposit.resourceId} supply.` });
     this.state.stats.wars += 1;
     relation.hostility = clamp(relation.hostility + 0.22);
     relation.grievances = clamp(relation.grievances + 0.18);
@@ -1426,6 +1470,17 @@ export class Simulation {
       loser.conflictPressure = clamp(loser.conflictPressure + 0.55);
       winner.politicalPower.military = clamp(winner.politicalPower.military + 0.08);
       this.applyKnowledgeEvents(this.knowledgeSystem.diffuseConquest(this.state, winner, loser));
+      for (const id of loser.knownRecipes) if (!winner.knownRecipes.includes(id)) winner.knownRecipes.push(id);
+      if (war.cause === 'resource-pressure') {
+        const site = this.state.world.resourceDeposits.find(d => d.controlledBy === loser.id && !d.depleted && winner.discoveredDeposits.includes(d.id));
+        if (site) {
+          site.controlledBy = winner.id; site.lastWorkedMonth = this.state.month;
+          loser.workedDeposits = loser.workedDeposits.filter(id => id !== site.id);
+          this.addEvent({ type: 'resource-site-established', location: { x: site.worldX, z: site.worldZ }, locationId: winner.id,
+            actors: [winner.id, loser.id, war.id], causes: ['conquest'], context: { deposit: site.id, resource: site.resourceId },
+            outcome: 'Control of the extraction site changed with the settlement of the war.', significance: 0.6, tags: ['war', 'resource'], summary: `${winner.name} gains control of a ${site.resourceId} site.` });
+        }
+      }
       const destructionRisk = clamp(0.14 + Math.abs(war.progress) * 0.22 + (war.casualtiesA + war.casualtiesB) / 120);
       if (this.random.chance(destructionRisk)) {
         this.applyKnowledgeEvents(this.knowledgeSystem.damageArchives(this.state, loser, clamp(0.28 + destructionRisk), 'wartime-destruction'));
@@ -1520,6 +1575,7 @@ export class Simulation {
       this.applyKnowledgeEvents(this.knowledgeSystem.diffuseMigration(this.state, settlement, founded, settledPioneers.length));
       founded.resources.food += settlement.resources.food * 0.07;
       settlement.resources.food *= 0.93;
+      for (const id of ['timber', 'stone']) addMaterial(founded, id, takeMaterial(settlement, id, (settlement.materials[id] ?? 0) * 0.07));
       this.addRelationsFor(founded);
     }
   }
@@ -1581,6 +1637,10 @@ export class Simulation {
   }
 
   private applyKnowledgeEvents(events: readonly KnowledgeEventDraft[]): void {
+    for (const event of events) this.addEvent(event);
+  }
+
+  private applyResourceEvents(events: readonly ResourceEventDraft[]): void {
     for (const event of events) this.addEvent(event);
   }
 

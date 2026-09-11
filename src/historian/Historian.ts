@@ -9,6 +9,7 @@ import { campaignFocus } from '../sim/war/Campaign';
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 
 const SIGNIFICANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
+  'resource-deposit-discovered', 'resource-site-established', 'resource-site-abandoned', 'resource-depleted', 'recipe-learned', 'resource-trade',
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'technology-widespread', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
   'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended',
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'harvest-crisis', 'recovery', 'cultural-shift',

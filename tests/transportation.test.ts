@@ -48,7 +48,7 @@ function testWorld(kind: 'flat' | 'lake' | 'ridge' | 'river' = 'flat'): WorldSta
     river[index] = Number(cell.river);
     lake[index] = Number(cell.lake);
   }
-  return { size, cellSize: 2, cells, seaLevel: 0.2, mountainLevel: 0.72, landmarks: [], environmentRevision: 0,
+  return { size, cellSize: 2, cells, seaLevel: 0.2, mountainLevel: 0.72, landmarks: [], environmentRevision: 0, resourceDeposits: [],
     terrain: { resolution, step: 2 / 3, originX: -13, originZ: -13, height, waterLevel, river, lake, flow: new Float32Array(count), rock: new Float32Array(count), fall: new Float32Array(count) } };
 }
 
@@ -256,6 +256,8 @@ function freightFixture() {
     settlement.prosperity = 0.8;
     settlement.buildings = 1;
     settlement.resources = { food: 100, wood: 100, minerals: 100, goods: i ? 0 : 200, wealth: 100 };
+    settlement.materials = { timber: 100, stone: 100 };
+    settlement.materialEconomy = undefined;
   }
   const route: TradeRoute = { id: 'freight-test', a: a!.id, b: b!.id, active: true, mode: 'land', volume: 1,
     ageMonths: 0, caravanProgress: 0, caravanDirection: 1, knowledgeFlow: 0, cumulativeKnowledge: 0 };

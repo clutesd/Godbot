@@ -37,6 +37,8 @@ Headless and batch runners bypass wall-clock presentation pacing and step the sa
 
 ## Historical persistence
 
+The foundational material economy is described in [RESOURCE_ECONOMY.md](docs/RESOURCE_ECONOMY.md). World generation sites deposits from biome/geology; settlements discover them, assign finite labour, carry harvested stock along validated paths, and consume physical inputs in learned processes. The material ledger backs existing wood/stone budgets, so construction, repairs and infrastructure share the same finite supply. Ore samples also gate the existing knowledge network. Logging uses the existing authoritative woodland stock and weather-driven recovery; renderer tree lifecycles show the consequence. Resource freight extends the existing transport model, and equipped materials feed the derived military profile without replacing campaigns.
+
 Knowledge records carry separate discovery, adoption, and transformation months. Adoption requires accumulated theory and reproducible practice; transformation also requires supporting institutions, infrastructure, and surplus. Industry advances through durable intermediate stages before becoming active, and atomic capability requires transformed fission knowledge plus mature industrial, power, and research foundations.
 
 Settlements accumulate building work over simulated months and remain alive through a prolonged decline window before abandonment. Polities have formation, consolidation, maturity, stress, and decline phases; stability derives from legitimacy, administration, prosperity, internal trade, and conflict. Leadership and dynastic households persist across ordinary years, while integration, succession, fracture, and war remain event-driven consequences.

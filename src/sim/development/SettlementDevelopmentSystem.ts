@@ -11,6 +11,7 @@ import {
   type FlexibleMaterialRequirement,
 } from '../resources/MaterialUse';
 import { advanceSettlementResourceExtraction } from '../resources/SettlementResourceExtraction';
+import { reconcileBulkStocks, takeMaterial } from '../resources/Inventory';
 import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
@@ -126,6 +127,10 @@ function materialFor(c: DevelopmentContext, level: number): StructureMaterial {
   if (masonryAvailable && practical(s, 'leverage') > 0.25 && practical(s, 'stone-composites') > 0.3 && s.resources.minerals > 12 && (c.localMinerals > c.localWood || c.culture.dimensions.longTermOrientation > 0.7)) return 'masonry';
   if (ceramicAvailable && practical(s, 'pottery-firing') > 0.3 && practical(s, 'fire-control') > 0.2 && s.resources.minerals > 8 && s.resources.wood > 6 && c.localWood < 0.5) return 'ceramic';
   return timberAvailable && (c.localWood > 0.25 || c.routes > 0) && s.resources.wood > 8 ? 'timber' : 'earth';
+  if (level === 3 && s.knownRecipes.includes('iron-tools') && (s.materials['iron-tools'] ?? 0) >= 6 && practical(s, 'iron-working') > 0.45 && practical(s, 'precision-tools') > 0.35 && s.resources.minerals > 32 && s.resources.wood > 12) return 'metal';
+  if (s.knownRecipes.includes('masonry') && (s.materials['dressed-stone'] ?? 0) >= 2 && practical(s, 'leverage') > 0.25 && practical(s, 'stone-composites') > 0.3 && s.resources.minerals > 12 && (c.localMinerals > c.localWood || c.culture.dimensions.longTermOrientation > 0.7)) return 'masonry';
+  if (practical(s, 'pottery-firing') > 0.3 && practical(s, 'fire-control') > 0.2 && s.resources.minerals > 8 && s.resources.wood > 6 && c.localWood < 0.5) return 'ceramic';
+  return s.knownRecipes.includes('timber-framing') && (s.materials['timber-frame'] ?? 0) >= 2 && s.resources.wood > 8 ? 'timber' : 'earth';
 }
 
 /** Capability requirements attach to a response, never to a world-era counter. */
@@ -197,13 +202,16 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     case 'healthcare':
       if (c.keepers < 2 || !knows('anatomical-observation', 0.2)) return undefined;
       sponsor = institution(c, 'temple') ?? institution(c, 'knowledge-keepers') ?? institution(c, 'council');
-      form = sponsor?.kind === 'temple' ? 'sanctuary' : 'hall'; names = ['healing house', 'community infirmary', 'clinical hospital'];
+      form = sponsor?.kind === 'temple' ? 'sanctuary' : 'hall'; names = [s.knownRecipes.includes('herbal-remedy') && ((s.materials['wild-herbs'] ?? 0) > 0 || (s.materialEconomy?.medicineCoverage ?? 0) > 0) ? 'herbal apothecary' : 'healing house', 'community infirmary', 'clinical hospital'];
       if (sponsor && knows('contagion-patterns')) maxLevel = 2;
       if (maxLevel === 2 && knows('modern-medicine', 0.45) && c.keepers >= 6) maxLevel = 3;
       break;
     case 'manufacturing':
       if (c.artisans < 2 || !(knows('pottery-firing', 0.2) || knows('metal-smelting', 0.2))) return undefined;
       sponsor = institution(c, 'craft-circle'); form = 'workshop'; names = ['craft workshop', 'specialist workshop', 'powered manufactory'];
+      if (s.knownRecipes.includes('iron-tools') && ((s.materials['iron-ore'] ?? 0) > 0 || (s.materials['iron-tools'] ?? 0) > 0)) names[0] = 'iron furnace and smithy';
+      else if (s.knownRecipes.includes('bronze-ingot') && (s.materials.bronze ?? 0) > 0) names[0] = 'bronze foundry';
+      else if (s.knownRecipes.includes('timber-framing') && s.resources.wood > 6) names[0] = 'carpenter workshop';
       if (sponsor && knows('precision-tools')) maxLevel = 2;
       if (maxLevel === 2 && knows('mechanical-power', 0.45) && knows('precision-manufacturing', 0.4) && c.artisans >= 8 && s.resources.wood > 12 && Math.max(s.infrastructure.roads, s.infrastructure.ports) > 0.2) maxLevel = 3;
       break;
@@ -247,6 +255,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   cost.minerals = units * (material === 'metal' ? 16 : material === 'masonry' ? 10 : material === 'ceramic' ? 6 : 1);
   cost.goods = (level - 1) * 4;
   cost.wealth = (level - 1) * 3;
+  const materialCost: Record<string, number> = material === 'metal' ? { 'iron-tools': units * 2 } : material === 'masonry' ? { 'dressed-stone': units * 2 } : material === 'timber' ? { 'timber-frame': units * 2 } : {};
   const services: ServiceSupply = { [need]: level === 1 ? 1 : level === 2 ? 2 : 3.5 };
   if (need === 'housing') services.housing = level === 1 ? 1 : 1.8;
   if (need === 'religion' && sponsor) { services.healthcare = level * 0.35; services.security = level * (d.religiousTendency > 0.7 ? 0.7 : 0.1); }
@@ -258,7 +267,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     ...(need === 'water' && s.development?.water ? [s.development.water.droughtStress > 0.4 ? 'drought-resilience' : s.development.water.quality < 0.55 ? 'clean-water' : 'water-security'] : []),
     ...(c.routes > 0 && ['trade', 'transport', 'religion'].includes(need) ? ['connected-exchange'] : [])];
   return { need, form, name: names[level - 1]!, level, material, cultureId: c.culture.id, style: { ...c.culture.style }, institutionId: sponsor?.id,
-    services, reasons, capabilities: [...new Set(requirements)], cost, labor: level * (open ? 0.5 : 1) };
+    services, reasons, capabilities: [...new Set(requirements)], cost, materialCost, labor: level * (open ? 0.5 : 1) };
 }
 
 function entry(response: DevelopmentResponse, month: number, action: StructureHistoryEntry['action']): StructureHistoryEntry {
@@ -395,11 +404,14 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
           const cost = { ...response.cost };
           for (const key of STOCK_KEYS) cost[key] *= materialScale;
           response = { ...response, cost };
+          for (const key of STOCK_KEYS) cost[key] *= 0.5 + (1 - plot.condition) * 0.5;
+          response = { ...response, cost, materialCost: Object.fromEntries(Object.entries(response.materialCost ?? {}).map(([id, n]) => [id, n * (0.5 + (1 - plot!.condition) * 0.5)])) };
         }
         const fuelReserve = response.need === 'energy' || response.level === 3 && ['food', 'manufacturing'].includes(response.need) ? 12 : 0;
         if (!STOCK_KEYS.every(key => settlement.resources[key] >= response.cost[key] + (key === 'wood' ? fuelReserve : 0)) || c.builders === 0) continue;
         const materialRequirements = scaleRequirements(structureMaterialRequirements(response), materialScale);
         if (hasMaterialAuthority(settlement) && materialRequirementCoverage(settlement, materialRequirements) < 0.08) continue;
+        if (Object.entries(response.materialCost ?? {}).some(([id, n]) => (settlement.materials[id] ?? 0) < n)) continue;
         if (plot && !validPlot(state, plot)) continue;
         plot ??= reserveStructurePlot(state, settlement, districtForResponse(response));
         if (!plot) continue;
@@ -425,11 +437,18 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       const physicalLimit = project.materialRequirements ? maxMaterialProgressIncrement(settlement, project.materialRequirements) : 1;
       const progress = Math.max(0, Math.min(1 - project.progress, workRate / project.response.labor, physicalLimit,
         ...STOCK_KEYS.filter(key => project.response.cost[key] > 0).map(key => settlement.resources[key] / project.response.cost[key])));
+      const progress = Math.min(1 - project.progress, workRate / project.response.labor,
+        ...Object.entries(project.response.materialCost ?? {}).filter(([, n]) => n > 0).map(([id, n]) => (settlement.materials[id] ?? 0) / n),
+        ...STOCK_KEYS.filter(key => project.response.cost[key] > 0).map(key => settlement.resources[key] / project.response.cost[key]));
       if (project.progress + progress >= 1 - 1e-8 && !validPlot(state, plot)) return events;
       consumeConstructionMaterials(settlement, project, progress, state.month);
       for (const key of STOCK_KEYS) {
         const payment = progress * project.response.cost[key];
         settlement.resources[key] = Math.max(0, settlement.resources[key] - payment); project.spent[key] += payment;
+      }
+      if (Object.keys(project.response.materialCost ?? {}).length) {
+        reconcileBulkStocks(settlement);
+        for (const [id, n] of Object.entries(project.response.materialCost ?? {})) takeMaterial(settlement, id, n * progress);
       }
       project.progress = Math.min(1, project.progress + progress);
       if (project.progress >= 1 - 1e-8) {

@@ -35,6 +35,9 @@ export interface WorldCell {
   temperature: number;
   fertility: number;
   wood: number;
+  /** Authoritative forest standing stock; WeatherSystem owns slow regrowth. */
+  forestCapacity?: number;
+  lastLoggingMonth?: number;
   minerals: number;
   habitability: number;
   movementCost: number;
@@ -66,6 +69,73 @@ export interface WorldState {
   mountainLevel: number;
   weather?: WeatherState;
   environmentRevision?: number;
+  /** Geographically sited raw-material deposits; see src/sim/resources. */
+  resourceDeposits: ResourceDeposit[];
+}
+
+/**
+ * A physically sited pocket of a raw resource (herb stand, forest stand, ore body, quarry face).
+ * Deposits are generated once, deterministically, from world cells at world-gen time. Settlements
+ * must discover them before they can be worked, and non-renewable deposits are consumed by use.
+ */
+export interface ResourceDeposit {
+  id: string;
+  resourceId: string;
+  cellIndex: number;
+  worldX: number;
+  worldZ: number;
+  /** 0..1 intrinsic richness/purity of this deposit, fixed at generation. */
+  quality: number;
+  /** Absolute local ceiling: original size for depletable deposits, sustainable standing stock for renewables. */
+  capacity: number;
+  /** Remaining share of capacity, 0..1. Renewables regenerate toward 1; non-renewables only fall. */
+  abundance: number;
+  renewable: boolean;
+  depleted: boolean;
+  /** Renewable deposits harvested faster than they regenerate accrue lasting ecological damage. */
+  overharvested: boolean;
+  /** SettlementId -> month first discovered. */
+  discoveredBy: Record<string, number>;
+  controlledBy?: string;
+  establishedMonth?: number;
+  lastWorkedMonth?: number;
+  /** Fraction of the original body accessible to surface gathering. */
+  surfaceShare?: number;
+  accessibility?: number;
+  abandonedMonth?: number;
+}
+
+/** Settlement stockpile of specific gathered/crafted materials, keyed by resource or recipe-output id. */
+export type MaterialInventory = Record<string, number>;
+
+export interface MaterialShipment {
+  depositId: string;
+  resourceId: string;
+  quantity: number;
+  quality: number;
+  path: Vec2[];
+  remainingMonths: number;
+}
+
+/** Serialized material accounting; recipes and resource experience survive reload/replay. */
+export interface MaterialEconomy {
+  quality: Record<string, number>;
+  experience: Record<string, number>;
+  recipeResearch: Record<string, number>;
+  inTransit: MaterialShipment[];
+  demand: Record<string, number>;
+  imports: Record<string, number>;
+  delivered: Record<string, number>;
+  lastEventMonth: Record<string, number>;
+  bulkSnapshot: { wood: number; minerals: number };
+  tools: number;
+  arms: number;
+  timberArms: number;
+  medicineCoverage: number;
+  energyDemand: number;
+  energySupplied: number;
+  labourUsed: number;
+  shortageMonths: number;
 }
 
 export type WeatherKind = 'clear' | 'cloudy' | 'rain' | 'heavy-rain' | 'snow' | 'heavy-snow' | 'thunderstorm' | 'windstorm' | 'tornado' | 'hurricane';
@@ -508,6 +578,15 @@ export interface Settlement {
   polityId: string;
   institutionIds: string[];
   alive: boolean;
+  /** Gathered raw materials and crafted goods from the resource/recipe system. */
+  materials: MaterialInventory;
+  /** Deposit IDs this settlement has found (may or may not still be workable). */
+  discoveredDeposits: string[];
+  /** Deposit IDs this settlement is actively extracting from. */
+  workedDeposits: string[];
+  /** Recipe IDs this settlement has successfully produced at least once. */
+  knownRecipes: string[];
+  materialEconomy?: MaterialEconomy;
 }
 
 export interface StructurePlot {
@@ -891,6 +970,12 @@ export type HistoricalEventType =
   | 'ecological-crisis'
   | 'climate-crisis'
   | 'resource-crisis'
+  | 'resource-deposit-discovered'
+  | 'resource-site-established'
+  | 'resource-depleted'
+  | 'recipe-learned'
+  | 'resource-site-abandoned'
+  | 'resource-trade'
   | 'autonomous-weapons-crisis'
   | 'machine-intelligence-transition'
   | 'first-orbit'

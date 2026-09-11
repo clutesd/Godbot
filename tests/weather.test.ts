@@ -13,6 +13,12 @@ describe('Weather simulation', () => {
     const setup = (wind: number) => {
       const simulation = new Simulation({ seed: 'winter-history', startingPopulation: 60, world: { size: 20 }, settlementCount: [2, 2] });
       for (const cell of simulation.state.world.cells) cell.temperature = 0.2;
+      for (const s of simulation.state.settlements) {
+        const deposit = { id: `weather-timber:${s.id}`, resourceId: 'timber', cellIndex: s.cellIndex,
+          worldX: s.position.x, worldZ: s.position.z, capacity: 100, abundance: 1, quality: 1, renewable: true,
+          depleted: false, overharvested: false, discoveredBy: { [s.id]: 0 } };
+        simulation.state.world.resourceDeposits.push(deposit); s.discoveredDeposits.push(deposit.id);
+      }
       simulation.state.weather.fronts = Array.from({ length: 4 }, (_, index) => ({
         id: `winter-${index}`, kind: 'heavy-rain' as const, x: 0, z: 0, radius: 1000,
         directionX: 1, directionZ: 0, velocity: 0, intensity: 1, wind,
@@ -33,7 +39,8 @@ describe('Weather simulation', () => {
     expect(events[0]!.context['snowpack']).toBe(weather.snowpack);
     expect(events[0]!.context['travelPenalty']).toBe(weather.travelPenalty);
     expect(settlement.monthlyBalance.food).toBeLessThan(ordinary.state.settlements[0]!.monthlyBalance.food);
-    expect(settlement.monthlyBalance.wood).toBeLessThan(ordinary.state.settlements[0]!.monthlyBalance.wood);
+    const harvested = (s: typeof settlement) => s.materialEconomy!.inTransit.filter(t => t.resourceId === 'timber').reduce((n, t) => n + t.quantity, 0);
+    expect(harvested(settlement)).toBeLessThan(harvested(ordinary.state.settlements[0]!));
     expect(ordinary.state.history.some((event) => event.tags.includes('snow'))).toBe(false);
     severe.step(2);
     expect(severe.state.history.filter((event) => event.tags.includes('snow') && event.locationId === settlement.id)).toHaveLength(1);

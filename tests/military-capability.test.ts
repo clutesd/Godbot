@@ -6,6 +6,7 @@ import {
   militaryProfileForWar,
 } from '../src/sim/war/MilitaryCapability';
 import { warFixture } from './fixtures/war';
+import { materialEconomy, publishBulkStocks } from '../src/sim/resources/Inventory';
 
 function grant(settlement: Settlement, ids: readonly string[], practice = 0.92): void {
   for (const id of ids) {
@@ -32,6 +33,10 @@ function provision(settlement: Settlement, industrial = false): void {
   settlement.resources.food = 180;
   settlement.resources.wood = 140;
   settlement.resources.minerals = 160;
+  settlement.materials.timber = 140; settlement.materials.stone = 160;
+  publishBulkStocks(settlement);
+  materialEconomy(settlement).arms = 12;
+  materialEconomy(settlement).timberArms = 6;
   settlement.resources.goods = industrial ? 170 : 80;
   settlement.resources.wealth = industrial ? 150 : 70;
   settlement.infrastructure.workshops = industrial ? 0.9 : 0.62;
