@@ -11,12 +11,12 @@ import { MaterialPalette, type Era } from '../materials/MaterialPalette';
 import { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
 import type { CultureStyleProfile } from '../style/CultureStyleProfile';
 import { ProceduralGeometry } from './ProceduralGeometry';
-import { resolveBuildingGrammar, type BuildingRole } from './BuildingGrammar';
+import { resolveBuildingGrammar, type BuildingGrammar, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentResponse } from '../../sim/development/types';
-import { heritageFingerprint } from './StructureHeritage';
 import { buildStructureComponentManifest } from './StructureComponents';
+import { structureVisualHistorySignature } from './StructureVisualSignature';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -36,6 +36,20 @@ export interface CachedAsset {
   lods: THREE.Object3D[]; // LOD variants
   config: AssetConfig;
   createdAt: number;
+  lastAccessedAt: number;
+}
+
+export interface AssetCacheStats {
+  entries: number;
+  maxEntries: number;
+  buildingEntries: number;
+  hits: number;
+  misses: number;
+  hitRate: number;
+  prunes: number;
+  evictions: number;
+  materialPalettes: number;
+  cultureProfiles: number;
 }
 
 /**
@@ -48,6 +62,10 @@ export class AssetBuilder {
   private readonly cultureProfiles: Map<string, CultureStyleProfile>;
   private maxCacheSize: number = 900; // Prevent unbounded memory growth
   private cacheClock = 0;
+  private cacheHits = 0;
+  private cacheMisses = 0;
+  private cachePrunes = 0;
+  private cacheEvictions = 0;
   private nightFactor = 0;
 
   constructor(globalSeed: string = 'assets') {
@@ -66,14 +84,17 @@ export class AssetBuilder {
   ): { mesh: THREE.Object3D; lods: THREE.Object3D[] } {
     const cacheKey = this.getCacheKey(type, config);
 
-    // Check cache first
+    // Check cache first. Touching the entry turns pruning into LRU rather than creation-order FIFO.
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey)!;
+      cached.lastAccessedAt = this.cacheClock++;
+      this.cacheHits++;
       return {
         mesh: cached.mesh,
         lods: cached.lods,
       };
     }
+    this.cacheMisses++;
 
     // Generate new asset
     let asset: { mesh: THREE.Object3D; lods: THREE.Object3D[]; material: THREE.Material } | null =
@@ -212,11 +233,12 @@ export class AssetBuilder {
   /**
    * Generate a building asset with LODs.
    *
-   * All form comes from the resolved BuildingGrammar; the variant encodes `role#stage`, so
-   * one cache entry serves every instance of a given culture/era/role/construction stage.
+   * Completed structures return a THREE.LOD root, so the existing renderer automatically swaps
+   * full procedural geometry for semantic mid-distance massing and a far silhouette. In-progress
+   * construction remains a single stage-specific mesh so distant sites never appear complete.
    */
   private generateBuilding(config: AssetConfig): {
-    mesh: THREE.Group;
+    mesh: THREE.Object3D;
     lods: THREE.Object3D[];
     material: THREE.Material;
   } {
@@ -228,43 +250,130 @@ export class AssetBuilder {
     const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
-    composed.group.userData['buildingHeight'] = composed.height;
-    composed.group.userData['footprintWidth'] = composed.extentX;
-    composed.group.userData['footprintDepth'] = composed.extentZ;
-    composed.group.userData['structureComponents'] = componentManifest;
-    composed.group.userData['structureComponentSignature'] = componentManifest.visualSignature;
+    const lods = stage === BUILD_STAGE.DETAIL
+      ? this.generateBuildingLODs(grammar, composed.height, palette)
+      : [];
+
+    composed.group.name = 'building-full-detail';
+    let root: THREE.Object3D = composed.group;
+    if (lods.length >= 2) {
+      const lod = new THREE.LOD();
+      lod.name = 'building-lod';
+      lod.autoUpdate = true;
+      lod.addLevel(composed.group, 0);
+      lods[0]!.name = 'building-mid-detail';
+      lods[1]!.name = 'building-far-silhouette';
+      // Documentary close/street shots remain full detail. Settlement approaches move to the
+      // semantic massing LOD, and regional/world views use the skyline silhouette.
+      lod.addLevel(lods[0]!, 20);
+      lod.addLevel(lods[1]!, 42);
+      root = lod;
+    }
+
+    root.userData['buildingHeight'] = composed.height;
+    root.userData['footprintWidth'] = composed.extentX;
+    root.userData['footprintDepth'] = composed.extentZ;
+    root.userData['structureComponents'] = componentManifest;
+    root.userData['structureComponentSignature'] = componentManifest.visualSignature;
+    root.userData['buildingLodDistances'] = lods.length >= 2 ? [0, 20, 42] : [0];
 
     return {
-      mesh: composed.group,
-      lods: this.generateBuildingLODs(grammar.width, grammar.depth, composed.height, palette),
+      mesh: root,
+      lods,
       material: palette.getSurfaceMaterial('plaster'),
     };
   }
 
   private generateBuildingLODs(
-    width: number,
-    depth: number,
+    grammar: BuildingGrammar,
     height: number,
     palette: MaterialPalette,
   ): THREE.Object3D[] {
-    const lods: THREE.Object3D[] = [];
-
-    // LOD 1: massing block plus roof cap, enough to keep the skyline reading at range.
+    const width = grammar.width;
+    const depth = grammar.depth;
+    const bodyMaterial = palette.getSurfaceMaterial('plaster');
+    const roofMaterial = palette.getRoofMaterial();
+    const stoneMaterial = palette.getSurfaceMaterial('stone');
+    const metalMaterial = palette.getSurfaceMaterial('metal');
     const lod1 = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(width, height * 0.6, depth), palette.getSurfaceMaterial('plaster'));
-    body.position.y = height * 0.3;
-    const cap = new THREE.Mesh(new THREE.ConeGeometry(Math.max(width, depth) * 0.72, height * 0.4, 4), palette.getRoofMaterial());
-    cap.position.y = height * 0.78;
-    cap.rotation.y = Math.PI / 4;
-    lod1.add(body, cap);
-    lods.push(lod1);
 
-    // LOD 2: silhouette only.
-    const lod2Geometry = new THREE.BoxGeometry(width * 0.9, height * 0.8, depth * 0.9);
-    const lod2 = new THREE.Mesh(lod2Geometry, palette.getSurfaceMaterial('plaster'));
-    lods.push(lod2);
+    const bodyHeight = Math.max(height * 0.58, grammar.wallHeight * grammar.storeys * 0.72);
+    const addBody = (x: number, z: number, sx: number, sz: number, sy = bodyHeight, y = sy / 2): void => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), bodyMaterial);
+      mesh.position.set(x, y, z);
+      lod1.add(mesh);
+    };
 
-    return lods;
+    // Main volume.
+    addBody(0, 0, width, depth);
+
+    // Preserve the biggest Step 1/2 identity cue at mid-distance instead of reducing every
+    // institution to one rectangular box.
+    const wingHeight = bodyHeight * 0.72;
+    if (grammar.massing === 'wing') {
+      addBody(width * 0.34, -depth * 0.42, width * 0.44, depth * 0.58, wingHeight, wingHeight / 2);
+    } else if (grammar.massing === 'twin') {
+      addBody(-width * 0.43, depth * 0.28, width * 0.3, depth * 0.42, wingHeight, wingHeight / 2);
+      addBody(width * 0.43, depth * 0.28, width * 0.3, depth * 0.42, wingHeight, wingHeight / 2);
+    } else if (grammar.massing === 'court') {
+      addBody(-width * 0.52, depth * 0.34, width * 0.24, depth * 0.7, wingHeight, wingHeight / 2);
+      addBody(width * 0.52, depth * 0.34, width * 0.24, depth * 0.7, wingHeight, wingHeight / 2);
+    }
+
+    // Simplified roof language keeps sacred/industrial/civic skylines distinct.
+    const roofHeight = Math.max(0.14, height - bodyHeight);
+    let roof: THREE.Mesh;
+    if (grammar.roofFamily === 'shell-dome' || grammar.roofFamily === 'canopy-shell') {
+      roof = new THREE.Mesh(new THREE.SphereGeometry(Math.max(width, depth) * 0.48, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), roofMaterial);
+      roof.scale.z = depth / Math.max(0.001, width);
+      roof.position.y = bodyHeight;
+    } else {
+      const sides = grammar.roofFamily === 'hide-cone' ? 6 : 4;
+      roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(width, depth) * 0.72, roofHeight, sides), roofMaterial);
+      roof.position.y = bodyHeight + roofHeight * 0.5;
+      roof.rotation.y = sides === 4 ? Math.PI / 4 : 0;
+      roof.scale.z = Math.max(0.45, depth / Math.max(0.001, width));
+    }
+    lod1.add(roof);
+
+    if (grammar.forecourt) {
+      const forecourt = new THREE.Mesh(new THREE.BoxGeometry(width * 1.45, 0.025, depth * 0.7), stoneMaterial);
+      forecourt.position.set(0, 0.0125, depth * 0.82);
+      lod1.add(forecourt);
+    }
+    if (grammar.gateway) {
+      const gate = new THREE.Group();
+      const gateHeight = Math.max(0.34, bodyHeight * 0.6);
+      for (const side of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(width * 0.045, gateHeight, width * 0.045), stoneMaterial);
+        post.position.set(side * width * 0.24, gateHeight / 2, depth * 0.78);
+        gate.add(post);
+      }
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(width * 0.56, width * 0.055, width * 0.055), stoneMaterial);
+      lintel.position.set(0, gateHeight, depth * 0.78);
+      gate.add(lintel);
+      lod1.add(gate);
+    }
+
+    if (grammar.chimneys > 0 || grammar.vents > 0) {
+      const count = Math.min(3, Math.max(grammar.chimneys, grammar.vents));
+      for (let index = 0; index < count; index++) {
+        const x = count === 1 ? 0 : -width * 0.28 + (width * 0.56 * index) / (count - 1);
+        const stackHeight = height * (grammar.chimneys > 0 ? 0.5 : 0.34);
+        const stack = new THREE.Mesh(new THREE.CylinderGeometry(width * 0.035, width * 0.045, stackHeight, 6), metalMaterial);
+        stack.position.set(x, bodyHeight + stackHeight * 0.38, -depth * 0.18);
+        lod1.add(stack);
+      }
+    }
+
+    const lod2 = new THREE.Mesh(
+      new THREE.BoxGeometry(width * 0.92, height * 0.82, depth * 0.92),
+      bodyMaterial,
+    );
+    // BoxGeometry is centred; lift it so the distant silhouette remains grounded.
+    lod2.position.y = height * 0.41;
+
+    return [lod1, lod2];
   }
 
   /**
@@ -337,7 +446,7 @@ export class AssetBuilder {
   private generateHumanoidLODs(palette: MaterialPalette, scale: number): THREE.Object3D[] {
     const lods: THREE.Object3D[] = [];
 
-    // LOD 1: Simplified (torso + head only)
+    // LOD 1: Simplified torso + head only.
     const lod1 = new THREE.Group();
     const lod1Torso = new THREE.Mesh(
       ProceduralGeometry.createBodySegment(0.3 * scale, 0.5 * scale, 0.25 * scale),
@@ -429,12 +538,13 @@ export class AssetBuilder {
   }
 
   /**
-   * Generate cache key. Historical building fabric is part of identity: two present-day halls
-   * with different origins or reuse histories must not collapse onto the same cached geometry.
+   * Generate a cache key from facts that can actually change the shared asset. Historical event
+   * timing and instance ownership are excluded; geometry-changing heritage and generation facts
+   * remain part of the key.
    */
   private getCacheKey(type: AssetType, config: AssetConfig): string {
     const d = config.development;
-    const history = type === 'building' ? heritageFingerprint(d) : 'na';
+    const history = type === 'building' ? structureVisualHistorySignature(d) : 'na';
     return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}`;
   }
 
@@ -448,12 +558,14 @@ export class AssetBuilder {
     lods: THREE.Object3D[],
     config: AssetConfig,
   ): void {
+    const access = this.cacheClock++;
     this.cache.set(key, {
       mesh,
       material,
       lods,
       config,
-      createdAt: this.cacheClock++,
+      createdAt: access,
+      lastAccessedAt: access,
     });
 
     // Prune if cache is too large
@@ -463,18 +575,42 @@ export class AssetBuilder {
   }
 
   /**
-   * Remove oldest cached items
+   * Remove least-recently-used cached items. Active architectural families survive churn from
+   * rarely revisited historical variants instead of being evicted purely because they are old.
    */
   private pruneCache(): void {
     const toRemove = Math.ceil(this.cache.size * 0.1); // Remove 10%
     const entries = Array.from(this.cache.entries()).sort(
-      (a, b) => a[1].createdAt - b[1].createdAt,
+      (a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt || a[1].createdAt - b[1].createdAt,
     );
 
+    this.cachePrunes++;
     for (let i = 0; i < toRemove; i++) {
       const entry = entries[i];
-      if (entry) this.cache.delete(entry[0]);
+      if (entry) {
+        this.cache.delete(entry[0]);
+        this.cacheEvictions++;
+      }
     }
+  }
+
+  /** Renderer/validation diagnostics. No cache keys or mutable internals are exposed. */
+  getCacheStats(): AssetCacheStats {
+    const requests = this.cacheHits + this.cacheMisses;
+    let buildingEntries = 0;
+    for (const key of this.cache.keys()) if (key.startsWith('building:')) buildingEntries++;
+    return {
+      entries: this.cache.size,
+      maxEntries: this.maxCacheSize,
+      buildingEntries,
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+      hitRate: requests === 0 ? 0 : this.cacheHits / requests,
+      prunes: this.cachePrunes,
+      evictions: this.cacheEvictions,
+      materialPalettes: this.materialPalettes.size,
+      cultureProfiles: this.cultureProfiles.size,
+    };
   }
 
   /** 0 at midday, 1 at deep night. Drives window, lantern and motif emissives. */
@@ -498,7 +634,7 @@ export class AssetBuilder {
   }
 
   /**
-   * Get or create culture style profile
+   * Get or create culture style profile for a culture
    */
   private getOrCreateCultureProfile(config: AssetConfig): CultureStyleProfile {
     const key = `${config.culture.primary}:${config.culture.symbol}:${config.culture.pattern}`;

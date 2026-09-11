@@ -80,13 +80,18 @@ export interface StructureDevelopmentEnvelope {
   stages: DevelopmentEnvelopeStage[];
 }
 
+/**
+ * Generation facts safe to attach to a shared cached asset. Plot-specific documentary fields such
+ * as exact start month and institution id remain in authoritative development/history state.
+ */
+export type SharedArchitecturalGeneration = Omit<ArchitecturalGeneration, 'startedMonth' | 'institutionId'>;
+
 export interface StructureComponentManifest {
   version: 2;
   role: string;
   era: string;
   components: StructureComponent[];
-  generations: ArchitecturalGeneration[];
-  omittedTransitionCount: number;
+  generations: SharedArchitecturalGeneration[];
   developmentEnvelope: StructureDevelopmentEnvelope;
   /** Geometry-relevant signature only; intentionally excludes event months and narrative text. */
   visualSignature: string;
@@ -156,6 +161,22 @@ function provenanceForGeneration(
           ? 'current-construction'
           : 'generation-addition',
   };
+}
+
+function sharedGenerations(model: ArchitecturalGenerationModel): SharedArchitecturalGeneration[] {
+  return model.generations.map(generation => ({
+    id: generation.id,
+    ordinal: generation.ordinal,
+    kind: generation.kind,
+    action: generation.action,
+    need: generation.need,
+    form: generation.form,
+    level: generation.level,
+    material: generation.material,
+    cultureId: generation.cultureId,
+    envelopeShare: generation.envelopeShare,
+    rebuiltAfterLoss: generation.rebuiltAfterLoss,
+  }));
 }
 
 function add(
@@ -272,8 +293,7 @@ export function buildStructureComponentManifest(
       role: grammar.role,
       era: grammar.era,
       components,
-      generations: generationModel.generations,
-      omittedTransitionCount: generationModel.omittedTransitionCount,
+      generations: sharedGenerations(generationModel),
       developmentEnvelope: envelope,
       visualSignature: visualSignature(components, generationModel),
     };
@@ -438,8 +458,7 @@ export function buildStructureComponentManifest(
     role: grammar.role,
     era: grammar.era,
     components,
-    generations: generationModel.generations,
-    omittedTransitionCount: generationModel.omittedTransitionCount,
+    generations: sharedGenerations(generationModel),
     developmentEnvelope: envelope,
     visualSignature: visualSignature(components, generationModel),
   };

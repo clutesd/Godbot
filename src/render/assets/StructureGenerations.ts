@@ -76,12 +76,13 @@ interface PhysicalSnapshot {
 }
 
 function sameFabric(a: PhysicalSnapshot, b: PhysicalSnapshot): boolean {
+  // Sponsorship/ownership belongs to documentary state, not physical fabric. A council changing
+  // hands must not create a new architectural generation unless form/material/use also changes.
   return a.need === b.need
     && a.form === b.form
     && a.level === b.level
     && a.material === b.material
-    && a.cultureId === b.cultureId
-    && a.institutionId === b.institutionId;
+    && a.cultureId === b.cultureId;
 }
 
 function kindFor(snapshot: PhysicalSnapshot, previous: PhysicalSnapshot | undefined, isOrigin: boolean, isCurrent: boolean): ArchitecturalGenerationKind {
@@ -139,7 +140,6 @@ function signature(generations: ArchitecturalGeneration[]): string {
     generation.level,
     generation.material,
     generation.cultureId,
-    generation.institutionId ?? '-',
     generation.rebuiltAfterLoss ? 1 : 0,
     generation.envelopeShare.toFixed(2),
   ].join('.')).join('|');
@@ -150,8 +150,8 @@ function signature(generations: ArchitecturalGeneration[]): string {
  *
  * The origin is permanent. Up to four later fabric generations are retained, prioritising
  * rebuilds, conversions and material/cultural modernisation over routine level changes. Exact
- * months and narrative reasons never affect the visual identity. For old saves without structure
- * history, a single current generation is returned.
+ * months, institution ids and narrative reasons never affect visual identity. For old saves
+ * without structure history, a single current generation is returned.
  */
 export function deriveArchitecturalGenerations(response: DevelopmentResponse): ArchitecturalGenerationModel {
   if (!isStructureDevelopment(response)) {
