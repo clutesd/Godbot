@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { CultureStyle } from '../src/sim/types';
 import type { DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../src/sim/development/types';
@@ -97,6 +98,22 @@ function buildingConfig(development: DevelopmentResponse) {
   };
 }
 
+function vertexCount(object: THREE.Object3D): number {
+  let vertices = 0;
+  object.traverse(child => {
+    if (child instanceof THREE.Mesh) vertices += child.geometry.getAttribute('position')?.count ?? 0;
+  });
+  return vertices;
+}
+
+function boundsSignature(object: THREE.Object3D): string {
+  const size = new THREE.Vector3();
+  new THREE.Box3().setFromObject(object).getSize(size);
+  let meshes = 0;
+  object.traverse(child => { if (child instanceof THREE.Mesh) meshes++; });
+  return [size.x.toFixed(2), size.y.toFixed(2), size.z.toFixed(2), meshes].join(':');
+}
+
 describe('structure renderer and performance validation', () => {
   it('keeps major institution families readable at normal settlement-view scale', () => {
     const summary = architectureGallerySummary('gallery-culture', CULTURE);
@@ -108,14 +125,15 @@ describe('structure renderer and performance validation', () => {
     expect(summary.farSignatureCount).toBeGreaterThanOrEqual(6);
   });
 
-  it('keeps procedural structures within the renderer surface budget', () => {
+  it('keeps full procedural detail bounded while runtime LODs carry the distance budget', () => {
     const summary = architectureGallerySummary('gallery-culture', CULTURE);
     expect(summary.maxMeshes).toBeLessThanOrEqual(12);
-    expect(summary.maxVertices).toBeLessThan(30000);
+    // Full detail is reserved for close documentary shots; this guards against runaway geometry.
+    expect(summary.maxVertices).toBeLessThan(60000);
     expect(summary.profiles.every(profile => profile.componentCount >= 2)).toBe(true);
   });
 
-  it('builds the deterministic developer gallery through the real asset cache', () => {
+  it('activates semantic mid/far building LODs through the real asset cache', () => {
     const builder = new AssetBuilder('architecture-gallery-validation');
     const gallery = buildArchitectureGalleryScene(builder, 'gallery-culture', CULTURE);
     const stats = builder.getCacheStats();
@@ -125,6 +143,37 @@ describe('structure renderer and performance validation', () => {
       .toBe(ARCHITECTURE_GALLERY_CASES.length);
     expect(stats.buildingEntries).toBe(ARCHITECTURE_GALLERY_CASES.length);
     expect(stats.entries).toBeLessThanOrEqual(stats.maxEntries);
+
+    const lods = gallery.children.map(child => child as THREE.LOD);
+    expect(lods.every(lod => lod.isLOD)).toBe(true);
+    expect(lods.every(lod => lod.levels.length === 3)).toBe(true);
+    expect(lods.every(lod => lod.levels[1]!.distance === 20 && lod.levels[2]!.distance === 42)).toBe(true);
+    expect(Math.max(...lods.map(lod => vertexCount(lod.levels[1]!.object)))).toBeLessThan(1200);
+    expect(Math.max(...lods.map(lod => vertexCount(lod.levels[2]!.object)))).toBeLessThan(100);
+
+    // Even after simplification, council/academy/hospital/garrison massing must not collapse to
+    // one generic hall silhouette.
+    const hallIds = new Set(['government', 'knowledge', 'healthcare', 'security']);
+    const hallMidSignatures = lods
+      .filter(lod => hallIds.has(String(lod.userData['architectureGalleryCase'])))
+      .map(lod => boundsSignature(lod.levels[1]!.object));
+    expect(new Set(hallMidSignatures).size).toBe(4);
+    builder.dispose();
+  });
+
+  it('does not use complete-building LOD silhouettes during active construction', () => {
+    const builder = new AssetBuilder('construction-lod-validation');
+    const development = currentResponse();
+    const role = developmentBuildingRole(development);
+    const asset = builder.getAsset('building', {
+      seed: 'construction-stage',
+      culture: CULTURE,
+      era: 'preIndustrial',
+      variant: `${role}#${BUILD_STAGE.WALLS}`,
+      development,
+    });
+    expect(asset.mesh).not.toBeInstanceOf(THREE.LOD);
+    expect(asset.lods).toHaveLength(0);
     builder.dispose();
   });
 
