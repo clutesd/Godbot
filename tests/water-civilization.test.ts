@@ -123,7 +123,7 @@ describe('civilization water feedback', () => {
     }
 
     expect(settlement.development!.water!.droughtMonths).toBe(6);
-    expect(events.some((event) => event.tags.includes('drought') && event.tags.includes('water'))).toBe(true);
+    expect(events.some((event) => event.tags?.includes('drought') && event.tags?.includes('water'))).toBe(true);
     expect(settlement.development!.water!.lastCrisisMonth).toBe(state.month);
   });
 
