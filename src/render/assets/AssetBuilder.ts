@@ -15,8 +15,8 @@ import { resolveBuildingGrammar, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentResponse } from '../../sim/development/types';
-import { heritageFingerprint } from './StructureHeritage';
 import { buildStructureComponentManifest } from './StructureComponents';
+import { structureVisualHistorySignature } from './StructureVisualSignature';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -36,6 +36,20 @@ export interface CachedAsset {
   lods: THREE.Object3D[]; // LOD variants
   config: AssetConfig;
   createdAt: number;
+  lastAccessedAt: number;
+}
+
+export interface AssetCacheStats {
+  entries: number;
+  maxEntries: number;
+  buildingEntries: number;
+  hits: number;
+  misses: number;
+  hitRate: number;
+  prunes: number;
+  evictions: number;
+  materialPalettes: number;
+  cultureProfiles: number;
 }
 
 /**
@@ -48,6 +62,10 @@ export class AssetBuilder {
   private readonly cultureProfiles: Map<string, CultureStyleProfile>;
   private maxCacheSize: number = 900; // Prevent unbounded memory growth
   private cacheClock = 0;
+  private cacheHits = 0;
+  private cacheMisses = 0;
+  private cachePrunes = 0;
+  private cacheEvictions = 0;
   private nightFactor = 0;
 
   constructor(globalSeed: string = 'assets') {
@@ -66,14 +84,17 @@ export class AssetBuilder {
   ): { mesh: THREE.Object3D; lods: THREE.Object3D[] } {
     const cacheKey = this.getCacheKey(type, config);
 
-    // Check cache first
+    // Check cache first. Touching the entry turns pruning into LRU rather than creation-order FIFO.
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey)!;
+      cached.lastAccessedAt = this.cacheClock++;
+      this.cacheHits++;
       return {
         mesh: cached.mesh,
         lods: cached.lods,
       };
     }
+    this.cacheMisses++;
 
     // Generate new asset
     let asset: { mesh: THREE.Object3D; lods: THREE.Object3D[]; material: THREE.Material } | null =
@@ -337,7 +358,7 @@ export class AssetBuilder {
   private generateHumanoidLODs(palette: MaterialPalette, scale: number): THREE.Object3D[] {
     const lods: THREE.Object3D[] = [];
 
-    // LOD 1: Simplified (torso + head only)
+    // LOD 1: Simplified canopy
     const lod1 = new THREE.Group();
     const lod1Torso = new THREE.Mesh(
       ProceduralGeometry.createBodySegment(0.3 * scale, 0.5 * scale, 0.25 * scale),
@@ -429,12 +450,13 @@ export class AssetBuilder {
   }
 
   /**
-   * Generate cache key. Historical building fabric is part of identity: two present-day halls
-   * with different origins or reuse histories must not collapse onto the same cached geometry.
+   * Generate a cache key from facts that can actually change the shared asset. Historical event
+   * timing and instance ownership are excluded; geometry-changing heritage and generation facts
+   * remain part of the key.
    */
   private getCacheKey(type: AssetType, config: AssetConfig): string {
     const d = config.development;
-    const history = type === 'building' ? heritageFingerprint(d) : 'na';
+    const history = type === 'building' ? structureVisualHistorySignature(d) : 'na';
     return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}`;
   }
 
@@ -448,12 +470,14 @@ export class AssetBuilder {
     lods: THREE.Object3D[],
     config: AssetConfig,
   ): void {
+    const access = this.cacheClock++;
     this.cache.set(key, {
       mesh,
       material,
       lods,
       config,
-      createdAt: this.cacheClock++,
+      createdAt: access,
+      lastAccessedAt: access,
     });
 
     // Prune if cache is too large
@@ -463,18 +487,42 @@ export class AssetBuilder {
   }
 
   /**
-   * Remove oldest cached items
+   * Remove least-recently-used cached items. Active architectural families survive churn from
+   * rarely revisited historical variants instead of being evicted purely because they are old.
    */
   private pruneCache(): void {
     const toRemove = Math.ceil(this.cache.size * 0.1); // Remove 10%
     const entries = Array.from(this.cache.entries()).sort(
-      (a, b) => a[1].createdAt - b[1].createdAt,
+      (a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt || a[1].createdAt - b[1].createdAt,
     );
 
+    this.cachePrunes++;
     for (let i = 0; i < toRemove; i++) {
       const entry = entries[i];
-      if (entry) this.cache.delete(entry[0]);
+      if (entry) {
+        this.cache.delete(entry[0]);
+        this.cacheEvictions++;
+      }
     }
+  }
+
+  /** Renderer/validation diagnostics. No cache keys or mutable internals are exposed. */
+  getCacheStats(): AssetCacheStats {
+    const requests = this.cacheHits + this.cacheMisses;
+    let buildingEntries = 0;
+    for (const key of this.cache.keys()) if (key.startsWith('building:')) buildingEntries++;
+    return {
+      entries: this.cache.size,
+      maxEntries: this.maxCacheSize,
+      buildingEntries,
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+      hitRate: requests === 0 ? 0 : this.cacheHits / requests,
+      prunes: this.cachePrunes,
+      evictions: this.cacheEvictions,
+      materialPalettes: this.materialPalettes.size,
+      cultureProfiles: this.cultureProfiles.size,
+    };
   }
 
   /** 0 at midday, 1 at deep night. Drives window, lantern and motif emissives. */
@@ -498,7 +546,7 @@ export class AssetBuilder {
   }
 
   /**
-   * Get or create culture style profile
+   * Get or create culture style profile for a culture
    */
   private getOrCreateCultureProfile(config: AssetConfig): CultureStyleProfile {
     const key = `${config.culture.primary}:${config.culture.symbol}:${config.culture.pattern}`;
