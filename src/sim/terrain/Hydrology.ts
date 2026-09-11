@@ -7,6 +7,7 @@ import { classifyWaterDepth, DANGEROUS_WATER_DEPTH, elevationToY, surfaceHeightA
 const MAX_DYNAMIC_FLOOD_DEPTH = 1.1;
 const FLOOD_RELAXATION_PASSES = 4;
 const FLOOD_VISIBLE_DEPTH = 0.005;
+const FLOODPLAIN_REACH_SAMPLES = 9;
 
 /**
  * Monthly, finite-volume flood routing layered on top of permanent river/lake geography.
@@ -23,6 +24,7 @@ export class DynamicHydrology {
   private readonly cellIndices: Int32Array;
   private readonly cellGroundY: Float32Array;
   private readonly sampleGroundY: Float32Array;
+  private readonly floodplainDistance: Uint8Array;
   private readonly maxAccumulation: number;
 
   constructor(private readonly world: WorldState) {
@@ -49,6 +51,7 @@ export class DynamicHydrology {
       const cellZ = Math.max(0, Math.min(world.size - 1, Math.round(worldZ / world.cellSize + world.size / 2)));
       return cellZ * world.size + cellX;
     });
+    this.floodplainDistance = this.buildFloodplainDistance();
   }
 
   advance(conditions: readonly WeatherCellState[]): void {
@@ -83,20 +86,22 @@ export class DynamicHydrology {
       const cell = this.world.cells[this.cellIndices[index]!]!;
 
       if (this.baseLevel[index]! < 0) {
-        // Long-lived extreme rain can saturate flat floodplains and produce shallow pluvial
-        // ponding even before a river's lateral front reaches them. The high storage threshold
-        // keeps ordinary rain dry, while slope raises the threshold so hills do not become ponds.
-        const pondingThreshold = 0.20 + cell.slope * 0.42 + Math.max(0, 0.72 - cell.moisture) * 0.18;
-        const pondingExcess = Math.max(0, this.storage[index]! - pondingThreshold);
-        if (pondingExcess > 0 && cell.slope < 0.32) {
-          const ponding = Math.min(0.085, pondingExcess * 0.70 * (1 - cell.slope));
-          floodDepth[index] = Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[index]! + ponding);
+        // Saturated low ground near an actual inland channel can pond under prolonged exceptional
+        // rain. Proximity is precomputed from permanent rivers/lakes so a storm cannot turn every
+        // unrelated flat plateau into a flood. Hills remain strongly resistant.
+        const distance = this.floodplainDistance[index]!;
+        if (distance <= FLOODPLAIN_REACH_SAMPLES && cell.slope < 0.32) {
+          const proximity = clamp01(1 - Math.max(0, distance - 1) / FLOODPLAIN_REACH_SAMPLES);
+          const pondingThreshold = 0.20 + cell.slope * 0.42 + Math.max(0, 0.72 - cell.moisture) * 0.18;
+          const pondingExcess = Math.max(0, this.storage[index]! - pondingThreshold);
+          if (pondingExcess > 0) {
+            const ponding = Math.min(0.075, pondingExcess * 0.92 * proximity * (1 - cell.slope));
+            floodDepth[index] = Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[index]! + ponding);
+          }
         }
         continue;
       }
 
-      // Normalized basin wetness means hierarchy only modestly raises bankfull capacity. Repeated
-      // ordinary rain remains below it; sustained heavy rain can overtop even a mature river.
       const capacity = terrain.lake[index]
         ? 0.27 + hierarchy * 0.05
         : 0.11 + hierarchy * 0.10 + cell.slope * 0.05;
@@ -181,6 +186,35 @@ export class DynamicHydrology {
   private baseSurfaceY(index: number): number {
     const level = this.baseLevel[index]!;
     return level >= 0 ? elevationToY(level, this.world.seaLevel) : this.sampleGroundY[index]!;
+  }
+
+  /** Chebyshev distance in fine samples to permanent inland water, bounded to the floodplain. */
+  private buildFloodplainDistance(): Uint8Array {
+    const { terrain, seaLevel } = this.world;
+    const distance = new Uint8Array(terrain.height.length).fill(255);
+    const queue: number[] = [];
+    for (let index = 0; index < terrain.height.length; index += 1) {
+      if (terrain.height[index]! < seaLevel || (!terrain.river[index] && !terrain.lake[index])) continue;
+      distance[index] = 0;
+      queue.push(index);
+    }
+    let cursor = 0;
+    while (cursor < queue.length) {
+      const index = queue[cursor++]!;
+      const nextDistance = distance[index]! + 1;
+      if (nextDistance > FLOODPLAIN_REACH_SAMPLES) continue;
+      const x = index % terrain.resolution;
+      const z = Math.floor(index / terrain.resolution);
+      for (const [dx, dz] of NEIGHBOURS) {
+        const nx = x + dx, nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= terrain.resolution || nz >= terrain.resolution) continue;
+        const next = nz * terrain.resolution + nx;
+        if (terrain.height[next]! < seaLevel || distance[next]! <= nextDistance) continue;
+        distance[next] = nextDistance;
+        queue.push(next);
+      }
+    }
+    return distance;
   }
 }
 
