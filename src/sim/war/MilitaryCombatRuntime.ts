@@ -2,6 +2,7 @@ import { Simulation } from '../Simulation';
 import type { HistoricalEvent, Settlement, SimulationState, War } from '../types';
 import { deriveMilitaryProfile, militaryEventContext, militaryProfileForWar, type MilitaryCapabilityProfile } from './MilitaryCapability';
 import { assessMilitaryCombat, militaryLogisticsBurden, militaryReplacement, militarySupplyCosts, type MilitaryCombatAssessment } from './MilitaryCombat';
+import { applyBattlePhysicalConsequences, attachWarDamageContext } from './WarConsequences';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 
@@ -70,14 +71,7 @@ function augmentWarEvent(event: HistoricalEvent, prepared: PreparedWar): void {
   });
 }
 
-/**
- * Installs the Step-2 conventional-war layer once the Simulation class has finished module
- * initialization. Campaign creation is the first safe call site in the existing dependency graph.
- * The wrapper deliberately preserves the established war state machine and RNG draw sequence:
- * it changes the physical meaning of strength/sustainment around each tick, then restores raw
- * manpower strength afterwards. This keeps the campaign system users already like intact while
- * making equipment, range, protection, logistics and technological mismatch consequential.
- */
+/** Installs capability-driven combat plus simulation-owned persistent battlefield consequences. */
 export function installMilitaryCombatRuntime(): void {
   if (installed) return;
   installed = true;
@@ -101,8 +95,6 @@ export function installMilitaryCombatRuntime(): void {
       const currentB = deriveMilitaryProfile(defender);
       const burdenA = militaryLogisticsBurden(militaryA);
       const burdenB = militaryLogisticsBurden(militaryB);
-      // Advanced armies have more capability but also more systems that can fail when the home
-      // economy can no longer replace equipment, ammunition and powered logistics.
       war.campaign.exhaustionA = clamp(war.campaign.exhaustionA + burdenA * (1 - militaryReplacement(currentA)) * 0.0025);
       war.campaign.exhaustionB = clamp(war.campaign.exhaustionB + burdenB * (1 - militaryReplacement(currentB)) * 0.0025);
 
@@ -111,52 +103,48 @@ export function installMilitaryCombatRuntime(): void {
 
       const rawStrengthA = war.strengthA;
       const rawStrengthB = war.strengthB;
-      // The legacy resolver reads one strength value for battlefield balance and casualty pressure.
-      // Fold Step-2 lethality/protection into that temporary operational strength, then restore the
-      // raw manpower-based value after the tick. Defender works are reduced by siege/artillery/air.
       war.strengthA = rawStrengthA * clamp(assessment.effectivenessA * readinessMultiplier(militaryA, assessment.casualtyPressureB), 0.62, 2.6);
       war.strengthB = rawStrengthB * clamp(assessment.effectivenessB * readinessMultiplier(militaryB, assessment.casualtyPressureA, assessment.defenderWorksMultiplier), 0.62, 2.75);
 
-      prepared.push({
-        war,
-        attacker,
-        defender,
-        militaryA,
-        militaryB,
-        assessment,
-        rawStrengthA,
-        rawStrengthB,
-        battleCount: war.campaign.battleCount,
-        historyLength: this.state.history.length,
-      });
+      prepared.push({ war, attacker, defender, militaryA, militaryB, assessment, rawStrengthA, rawStrengthB, battleCount: war.campaign.battleCount, historyLength: this.state.history.length });
     }
 
     legacyRunWars.call(this);
 
     for (const item of prepared) {
       const battleOccurred = item.war.campaign.battleCount > item.battleCount;
-      // Legacy battle resolution may have removed real people/represented population. Recompute
-      // raw strength only after such a loss; otherwise restore the exact pre-tick value.
       item.war.strengthA = battleOccurred && item.attacker.alive ? this.militaryStrength(item.attacker) : item.rawStrengthA;
       item.war.strengthB = battleOccurred && item.defender.alive ? this.militaryStrength(item.defender) : item.rawStrengthB;
 
-      for (const event of this.state.history.slice(item.historyLength)) {
-        if (!event.actors.includes(item.war.id)) continue;
-        augmentWarEvent(event, item);
+      const newEvents = this.state.history.slice(item.historyLength).filter(event => event.actors.includes(item.war.id));
+      for (const event of newEvents) augmentWarEvent(event, item);
+
+      if (battleOccurred && item.attacker.alive && item.defender.alive) {
+        const damage = applyBattlePhysicalConsequences(this.state, item.war, item.attacker, item.defender, item.militaryA, item.militaryB, item.assessment);
+        for (const event of newEvents.filter(event => event.type === 'battle')) attachWarDamageContext(event, damage);
+        if ((damage.ruinedStructures > 0 || damage.ignitedStructures > 0 || damage.infrastructureDamage > 0.2)
+          && !item.war.campaign.dispatches.includes(`physical-damage-${item.war.campaign.battleCount}`)) {
+          this.campaignDispatch(
+            item.war,
+            item.attacker,
+            item.defender,
+            `physical-damage-${item.war.campaign.battleCount}`,
+            `Fighting around ${item.defender.name} leaves ${damage.damagedStructures} structures damaged${damage.ruinedStructures ? `, ${damage.ruinedStructures} ruined` : ''}${damage.ignitedStructures ? ` and ${damage.ignitedStructures} burning` : ''}.`,
+            ['battle-damage', 'infrastructure-loss'],
+          );
+          const dispatch = this.state.history.at(-1);
+          if (dispatch?.actors.includes(item.war.id)) {
+            augmentWarEvent(dispatch, item);
+            attachWarDamageContext(dispatch, damage);
+          }
+        }
       }
 
       const mismatch = Math.max(item.assessment.mismatchA, item.assessment.mismatchB);
       if (mismatch > 0.28 && item.war.phase === 'battle' && !item.war.campaign.dispatches.includes('capability-mismatch')) {
         const advantaged = item.assessment.mismatchA >= item.assessment.mismatchB ? item.attacker : item.defender;
         const profile = advantaged.id === item.attacker.id ? item.militaryA : item.militaryB;
-        this.campaignDispatch(
-          item.war,
-          item.attacker,
-          item.defender,
-          'capability-mismatch',
-          `${advantaged.name}'s ${profile.regime.replaceAll('-', ' ')} force holds a material advantage in reach, protection, firepower or coordination.`,
-          ['military-capability-gap'],
-        );
+        this.campaignDispatch(item.war, item.attacker, item.defender, 'capability-mismatch', `${advantaged.name}'s ${profile.regime.replaceAll('-', ' ')} force holds a material advantage in reach, protection, firepower or coordination.`, ['military-capability-gap']);
         const dispatch = this.state.history.at(-1);
         if (dispatch?.actors.includes(item.war.id)) augmentWarEvent(dispatch, item);
       }
