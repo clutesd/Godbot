@@ -10,11 +10,8 @@ const FLOOD_VISIBLE_DEPTH = 0.005;
 
 /**
  * Monthly, finite-volume flood routing layered on top of permanent river/lake geography.
- *
- * `terrain.waterLevel` remains the compatibility surface consumed by navigation/rendering, but it
- * is rebuilt each tick from immutable base hydrology + explicit world-space `terrain.floodDepth`.
- * Floodwater therefore carries finite depth/volume; an upland river can no longer paste its
- * absolute surface elevation across every lower cell downstream.
+ * `terrain.waterLevel` remains the compatibility surface consumed by navigation/rendering, but is
+ * rebuilt from immutable base hydrology plus explicit world-space `terrain.floodDepth`.
  */
 export class DynamicHydrology {
   private readonly baseLevel: Float32Array;
@@ -31,9 +28,7 @@ export class DynamicHydrology {
   constructor(private readonly world: WorldState) {
     const terrain = world.terrain;
     const legacyTerrain = terrain as unknown as { floodDepth?: Float32Array };
-    if (!legacyTerrain.floodDepth || legacyTerrain.floodDepth.length !== terrain.height.length) {
-      legacyTerrain.floodDepth = new Float32Array(terrain.height.length);
-    }
+    if (!legacyTerrain.floodDepth || legacyTerrain.floodDepth.length !== terrain.height.length) legacyTerrain.floodDepth = new Float32Array(terrain.height.length);
     this.baseLevel = terrain.waterLevel.slice();
     this.baseFlow = terrain.flow.slice();
     this.baseWater = world.cells.map((cell) => cell.water);
@@ -46,9 +41,7 @@ export class DynamicHydrology {
     this.runoff = new Float32Array(terrain.height.length);
     this.storage = new Float32Array(terrain.height.length);
     this.transfer = new Float32Array(terrain.height.length);
-    this.maxAccumulation = terrain.drainage
-      ? terrain.drainage.accumulation.reduce((max, value) => Math.max(max, value), 1)
-      : 1;
+    this.maxAccumulation = terrain.drainage ? terrain.drainage.accumulation.reduce((max, value) => Math.max(max, value), 1) : 1;
     this.cellIndices = Int32Array.from(terrain.height, (_, index) => {
       const worldX = terrain.originX + index % terrain.resolution * terrain.step;
       const worldZ = terrain.originZ + Math.floor(index / terrain.resolution) * terrain.step;
@@ -71,10 +64,7 @@ export class DynamicHydrology {
     }
 
     for (let index = 0; index < height.length; index += 1) {
-      if (height[index]! < seaLevel) {
-        floodDepth[index] = 0;
-        continue;
-      }
+      if (height[index]! < seaLevel) { floodDepth[index] = 0; continue; }
       const cell = this.world.cells[this.cellIndices[index]!]!;
       const baseRetention = Math.max(0.46, Math.min(0.78, 0.55 + (1 - cell.slope) * 0.14 + cell.moisture * 0.07));
       const retention = this.baseLevel[index]! >= 0 ? Math.max(0.82, baseRetention) : baseRetention;
@@ -87,13 +77,14 @@ export class DynamicHydrology {
       const basinWetness = this.runoff[index]! / contributing;
       this.storage[index] = Math.min(1, this.storage[index]! * 0.58 + basinWetness);
       flow[index] = clamp01(this.baseFlow[index]! + this.storage[index]! * 0.26);
-
       if (this.baseLevel[index]! < 0 || height[index]! < seaLevel) continue;
       const hierarchy = accumulationLog > 0 ? clamp01(Math.log1p(contributing) / accumulationLog) : 0;
       const cell = this.world.cells[this.cellIndices[index]!]!;
+      // Because basinWetness is normalized by contributing area, hierarchy only modestly raises
+      // bankfull capacity. Sustained heavy rain can still overtop a major river; ordinary rain cannot.
       const capacity = terrain.lake[index]
-        ? 0.31 + hierarchy * 0.08
-        : 0.14 + hierarchy * 0.25 + cell.slope * 0.07;
+        ? 0.27 + hierarchy * 0.05
+        : 0.11 + hierarchy * 0.10 + cell.slope * 0.05;
       const excess = Math.max(0, this.storage[index]! - capacity);
       if (excess <= 0) continue;
       const pulse = Math.min(0.22, excess * (0.42 + hierarchy * 0.18));
@@ -112,16 +103,13 @@ export class DynamicHydrology {
         const candidates: Array<{ index: number; drop: number }> = [];
         let totalDrop = 0;
         for (const [dx, dz] of NEIGHBOURS) {
-          const x = sourceX + dx;
-          const z = sourceZ + dz;
+          const x = sourceX + dx, z = sourceZ + dz;
           if (x < 0 || z < 0 || x >= resolution || z >= resolution) continue;
           const next = z * resolution + x;
           const nextBase = height[next]! < seaLevel ? elevationToY(seaLevel, seaLevel) : this.baseSurfaceY(next);
-          const nextHead = nextBase + floodDepth[next]!;
-          const drop = sourceHead - nextHead;
+          const drop = sourceHead - (nextBase + floodDepth[next]!);
           if (drop <= 0.012) continue;
-          candidates.push({ index: next, drop });
-          totalDrop += drop;
+          candidates.push({ index: next, drop }); totalDrop += drop;
         }
         if (!candidates.length || totalDrop <= 0) continue;
         let available = depth * 0.52;
@@ -136,10 +124,7 @@ export class DynamicHydrology {
         }
       }
       for (let index = 0; index < height.length; index += 1) {
-        if (height[index]! < seaLevel) {
-          floodDepth[index] = 0;
-          continue;
-        }
+        if (height[index]! < seaLevel) { floodDepth[index] = 0; continue; }
         floodDepth[index] = Math.max(0, Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[index]! + this.transfer[index]!));
       }
     }
@@ -213,8 +198,7 @@ class FloodQueue {
   }
   pop(): number {
     const top = this.payload[0] ?? -1;
-    const lastPriority = this.priority.pop();
-    const lastPayload = this.payload.pop();
+    const lastPriority = this.priority.pop(), lastPayload = this.payload.pop();
     if (this.payload.length > 0 && lastPriority !== undefined && lastPayload !== undefined) {
       this.priority[0] = lastPriority; this.payload[0] = lastPayload;
       let parent = 0;
