@@ -60,18 +60,34 @@ function sourceReserve(settlement: Settlement, material: MaterialKind): number {
   return round(Math.max(critical ? 1.25 : 0.4, monthlyDemand * 6));
 }
 
+function preferredProjectNeed(settlement: Settlement, material: MaterialKind): number {
+  const project = settlement.development?.project;
+  if (!project?.materialRequirements || !settlement.materials) return 0;
+  let preferredNeed = 0;
+  for (const requirement of project.materialRequirements) {
+    if (requirement.options[0] !== material) continue;
+    const remainingProgress = Math.max(0, 1 - project.progress);
+    const remainingBill = requirement.amount * remainingProgress;
+    const availableSubstitutes = requirement.options.reduce((sum, option) => sum + settlement.materials!.stock[option], 0);
+    preferredNeed += Math.max(0, remainingBill - availableSubstitutes);
+  }
+  return round(preferredNeed);
+}
+
 function targetNeed(settlement: Settlement, material: MaterialKind): { need: number; pressure: number; critical: boolean } {
   const materialPressure = settlement.materialUse?.materials[material];
-  const critical = settlement.materialUse?.criticalInputs.includes(material) ?? false;
-  const pressure = Math.max(materialPressure?.pressure ?? 0, critical ? 0.65 : 0);
+  const operatingCritical = settlement.materialUse?.criticalInputs.includes(material) ?? false;
+  const projectNeed = preferredProjectNeed(settlement, material);
+  const critical = operatingCritical || projectNeed > EPSILON;
+  const pressure = Math.max(materialPressure?.pressure ?? 0, operatingCritical ? 0.65 : 0, projectNeed > EPSILON ? 0.82 : 0);
   if (pressure <= 0.08) return { need: 0, pressure, critical };
   const inventory = settlement.materials;
   const stock = inventory?.stock[material] ?? 0;
   const demand = materialPressure?.demand ?? 0;
   const unmet = materialPressure?.unmet ?? 0;
   // Import enough to cover several future cycles rather than oscillating cargo every month.
-  const targetBuffer = Math.max(critical ? 1.5 : 0.6, demand * 4, unmet * 8);
-  return { need: round(Math.max(0, targetBuffer - stock)), pressure, critical };
+  const targetBuffer = Math.max(critical ? 1.5 : 0.6, demand * 4, unmet * 8, stock + projectNeed);
+  return { need: round(Math.max(projectNeed, targetBuffer - stock)), pressure, critical };
 }
 
 function candidateForDirection(
@@ -105,7 +121,8 @@ function candidateForDirection(
 
 /**
  * Chooses one physically useful material shipment for a route. Demand comes from the shared
- * shortage model; supply must be a genuine surplus after the exporting settlement's own reserve.
+ * shortage model plus stalled construction; supply must be a genuine surplus after the exporting
+ * settlement's own reserve.
  */
 export function chooseMaterialShipment(
   a: Settlement,
