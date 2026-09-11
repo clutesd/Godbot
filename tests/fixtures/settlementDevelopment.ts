@@ -1,5 +1,6 @@
 import { Simulation } from '../../src/sim/Simulation';
 import { advanceSettlementDevelopment, initializeSettlementDevelopment } from '../../src/sim/development/SettlementDevelopmentSystem';
+import { ensureMaterialInventory } from '../../src/sim/resources/MaterialEconomy';
 import type { CultureDimensions, InstitutionKind, Settlement, SimulationState } from '../../src/sim/types';
 import { syncStructurePlots } from '../../src/shared/StructurePlots';
 import { cellAt } from '../../src/sim/world';
@@ -30,6 +31,17 @@ export function societyFixture() {
     s.cultureShares = { [state.cultures[i]!.id]: 1 };
     s.institutionIds = []; s.structurePlots = []; s.development = undefined; s.structurePlotTarget = undefined;
     s.buildings = 4; s.targetBuildings = 4; s.resources = { food: 2000, wood: 600, minerals: 600, goods: 400, wealth: 400 };
+    // This acceptance fixture isolates development decisions rather than material scarcity. Since
+    // typed materials are now authoritative when a settlement has an inventory, seed a generous
+    // physically coherent ledger instead of accidentally blocking every construction project.
+    const materials = ensureMaterialInventory(s);
+    Object.assign(materials.stock, {
+      timber: 300, 'medicinal-flora': 80, 'plant-fiber': 150, stone: 300, clay: 200,
+      'copper-ore': 100, 'tin-ore': 100, 'iron-ore': 100, coal: 100, 'uranium-ore': 20,
+      lumber: 300, charcoal: 150, brick: 300, copper: 100, tin: 100, bronze: 100,
+      iron: 150, steel: 100, medicine: 80, textile: 150,
+    });
+    materials.revision += 1;
     s.foodSecurity = 0.9; s.prosperity = 0.8; s.specialization = 'forestry'; s.urbanization = 0.1; s.conflictPressure = 0;
     s.politicalPower.kinship = 0.1; s.politicalPower.institutional = 0.7;
     s.knowledge.records = {}; s.knowledge.literacy = 0;
