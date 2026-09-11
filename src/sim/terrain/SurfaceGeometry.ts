@@ -15,7 +15,6 @@ export function classifyWaterDepth(depth: number, wetness = 0): WaterDepthState 
 
 export function waterDepthAt(world: WorldState, x: number, z: number, floorY?: number): number {
   const water = surfaceWaterAt(world, x, z);
-  // Most queries are dry. Avoid terrain interpolation/noise unless water is actually present.
   return Number.isFinite(water) ? Math.max(0, water - (floorY ?? surfaceHeightAt(world, x, z))) : 0;
 }
 
@@ -25,6 +24,18 @@ const grainSeeds = octaveSeeds('terrain', 'surface-grain', 3);
 export function elevationToY(elevation: number, seaLevel: number): number {
   const alpine = smoothstep(seaLevel + 0.16, 0.92, elevation);
   return (elevation - seaLevel) * 17.5 + alpine ** 1.45 * 8.5;
+}
+
+/** Stable inverse used when finite flood depth has to be exposed through the legacy waterLevel field. */
+export function yToElevation(y: number, seaLevel: number): number {
+  let lo = seaLevel - 0.25;
+  let hi = 1.35;
+  for (let i = 0; i < 24; i += 1) {
+    const mid = (lo + hi) * 0.5;
+    if (elevationToY(mid, seaLevel) < y) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) * 0.5;
 }
 
 export function surfaceHeightAt(world: WorldState, x: number, z: number): number {
