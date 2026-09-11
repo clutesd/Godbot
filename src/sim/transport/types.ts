@@ -1,7 +1,9 @@
+import type { MaterialKind } from '../resources/MaterialEconomy';
 import type { Vec2 } from '../types';
 
 export type NetworkMode = 'road' | 'rail' | 'water';
 export type TransportMode = NetworkMode | 'walk';
+export type LegacyFreightResource = 'food' | 'wood' | 'minerals' | 'goods';
 export interface RoutePoint extends Vec2 { y: number }
 export interface TransportSegment {
   id: string;
@@ -18,6 +20,10 @@ export interface TransportSegment {
   floodDepth?: number;
   floodMonths?: number;
   damagedMonth?: number;
+  /** Exact physical capital incorporated into this segment over construction. */
+  materialSpent?: Partial<Record<MaterialKind, number>>;
+  /** First month physical scarcity prevented otherwise-possible construction progress. */
+  materialBlockedSince?: number;
 }
 export interface TransportStop {
   id: string;
@@ -49,9 +55,12 @@ export interface FreightTrip {
   id: string;
   origin: string;
   destination: string;
-  reason: 'trade';
+  reason: 'trade' | 'scarcity-relief';
   mode: TransportMode;
-  resource: 'food' | 'wood' | 'minerals' | 'goods';
+  /** Legacy aggregate freight retained during the migration. Exactly one of resource/material is set. */
+  resource?: LegacyFreightResource;
+  /** Typed physical material freight selected from real destination shortages and source surplus. */
+  material?: MaterialKind;
   quantity: number;
   departedMonth: number;
   path: TraversalPath;
