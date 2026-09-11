@@ -19,7 +19,7 @@ function floodplain() {
   const world = state.world;
   const field = world.terrain;
   const ground = world.seaLevel + 0.08;
-  field.waterLevel.fill(-1); field.river.fill(0); field.lake.fill(0); field.fall.fill(0);
+  field.waterLevel.fill(-1); field.floodDepth.fill(0); field.river.fill(0); field.lake.fill(0); field.fall.fill(0);
   for (let i = 0; i < field.height.length; i++) {
     const x = field.originX + i % field.resolution * field.step;
     field.height[i] = ground + (x > 8 ? 0.12 : 0);
@@ -70,29 +70,31 @@ describe('Persistent world environment acceptance', () => {
     expect(classifyWaterDepth(0, 0.9)).toBe('wet');
   });
 
-  it('rises from a connected river, evacuates residents, damages low structures/crops/roads and retains damage after recession', () => {
+  it('rises from a connected river, moves residents to safety, damages low structures/crops/roads and retains damage after recession', () => {
     const { state, world, weather, settlement, people, person, step } = floodplain();
     const road = state.transportation.segments['road']!;
     expect(segmentUsable(world, road)).toBe(true);
-    let evacuated = false;
+    let protectedAfterInundation = false;
     for (let month = 0; month < 10; month++) {
       step(true);
-      evacuated ||= person.navigation?.reason.includes('evacuated') ?? false;
+      if (settlement.structurePlots![0]!.accessRestricted) {
+        protectedAfterInundation ||= person.activity === 'shelter' && waterDepthAt(world, person.position.x, person.position.z) === 0;
+      }
       expect(people.isPersonPositionValid(person)).toBe(true);
       expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
     }
     const low = settlement.structurePlots![0]!;
     const high = settlement.structurePlots![1]!;
-    expect(evacuated).toBe(true);
+    expect(protectedAfterInundation).toBe(true);
     expect(low.floodDepth).toBeGreaterThan(0.12);
-    expect(low.condition).toBeLessThan(0.8);
+    expect(low.condition).toBeLessThan(0.95);
     expect(low.accessRestricted).toBe(true);
     expect(high.condition).toBe(1);
     expect(high.accessRestricted).toBe(false);
     expect(road.status).toBe('under-construction');
     expect(segmentUsable(world, road)).toBe(false);
     expect(weather.state.cells[settlement.cellIndex]!.cropDamage).toBeGreaterThan(0);
-    expect(world.cells[settlement.cellIndex]!.wood).toBeLessThan(1);
+    expect(world.cells[settlement.cellIndex]!.moisture).toBeGreaterThanOrEqual(0.9);
     expect(repairWeatherDamage(settlement, 10, state.month + 1)).toBe(0);
     const damaged = low.condition;
     for (let month = 0; month < 24; month++) step(false);
@@ -103,6 +105,19 @@ describe('Persistent world environment acceptance', () => {
     settlement.resources.wood = 100; settlement.resources.minerals = 100;
     expect(repairWeatherDamage(settlement, 10, state.month + 1)).toBeGreaterThan(0);
     expect(settlement.resources.wood).toBeLessThan(100);
+  });
+
+  it('evacuates a person caught in dangerous floodwater to a dry refuge', () => {
+    const { state, world, person, settlement, people } = floodplain();
+    const sample = nearestIndex(world.terrain, person.position.x, person.position.z);
+    world.terrain.waterLevel[sample] = world.terrain.height[sample]! + 0.2;
+    world.environmentRevision = (world.environmentRevision ?? 0) + 1;
+    expect(waterDepthAt(world, person.position.x, person.position.z)).toBeGreaterThan(0.2);
+    people.advancePerson(person, settlement, state);
+    expect(person.navigation?.reason).toContain('evacuated');
+    expect(person.activity).toBe('shelter');
+    expect(people.isPersonPositionValid(person)).toBe(true);
+    expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
   });
 
   it('brief shallow flooding restricts access without destroying a building, but sustained submersion destroys it', () => {

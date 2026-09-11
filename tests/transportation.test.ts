@@ -41,7 +41,7 @@ function testWorld(kind: 'flat' | 'lake' | 'ridge' | 'river' = 'flat'): WorldSta
     lake[index] = Number(cell.lake);
   }
   return { size, cellSize: 2, cells, seaLevel: 0.2, mountainLevel: 0.72, landmarks: [], environmentRevision: 0,
-    terrain: { resolution, step: 2 / 3, originX: -13, originZ: -13, height, waterLevel, river, lake, flow: new Float32Array(count), rock: new Float32Array(count), fall: new Float32Array(count) } };
+    terrain: { resolution, step: 2 / 3, originX: -13, originZ: -13, height, waterLevel, floodDepth: new Float32Array(count), river, lake, flow: new Float32Array(count), rock: new Float32Array(count), fall: new Float32Array(count) } };
 }
 
 function install(edges: PlannedEdge[], mode: NetworkMode, complete = edges.length) {

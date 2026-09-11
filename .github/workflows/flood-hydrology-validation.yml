@@ -1,0 +1,54 @@
+name: Flood hydrology validation
+
+on:
+  push:
+    paths:
+      - 'src/sim/terrain/Hydrology.ts'
+      - 'src/sim/terrain/SurfaceGeometry.ts'
+      - 'src/sim/terrain/TerrainField.ts'
+      - 'src/sim/world.ts'
+      - 'tests/flood-hydrology.test.ts'
+      - 'tests/weather.test.ts'
+      - 'tests/environment-interactions.test.ts'
+      - 'tests/water-rendering.test.ts'
+      - '.github/workflows/flood-hydrology-validation.yml'
+  pull_request:
+    paths:
+      - 'src/sim/terrain/Hydrology.ts'
+      - 'src/sim/terrain/SurfaceGeometry.ts'
+      - 'src/sim/terrain/TerrainField.ts'
+      - 'src/sim/world.ts'
+      - 'tests/flood-hydrology.test.ts'
+      - 'tests/weather.test.ts'
+      - 'tests/environment-interactions.test.ts'
+      - 'tests/water-rendering.test.ts'
+      - '.github/workflows/flood-hydrology-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Lint flood hydrology
+        run: >-
+          npx eslint
+          src/sim/terrain/Hydrology.ts
+          src/sim/terrain/SurfaceGeometry.ts
+          src/sim/terrain/TerrainField.ts
+          src/sim/world.ts
+          tests/flood-hydrology.test.ts
+      - name: Run flood and water regressions
+        run: npx vitest run tests/flood-hydrology.test.ts tests/environment-interactions.test.ts tests/water-rendering.test.ts
+      - name: Verify established weather flood contract
+        run: npx vitest run tests/weather.test.ts -t "routes prolonged runoff into canonical water levels, floods connected low ground, and recedes"
+      - name: Project-wide typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
