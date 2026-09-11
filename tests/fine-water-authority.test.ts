@@ -46,8 +46,8 @@ function narrowRiverWorld(): WorldState {
   const flow = new Float32Array(count);
   for (let z = 0; z < resolution; z++) {
     const index = z * resolution + 3;
-    height[index] = 0.43;
-    waterLevel[index] = 0.435;
+    height[index] = 0.415;
+    waterLevel[index] = 0.425;
     river[index] = 1;
     flow[index] = 0.6;
   }
