@@ -232,21 +232,30 @@ export class WeatherSystem {
     const precipitation = weather.intensity * (heavy ? 0.24 : 0.07) * months;
     const snowFraction = weather.snowFraction ?? 0;
     const rainfall = weather.precipitation !== 'none' ? precipitation * (1 - snowFraction) : 0;
+    const snowfall = weather.precipitation !== 'none' ? precipitation * snowFraction : 0;
     conditions.blizzard = weather.kind === 'heavy-snow' && weather.intensity > 0.65 && weather.wind > 0.6 && temperature < FREEZING - 0.03
       ? clamp01((weather.intensity - 0.65) / 0.35) * clamp01((weather.wind - 0.6) / 0.3)
         * clamp01((FREEZING - 0.03 - temperature) / 0.12) : 0;
-    if (snowFraction > 0) {
-      const retention = (0.85 + (FREEZING - temperature) * 0.5) * (1 - cell.slope * 0.2);
-      conditions.snowpack = Math.min(1.5, conditions.snowpack + precipitation * snowFraction * retention * (1 + conditions.blizzard * 0.35));
+    let snowOverflow = 0;
+    if (snowfall > 0) {
+      const retention = clamp01((0.85 + (FREEZING - temperature) * 0.5) * (1 - cell.slope * 0.2) * (1 + conditions.blizzard * 0.35));
+      const retainedSnow = snowfall * retention;
+      const storedSnow = Math.min(Math.max(0, 1.5 - conditions.snowpack), retainedSnow);
+      conditions.snowpack += storedSnow;
+      snowOverflow = retainedSnow - storedSnow;
     }
     const sunlight = 0.8 + (1 - this.seasonCosine()) * 0.2;
     const melt = Math.min(conditions.snowpack, Math.max(0, temperature - FREEZING) * sunlight * months / (1 + conditions.snowpack * 0.3));
     conditions.snowpack -= melt;
     conditions.snowMonths = conditions.snowpack > 0.05 ? conditions.snowMonths + months : 0;
-    const liquid = rainfall + melt;
-    conditions.runoff = liquid * (0.2 + cell.moisture * 0.6 + cell.slope * 0.2);
-    const evaporation = (0.008 + temperature * 0.015) * months;
-    cell.moisture = clamp01(cell.moisture + liquid * 0.6 - evaporation
+    const liquid = rainfall + melt + snowOverflow;
+    const runoffFraction = clamp01(0.12 + cell.moisture * 0.5 + cell.slope * 0.28);
+    conditions.runoff = liquid * runoffFraction;
+    const infiltration = liquid - conditions.runoff;
+    const evaporationPotential = (0.008 + temperature * 0.015) * months;
+    const soilWater = Math.max(0, cell.moisture + infiltration);
+    const evaporation = Math.min(soilWater, evaporationPotential);
+    cell.moisture = clamp01(soilWater - evaporation
       + ((this.climateMoisture[index] ?? cell.moisture) - cell.moisture) * 0.04 * months);
     conditions.travelPenalty = conditions.snowpack * 3 + conditions.blizzard + Math.max(0, cell.moisture - 0.75) * 0.8;
     cell.movementCost = this.movementCosts[index]! + conditions.travelPenalty;
