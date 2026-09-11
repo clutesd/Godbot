@@ -76,12 +76,13 @@ interface PhysicalSnapshot {
 }
 
 function sameFabric(a: PhysicalSnapshot, b: PhysicalSnapshot): boolean {
+  // Sponsorship/ownership belongs to documentary state, not physical fabric. A council changing
+  // hands must not create a new architectural generation unless form/material/use also changes.
   return a.need === b.need
     && a.form === b.form
     && a.level === b.level
     && a.material === b.material
-    && a.cultureId === b.cultureId
-    && a.institutionId === b.institutionId;
+    && a.cultureId === b.cultureId;
 }
 
 function kindFor(snapshot: PhysicalSnapshot, previous: PhysicalSnapshot | undefined, isOrigin: boolean, isCurrent: boolean): ArchitecturalGenerationKind {
