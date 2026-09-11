@@ -21,7 +21,10 @@ society.state.settlements.forEach((settlement, index) => {
   const specialty = records[index % records.length];
   if (specialty) { specialty.theory = 0.9; specialty.practice = 0.9; }
 });
-society.step(80 * 12);
+// The causal trade/politics stack is deliberately slower than the old calendar-unlock model.
+// Give institutions, surveyed routes and succession enough time to emerge rather than asserting
+// that all of them must exist by an arbitrary earlier year.
+society.step(120 * 12);
 
 describe('Emergent society', () => {
   it('forms causal institutions and gives political power persistent human actors', () => {
