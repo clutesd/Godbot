@@ -57,7 +57,9 @@ describe('Weather simulation', () => {
     }
     cell.temperature = 0.52;
     system.applyWeatherToCell(cell, { kind: 'heavy-snow', intensity: 1, wind: 1 });
-    expect(conditions.precipitation).toBe('snow');
+    // Borderline temperatures intentionally resolve to a rain/snow mix rather than snapping to
+    // pure snow. Mixed precipitation still must not satisfy the sustained-snow blizzard gate.
+    expect(conditions.precipitation).toBe('mixed');
     expect(conditions.blizzard).toBe(0);
     cell.temperature = 0.9;
     system.applyWeatherToCell(cell, { kind: 'heavy-snow', intensity: 1, wind: 1 });

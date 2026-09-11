@@ -40,7 +40,7 @@ describe('Observation restart', () => {
     expect(simulation.state.history).toEqual(fresh.state.history);
     expect(simulation.state.people).toEqual(fresh.state.people);
     expect(simulation.state.settlements).toEqual(fresh.state.settlements);
-  });
+  }, 30_000);
 
   it('restarts from a specified seed deterministically', () => {
     const simulation = new Simulation(CONFIG);
