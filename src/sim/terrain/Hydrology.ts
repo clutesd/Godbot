@@ -138,8 +138,10 @@ export class DynamicHydrology {
           const share = depth * 0.58 * candidate.drop / totalDrop;
           const moved = Math.min(available, share, candidate.drop * 0.26);
           if (moved <= 0) continue;
-          this.transfer[index] -= moved;
-          if (height[candidate.index]! >= seaLevel) this.transfer[candidate.index] += moved;
+          this.transfer[index] = (this.transfer[index] ?? 0) - moved;
+          if (height[candidate.index]! >= seaLevel) {
+            this.transfer[candidate.index] = (this.transfer[candidate.index] ?? 0) + moved;
+          }
           available -= moved;
         }
       }
