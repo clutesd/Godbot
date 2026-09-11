@@ -3,6 +3,7 @@ import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSyste
 import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
+import { advanceSettlementWater } from './WaterCivilization';
 import { SETTLEMENT_NEEDS, type DevelopmentResponse, type ServiceSupply, type SettlementNeed, type StructureDevelopment, type StructureForm, type StructureHistoryEntry, type StructureMaterial } from './types';
 
 const clamp = (n: number, max = 1): number => Math.max(0, Math.min(max, n));
@@ -42,12 +43,14 @@ export function developmentContext(state: SimulationState, settlement: Settlemen
   const city = state.advanced.scale === 'modern-statistical' ? state.advanced.cities.find(c => c.settlementId === settlement.id) : undefined;
   const count = (occupation: Person['occupation']) => residents.filter(p => p.occupation === occupation).length;
   const polity = state.polities.find(p => p.id === settlement.polityId);
+  const waterState = settlement.development?.water;
   return { settlement, culture, institutions: state.institutions.filter(i => settlement.institutionIds.includes(i.id) && i.support >= 0.2),
     population: city?.population ?? residents.length, farmers: count('farmer'), artisans: count('artisan'), keepers: count('keeper'), builders: count('builder'),
     health: city?.health ?? residents.reduce((n, p) => n + p.health, 0) / Math.max(1, residents.length),
     routes: state.tradeRoutes.filter(r => (r.a === settlement.id || r.b === settlement.id) && connected(state, r)).length,
     capitalReach: polity?.capitalId === settlement.id ? polity.settlementIds.length - 1 : 0,
-    fertile: cell.fertility > 0.35, water: cell.river || cell.coast || cell.moisture > 0.45,
+    fertile: cell.fertility > 0.35,
+    water: waterState ? waterState.availability > 0.3 || waterState.reliability > 0.38 : cell.river || cell.coast || cell.moisture > 0.45,
     localWood: cell.wood, localMinerals: cell.minerals, movement: cell.movementCost,
     memory: Math.min(2, culture.memory.frontierViolence + culture.memory.collectiveSuccess * 0.05 + (settlement.weatherRecoverySince === undefined ? 0 : 0.5)) };
 }
@@ -70,6 +73,7 @@ export function serviceSupply(settlement: Settlement): ServiceSupply {
 export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSupply; informal: ServiceSupply } {
   const s = c.settlement;
   const d = c.culture.dimensions;
+  const waterState = s.development?.water;
   const scale = Math.min(4, Math.sqrt(c.population / 65));
   const backing = (kind: InstitutionKind) => { const i = institution(c, kind); return i ? i.support * 1.5 + Math.min(1, i.members / 24) : 0; };
   const pressures: ServiceSupply = {
@@ -80,18 +84,22 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
     security: scale * (s.conflictPressure * 3 + d.militarism * 0.4 + clamp(c.culture.memory.frontierViolence) * 0.5) + backing('military-order'),
     religion: scale * Math.max(0, d.religiousTendency - 0.4) * 1.8 + backing('temple'),
     knowledge: scale * Math.max(0, d.curiosity - 0.5) + backing('knowledge-keepers') + s.knowledge.literacy * scale * 0.6,
-    healthcare: scale * ((1 - c.health) * 2 + s.pollution * 0.5 + d.cooperation * 0.2),
+    healthcare: scale * ((1 - c.health) * 2 + s.pollution * 0.5 + d.cooperation * 0.2 + (waterState ? (1 - waterState.quality) * 0.8 : 0)),
     manufacturing: scale * (Math.min(1, c.artisans / 8) * 0.6 + s.industry.intensity * 2) + backing('craft-circle'),
     transport: c.routes ? scale * (0.3 + c.routes * 0.35 + clamp(c.movement / 5) * 0.3) : 0,
     energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power),
-    water: scale * (s.urbanization * 1.3 + s.pollution + (c.water ? 0.1 : 0.55) + s.climateStress * 0.5),
+    water: scale * (s.urbanization * 1.3 + s.pollution + (c.water ? 0.1 : 0.55) + s.climateStress * 0.5
+      + (waterState ? waterState.droughtStress * 1.8 + (1 - waterState.quality) * 0.8 + waterState.floodContamination * 0.7 : 0)),
     memory: c.memory > 0.3 ? scale * Math.min(1.8, c.memory) * d.longTermOrientation : 0,
   };
   // Household care, elders, rituals and mutual watch do not imply dedicated buildings.
   const decentralized = d.hierarchy < 0.42 && s.politicalPower.kinship >= s.politicalPower.institutional;
+  const informalWater = waterState
+    ? scale * (0.08 + waterState.surfaceAccess * 0.38 + waterState.reliability * 0.2) * (0.6 + waterState.quality * 0.4)
+    : scale * (c.water ? 0.45 : 0.15);
   const informal: ServiceSupply = { government: decentralized ? scale * 0.85 : scale * 0.2,
     security: scale * (decentralized ? 0.8 : 0.3) * (1 - s.conflictPressure),
-    religion: scale * 0.25, healthcare: scale * 0.5, knowledge: scale * 0.2, water: scale * (c.water ? 0.45 : 0.15),
+    religion: scale * 0.25, healthcare: scale * 0.5, knowledge: scale * 0.2, water: informalWater,
     manufacturing: scale * 0.3, food: scale * 0.2, energy: scale * 0.35, transport: scale * 0.25, memory: scale * 0.2 };
   return { pressures, informal };
 }
@@ -231,6 +239,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   const reasons = [need + '-pressure', ...(sponsor ? [sponsor.kind, sponsor.id] : ['household-cooperation']),
     ...(need === 'security' ? [s.conflictPressure > 0.3 ? 'frontier-conflict' : 'local-order'] : []),
     ...(need === 'food' ? [s.monthlyBalance.food > 0 ? 'agricultural-surplus' : 'food-resilience'] : []),
+    ...(need === 'water' && s.development?.water ? [s.development.water.droughtStress > 0.4 ? 'drought-resilience' : s.development.water.quality < 0.55 ? 'clean-water' : 'water-security'] : []),
     ...(c.routes > 0 && ['trade', 'transport', 'religion'].includes(need) ? ['connected-exchange'] : [])];
   return { need, form, name: names[level - 1]!, level, material, cultureId: c.culture.id, style: { ...c.culture.style }, institutionId: sponsor?.id,
     services, reasons, capabilities: [...new Set(requirements)], cost, labor: level * (open ? 0.5 : 1) };
@@ -278,6 +287,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
   initializeSettlementDevelopment(state, settlement, residents);
   const dev = settlement.development!;
   const events: KnowledgeEventDraft[] = [];
+  events.push(...advanceSettlementWater(state, settlement, residents));
   if (dev.project && !settlement.alive) abandonProject();
   function abandonProject(): void {
     const project = dev.project!;

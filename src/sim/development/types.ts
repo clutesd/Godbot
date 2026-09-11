@@ -7,6 +7,32 @@ export type StructureForm = 'dwelling' | 'field' | 'store' | 'gathering' | 'hall
 export type StructureMaterial = 'earth' | 'timber' | 'masonry' | 'ceramic' | 'metal';
 export type ServiceSupply = Partial<Record<SettlementNeed, number>>;
 
+export interface SettlementWaterState {
+  /** Simulation month in which this state was last applied. */
+  evaluatedMonth: number;
+  /** 0..1 local water physically available from soil, rivers, lakes and current runoff. */
+  availability: number;
+  /** 0..1 ability to keep supplying water through seasonal and drought variation. */
+  reliability: number;
+  /** 0..1 fitness for domestic use after pollution, flooding and sanitation are considered. */
+  quality: number;
+  /** 0..1 practical irrigation capability that can stabilize crop output. */
+  irrigation: number;
+  /** 0..1 public-health protection from managed water and sanitation. */
+  sanitation: number;
+  /** 0..1 hydrologic scarcity pressure currently felt by the settlement. */
+  droughtStress: number;
+  /** 0..1 contamination pressure from floodwater mixing with settled land. */
+  floodContamination: number;
+  /** 0..1 access to nearby non-ocean surface water on the fine hydrology field. */
+  surfaceAccess: number;
+  /** Effective built water-storage / distribution service from active structures. */
+  builtService: number;
+  droughtMonths: number;
+  lastCrisisMonth?: number;
+  lastRecoveryMonth?: number;
+}
+
 export interface DevelopmentResponse {
   need: SettlementNeed;
   form: StructureForm;
@@ -64,5 +90,7 @@ export interface SettlementDevelopment {
   evaluatedMonth: number;
   nextAttemptMonth: number;
   revision: number;
+  /** Dynamic coupling between physical hydrology and civilization. Optional for old archives. */
+  water?: SettlementWaterState;
   project?: DevelopmentProject;
 }
