@@ -85,9 +85,12 @@ describe('Persistent world environment acceptance', () => {
       if (!evacuated && low.accessRestricted) {
         person.position = { x: low.worldX, z: low.worldZ };
         person.target = { ...person.position };
-        person.navigation = undefined;
+        person.navigation = {
+          destinationKind: 'home', destinationId: `${person.householdId}:home`, reason: 'resident exposed at low home',
+          waypoints: [], waypointIndex: 0, schedulePhase: 'home', traveling: false, crossingMode: 'walk',
+        };
         people.advancePerson(person, settlement, state);
-        evacuated ||= person.navigation?.reason.includes('evacuated') ?? false;
+        evacuated ||= person.navigation.reason.includes('evacuated');
       }
       expect(people.isPersonPositionValid(person)).toBe(true);
       expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
