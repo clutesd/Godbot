@@ -68,13 +68,15 @@ describe('Rendered vegetation contracts', () => {
     expect(JSON.stringify(simulation.state)).toBe(before);
   });
 
-  it('counts actual flower passes, retains autumn seed heads, and hides everything in winter', () => {
+  it('counts the bounded flower plus understory passes, retains autumn seed heads, and hides everything in winter', () => {
     const { world, surface, camera } = vegetationFixture();
     const flowers = new FlowerField(world, surface, 'flower-render', 200, []);
     const seedHeads = flowers.group.getObjectByName('seasonal-flower-seed-heads') as THREE.InstancedMesh;
     flowers.update(camera, 5, []);
     expect(flowers.report.visible).toBeGreaterThan(100);
-    expect(flowers.report.drawCalls).toBe(3);
+    // Three flower meshes plus the bounded understory layer are part of the same ground-flora
+    // presentation contract. Keep the total explicit so accidental draw-call growth is caught.
+    expect(flowers.report.drawCalls).toBe(6);
     flowers.update(camera, 9.4, []);
     expect(seedHeads.count).toBeGreaterThan(0);
     expect((flowers.group.getObjectByName('seasonal-flower-blooms') as THREE.InstancedMesh).count).toBe(0);
