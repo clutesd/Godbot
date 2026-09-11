@@ -1,4 +1,6 @@
 import { capabilityPractice } from '../knowledge/CapabilityContract';
+import { materialAmount } from '../resources/MaterialEconomy';
+import { materialReadiness } from '../resources/MaterialUse';
 import type { Settlement, War } from '../types';
 
 export type MilitaryRegime =
@@ -114,6 +116,29 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
   const minerals = stock(settlement.resources.minerals, 45);
   const goods = stock(settlement.resources.goods, 55);
   const wealth = stock(settlement.resources.wealth, 55);
+  const typed = settlement.materials !== undefined;
+  const timberMaterial = typed
+    ? stock(materialAmount(settlement, 'timber') + materialAmount(settlement, 'lumber') * 1.15, 45)
+    : wood;
+  const structuralMaterial = typed
+    ? stock(materialAmount(settlement, 'stone') + materialAmount(settlement, 'brick') + materialAmount(settlement, 'lumber') * 0.25, 45)
+    : minerals;
+  const metalMaterial = typed
+    ? clamp(Math.max(
+      stock(materialAmount(settlement, 'bronze'), 20),
+      stock(materialAmount(settlement, 'iron'), 24),
+      stock(materialAmount(settlement, 'steel'), 26),
+    ))
+    : minerals;
+  const industrialMetal = typed
+    ? clamp(stock(materialAmount(settlement, 'steel') + materialAmount(settlement, 'iron') * 0.38 + materialAmount(settlement, 'copper') * 0.22, 30))
+    : minerals;
+  const fuelMaterial = typed
+    ? stock(materialAmount(settlement, 'coal') + materialAmount(settlement, 'charcoal') * 0.72 + materialAmount(settlement, 'timber') * 0.12, 32)
+    : Math.max(wood, goods * 0.35);
+  const militarySupply = typed ? materialReadiness(settlement, 'military') : 1;
+  const industrialSupply = typed ? materialReadiness(settlement, 'industry') : 1;
+  const infrastructureSupply = typed ? materialReadiness(settlement, 'infrastructure') : 1;
   const workshops = clamp(settlement.infrastructure.workshops);
   const factories = clamp(settlement.infrastructure.factories);
   const grid = clamp(settlement.infrastructure.power);
@@ -130,16 +155,16 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     [administration, 0.20],
   );
 
-  const workshopProduction = blend([workshops, 0.34], [stone, 0.12], [iron, 0.18], [precision, 0.14], [minerals, 0.1], [goods, 0.12]);
-  const industrialProduction = blend([industry, 0.30], [factories, 0.26], [precisionManufacturing, 0.20], [industrialChemistry, 0.10], [goods, 0.08], [minerals, 0.06]);
-  const production = clamp(Math.max(workshopProduction * 0.78, industrialProduction));
+  const workshopProduction = blend([workshops, 0.34], [stone, 0.12], [iron, 0.18], [precision, 0.14], [typed ? structuralMaterial : minerals, 0.1], [goods, 0.12]);
+  const industrialProduction = blend([industry, 0.30], [factories, 0.26], [precisionManufacturing, 0.20], [industrialChemistry, 0.10], [goods, 0.08], [typed ? industrialMetal : minerals, 0.06]);
+  const production = clamp(Math.max(workshopProduction * 0.78, industrialProduction) * (typed ? 0.55 + industrialSupply * 0.45 : 1));
 
-  const muscleFirePower = blend([settlement.foodSecurity, 0.35], [food, 0.2], [fire, 0.16], [wood, 0.12], [workshops, 0.08], [institutionalSupport, 0.09]);
-  const workshopPower = gate(Math.max(fire, mechanical * 0.55), Math.max(workshops, 0.18), Math.max(wood, minerals * 0.7));
-  const mechanicalPower = gate(mechanical, Math.max(workshops, factories * 0.8), Math.max(goods, minerals));
-  const combustionPower = gate(combustion, Math.max(industry, 0.12), Math.max(goods, wealth * 0.75));
-  const electricalPower = gate(Math.max(electricalGeneration, electricGrid), Math.max(grid, 0.08), Math.max(industry, factories));
-  const advancedGridPower = gate(Math.max(electricGrid, nuclearEnergy), Math.max(grid, 0.2), Math.max(computation, automation * 0.8));
+  const muscleFirePower = blend([settlement.foodSecurity, 0.35], [food, 0.2], [fire, 0.16], [typed ? timberMaterial : wood, 0.12], [workshops, 0.08], [institutionalSupport, 0.09]);
+  const workshopPower = gate(Math.max(fire, mechanical * 0.55), Math.max(workshops, 0.18), Math.max(typed ? timberMaterial : wood, (typed ? structuralMaterial : minerals) * 0.7));
+  const mechanicalPower = gate(mechanical, Math.max(workshops, factories * 0.8), Math.max(goods, typed ? metalMaterial : minerals));
+  const combustionPower = gate(combustion, Math.max(industry, 0.12), Math.max(goods, wealth * 0.75), typed ? fuelMaterial : 1);
+  const electricalPower = gate(Math.max(electricalGeneration, electricGrid), Math.max(grid, 0.08), Math.max(industry, factories), typed ? infrastructureSupply : 1);
+  const advancedGridPower = gate(Math.max(electricGrid, nuclearEnergy), Math.max(grid, 0.2), Math.max(computation, automation * 0.8), typed ? infrastructureSupply : 1);
   const energy = clamp(Math.max(muscleFirePower * 0.62, workshopPower * 0.72, mechanicalPower * 0.82, combustionPower * 0.92, electricalPower, advancedGridPower));
 
   const powerCandidates: Array<readonly [MilitaryPowerBase, number]> = [
@@ -152,7 +177,7 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
   ];
   const powerBase = [...powerCandidates].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'muscle-fire';
 
-  const sustainment = blend(
+  const baseSustainment = blend(
     [settlement.foodSecurity, 0.24],
     [settlement.prosperity, 0.12],
     [food, 0.14],
@@ -162,26 +187,28 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     [Math.max(rail, railInfrastructure), 0.05],
     [institutionalSupport, 0.07],
   );
+  const sustainment = clamp(baseSustainment * (typed ? 0.55 + militarySupply * 0.45 : 1));
 
-  const primitiveMelee = blend([stone, 0.52], [wood, 0.16], [institutionalSupport, 0.12], [sustainment, 0.2]);
-  const metalMelee = gate(iron, Math.max(minerals, 0.2), Math.max(workshops, 0.12));
+  const primitiveMelee = blend([stone, 0.52], [typed ? timberMaterial : wood, 0.16], [institutionalSupport, 0.12], [sustainment, 0.2]);
+  const metalMelee = gate(iron, Math.max(typed ? metalMaterial : minerals, 0.2), Math.max(workshops, 0.12), typed ? militarySupply : 1);
   const melee = clamp(Math.max(0.18 + primitiveMelee * 0.54, metalMelee * 0.92 + precision * 0.08));
 
-  const bowCapability = gate(Math.max(stone, 0.18), Math.max(leverage, 0.12), Math.max(wood, 0.2));
-  const gunpowderBase = gate(Math.max(chemistry, industrialChemistry * 0.82), Math.max(precision, 0.22), Math.max(iron, 0.18), Math.max(minerals, 0.2), Math.max(workshops, 0.12));
-  const industrialSmallArms = gate(precisionManufacturing, industrialChemistry, Math.max(factories, industry * 0.8), Math.max(goods, minerals), Math.max(energy, 0.28));
+  const bowCapability = gate(Math.max(stone, 0.18), Math.max(leverage, 0.12), Math.max(typed ? timberMaterial : wood, 0.2));
+  const gunpowderBase = gate(Math.max(chemistry, industrialChemistry * 0.82), Math.max(precision, 0.22), Math.max(iron, 0.18), Math.max(typed ? metalMaterial : minerals, 0.2), Math.max(workshops, 0.12), typed ? militarySupply : 1);
+  const industrialSmallArms = gate(precisionManufacturing, industrialChemistry, Math.max(factories, industry * 0.8), Math.max(goods, typed ? industrialMetal : minerals), Math.max(energy, 0.28), typed ? militarySupply : 1);
   const ranged = clamp(Math.max(bowCapability * 0.68, gunpowderBase * 0.8, industrialSmallArms));
 
-  const shields = gate(Math.max(stone, iron * 0.85), Math.max(wood, minerals), Math.max(workshops, 0.08));
-  const armour = gate(iron, Math.max(precision, 0.14), Math.max(minerals, 0.24), Math.max(workshops, 0.16));
+  const shields = gate(Math.max(stone, iron * 0.85), Math.max(typed ? timberMaterial : wood, typed ? metalMaterial : minerals), Math.max(workshops, 0.08), typed ? militarySupply : 1);
+  const armour = gate(iron, Math.max(precision, 0.14), Math.max(typed ? metalMaterial : minerals, 0.24), Math.max(workshops, 0.16), typed ? militarySupply : 1);
   const protection = clamp(Math.max(shields * 0.58, armour * 0.94));
 
   const siege = gate(
     Math.max(leverage, wheel * 0.82),
     Math.max(stone, iron * 0.75),
-    Math.max(wood, minerals * 0.72),
+    Math.max(typed ? timberMaterial : wood, (typed ? structuralMaterial : minerals) * 0.72),
     Math.max(institutionalSupport, administration * 0.86),
     Math.max(workshops, 0.15),
+    typed ? militarySupply : 1,
   );
 
   const firearms = clamp(Math.max(gunpowderBase * 0.7, industrialSmallArms));
@@ -191,10 +218,12 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     Math.max(mechanical, factories),
     Math.max(production, 0.28),
     Math.max(energy, 0.22),
+    typed ? industrialMetal : 1,
+    typed ? militarySupply : 1,
   );
 
-  const motorMobility = gate(combustion, Math.max(industry, factories), Math.max(roads, improvedRoads), Math.max(goods, 0.25), Math.max(energy, 0.25));
-  const railMobility = gate(rail, Math.max(railInfrastructure, 0.12), Math.max(industry, 0.2));
+  const motorMobility = gate(combustion, Math.max(industry, factories), Math.max(roads, improvedRoads), Math.max(goods, 0.25), Math.max(energy, 0.25), typed ? fuelMaterial : 1, typed ? militarySupply : 1);
+  const railMobility = gate(rail, Math.max(railInfrastructure, 0.12), Math.max(industry, 0.2), typed ? infrastructureSupply : 1);
   const mobility = clamp(Math.max(0.12 + roads * 0.28 + wheel * 0.2, motorMobility, railMobility * 0.88));
 
   const communications = clamp(Math.max(
@@ -209,6 +238,8 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     Math.max(precisionManufacturing, 0.26),
     Math.max(industry, factories),
     Math.max(production, 0.28),
+    typed ? industrialMetal : 1,
+    typed ? militarySupply : 1,
   );
 
   const missile = gate(
@@ -218,22 +249,24 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     Math.max(precisionManufacturing, 0.32),
     Math.max(electricalPower, advancedGridPower, 0.28),
     Math.max(production, 0.32),
+    typed ? industrialMetal : 1,
+    typed ? militarySupply : 1,
   );
 
   const equipment: MilitaryEquipment[] = ['clubs'];
-  equipmentThreshold('stone-spears', gate(stone, Math.max(wood, 0.18)), 0.15, equipment);
-  equipmentThreshold('torches', gate(fire, Math.max(wood, 0.1)), 0.16, equipment);
+  equipmentThreshold('stone-spears', gate(stone, Math.max(typed ? timberMaterial : wood, 0.18)), 0.15, equipment);
+  equipmentThreshold('torches', gate(fire, Math.max(typed ? timberMaterial : wood, 0.1)), 0.16, equipment);
   equipmentThreshold('bows', bowCapability, 0.22, equipment);
   equipmentThreshold('shields', shields, 0.22, equipment);
   equipmentThreshold('metal-weapons', metalMelee, 0.30, equipment);
   equipmentThreshold('metal-armour', armour, 0.38, equipment);
   equipmentThreshold('siege-engines', siege, 0.35, equipment);
   equipmentThreshold('gunpowder-weapons', gunpowderBase, 0.34, equipment);
-  equipmentThreshold('cannon', gate(gunpowderBase, iron, Math.max(mechanical, leverage), Math.max(production, 0.24)), 0.38, equipment);
+  equipmentThreshold('cannon', gate(gunpowderBase, iron, Math.max(mechanical, leverage), Math.max(production, 0.24), typed ? metalMaterial : 1), 0.38, equipment);
   equipmentThreshold('rifles', industrialSmallArms, 0.42, equipment);
-  equipmentThreshold('grenades', gate(industrialChemistry, precisionManufacturing, Math.max(factories, industry), Math.max(production, 0.34)), 0.4, equipment);
+  equipmentThreshold('grenades', gate(industrialChemistry, precisionManufacturing, Math.max(factories, industry), Math.max(production, 0.34), typed ? militarySupply : 1), 0.4, equipment);
   equipmentThreshold('artillery', artillery, 0.42, equipment);
-  equipmentThreshold('automatic-weapons', gate(industrialSmallArms, standardized, Math.max(factories, 0.3), Math.max(energy, 0.34)), 0.44, equipment);
+  equipmentThreshold('automatic-weapons', gate(industrialSmallArms, standardized, Math.max(factories, 0.3), Math.max(energy, 0.34), typed ? militarySupply : 1), 0.44, equipment);
   equipmentThreshold('motor-transport', motorMobility, 0.38, equipment);
   equipmentThreshold('aircraft', airPower, 0.42, equipment);
   equipmentThreshold('guided-missiles', missile, 0.42, equipment);
@@ -245,8 +278,6 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
           : equipment.includes('metal-weapons') || equipment.includes('bows') || equipment.includes('shields') ? 'organized-melee'
             : 'improvised';
 
-  // Overall is documentary shorthand only in Step 1. The existing battle technology scalar remains
-  // untouched until the dedicated combat-mechanics pass, avoiding an accidental balance rewrite.
   const overall = clamp(mean([melee, ranged, protection, siege, firearms, artillery, mobility, communications, airPower, missile, production, sustainment]));
 
   return {
