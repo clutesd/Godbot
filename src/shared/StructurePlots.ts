@@ -1,5 +1,6 @@
 import { SeededRandom } from '../sim/prng';
 import { nearestIndex, sampleHeight } from '../sim/terrain/TerrainField';
+import { waterAt } from '../sim/transport/TerrainTraversal';
 import type { Settlement, SimulationState, StructurePlot } from '../sim/types';
 import { cellAt, TERRAIN_VERTICAL_SCALE } from '../sim/world';
 import { createSettlementLayoutPlan, type BuildingDistrict } from './SettlementLayoutPlan';
@@ -26,7 +27,7 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
       const worldX = anchor.worldX + Math.cos(angle) * searchRadius;
       const worldZ = anchor.worldZ + Math.sin(angle) * searchRadius;
       const cell = cellAt(state.world, worldX, worldZ);
-      if (!cell || cell.water || cell.slope > 0.42 || cell.biome === 'mountain') continue;
+      if (!cell || waterAt(state.world, { x: worldX, z: worldZ }, cell) || cell.slope > 0.42 || cell.biome === 'mountain') continue;
       if (allPlots.some(plot => Math.hypot(plot.worldX - worldX, plot.worldZ - worldZ) < plot.radius + radius + 0.25)) continue;
       const ground = sampleHeight(state.world.terrain, worldX, worldZ);
       let valid = true;
