@@ -91,6 +91,7 @@ describe('civilization water feedback', () => {
     for (const settlement of [engineered, exposed]) {
       primeEconomy(state, settlement);
       setDry(state, settlement);
+      settlement.pollution = 0.4;
       learn(settlement, 'irrigation', 'contagion-patterns', 'civic-administration');
     }
     installWaterWorks(engineered);
