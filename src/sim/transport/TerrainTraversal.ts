@@ -9,11 +9,11 @@ export const pointKey = (p: Vec2): string => `${p.x.toFixed(4)},${p.z.toFixed(4)
 export const edgeKey = (a: Vec2, b: Vec2, mode: NetworkMode): string => `${mode}:${[pointKey(a), pointKey(b)].sort().join('>')}`;
 export const distance = (a: Vec2, b: Vec2): number => Math.hypot(b.x - a.x, b.z - a.z);
 
-/** Tests both resolutions. A dry coarse cell never licenses crossing a fine river sample. */
+/** Fine hydrology is authoritative at an exact point; coarse cell water flags are descriptive only. */
 export function waterAt(world: WorldState, p: Vec2, cell: WorldCell | undefined = cellAt(world, p.x, p.z)): boolean {
   if (!cell) return true;
   const i = nearestIndex(world.terrain, p.x, p.z);
-  return cell.water || cell.river || cell.lake || world.terrain.river[i] === 1 || world.terrain.lake[i] === 1
+  return world.terrain.river[i] === 1 || world.terrain.lake[i] === 1
     || world.terrain.waterLevel[i]! >= 0 || sampleField(world.terrain, world.terrain.height, p.x, p.z) < world.seaLevel;
 }
 
@@ -115,9 +115,8 @@ export function surveyEdge(world: WorldState, a: Vec2, b: Vec2, mode: NetworkMod
       if (wet[i]) {
         if (leftWater) return undefined;
         entered = true;
-        const cell = cellAt(world, p.x, p.z)!;
         const index = nearestIndex(world.terrain, p.x, p.z);
-        if (cell.lake || world.terrain.lake[index] || cell.elevation < world.seaLevel || (!cell.river && !world.terrain.river[index])) return undefined;
+        if (world.terrain.lake[index] || world.terrain.height[index]! < world.seaLevel || !world.terrain.river[index]) return undefined;
       } else if (entered) leftWater = true;
     }
   }
