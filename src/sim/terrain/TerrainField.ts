@@ -12,8 +12,14 @@ export interface TerrainField {
   readonly originZ: number;
   /** Normalised ground elevation, same 0..1 space as `WorldCell.elevation`. */
   readonly height: Float32Array;
-  /** Normalised surface of standing or flowing water; -1 where the sample is dry. */
+  /**
+   * Normalised visible surface of permanent water plus the current dynamic stage/flood projection;
+   * -1 where the sample is dry. Static hydrology is snapshotted by DynamicHydrology before weather
+   * begins, while temporary inundation is authored independently in `floodDepth`.
+   */
   readonly waterLevel: Float32Array;
+  /** Temporary weather-driven inundation depth in world units above local ground. */
+  readonly floodDepth: Float32Array;
   /** 0..1 normalised river discharge. */
   readonly flow: Float32Array;
   /** 0..1 exposed rock and scree, used for surface blending and boulder scatter. */
