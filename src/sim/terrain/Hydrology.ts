@@ -4,15 +4,49 @@ import { nearestIndex } from './TerrainField';
 import type { WeatherCellState, WorldState } from '../types';
 import { classifyWaterDepth, DANGEROUS_WATER_DEPTH, elevationToY, surfaceHeightAt } from './SurfaceGeometry';
 
+const STORAGE_TO_STAGE = 0.055;
+const MIN_VISIBLE_STORAGE = 0.0015;
+const RIVER_RETENTION = 0.58;
+const LAKE_RETENTION = 0.88;
+const FLOODPLAIN_RETENTION = 0.34;
+const RIVER_BANKFULL_EXCESS = 0.055;
+const LAKE_BANKFULL_EXCESS = 0.18;
+const FLOODPLAIN_BANKFULL = 0.035;
+const MAX_FLOOD_PASSES = 6;
+
+export interface HydrologyWaterBudget {
+  readonly runoffInput: number;
+  readonly startingStorage: number;
+  readonly endingStorage: number;
+  readonly outletLoss: number;
+  readonly floodedStorage: number;
+  readonly maxDischarge: number;
+  readonly massError: number;
+}
+
 export class DynamicHydrology {
   private readonly baseLevel: Float32Array;
   private readonly baseFlow: Float32Array;
   private readonly baseWater: boolean[];
-  private readonly runoff: Float32Array;
-  private readonly storage: Float32Array;
+  private readonly storage: Float64Array;
+  private readonly incoming: Float64Array;
+  private readonly discharge: Float64Array;
+  private readonly referenceStorage: Float64Array;
+  private readonly referenceDischarge: Float64Array;
   private readonly cellIndices: Int32Array;
-  private readonly visited: Uint8Array;
+  private readonly samplesPerCell: Uint16Array;
+  private readonly flooded: Uint8Array;
   private readonly cellGroundY: Float32Array;
+
+  lastBudget: HydrologyWaterBudget = {
+    runoffInput: 0,
+    startingStorage: 0,
+    endingStorage: 0,
+    outletLoss: 0,
+    floodedStorage: 0,
+    maxDischarge: 0,
+    massError: 0,
+  };
 
   constructor(private readonly world: WorldState) {
     const terrain = world.terrain;
@@ -20,56 +54,116 @@ export class DynamicHydrology {
     this.baseFlow = terrain.flow.slice();
     this.baseWater = world.cells.map((cell) => cell.water);
     this.cellGroundY = Float32Array.from(world.cells, cell => surfaceHeightAt(world, cell.worldX, cell.worldZ));
-    this.runoff = new Float32Array(terrain.height.length);
-    this.storage = new Float32Array(terrain.height.length);
-    this.visited = new Uint8Array(terrain.height.length);
+    this.storage = new Float64Array(terrain.height.length);
+    this.incoming = new Float64Array(terrain.height.length);
+    this.discharge = new Float64Array(terrain.height.length);
+    this.referenceStorage = new Float64Array(terrain.height.length);
+    this.referenceDischarge = new Float64Array(terrain.height.length);
+    this.flooded = new Uint8Array(terrain.height.length);
+    this.samplesPerCell = new Uint16Array(world.cells.length);
     this.cellIndices = Int32Array.from(terrain.height, (_, index) => {
       const worldX = terrain.originX + index % terrain.resolution * terrain.step;
       const worldZ = terrain.originZ + Math.floor(index / terrain.resolution) * terrain.step;
       const cellX = Math.max(0, Math.min(world.size - 1, Math.round(worldX / world.cellSize + world.size / 2)));
       const cellZ = Math.max(0, Math.min(world.size - 1, Math.round(worldZ / world.cellSize + world.size / 2)));
-      return cellZ * world.size + cellX;
+      const cellIndex = cellZ * world.size + cellX;
+      this.samplesPerCell[cellIndex] = (this.samplesPerCell[cellIndex] ?? 0) + 1;
+      return cellIndex;
     });
+    for (let index = 0; index < terrain.height.length; index += 1) {
+      if (terrain.height[index]! < world.seaLevel || this.baseLevel[index]! < 0) continue;
+      const depth = Math.max(0, this.baseLevel[index]! - terrain.height[index]!);
+      const reference = terrain.lake[index]
+        ? 0.2 + Math.min(0.28, depth / STORAGE_TO_STAGE * 0.25)
+        : terrain.river[index]
+          ? 0.035 + this.baseFlow[index]! * 0.09 + Math.min(0.08, depth / STORAGE_TO_STAGE * 0.15)
+          : 0;
+      this.referenceStorage[index] = reference;
+      this.storage[index] = reference;
+      const retained = this.retentionAt(index);
+      this.referenceDischarge[index] = Math.max(0.0025, reference * (1 - retained));
+    }
   }
 
   advance(conditions: readonly WeatherCellState[]): void {
     const { terrain, seaLevel } = this.world;
-    const { drainage, waterLevel, height, resolution, flow } = terrain;
-    for (let index = 0; index < height.length; index += 1) this.runoff[index] = conditions[this.cellIndices[index]!]!.runoff;
-    if (drainage) {
-      for (const index of drainage.order) {
-        const downstream = drainage.downstream[index] ?? -1;
-        if (downstream >= 0) this.runoff[downstream] = this.runoff[downstream]! + this.runoff[index]!;
+    const { drainage, waterLevel, height, flow } = terrain;
+    const startingStorage = sum(this.storage);
+    let runoffInput = 0;
+    let outletLoss = 0;
+    let maxDischarge = 0;
+    this.incoming.fill(0);
+    this.discharge.fill(0);
+
+    const order = drainage?.order ?? Array.from({ length: height.length }, (_, index) => index);
+    for (const index of order) {
+      const cellIndex = this.cellIndices[index]!;
+      const localRunoff = Math.max(0, conditions[cellIndex]?.runoff ?? 0) / Math.max(1, this.samplesPerCell[cellIndex]!);
+      runoffInput += localRunoff;
+      const available = this.storage[index]! + this.incoming[index]! + localRunoff;
+
+      if (height[index]! < seaLevel) {
+        outletLoss += available;
+        this.storage[index] = 0;
+        this.discharge[index] = available;
+        maxDischarge = Math.max(maxDischarge, available);
+        continue;
       }
+
+      const retention = this.retentionAt(index);
+      let retained = available * retention;
+      const softCapacity = this.softStorageCapacity(index);
+      if (softCapacity > 0 && retained > softCapacity * 4) retained = softCapacity * 4;
+      const outflow = Math.max(0, available - retained);
+      this.storage[index] = retained;
+      this.discharge[index] = outflow;
+      maxDischarge = Math.max(maxDischarge, outflow);
+
+      const downstream = drainage?.downstream[index] ?? -1;
+      if (downstream >= 0) this.incoming[downstream] = this.incoming[downstream]! + outflow;
+      else outletLoss += outflow;
     }
-    waterLevel.set(this.baseLevel);
-    this.visited.fill(0);
-    const queue = new FloodQueue();
+
+    this.spillFloodwater(height, seaLevel);
+    waterLevel.fill(-1);
     for (let index = 0; index < height.length; index += 1) {
-      const inflow = this.runoff[index]! / Math.max(1, drainage?.accumulation[index] ?? 1);
-      this.storage[index] = Math.min(1, this.storage[index]! * 0.65 + inflow);
-      flow[index] = clamp01(this.baseFlow[index]! + this.storage[index]! * 0.35);
-      if (this.baseLevel[index]! < 0 || height[index]! < seaLevel) continue;
-      waterLevel[index] = this.baseLevel[index]! + this.storage[index]! * 0.006 + Math.max(0, this.storage[index]! - 0.12) * 0.1;
-      if (this.storage[index]! > 0.12) queue.push(-waterLevel[index]!, index);
-    }
-    while (queue.size > 0) {
-      const index = queue.pop();
-      if (this.visited[index]) continue;
-      this.visited[index] = 1;
-      const surface = waterLevel[index]!;
-      const sourceX = index % resolution;
-      const sourceZ = Math.floor(index / resolution);
-      for (const [offsetX, offsetZ] of NEIGHBOURS) {
-        const nextX = sourceX + offsetX;
-        const nextZ = sourceZ + offsetZ;
-        if (nextX < 0 || nextZ < 0 || nextX >= resolution || nextZ >= resolution) continue;
-        const next = nextZ * resolution + nextX;
-        if (this.visited[next] || height[next]! < seaLevel || height[next]! >= surface - 0.001 || waterLevel[next]! >= surface - 0.000101) continue;
-        waterLevel[next] = surface - 0.0001;
-        queue.push(-waterLevel[next]!, next);
+      if (height[index]! < seaLevel) {
+        waterLevel[index] = seaLevel;
+        flow[index] = this.baseFlow[index]!;
+        this.flooded[index] = 0;
+        continue;
       }
+
+      const reference = this.referenceStorage[index]!;
+      if (this.baseLevel[index]! >= 0) {
+        const stage = this.baseLevel[index]! + (this.storage[index]! - reference) * STORAGE_TO_STAGE;
+        waterLevel[index] = stage > height[index]! + 0.00035 && this.storage[index]! > MIN_VISIBLE_STORAGE ? stage : -1;
+      } else if (this.flooded[index] && this.storage[index]! > MIN_VISIBLE_STORAGE) {
+        waterLevel[index] = height[index]! + this.storage[index]! * STORAGE_TO_STAGE;
+      } else {
+        this.flooded[index] = 0;
+      }
+
+      const referenceDischarge = Math.max(this.referenceDischarge[index]!, 0.004 + this.baseFlow[index]! * 0.04);
+      const dischargeRatio = this.discharge[index]! / referenceDischarge;
+      flow[index] = clamp01(this.baseFlow[index]! * Math.sqrt(Math.max(0, dischargeRatio)));
     }
+
+    let floodedStorage = 0;
+    for (let index = 0; index < this.flooded.length; index += 1) {
+      if (this.flooded[index]) floodedStorage += this.storage[index]!;
+    }
+    const endingStorage = sum(this.storage);
+    this.lastBudget = {
+      runoffInput,
+      startingStorage,
+      endingStorage,
+      outletLoss,
+      floodedStorage,
+      maxDischarge,
+      massError: startingStorage + runoffInput - endingStorage - outletLoss,
+    };
+
     for (let index = 0; index < this.world.cells.length; index += 1) {
       const cell = this.world.cells[index]!;
       const weather = conditions[index]!;
@@ -90,11 +184,90 @@ export class DynamicHydrology {
           weather.lastWindthrowMonth = this.world.weather?.month ?? 0;
         }
       }
-      weather.floodRisk = clamp01(this.storage[sample]! * (1 - cell.slope) * 3);
+      const reference = this.referenceStorage[sample]!;
+      const bankfull = Math.max(reference + this.bankfullExcess(sample), FLOODPLAIN_BANKFULL);
+      weather.floodRisk = clamp01(Math.max(0, this.storage[sample]! - reference) / Math.max(0.02, bankfull - reference) * (1 - cell.slope));
+      // Coarse water remains a regional descriptor. Exact traversal/placement authority is terrain.waterLevel.
       cell.water = this.baseWater[index]! || weather.floodDepth > 0.035;
       cell.flow = flow[sample]!;
     }
   }
+
+  private retentionAt(index: number): number {
+    const terrain = this.world.terrain;
+    if (terrain.lake[index]) return LAKE_RETENTION;
+    if (terrain.river[index] || this.baseLevel[index]! >= 0) return RIVER_RETENTION;
+    return this.flooded[index] ? FLOODPLAIN_RETENTION : 0;
+  }
+
+  private bankfullExcess(index: number): number {
+    const terrain = this.world.terrain;
+    if (terrain.lake[index]) return LAKE_BANKFULL_EXCESS;
+    if (terrain.river[index] || this.baseLevel[index]! >= 0) return RIVER_BANKFULL_EXCESS;
+    return FLOODPLAIN_BANKFULL;
+  }
+
+  private softStorageCapacity(index: number): number {
+    if (this.world.terrain.height[index]! < this.world.seaLevel) return 0;
+    const reference = this.referenceStorage[index]!;
+    if (reference > 0) return reference + this.bankfullExcess(index);
+    return this.flooded[index] ? FLOODPLAIN_BANKFULL : 0;
+  }
+
+  /**
+   * Moves only water that actually exists into adjacent low ground. Every transferred unit is
+   * removed from the source sample, so widening a floodplain cannot manufacture water volume.
+   */
+  private spillFloodwater(height: Float32Array, seaLevel: number): void {
+    const resolution = this.world.terrain.resolution;
+    for (let pass = 0; pass < MAX_FLOOD_PASSES; pass += 1) {
+      let moved = false;
+      for (let index = 0; index < height.length; index += 1) {
+        const reference = this.referenceStorage[index]!;
+        if (reference <= 0 && !this.flooded[index]) continue;
+        const bankfull = reference > 0 ? reference + this.bankfullExcess(index) : FLOODPLAIN_BANKFULL;
+        let excess = this.storage[index]! - bankfull;
+        if (excess <= 1e-9) continue;
+        const sourceSurface = reference > 0
+          ? this.baseLevel[index]! + (this.storage[index]! - reference) * STORAGE_TO_STAGE
+          : height[index]! + this.storage[index]! * STORAGE_TO_STAGE;
+        const sourceX = index % resolution;
+        const sourceZ = Math.floor(index / resolution);
+        const candidates: number[] = [];
+        for (const [offsetX, offsetZ] of NEIGHBOURS) {
+          const nextX = sourceX + offsetX;
+          const nextZ = sourceZ + offsetZ;
+          if (nextX < 0 || nextZ < 0 || nextX >= resolution || nextZ >= resolution) continue;
+          const next = nextZ * resolution + nextX;
+          if (height[next]! < seaLevel || height[next]! >= sourceSurface - 0.0005) continue;
+          candidates.push(next);
+        }
+        candidates.sort((a, b) => height[a]! - height[b]! || a - b);
+        for (const next of candidates) {
+          if (excess <= 1e-9) break;
+          const capacity = Math.max(0, (sourceSurface - height[next]!) / STORAGE_TO_STAGE - this.storage[next]!);
+          if (capacity <= 1e-9) continue;
+          const transfer = Math.min(excess, capacity);
+          this.storage[index] = this.storage[index]! - transfer;
+          this.storage[next] = this.storage[next]! + transfer;
+          this.flooded[next] = 1;
+          excess -= transfer;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    for (let index = 0; index < this.flooded.length; index += 1) {
+      if (this.referenceStorage[index]! > 0 || this.storage[index]! > MIN_VISIBLE_STORAGE) continue;
+      this.flooded[index] = 0;
+    }
+  }
+}
+
+function sum(values: Float64Array): number {
+  let total = 0;
+  for (let index = 0; index < values.length; index += 1) total += values[index]!;
+  return total;
 }
 
 export interface Hydrology {
