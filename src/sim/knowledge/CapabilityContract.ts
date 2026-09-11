@@ -40,10 +40,12 @@ function adoptionThreshold(record: KnowledgeRecord, thresholds: KnowledgeStageTh
 /**
  * Returns the social lifecycle stage of a piece of knowledge.
  *
- * Major discoveries use the explicit adoption/transformation dates recorded by KnowledgeSystem.
- * Minor practices do not create headline history events, so mature local practice is treated as
- * adopted once it crosses the same adoption threshold. A major capability can therefore never
- * silently become civilization-wide simply because its raw practice score is high.
+ * Inherited knowledge represents established communal practice at the simulation horizon, not a
+ * fresh discovery, so it begins locally adopted unless it later becomes dormant. Major discoveries
+ * use explicit adoption/transformation dates recorded by KnowledgeSystem. Minor practices do not
+ * create headline history events, so mature local practice is treated as adopted once it crosses
+ * the same adoption threshold. A major capability can therefore never silently become
+ * civilization-wide simply because its raw practice score is high.
  */
 export function knowledgeLifecycleStage(
   settlement: Settlement,
@@ -53,7 +55,7 @@ export function knowledgeLifecycleStage(
   const record = settlement.knowledge.records[id];
   if (!record || record.dormant) return 'unknown';
   if (record.transformedMonth !== undefined) return 'transformed';
-  if (record.adoptedMonth !== undefined) return 'adopted';
+  if (record.adoptedMonth !== undefined || record.source === 'inheritance') return 'adopted';
 
   const definition = KNOWLEDGE_BY_ID.get(id);
   const threshold = Math.max(0.01, adoptionThreshold(record, thresholds));
