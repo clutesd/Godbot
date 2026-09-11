@@ -2,6 +2,7 @@ import { practical } from '../knowledge/KnowledgeSystem';
 import type { Person, Settlement, SimulationState, WorldCell } from '../types';
 import { cellAt } from '../world';
 import {
+  advanceMaterialProcessing,
   ensureMaterialInventory,
   recordMaterialExtraction,
   type RawMaterialKind,
@@ -175,15 +176,16 @@ function extractionSnapshotFromFlow(settlement: Settlement, month: number): Sett
 }
 
 /**
- * Converts legacy monthly wood/mineral production estimates into real extraction and writes exact
- * physical identities into the typed material ledger. Legacy aggregates remain the compatibility
- * demand/value layer until construction and trade migrate in Step 3.
+ * Converts legacy monthly wood/mineral production estimates into real extraction, writes exact
+ * physical identities into the typed material ledger, then gives local specialists one bounded
+ * processing pass. Legacy aggregates remain the compatibility demand/value layer until Step 3.
  */
 export function advanceSettlementResourceExtraction(
   state: SimulationState,
   settlement: Settlement,
-  residents: readonly Person[] = [],
+  residents?: readonly Person[],
 ): SettlementExtractionResult {
+  const localResidents = residents ?? state.people.filter((person) => person.alive && person.homeId === settlement.id);
   const requestedWood = Math.max(0, settlement.monthlyBalance.wood);
   const requestedMinerals = Math.max(0, settlement.monthlyBalance.minerals);
   const empty: SettlementExtractionResult = {
@@ -199,16 +201,22 @@ export function advanceSettlementResourceExtraction(
 
   const cells = settlementResourceCatchment(state, settlement);
   const authoritative = cells.some((cell) => cell.naturalResources !== undefined);
-  if (!authoritative) return empty;
+  if (!authoritative) {
+    advanceMaterialProcessing(state, settlement, localResidents);
+    return empty;
+  }
 
   const prior = extractionSnapshotFromFlow(settlement, state.month);
-  if (prior) return prior;
+  if (prior) {
+    advanceMaterialProcessing(state, settlement, localResidents);
+    return prior;
+  }
 
   for (const cell of cells) advanceRenewablesToMonth(cell, state.month);
 
   const harvestedWood = harvestRenewableAcross(cells, 'timber', requestedWood);
   const mineralExtraction = extractMinerals(settlement, cells, requestedMinerals);
-  const supplementalRequests = requestedSupplementalRenewables(residents);
+  const supplementalRequests = requestedSupplementalRenewables(localResidents);
   const renewables: Partial<Record<SupplementalRenewable, number>> = {};
   for (const kind of SUPPLEMENTAL_RENEWABLES) {
     const harvested = harvestRenewableAcross(cells, kind, supplementalRequests[kind]);
@@ -228,6 +236,7 @@ export function advanceSettlementResourceExtraction(
     if (amount > 0) recordMaterialExtraction(settlement, kind, amount, state.month);
   }
   inventory.lastExtractionMonth = state.month;
+  advanceMaterialProcessing(state, settlement, localResidents);
 
   return {
     authoritative: true,
