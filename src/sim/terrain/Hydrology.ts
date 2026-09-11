@@ -67,7 +67,9 @@ export class DynamicHydrology {
       if (height[index]! < seaLevel) { floodDepth[index] = 0; continue; }
       const cell = this.world.cells[this.cellIndices[index]!]!;
       const baseRetention = Math.max(0.46, Math.min(0.78, 0.55 + (1 - cell.slope) * 0.14 + cell.moisture * 0.07));
-      const retention = this.baseLevel[index]! >= 0 ? Math.max(0.82, baseRetention) : baseRetention;
+      // Water stored in a channel drains downstream, but its stage must persist long enough for a
+      // multi-month exceptional storm to overtop banks. Floodplain water itself recedes faster.
+      const retention = this.baseLevel[index]! >= 0 ? Math.max(0.91, baseRetention) : baseRetention;
       floodDepth[index] = Math.max(0, floodDepth[index]! * retention - 0.0025);
     }
 
@@ -80,14 +82,14 @@ export class DynamicHydrology {
       if (this.baseLevel[index]! < 0 || height[index]! < seaLevel) continue;
       const hierarchy = accumulationLog > 0 ? clamp01(Math.log1p(contributing) / accumulationLog) : 0;
       const cell = this.world.cells[this.cellIndices[index]!]!;
-      // Because basinWetness is normalized by contributing area, hierarchy only modestly raises
-      // bankfull capacity. Sustained heavy rain can still overtop a major river; ordinary rain cannot.
+      // Normalized basin wetness means hierarchy only modestly raises bankfull capacity. Repeated
+      // ordinary rain remains below it; sustained heavy rain can overtop even a mature river.
       const capacity = terrain.lake[index]
         ? 0.27 + hierarchy * 0.05
         : 0.11 + hierarchy * 0.10 + cell.slope * 0.05;
       const excess = Math.max(0, this.storage[index]! - capacity);
       if (excess <= 0) continue;
-      const pulse = Math.min(0.22, excess * (0.42 + hierarchy * 0.18));
+      const pulse = Math.min(0.30, excess * (0.72 + hierarchy * 0.20));
       floodDepth[index] = Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[index]! + pulse);
     }
 
@@ -108,15 +110,15 @@ export class DynamicHydrology {
           const next = z * resolution + x;
           const nextBase = height[next]! < seaLevel ? elevationToY(seaLevel, seaLevel) : this.baseSurfaceY(next);
           const drop = sourceHead - (nextBase + floodDepth[next]!);
-          if (drop <= 0.012) continue;
+          if (drop <= 0.008) continue;
           candidates.push({ index: next, drop }); totalDrop += drop;
         }
         if (!candidates.length || totalDrop <= 0) continue;
-        let available = depth * 0.52;
+        let available = depth * 0.58;
         for (const candidate of candidates) {
           if (available <= 0) break;
-          const share = depth * 0.52 * candidate.drop / totalDrop;
-          const moved = Math.min(available, share, candidate.drop * 0.22);
+          const share = depth * 0.58 * candidate.drop / totalDrop;
+          const moved = Math.min(available, share, candidate.drop * 0.26);
           if (moved <= 0) continue;
           this.transfer[index] -= moved;
           if (height[candidate.index]! >= seaLevel) this.transfer[candidate.index] += moved;
