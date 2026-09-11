@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/sim/knowledge/CapabilityContract.ts'
+      - 'src/sim/knowledge/KnowledgeSystem.ts'
       - 'src/sim/transport/TransportationSystem.ts'
       - 'src/sim/war/MilitaryCapability.ts'
       - 'tests/knowledge-stage-contract.test.ts'
@@ -23,6 +24,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/sim/knowledge/CapabilityContract.ts src/sim/transport/TransportationSystem.ts src/sim/war/MilitaryCapability.ts tests/knowledge-stage-contract.test.ts
+      - run: npx eslint src/sim/knowledge/CapabilityContract.ts src/sim/knowledge/KnowledgeSystem.ts src/sim/transport/TransportationSystem.ts src/sim/war/MilitaryCapability.ts tests/knowledge-stage-contract.test.ts
       - run: npx vitest run tests/knowledge-stage-contract.test.ts tests/knowledge.test.ts
       - run: npm run build

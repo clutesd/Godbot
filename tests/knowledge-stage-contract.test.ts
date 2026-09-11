@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { configWith } from '../src/config';
 import { Simulation } from '../src/sim/Simulation';
 import {
   capabilityPractice,
   hasKnowledgeCapability,
   knowledgeLifecycleStage,
 } from '../src/sim/knowledge/CapabilityContract';
+import { KnowledgeSystem, practical } from '../src/sim/knowledge/KnowledgeSystem';
+import { SeededRandom } from '../src/sim/prng';
 import type { KnowledgeRecord, Settlement } from '../src/sim/types';
 import { deriveMilitaryProfile } from '../src/sim/war/MilitaryCapability';
 
@@ -40,15 +43,30 @@ describe('knowledge capability contract', () => {
     expect(capabilityPractice(settlement, 'rail-transport', 'experimental')).toBeCloseTo(0.95);
     expect(capabilityPractice(settlement, 'rail-transport', 'adopted')).toBe(0);
     expect(capabilityPractice(settlement, 'rail-transport', 'transformed')).toBe(0);
+    expect(practical(settlement, 'rail-transport')).toBe(0);
 
     rail.adoptedMonth = 24;
     expect(knowledgeLifecycleStage(settlement, 'rail-transport')).toBe('adopted');
     expect(hasKnowledgeCapability(settlement, 'rail-transport', 'adopted')).toBe(true);
     expect(hasKnowledgeCapability(settlement, 'rail-transport', 'transformed')).toBe(false);
+    expect(practical(settlement, 'rail-transport')).toBeCloseTo(0.95);
 
     rail.transformedMonth = 60;
     expect(knowledgeLifecycleStage(settlement, 'rail-transport')).toBe('transformed');
     expect(capabilityPractice(settlement, 'rail-transport', 'transformed')).toBeCloseTo(0.95);
+  });
+
+  it('treats inherited foundations as established local capability', () => {
+    const settlement = settlementFor('stage-inherited-foundations');
+    const fire = settlement.knowledge.records['fire-control'];
+    const stone = settlement.knowledge.records['stone-composites'];
+
+    expect(fire?.source).toBe('inheritance');
+    expect(stone?.source).toBe('inheritance');
+    expect(knowledgeLifecycleStage(settlement, 'fire-control')).toBe('adopted');
+    expect(knowledgeLifecycleStage(settlement, 'stone-composites')).toBe('adopted');
+    expect(practical(settlement, 'fire-control')).toBeGreaterThan(0);
+    expect(practical(settlement, 'stone-composites')).toBeGreaterThan(0);
   });
 
   it('allows mature minor practices to become routine without manufacturing headline history', () => {
@@ -72,6 +90,66 @@ describe('knowledge capability contract', () => {
     recordState.dormant = true;
     expect(knowledgeLifecycleStage(settlement, 'iron-working')).toBe('unknown');
     expect(capabilityPractice(settlement, 'iron-working', 'experimental')).toBe(0);
+    expect(practical(settlement, 'iron-working')).toBe(0);
+  });
+
+  it('requires transformation before civilization-scale production multipliers appear', () => {
+    const seed = 'stage-production-transformation';
+    const simulation = new Simulation({ seed, startingPopulation: 360, settlementCount: [4, 4] });
+    const settlement = simulation.state.settlements[0];
+    if (!settlement) throw new Error('Expected a settlement');
+    const system = new KnowledgeSystem(configWith({ seed }), new SeededRandom(`${seed}:stage-production`));
+
+    const surplus = record('agrarian-surplus', settlement);
+    surplus.adoptedMonth = 24;
+    settlement.knowledge.records['agrarian-surplus'] = surplus;
+    const manufacturing = record('precision-manufacturing', settlement);
+    manufacturing.adoptedMonth = 24;
+    settlement.knowledge.records['precision-manufacturing'] = manufacturing;
+    const rail = record('rail-transport', settlement);
+    rail.adoptedMonth = 24;
+    settlement.knowledge.records['rail-transport'] = rail;
+
+    const adoptedOnly = system.productionFactors(settlement);
+    expect(adoptedOnly.food).toBeCloseTo(1);
+    expect(adoptedOnly.goods).toBeCloseTo(1);
+    expect(adoptedOnly.transport).toBeCloseTo(1);
+
+    surplus.transformedMonth = 72;
+    manufacturing.transformedMonth = 72;
+    rail.transformedMonth = 72;
+    const transformed = system.productionFactors(settlement);
+    expect(transformed.food).toBeGreaterThan(adoptedOnly.food);
+    expect(transformed.goods).toBeGreaterThan(adoptedOnly.goods);
+    expect(transformed.transport).toBeGreaterThan(adoptedOnly.transport);
+  });
+
+  it('requires transformed rail knowledge before rail infrastructure can grow', () => {
+    const seed = 'stage-rail-infrastructure';
+    const overrides = { seed, startingPopulation: 360, settlementCount: [4, 4] as const };
+    const simulation = new Simulation(overrides);
+    const settlement = simulation.state.settlements[0];
+    if (!settlement) throw new Error('Expected a settlement');
+    const system = new KnowledgeSystem(configWith(overrides), new SeededRandom(`${seed}:stage-infrastructure`));
+
+    simulation.state.institutions = [];
+    settlement.institutionIds = [];
+    settlement.resources.wood = 500;
+    settlement.resources.minerals = 500;
+    settlement.resources.goods = 500;
+    settlement.resources.wealth = 500;
+    const rail = record('rail-transport', settlement);
+    rail.adoptedMonth = 24;
+    settlement.knowledge.records['rail-transport'] = rail;
+
+    simulation.state.month = 12;
+    system.advanceYear(simulation.state);
+    expect(settlement.infrastructure.rail).toBe(0);
+
+    rail.transformedMonth = 24;
+    simulation.state.month = 24;
+    system.advanceYear(simulation.state);
+    expect(settlement.infrastructure.rail).toBeGreaterThan(0);
   });
 
   it('prevents experimental metallurgy from silently creating fieldable metal weapons', () => {

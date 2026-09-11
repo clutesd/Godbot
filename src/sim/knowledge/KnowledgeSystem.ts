@@ -17,6 +17,7 @@ import type {
   Vec2,
   WorldCell,
 } from '../types';
+import { capabilityPractice, hasKnowledgeCapability } from './CapabilityContract';
 import { KNOWLEDGE_BY_ID, KNOWLEDGE_CATALOG, type DiscoveryConditions, type KnowledgeDefinition, type KnowledgeNeed } from './catalog';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
@@ -212,9 +213,9 @@ export class KnowledgeSystem {
   }
 
   retrospectiveLabel(settlement: Settlement): string {
-    if (practical(settlement, 'interplanetary-capability') > 0.42) return 'interplanetary systems center';
-    if (practical(settlement, 'orbital-capability') > 0.42) return 'orbital-capable center';
-    if (practical(settlement, 'nuclear-fission') > 0.32 || practical(settlement, 'machine-intelligence') > 0.32) return 'advanced scientific center';
+    if (capabilityPractice(settlement, 'interplanetary-capability', 'transformed') > 0.42) return 'interplanetary systems center';
+    if (capabilityPractice(settlement, 'orbital-capability', 'transformed') > 0.42) return 'orbital-capable center';
+    if (capabilityPractice(settlement, 'nuclear-fission', 'transformed') > 0.32 || capabilityPractice(settlement, 'machine-intelligence', 'transformed') > 0.32) return 'advanced scientific center';
     if (settlement.industry.active) return settlement.industry.intensity > 0.55 ? 'industrial center' : 'early industrial center';
     if (practical(settlement, 'mechanical-power') > 0.35 || practical(settlement, 'industrial-chemistry') > 0.35) return 'mechanized workshop society';
     if (settlement.knowledge.literacy > 0.32 && practical(settlement, 'agrarian-surplus') > 0.3) return 'literate agrarian network';
@@ -227,11 +228,11 @@ export class KnowledgeSystem {
       practical(settlement, 'iron-working') * 0.24
       + practical(settlement, 'precision-tools') * 0.16
       + practical(settlement, 'mechanical-power') * 0.22
-      + practical(settlement, 'rail-transport') * 0.2
+      + capabilityPractice(settlement, 'rail-transport', 'transformed') * 0.2
       + settlement.infrastructure.roads * 0.1
       + settlement.industry.intensity * 0.18
-      + practical(settlement, 'computation') * 0.12
-      + practical(settlement, 'automation') * 0.1,
+      + capabilityPractice(settlement, 'computation', 'transformed') * 0.12
+      + capabilityPractice(settlement, 'automation', 'transformed') * 0.1,
     );
   }
 
@@ -243,7 +244,7 @@ export class KnowledgeSystem {
       + settlement.knowledge.literacy * 0.08
       + settlement.industry.intensity * 0.06
       + practical(settlement, 'modern-medicine') * 0.22
-      + practical(settlement, 'biotechnology') * 0.08,
+      + capabilityPractice(settlement, 'biotechnology', 'transformed') * 0.08,
       0,
       0.72,
     );
@@ -251,10 +252,25 @@ export class KnowledgeSystem {
 
   productionFactors(settlement: Settlement): { food: number; materials: number; goods: number; transport: number } {
     return {
-      food: 1 + practical(settlement, 'crop-selection') * 0.2 + practical(settlement, 'irrigation') * 0.28 + practical(settlement, 'agrarian-surplus') * 0.38,
-      materials: 1 + practical(settlement, 'metal-smelting') * 0.2 + practical(settlement, 'iron-working') * 0.28 + settlement.industry.intensity * 0.55,
-      goods: 1 + practical(settlement, 'precision-tools') * 0.18 + practical(settlement, 'precision-manufacturing') * 0.8 + practical(settlement, 'industrial-chemistry') * 0.55 + practical(settlement, 'automation') * 0.72 + settlement.industry.intensity,
-      transport: 1 + practical(settlement, 'improved-roads') * 0.35 + practical(settlement, 'ocean-navigation') * 0.34 + practical(settlement, 'rail-transport') * 1.2 + practical(settlement, 'aviation') * 0.72,
+      food: 1
+        + practical(settlement, 'crop-selection') * 0.2
+        + practical(settlement, 'irrigation') * 0.28
+        + capabilityPractice(settlement, 'agrarian-surplus', 'transformed') * 0.38,
+      materials: 1
+        + practical(settlement, 'metal-smelting') * 0.2
+        + practical(settlement, 'iron-working') * 0.28
+        + settlement.industry.intensity * 0.55,
+      goods: 1
+        + practical(settlement, 'precision-tools') * 0.18
+        + capabilityPractice(settlement, 'precision-manufacturing', 'transformed') * 0.8
+        + capabilityPractice(settlement, 'industrial-chemistry', 'transformed') * 0.55
+        + capabilityPractice(settlement, 'automation', 'transformed') * 0.72
+        + settlement.industry.intensity,
+      transport: 1
+        + practical(settlement, 'improved-roads') * 0.35
+        + practical(settlement, 'ocean-navigation') * 0.34
+        + capabilityPractice(settlement, 'rail-transport', 'transformed') * 1.2
+        + capabilityPractice(settlement, 'aviation', 'transformed') * 0.72,
     };
   }
 
@@ -287,8 +303,6 @@ export class KnowledgeSystem {
     const maturity = this.prerequisiteMaturity(settlement, definition.conditions);
     const rediscovery = Boolean(settlement.knowledge.lost[id]);
     const ramp = 0.05 + 0.95 * Math.pow(maturity, 1.6);
-    // Insight: discoveries begin very unlikely and grow as experimentation accumulates toward a
-    // difficulty-scaled critical mass. Harder ideas demand proportionally more accumulated work.
     const insight = Math.pow(clamp(settlement.knowledge.experimentation[definition.domain] / Math.max(0.1, definition.difficulty * 3)), 2);
     return clamp(definition.baseChance * readiness * ramp * insight * this.config.knowledge.discoveryRate * (rediscovery ? 1.75 : 1), 0, 0.22);
   }
@@ -296,7 +310,7 @@ export class KnowledgeSystem {
   /** Where a record sits on the path idea → experiment → local adoption → transformed. */
   adoptionStage(record: KnowledgeRecord): 'idea' | 'experiment' | 'local-adoption' | 'transformed' {
     if (record.transformedMonth !== undefined) return 'transformed';
-    if (record.adoptedMonth !== undefined) return 'local-adoption';
+    if (record.adoptedMonth !== undefined || record.source === 'inheritance') return 'local-adoption';
     const definition = KNOWLEDGE_BY_ID.get(record.id);
     const threshold = definition?.kind === 'understanding' ? this.config.historicalPace.adoptionTheory : this.config.historicalPace.adoptionPractice;
     const progress = (definition?.kind === 'understanding' ? record.theory : record.practice) / Math.max(0.01, threshold);
@@ -346,8 +360,6 @@ export class KnowledgeSystem {
             : domain === 'materials' || domain === 'energy' ? settlement.conflictPressure * 0.35
               : domain === 'records' ? Math.max(0, people.length / 80 - 0.4) : 0;
       const gain = (specialists / Math.max(12, people.length) * 0.09 + institutionalSupport * 0.022 + (culture?.dimensions.curiosity ?? 0.5) * 0.012 + pressure * 0.018 + settlement.industry.intensity * 0.025) * (1 + settlement.knowledge.literacy * 0.55);
-      // Multi-generational accumulation: insight into a domain is the work of centuries of
-      // specialists, not a single lively decade. Decay is slow; discovery consumes the stock.
       settlement.knowledge.experimentation[domain] = Math.min(3, settlement.knowledge.experimentation[domain] * 0.985 + gain);
     }
   }
@@ -469,8 +481,6 @@ export class KnowledgeSystem {
       if (this.occupationCount(people, occupation as Occupation) < (count ?? 0)) return false;
     }
     if (conditions.institutionsAny && !conditions.institutionsAny.some((kind) => this.institutionsAt(state, settlement.id).some((institution) => institution.kind === kind))) return false;
-    // Prior knowledge gates at partial familiarity: the idea becomes conceivable once the
-    // community handles its foundations, but likely only once that handling is mature.
     if (conditions.foundations && !conditions.foundations.every((knowledgeNeed) => this.needProgress(settlement, knowledgeNeed) >= KnowledgeSystem.PREREQUISITE_FAMILIARITY)) return false;
     if (conditions.alternatives && !conditions.alternatives.some((path) => path.every((knowledgeNeed) => this.needProgress(settlement, knowledgeNeed) >= KnowledgeSystem.PREREQUISITE_FAMILIARITY))) return false;
     return true;
@@ -478,7 +488,6 @@ export class KnowledgeSystem {
 
   private static readonly PREREQUISITE_FAMILIARITY = 0.55;
 
-  /** 0 = the prerequisite is unknown; 1 = fully mastered to the level the discovery assumes. */
   private needProgress(settlement: Settlement, knowledgeNeed: KnowledgeNeed): number {
     const record = settlement.knowledge.records[knowledgeNeed.id];
     if (!record || record.dormant) return 0;
@@ -487,7 +496,6 @@ export class KnowledgeSystem {
     return clamp(Math.min(record.theory / theoryNeed, record.practice / practiceNeed));
   }
 
-  /** 0 at first familiarity with the prerequisite chain, 1 at full mastery of it. */
   private prerequisiteMaturity(settlement: Settlement, conditions: DiscoveryConditions): number {
     const foundationScore = conditions.foundations?.length
       ? Math.min(...conditions.foundations.map((knowledgeNeed) => this.needProgress(settlement, knowledgeNeed)))
@@ -532,14 +540,15 @@ export class KnowledgeSystem {
     const cell = state.world.cells[settlement.cellIndex];
     const routeCount = state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const hasInstitution = (kind: Institution['kind']): boolean => this.institutionsAt(state, settlement.id).some((institution) => institution.kind === kind);
+    const transformed = (id: string): number => capabilityPractice(settlement, id, 'transformed');
     const candidates: Array<{ key: keyof InfrastructureState; enabled: boolean; target: number; wood: number; minerals: number; goods: number; wealth: number; cause: string }> = [
-      { key: 'workshops', enabled: practical(settlement, 'pottery-firing') > 0.22 || practical(settlement, 'metal-smelting') > 0.18, target: 0.35 + practical(settlement, 'precision-manufacturing') * 0.65, wood: 5, minerals: 2, goods: 1, wealth: 2, cause: 'specialized-craft' },
+      { key: 'workshops', enabled: practical(settlement, 'pottery-firing') > 0.22 || practical(settlement, 'metal-smelting') > 0.18, target: 0.35 + transformed('precision-manufacturing') * 0.65, wood: 5, minerals: 2, goods: 1, wealth: 2, cause: 'specialized-craft' },
       { key: 'archives', enabled: practical(settlement, 'durable-records') > 0.28 && (hasInstitution('knowledge-keepers') || hasInstitution('council')), target: 0.25 + practical(settlement, 'printing') * 0.7, wood: 6, minerals: 1, goods: 3, wealth: 4, cause: 'durable-records' },
-      { key: 'roads', enabled: routeCount > 0 && practical(settlement, 'wheel-axle') > 0.22, target: 0.28 + practical(settlement, 'improved-roads') * 0.72, wood: 8, minerals: 3, goods: 2, wealth: 3, cause: 'trade-volume' },
-      { key: 'ports', enabled: Boolean(cell?.coast) && practical(settlement, 'buoyancy-currents') > 0.25, target: 0.2 + practical(settlement, 'ocean-navigation') * 0.8, wood: 10, minerals: 2, goods: 2, wealth: 4, cause: 'maritime-trade' },
-      { key: 'bridges', enabled: practical(settlement, 'improved-roads') > 0.28 && routeCount > 1, target: 0.18 + practical(settlement, 'improved-roads') * 0.62, wood: 9, minerals: 5, goods: 2, wealth: 4, cause: 'route-continuity' },
-      { key: 'rail', enabled: practical(settlement, 'rail-transport') > 0.34, target: practical(settlement, 'rail-transport'), wood: 8, minerals: 15, goods: 8, wealth: 10, cause: 'guided-powered-transport' },
-      { key: 'power', enabled: practical(settlement, 'electrical-generation') > 0.32, target: practical(settlement, 'electrical-generation'), wood: 5, minerals: 14, goods: 10, wealth: 12, cause: 'electrical-generation' },
+      { key: 'roads', enabled: routeCount > 0 && practical(settlement, 'wheel-axle') > 0.22, target: 0.28 + transformed('improved-roads') * 0.72, wood: 8, minerals: 3, goods: 2, wealth: 3, cause: 'trade-volume' },
+      { key: 'ports', enabled: Boolean(cell?.coast) && practical(settlement, 'buoyancy-currents') > 0.25, target: 0.2 + transformed('ocean-navigation') * 0.8, wood: 10, minerals: 2, goods: 2, wealth: 4, cause: 'maritime-trade' },
+      { key: 'bridges', enabled: hasKnowledgeCapability(settlement, 'improved-roads', 'transformed') && routeCount > 1, target: 0.18 + transformed('improved-roads') * 0.62, wood: 9, minerals: 5, goods: 2, wealth: 4, cause: 'route-continuity' },
+      { key: 'rail', enabled: hasKnowledgeCapability(settlement, 'rail-transport', 'transformed'), target: transformed('rail-transport'), wood: 8, minerals: 15, goods: 8, wealth: 10, cause: 'guided-powered-transport' },
+      { key: 'power', enabled: hasKnowledgeCapability(settlement, 'electrical-generation', 'transformed'), target: transformed('electrical-generation'), wood: 5, minerals: 14, goods: 10, wealth: 12, cause: 'electrical-generation' },
       { key: 'factories', enabled: settlement.industry.active, target: 0.2 + settlement.industry.intensity * 0.8, wood: 9, minerals: 12, goods: 8, wealth: 11, cause: 'industrial-production' },
     ];
     const candidate = candidates.filter((item) => item.enabled && settlement.infrastructure[item.key] + 0.04 < item.target && settlement.resources.wood >= item.wood && settlement.resources.minerals >= item.minerals && settlement.resources.goods >= item.goods && settlement.resources.wealth >= item.wealth).sort((a, b) => (b.target - settlement.infrastructure[b.key]) - (a.target - settlement.infrastructure[a.key]))[0];
@@ -819,6 +828,12 @@ export function mastery(settlement: Settlement, id: string): { theory: number; p
   return record ? { theory: record.theory, practice: record.dormant ? 0 : record.practice } : { theory: 0, practice: 0 };
 }
 
+/**
+ * Reliable locally deployable practice. Discovery, prerequisite familiarity, experimentation and
+ * historical analysis must use `mastery()`/the raw record instead. This boundary prevents an idea
+ * or prototype from silently changing production, infrastructure, health, development or other
+ * real-world simulation outcomes before society has actually adopted it.
+ */
 export function practical(settlement: Settlement, id: string): number {
-  return mastery(settlement, id).practice;
+  return capabilityPractice(settlement, id, 'adopted');
 }
