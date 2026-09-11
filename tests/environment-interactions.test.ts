@@ -94,7 +94,7 @@ describe('Persistent world environment acceptance', () => {
     expect(road.status).toBe('under-construction');
     expect(segmentUsable(world, road)).toBe(false);
     expect(weather.state.cells[settlement.cellIndex]!.cropDamage).toBeGreaterThan(0);
-    expect(world.cells[settlement.cellIndex]!.wood).toBeLessThan(1);
+    expect(world.cells[settlement.cellIndex]!.moisture).toBeGreaterThanOrEqual(0.9);
     expect(repairWeatherDamage(settlement, 10, state.month + 1)).toBe(0);
     const damaged = low.condition;
     for (let month = 0; month < 24; month++) step(false);
