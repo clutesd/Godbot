@@ -5,12 +5,16 @@ on:
     paths:
       - 'src/sim/resources/**'
       - 'src/sim/development/SettlementDevelopmentSystem.ts'
+      - 'src/sim/transport/TransportationSystem.ts'
+      - 'src/sim/transport/types.ts'
       - 'src/sim/war/MilitaryCapability.ts'
       - 'src/sim/world.ts'
       - 'tests/world-resources.test.ts'
       - 'tests/resource-extraction.test.ts'
       - 'tests/material-economy.test.ts'
       - 'tests/material-use.test.ts'
+      - 'tests/material-logistics.test.ts'
+      - 'tests/transportation.test.ts'
       - 'tests/knowledge.test.ts'
       - 'tests/military-capability.test.ts'
       - '.github/workflows/resource-validation.yml'
@@ -28,6 +32,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/sim/resources/WorldResources.ts src/sim/resources/SettlementResourceExtraction.ts src/sim/resources/MaterialEconomy.ts src/sim/resources/MaterialUse.ts src/sim/development/SettlementDevelopmentSystem.ts src/sim/war/MilitaryCapability.ts src/sim/world.ts tests/world-resources.test.ts tests/resource-extraction.test.ts tests/material-economy.test.ts tests/material-use.test.ts tests/military-capability.test.ts
-      - run: npx vitest run tests/world-resources.test.ts tests/resource-extraction.test.ts tests/material-economy.test.ts tests/material-use.test.ts tests/military-capability.test.ts tests/knowledge.test.ts
+      - run: npx eslint src/sim/resources/WorldResources.ts src/sim/resources/SettlementResourceExtraction.ts src/sim/resources/MaterialEconomy.ts src/sim/resources/MaterialUse.ts src/sim/resources/MaterialLogistics.ts src/sim/development/SettlementDevelopmentSystem.ts src/sim/transport/TransportationSystem.ts src/sim/transport/types.ts src/sim/war/MilitaryCapability.ts src/sim/world.ts tests/world-resources.test.ts tests/resource-extraction.test.ts tests/material-economy.test.ts tests/material-use.test.ts tests/material-logistics.test.ts tests/transportation.test.ts tests/military-capability.test.ts
+      - run: npx vitest run tests/world-resources.test.ts tests/resource-extraction.test.ts tests/material-economy.test.ts tests/material-use.test.ts tests/material-logistics.test.ts tests/transportation.test.ts tests/military-capability.test.ts tests/knowledge.test.ts
       - run: npm run build
