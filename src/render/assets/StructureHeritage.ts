@@ -85,12 +85,13 @@ export function deriveStructureHeritage(response: DevelopmentResponse): Structur
     .filter(entry => entry.action !== 'abandoned' && entry.action !== 'ruined');
   const fallbackForm = response.form;
   const fallbackMaterial = response.material;
-  const fallbackLevel = response.level;
+  // A level-only upgrade is the same architectural generation. Legacy means a phase whose
+  // social use, physical form, material or culture is actually different from the present.
   const prior = [...phases].reverse().find(entry =>
     entry.need !== response.need
     || phaseForm(entry, fallbackForm) !== response.form
     || phaseMaterial(entry, fallbackMaterial) !== response.material
-    || phaseLevel(entry, fallbackLevel) !== response.level,
+    || entry.cultureId !== response.cultureId,
   ) ?? origin;
 
   const upgradeCount = response.history.filter(entry => entry.action === 'expanded' || entry.action === 'upgraded').length;
