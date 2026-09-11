@@ -8,9 +8,11 @@ on:
       - 'src/render/assets/BuildingComposer.ts'
       - 'src/render/assets/StructureComposition.ts'
       - 'src/render/assets/StructureHeritage.ts'
+      - 'src/render/assets/StructureComponents.ts'
       - 'src/render/materials/MaterialPalette.ts'
       - 'tests/structure-identity.test.ts'
       - 'tests/structure-heritage.test.ts'
+      - 'tests/structure-components.test.ts'
       - 'tests/architecture.test.ts'
       - '.github/workflows/structure-identity-validation.yml'
   workflow_dispatch:
@@ -27,6 +29,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/render/assets/AssetBuilder.ts src/render/assets/BuildingGrammar.ts src/render/assets/StructureComposition.ts src/render/assets/StructureHeritage.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts
-      - run: npx vitest run tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/architecture.test.ts
+      - run: npx eslint src/render/assets/AssetBuilder.ts src/render/assets/BuildingGrammar.ts src/render/assets/StructureComposition.ts src/render/assets/StructureHeritage.ts src/render/assets/StructureComponents.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts
+      - run: npx vitest run tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/architecture.test.ts
       - run: npm run build

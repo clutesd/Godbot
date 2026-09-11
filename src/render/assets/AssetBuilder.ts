@@ -16,6 +16,7 @@ import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingCompose
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentResponse } from '../../sim/development/types';
 import { heritageFingerprint } from './StructureHeritage';
+import { buildStructureComponentManifest } from './StructureComponents';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -226,9 +227,12 @@ export class AssetBuilder {
     const stage = stageName === undefined ? BUILD_STAGE.DETAIL : (Number(stageName) as BuildStage);
     const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage);
+    const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
     composed.group.userData['buildingHeight'] = composed.height;
     composed.group.userData['footprintWidth'] = composed.extentX;
     composed.group.userData['footprintDepth'] = composed.extentZ;
+    composed.group.userData['structureComponents'] = componentManifest;
+    composed.group.userData['structureComponentSignature'] = componentManifest.visualSignature;
 
     return {
       mesh: composed.group,

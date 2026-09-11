@@ -17,6 +17,7 @@ export interface StructureHeritage {
   legacyNeed: SettlementNeed;
   legacyForm: StructureForm;
   legacyMaterial: StructureMaterial;
+  legacyCultureId: string;
   transitionCount: number;
   upgradeCount: number;
   repurposed: boolean;
@@ -126,6 +127,7 @@ export function deriveStructureHeritage(response: DevelopmentResponse): Structur
     legacyNeed: prior.need,
     legacyForm: phaseForm(prior, response.form),
     legacyMaterial: phaseMaterial(prior, response.material),
+    legacyCultureId: prior.cultureId,
     transitionCount: response.transitionCount,
     upgradeCount,
     repurposed,
