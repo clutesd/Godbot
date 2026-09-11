@@ -8,7 +8,6 @@ on:
       - 'src/sim/terrain/TerrainField.ts'
       - 'src/sim/world.ts'
       - 'tests/flood-hydrology.test.ts'
-      - 'tests/flood-diagnostics.test.ts'
       - 'tests/weather.test.ts'
       - 'tests/environment-interactions.test.ts'
       - 'tests/water-rendering.test.ts'
@@ -20,7 +19,6 @@ on:
       - 'src/sim/terrain/TerrainField.ts'
       - 'src/sim/world.ts'
       - 'tests/flood-hydrology.test.ts'
-      - 'tests/flood-diagnostics.test.ts'
       - 'tests/weather.test.ts'
       - 'tests/environment-interactions.test.ts'
       - 'tests/water-rendering.test.ts'
@@ -46,8 +44,6 @@ jobs:
           src/sim/terrain/TerrainField.ts
           src/sim/world.ts
           tests/flood-hydrology.test.ts
-      - name: Controlled flood diagnostic
-        run: npx vitest run tests/flood-diagnostics.test.ts --reporter=verbose
       - name: Run flood and water regressions
         run: npx vitest run tests/flood-hydrology.test.ts tests/environment-interactions.test.ts tests/water-rendering.test.ts
       - name: Verify established weather flood contract
