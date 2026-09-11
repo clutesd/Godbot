@@ -1,16 +1,24 @@
 import { practical } from '../knowledge/KnowledgeSystem';
-import type { Settlement, SimulationState, WorldCell } from '../types';
+import type { Person, Settlement, SimulationState, WorldCell } from '../types';
 import { cellAt } from '../world';
+import {
+  ensureMaterialInventory,
+  recordMaterialExtraction,
+  type RawMaterialKind,
+} from './MaterialEconomy';
 import {
   extractDeposit,
   harvestRenewable,
   regenerateRenewables,
   type DepositResourceKind,
+  type RenewableResourceKind,
 } from './WorldResources';
 
 const CATCHMENT_RADIUS_CELLS = 2;
 const BASE_DEPOSITS: readonly DepositResourceKind[] = ['stone', 'clay'];
 const METAL_DEPOSITS: readonly DepositResourceKind[] = ['copper-ore', 'tin-ore', 'iron-ore'];
+const SUPPLEMENTAL_RENEWABLES = ['medicinal-flora', 'plant-fiber'] as const;
+type SupplementalRenewable = typeof SUPPLEMENTAL_RENEWABLES[number];
 
 export interface SettlementExtractionResult {
   authoritative: boolean;
@@ -19,14 +27,15 @@ export interface SettlementExtractionResult {
   requestedMinerals: number;
   extractedMinerals: number;
   deposits: Partial<Record<DepositResourceKind, number>>;
+  renewables: Partial<Record<SupplementalRenewable, number>>;
 }
 
 const distanceScore = (cell: WorldCell, home: WorldCell): number =>
   Math.hypot(cell.x - home.x, cell.z - home.z);
 
 /**
- * The local economic catchment around a settlement. It is intentionally small: Step 1 makes
- * geography binding without pretending that a settlement can freely exploit an entire world.
+ * The local economic catchment around a settlement. It is intentionally small: geography is
+ * binding without pretending that a settlement can freely exploit an entire world.
  */
 export function settlementResourceCatchment(state: SimulationState, settlement: Settlement): WorldCell[] {
   const home = state.world.cells[settlement.cellIndex];
@@ -70,20 +79,20 @@ function eligibleDeposits(settlement: Settlement): DepositResourceKind[] {
   return kinds;
 }
 
-function harvestTimber(cells: readonly WorldCell[], requested: number): number {
+function harvestRenewableAcross(cells: readonly WorldCell[], kind: RenewableResourceKind, requested: number): number {
   if (requested <= 0) return 0;
   const ranked = cells
     .map((cell, distance) => {
-      const timber = cell.naturalResources?.renewables.timber;
-      const stockShare = timber && timber.capacity > 0 ? timber.stock / timber.capacity : 0;
-      return { cell, score: (timber?.accessibility ?? 0) * (0.4 + stockShare * 0.6) / (1 + distance * 0.08) };
+      const resource = cell.naturalResources?.renewables[kind];
+      const stockShare = resource && resource.capacity > 0 ? resource.stock / resource.capacity : 0;
+      return { cell, score: (resource?.accessibility ?? 0) * (0.4 + stockShare * 0.6) / (1 + distance * 0.08) };
     })
     .sort((a, b) => b.score - a.score);
   let remaining = requested;
   let harvested = 0;
   for (const candidate of ranked) {
     if (remaining <= 1e-9) break;
-    const amount = harvestRenewable(candidate.cell, 'timber', remaining);
+    const amount = harvestRenewable(candidate.cell, kind, remaining);
     harvested += amount;
     remaining -= amount;
   }
@@ -131,15 +140,49 @@ function reconcilePositiveBalance(settlement: Settlement, key: 'wood' | 'mineral
   settlement.resources[key] = Math.max(0, settlement.resources[key] - shortfall);
 }
 
+function requestedSupplementalRenewables(residents: readonly Person[]): Record<SupplementalRenewable, number> {
+  const count = (occupation: Person['occupation']): number => residents.filter((person) => person.alive && person.occupation === occupation).length;
+  const foragers = count('forager');
+  const keepers = count('keeper');
+  const builders = count('builder');
+  return {
+    'medicinal-flora': foragers * 0.018 + keepers * 0.006,
+    'plant-fiber': foragers * 0.032 + builders * 0.01,
+  };
+}
+
+function extractionSnapshotFromFlow(settlement: Settlement, month: number): SettlementExtractionResult | undefined {
+  const inventory = settlement.materials;
+  if (!inventory || inventory.lastExtractionMonth !== month || inventory.lastFlow?.month !== month) return undefined;
+  const extracted = inventory.lastFlow.extracted;
+  const deposits: Partial<Record<DepositResourceKind, number>> = {};
+  for (const kind of [...BASE_DEPOSITS, ...METAL_DEPOSITS, 'coal', 'uranium-ore'] as const) {
+    const amount = extracted[kind];
+    if (amount !== undefined) deposits[kind] = amount;
+  }
+  return {
+    authoritative: true,
+    requestedWood: Math.max(0, settlement.monthlyBalance.wood),
+    harvestedWood: extracted.timber ?? 0,
+    requestedMinerals: Math.max(0, settlement.monthlyBalance.minerals),
+    extractedMinerals: Object.values(deposits).reduce((sum, amount) => sum + (amount ?? 0), 0),
+    deposits,
+    renewables: {
+      'medicinal-flora': extracted['medicinal-flora'] ?? 0,
+      'plant-fiber': extracted['plant-fiber'] ?? 0,
+    },
+  };
+}
+
 /**
- * Converts the legacy monthly wood/mineral production estimate into real extraction from the
- * authoritative world layer. The legacy balance remains the demand signal while this bridge caps
- * what actually reaches the settlement stockpile. Worlds/fixtures without naturalResources keep
- * legacy behavior so old saves and isolated subsystem tests remain compatible.
+ * Converts legacy monthly wood/mineral production estimates into real extraction and writes exact
+ * physical identities into the typed material ledger. Legacy aggregates remain the compatibility
+ * demand/value layer until construction and trade migrate in Step 3.
  */
 export function advanceSettlementResourceExtraction(
   state: SimulationState,
   settlement: Settlement,
+  residents: readonly Person[] = [],
 ): SettlementExtractionResult {
   const requestedWood = Math.max(0, settlement.monthlyBalance.wood);
   const requestedMinerals = Math.max(0, settlement.monthlyBalance.minerals);
@@ -150,18 +193,41 @@ export function advanceSettlementResourceExtraction(
     requestedMinerals,
     extractedMinerals: requestedMinerals,
     deposits: {},
+    renewables: {},
   };
   if (!settlement.alive) return empty;
 
   const cells = settlementResourceCatchment(state, settlement);
   const authoritative = cells.some((cell) => cell.naturalResources !== undefined);
   if (!authoritative) return empty;
+
+  const prior = extractionSnapshotFromFlow(settlement, state.month);
+  if (prior) return prior;
+
   for (const cell of cells) advanceRenewablesToMonth(cell, state.month);
 
-  const harvestedWood = harvestTimber(cells, requestedWood);
+  const harvestedWood = harvestRenewableAcross(cells, 'timber', requestedWood);
   const mineralExtraction = extractMinerals(settlement, cells, requestedMinerals);
+  const supplementalRequests = requestedSupplementalRenewables(residents);
+  const renewables: Partial<Record<SupplementalRenewable, number>> = {};
+  for (const kind of SUPPLEMENTAL_RENEWABLES) {
+    const harvested = harvestRenewableAcross(cells, kind, supplementalRequests[kind]);
+    if (harvested > 0) renewables[kind] = harvested;
+  }
+
   reconcilePositiveBalance(settlement, 'wood', harvestedWood);
   reconcilePositiveBalance(settlement, 'minerals', mineralExtraction.total);
+
+  const inventory = ensureMaterialInventory(settlement);
+  if (harvestedWood > 0) recordMaterialExtraction(settlement, 'timber', harvestedWood, state.month);
+  for (const [kind, amount] of Object.entries(mineralExtraction.deposits) as Array<[DepositResourceKind, number | undefined]>) {
+    if (amount && amount > 0) recordMaterialExtraction(settlement, kind as RawMaterialKind, amount, state.month);
+  }
+  for (const kind of SUPPLEMENTAL_RENEWABLES) {
+    const amount = renewables[kind] ?? 0;
+    if (amount > 0) recordMaterialExtraction(settlement, kind, amount, state.month);
+  }
+  inventory.lastExtractionMonth = state.month;
 
   return {
     authoritative: true,
@@ -170,5 +236,6 @@ export function advanceSettlementResourceExtraction(
     requestedMinerals,
     extractedMinerals: mineralExtraction.total,
     deposits: mineralExtraction.deposits,
+    renewables,
   };
 }
