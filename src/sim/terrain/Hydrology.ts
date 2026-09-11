@@ -2,17 +2,30 @@ import type { RawHeightfield } from './Heightfield';
 import { clamp01 } from './noise';
 import { nearestIndex } from './TerrainField';
 import type { WeatherCellState, WorldState } from '../types';
-import { classifyWaterDepth, DANGEROUS_WATER_DEPTH, elevationToY, surfaceHeightAt } from './SurfaceGeometry';
+import { classifyWaterDepth, DANGEROUS_WATER_DEPTH, elevationFromY, elevationToY, surfaceHeightAt } from './SurfaceGeometry';
 
+/** Hard physical guardrail in world units: dynamic floodwater can become dangerous, never mountainous. */
+export const MAX_DYNAMIC_FLOOD_DEPTH = 1.25;
+const FLOOD_PRESENT_DEPTH = 0.005;
+const FLOOD_RELAX_PASSES = 4;
+
+/**
+ * Weather-driven hydrology is intentionally separate from generated rivers and lakes. Permanent
+ * water is frozen in `baseLevel`; transient inundation lives in `terrain.floodDepth` as actual
+ * world-space depth. `terrain.waterLevel` is only the composed surface consumed by legacy systems
+ * and the renderer.
+ */
 export class DynamicHydrology {
   private readonly baseLevel: Float32Array;
   private readonly baseFlow: Float32Array;
   private readonly baseWater: boolean[];
   private readonly runoff: Float32Array;
   private readonly storage: Float32Array;
+  private readonly transfer: Float32Array;
   private readonly cellIndices: Int32Array;
-  private readonly visited: Uint8Array;
   private readonly cellGroundY: Float32Array;
+  private readonly sampleGroundY: Float32Array;
+  private readonly maximumAccumulation: number;
 
   constructor(private readonly world: WorldState) {
     const terrain = world.terrain;
@@ -20,9 +33,15 @@ export class DynamicHydrology {
     this.baseFlow = terrain.flow.slice();
     this.baseWater = world.cells.map((cell) => cell.water);
     this.cellGroundY = Float32Array.from(world.cells, cell => surfaceHeightAt(world, cell.worldX, cell.worldZ));
+    this.sampleGroundY = Float32Array.from(terrain.height, elevation => elevationToY(elevation, world.seaLevel));
     this.runoff = new Float32Array(terrain.height.length);
     this.storage = new Float32Array(terrain.height.length);
-    this.visited = new Uint8Array(terrain.height.length);
+    this.transfer = new Float32Array(terrain.height.length);
+    let maximumAccumulation = 1;
+    if (terrain.drainage) {
+      for (const amount of terrain.drainage.accumulation) maximumAccumulation = Math.max(maximumAccumulation, amount);
+    }
+    this.maximumAccumulation = maximumAccumulation;
     this.cellIndices = Int32Array.from(terrain.height, (_, index) => {
       const worldX = terrain.originX + index % terrain.resolution * terrain.step;
       const worldZ = terrain.originZ + Math.floor(index / terrain.resolution) * terrain.step;
@@ -34,7 +53,10 @@ export class DynamicHydrology {
 
   advance(conditions: readonly WeatherCellState[]): void {
     const { terrain, seaLevel } = this.world;
-    const { drainage, waterLevel, height, resolution, flow } = terrain;
+    const { drainage, waterLevel, floodDepth, height, flow } = terrain;
+
+    // Route catchment runoff downstream, but retain the catchment-average wetness signal. This is
+    // the rainfall/snowmelt forcing; it is not itself a water-surface elevation.
     for (let index = 0; index < height.length; index += 1) this.runoff[index] = conditions[this.cellIndices[index]!]!.runoff;
     if (drainage) {
       for (const index of drainage.order) {
@@ -42,43 +64,60 @@ export class DynamicHydrology {
         if (downstream >= 0) this.runoff[downstream] = this.runoff[downstream]! + this.runoff[index]!;
       }
     }
-    waterLevel.set(this.baseLevel);
-    this.visited.fill(0);
-    const queue = new FloodQueue();
-    for (let index = 0; index < height.length; index += 1) {
-      const inflow = this.runoff[index]! / Math.max(1, drainage?.accumulation[index] ?? 1);
-      this.storage[index] = Math.min(1, this.storage[index]! * 0.65 + inflow);
-      flow[index] = clamp01(this.baseFlow[index]! + this.storage[index]! * 0.35);
-      if (this.baseLevel[index]! < 0 || height[index]! < seaLevel) continue;
-      waterLevel[index] = this.baseLevel[index]! + this.storage[index]! * 0.006 + Math.max(0, this.storage[index]! - 0.12) * 0.1;
-      if (this.storage[index]! > 0.12) queue.push(-waterLevel[index]!, index);
+
+    // Existing floodwater infiltrates and drains between storms instead of retaining a magical
+    // high-altitude sheet. Flood depth is measured locally, so recession cannot inherit upstream altitude.
+    for (let index = 0; index < floodDepth.length; index += 1) {
+      const depth = floodDepth[index]!;
+      if (depth <= 0) continue;
+      const weather = conditions[this.cellIndices[index]!]!;
+      const cell = this.world.cells[this.cellIndices[index]!]!;
+      const drying = 0.003 + weather.temperature * 0.005 + Math.max(0, 0.7 - cell.moisture) * 0.004;
+      floodDepth[index] = Math.max(0, Math.min(MAX_DYNAMIC_FLOOD_DEPTH, depth * 0.82 - drying));
     }
-    while (queue.size > 0) {
-      const index = queue.pop();
-      if (this.visited[index]) continue;
-      this.visited[index] = 1;
-      const surface = waterLevel[index]!;
-      const sourceX = index % resolution;
-      const sourceZ = Math.floor(index / resolution);
-      for (const [offsetX, offsetZ] of NEIGHBOURS) {
-        const nextX = sourceX + offsetX;
-        const nextZ = sourceZ + offsetZ;
-        if (nextX < 0 || nextZ < 0 || nextX >= resolution || nextZ >= resolution) continue;
-        const next = nextZ * resolution + nextX;
-        if (this.visited[next] || height[next]! < seaLevel || height[next]! >= surface - 0.001 || waterLevel[next]! >= surface - 0.000101) continue;
-        waterLevel[next] = surface - 0.0001;
-        queue.push(-waterLevel[next]!, next);
+
+    for (let index = 0; index < height.length; index += 1) {
+      const accumulation = Math.max(1, drainage?.accumulation[index] ?? 1);
+      const inflow = this.runoff[index]! / accumulation;
+      this.storage[index] = Math.min(1, this.storage[index]! * 0.62 + inflow);
+      flow[index] = clamp01(this.baseFlow[index]! + this.storage[index]! * 0.24);
+
+      if (this.baseLevel[index]! < 0 || height[index]! < seaLevel) continue;
+      const threshold = this.bankfullThreshold(index);
+      const excess = this.storage[index]! - threshold;
+      if (excess > 0) this.spillFromChannel(index, excess);
+    }
+
+    // Equalise local hydraulic head in a few cheap monthly passes. Each transfer spends water from
+    // the donor, so a high mountain stream cannot stamp its absolute altitude across a valley.
+    for (let pass = 0; pass < FLOOD_RELAX_PASSES; pass += 1) this.relaxFlood();
+
+    // Compose permanent water, modest channel stage and dynamic floodwater into the canonical
+    // visible surface. Consumers that predate this repair still see one coherent waterLevel field.
+    waterLevel.set(this.baseLevel);
+    for (let index = 0; index < height.length; index += 1) {
+      if (height[index]! < seaLevel) continue;
+      const base = this.baseLevel[index]!;
+      if (base >= 0) {
+        const threshold = this.bankfullThreshold(index);
+        const stageSignal = Math.max(0, this.storage[index]! - threshold * 0.48);
+        const stage = Math.min(0.14, stageSignal * (terrain.lake[index] ? 0.08 : 0.17));
+        if (stage > 0) waterLevel[index] = elevationFromY(elevationToY(base, seaLevel) + stage, seaLevel);
+      } else if (floodDepth[index]! > FLOOD_PRESENT_DEPTH) {
+        waterLevel[index] = elevationFromY(this.sampleGroundY[index]! + floodDepth[index]!, seaLevel);
       }
     }
+
     for (let index = 0; index < this.world.cells.length; index += 1) {
       const cell = this.world.cells[index]!;
       const weather = conditions[index]!;
       const sample = nearestIndex(terrain, cell.worldX, cell.worldZ);
       const level = waterLevel[sample]!;
-      const depth = level < 0 ? 0 : Math.max(0, elevationToY(level, seaLevel) - this.cellGroundY[index]!);
-      weather.waterDepth = depth;
-      weather.floodDepth = this.baseWater[index] || this.baseLevel[sample]! >= 0 ? 0 : depth;
-      weather.floodState = classifyWaterDepth(depth, cell.moisture);
+      const waterDepth = level < 0 ? 0 : Math.max(0, elevationToY(level, seaLevel) - this.cellGroundY[index]!);
+      const dynamicDepth = floodDepth[sample] ?? 0;
+      weather.waterDepth = waterDepth;
+      weather.floodDepth = this.baseWater[index] || this.baseLevel[sample]! >= 0 ? 0 : dynamicDepth;
+      weather.floodState = classifyWaterDepth(Math.max(waterDepth, weather.floodDepth), cell.moisture);
       weather.floodMonths = weather.floodDepth >= DANGEROUS_WATER_DEPTH ? weather.floodMonths + 1 : 0;
       if (weather.floodDepth > 0.02) cell.moisture = Math.max(cell.moisture, 0.9);
       if (weather.floodDepth >= DANGEROUS_WATER_DEPTH) {
@@ -90,9 +129,115 @@ export class DynamicHydrology {
           weather.lastWindthrowMonth = this.world.weather?.month ?? 0;
         }
       }
-      weather.floodRisk = clamp01(this.storage[sample]! * (1 - cell.slope) * 3);
+      weather.floodRisk = clamp01(this.storage[sample]! * (1 - cell.slope) * 2.1 + dynamicDepth / MAX_DYNAMIC_FLOOD_DEPTH * 0.45);
       cell.water = this.baseWater[index]! || weather.floodDepth > 0.035;
       cell.flow = flow[sample]!;
+    }
+  }
+
+  /** Major channels and lakes carry more water before overtopping than small tributaries. */
+  private bankfullThreshold(index: number): number {
+    const drainage = this.world.terrain.drainage;
+    const accumulation = Math.max(1, drainage?.accumulation[index] ?? 1);
+    const hierarchy = Math.log1p(accumulation) / Math.log1p(this.maximumAccumulation);
+    if (this.world.terrain.lake[index]) return 0.48 + hierarchy * 0.08;
+    return 0.24 + hierarchy * 0.22;
+  }
+
+  /**
+   * Convert excess channel wetness into a bounded local volume beside the channel. Only banks that
+   * are actually low enough to overtop receive water; no absolute source elevation is propagated.
+   */
+  private spillFromChannel(index: number, excess: number): void {
+    const { terrain, seaLevel } = this.world;
+    const { resolution, height, floodDepth } = terrain;
+    const base = this.baseLevel[index]!;
+    if (base < 0) return;
+    const sourceX = index % resolution;
+    const sourceZ = Math.floor(index / resolution);
+    const accumulation = Math.max(1, terrain.drainage?.accumulation[index] ?? 1);
+    const hierarchy = Math.log1p(accumulation) / Math.log1p(this.maximumAccumulation);
+    const sourceSurface = elevationToY(base, seaLevel);
+    const overtoppingHead = sourceSurface + 0.05 + Math.min(0.26, excess * 0.38);
+    let weightTotal = 0;
+
+    for (const [dx, dz] of NEIGHBOURS) {
+      const nx = sourceX + dx;
+      const nz = sourceZ + dz;
+      if (nx < 0 || nz < 0 || nx >= resolution || nz >= resolution) continue;
+      const next = nz * resolution + nx;
+      if (height[next]! < seaLevel || this.baseLevel[next]! >= 0) continue;
+      const headroom = overtoppingHead - this.sampleGroundY[next]!;
+      if (headroom <= 0) continue;
+      weightTotal += (0.02 + headroom) / Math.hypot(dx, dz);
+    }
+    if (weightTotal <= 0) return;
+
+    const release = Math.min(0.09, excess * (0.18 + (1 - hierarchy) * 0.08));
+    for (const [dx, dz] of NEIGHBOURS) {
+      const nx = sourceX + dx;
+      const nz = sourceZ + dz;
+      if (nx < 0 || nz < 0 || nx >= resolution || nz >= resolution) continue;
+      const next = nz * resolution + nx;
+      if (height[next]! < seaLevel || this.baseLevel[next]! >= 0) continue;
+      const headroom = overtoppingHead - this.sampleGroundY[next]!;
+      if (headroom <= 0) continue;
+      const weight = (0.02 + headroom) / Math.hypot(dx, dz);
+      floodDepth[next] = Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[next]! + release * weight / weightTotal);
+    }
+  }
+
+  /** One conservative relaxation pass over local water depth. */
+  private relaxFlood(): void {
+    const { terrain, seaLevel } = this.world;
+    const { resolution, height, floodDepth } = terrain;
+    this.transfer.fill(0);
+
+    for (let index = 0; index < floodDepth.length; index += 1) {
+      const depth = floodDepth[index]!;
+      if (depth <= FLOOD_PRESENT_DEPTH || height[index]! < seaLevel || this.baseLevel[index]! >= 0) continue;
+      const sourceX = index % resolution;
+      const sourceZ = Math.floor(index / resolution);
+      const sourceHead = this.sampleGroundY[index]! + depth;
+      let potential = 0;
+
+      for (const [dx, dz] of NEIGHBOURS) {
+        const nx = sourceX + dx;
+        const nz = sourceZ + dz;
+        if (nx < 0 || nz < 0 || nx >= resolution || nz >= resolution) continue;
+        const next = nz * resolution + nx;
+        const destinationHead = height[next]! < seaLevel
+          ? elevationToY(seaLevel, seaLevel)
+          : this.baseLevel[next]! >= 0
+            ? elevationToY(this.baseLevel[next]!, seaLevel)
+            : this.sampleGroundY[next]! + floodDepth[next]!;
+        const drop = (sourceHead - destinationHead) / Math.hypot(dx, dz);
+        if (drop > 0.004) potential += drop;
+      }
+      if (potential <= 0) continue;
+
+      const movable = Math.min(depth * 0.42, potential * 0.08);
+      for (const [dx, dz] of NEIGHBOURS) {
+        const nx = sourceX + dx;
+        const nz = sourceZ + dz;
+        if (nx < 0 || nz < 0 || nx >= resolution || nz >= resolution) continue;
+        const next = nz * resolution + nx;
+        const destinationHead = height[next]! < seaLevel
+          ? elevationToY(seaLevel, seaLevel)
+          : this.baseLevel[next]! >= 0
+            ? elevationToY(this.baseLevel[next]!, seaLevel)
+            : this.sampleGroundY[next]! + floodDepth[next]!;
+        const drop = (sourceHead - destinationHead) / Math.hypot(dx, dz);
+        if (drop <= 0.004) continue;
+        const amount = movable * drop / potential;
+        this.transfer[index] -= amount;
+        // Permanent rivers/lakes and the ocean are drainage sinks, not duplicate flood layers.
+        if (height[next]! >= seaLevel && this.baseLevel[next]! < 0) this.transfer[next] += amount;
+      }
+    }
+
+    for (let index = 0; index < floodDepth.length; index += 1) {
+      floodDepth[index] = Math.max(0, Math.min(MAX_DYNAMIC_FLOOD_DEPTH, floodDepth[index]! + this.transfer[index]!));
     }
   }
 }
