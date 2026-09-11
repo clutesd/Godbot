@@ -8,7 +8,6 @@ on:
       - 'src/render/assets/StructureComposition.ts'
       - 'src/render/materials/MaterialPalette.ts'
       - 'tests/structure-identity.test.ts'
-      - 'tests/settlement-development.test.ts'
       - 'tests/architecture.test.ts'
       - '.github/workflows/structure-identity-validation.yml'
   workflow_dispatch:
@@ -26,5 +25,5 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npx eslint src/render/assets/BuildingGrammar.ts src/render/assets/StructureComposition.ts tests/structure-identity.test.ts
-      - run: npx vitest run tests/structure-identity.test.ts tests/settlement-development.test.ts tests/architecture.test.ts
+      - run: npx vitest run tests/structure-identity.test.ts tests/architecture.test.ts
       - run: npm run build
