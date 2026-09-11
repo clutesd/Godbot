@@ -1,4 +1,4 @@
-import { practical } from '../knowledge/KnowledgeSystem';
+import { capabilityPractice } from '../knowledge/CapabilityContract';
 import type { Settlement, War } from '../types';
 
 export type MilitaryRegime =
@@ -77,31 +77,37 @@ function equipmentThreshold(equipment: MilitaryEquipment, score: number, thresho
  * fuel, factories and grids. This makes advanced capability strong but materially conditional.
  */
 export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilityProfile {
-  const fire = practical(settlement, 'fire-control');
-  const stone = practical(settlement, 'stone-composites');
-  const leverage = practical(settlement, 'leverage');
-  const wheel = practical(settlement, 'wheel-axle');
-  const iron = practical(settlement, 'iron-working');
-  const records = practical(settlement, 'durable-records');
-  const administration = practical(settlement, 'civic-administration');
-  const precision = practical(settlement, 'precision-tools');
-  const standardized = practical(settlement, 'standardized-parts');
-  const chemistry = practical(settlement, 'chemical-reactions');
-  const industrialChemistry = practical(settlement, 'industrial-chemistry');
-  const precisionManufacturing = practical(settlement, 'precision-manufacturing');
-  const mechanical = practical(settlement, 'mechanical-power');
-  const improvedRoads = practical(settlement, 'improved-roads');
-  const rail = practical(settlement, 'rail-transport');
-  const combustion = practical(settlement, 'internal-combustion');
-  const electricalGeneration = practical(settlement, 'electrical-generation');
-  const electricGrid = practical(settlement, 'electric-grid');
-  const massCommunication = practical(settlement, 'mass-communication');
-  const computation = practical(settlement, 'computation');
-  const automation = practical(settlement, 'automation');
-  const aviation = practical(settlement, 'aviation');
-  const rocketry = practical(settlement, 'rocketry');
-  const satelliteSystems = practical(settlement, 'satellite-systems');
-  const nuclearEnergy = practical(settlement, 'nuclear-energy');
+  // Small-scale craft can matter while still experimental; repeatable equipment requires local
+  // adoption; networked/industrial military effects require society-level transformation.
+  const experimental = (id: string): number => capabilityPractice(settlement, id, 'experimental');
+  const adopted = (id: string): number => capabilityPractice(settlement, id, 'adopted');
+  const transformed = (id: string): number => capabilityPractice(settlement, id, 'transformed');
+
+  const fire = experimental('fire-control');
+  const stone = experimental('stone-composites');
+  const leverage = experimental('leverage');
+  const wheel = adopted('wheel-axle');
+  const iron = adopted('iron-working');
+  const records = adopted('durable-records');
+  const administration = adopted('civic-administration');
+  const precision = adopted('precision-tools');
+  const standardized = transformed('standardized-parts');
+  const chemistry = adopted('chemical-reactions');
+  const industrialChemistry = transformed('industrial-chemistry');
+  const precisionManufacturing = transformed('precision-manufacturing');
+  const mechanical = adopted('mechanical-power');
+  const improvedRoads = adopted('improved-roads');
+  const rail = transformed('rail-transport');
+  const combustion = transformed('internal-combustion');
+  const electricalGeneration = transformed('electrical-generation');
+  const electricGrid = transformed('electric-grid');
+  const massCommunication = transformed('mass-communication');
+  const computation = transformed('computation');
+  const automation = transformed('automation');
+  const aviation = transformed('aviation');
+  const rocketry = transformed('rocketry');
+  const satelliteSystems = transformed('satellite-systems');
+  const nuclearEnergy = transformed('nuclear-energy');
 
   const food = stock(settlement.resources.food, 70);
   const wood = stock(settlement.resources.wood, 45);

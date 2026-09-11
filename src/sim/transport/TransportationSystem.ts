@@ -1,5 +1,5 @@
 import { createSettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
-import { practical } from '../knowledge/KnowledgeSystem';
+import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { stableHash } from '../prng';
 import { surfaceHeightAt, surfaceWaterAt } from '../terrain/SurfaceGeometry';
@@ -45,7 +45,9 @@ export class TransportationSystem {
         const a = state.settlements.find(s => s.id === route.a);
         const b = state.settlements.find(s => s.id === route.b);
         if (!a?.alive || !b?.alive) continue;
-        if (practical(a, 'rail-transport') > 0.34 && practical(b, 'rail-transport') > 0.34
+        const railA = capabilityPractice(a, 'rail-transport', 'transformed');
+        const railB = capabilityPractice(b, 'rail-transport', 'transformed');
+        if (railA > 0.34 && railB > 0.34
           && Math.min(a.infrastructure.rail, b.infrastructure.rail) > 0.16 && route.volume > 0.5) {
           this.addUpgrade(route, a, b, 'rail');
         }
@@ -112,7 +114,7 @@ export class TransportationSystem {
     if (!shipment) return undefined;
     const path = transport.path;
     const reverse = shipment.source.id === b.id;
-    const mode = path.mode === 'road' && practical(shipment.source, 'wheel-axle') < 0.22 ? 'walk' : path.mode;
+    const mode = path.mode === 'road' && capabilityPractice(shipment.source, 'wheel-axle', 'adopted') < 0.22 ? 'walk' : path.mode;
     shipment.source.resources[shipment.resource] -= shipment.quantity;
     transport.trip = {
       id: `${route.id}:freight:${this.state.month}`, origin: shipment.source.id, destination: shipment.target.id,
@@ -139,7 +141,9 @@ export class TransportationSystem {
     this.retries.set(retryKey, this.state.month + 120);
     const stops = [this.stop(a, mode), this.stop(b, mode)];
     if (!stops[0] || !stops[1]) return undefined;
-    const bridgeCapability = mode !== 'water' && practical(a, 'improved-roads') > 0.28 && practical(b, 'improved-roads') > 0.28
+    const bridgeCapability = mode !== 'water'
+      && capabilityPractice(a, 'improved-roads', 'adopted') > 0.28
+      && capabilityPractice(b, 'improved-roads', 'adopted') > 0.28
       && Math.min(a.resources.wealth, b.resources.wealth) > 12;
     const edges = this.planner.plan(stops[0].position, stops[1].position, mode, this.state.transportation, bridgeCapability);
     if (!edges.length) return undefined;
@@ -192,7 +196,8 @@ export class TransportationSystem {
     const b = this.state.settlements.find(s => s.id === project.b);
     if (!a?.alive || !b?.alive || Math.min(a.foodSecurity, b.foodSecurity) < 0.35) return;
     if (project.reason === 'trade' && !this.state.tradeRoutes.some(r => r.active && r.transport?.projectIds.includes(project.id))) return;
-    if (project.mode === 'rail' && Math.min(practical(a, 'rail-transport'), practical(b, 'rail-transport')) <= 0.34) return;
+    if (project.mode === 'rail'
+      && Math.min(capabilityPractice(a, 'rail-transport', 'transformed'), capabilityPractice(b, 'rail-transport', 'transformed')) <= 0.34) return;
     if (project.mode === 'water' && (!this.canShip(a) || !this.canShip(b))) return;
     let work = 0.22 + Math.min(a.prosperity, b.prosperity) * 0.28;
     let cursor = project.from;
@@ -207,7 +212,8 @@ export class TransportationSystem {
       if (segment.from !== cursor && segment.to !== cursor) return;
       const survey = surveyEdge(this.state.world, segment.points[0]!, segment.points[segment.points.length - 1]!, segment.mode, segment.kind === 'bridge');
       if (!survey) return;
-      if (segment.kind === 'bridge' && Math.min(practical(a, 'improved-roads'), practical(b, 'improved-roads')) <= 0.28) return;
+      if (segment.kind === 'bridge'
+        && Math.min(capabilityPractice(a, 'improved-roads', 'adopted'), capabilityPractice(b, 'improved-roads', 'adopted')) <= 0.28) return;
       const minerals = project.mode === 'rail' ? 0.65 : segment.kind === 'bridge' ? 0.4 : 0.05;
       const amount = Math.min(work, segment.cost - segment.work, a.resources.wealth, a.resources.wood / 0.3, a.resources.minerals / minerals);
       if (amount <= 0.0001) return;
@@ -245,6 +251,6 @@ export class TransportationSystem {
   }
 
   private canShip(settlement: Settlement): boolean {
-    return settlement.infrastructure.ports > 0.12 && practical(settlement, 'buoyancy-currents') > 0.25;
+    return settlement.infrastructure.ports > 0.12 && capabilityPractice(settlement, 'buoyancy-currents', 'adopted') > 0.25;
   }
 }

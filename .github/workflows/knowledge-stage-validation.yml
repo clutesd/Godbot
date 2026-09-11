@@ -1,0 +1,28 @@
+name: Knowledge stage validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/sim/knowledge/CapabilityContract.ts'
+      - 'src/sim/transport/TransportationSystem.ts'
+      - 'src/sim/war/MilitaryCapability.ts'
+      - 'tests/knowledge-stage-contract.test.ts'
+      - 'tests/knowledge.test.ts'
+      - '.github/workflows/knowledge-stage-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx eslint src/sim/knowledge/CapabilityContract.ts src/sim/transport/TransportationSystem.ts src/sim/war/MilitaryCapability.ts tests/knowledge-stage-contract.test.ts
+      - run: npx vitest run tests/knowledge-stage-contract.test.ts tests/knowledge.test.ts
+      - run: npm run build
