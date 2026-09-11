@@ -67,7 +67,7 @@ export class DynamicHydrology {
       const cellX = Math.max(0, Math.min(world.size - 1, Math.round(worldX / world.cellSize + world.size / 2)));
       const cellZ = Math.max(0, Math.min(world.size - 1, Math.round(worldZ / world.cellSize + world.size / 2)));
       const cellIndex = cellZ * world.size + cellX;
-      this.samplesPerCell[cellIndex]!++;
+      this.samplesPerCell[cellIndex] = (this.samplesPerCell[cellIndex] ?? 0) + 1;
       return cellIndex;
     });
     for (let index = 0; index < terrain.height.length; index += 1) {
@@ -100,7 +100,7 @@ export class DynamicHydrology {
       const cellIndex = this.cellIndices[index]!;
       const localRunoff = Math.max(0, conditions[cellIndex]?.runoff ?? 0) / Math.max(1, this.samplesPerCell[cellIndex]!);
       runoffInput += localRunoff;
-      let available = this.storage[index]! + this.incoming[index]! + localRunoff;
+      const available = this.storage[index]! + this.incoming[index]! + localRunoff;
 
       if (height[index]! < seaLevel) {
         outletLoss += available;
@@ -120,7 +120,7 @@ export class DynamicHydrology {
       maxDischarge = Math.max(maxDischarge, outflow);
 
       const downstream = drainage?.downstream[index] ?? -1;
-      if (downstream >= 0) this.incoming[downstream] += outflow;
+      if (downstream >= 0) this.incoming[downstream] = this.incoming[downstream]! + outflow;
       else outletLoss += outflow;
     }
 
@@ -248,8 +248,8 @@ export class DynamicHydrology {
           const capacity = Math.max(0, (sourceSurface - height[next]!) / STORAGE_TO_STAGE - this.storage[next]!);
           if (capacity <= 1e-9) continue;
           const transfer = Math.min(excess, capacity);
-          this.storage[index] -= transfer;
-          this.storage[next] += transfer;
+          this.storage[index] = this.storage[index]! - transfer;
+          this.storage[next] = this.storage[next]! + transfer;
           this.flooded[next] = 1;
           excess -= transfer;
           moved = true;
