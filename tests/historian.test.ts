@@ -82,18 +82,23 @@ describe('Historian grounding', () => {
   });
 
   it('labels uncertainty and records predictions for later calibration', () => {
-    for (const war of simulation.state.wars) war.active = false;
-    const living = new Set(simulation.state.settlements.filter((settlement) => settlement.alive).map((settlement) => settlement.id));
-    const relation = simulation.state.relations.find((candidate) => living.has(candidate.a) && living.has(candidate.b));
-    if (!relation) throw new Error('Expected a relation between living settlements');
+    // Use a fresh, living multi-settlement world so this test measures inference grounding rather
+    // than depending on whether a 120-year integration fixture happened to retain two survivors.
+    const inferenceSimulation = new Simulation({ seed: 'historian-inference', startingPopulation: 180, settlementCount: [4, 4] });
+    const inferenceHistorian = new Historian(inferenceSimulation.config);
+    for (const war of inferenceSimulation.state.wars) war.active = false;
+    const living = new Set(inferenceSimulation.state.settlements.filter((settlement) => settlement.alive).map((settlement) => settlement.id));
+    const relation = inferenceSimulation.state.relations.find((candidate) => living.has(candidate.a) && living.has(candidate.b));
+    expect(relation).toBeDefined();
+    if (!relation) return;
     relation.contact = true;
     relation.hostility = 1;
     relation.territorialTension = 1;
     relation.grievances = 1;
-    const inference = historian.candidates(simulation.state).find((candidate) => candidate.statement.epistemicStatus === 'probabilistic-inference');
+    const inference = inferenceHistorian.candidates(inferenceSimulation.state).find((candidate) => candidate.statement.epistemicStatus === 'probabilistic-inference');
     expect(inference).toBeDefined();
-    expect(inference && historian.validateStatement(inference.statement, simulation.state)).toBe(true);
-    expect(historian.predictions.some((prediction) => prediction.sourceEntityIds.includes(relation.id) && !prediction.resolved)).toBe(true);
+    expect(inference && inferenceHistorian.validateStatement(inference.statement, inferenceSimulation.state)).toBe(true);
+    expect(inferenceHistorian.predictions.some((prediction) => prediction.sourceEntityIds.includes(relation.id) && !prediction.resolved)).toBe(true);
   });
 });
 
@@ -126,7 +131,11 @@ describe('Presentation independence', () => {
     const director = new PresentationDirector(simulation.config);
     director.update(1, simulation.state, { kind: 'settlement-approach', interest: 0.95 });
     expect(director.mode).toBe('city-life');
-    expect(director.targetSpeed(simulation.state, { kind: 'settlement-approach', interest: 0.95 })).toBe(simulation.config.presentation.ordinaryMonthsPerSecond);
+    const speed = director.targetSpeed(simulation.state, { kind: 'settlement-approach', interest: 0.95 });
+    // High-interest city life may receive an anticipatory slowdown, but without an event it must
+    // stay above the major-event pace and never accelerate beyond ordinary observation.
+    expect(speed).toBeGreaterThan(simulation.config.presentation.significantMonthsPerSecond);
+    expect(speed).toBeLessThanOrEqual(simulation.config.presentation.ordinaryMonthsPerSecond);
   });
 
   it('keeps authoritative history identical across documentary and accelerated presentation presets', () => {
