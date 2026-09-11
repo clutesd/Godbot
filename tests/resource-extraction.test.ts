@@ -24,6 +24,7 @@ function emptyCatchment(sim: Simulation, settlementIndex = 0) {
     const resources = cell.naturalResources;
     if (!resources) continue;
     resources.renewables.timber.stock = 0;
+    resources.lastRegeneratedMonth = 1;
     for (const kind of depositKinds) {
       const deposit = resources.deposits[kind];
       if (deposit) deposit.reserve = 0;
