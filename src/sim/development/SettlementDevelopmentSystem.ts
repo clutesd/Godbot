@@ -1,5 +1,15 @@
 import type { Culture, Institution, InstitutionKind, Person, ResourceStock, Settlement, SimulationState, StructurePlot, TradeRoute } from '../types';
 import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
+import { materialAmount } from '../resources/MaterialEconomy';
+import {
+  advanceSettlementMaterialUse,
+  consumeConstructionMaterials,
+  hasMaterialAuthority,
+  materialRequirementCoverage,
+  maxMaterialProgressIncrement,
+  structureMaterialRequirements,
+  type FlexibleMaterialRequirement,
+} from '../resources/MaterialUse';
 import { advanceSettlementResourceExtraction } from '../resources/SettlementResourceExtraction';
 import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
@@ -107,10 +117,15 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
 
 function materialFor(c: DevelopmentContext, level: number): StructureMaterial {
   const s = c.settlement;
-  if (level === 3 && practical(s, 'iron-working') > 0.45 && practical(s, 'precision-tools') > 0.35 && s.resources.minerals > 32 && s.resources.wood > 12) return 'metal';
-  if (practical(s, 'leverage') > 0.25 && practical(s, 'stone-composites') > 0.3 && s.resources.minerals > 12 && (c.localMinerals > c.localWood || c.culture.dimensions.longTermOrientation > 0.7)) return 'masonry';
-  if (practical(s, 'pottery-firing') > 0.3 && practical(s, 'fire-control') > 0.2 && s.resources.minerals > 8 && s.resources.wood > 6 && c.localWood < 0.5) return 'ceramic';
-  return (c.localWood > 0.25 || c.routes > 0) && s.resources.wood > 8 ? 'timber' : 'earth';
+  const typed = hasMaterialAuthority(s);
+  const timberAvailable = !typed || materialAmount(s, 'timber') + materialAmount(s, 'lumber') > 1;
+  const masonryAvailable = !typed || materialAmount(s, 'stone') + materialAmount(s, 'brick') > 2;
+  const ceramicAvailable = !typed || materialAmount(s, 'brick') > 2;
+  const metalAvailable = !typed || materialAmount(s, 'steel') + materialAmount(s, 'iron') + materialAmount(s, 'bronze') > 1.5;
+  if (level === 3 && metalAvailable && practical(s, 'iron-working') > 0.45 && practical(s, 'precision-tools') > 0.35 && s.resources.minerals > 32 && s.resources.wood > 12) return 'metal';
+  if (masonryAvailable && practical(s, 'leverage') > 0.25 && practical(s, 'stone-composites') > 0.3 && s.resources.minerals > 12 && (c.localMinerals > c.localWood || c.culture.dimensions.longTermOrientation > 0.7)) return 'masonry';
+  if (ceramicAvailable && practical(s, 'pottery-firing') > 0.3 && practical(s, 'fire-control') > 0.2 && s.resources.minerals > 8 && s.resources.wood > 6 && c.localWood < 0.5) return 'ceramic';
+  return timberAvailable && (c.localWood > 0.25 || c.routes > 0) && s.resources.wood > 8 ? 'timber' : 'earth';
 }
 
 /** Capability requirements attach to a response, never to a world-era counter. */
@@ -283,12 +298,19 @@ function historyEvent(settlement: Settlement, plot: StructurePlot, record: Struc
     tags: ['settlement-development', record.need, record.action], summary: `${settlement.name}: ${record.name} ${record.action}.` };
 }
 
+function scaleRequirements(requirements: FlexibleMaterialRequirement[], factor: number): FlexibleMaterialRequirement[] {
+  return requirements.map(requirement => ({ ...requirement, amount: requirement.amount * factor }));
+}
+
 /** One evaluation per year, one funded project at a time, no random draws. */
 export function advanceSettlementDevelopment(state: SimulationState, settlement: Settlement, residents: Person[], workRate: number): KnowledgeEventDraft[] {
   initializeSettlementDevelopment(state, settlement, residents);
   const dev = settlement.development!;
   const events: KnowledgeEventDraft[] = [];
-  if (settlement.alive) advanceSettlementResourceExtraction(state, settlement);
+  if (settlement.alive) {
+    advanceSettlementResourceExtraction(state, settlement, residents);
+    advanceSettlementMaterialUse(state, settlement, residents);
+  }
   events.push(...advanceSettlementWater(state, settlement, residents));
   if (dev.project && !settlement.alive) abandonProject();
   function abandonProject(): void {
@@ -360,6 +382,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         if (!response) continue;
         let plot = ancestor && response.level > ancestor.development!.level ? ancestor : undefined;
         let action: StructureHistoryEntry['action'] = plot ? (response.form === plot.development!.form ? 'expanded' : 'upgraded') : 'founded';
+        let materialScale = 1;
         if (!plot) {
           response = responseForNeed(c, need)!;
           // Adapt a dormant building or a redundant communal hall before claiming new ground.
@@ -368,16 +391,19 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
           if (plot) action = plot.development!.status === 'active' ? 'repurposed' : 'reused';
         }
         if (plot) {
+          materialScale = 0.5 + (1 - plot.condition) * 0.5;
           const cost = { ...response.cost };
-          for (const key of STOCK_KEYS) cost[key] *= 0.5 + (1 - plot.condition) * 0.5;
+          for (const key of STOCK_KEYS) cost[key] *= materialScale;
           response = { ...response, cost };
         }
         const fuelReserve = response.need === 'energy' || response.level === 3 && ['food', 'manufacturing'].includes(response.need) ? 12 : 0;
         if (!STOCK_KEYS.every(key => settlement.resources[key] >= response.cost[key] + (key === 'wood' ? fuelReserve : 0)) || c.builders === 0) continue;
+        const materialRequirements = scaleRequirements(structureMaterialRequirements(response), materialScale);
+        if (hasMaterialAuthority(settlement) && materialRequirementCoverage(settlement, materialRequirements) < 0.08) continue;
         if (plot && !validPlot(state, plot)) continue;
         plot ??= reserveStructurePlot(state, settlement, districtForResponse(response));
         if (!plot) continue;
-        dev.project = { plotId: plot.id, response, action, startedMonth: state.month, progress: 0, spent: stock() };
+        dev.project = { plotId: plot.id, response, action, startedMonth: state.month, progress: 0, spent: stock(), materialRequirements, materialSpent: {} };
         dev.revision++; break;
       }
       dev.nextAttemptMonth = state.month + 12;
@@ -396,9 +422,11 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     if (!plot || plot.fire || !supported || supported.level < project.response.level || patronLost || materialLost || (plot.floodDepth ?? 0) > 0.06) {
       if (state.month - project.startedMonth > 120) abandonProject();
     } else if (workRate > 0) {
-      const progress = Math.min(1 - project.progress, workRate / project.response.labor,
-        ...STOCK_KEYS.filter(key => project.response.cost[key] > 0).map(key => settlement.resources[key] / project.response.cost[key]));
+      const physicalLimit = project.materialRequirements ? maxMaterialProgressIncrement(settlement, project.materialRequirements) : 1;
+      const progress = Math.max(0, Math.min(1 - project.progress, workRate / project.response.labor, physicalLimit,
+        ...STOCK_KEYS.filter(key => project.response.cost[key] > 0).map(key => settlement.resources[key] / project.response.cost[key])));
       if (project.progress + progress >= 1 - 1e-8 && !validPlot(state, plot)) return events;
+      consumeConstructionMaterials(settlement, project, progress, state.month);
       for (const key of STOCK_KEYS) {
         const payment = progress * project.response.cost[key];
         settlement.resources[key] = Math.max(0, settlement.resources[key] - payment); project.spent[key] += payment;
