@@ -15,6 +15,7 @@ import { resolveBuildingGrammar, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentResponse } from '../../sim/development/types';
+import { heritageFingerprint } from './StructureHeritage';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -424,11 +425,13 @@ export class AssetBuilder {
   }
 
   /**
-   * Generate cache key
+   * Generate cache key. Historical building fabric is part of identity: two present-day halls
+   * with different origins or reuse histories must not collapse onto the same cached geometry.
    */
   private getCacheKey(type: AssetType, config: AssetConfig): string {
     const d = config.development;
-    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}`;
+    const history = type === 'building' ? heritageFingerprint(d) : 'na';
+    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}`;
   }
 
   /**
