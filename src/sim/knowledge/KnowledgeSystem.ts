@@ -185,7 +185,7 @@ export class KnowledgeSystem {
     const events: KnowledgeEventDraft[] = [];
     const previous = settlement.infrastructure.archives;
     settlement.infrastructure.archives = clamp(previous - severity * 0.55);
-    settlement.knowledge.preservation = clamp(0.07 + settlement.knowledge.literacy * 0.5 + settlement.infrastructure.archives * 0.34);
+    settlement.knowledge.preservation = clamp(settlement.knowledge.preservation - severity * 0.24);
     if (previous > 0.12 && settlement.infrastructure.archives < previous * 0.62) {
       events.push({
         type: 'archive-destroyed', location: settlement.position, locationId: settlement.id, actors: [settlement.id], causes: [reason],
