@@ -6,7 +6,7 @@ import { MaterialPalette, type Era } from '../materials/MaterialPalette';
 import { BUILD_STAGE, composeBuilding } from './BuildingComposer';
 import { developmentBuildingRole, resolveBuildingGrammar } from './BuildingGrammar';
 import { buildStructureComponentManifest } from './StructureComponents';
-import { AssetBuilder } from './AssetBuilder';
+import type { AssetBuilder } from './AssetBuilder';
 
 export interface ArchitectureGalleryCase {
   id: string;
