@@ -1,5 +1,6 @@
 import type { GodboxConfig } from '../config';
 import { SeededRandom } from './prng';
+import { createCellResourceState } from './resources/WorldResources';
 import { computeRockiness, synthesizeHeightfield } from './terrain/Heightfield';
 import { carveChannels, computeHydrology, enforceChannelDescent, type Hydrology } from './terrain/Hydrology';
 import { detectLandmarks } from './terrain/Landmarks';
@@ -199,7 +200,10 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
         rockiness: sample.rockiness,
         landform: landformFor(elevation, sample.slope, sample.relief, sample.flow, seaLevel, mountainLevel),
       };
-      cells.push({ ...base, biome: biomeFor(base, mountainLevel) });
+      const biome = biomeFor(base, mountainLevel);
+      const cell = { ...base, biome } as WorldCell;
+      cell.naturalResources = createCellResourceState(config.seed, cell, resourceAbundance);
+      cells.push(cell);
     }
   }
 
