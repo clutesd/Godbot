@@ -27,6 +27,21 @@ export function elevationToY(elevation: number, seaLevel: number): number {
   return (elevation - seaLevel) * 17.5 + alpine ** 1.45 * 8.5;
 }
 
+/**
+ * Inverse of `elevationToY`, used when a world-space flood depth must be projected back into the
+ * canonical water-level field. Bisection is deterministic and only used on wet dynamic samples.
+ */
+export function elevationFromY(worldY: number, seaLevel: number): number {
+  let low = seaLevel - 0.25;
+  let high = 1.5;
+  for (let iteration = 0; iteration < 18; iteration += 1) {
+    const middle = (low + high) * 0.5;
+    if (elevationToY(middle, seaLevel) < worldY) low = middle;
+    else high = middle;
+  }
+  return (low + high) * 0.5;
+}
+
 export function surfaceHeightAt(world: WorldState, x: number, z: number): number {
   const elevation = sampleField(world.terrain, world.terrain.height, x, z);
   const grain = elevation < world.seaLevel ? 0 : (fbmSeeded(grainSeeds, x * 0.42, z * 0.42) - 0.5)
