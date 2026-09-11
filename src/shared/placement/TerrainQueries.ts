@@ -11,6 +11,7 @@
 
 import type { Biome, WorldCell, WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
+import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../../sim/terrain/SurfaceGeometry';
 import { waterAt } from '../../sim/transport/TerrainTraversal';
 import * as THREE from 'three';
 
@@ -52,7 +53,7 @@ export class TerrainQueries {
       const cell = cellAt(this.world, worldX, worldZ);
       if (cell) {
         cached.water = waterAt(this.world, { x: worldX, z: worldZ }, cell);
-        cached.shallow = cell.water && !this.isDeepWater(cell);
+        cached.shallow = cached.water && !this.isDeepWater(worldX, worldZ);
         cached.moisture = cell.moisture;
       }
       return cached;
@@ -60,13 +61,14 @@ export class TerrainQueries {
 
     const cell = cellAt(this.world, worldX, worldZ);
     if (!cell) return null;
+    const water = waterAt(this.world, { x: worldX, z: worldZ }, cell);
 
     const properties: TerrainProperties = {
       elevation: cell.elevation,
       slope: this.calculateSlope(cell),
       maxSlope: this.calculateMaxSlope(cell),
-      water: waterAt(this.world, { x: worldX, z: worldZ }, cell),
-      shallow: cell.water && !this.isDeepWater(cell),
+      water,
+      shallow: water && !this.isDeepWater(worldX, worldZ),
       biome: cell.biome,
       distanceToCoast: cell.coast ? -cell.elevation * 100 : this.distanceToCoastFrom(cell),
       riverNearby: this.riverNearby(cell),
@@ -93,9 +95,10 @@ export class TerrainQueries {
     for (let dx = -radius; dx <= radius; dx += stepSize) {
       for (let dz = -radius; dz <= radius; dz += stepSize) {
         if (Math.sqrt(dx * dx + dz * dz) > radius) continue;
-
-        const cell = cellAt(this.world, worldX + dx, worldZ + dz);
-        if (cell && !cell.water) {
+        const sampleX = worldX + dx;
+        const sampleZ = worldZ + dz;
+        const cell = cellAt(this.world, sampleX, sampleZ);
+        if (cell && !waterAt(this.world, { x: sampleX, z: sampleZ }, cell)) {
           slopeSum += this.calculateSlope(cell);
           sampleCount += 1;
         }
@@ -137,8 +140,7 @@ export class TerrainQueries {
   getWaterMask(worldX: number, worldZ: number): boolean {
     const cell = cellAt(this.world, worldX, worldZ);
     if (!cell) return true; // Outside bounds = unsafe
-
-    return cell.water && this.isDeepWater(cell);
+    return waterAt(this.world, { x: worldX, z: worldZ }, cell);
   }
 
   /**
@@ -154,21 +156,15 @@ export class TerrainQueries {
     const east = (cell.x < size - 1 ? this.world.cells[cell.z * size + (cell.x + 1)] : cell) ?? cell;
     const west = (cell.x > 0 ? this.world.cells[cell.z * size + (cell.x - 1)] : cell) ?? cell;
 
-    // Finite differences
     const dx = (east.elevation - west.elevation) * cellSize;
     const dz = (south.elevation - north.elevation) * cellSize;
-
-    // Cross product to get normal (dx, dz, cellSize)
     const normal = new THREE.Vector3(-dx, cellSize * 2, -dz);
     return normal.normalize();
   }
 
-  /**
-   * True if this cell is deep water (not fordable)
-   */
-  private isDeepWater(cell: WorldCell): boolean {
-    // Water cells with low habitability are too deep for fords
-    return cell.water && cell.elevation < 0.05;
+  /** True when exact local water depth is unsafe rather than merely shallow/wet. */
+  private isDeepWater(worldX: number, worldZ: number): boolean {
+    return waterDepthAt(this.world, worldX, worldZ) >= DANGEROUS_WATER_DEPTH;
   }
 
   /**
@@ -186,8 +182,6 @@ export class TerrainQueries {
     const cellSize = this.world.cellSize;
 
     let maxSlopeDelta = 0;
-
-    // Check 4 cardinal neighbors
     const neighbors = [
       [cell.x - 1, cell.z, 'west'],
       [cell.x + 1, cell.z, 'east'],
@@ -217,8 +211,6 @@ export class TerrainQueries {
     const cellSize = this.world.cellSize;
 
     let maxSlope = 0;
-
-    // Check 8 directions (including diagonals)
     const offsets = [
       [-1, -1],
       [0, -1],
@@ -254,8 +246,7 @@ export class TerrainQueries {
     if (cell.coast) return -1;
 
     let minDistance = Infinity;
-    const searchRadius = 15; // cell grid radius
-
+    const searchRadius = 15;
     for (let dz = -searchRadius; dz <= searchRadius; dz++) {
       for (let dx = -searchRadius; dx <= searchRadius; dx++) {
         const nx = cell.x + dx;
@@ -263,9 +254,7 @@ export class TerrainQueries {
         if (nx >= 0 && nx < this.world.size && nz >= 0 && nz < this.world.size) {
           const neighbor = this.world.cells[nz * this.world.size + nx];
           if (!neighbor) continue;
-          if (neighbor.coast) {
-            minDistance = Math.min(minDistance, Math.hypot(dx, dz) * this.world.cellSize);
-          }
+          if (neighbor.coast) minDistance = Math.min(minDistance, Math.hypot(dx, dz) * this.world.cellSize);
         }
       }
     }
@@ -274,7 +263,7 @@ export class TerrainQueries {
   }
 
   /**
-   * True if river is nearby (within a few cells)
+   * True if river is nearby (within a few cells). This remains a coarse descriptor by design.
    */
   private riverNearby(cell: WorldCell): boolean {
     if (cell.river) return true;
@@ -295,17 +284,12 @@ export class TerrainQueries {
     return false;
   }
 
-  /**
-   * Clear caches (call after world changes or periodically)
-   */
+  /** Clear caches (call after world changes or periodically). */
   clearCaches(): void {
     this.cellCache.clear();
     this.propertiesCache.clear();
   }
 
-  /**
-   * Dispose resources
-   */
   dispose(): void {
     this.clearCaches();
   }

@@ -4,6 +4,7 @@ import type { Settlement, TradeRoute, Vec2, WorldCell, WorldState } from '../src
 import { createTransportationState, type NetworkMode } from '../src/sim/transport/types';
 import { RoutePlanner, type PlannedEdge } from '../src/sim/transport/RoutePlanner';
 import { edgeKey, fineSegmentDry, gradeLimit, navigableAt, pointKey, surveyEdge, waterAt } from '../src/sim/transport/TerrainTraversal';
+import { nearestIndex } from '../src/sim/terrain/TerrainField';
 import { gradeViolations, pathLength, positionAlongPath, TransportNetwork } from '../src/sim/transport/TransportNetwork';
 import { TransportationSystem } from '../src/sim/transport/TransportationSystem';
 import { transportRibbon } from '../src/render/transport/TransportGeometry';
@@ -11,6 +12,13 @@ import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 
 const point = (x: number, z: number): Vec2 => ({ x: (x - 6.5) * 2, z: (z - 6.5) * 2 });
+
+function setFloodedAt(world: WorldState, p: Vec2, flooded: boolean): void {
+  const index = nearestIndex(world.terrain, p.x, p.z);
+  world.terrain.waterLevel[index] = flooded
+    ? Math.max(world.seaLevel, world.terrain.height[index]!) + 0.01
+    : -1;
+}
 
 /** Small deterministic worlds whose lake, ridge/pass and river are evident from the coordinates. */
 function testWorld(kind: 'flat' | 'lake' | 'ridge' | 'river' = 'flat'): WorldState {
@@ -90,9 +98,7 @@ describe('Geography-aware transportation', () => {
     expect(check).toHaveBeenCalledTimes(1);
     cached.x += 100;
     expect(walking.nearestWalkable(origin, 'shared-home')).toEqual(first);
-    const cellX = Math.round(first.x / world.cellSize + world.size / 2);
-    const cellZ = Math.round(first.z / world.cellSize + world.size / 2);
-    world.cells[cellZ * world.size + cellX]!.water = true;
+    setFloodedAt(world, first, true);
     world.environmentRevision!++;
     const recovered = walking.nearestWalkable(origin, 'shared-home');
     expect(recovered).not.toEqual(first);
@@ -193,11 +199,12 @@ describe('Completed network authority', () => {
     expect(network.pathValid(path)).toBe(true);
     world.environmentRevision!++;
     expect(network.findPath(pointKey(edge.a), pointKey(edge.b), 'road')).toBe(path);
-    world.cells[6 * world.size + 4]!.water = true;
+    const midpoint = { x: (edge.a.x + edge.b.x) / 2, z: (edge.a.z + edge.b.z) / 2 };
+    setFloodedAt(world, midpoint, true);
     world.environmentRevision!++;
     expect(network.pathValid(path)).toBe(false);
     expect(network.findPath(pointKey(edge.a), pointKey(edge.b), 'road')).toBeUndefined();
-    world.cells[6 * world.size + 4]!.water = false;
+    setFloodedAt(world, midpoint, false);
     world.environmentRevision!++;
     expect(network.pathValid(path)).toBe(true);
   });

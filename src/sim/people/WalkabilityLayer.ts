@@ -202,7 +202,6 @@ export class WalkabilityLayer {
   }
 
   private isWalkableCell(cell: WorldCell): boolean {
-    if (cell.water) return false;
     if (cell.landform === 'peak' || cell.landform === 'canyon') return false;
     const weather = this.world.weather?.cells[cell.z * this.world.size + cell.x];
     return cell.slope <= 0.54 && cell.movementCost - (weather?.travelPenalty ?? 0) < 4.2 && (weather?.snowpack ?? 0) < 1;
@@ -341,7 +340,7 @@ export class WalkabilityLayer {
     this.blockedSamples ??= new Uint8Array(field.height.length);
     for (let i = 0; i < this.world.cells.length; i++) {
       const cell = this.world.cells[i]!;
-      const blocked = Number(!this.isWalkableCell(cell) || cell.river || cell.lake);
+      const blocked = Number(!this.isWalkableCell(cell));
       if (this.blockedCells[i] !== blocked) {
         changed = true;
         this.blockedCells[i] = blocked;
