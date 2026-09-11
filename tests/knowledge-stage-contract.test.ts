@@ -124,6 +124,34 @@ describe('knowledge capability contract', () => {
     expect(transformed.transport).toBeGreaterThan(adoptedOnly.transport);
   });
 
+  it('requires transformed rail knowledge before rail infrastructure can grow', () => {
+    const seed = 'stage-rail-infrastructure';
+    const overrides = { seed, startingPopulation: 360, settlementCount: [4, 4] as const };
+    const simulation = new Simulation(overrides);
+    const settlement = simulation.state.settlements[0];
+    if (!settlement) throw new Error('Expected a settlement');
+    const system = new KnowledgeSystem(configWith(overrides), new SeededRandom(`${seed}:stage-infrastructure`));
+
+    simulation.state.institutions = [];
+    settlement.institutionIds = [];
+    settlement.resources.wood = 500;
+    settlement.resources.minerals = 500;
+    settlement.resources.goods = 500;
+    settlement.resources.wealth = 500;
+    const rail = record('rail-transport', settlement);
+    rail.adoptedMonth = 24;
+    settlement.knowledge.records['rail-transport'] = rail;
+
+    simulation.state.month = 12;
+    system.advanceYear(simulation.state);
+    expect(settlement.infrastructure.rail).toBe(0);
+
+    rail.transformedMonth = 24;
+    simulation.state.month = 24;
+    system.advanceYear(simulation.state);
+    expect(settlement.infrastructure.rail).toBeGreaterThan(0);
+  });
+
   it('prevents experimental metallurgy from silently creating fieldable metal weapons', () => {
     const settlement = settlementFor('stage-military-adoption');
     settlement.resources.food = 500;
