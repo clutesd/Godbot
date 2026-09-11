@@ -18,8 +18,8 @@ export interface TerrainField {
    * begins, while temporary inundation is authored independently in `floodDepth`.
    */
   readonly waterLevel: Float32Array;
-  /** Temporary weather-driven inundation depth in world units above local ground. Optional only for legacy fixtures/saves. */
-  readonly floodDepth?: Float32Array;
+  /** Temporary weather-driven inundation depth in world units above local ground. */
+  readonly floodDepth: Float32Array;
   /** 0..1 normalised river discharge. */
   readonly flow: Float32Array;
   /** 0..1 exposed rock and scree, used for surface blending and boulder scatter. */
