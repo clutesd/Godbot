@@ -126,7 +126,7 @@ export class ResourceSiteRenderer {
       this.marker.scale.set(
         this.world.cellSize * (0.045 + Math.sqrt(intensity) * 0.085),
         1,
-        this.world.cellSize * (0.62 + Math.min(1, intensity) * 0.24),
+        this.world.cellSize * direction.span * (0.9 + Math.min(1, intensity) * 0.12),
       );
       this.marker.updateMatrix();
       this.footpaths.setMatrixAt(footpathIndex, this.marker.matrix);
@@ -138,7 +138,7 @@ export class ResourceSiteRenderer {
     if (this.footpaths.instanceColor) this.footpaths.instanceColor.needsUpdate = true;
   }
 
-  private trackDirection(cellIndex: number): { x: number; z: number } | undefined {
+  private trackDirection(cellIndex: number): { x: number; z: number; span: number } | undefined {
     const cell = this.world.cells[cellIndex];
     if (!cell) return undefined;
     let bestWeight = 0;
@@ -156,7 +156,7 @@ export class ResourceSiteRenderer {
       bestZ = dz;
     }
     if (bestWeight < 0.01) return undefined;
-    const length = Math.max(0.001, Math.hypot(bestX, bestZ));
-    return { x: bestX / length, z: bestZ / length };
+    const span = Math.max(0.001, Math.hypot(bestX, bestZ));
+    return { x: bestX / span, z: bestZ / span, span };
   }
 }
