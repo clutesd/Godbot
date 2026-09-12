@@ -1,0 +1,41 @@
+name: Settlement banner history cache
+
+on:
+  push:
+    branches:
+      - feature/settlement-banner-history-polish
+    paths:
+      - '.github/workflows/settlement-banner-history-cache.yml'
+      - 'scripts/optimize-banner-history.py'
+
+permissions:
+  contents: write
+
+jobs:
+  optimize-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Apply history cache optimization
+        run: python scripts/optimize-banner-history.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx eslint src/render/GodboxRenderer.ts src/render/style/BannerLegacy.ts tests/banner-legacy.test.ts
+      - run: npx vitest run tests/banner-identity.test.ts tests/banner-legacy.test.ts
+      - run: npm run build
+      - name: Commit optimization and remove one-shot files
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/settlement-banner-history-cache.yml scripts/optimize-banner-history.py
+          git add src/render/GodboxRenderer.ts
+          git commit -m "Cache banner history lookups"
+          git push origin HEAD:feature/settlement-banner-history-polish
