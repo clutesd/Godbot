@@ -5,10 +5,11 @@ import { eraRank } from '../assets/BuildingGrammar';
 import type { Era, MaterialPalette } from '../materials/MaterialPalette';
 
 /**
- * Primitive and early settlements have no synthetic street/common overlay. Their visible ground
- * circulation is entirely movement-worn terrain from ResourceSiteRenderer, so the shape of the
- * settlement records actual journeys instead of a radial planning template. Deliberately planned
- * ground craft returns only once the settlement reaches village/urban street-building maturity.
+ * Most settlements now reveal circulation through movement-shaped paths rather than a synthetic
+ * hub-and-spoke overlay. Only industrial/advanced societies regain the legacy planned-ground layer;
+ * by then deliberate boulevards and civic replanning are historically plausible. Earlier villages
+ * and pre-industrial towns must earn their street pattern through repeated movement and path
+ * promotion, preserving the irregular history visible in the landscape.
  */
 type GroundCraftMethod = (
   this: GodboxRenderer,
@@ -29,7 +30,7 @@ if (plannedGroundCraft) {
     palette: MaterialPalette,
     random: unknown,
   ): void {
-    if (eraRank(era) < 2) return;
+    if (eraRank(era) < 4) return;
     plannedGroundCraft.call(this, group, era, palette, random);
   }) as GroundCraftMethod;
 }
