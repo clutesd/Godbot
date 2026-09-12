@@ -12,3 +12,4 @@ Thumbs.db
 
 *.cpuprofile
 .transport-audit.ts
+tests/architecture-preview.html
