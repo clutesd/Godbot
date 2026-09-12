@@ -11,6 +11,7 @@ import type { TerrainQueries } from './placement/TerrainQueries';
 import type { TerrainSurface } from './terrain/TerrainSurface';
 import type { WeatherRenderer } from './atmosphere/WeatherRenderer';
 import { createBridgeStructure, createDockStructure } from './transport/TransportStructures';
+import { resolveHarbourFootprint, transportPresentationWidth } from './transport/TransportPresentation';
 import {
   collectTransportDebugRecords,
   createPortalDebugOverlay,
@@ -136,10 +137,11 @@ function enhancedAddRoutePortals(
       const bankZ = portal.bank.z - settlement.position.z;
       const bankY = self.elevationAt(portal.bank.x, portal.bank.z) - settlementY + 0.06;
       const bankPoint = new THREE.Vector3(bankX, bankY, bankZ);
-      const waterPoint = new THREE.Vector3(portal.localX, localY, portal.localZ);
+      const logicalWaterPoint = new THREE.Vector3(portal.localX, localY, portal.localZ);
+      const footprint = resolveHarbourFootprint(bankPoint, logicalWaterPoint, rank);
       const dock = createDockStructure({
         bank: bankPoint,
-        water: waterPoint,
+        water: footprint.visibleWater,
         eraRank: rank,
         identity: `${settlement.id}:${portal.routeId}`,
         activity: harbourActivity,
@@ -155,14 +157,20 @@ function enhancedAddRoutePortals(
         groundAt: (x, z) => self.elevationAt(settlement.position.x + x, settlement.position.z + z) - settlementY,
       });
       dock.userData['routeId'] = portal.routeId;
+      dock.userData['logicalHarbourLength'] = footprint.logicalLength;
+      dock.userData['visibleHarbourLength'] = footprint.visibleLength;
+      dock.userData['harbourFootprintCapped'] = footprint.capped;
       group.add(dock);
+
+      // Debug deliberately shows the full logical bank -> navigation-anchor span so a long
+      // shipping connection remains diagnosable even though ordinary presentation is compact.
       const debug = createPortalDebugOverlay({
         kind: 'dock',
         id: `dock:${settlement.id}`,
         settlementId: settlement.id,
         routeId: portal.routeId,
         from: bankPoint,
-        to: waterPoint,
+        to: logicalWaterPoint,
       });
       debug.visible = transportDebugEnabled;
       group.add(debug);
@@ -273,7 +281,7 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
       if (marker) self.routeGroup.add(marker);
       if (segment.damagedMonth !== undefined) {
         const scar = new THREE.Mesh(
-          transportRibbon(self.state.world, segment, segment.mode === 'rail' ? 0.85 : 0.62),
+          transportRibbon(self.state.world, segment, transportPresentationWidth(segment)),
           new THREE.MeshStandardMaterial({ color: '#615044', roughness: 1, side: THREE.DoubleSide }),
         );
         scar.userData['weatherSurface'] = true;
@@ -286,7 +294,7 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
 
     const rail = segment.mode === 'rail';
     const bridge = segment.kind === 'bridge';
-    const width = rail ? 0.85 : 0.62;
+    const width = transportPresentationWidth(segment);
     const bed = new THREE.Mesh(
       transportRibbon(self.state.world, segment, width),
       new THREE.MeshStandardMaterial({ color: rail ? '#625f58' : bridge ? '#8c8170' : '#987b57', roughness: 0.94, side: THREE.DoubleSide }),
@@ -299,7 +307,7 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
     if (rail || bridge) {
       for (const side of [-1, 1]) {
         const line = new THREE.Mesh(
-          transportRibbon(self.state.world, segment, rail ? 0.055 : 0.04, side * (rail ? 0.25 : width * 0.48), rail ? 0.045 : 0.25),
+          transportRibbon(self.state.world, segment, rail ? 0.045 : 0.035, side * width * (rail ? 0.44 : 0.48), rail ? 0.04 : 0.18),
           new THREE.MeshStandardMaterial({ color: rail ? '#9a9ea0' : '#776958', metalness: rail ? 0.65 : 0.05, roughness: 0.6, side: THREE.DoubleSide }),
         );
         line.userData['weatherSurface'] = true;
