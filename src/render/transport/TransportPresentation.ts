@@ -1,4 +1,5 @@
 import '../settlement/SettlementStreetPresentation';
+import '../settlement/FootTrafficPresentation';
 import * as THREE from 'three';
 import type { TransportSegment } from '../../sim/transport/types';
 
