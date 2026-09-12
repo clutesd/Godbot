@@ -22,7 +22,7 @@ const rendererPrototype = GodboxRenderer.prototype as unknown as Record<string, 
 const plannedGroundCraft = rendererPrototype['addGroundCraft'] as GroundCraftMethod | undefined;
 
 if (plannedGroundCraft) {
-  rendererPrototype['addGroundCraft'] = function movementDrivenGroundCraft(
+  rendererPrototype['addGroundCraft'] = (function movementDrivenGroundCraft(
     this: GodboxRenderer,
     group: THREE.Group,
     era: Era,
@@ -47,5 +47,5 @@ if (plannedGroundCraft) {
     earth.receiveShadow = true;
     earth.userData['weatherSurface'] = true;
     group.add(earth);
-  } satisfies GroundCraftMethod;
+  }) as GroundCraftMethod;
 }
