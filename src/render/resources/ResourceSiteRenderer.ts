@@ -3,9 +3,10 @@ import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
 
-const FOOTPATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
+const FOOTPATH_LINKS = [[1, 0], [0, 1], [1, 1], [-1, 1]] as const;
 const FOOTPATH_FRESH = new THREE.Color('#886b4c');
 const FOOTPATH_WORN = new THREE.Color('#594535');
+const FOOTPATH_VISIBLE_THRESHOLD = 0.022;
 
 /** Small ground-level work piles: only discovered working/abandoned sites become visible. */
 export class ResourceSiteRenderer {
@@ -15,11 +16,7 @@ export class ResourceSiteRenderer {
   private readonly colour = new THREE.Color();
   private readonly scars: THREE.InstancedMesh;
   private readonly trails = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#796b4f', transparent: true, opacity: 0.42 }));
-  private readonly footpaths: THREE.InstancedMesh;
-  private readonly pathNormal = new THREE.Vector3();
-  private readonly pathTangent = new THREE.Vector3();
-  private readonly pathSide = new THREE.Vector3();
-  private readonly pathBasis = new THREE.Matrix4();
+  private readonly footpaths: THREE.Mesh;
   private revision = '';
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface) {
@@ -30,13 +27,20 @@ export class ResourceSiteRenderer {
     this.group.add(this.piles);
     this.scars = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 9), new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.65, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }), Math.max(1, world.cells.length));
     this.scars.count = 0; this.scars.frustumCulled = false;
-    this.footpaths = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1, 0.018, 1),
-      new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.78, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, vertexColors: true }),
-      Math.max(1, world.cells.length),
+    this.footpaths = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshStandardMaterial({
+        roughness: 1,
+        transparent: true,
+        opacity: 0.76,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        vertexColors: true,
+        side: THREE.DoubleSide,
+      }),
     );
     this.footpaths.name = 'Movement-worn desire paths';
-    this.footpaths.count = 0;
     this.footpaths.receiveShadow = true;
     this.footpaths.frustumCulled = false;
     this.group.add(this.scars, this.trails, this.footpaths);
@@ -103,60 +107,62 @@ export class ResourceSiteRenderer {
     this.trails.geometry = new THREE.BufferGeometry();
     this.trails.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
 
-    let footpathIndex = 0;
-    const normalSample = Math.max(0.16, this.world.cellSize * 0.12);
+    this.rebuildFootpaths();
+  }
+
+  private rebuildFootpaths(): void {
+    const positions: number[] = [];
+    const colours: number[] = [];
+    const indices: number[] = [];
+
     for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
       const cell = this.world.cells[cellIndex]!;
       const intensity = cell.modifications?.footpath?.intensity ?? 0;
-      if (cell.water || intensity < 0.025) continue;
-      const direction = this.footpathDirection(cellIndex);
-      if (!direction) continue;
+      if (cell.water || intensity < FOOTPATH_VISIBLE_THRESHOLD) continue;
 
-      this.pathNormal.set(
-        this.surface.heightAt(cell.worldX - normalSample, cell.worldZ) - this.surface.heightAt(cell.worldX + normalSample, cell.worldZ),
-        normalSample * 2,
-        this.surface.heightAt(cell.worldX, cell.worldZ - normalSample) - this.surface.heightAt(cell.worldX, cell.worldZ + normalSample),
-      ).normalize();
-      this.pathTangent.set(direction.x, 0, direction.z).projectOnPlane(this.pathNormal).normalize();
-      if (this.pathTangent.lengthSq() < 0.001) continue;
-      this.pathSide.copy(this.pathNormal).cross(this.pathTangent).normalize();
-      this.pathBasis.makeBasis(this.pathSide, this.pathNormal, this.pathTangent);
-      this.marker.position.set(cell.worldX, this.surface.heightAt(cell.worldX, cell.worldZ) + 0.022, cell.worldZ);
-      this.marker.quaternion.setFromRotationMatrix(this.pathBasis);
-      this.marker.scale.set(
-        this.world.cellSize * (0.045 + Math.sqrt(intensity) * 0.085),
-        1,
-        this.world.cellSize * direction.span * (0.9 + Math.min(1, intensity) * 0.12),
-      );
-      this.marker.updateMatrix();
-      this.footpaths.setMatrixAt(footpathIndex, this.marker.matrix);
-      this.colour.copy(FOOTPATH_FRESH).lerp(FOOTPATH_WORN, Math.min(1, intensity * 1.2));
-      this.footpaths.setColorAt(footpathIndex++, this.colour);
+      for (const [dx, dz] of FOOTPATH_LINKS) {
+        const x = cell.x + dx;
+        const z = cell.z + dz;
+        if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
+        const neighbour = this.world.cells[z * this.world.size + x];
+        const neighbourIntensity = neighbour?.modifications?.footpath?.intensity ?? 0;
+        if (!neighbour || neighbour.water || neighbourIntensity < FOOTPATH_VISIBLE_THRESHOLD) continue;
+
+        const vx = neighbour.worldX - cell.worldX;
+        const vz = neighbour.worldZ - cell.worldZ;
+        const length = Math.hypot(vx, vz);
+        if (length < 0.001) continue;
+        const sideX = -vz / length;
+        const sideZ = vx / length;
+        const widthA = this.pathWidth(intensity);
+        const widthB = this.pathWidth(neighbourIntensity);
+        const base = positions.length / 3;
+        const corners = [
+          [cell.worldX + sideX * widthA, cell.worldZ + sideZ * widthA],
+          [cell.worldX - sideX * widthA, cell.worldZ - sideZ * widthA],
+          [neighbour.worldX + sideX * widthB, neighbour.worldZ + sideZ * widthB],
+          [neighbour.worldX - sideX * widthB, neighbour.worldZ - sideZ * widthB],
+        ] as const;
+        for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.022, worldZ);
+        indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+
+        const visualIntensity = Math.min(1, (intensity + neighbourIntensity) * 0.6);
+        this.colour.copy(FOOTPATH_FRESH).lerp(FOOTPATH_WORN, visualIntensity);
+        for (let corner = 0; corner < 4; corner += 1) colours.push(this.colour.r, this.colour.g, this.colour.b);
+      }
     }
-    this.footpaths.count = footpathIndex;
-    this.footpaths.instanceMatrix.needsUpdate = true;
-    if (this.footpaths.instanceColor) this.footpaths.instanceColor.needsUpdate = true;
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+    geometry.setIndex(indices);
+    if (positions.length > 0) geometry.computeVertexNormals();
+    this.footpaths.geometry.dispose();
+    this.footpaths.geometry = geometry;
   }
 
-  private footpathDirection(cellIndex: number): { x: number; z: number; span: number } | undefined {
-    const cell = this.world.cells[cellIndex];
-    if (!cell) return undefined;
-    let bestWeight = 0;
-    let bestX = 0;
-    let bestZ = 0;
-    for (const [dx, dz] of FOOTPATH_NEIGHBOURS) {
-      const x = cell.x + dx;
-      const z = cell.z + dz;
-      if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
-      const neighbour = this.world.cells[z * this.world.size + x];
-      const weight = neighbour?.modifications?.footpath?.intensity ?? 0;
-      if (weight <= bestWeight) continue;
-      bestWeight = weight;
-      bestX = dx;
-      bestZ = dz;
-    }
-    if (bestWeight < 0.01) return undefined;
-    const span = Math.max(0.001, Math.hypot(bestX, bestZ));
-    return { x: bestX / span, z: bestZ / span, span };
+  private pathWidth(intensity: number): number {
+    const halfWidth = this.world.cellSize * (0.028 + Math.sqrt(Math.min(1, intensity)) * 0.055);
+    return Math.min(this.world.cellSize * 0.095, halfWidth);
   }
 }
