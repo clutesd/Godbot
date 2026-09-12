@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
+import type { WorldCell } from '../src/sim/types';
 import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { recordFootTrafficSegment } from '../src/sim/people/FootTraffic';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
@@ -12,7 +13,7 @@ describe('movement-driven desire paths', () => {
     const world = simulation.state.world;
     const walking = new WalkabilityLayer(world);
 
-    let pair: [typeof world.cells[number], typeof world.cells[number]] | undefined;
+    let pair: [WorldCell, WorldCell] | undefined;
     for (const cell of world.cells) {
       if (!walking.isWalkable({ x: cell.worldX, z: cell.worldZ })) continue;
       const neighbours = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
