@@ -1,7 +1,7 @@
 import { stableHash } from '../prng';
 import { cellAt } from '../world';
-import type { Person, Settlement, SimulationState, Vec2, WorldCell, WorldState } from '../types';
-import { PeopleSystem } from './PeopleSystem';
+import type { DestinationKind, Person, Settlement, SimulationState, Vec2, WorldCell, WorldState } from '../types';
+import { PeopleSystem, settlementEraRank } from './PeopleSystem';
 
 const BASE_WEAR_PER_PASS = 0.0008;
 const MAX_RECORDED_STEP_MULTIPLIER = 3.5;
@@ -64,7 +64,41 @@ function sampledThisMonth(person: Person, state: SimulationState): boolean {
   return state.month % TRAFFIC_SAMPLE_PERIOD === phase;
 }
 
-let installed = false;
+type PreferredRoadWaypoints = (
+  this: PeopleSystem,
+  person: Person,
+  settlement: Settlement,
+  state: SimulationState,
+  destination: DestinationKind,
+) => Vec2[];
+
+let trafficInstalled = false;
+let organicRoutingInstalled = false;
+
+/**
+ * Early circulation must be discovered from geography and destinations, not inherited from the
+ * renderer's abstract district diagram. Primitive and early settlements therefore provide no
+ * residential/civic/district waypoint hints: WalkabilityLayer finds the safest useful route to the
+ * real destination. Once a settlement reaches deliberate street-building maturity (rank >= 2),
+ * the existing planned-road preferences are allowed back in.
+ */
+function installOrganicEarlyRouting(): void {
+  if (organicRoutingInstalled) return;
+  organicRoutingInstalled = true;
+  const prototype = PeopleSystem.prototype as unknown as Record<string, unknown>;
+  const plannedWaypoints = prototype['preferredRoadWaypoints'] as PreferredRoadWaypoints | undefined;
+  if (!plannedWaypoints) return;
+  prototype['preferredRoadWaypoints'] = (function organicPreferredRoadWaypoints(
+    this: PeopleSystem,
+    person: Person,
+    settlement: Settlement,
+    state: SimulationState,
+    destination: DestinationKind,
+  ): Vec2[] {
+    if (settlementEraRank(settlement, state) <= 1) return [];
+    return plannedWaypoints.call(this, person, settlement, state, destination);
+  }) as PreferredRoadWaypoints;
+}
 
 /**
  * Instruments the existing PeopleSystem without changing its navigation authority. We observe the
@@ -75,8 +109,9 @@ let installed = false;
  * months, preserving long-run traffic pressure while roughly halving bookkeeping cost.
  */
 export function installFootTrafficTracking(): void {
-  if (installed) return;
-  installed = true;
+  installOrganicEarlyRouting();
+  if (trafficInstalled) return;
+  trafficInstalled = true;
   const original = PeopleSystem.prototype.advancePerson;
   PeopleSystem.prototype.advancePerson = function trackedAdvancePerson(
     this: PeopleSystem,
