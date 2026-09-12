@@ -26,7 +26,7 @@ describe('movement-driven desire paths', () => {
     expect(worn.some(cell => cell.modifications?.track === undefined)).toBe(true);
   });
 
-  it('lets early settlements route from geography instead of the abstract district spokes', () => {
+  it('keeps local routing geography-led until industrial planning becomes plausible', () => {
     const simulation = new Simulation({ seed: 'organic-route-regression', startingPopulation: 30, settlementCount: [2, 2] });
     const settlement = simulation.state.settlements[0]!;
     const person = simulation.state.people.find(candidate => candidate.homeId === settlement.id)!;
@@ -39,6 +39,10 @@ describe('movement-driven desire paths', () => {
     expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop')).toEqual([]);
 
     settlement.urbanization = 0.35;
+    settlement.infrastructure.roads = 0.35;
+    expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop')).toEqual([]);
+
+    settlement.industry.active = true;
     expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop').length).toBeGreaterThan(0);
   });
 
