@@ -22,7 +22,7 @@ export interface ForestCommunity {
   disturbance: number;
   lastDisturbanceMonth: number;
 }
-export type ModificationKind = 'logging' | 'farmland' | 'quarry' | 'mine' | 'track' | 'industry' | 'ruin';
+export type ModificationKind = 'logging' | 'farmland' | 'quarry' | 'mine' | 'track' | 'footpath' | 'industry' | 'ruin';
 export interface LandModification {
   intensity: number;
   firstMonth: number;
