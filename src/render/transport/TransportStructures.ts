@@ -27,6 +27,17 @@ function beamBetween(a: THREE.Vector3, b: THREE.Vector3, thickness: number, mate
   return beam;
 }
 
+function deckBetween(a: THREE.Vector3, b: THREE.Vector3, width: number, thickness: number, material: THREE.Material): THREE.Mesh {
+  const midpoint = a.clone().add(b).multiplyScalar(0.5);
+  const length = Math.max(0.001, a.distanceTo(b));
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(width, thickness, length), material);
+  deck.position.copy(midpoint);
+  deck.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), b.clone().sub(a).normalize());
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+  return deck;
+}
+
 function verticalSupport(x: number, z: number, topY: number, bottomY: number, radius: number, material: THREE.Material): THREE.Mesh {
   const height = Math.max(0.16, topY - bottomY);
   const support = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.88, radius, height, 7), material);
@@ -74,7 +85,7 @@ export function createDockStructure(options: DockStructureOptions): THREE.Group 
 
   // A short gangway absorbs bank elevation instead of pitching the whole pier into the sky.
   const rampStart = new THREE.Vector3(bank.x, bank.y + 0.08, bank.z);
-  group.add(beamBetween(rampStart, deckStart, deckWidth, materials.timber));
+  group.add(deckBetween(rampStart, deckStart, deckWidth * 0.9, 0.07, materials.timber));
 
   const deckLength = Math.max(0.45, deckStart.distanceTo(deckEnd));
   const yaw = Math.atan2(dirX, dirZ);
