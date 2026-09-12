@@ -23,6 +23,7 @@ import { TransitionTimeline } from './presentation/TransitionTimeline';
 import { VisualStateResolver } from './presentation/VisualStateResolver';
 import { CultureStyleProfileFactory } from './style/CultureStyleProfile';
 import { generateBannerIdentity, type BannerIdentity } from './style/BannerIdentity';
+import { deriveBannerLegacy, type BannerLegacy } from './style/BannerLegacy';
 import { SkyAtmosphere } from './atmosphere/SkyAtmosphere';
 import { TerrainDecor } from './terrain/TerrainDecor';
 import { TerrainSurface } from './terrain/TerrainSurface';
@@ -242,6 +243,8 @@ export class GodboxRenderer {
   private readonly sunHighColor = new THREE.Color('#fff1d6');
   private lastRouteSignature = '';
   private lastSettlementSignature = '';
+  private bannerHistoryIndexLength = -1;
+  private readonly bannerHistoryByEntity = new Map<string, SimulationState['history']>();
   private structuralAccumulator = 0;
   private lastVisualSeason = -1;
   private latestCatastrophe?: SimulationState['history'][number];
@@ -701,10 +704,13 @@ export class GodboxRenderer {
   }
 
   private syncSettlements(force = false): void {
+    const bannerSignatures = new Map<string, string>();
     const signature = this.state.settlements.map((settlement) => {
       const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
       const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
-      return `${settlement.id}:${settlement.alive ? settlement.buildings : 0}:${settlement.institutionIds.length}:${routeCount}:${politySize}:${this.bannerIdentityForSettlement(settlement).id}:${this.developmentSignature(settlement)}:${this.constructionSignature(settlement.id)}`;
+      const bannerSignature = this.bannerSignatureForSettlement(settlement);
+      bannerSignatures.set(settlement.id, bannerSignature);
+      return `${settlement.id}:${settlement.alive ? settlement.buildings : 0}:${settlement.institutionIds.length}:${routeCount}:${politySize}:${bannerSignature}:${this.developmentSignature(settlement)}:${this.constructionSignature(settlement.id)}`;
     }).join('|');
     if (!force && signature === this.lastSettlementSignature) return;
     this.lastSettlementSignature = signature;
@@ -719,7 +725,7 @@ export class GodboxRenderer {
       const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
       const developmentSignature = this.developmentSignature(settlement);
       const constructionSignature = this.constructionSignature(settlement.id);
-      const bannerSignature = this.bannerIdentityForSettlement(settlement).id;
+      const bannerSignature = bannerSignatures.get(settlement.id) ?? this.bannerSignatureForSettlement(settlement);
       const event = this.visualStateResolver.trackEntity(settlement.id, 'settlement', { infrastructure: settlement.infrastructure, buildings: settlement.buildings, alive: settlement.alive }, this.state.month);
       if (event?.kind === 'infrastructure-added') this.transitionTimeline.createBuildingUpgrade(settlement.id, 0, 1, event.associatedData);
       if (existing && existing.buildingCount === settlement.buildings && existing.institutionCount === settlement.institutionIds.length && existing.routeCount === routeCount && existing.politySize === politySize && existing.bannerSignature === bannerSignature && existing.developmentSignature === developmentSignature && existing.constructionSignature === constructionSignature) continue;
@@ -749,14 +755,15 @@ export class GodboxRenderer {
     const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
     group.position.set(settlement.position.x, settlementY, settlement.position.z);
     const culture = this.dominantCulture(settlement);
-    const bannerIdentity = this.bannerIdentityForSettlement(settlement, culture);
     const era = this.eraForSettlement(settlement);
+    const bannerIdentity = this.bannerIdentityForSettlement(settlement, culture);
     const visualRandom = this.random.fork(settlement.id);
     const cultureStyle = culture?.style ?? { primary: '#c36557', secondary: '#313550', accent: '#d9a748', symbol: 'sun-step' as const, pattern: 'chevron' as const, nameSyllables: ['go', 'do'] };
     const palette = this.getPalette(cultureStyle, era);
     const profile = CultureStyleProfileFactory.createFromCulture(culture?.id ?? 'fallback', cultureStyle);
     const shownBuildings = this.shownBuildingCount(settlement);
     const layout = this.layoutForSettlement(settlement, era);
+    const bannerLegacy = this.bannerLegacyForSettlement(settlement, bannerIdentity, culture, era, layout);
     const hasActiveConstruction = settlement.constructionProgress > 0 && (Boolean(settlement.development?.project) || settlement.buildings < settlement.targetBuildings);
     const reservedPlacements = this.getSettlementBuildingPlacements(settlement, shownBuildings + (hasActiveConstruction ? 1 : 0), layout);
     const placements = settlement.development ? reservedPlacements.filter(p => settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shownBuildings) : reservedPlacements.slice(0, shownBuildings);
@@ -786,7 +793,7 @@ export class GodboxRenderer {
     this.addRoutePortals(group, settlement, layout, era, palette);
     const axisAngle = this.random.fork(`${settlement.id}:axis`).float() * Math.PI * 2;
     if (!settlement.development && eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
-    if (settlement.alive) this.addBanner(group, bannerIdentity, settlement.institutionIds.length);
+    if (settlement.alive) this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
     const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
@@ -803,7 +810,7 @@ export class GodboxRenderer {
     const lights = settlement.alive ? this.addSettlementLighting(group, era, palette, visualRandom) : [];
     group.userData['settlementId'] = settlement.id;
     group.traverse((object) => { if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true; });
-    return { group, buildingCount: settlement.buildings, institutionCount: settlement.institutionIds.length, routeCount, politySize, bannerSignature: bannerIdentity.id, developmentSignature: this.developmentSignature(settlement), constructionSignature: this.constructionSignature(settlement.id), powerLevel: settlement.infrastructure.power, lights, smokeSources };
+    return { group, buildingCount: settlement.buildings, institutionCount: settlement.institutionIds.length, routeCount, politySize, bannerSignature: `${bannerIdentity.id}:${bannerLegacy.id}`, developmentSignature: this.developmentSignature(settlement), constructionSignature: this.constructionSignature(settlement.id), powerLevel: settlement.infrastructure.power, lights, smokeSources };
   }
 
   /**
@@ -1524,7 +1531,7 @@ export class GodboxRenderer {
     }
   }
 
-  /** Derive a readable heraldic identity from the settlement's actual cultural context. */
+  /** Derive the founding heraldry from geography, institutions, culture and lineage. */
   private bannerIdentityForSettlement(settlement: Settlement, culture = this.dominantCulture(settlement)): BannerIdentity {
     const cell = this.state.world.cells[settlement.cellIndex];
     const institutionIds = new Set(settlement.institutionIds);
@@ -1555,16 +1562,163 @@ export class GodboxRenderer {
   }
 
   /**
-   * Step two gives every standard actual heraldry. The cloth still follows the restrained visual
-   * language from step one, but its field, emblem, silhouette and house marks now come from the
-   * settlement's generated identity rather than a generic culture symbol.
+   * Index history once per history-length revision. Long GODBOX runs can contain enormous
+   * chronicles; scanning the entire archive once per settlement would make decorative flags an
+   * accidental O(settlements × history) hot path.
    */
-  private addBanner(group: THREE.Group, identity: BannerIdentity, institutionCount: number): void {
-    const shapeSeed = stableUnit(`${identity.id}:standard-shape`);
+  private bannerHistoryForSettlement(settlement: Settlement, culture?: Culture): SimulationState['history'] {
+    if (this.bannerHistoryIndexLength !== this.state.history.length) {
+      this.bannerHistoryByEntity.clear();
+      for (const event of this.state.history) {
+        const keys = new Set<string>();
+        if (event.locationId) keys.add(event.locationId);
+        for (const actor of event.actors) keys.add(actor);
+        for (const key of keys) {
+          const bucket = this.bannerHistoryByEntity.get(key) ?? [];
+          bucket.push(event);
+          this.bannerHistoryByEntity.set(key, bucket);
+        }
+      }
+      this.bannerHistoryIndexLength = this.state.history.length;
+    }
+
+    const ids = [settlement.id, settlement.polityId, culture?.id].filter((id): id is string => Boolean(id));
+    const merged = new Map<string, SimulationState['history'][number]>();
+    for (const id of ids) {
+      for (const event of this.bannerHistoryByEntity.get(id) ?? []) merged.set(event.id, event);
+    }
+    return [...merged.values()];
+  }
+
+  /** Historical layer: the same people keep a recognizable standard, but history leaves marks. */
+  private bannerLegacyForSettlement(
+    settlement: Settlement,
+    identity: BannerIdentity,
+    culture = this.dominantCulture(settlement),
+    era = this.eraForSettlement(settlement),
+    layout = this.layoutForSettlement(settlement, era),
+  ): BannerLegacy {
+    const institutionIds = new Set(settlement.institutionIds);
+    const institutions = this.state.institutions
+      .filter(institution => institutionIds.has(institution.id))
+      .map(institution => ({ kind: institution.kind, support: institution.support, prestige: institution.prestige }));
+    const polity = this.state.polities.find(candidate => candidate.id === settlement.polityId);
+    return deriveBannerLegacy({
+      currentMonth: this.state.month,
+      foundedMonth: settlement.foundedMonth,
+      settlementId: settlement.id,
+      polityId: settlement.polityId,
+      cultureId: culture?.id,
+      currentEra: era,
+      specialization: settlement.specialization,
+      prosperity: settlement.prosperity,
+      crisisMonths: settlement.crisisMonths,
+      conflictPressure: settlement.conflictPressure,
+      successionCount: polity?.successionCount ?? 0,
+      isCapital: polity?.capitalId === settlement.id,
+      institutions,
+      identity,
+      history: this.bannerHistoryForSettlement(settlement, culture),
+      hasLandGate: layout.portals.some(portal => portal.kind === 'gate'),
+      hasAnyPortal: layout.portals.length > 0,
+    });
+  }
+
+  private bannerSignatureForSettlement(settlement: Settlement): string {
+    const culture = this.dominantCulture(settlement);
+    const era = this.eraForSettlement(settlement);
+    const layout = this.layoutForSettlement(settlement, era);
+    const identity = this.bannerIdentityForSettlement(settlement, culture);
+    const legacy = this.bannerLegacyForSettlement(settlement, identity, culture, era, layout);
+    // Bucket slow wear/prestige values so settlements do not rebuild for meaningless tiny changes.
+    const wearBucket = Math.round(legacy.wear * 20) / 20;
+    const prestigeBucket = Math.round(legacy.prestigeTrim * 10) / 10;
+    return `${identity.id}:${legacy.site}:${legacy.mount}:${legacy.generation}:${legacy.politicalBands}:${legacy.culturalMarks}:${legacy.successionMarks}:${legacy.allianceKnots}:${wearBucket}:${legacy.repairPatches}:${Number(legacy.mourning)}:${prestigeBucket}:${legacy.fieldVariant}:${legacy.emblemVariant}:${legacy.latestChangeMonth ?? -1}`;
+  }
+
+  /**
+   * A standard belongs somewhere. Camps put it near the hearth; mature societies put it where
+   * authority actually lives — civic court, temple precinct, market approach or defended gate.
+   */
+  private bannerPlacementForSettlement(settlement: Settlement, layout: SettlementLayoutPlan, legacy: BannerLegacy): { localX: number; localY: number; localZ: number; rotationY: number } {
+    const phase = stableUnit(`${this.config.seed}:${settlement.id}:banner:${legacy.site}`) * Math.PI * 2;
+    let localX = Math.cos(phase) * 1.05;
+    let localZ = Math.sin(phase) * 1.05;
+
+    const offsetAnchor = (anchor: SettlementLayoutPlan['anchors']['civic'], scale: number, lateral: number): void => {
+      const angle = Math.abs(anchor.localX) + Math.abs(anchor.localZ) > 0.01 ? Math.atan2(anchor.localZ, anchor.localX) : phase;
+      localX = anchor.localX * scale + Math.cos(angle + Math.PI / 2) * lateral;
+      localZ = anchor.localZ * scale + Math.sin(angle + Math.PI / 2) * lateral;
+    };
+
+    if (legacy.site === 'civic') {
+      const anchor = layout.anchors.civic;
+      localX = anchor.localX + Math.cos(phase) * Math.min(1.35, anchor.radius * 0.7);
+      localZ = anchor.localZ + Math.sin(phase) * Math.min(1.35, anchor.radius * 0.7);
+    } else if (legacy.site === 'sacred') {
+      offsetAnchor(layout.anchors.sacred, 0.84, 0.5);
+    } else if (legacy.site === 'market') {
+      offsetAnchor(layout.anchors.market, 0.82, 0.55);
+    } else if (legacy.site === 'gate') {
+      const portal = [...layout.portals].filter(candidate => candidate.kind === 'gate').sort((a, b) => a.routeId.localeCompare(b.routeId))[0];
+      if (portal) {
+        const angle = Math.atan2(portal.localZ, portal.localX);
+        localX = portal.localX * 0.86 + Math.cos(angle + Math.PI / 2) * 0.42;
+        localZ = portal.localZ * 0.86 + Math.sin(angle + Math.PI / 2) * 0.42;
+      }
+    }
+
+    const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
+    const resolve = (x: number, z: number): { localX: number; localY: number; localZ: number; rotationY: number } | undefined => {
+      const worldX = settlement.position.x + x;
+      const worldZ = settlement.position.z + z;
+      const terrain = this.terrainQueries.queryTerrainAt(worldX, worldZ);
+      if (!terrain || terrain.water || terrain.maxSlope > 28) return undefined;
+      return {
+        localX: x,
+        localY: this.elevationAt(worldX, worldZ) - settlementY,
+        localZ: z,
+        rotationY: Math.atan2(-x, -z),
+      };
+    };
+
+    return resolve(localX, localZ)
+      ?? resolve(Math.cos(phase) * 1.15, Math.sin(phase) * 1.15)
+      ?? { localX: -0.8, localY: 0, localZ: 0.15, rotationY: 0 };
+  }
+
+  private bannerMountDimensions(legacy: BannerLegacy): { width: number; height: number; poleHeight: number; topY: number; crossbar: boolean } {
+    switch (legacy.mount) {
+      case 'processional': return { width: 0.48, height: 1.82, poleHeight: 3.2, topY: 2.82, crossbar: true };
+      case 'gonfalon': return { width: 0.78, height: 1.88, poleHeight: 3.65, topY: 3.12, crossbar: true };
+      case 'market-standard': return { width: 0.62, height: 1.5, poleHeight: 3.25, topY: 2.82, crossbar: true };
+      case 'pennon': return { width: 1.02, height: 0.92, poleHeight: 3.45, topY: 3.02, crossbar: false };
+      case 'civic-standard':
+      default: return { width: 0.72, height: 1.74, poleHeight: 3.72, topY: 3.18, crossbar: true };
+    }
+  }
+
+  /**
+   * Final banner presentation. Settlements no longer share one pole/shape/location: mount style,
+   * site, field revisions, wear, repairs and ceremonial finish all carry simulation meaning.
+   */
+  private addBanner(
+    group: THREE.Group,
+    settlement: Settlement,
+    layout: SettlementLayoutPlan,
+    identity: BannerIdentity,
+    legacy: BannerLegacy,
+    institutionCount: number,
+  ): void {
+    const shapeSeed = stableUnit(`${identity.id}:${legacy.id}:standard-shape`);
     const standard = new THREE.Group();
     standard.name = 'settlement-standard';
-    standard.position.set(-0.8, 0, 0.15);
+    const placement = this.bannerPlacementForSettlement(settlement, layout, legacy);
+    standard.position.set(placement.localX, placement.localY, placement.localZ);
+    standard.rotation.y = placement.rotationY;
     standard.userData['bannerIdentity'] = identity;
+    standard.userData['bannerLegacy'] = legacy;
+    standard.userData['bannerSite'] = legacy.site;
 
     const mute = (value: THREE.ColorRepresentation, saturation: number, minimumLightness: number, maximumLightness: number, lightnessScale = 1): THREE.Color => {
       const color = new THREE.Color(value);
@@ -1578,51 +1732,84 @@ export class GodboxRenderer {
       return color;
     };
 
-    const clothColor = mute(identity.primary, 0.42, 0.18, 0.46, 0.8);
-    const secondaryColor = mute(identity.secondary, 0.34, 0.18, 0.44, 0.9);
+    const clothColor = mute(identity.primary, 0.42, 0.18, 0.46, 0.8).lerp(new THREE.Color('#756c61'), legacy.wear * 0.22);
+    const secondaryColor = mute(identity.secondary, 0.34, 0.18, 0.44, 0.9).lerp(new THREE.Color('#6f685f'), legacy.wear * 0.16);
     const accentColor = mute(identity.accent, 0.38, 0.46, 0.7);
-    accentColor.lerp(new THREE.Color('#d6ccb5'), 0.16);
+    accentColor.lerp(new THREE.Color('#d6ccb5'), 0.16 + legacy.wear * 0.08);
 
+    const dimensions = this.bannerMountDimensions(legacy);
+    const { width, height, poleHeight, topY } = dimensions;
     const wood = new THREE.MeshStandardMaterial({ color: '#3c2d27', roughness: 0.98, metalness: 0 });
-    const poleHeight = 3.35;
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.055, poleHeight, 7), wood);
     pole.position.y = poleHeight / 2;
     pole.castShadow = true;
+    standard.add(pole);
 
-    const width = 0.64;
-    const height = 1.68;
-    const topY = 2.9;
-    const crossbarLength = width + 0.14;
-    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.028, crossbarLength, 7), wood);
-    crossbar.rotation.z = Math.PI / 2;
-    crossbar.position.set(crossbarLength / 2 - 0.015, topY + 0.015, 0);
-    crossbar.castShadow = true;
-    const finial = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.18, 6), wood);
+    if (dimensions.crossbar) {
+      const crossbarLength = width + 0.14;
+      const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.028, crossbarLength, 7), wood);
+      crossbar.rotation.z = Math.PI / 2;
+      crossbar.position.set(crossbarLength / 2 - 0.015, topY + 0.015, 0);
+      crossbar.castShadow = true;
+      standard.add(crossbar);
+    } else {
+      // Gate pennons are lashed to the pole instead of hanging from a civic crossbar.
+      for (const y of [topY - 0.08, topY - height * 0.72]) {
+        const tie = new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.012, 5, 8), new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.95 }));
+        tie.rotation.x = Math.PI / 2;
+        tie.position.set(0.015, y, 0);
+        standard.add(tie);
+      }
+    }
+
+    const finialMaterial = legacy.prestigeTrim >= 0.62
+      ? new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.72, metalness: 0.12 })
+      : wood;
+    const finial = legacy.site === 'sacred'
+      ? new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), finialMaterial)
+      : new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.18, 6), finialMaterial);
     finial.position.y = poleHeight + 0.09;
     finial.castShadow = true;
-    standard.add(pole, crossbar, finial);
+    standard.add(finial);
 
-    const clothGeometry = new THREE.PlaneGeometry(width, height, 6, 10);
+    const clothGeometry = new THREE.PlaneGeometry(width, height, 7, 11);
     const positions = clothGeometry.attributes.position as THREE.BufferAttribute;
+    const silhouette = legacy.mount === 'pennon' && identity.shape === 'straight' ? 'pointed' : identity.shape;
     for (let index = 0; index < positions.count; index += 1) {
       const x = positions.getX(index);
       const y = positions.getY(index);
       const across = THREE.MathUtils.clamp((x + width / 2) / width, 0, 1);
       const down = THREE.MathUtils.clamp((height / 2 - y) / height, 0, 1);
       let shapedY = y;
-      if (down > 0.995) {
-        if (identity.shape === 'pointed') {
+      let shapedX = x;
+
+      if (legacy.mount === 'pennon') {
+        const taper = 1 - across * 0.72;
+        shapedY = y * taper - height * across * 0.08;
+        shapedX += across * width * 0.035;
+      } else if (down > 0.995) {
+        if (silhouette === 'pointed') {
           shapedY += Math.abs(across - 0.5) * 0.34;
-        } else if (identity.shape === 'swallowtail') {
+        } else if (silhouette === 'swallowtail') {
           shapedY += (1 - Math.abs(across - 0.5) * 2) * 0.24;
-        } else if (identity.shape === 'stepped') {
+        } else if (silhouette === 'stepped') {
           shapedY += across < 0.25 || across > 0.75 ? 0.17 : across < 0.42 || across > 0.58 ? 0.08 : 0;
-        } else if (identity.shape === 'ragged') {
-          const tooth = stableUnit(`${identity.id}:rag:${Math.round(across * 6)}`);
+        } else if (silhouette === 'ragged') {
+          const tooth = stableUnit(`${identity.id}:rag:${Math.round(across * 7)}`);
           shapedY += 0.03 + tooth * 0.14;
         }
       }
+
+      if (down > 0.82 && legacy.wear > 0.08) {
+        const wearNoise = stableUnit(`${identity.id}:${legacy.generation}:wear:${Math.round(across * 9)}`);
+        shapedY += wearNoise * legacy.wear * 0.15 * (down - 0.82) / 0.18;
+      }
+      if (across > 0.92 && legacy.wear > 0.18) {
+        shapedX -= stableUnit(`${identity.id}:edge:${Math.round(down * 10)}`) * legacy.wear * 0.045;
+      }
+
       shapedY -= 0.035 * across * across * (0.35 + down * 0.65);
+      positions.setX(index, shapedX);
       positions.setY(index, shapedY);
       positions.setZ(index,
         0.044 * across * Math.sin(down * Math.PI * 2.2 + shapeSeed * Math.PI * 2)
@@ -1635,39 +1822,44 @@ export class GodboxRenderer {
     const clothRig = new THREE.Group();
     clothRig.position.y = topY;
     clothRig.userData['windPhase'] = shapeSeed * Math.PI * 2;
-    clothRig.userData['windStrength'] = 0.035 + stableUnit(`${identity.id}:wind`) * 0.035;
+    clothRig.userData['windStrength'] = 0.03 + stableUnit(`${identity.id}:${legacy.mount}:wind`) * 0.04;
 
     const cloth = new THREE.Mesh(clothGeometry, new THREE.MeshStandardMaterial({
       color: clothColor,
       side: THREE.DoubleSide,
-      roughness: 0.96,
+      roughness: 0.97,
       metalness: 0,
     }));
     cloth.position.set(width / 2 + 0.045, -height / 2, 0.018);
     cloth.castShadow = true;
     clothRig.add(cloth);
 
-    this.addBannerFieldPattern(clothRig, identity, width, height, secondaryColor);
+    this.addBannerFieldPattern(clothRig, identity, legacy, width, height, secondaryColor);
     const emblemMaterial = new THREE.MeshStandardMaterial({ color: accentColor, side: THREE.DoubleSide, roughness: 0.92, metalness: 0 });
-    const emblem = this.createBannerEmblem(identity, emblemMaterial);
-    emblem.position.set(width * (0.47 + identity.emblemVariant * 0.025) + 0.045, -height * 0.48, 0.095);
-    emblem.scale.setScalar(0.92 - identity.emblemVariant * 0.035);
+    const emblem = this.createBannerEmblem(identity, legacy.emblemVariant, emblemMaterial);
+    const emblemX = legacy.mount === 'pennon' ? width * 0.32 + 0.045 : width * (0.47 + legacy.emblemVariant * 0.02) + 0.045;
+    const emblemY = legacy.mount === 'pennon' ? -height * 0.42 : -height * 0.48;
+    emblem.position.set(emblemX, emblemY, 0.095);
+    emblem.scale.setScalar(legacy.mount === 'pennon' ? 0.72 : 0.92 - legacy.emblemVariant * 0.035);
     clothRig.add(emblem);
 
     const houseMaterial = new THREE.MeshStandardMaterial({ color: accentColor, side: THREE.DoubleSide, roughness: 0.96 });
-    for (let index = 0; index < identity.lineageMarks; index += 1) {
-      const mark = new THREE.Mesh(new THREE.PlaneGeometry(0.035, 0.17 + index * 0.015), houseMaterial);
-      mark.position.set(0.11 + index * 0.055, -0.16, 0.105);
+    const houseMarks = Math.min(4, identity.lineageMarks + Math.ceil(legacy.successionMarks / 2));
+    for (let index = 0; index < houseMarks; index += 1) {
+      const mark = new THREE.Mesh(new THREE.PlaneGeometry(0.032, 0.15 + index * 0.012), houseMaterial);
+      mark.position.set(0.105 + index * 0.047, -0.15, 0.105);
       mark.rotation.z = index % 2 === 0 ? -0.08 : 0.08;
       clothRig.add(mark);
     }
 
+    this.addBannerLegacyDetails(clothRig, identity, legacy, width, height, clothColor, secondaryColor, accentColor);
+
     for (let index = 0; index < Math.min(2, institutionCount); index += 1) {
       const tassel = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.055, 0.34 + index * 0.06),
+        new THREE.PlaneGeometry(0.05, 0.3 + index * 0.055),
         new THREE.MeshStandardMaterial({ color: index === 0 ? accentColor : secondaryColor, side: THREE.DoubleSide, roughness: 0.98 }),
       );
-      tassel.position.set(0.105 + index * 0.085, -0.22 - index * 0.025, -0.005);
+      tassel.position.set(0.1 + index * 0.075, -0.2 - index * 0.025, -0.005);
       tassel.rotation.z = -0.04 - index * 0.035;
       clothRig.add(tassel);
     }
@@ -1676,10 +1868,13 @@ export class GodboxRenderer {
     group.add(standard);
     group.userData['bannerClothRig'] = clothRig;
     group.userData['bannerIdentity'] = identity;
+    group.userData['bannerLegacy'] = legacy;
+    group.userData['bannerSite'] = legacy.site;
+    group.userData['bannerMeaning'] = [...identity.rationale, ...legacy.rationale];
   }
 
-  /** Heraldic field geometry kept deliberately low-poly and dye-like. */
-  private addBannerFieldPattern(group: THREE.Group, identity: BannerIdentity, width: number, height: number, color: THREE.Color): void {
+  /** Heraldic field geometry kept deliberately low-poly and inside the chosen mount silhouette. */
+  private addBannerFieldPattern(group: THREE.Group, identity: BannerIdentity, legacy: BannerLegacy, width: number, height: number, color: THREE.Color): void {
     if (identity.fieldPattern === 'solid') return;
     const material = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide, roughness: 0.98, metalness: 0 });
     const addPanel = (panelWidth: number, panelHeight: number, x: number, y: number, rotation = 0): void => {
@@ -1690,33 +1885,40 @@ export class GodboxRenderer {
     };
     const left = 0.045;
     const centerX = left + width / 2;
+    const variant = legacy.fieldVariant;
+
+    if (legacy.mount === 'pennon') {
+      const bandWidth = width * (0.2 + variant * 0.025);
+      addPanel(bandWidth, height * 0.72, left + bandWidth * 0.62, -height * 0.48);
+      return;
+    }
     if (identity.fieldPattern === 'stripe') {
-      if (identity.fieldVariant % 2 === 0) {
-        const stripeWidth = width * (identity.fieldVariant >= 2 ? 0.18 : 0.24);
-        addPanel(stripeWidth, height * 0.92, centerX + (identity.fieldVariant === 2 ? width * 0.16 : 0), -height * 0.5);
+      if (variant % 2 === 0) {
+        const stripeWidth = width * (variant >= 2 ? 0.18 : 0.24);
+        addPanel(stripeWidth, height * 0.92, centerX + (variant === 2 ? width * 0.16 : 0), -height * 0.5);
       } else {
-        const bandHeight = height * (identity.fieldVariant === 3 ? 0.14 : 0.2);
-        addPanel(width * 0.92, bandHeight, centerX, -height * (identity.fieldVariant === 3 ? 0.66 : 0.5));
+        const bandHeight = height * (variant === 3 ? 0.14 : 0.2);
+        addPanel(width * 0.92, bandHeight, centerX, -height * (variant === 3 ? 0.66 : 0.5));
       }
       return;
     }
     if (identity.fieldPattern === 'split') {
-      if (identity.fieldVariant % 2 === 0) addPanel(width * 0.47, height * 0.92, left + width * 0.74, -height * 0.5);
+      if (variant % 2 === 0) addPanel(width * 0.47, height * 0.92, left + width * 0.74, -height * 0.5);
       else addPanel(width * 0.92, height * 0.46, centerX, -height * 0.73);
       return;
     }
     if (identity.fieldPattern === 'top-band') {
-      addPanel(width * 0.94, height * (0.18 + identity.fieldVariant * 0.018), centerX, -height * 0.14);
+      addPanel(width * 0.94, height * (0.18 + variant * 0.018), centerX, -height * 0.14);
       return;
     }
-    const border = 0.045 + identity.fieldVariant * 0.006;
+    const border = 0.045 + variant * 0.006;
     addPanel(border, height * 0.88, left + border * 0.65, -height * 0.5);
     addPanel(border, height * 0.88, left + width - border * 0.65, -height * 0.5);
     addPanel(width * 0.9, border, centerX, -height * 0.05);
   }
 
   /** Nine deliberately simple emblem families that remain legible at documentary-camera scale. */
-  private createBannerEmblem(identity: BannerIdentity, material: THREE.MeshStandardMaterial): THREE.Group {
+  private createBannerEmblem(identity: BannerIdentity, variant: number, material: THREE.MeshStandardMaterial): THREE.Group {
     const emblem = new THREE.Group();
     const addBar = (width: number, height: number, x: number, y: number, rotation = 0): THREE.Mesh => {
       const bar = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
@@ -1780,7 +1982,7 @@ export class GodboxRenderer {
       }
       case 'moon': {
         const moon = new THREE.Mesh(new THREE.RingGeometry(0.11, 0.2, 14, 1, 0.45, Math.PI * 1.45), material);
-        moon.rotation.z = identity.emblemVariant * 0.18;
+        moon.rotation.z = variant * 0.18;
         emblem.add(moon);
         break;
       }
@@ -1799,11 +2001,96 @@ export class GodboxRenderer {
       case 'rune':
       default:
         addBar(0.045, 0.34, 0, 0);
-        addBar(0.04, 0.22, identity.emblemVariant % 2 === 0 ? 0.08 : -0.08, 0.06, identity.emblemVariant % 2 === 0 ? -0.72 : 0.72);
-        addBar(0.04, 0.18, identity.emblemVariant >= 2 ? -0.075 : 0.075, -0.08, identity.emblemVariant >= 2 ? 0.68 : -0.68);
+        addBar(0.04, 0.22, variant % 2 === 0 ? 0.08 : -0.08, 0.06, variant % 2 === 0 ? -0.72 : 0.72);
+        addBar(0.04, 0.18, variant >= 2 ? -0.075 : 0.075, -0.08, variant >= 2 ? 0.68 : -0.68);
         break;
     }
     return emblem;
+  }
+
+  /** The details are history, not decoration: regime bands, repairs, alliance ties and mourning. */
+  private addBannerLegacyDetails(
+    group: THREE.Group,
+    identity: BannerIdentity,
+    legacy: BannerLegacy,
+    width: number,
+    height: number,
+    clothColor: THREE.Color,
+    secondaryColor: THREE.Color,
+    accentColor: THREE.Color,
+  ): void {
+    const accent = new THREE.MeshStandardMaterial({ color: accentColor, side: THREE.DoubleSide, roughness: 0.96 });
+    const secondary = new THREE.MeshStandardMaterial({ color: secondaryColor, side: THREE.DoubleSide, roughness: 0.98 });
+    const dark = new THREE.MeshStandardMaterial({ color: '#211d1b', side: THREE.DoubleSide, roughness: 1, transparent: true, opacity: 0.48 });
+    const z = 0.112;
+
+    // Regime changes add restrained revision bands rather than replacing the founding field.
+    for (let index = 0; index < legacy.politicalBands; index += 1) {
+      const band = new THREE.Mesh(new THREE.PlaneGeometry(width * (0.58 - index * 0.06), 0.025), index % 2 === 0 ? accent : secondary);
+      band.position.set(0.045 + width * 0.52, -height * (0.76 - index * 0.07), z);
+      group.add(band);
+    }
+
+    // Long cultural shifts add small geometric seals around the inherited emblem.
+    for (let index = 0; index < legacy.culturalMarks; index += 1) {
+      const seal = new THREE.Mesh(new THREE.CircleGeometry(0.035 + index * 0.006, 4), accent);
+      seal.rotation.z = Math.PI / 4;
+      seal.position.set(0.045 + width * (0.2 + index * 0.1), -height * 0.28, z + 0.003);
+      group.add(seal);
+    }
+
+    // Alliance ties remain close to the hoist, like cords acquired through diplomacy.
+    for (let index = 0; index < legacy.allianceKnots; index += 1) {
+      const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.035, 0.22 + index * 0.035), index % 2 === 0 ? secondary : accent);
+      tie.position.set(0.07 + index * 0.045, -0.12 - index * 0.02, z + 0.004);
+      tie.rotation.z = -0.14 + index * 0.11;
+      group.add(tie);
+    }
+
+    // Recovery stays visible as repair cloth; it does not magically restore a pristine flag.
+    for (let index = 0; index < legacy.repairPatches; index += 1) {
+      const patchColor = clothColor.clone().lerp(secondaryColor, 0.35 + index * 0.12);
+      const patchMaterial = new THREE.MeshStandardMaterial({ color: patchColor, side: THREE.DoubleSide, roughness: 1 });
+      const patchWidth = width * (0.13 + index * 0.018);
+      const patchHeight = height * 0.09;
+      const patch = new THREE.Mesh(new THREE.PlaneGeometry(patchWidth, patchHeight), patchMaterial);
+      const px = 0.045 + width * (0.68 - index * 0.16);
+      const py = -height * (0.62 + index * 0.085);
+      patch.position.set(px, py, z + 0.006);
+      patch.rotation.z = (index - 1) * 0.09;
+      group.add(patch);
+      for (const stitchSide of [-1, 1]) {
+        const stitch = new THREE.Mesh(new THREE.PlaneGeometry(0.012, patchHeight * 0.82), accent);
+        stitch.position.set(px + stitchSide * patchWidth * 0.42, py, z + 0.009);
+        group.add(stitch);
+      }
+    }
+
+    if (legacy.scorch > 0.08) {
+      const scorch = new THREE.Mesh(new THREE.CircleGeometry(Math.min(width, height) * (0.09 + legacy.scorch * 0.1), 9), dark);
+      scorch.scale.set(1.35, 0.72, 1);
+      scorch.position.set(0.045 + width * 0.74, -height * 0.72, z + 0.008);
+      group.add(scorch);
+    }
+
+    if (legacy.mourning) {
+      const streamer = new THREE.Mesh(new THREE.PlaneGeometry(0.045, Math.min(0.68, height * 0.46)), dark);
+      streamer.position.set(0.075, -height * 0.28, z + 0.012);
+      streamer.rotation.z = -0.08;
+      group.add(streamer);
+    }
+
+    if (legacy.prestigeTrim >= 0.62 && legacy.mount !== 'pennon') {
+      const trimWidth = 0.018 + Math.min(0.012, legacy.prestigeTrim * 0.012);
+      const top = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.92, trimWidth), accent);
+      top.position.set(0.045 + width / 2, -height * 0.055, z + 0.012);
+      const hoist = new THREE.Mesh(new THREE.PlaneGeometry(trimWidth, height * 0.86), accent);
+      hoist.position.set(0.065, -height * 0.48, z + 0.012);
+      group.add(top, hoist);
+    }
+
+    // Keep the meaning inspectable for documentary/camera work without inventing UI labels.
+    group.userData['bannerMeaning'] = [...identity.rationale, ...legacy.rationale];
   }
 
   /** Cheap, restrained wind motion; reduced-motion users get the sculpted resting shape only. */
