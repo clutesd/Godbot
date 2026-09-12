@@ -1,11 +1,21 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
-import type { WorldCell } from '../src/sim/types';
+import type { DestinationKind, Person, Settlement, SimulationState, Vec2, WorldCell } from '../src/sim/types';
+import { PeopleSystem } from '../src/sim/people/PeopleSystem';
 import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { recordFootTrafficSegment } from '../src/sim/people/FootTraffic';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { ResourceSiteRenderer } from '../src/render/resources/ResourceSiteRenderer';
+
+type RoadWaypointProbe = {
+  preferredRoadWaypoints(
+    person: Person,
+    settlement: Settlement,
+    state: SimulationState,
+    destination: DestinationKind,
+  ): Vec2[];
+};
 
 describe('movement-driven desire paths', () => {
   it('records actual represented pedestrian movement during a simulation', () => {
@@ -14,6 +24,22 @@ describe('movement-driven desire paths', () => {
     const worn = simulation.state.world.cells.filter(cell => (cell.modifications?.footpath?.intensity ?? 0) > 0);
     expect(worn.length).toBeGreaterThan(0);
     expect(worn.some(cell => cell.modifications?.track === undefined)).toBe(true);
+  });
+
+  it('lets early settlements route from geography instead of the abstract district spokes', () => {
+    const simulation = new Simulation({ seed: 'organic-route-regression', startingPopulation: 30, settlementCount: [2, 2] });
+    const settlement = simulation.state.settlements[0]!;
+    const person = simulation.state.people.find(candidate => candidate.homeId === settlement.id)!;
+    const people = new PeopleSystem(simulation.state.world, simulation.state.seed);
+    const probe = people as unknown as RoadWaypointProbe;
+
+    settlement.buildings = 4;
+    settlement.urbanization = 0;
+    settlement.infrastructure.roads = 0.03;
+    expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop')).toEqual([]);
+
+    settlement.urbanization = 0.35;
+    expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop').length).toBeGreaterThan(0);
   });
 
   it('turns repeated real pedestrian movement into persistent visible footpath wear', () => {
@@ -57,8 +83,9 @@ describe('movement-driven desire paths', () => {
     const renderer = new ResourceSiteRenderer(world, new TerrainSurface(world));
     renderer.update();
     const paths = renderer.group.getObjectByName('Movement-worn desire paths');
-    expect(paths).toBeInstanceOf(THREE.InstancedMesh);
-    expect((paths as THREE.InstancedMesh).count).toBeGreaterThanOrEqual(2);
+    expect(paths).toBeInstanceOf(THREE.Mesh);
+    const geometry = (paths as THREE.Mesh).geometry as THREE.BufferGeometry;
+    expect(geometry.getAttribute('position').count).toBeGreaterThan(0);
   });
 
   it('rejects teleport-scale jumps so emergency relocation cannot carve a road', () => {
