@@ -3,9 +3,9 @@ import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
 
-const TRACK_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
-const TRACK_FRESH = new THREE.Color('#886b4c');
-const TRACK_WORN = new THREE.Color('#594535');
+const FOOTPATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
+const FOOTPATH_FRESH = new THREE.Color('#886b4c');
+const FOOTPATH_WORN = new THREE.Color('#594535');
 
 /** Small ground-level work piles: only discovered working/abandoned sites become visible. */
 export class ResourceSiteRenderer {
@@ -107,9 +107,9 @@ export class ResourceSiteRenderer {
     const normalSample = Math.max(0.16, this.world.cellSize * 0.12);
     for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
       const cell = this.world.cells[cellIndex]!;
-      const intensity = cell.modifications?.track?.intensity ?? 0;
+      const intensity = cell.modifications?.footpath?.intensity ?? 0;
       if (cell.water || intensity < 0.025) continue;
-      const direction = this.trackDirection(cellIndex);
+      const direction = this.footpathDirection(cellIndex);
       if (!direction) continue;
 
       this.pathNormal.set(
@@ -130,7 +130,7 @@ export class ResourceSiteRenderer {
       );
       this.marker.updateMatrix();
       this.footpaths.setMatrixAt(footpathIndex, this.marker.matrix);
-      this.colour.copy(TRACK_FRESH).lerp(TRACK_WORN, Math.min(1, intensity * 1.2));
+      this.colour.copy(FOOTPATH_FRESH).lerp(FOOTPATH_WORN, Math.min(1, intensity * 1.2));
       this.footpaths.setColorAt(footpathIndex++, this.colour);
     }
     this.footpaths.count = footpathIndex;
@@ -138,18 +138,18 @@ export class ResourceSiteRenderer {
     if (this.footpaths.instanceColor) this.footpaths.instanceColor.needsUpdate = true;
   }
 
-  private trackDirection(cellIndex: number): { x: number; z: number; span: number } | undefined {
+  private footpathDirection(cellIndex: number): { x: number; z: number; span: number } | undefined {
     const cell = this.world.cells[cellIndex];
     if (!cell) return undefined;
     let bestWeight = 0;
     let bestX = 0;
     let bestZ = 0;
-    for (const [dx, dz] of TRACK_NEIGHBOURS) {
+    for (const [dx, dz] of FOOTPATH_NEIGHBOURS) {
       const x = cell.x + dx;
       const z = cell.z + dz;
       if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
       const neighbour = this.world.cells[z * this.world.size + x];
-      const weight = neighbour?.modifications?.track?.intensity ?? 0;
+      const weight = neighbour?.modifications?.footpath?.intensity ?? 0;
       if (weight <= bestWeight) continue;
       bestWeight = weight;
       bestX = dx;
