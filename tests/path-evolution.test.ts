@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import type { Settlement } from '../src/sim/types';
-import { advanceMovementPaths, movementPathStage } from '../src/sim/environment/PathEvolution';
+import { advanceMovementPaths, installMovementRoadAuthority, movementPathStage } from '../src/sim/environment/PathEvolution';
 import { ensureMaterialInventory } from '../src/sim/resources/MaterialEconomy';
+import { TransportationSystem } from '../src/sim/transport/TransportationSystem';
 
 function grant(settlement: Settlement, id: string, practice = 0.9): void {
   settlement.knowledge.records[id] = {
@@ -73,5 +74,17 @@ describe('movement-shaped road evolution', () => {
     expect(cell.modifications.track).toBeUndefined();
     expect(cell.modifications['cart-road']).toBeUndefined();
     expect(cell.modifications.road).toBeUndefined();
+  });
+
+  it('stops the legacy district-anchor planner from creating synthetic local road spokes', () => {
+    const simulation = new Simulation({ seed: 'movement-road-authority', startingPopulation: 24, settlementCount: [2, 2] });
+    const state = simulation.state;
+    for (const settlement of state.settlements) settlement.buildings = 12;
+    state.month = 12;
+    installMovementRoadAuthority();
+    const transport = new TransportationSystem(state);
+    transport.advanceMonth();
+
+    expect(Object.values(state.transportation.projects).some(project => project.reason === 'district-access')).toBe(false);
   });
 });
