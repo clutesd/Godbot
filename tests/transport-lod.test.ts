@@ -80,6 +80,7 @@ describe('transport documentary-scale LODs', () => {
     expect(lod.levels[2]?.object.name).toBe('bridge-regional-silhouette');
     expect(lod.levels[1]?.object.getObjectByName('bridge-metal-truss')).toBeUndefined();
     expect(lod.levels[2]?.object.getObjectByName('bridge-metal-truss')).toBeUndefined();
-    expect(lod.levels[2]?.object.children.length).toBeLessThan(lod.levels[0]?.object.children.length ?? 0);
+    expect(lod.levels[1]?.object.children.length).toBeLessThanOrEqual(5);
+    expect(lod.levels[2]?.object.children.length).toBeLessThanOrEqual(2);
   });
 });
