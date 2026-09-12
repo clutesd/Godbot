@@ -11,6 +11,7 @@ import type { TerrainQueries } from './placement/TerrainQueries';
 import type { TerrainSurface } from './terrain/TerrainSurface';
 import type { WeatherRenderer } from './atmosphere/WeatherRenderer';
 import { createBridgeStructure, createDockStructure } from './transport/TransportStructures';
+import { createBridgePresentationLod, createHarbourPresentationLod } from './transport/TransportLod';
 import { resolveHarbourFootprint, transportPresentationWidth } from './transport/TransportPresentation';
 import {
   collectTransportDebugRecords,
@@ -139,27 +140,37 @@ function enhancedAddRoutePortals(
       const bankPoint = new THREE.Vector3(bankX, bankY, bankZ);
       const logicalWaterPoint = new THREE.Vector3(portal.localX, localY, portal.localZ);
       const footprint = resolveHarbourFootprint(bankPoint, logicalWaterPoint, rank);
-      const dock = createDockStructure({
+      const dockMaterials = {
+        timber: palette.getSurfaceMaterial('timber'),
+        stone: palette.getSurfaceMaterial('stone'),
+        metal: palette.getSurfaceMaterial('metal'),
+        accent: palette.getSurfaceMaterial('motif'),
+        glow: palette.getSurfaceMaterial('glow'),
+        cloth: palette.getSurfaceMaterial('cloth'),
+        shadow: palette.getSurfaceMaterial('shadow'),
+      };
+      const dockDetail = createDockStructure({
         bank: bankPoint,
         water: footprint.visibleWater,
         eraRank: rank,
         identity: `${settlement.id}:${portal.routeId}`,
         activity: harbourActivity,
-        materials: {
-          timber: palette.getSurfaceMaterial('timber'),
-          stone: palette.getSurfaceMaterial('stone'),
-          metal: palette.getSurfaceMaterial('metal'),
-          accent: palette.getSurfaceMaterial('motif'),
-          glow: palette.getSurfaceMaterial('glow'),
-          cloth: palette.getSurfaceMaterial('cloth'),
-          shadow: palette.getSurfaceMaterial('shadow'),
-        },
+        materials: dockMaterials,
         groundAt: (x, z) => self.elevationAt(settlement.position.x + x, settlement.position.z + z) - settlementY,
+      });
+      dockDetail.userData['routeId'] = portal.routeId;
+      const dock = createHarbourPresentationLod({
+        detail: dockDetail,
+        bank: bankPoint,
+        water: footprint.visibleWater,
+        eraRank: rank,
+        materials: dockMaterials,
       });
       dock.userData['routeId'] = portal.routeId;
       dock.userData['logicalHarbourLength'] = footprint.logicalLength;
       dock.userData['visibleHarbourLength'] = footprint.visibleLength;
       dock.userData['harbourFootprintCapped'] = footprint.capped;
+      markWeatherSurface(dock);
       group.add(dock);
 
       // Debug deliberately shows the full logical bank -> navigation-anchor span so a long
@@ -304,11 +315,13 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
     bed.userData['weatherSurface'] = true;
     self.routeGroup.add(bed);
 
-    if (rail || bridge) {
+    // Only rail needs persistent paired lines. Road bridges get their silhouette from the bridge
+    // structure itself; permanent raised edge ribbons were the source of the black-spaghetti look.
+    if (rail) {
       for (const side of [-1, 1]) {
         const line = new THREE.Mesh(
-          transportRibbon(self.state.world, segment, rail ? 0.045 : 0.035, side * width * (rail ? 0.44 : 0.48), rail ? 0.04 : 0.18),
-          new THREE.MeshStandardMaterial({ color: rail ? '#9a9ea0' : '#776958', metalness: rail ? 0.65 : 0.05, roughness: 0.6, side: THREE.DoubleSide }),
+          transportRibbon(self.state.world, segment, 0.03, side * width * 0.42, 0.035),
+          new THREE.MeshStandardMaterial({ color: '#969a9c', metalness: 0.6, roughness: 0.62, side: THREE.DoubleSide }),
         );
         line.userData['weatherSurface'] = true;
         self.routeGroup.add(line);
@@ -316,16 +329,25 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
     }
 
     if (bridge) {
-      const timber = new THREE.MeshStandardMaterial({ color: '#6d4f3d', roughness: 0.96 });
-      const stone = new THREE.MeshStandardMaterial({ color: '#817768', roughness: 0.92 });
-      const metal = new THREE.MeshStandardMaterial({ color: '#666e72', roughness: 0.55, metalness: 0.48 });
-      const structure = createBridgeStructure({
+      const bridgeMaterials = {
+        timber: new THREE.MeshStandardMaterial({ color: '#6d4f3d', roughness: 0.96 }),
+        stone: new THREE.MeshStandardMaterial({ color: '#817768', roughness: 0.92 }),
+        metal: new THREE.MeshStandardMaterial({ color: '#666e72', roughness: 0.55, metalness: 0.48 }),
+      };
+      const bridgeDetail = createBridgeStructure({
         segment,
         width,
         groundAt: (x, z) => self.elevationAt(x, z),
-        timber,
-        stone,
-        metal,
+        timber: bridgeMaterials.timber,
+        stone: bridgeMaterials.stone,
+        metal: bridgeMaterials.metal,
+      });
+      const structure = createBridgePresentationLod({
+        detail: bridgeDetail,
+        segment,
+        width,
+        groundAt: (x, z) => self.elevationAt(x, z),
+        materials: bridgeMaterials,
       });
       markWeatherSurface(structure);
       self.routeGroup.add(structure);
