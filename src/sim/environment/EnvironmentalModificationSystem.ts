@@ -3,13 +3,14 @@ import { clamp01 } from '../terrain/noise';
 import type { ResourceDeposit, SimulationState, Vec2, WorldCell, WorldState } from '../types';
 import type { ModificationKind } from './types';
 import { forestFamily } from './SoilSystem';
-import { advanceMovementPaths } from './PathEvolution';
+import { advanceMovementPaths, installMovementRoadAuthority } from './PathEvolution';
 import { installFootTrafficTracking } from '../people/FootTraffic';
 
 // Full simulations load the environmental system through ResourceSystem. Installing here keeps
 // foot traffic as an environmental side effect of represented movement without changing routing
-// authority or requiring a second people loop. The installer is idempotent.
+// authority or requiring a second people loop. The installers are idempotent.
 installFootTrafficTracking();
+installMovementRoadAuthority();
 
 /** Bounded slots per cell preserve land history without accumulating per-harvest records. */
 export function modifyLand(cell: WorldCell, kind: ModificationKind, intensity: number, month: number, ownerId?: string): void {
