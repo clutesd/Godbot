@@ -2,13 +2,26 @@ import * as THREE from 'three';
 import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
+import { movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
-const FOOTPATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
-const FOOTPATH_FRESH = new THREE.Color('#886b4c');
-const FOOTPATH_WORN = new THREE.Color('#594535');
-const FOOTPATH_VISIBLE_THRESHOLD = 0.022;
+const PATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
+const PATH_COLOURS: Record<Exclude<MovementPathStage, 'none'>, THREE.Color> = {
+  'desire-path': new THREE.Color('#8d775d'),
+  footpath: new THREE.Color('#7b6249'),
+  'packed-track': new THREE.Color('#66523e'),
+  'cart-road': new THREE.Color('#685a46'),
+  'engineered-road': new THREE.Color('#777168'),
+};
+const STAGE_RANK: Record<MovementPathStage, number> = {
+  none: 0,
+  'desire-path': 1,
+  footpath: 2,
+  'packed-track': 3,
+  'cart-road': 4,
+  'engineered-road': 5,
+};
 
-/** Small ground-level work piles: only discovered working/abandoned sites become visible. */
+/** Small ground-level work piles plus persistent movement-shaped paths. */
 export class ResourceSiteRenderer {
   readonly group = new THREE.Group();
   private readonly piles: THREE.InstancedMesh;
@@ -32,7 +45,7 @@ export class ResourceSiteRenderer {
       new THREE.MeshStandardMaterial({
         roughness: 1,
         transparent: true,
-        opacity: 0.76,
+        opacity: 0.8,
         depthWrite: false,
         polygonOffset: true,
         polygonOffsetFactor: -2,
@@ -40,6 +53,8 @@ export class ResourceSiteRenderer {
         side: THREE.DoubleSide,
       }),
     );
+    // Keep the Step-1 object name stable for diagnostics/tests even though the mesh now spans the
+    // whole desire-path -> road hierarchy.
     this.footpaths.name = 'Movement-worn desire paths';
     this.footpaths.receiveShadow = true;
     this.footpaths.frustumCulled = false;
@@ -107,23 +122,25 @@ export class ResourceSiteRenderer {
     this.trails.geometry = new THREE.BufferGeometry();
     this.trails.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
 
-    this.rebuildFootpaths();
+    this.rebuildMovementPaths();
   }
 
-  private rebuildFootpaths(): void {
+  private rebuildMovementPaths(): void {
     const positions: number[] = [];
     const colours: number[] = [];
     const indices: number[] = [];
     const emitted = new Set<string>();
+    const counts: Record<MovementPathStage, number> = { none: 0, 'desire-path': 0, footpath: 0, 'packed-track': 0, 'cart-road': 0, 'engineered-road': 0 };
 
     for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
       const cell = this.world.cells[cellIndex]!;
-      const intensity = cell.modifications?.footpath?.intensity ?? 0;
-      if (cell.water || intensity < FOOTPATH_VISIBLE_THRESHOLD) continue;
-      const neighbourIndex = this.strongestFootpathNeighbour(cellIndex);
+      const stageA = movementPathStage(cell);
+      if (cell.water || stageA === 'none') continue;
+      const neighbourIndex = this.strongestPathNeighbour(cellIndex);
       if (neighbourIndex === undefined) continue;
       const neighbour = this.world.cells[neighbourIndex]!;
-      const neighbourIntensity = neighbour.modifications?.footpath?.intensity ?? 0;
+      const stageB = movementPathStage(neighbour);
+      if (stageB === 'none') continue;
       const edgeKey = cellIndex < neighbourIndex ? `${cellIndex}:${neighbourIndex}` : `${neighbourIndex}:${cellIndex}`;
       if (emitted.has(edgeKey)) continue;
       emitted.add(edgeKey);
@@ -134,8 +151,8 @@ export class ResourceSiteRenderer {
       if (length < 0.001) continue;
       const sideX = -vz / length;
       const sideZ = vx / length;
-      const widthA = this.pathWidth(intensity);
-      const widthB = this.pathWidth(neighbourIntensity);
+      const widthA = this.pathHalfWidth(stageA, movementPathStrength(cell));
+      const widthB = this.pathHalfWidth(stageB, movementPathStrength(neighbour));
       const base = positions.length / 3;
       const corners = [
         [cell.worldX + sideX * widthA, cell.worldZ + sideZ * widthA],
@@ -146,9 +163,11 @@ export class ResourceSiteRenderer {
       for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.022, worldZ);
       indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
 
-      const visualIntensity = Math.min(1, (intensity + neighbourIntensity) * 0.6);
-      this.colour.copy(FOOTPATH_FRESH).lerp(FOOTPATH_WORN, visualIntensity);
-      for (let corner = 0; corner < 4; corner += 1) colours.push(this.colour.r, this.colour.g, this.colour.b);
+      const colourA = PATH_COLOURS[stageA];
+      const colourB = PATH_COLOURS[stageB];
+      for (let corner = 0; corner < 2; corner += 1) colours.push(colourA.r, colourA.g, colourA.b);
+      for (let corner = 0; corner < 2; corner += 1) colours.push(colourB.r, colourB.g, colourB.b);
+      counts[STAGE_RANK[stageA] >= STAGE_RANK[stageB] ? stageA : stageB] += 1;
     }
 
     const geometry = new THREE.BufferGeometry();
@@ -158,30 +177,37 @@ export class ResourceSiteRenderer {
     if (positions.length > 0) geometry.computeVertexNormals();
     this.footpaths.geometry.dispose();
     this.footpaths.geometry = geometry;
+    this.footpaths.userData['pathStageCounts'] = counts;
   }
 
-  private strongestFootpathNeighbour(cellIndex: number): number | undefined {
+  private strongestPathNeighbour(cellIndex: number): number | undefined {
     const cell = this.world.cells[cellIndex];
     if (!cell) return undefined;
     let bestIndex: number | undefined;
-    let bestScore = FOOTPATH_VISIBLE_THRESHOLD;
-    for (const [dx, dz] of FOOTPATH_NEIGHBOURS) {
+    let bestScore = 0;
+    for (const [dx, dz] of PATH_NEIGHBOURS) {
       const x = cell.x + dx;
       const z = cell.z + dz;
       if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
       const index = z * this.world.size + x;
       const neighbour = this.world.cells[index];
-      if (!neighbour || neighbour.water) continue;
-      const intensity = neighbour.modifications?.footpath?.intensity ?? 0;
-      if (intensity <= bestScore) continue;
-      bestScore = intensity;
+      if (!neighbour || neighbour.water || movementPathStage(neighbour) === 'none') continue;
+      const diagonalPenalty = dx !== 0 && dz !== 0 ? 0.94 : 1;
+      const score = movementPathStrength(neighbour) * diagonalPenalty;
+      if (score <= bestScore) continue;
+      bestScore = score;
       bestIndex = index;
     }
     return bestIndex;
   }
 
-  private pathWidth(intensity: number): number {
-    const halfWidth = this.world.cellSize * (0.028 + Math.sqrt(Math.min(1, intensity)) * 0.055);
-    return Math.min(this.world.cellSize * 0.095, halfWidth);
+  private pathHalfWidth(stage: Exclude<MovementPathStage, 'none'>, strength: number): number {
+    const base = stage === 'desire-path' ? 0.018
+      : stage === 'footpath' ? 0.027
+        : stage === 'packed-track' ? 0.043
+          : stage === 'cart-road' ? 0.064
+            : 0.082;
+    const growth = stage === 'engineered-road' ? 0.032 : stage === 'cart-road' ? 0.026 : 0.018;
+    return this.world.cellSize * Math.min(0.12, base + Math.sqrt(Math.min(1.5, strength)) * growth);
   }
 }
