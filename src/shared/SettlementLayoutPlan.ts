@@ -1,6 +1,6 @@
 import { SeededRandom } from '../sim/prng';
 import type { Settlement, TradeRoute, Vec2 } from '../sim/types';
-import type { TransportationState } from '../sim/transport/types';
+import type { TransportationState, TransportStop } from '../sim/transport/types';
 import type { DevelopmentResponse } from '../sim/development/types';
 
 /**
@@ -93,7 +93,7 @@ export function createSettlementLayoutPlan(input: SettlementLayoutInput): Settle
   })) as Record<BuildingDistrict, LayoutAnchor>;
 
   const portals = createRoutePortals(settlement, settlements, activeRoutes, baseRadius, input.transportation);
-  const streets = createStreetSegments(anchors, portals, baseRadius, eraRank);
+  const streets = createStreetSegments(anchors, portals, baseRadius, eraRank, settlement.position);
   return { radius: baseRadius, anchors, portals, streets };
 }
 
@@ -153,33 +153,70 @@ function industrialFacingAngle(settlement: Settlement, routes: readonly TradeRou
   return Math.atan2(other.position.z - settlement.position.z, other.position.x - settlement.position.x);
 }
 
-function createRoutePortals(settlement: Settlement, settlements: readonly Settlement[], routes: readonly TradeRoute[], cityRadius: number, infrastructure?: TransportationState): RoutePortal[] {
-  return routes.flatMap((route) => {
-    const otherId = route.a === settlement.id ? route.b : route.a;
-    const other = settlements.find((candidate) => candidate.id === otherId);
-    if (!other) return [];
-    const angle = Math.atan2(other.position.z - settlement.position.z, other.position.x - settlement.position.x);
-    const portalDistance = cityRadius * 1.08;
-    const stop = (route.mode === 'water' ? ['water', 'rail', 'road'] : ['rail', 'road', 'water'])
-      .map(mode => infrastructure?.stops[`${settlement.id}:${mode}`]).find(stop => stop?.status === 'complete');
-    const rail = stop ? stop.kind === 'station' : route.transport?.path?.mode === 'rail';
-    const water = stop ? stop.kind === 'port' : route.transport?.path?.mode === 'water';
-    const kind: RoutePortal['kind'] = water ? 'dock' : rail ? 'station' : 'gate';
-    const mode: RoutePortal['mode'] = rail ? 'rail' : water ? 'water' : 'land';
-    const path = route.transport?.path;
-    if (!path && !stop) return [];
-    const endpoint = stop?.position ?? (path ? (route.a === settlement.id ? path.points[0] : path.points[path.points.length - 1]) : undefined);
-    const localX = endpoint ? endpoint.x - settlement.position.x : Math.cos(angle) * portalDistance;
-    const localZ = endpoint ? endpoint.z - settlement.position.z : Math.sin(angle) * portalDistance;
-    return [{ routeId: route.id, mode, kind, localX, localZ, worldX: settlement.position.x + localX, worldZ: settlement.position.z + localZ, angle, bank: stop?.kind === 'port' ? stop.access[stop.access.length - 1] : undefined }];
-  });
+function completedStopForMode(settlementId: string, mode: 'road' | 'rail' | 'water', infrastructure?: TransportationState): TransportStop | undefined {
+  const stop = infrastructure?.stops[`${settlementId}:${mode}`];
+  return stop?.status === 'complete' ? stop : undefined;
 }
 
-function createStreetSegments(anchors: Record<BuildingDistrict, LayoutAnchor>, portals: readonly RoutePortal[], cityRadius: number, eraRankValue: number): StreetSegment[] {
+function createRoutePortals(settlement: Settlement, settlements: readonly Settlement[], routes: readonly TradeRoute[], cityRadius: number, infrastructure?: TransportationState): RoutePortal[] {
+  const portals: RoutePortal[] = [];
+  const representedInfrastructure = new Set<string>();
+
+  for (const route of routes) {
+    const otherId = route.a === settlement.id ? route.b : route.a;
+    const other = settlements.find((candidate) => candidate.id === otherId);
+    if (!other) continue;
+
+    const path = route.transport?.path;
+    if (!path) continue;
+    const networkMode: 'road' | 'rail' | 'water' = path.mode === 'water' ? 'water' : path.mode === 'rail' ? 'rail' : 'road';
+    const stop = completedStopForMode(settlement.id, networkMode, infrastructure);
+
+    // When authoritative transportation state exists, a route may only render through its own
+    // commissioned stop. Never borrow a water stop for a road/rail route (or vice versa).
+    if (infrastructure && !stop) continue;
+
+    const kind: RoutePortal['kind'] = networkMode === 'water' ? 'dock' : networkMode === 'rail' ? 'station' : 'gate';
+    const mode: RoutePortal['mode'] = networkMode === 'water' ? 'water' : networkMode === 'rail' ? 'rail' : 'land';
+    const endpoint = stop?.position ?? (route.a === settlement.id ? path.points[0] : path.points[path.points.length - 1]);
+    if (!endpoint) continue;
+
+    // A physical stop is a piece of settlement infrastructure, not one object per trade partner.
+    // All water routes therefore share the same harbour, all rail routes the same station, etc.
+    const infrastructureKey = stop?.id ?? `${settlement.id}:${networkMode}`;
+    if (representedInfrastructure.has(infrastructureKey)) continue;
+    representedInfrastructure.add(infrastructureKey);
+
+    const routeAngle = Math.atan2(other.position.z - settlement.position.z, other.position.x - settlement.position.x);
+    const portalDistance = cityRadius * 1.08;
+    const bank = stop?.kind === 'port' ? stop.access[stop.access.length - 1] : undefined;
+    const localX = endpoint ? endpoint.x - settlement.position.x : Math.cos(routeAngle) * portalDistance;
+    const localZ = endpoint ? endpoint.z - settlement.position.z : Math.sin(routeAngle) * portalDistance;
+    const angle = kind === 'dock' && bank
+      ? Math.atan2(endpoint.z - bank.z, endpoint.x - bank.x)
+      : routeAngle;
+
+    portals.push({ routeId: route.id, mode, kind, localX, localZ, worldX: settlement.position.x + localX, worldZ: settlement.position.z + localZ, angle, ...(bank ? { bank } : {}) });
+  }
+
+  return portals;
+}
+
+function createStreetSegments(
+  anchors: Record<BuildingDistrict, LayoutAnchor>,
+  portals: readonly RoutePortal[],
+  cityRadius: number,
+  eraRankValue: number,
+  settlementPosition: Vec2,
+): StreetSegment[] {
   const width = eraRankValue >= 4 ? 0.34 : eraRankValue >= 2 ? 0.26 : 0.18;
   const segments: StreetSegment[] = [];
   for (const portal of portals) {
-    segments.push({ kind: 'primary', fromX: portal.localX, fromZ: portal.localZ, toX: anchors.market.localX, toZ: anchors.market.localZ, width: width * 1.2 });
+    // Roads meet a harbour on the dry bank. They should never be drawn from the offshore end of
+    // the pier back through water or cliff terrain toward the market.
+    const fromX = portal.kind === 'dock' && portal.bank ? portal.bank.x - settlementPosition.x : portal.localX;
+    const fromZ = portal.kind === 'dock' && portal.bank ? portal.bank.z - settlementPosition.z : portal.localZ;
+    segments.push({ kind: 'primary', fromX, fromZ, toX: anchors.market.localX, toZ: anchors.market.localZ, width: width * 1.2 });
   }
   segments.push({ kind: 'primary', fromX: anchors.market.localX, fromZ: anchors.market.localZ, toX: anchors.civic.localX, toZ: anchors.civic.localZ, width: width * 1.15 });
   for (const district of ['sacred', 'residential', 'craft', 'industrial'] as const) {
