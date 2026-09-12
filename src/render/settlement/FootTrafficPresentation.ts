@@ -1,14 +1,13 @@
 import './SettlementStreetPresentation';
-import * as THREE from 'three';
 import { GodboxRenderer } from '../GodboxRenderer';
 import { eraRank } from '../assets/BuildingGrammar';
 import type { Era, MaterialPalette } from '../materials/MaterialPalette';
 
 /**
- * Young settlements should not begin with a planned hub-and-spoke street diagram. Until a society
- * has enough urban/engineering maturity to deliberately maintain streets, the visible circulation
- * network comes from movement-worn terrain rendered by ResourceSiteRenderer. We keep only a small
- * trodden common around the civic hearth so the settlement still has a readable centre.
+ * Primitive and early settlements have no synthetic street/common overlay. Their visible ground
+ * circulation is entirely movement-worn terrain from ResourceSiteRenderer, so the shape of the
+ * settlement records actual journeys instead of a radial planning template. Deliberately planned
+ * ground craft returns only once the settlement reaches village/urban street-building maturity.
  */
 type GroundCraftMethod = (
   this: GodboxRenderer,
@@ -29,23 +28,7 @@ if (plannedGroundCraft) {
     palette: MaterialPalette,
     random: unknown,
   ): void {
-    const rank = eraRank(era);
-    if (rank >= 2) {
-      plannedGroundCraft.call(this, group, era, palette, random);
-      return;
-    }
-
-    const radius = rank === 0 ? 1.3 : 1.55;
-    const earth = new THREE.Mesh(
-      new THREE.CircleGeometry(radius, 18),
-      new THREE.MeshStandardMaterial({ color: rank === 0 ? '#756149' : '#80694d', roughness: 1, transparent: true, opacity: 0.78, depthWrite: false }),
-    );
-    earth.name = 'settlement-trodden-common';
-    earth.rotation.x = -Math.PI / 2;
-    earth.scale.y = 0.84;
-    earth.position.y = 0.014;
-    earth.receiveShadow = true;
-    earth.userData['weatherSurface'] = true;
-    group.add(earth);
+    if (eraRank(era) < 2) return;
+    plannedGroundCraft.call(this, group, era, palette, random);
   }) as GroundCraftMethod;
 }
