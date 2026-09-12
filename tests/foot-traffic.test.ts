@@ -8,7 +8,7 @@ import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { ResourceSiteRenderer } from '../src/render/resources/ResourceSiteRenderer';
 
 describe('movement-driven desire paths', () => {
-  it('turns repeated real pedestrian movement into persistent visible track wear', () => {
+  it('turns repeated real pedestrian movement into persistent visible footpath wear', () => {
     const simulation = new Simulation({ seed: 'desire-path-regression', startingPopulation: 36, settlementCount: [2, 2] });
     const world = simulation.state.world;
     const walking = new WalkabilityLayer(world);
@@ -40,10 +40,11 @@ describe('movement-driven desire paths', () => {
       recordFootTrafficSegment(world, from, to, 24, 'settlement-test');
     }
 
-    expect(fromCell.modifications?.track?.intensity).toBeGreaterThan(0.05);
-    expect(toCell.modifications?.track?.intensity).toBeGreaterThan(0.05);
-    expect(fromCell.modifications?.track?.firstMonth).toBe(24);
-    expect(fromCell.modifications?.track?.lastMonth).toBe(24);
+    expect(fromCell.modifications?.footpath?.intensity).toBeGreaterThan(0.05);
+    expect(toCell.modifications?.footpath?.intensity).toBeGreaterThan(0.05);
+    expect(fromCell.modifications?.footpath?.firstMonth).toBe(24);
+    expect(fromCell.modifications?.footpath?.lastMonth).toBe(24);
+    expect(fromCell.modifications?.track).toBeUndefined();
 
     const renderer = new ResourceSiteRenderer(world, new TerrainSurface(world));
     renderer.update();
@@ -56,9 +57,9 @@ describe('movement-driven desire paths', () => {
     const simulation = new Simulation({ seed: 'desire-path-jump', startingPopulation: 24, settlementCount: [2, 2] });
     const world = simulation.state.world;
     const start = simulation.state.settlements[0]!.position;
-    const before = world.cells.filter(cell => (cell.modifications?.track?.intensity ?? 0) > 0).length;
+    const before = world.cells.filter(cell => (cell.modifications?.footpath?.intensity ?? 0) > 0).length;
     recordFootTrafficSegment(world, start, { x: start.x + world.cellSize * 5, z: start.z }, 4, simulation.state.settlements[0]!.id);
-    const after = world.cells.filter(cell => (cell.modifications?.track?.intensity ?? 0) > 0).length;
+    const after = world.cells.filter(cell => (cell.modifications?.footpath?.intensity ?? 0) > 0).length;
     expect(after).toBe(before);
   });
 });
