@@ -3,6 +3,7 @@ import { clamp01 } from '../terrain/noise';
 import type { ResourceDeposit, SimulationState, Vec2, WorldCell, WorldState } from '../types';
 import type { ModificationKind } from './types';
 import { forestFamily } from './SoilSystem';
+import { advanceMovementPaths } from './PathEvolution';
 import { installFootTrafficTracking } from '../people/FootTraffic';
 
 // Full simulations load the environmental system through ResourceSystem. Installing here keeps
@@ -73,6 +74,9 @@ export function wearExtractionPath(world: WorldState, path: Vec2[], amount: numb
 /** Annual succession, soil loss and land-use footprint. Wood regrowth remains in WeatherSystem. */
 export function advanceEnvironment(state: SimulationState): void {
   if (state.month % 12 !== 0) return;
+  // Movement is allowed to become infrastructure before abandonment/recovery is assessed, so an
+  // actively used corridor renews its own maintenance clock rather than being faded in the same year.
+  advanceMovementPaths(state);
   const living = new Set(state.settlements.filter(s => s.alive).map(s => s.id));
   for (const s of state.settlements) {
     const home = state.world.cells[s.cellIndex];
@@ -97,8 +101,13 @@ export function advanceEnvironment(state: SimulationState): void {
     for (const [kind, mark] of Object.entries(cell.modifications ?? {})) {
       if ((mark.ownerId && !living.has(mark.ownerId)) || state.month - mark.lastMonth > 120) mark.abandonedMonth ??= state.month;
       if (mark.abandonedMonth !== undefined) {
-        // A quarry or ruin remains legible for millennia; fields and tracks recover over decades.
-        mark.intensity *= ['mine', 'quarry', 'ruin'].includes(kind) ? 0.9995 : kind === 'industry' ? 0.995 : 0.975;
+        // Engineered roadbeds linger longer than dirt tracks; both still disappear without use and maintenance.
+        const decay = ['mine', 'quarry', 'ruin'].includes(kind) ? 0.9995
+          : kind === 'industry' ? 0.995
+            : kind === 'road' ? 0.992
+              : kind === 'cart-road' ? 0.985
+                : 0.975;
+        mark.intensity *= decay;
       }
     }
     if (cell.ecology) {
