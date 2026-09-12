@@ -1,3 +1,4 @@
+import '../GodboxRendererEnhanced';
 import type { SimulationState, War } from '../../sim/types';
 import { WAR_CAUSES, WAR_CHAPTERS } from '../../historian/WarStory';
 
