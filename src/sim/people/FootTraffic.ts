@@ -27,8 +27,8 @@ function applyFootpathWear(cell: WorldCell, amount: number, month: number, owner
  * Records one actually-walked segment as persistent landscape wear. This is deliberately much
  * weaker than an engineered road: a single traveller leaves almost nothing, while repeated
  * movement by a community gradually exposes a desire path. Pedestrian wear uses its own
- * `footpath` modification so Step 1 remains observational: existing extraction-track economics
- * are unchanged until a later road-promotion step explicitly chooses to use this evidence.
+ * `footpath` modification so movement pressure remains distinct from extraction tracks and built
+ * road capital.
  */
 export function recordFootTrafficSegment(
   world: WorldState,
@@ -76,11 +76,10 @@ let trafficInstalled = false;
 let organicRoutingInstalled = false;
 
 /**
- * Early circulation must be discovered from geography and destinations, not inherited from the
- * renderer's abstract district diagram. Primitive and early settlements therefore provide no
- * residential/civic/district waypoint hints: WalkabilityLayer finds the safest useful route to the
- * real destination. Once a settlement reaches deliberate street-building maturity (rank >= 2),
- * the existing planned-road preferences are allowed back in.
+ * Local circulation stays geography-led through primitive, village and pre-industrial eras. Those
+ * societies therefore provide no residential/civic/district template hints: WalkabilityLayer finds
+ * the terrain-safe route to the real destination and repeated use decides which corridors survive.
+ * Only industrial/advanced settlements (rank >= 4) regain deliberate planned-waypoint behaviour.
  */
 function installOrganicEarlyRouting(): void {
   if (organicRoutingInstalled) return;
@@ -95,7 +94,7 @@ function installOrganicEarlyRouting(): void {
     state: SimulationState,
     destination: DestinationKind,
   ): Vec2[] {
-    if (settlementEraRank(settlement, state) <= 1) return [];
+    if (settlementEraRank(settlement, state) < 4) return [];
     return plannedWaypoints.call(this, person, settlement, state, destination);
   }) as PreferredRoadWaypoints;
 }
