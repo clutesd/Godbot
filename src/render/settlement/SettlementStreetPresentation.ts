@@ -62,7 +62,7 @@ function worldPoint(settlement: Settlement, localX: number, localZ: number): Vec
 function routeForStreet(
   renderer: GodboxRenderer,
   self: RendererInternals,
-  settlement: Settlement,
+  _settlement: Settlement,
   start: Vec2,
   end: Vec2,
   identity: string,
