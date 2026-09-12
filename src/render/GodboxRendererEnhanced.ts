@@ -165,5 +165,13 @@ export class GodboxRenderer extends (BaseGodboxRenderer as unknown as new (...ar
   }
 }
 
+// The production entry point still imports the established renderer module. Installing these
+// two presentation methods on that prototype keeps the rest of the renderer untouched while
+// making the richer transport grammar active everywhere the base renderer is instantiated.
+const basePrototype = BaseGodboxRenderer.prototype as any;
+const enhancedPrototype = GodboxRenderer.prototype as any;
+basePrototype.addRoutePortals = enhancedPrototype.addRoutePortals;
+basePrototype.syncRoutes = enhancedPrototype.syncRoutes;
+
 export { CANONICAL_ADULT_HEIGHT, NOTABLE_VISUAL_BUDGET, visiblePersonBudgetForDensity } from './GodboxRenderer';
 export type { PlacementSmokeReport, PersonPresentation } from './GodboxRenderer';
