@@ -60,28 +60,30 @@ let installed = false;
 
 /**
  * Instruments the existing PeopleSystem without changing its navigation authority. We observe the
- * position before and after `advancePerson`; only a short, genuinely walkable on-foot movement is
- * allowed to wear the ground. Teleports, flood evacuation jumps, rail and water travel cannot
- * create paths.
+ * position before and after `advancePerson`; only a short movement that began as an on-foot trip is
+ * allowed to wear the ground. The PeopleSystem already validates every walking leg before moving,
+ * so this observer deliberately avoids repeating its expensive segment-validation work.
  */
 export function installFootTrafficTracking(): void {
   if (installed) return;
   installed = true;
   const original = PeopleSystem.prototype.advancePerson;
   PeopleSystem.prototype.advancePerson = function trackedAdvancePerson(
+    this: PeopleSystem,
     person: Person,
     settlement: Settlement,
     state: SimulationState,
   ): void {
     const from = { ...person.position };
+    const wasTraveling = person.navigation?.traveling === true;
     const crossingMode = person.navigation?.crossingMode ?? 'walk';
     original.call(this, person, settlement, state);
 
-    if (crossingMode !== 'walk' || !person.alive) return;
+    if (!wasTraveling || crossingMode !== 'walk' || !person.alive) return;
+    if (person.navigation?.schedulePhase === 'emergency') return;
     const distance = Math.hypot(person.position.x - from.x, person.position.z - from.z);
     if (distance < 0.025 || distance > state.world.cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
     if (!this.walkability.isWalkable(from) || !this.walkability.isWalkable(person.position)) return;
-    if (!this.walkability.isSegmentWalkable(from, person.position)) return;
 
     recordFootTrafficSegment(state.world, from, person.position, state.month, settlement.id, trafficWeight(person));
   };
