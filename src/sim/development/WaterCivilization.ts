@@ -113,7 +113,7 @@ export function advanceSettlementWater(
   // Separate productive output from household consumption so irrigation only changes production.
   const baselineConsumption = residents.length * (0.31 + settlement.urbanization * 0.018);
   const estimatedProduction = Math.max(0, settlement.monthlyBalance.food + baselineConsumption);
-  const waterYieldFactor = Math.max(0.48, Math.min(1.24,
+  const waterYieldFactor = Math.max(1, Math.min(1.24,
     0.78 + reliability * 0.15 + irrigation * 0.34 - droughtStress * 0.42 - floodContamination * 0.08));
   const foodDelta = estimatedProduction * (waterYieldFactor - 1);
   settlement.monthlyBalance.food += foodDelta;

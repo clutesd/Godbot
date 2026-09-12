@@ -16,10 +16,25 @@ export interface Vec3 {
 
 type LocalMap = (x: number, y: number, z: number) => Vec3;
 
+/** 0 = x, 1 = y, 2 = z. */
+function dominantAxis(x: number, y: number, z: number): number {
+  const ax = Math.abs(x);
+  const ay = Math.abs(y);
+  const az = Math.abs(z);
+  if (ay >= ax && ay >= az) return 1;
+  return az > ax ? 2 : 0;
+}
+
 export class GeometryBuilder {
   private readonly positions: number[] = [];
   private readonly normals: number[] = [];
   private readonly indices: number[] = [];
+  /** (weathering, tone jitter, grain axis, unused) per vertex as normalized bytes; only materialised once something asks for it. */
+  private readonly details: number[] = [];
+  private detailUsed = false;
+  private wear = 0;
+  private tone = 0;
+  private grain = 0;
 
   get isEmpty(): boolean {
     return this.indices.length === 0;
@@ -27,6 +42,24 @@ export class GeometryBuilder {
 
   get triangleCount(): number {
     return this.indices.length / 3;
+  }
+
+  /**
+   * Age and use for everything emitted from now on. `wear` darkens, dulls and desaturates in the
+   * shared surface shader; `tone` is a small deterministic lightness offset per building.
+   * The macro architecture is untouched — this only drives shading.
+   */
+  setWeathering(wear: number, tone = 0): void {
+    this.wear = Math.round(Math.max(0, Math.min(1, wear)) * 127);
+    this.tone = Math.round(Math.max(-1, Math.min(1, tone)) * 127);
+    if (this.wear !== 0 || this.tone !== 0) this.ensureDetail();
+  }
+
+  private ensureDetail(): void {
+    if (this.detailUsed) return;
+    this.detailUsed = true;
+    const vertices = this.positions.length / 3;
+    for (let index = 0; index < vertices * 4; index += 1) this.details.push(0);
   }
 
   addTriangle(a: Vec3, b: Vec3, c: Vec3): void {
@@ -48,6 +81,9 @@ export class GeometryBuilder {
     this.positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
     this.normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
     this.indices.push(base, base + 1, base + 2);
+    if (this.detailUsed) {
+      for (let index = 0; index < 3; index += 1) this.details.push(this.wear, this.tone, this.grain, 0);
+    }
   }
 
   addQuad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
@@ -67,12 +103,14 @@ export class GeometryBuilder {
   ): void {
     const cos = Math.cos(rotationY);
     const sin = Math.sin(rotationY);
+    this.setGrainAxis(dominantAxis(sizeX, sizeY, sizeZ), Math.abs(sin) > Math.abs(cos));
     const map: LocalMap = (x, y, z) => ({
       x: centerX + x * cos + z * sin,
       y: centerY + y,
       z: centerZ - x * sin + z * cos,
     });
     this.emitBox(map, sizeX / 2, sizeY / 2, -sizeZ / 2, sizeZ / 2);
+    this.grain = 0;
   }
 
   /** Box swept between two points — rafters, braces, trusses, railings. */
@@ -85,6 +123,7 @@ export class GeometryBuilder {
     dx /= length;
     dy /= length;
     dz /= length;
+    this.setGrainAxis(dominantAxis(dx, dy, dz), false);
     const nearVertical = Math.abs(dy) > 0.94;
     const upY = nearVertical ? 0 : 1;
     const upZ = nearVertical ? 1 : 0;
@@ -104,6 +143,7 @@ export class GeometryBuilder {
       z: from.z + rz * x + uz * y + dz * z,
     });
     this.emitBox(map, width / 2, thickness / 2, 0, length);
+    this.grain = 0;
   }
 
   /** Loft a closed strip between two rings of equal length. */
@@ -144,9 +184,19 @@ export class GeometryBuilder {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(this.normals, 3));
+    if (this.detailUsed) {
+      geometry.setAttribute('aSurfaceDetail', new THREE.Int8BufferAttribute(this.details, 4, true));
+    }
     geometry.setIndex(this.indices);
     geometry.computeBoundingSphere();
     return geometry;
+  }
+
+  /** Timber and sheet materials run their grain along the element's long axis. */
+  private setGrainAxis(axis: number, swapHorizontal: boolean): void {
+    const resolved = swapHorizontal && axis !== 1 ? 2 - axis : axis;
+    this.grain = resolved === 0 ? 0 : resolved === 1 ? 63 : 127;
+    if (this.grain !== 0) this.ensureDetail();
   }
 
   private emitBox(map: LocalMap, halfX: number, halfY: number, zMin: number, zMax: number): void {

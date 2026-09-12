@@ -1,5 +1,7 @@
 import type { GodboxConfig } from '../config';
 import { SeededRandom } from './prng';
+import { initializeEnvironment } from './environment/SoilSystem';
+import { generateResourceDeposits } from './resources/WorldResourceSystem';
 import { createCellResourceState } from './resources/WorldResources';
 import { computeRockiness, synthesizeHeightfield } from './terrain/Heightfield';
 import { carveChannels, computeHydrology, enforceChannelDescent, type Hydrology } from './terrain/Hydrology';

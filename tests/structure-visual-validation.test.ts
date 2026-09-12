@@ -121,8 +121,29 @@ describe('structure renderer and performance validation', () => {
     const hallPeers = ['government', 'knowledge', 'healthcare', 'security'].map(id => byId.get(id)!.midSignature);
 
     expect(new Set(hallPeers).size).toBe(4);
-    expect(summary.midSignatureCount).toBeGreaterThanOrEqual(9);
-    expect(summary.farSignatureCount).toBeGreaterThanOrEqual(6);
+    // No two building purposes may collapse into the same settlement-view identity.
+    expect(summary.midSignatureCount).toBe(ARCHITECTURE_GALLERY_CASES.length);
+    expect(summary.farSignatureCount).toBeGreaterThanOrEqual(10);
+  });
+
+  it('distinguishes purpose by frontage and skyline feature rather than by colour', () => {
+    const summary = architectureGallerySummary('gallery-culture', CULTURE);
+    const byId = new Map(summary.profiles.map(profile => [profile.id, profile]));
+
+    expect(byId.get('trade')!.frontage).toBe('market-stalls');
+    expect(byId.get('government')!.frontage).toBe('portico');
+    expect(byId.get('knowledge')!.frontage).toBe('colonnade');
+    expect(byId.get('healthcare')!.frontage).toBe('ward-pavilion');
+    expect(byId.get('security')!.frontage).toBe('guard-screen');
+    expect(byId.get('transport')!.frontage).toBe('loading-dock');
+    expect(byId.get('manufacturing')!.frontage).toBe('work-yard');
+    expect(byId.get('religion')!.crown).toBe('spire');
+    expect(byId.get('energy')!.crown).toBe('cooling-mass');
+    expect(byId.get('water')!.crown).toBe('water-tank');
+
+    // Every purpose carries its own working props, and no two share a frontage/crown pair.
+    expect(summary.profiles.every(profile => profile.props !== 'none')).toBe(true);
+    expect(summary.purposeCueCount).toBeGreaterThanOrEqual(10);
   });
 
   it('keeps full procedural detail bounded while runtime LODs carry the distance budget', () => {
@@ -150,6 +171,19 @@ describe('structure renderer and performance validation', () => {
     expect(lods.every(lod => lod.levels[1]!.distance === 20 && lod.levels[2]!.distance === 42)).toBe(true);
     expect(Math.max(...lods.map(lod => vertexCount(lod.levels[1]!.object)))).toBeLessThan(1200);
     expect(Math.max(...lods.map(lod => vertexCount(lod.levels[2]!.object)))).toBeLessThan(100);
+
+    // A crowned structure must not grow or shrink as it crosses a LOD boundary.
+    for (const lod of lods) {
+      const heights = lod.levels.map(level => {
+        const size = new THREE.Vector3();
+        new THREE.Box3().setFromObject(level.object).getSize(size);
+        return size.y;
+      });
+      expect(heights[1]! / heights[0]!).toBeGreaterThan(0.8);
+      expect(heights[1]! / heights[0]!).toBeLessThan(1.25);
+      expect(heights[2]! / heights[0]!).toBeGreaterThan(0.7);
+      expect(heights[2]! / heights[0]!).toBeLessThan(1.15);
+    }
 
     // Even after simplification, council/academy/hospital/garrison massing must not collapse to
     // one generic hall silhouette.

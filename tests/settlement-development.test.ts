@@ -110,7 +110,7 @@ describe('Persistent society and construction', () => {
     run(state, 130);
     const site = s!.structurePlots!.find(p => p.id === plotId)!;
     expect(site.development?.status).toBe('abandoned');
-    expect(s!.resources).toEqual(resources);
+    for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) expect(s!.resources[key]).toBe(resources[key]);
     const condition = site.condition;
     repairWeatherDamage(s!, 20, state.month + 1);
     expect(site.condition).toBe(condition);
@@ -176,7 +176,7 @@ describe('Persistent society and construction', () => {
     const resources = { ...s!.resources };
     run(state, 48);
     expect(s!.development?.project).toBeUndefined();
-    expect(s!.resources).toEqual(resources);
+    for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) expect(s!.resources[key]).toBe(resources[key]);
     expect(s!.structurePlots).toHaveLength(4);
   });
 

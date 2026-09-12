@@ -78,7 +78,7 @@ describe('ResourceSystem discovery and gathering', () => {
     s!.discoveredDeposits.push(deposit.id);
     const system = new ResourceSystem(new SeededRandom('gather-test'));
     for (let month = 0; month < 6; month += 1) { state.month = month; system.advanceMonth(state); }
-    expect(s!.materials['wild-herbs']).toBeGreaterThan(0);
+    expect(s!.localMaterials['wild-herbs']).toBeGreaterThan(0);
     expect(s!.workedDeposits).toContain(deposit.id);
   });
 
@@ -119,9 +119,9 @@ describe('ResourceSystem recipe crafting', () => {
     const { state, settlements: [s] } = societyFixture();
     state.world.resourceDeposits = [];
     s!.infrastructure.workshops = 0.2;
-    s!.materials['copper-ore'] = 30;
-    s!.materials['tin-ore'] = 30;
-    s!.materials['timber'] = 60;
+    s!.localMaterials['copper-ore'] = 30;
+    s!.localMaterials['tin-ore'] = 30;
+    s!.localMaterials['timber'] = 60;
     return { state, s: s! };
   }
 
@@ -130,7 +130,7 @@ describe('ResourceSystem recipe crafting', () => {
     const system = new ResourceSystem(new SeededRandom('no-knowledge'));
     for (let month = 0; month < 6; month += 1) { state.month = month; system.advanceMonth(state); }
     expect(s.knownRecipes).not.toContain('bronze-ingot');
-    expect(s.materials['bronze'] ?? 0).toBe(0);
+    expect(s.localMaterials['bronze'] ?? 0).toBe(0);
   });
 
   it('crafts bronze once metal-smelting knowledge and inputs are both available', () => {
@@ -144,8 +144,8 @@ describe('ResourceSystem recipe crafting', () => {
       if (events.some((event) => event.type === 'recipe-learned' && event.context?.recipe === 'bronze-ingot')) learnedEvent = true;
     }
     expect(s.knownRecipes).toContain('bronze-ingot');
-    expect(s.materials['bronze']).toBeGreaterThan(0);
-    expect(s.materials['copper-ore']).toBeLessThan(30);
+    expect(s.localMaterials['bronze']).toBeGreaterThan(0);
+    expect(s.localMaterials['copper-ore']).toBeLessThan(30);
     expect(learnedEvent).toBe(true);
   });
 });
@@ -156,13 +156,13 @@ describe('ResourceSystem settlement consequences', () => {
     state.world.resourceDeposits = [];
     s!.foodSecurity = 0.5;
     residents(state, s!).forEach(p => { p.health = 0.6; });
-    s!.materials['herbal-remedy'] = 50;
+    s!.localMaterials['herbal-remedy'] = 50;
     const system = new ResourceSystem(new SeededRandom('remedy-test'));
     state.month = 1;
     system.advanceMonth(state);
     expect(residents(state, s!)[0]!.health).toBeGreaterThan(0.6);
     expect(s!.foodSecurity).toBe(0.5);
-    expect(s!.materials['herbal-remedy']).toBeLessThan(50);
+    expect(s!.localMaterials['herbal-remedy']).toBeLessThan(50);
   });
 
   it('resource definitions are catalogued for every material referenced by recipes', () => {

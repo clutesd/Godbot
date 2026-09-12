@@ -15,7 +15,7 @@ export function storageCapacity(s: Settlement): number {
 }
 
 export function storedVolume(s: Settlement): number {
-  return Object.values(s.materials).reduce((sum, n) => sum + Math.max(0, n), 0)
+  return Object.values(s.localMaterials).reduce((sum, n) => sum + Math.max(0, n), 0)
     + materialEconomy(s).inTransit.reduce((sum, shipment) => sum + shipment.quantity, 0);
 }
 
@@ -23,8 +23,8 @@ export function storageRoom(s: Settlement): number { return Math.max(0, storageC
 
 /** Existing construction/repair/industry budgets spend these projections. They never create deposits. */
 export function publishBulkStocks(s: Settlement): void {
-  s.resources.wood = s.materials.timber ?? 0;
-  s.resources.minerals = s.materials.stone ?? 0;
+  s.resources.wood = s.localMaterials.timber ?? 0;
+  s.resources.minerals = s.localMaterials.stone ?? 0;
   materialEconomy(s).bulkSnapshot = { wood: s.resources.wood, minerals: s.resources.minerals };
 }
 
@@ -33,7 +33,7 @@ export function reconcileBulkStocks(s: Settlement): void {
   const previous = materialEconomy(s).bulkSnapshot;
   for (const [bulk, id] of [['wood', 'timber'], ['minerals', 'stone']] as const) {
     const spent = Math.max(0, previous[bulk] - s.resources[bulk]);
-    s.materials[id] = Math.max(0, (s.materials[id] ?? 0) - spent);
+    s.localMaterials[id] = Math.max(0, (s.localMaterials[id] ?? 0) - spent);
   }
   publishBulkStocks(s);
 }
@@ -42,18 +42,18 @@ export function addMaterial(s: Settlement, id: string, requested: number, qualit
   reconcileBulkStocks(s);
   const quantity = Math.min(Math.max(0, requested), storageRoom(s));
   if (!quantity) return 0;
-  const old = s.materials[id] ?? 0;
+  const old = s.localMaterials[id] ?? 0;
   const economy = materialEconomy(s);
   economy.quality[id] = ((economy.quality[id] ?? 0.5) * old + quality * quantity) / (old + quantity);
-  s.materials[id] = old + quantity;
+  s.localMaterials[id] = old + quantity;
   publishBulkStocks(s);
   return quantity;
 }
 
 export function takeMaterial(s: Settlement, id: string, requested: number): number {
   reconcileBulkStocks(s);
-  const quantity = Math.min(Math.max(0, requested), Math.max(0, s.materials[id] ?? 0));
-  s.materials[id] = Math.max(0, (s.materials[id] ?? 0) - quantity);
+  const quantity = Math.min(Math.max(0, requested), Math.max(0, s.localMaterials[id] ?? 0));
+  s.localMaterials[id] = Math.max(0, (s.localMaterials[id] ?? 0) - quantity);
   publishBulkStocks(s);
   return quantity;
 }

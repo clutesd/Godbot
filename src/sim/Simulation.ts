@@ -4,6 +4,7 @@ import { KnowledgeSystem, type KnowledgeEventDraft } from './knowledge/Knowledge
 import { KNOWLEDGE_BY_ID } from './knowledge/catalog';
 import { AdvancedCivilizationSystem, createAdvancedCivilizationState, representedPopulation, settlementRepresentedPopulation } from './advanced/AdvancedCivilizationSystem';
 import { PeopleSystem } from './people/PeopleSystem';
+import { HistoricalImportanceSystem } from './people/HistoricalImportance';
 import { WeatherSystem } from './weather/WeatherSystem';
 import { syncStructurePlots } from '../shared/StructurePlots';
 import { advanceSettlementDevelopment, initializeSettlementDevelopment } from './development/SettlementDevelopmentSystem';
@@ -171,6 +172,7 @@ export class Simulation {
   private advancedSystem!: AdvancedCivilizationSystem;
   private peopleSystem!: PeopleSystem;
   private weatherSystem!: WeatherSystem;
+  private readonly importanceSystem = new HistoricalImportanceSystem();
   private nextPersonId = 1;
   private nextSettlementId = 1;
   private nextEventId = 1;
@@ -225,6 +227,7 @@ export class Simulation {
     this.personById.clear();
     this.routesBySettlement.clear();
     this.widespreadAdoptions.clear();
+    this.importanceSystem.reset();
     this.state = {
       engineVersion: this.config.engineVersion,
       seed: this.config.seed,
@@ -232,6 +235,7 @@ export class Simulation {
       world,
       weather: this.weatherSystem.state,
       people: [],
+      notableFigures: [],
       settlements: [],
       cultures: [],
       institutions: [],
@@ -671,9 +675,15 @@ export class Simulation {
       const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
       const irrigation = 1 + waterEconomy(cell, settlement).irrigation * 0.12;
       balance.food = (farmers * (0.54 + cell.fertility * 0.7) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.18 + cell.fertility * 0.25)) * safetyFactor * productivity.food * exposedWork - people.length * (0.31 + settlement.urbanization * 0.018);
-      // Raw materials arrive only through extraction or freight. Bulk stocks are inventory projections.
-      balance.wood = -Math.min(settlement.resources.wood, settlement.buildings * 0.022);
-      balance.minerals = 0;
+      // The settlement must request actual raw-material extraction before it can consume finished stocks.
+      // Legacy `resources.wood/minerals` still model broad stockpiles; the positive monthlyBalance values
+      // are the physical-demand signal that activates world-resource extraction and typed material accounting.
+      const woodDemand = Math.max(0, builders * 0.24 + foragers * 0.18 + settlement.buildings * 0.1 + settlement.institutionIds.length * 0.05 + (settlement.structurePlots?.length ?? 0) * 0.02);
+      const mineralDemand = Math.max(0, artisans * 0.44 + builders * 0.16 + settlement.buildings * 0.08 + settlement.infrastructure.workshops * 0.35 + settlement.industry.intensity * 0.9);
+      const woodUse = Math.min(settlement.resources.wood, settlement.buildings * 0.022 + builders * 0.01 + Math.max(0, settlement.infrastructure.rail - 0.1) * 0.22);
+      const mineralUse = Math.min(settlement.resources.minerals, artisans * 0.03 + settlement.buildings * 0.012 + settlement.infrastructure.workshops * 0.12);
+      balance.wood = woodDemand - woodUse;
+      balance.minerals = mineralDemand - mineralUse;
       balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods - people.length * (0.016 + settlement.urbanization * 0.006);
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
       for (const key of ['food', 'wood', 'minerals', 'goods', 'wealth'] as const) {
@@ -725,6 +735,7 @@ export class Simulation {
 
   private runPeople(): void {
     const newborns: Person[] = [];
+    this.importanceSystem.ingest(this.state);
     const popLimitFactor = clamp(1 - this.population / this.config.simulation.populationSoftCap, 0.04, 1);
     for (const person of this.state.people) {
       const settlement = this.settlement(person.homeId);
@@ -734,6 +745,7 @@ export class Simulation {
       if (person.ageMonths % 12 === 0) {
         person.occupation = this.occupationFor(person.ageMonths, settlement);
         this.peopleSystem.refreshIdentity(person, settlement, this.state);
+        this.importanceSystem.evaluate(person, this.state, this.state.month);
       }
       const nutritionalChange = (settlement.foodSecurity - 0.46) * 0.026;
       person.health = clamp(person.health + nutritionalChange + this.random.range(-0.008, 0.008));
@@ -778,6 +790,7 @@ export class Simulation {
     }
     this.state.people.push(...newborns);
     for (const child of newborns) this.indexPerson(child);
+    if (this.state.month % 12 === 0) this.state.notableFigures = this.importanceSystem.roster(this.state.people);
   }
 
   private formPartnerships(): void {
@@ -811,6 +824,7 @@ export class Simulation {
 
   private killPerson(person: Person, cause: string): void {
     person.alive = false;
+    this.importanceSystem.retire(person, this.state.month);
     this.personById.delete(person.id);
     const localPeople = this.peopleBySettlement.get(person.homeId);
     const localIndex = localPeople?.indexOf(person) ?? -1;
@@ -938,16 +952,17 @@ export class Simulation {
         }
       }
       if (delivered) {
-        if (delivered.materialId) {
+        const deliveredMaterial = delivered.material ?? delivered.materialId;
+        if (deliveredMaterial) {
           const target = delivered.destination === a.id ? a : b;
           const economy = materialEconomy(target);
-          const key = `import:${route.id}:${delivered.materialId}`;
+          const key = `import:${route.id}:${deliveredMaterial}`;
           if (economy.lastEventMonth[key] === undefined) {
             economy.lastEventMonth[key] = this.state.month;
             this.addEvent({ type: 'resource-trade', location: target.position, locationId: target.id, actors: [a.id, b.id],
-              causes: ['material-shortage', 'completed-freight-route'], context: { resource: delivered.materialId, route: route.id, quantity: delivered.quantity },
+              causes: ['material-shortage', 'completed-freight-route'], context: { resource: deliveredMaterial, route: route.id, quantity: delivered.quantity },
               outcome: 'Delivered imports supplied a missing material through a working trade connection.', significance: 0.55,
-              tags: ['resource', 'trade'], summary: `${target.name} begins importing ${delivered.materialId}.` });
+              tags: ['resource', 'trade'], summary: `${target.name} begins importing ${deliveredMaterial}.` });
           }
         }
         for (const [source, target] of [[a, b], [b, a]] as const) for (const id of source.knownRecipes) {
@@ -991,8 +1006,8 @@ export class Simulation {
       const rivalry = ((cultureA?.dimensions.militarism ?? 0.5) + (cultureB?.dimensions.militarism ?? 0.5) + politicalAmbition) / 3 * (1 - relation.trust) * proximity;
       relation.territorialTension = clamp(relation.territorialTension * 0.86 + proximity * Math.max(pressureA, pressureB) * 0.2 + rivalry * 0.12);
       const contested = this.state.world.resourceDeposits.some(d => !d.depleted && ((d.controlledBy === a.id && b.discoveredDeposits.includes(d.id)
-        && (materialEconomy(b).demand[d.resourceId] ?? 0) > (b.materials[d.resourceId] ?? 0)) || (d.controlledBy === b.id && a.discoveredDeposits.includes(d.id)
-        && (materialEconomy(a).demand[d.resourceId] ?? 0) > (a.materials[d.resourceId] ?? 0))));
+        && (materialEconomy(b).demand[d.resourceId] ?? 0) > (b.localMaterials[d.resourceId] ?? 0)) || (d.controlledBy === b.id && a.discoveredDeposits.includes(d.id)
+        && (materialEconomy(a).demand[d.resourceId] ?? 0) > (a.localMaterials[d.resourceId] ?? 0))));
       if (contested && a.polityId !== b.polityId) relation.territorialTension = clamp(relation.territorialTension + (connected ? 0.005 : 0.025));
       const wealthGap = Math.abs(a.resources.wealth - b.resources.wealth) / Math.max(25, a.resources.wealth + b.resources.wealth);
       const polityRivalry = a.polityId !== b.polityId ? politicalAmbition * proximity * 0.018 : 0;
@@ -1312,7 +1327,7 @@ export class Simulation {
     const attacker = ambitionA + (cultureA?.dimensions.militarism ?? 0.5) >= ambitionB + (cultureB?.dimensions.militarism ?? 0.5) ? a : b;
     const defender = attacker === a ? b : a;
     const strategicDeposit = this.state.world.resourceDeposits.find(d => d.controlledBy === defender.id && !d.depleted
-      && attacker.discoveredDeposits.includes(d.id) && (materialEconomy(attacker).demand[d.resourceId] ?? 0) > (attacker.materials[d.resourceId] ?? 0));
+      && attacker.discoveredDeposits.includes(d.id) && (materialEconomy(attacker).demand[d.resourceId] ?? 0) > (attacker.localMaterials[d.resourceId] ?? 0));
     const cause: WarCause = strategicDeposit ? 'resource-pressure' : relation.grievances > 0.62 ? 'retaliation' : relation.territorialTension > 0.62 ? 'territorial-dispute' : Math.min(a.foodSecurity, b.foodSecurity) < 0.3 ? 'resource-pressure' : 'political-ambition';
     const leaderA = this.leaderFor(attacker);
     const leaderB = this.leaderFor(defender);
@@ -1579,9 +1594,11 @@ export class Simulation {
         settledPioneers.push(pioneer);
       }
       this.applyKnowledgeEvents(this.knowledgeSystem.diffuseMigration(this.state, settlement, founded, settledPioneers.length));
+      // The people who actually reached the new ground are its founders, in the order they left.
+      for (const founder of settledPioneers.slice(0, 3)) this.importanceSystem.credit(founder.id, 'settlement-founder', 0.44);
       founded.resources.food += settlement.resources.food * 0.07;
       settlement.resources.food *= 0.93;
-      for (const id of ['timber', 'stone']) addMaterial(founded, id, takeMaterial(settlement, id, (settlement.materials[id] ?? 0) * 0.07));
+      for (const id of ['timber', 'stone']) addMaterial(founded, id, takeMaterial(settlement, id, (settlement.localMaterials[id] ?? 0) * 0.07));
       this.addRelationsFor(founded);
     }
   }

@@ -23,7 +23,7 @@ function fixture() {
   const s = settlements[0]!;
   state.world.resourceDeposits = [];
   for (const town of settlements) {
-    town.alive = town === s; town.materials = {}; town.materialEconomy = undefined;
+    town.alive = town === s; town.localMaterials = {}; town.materialEconomy = undefined;
     town.discoveredDeposits = []; town.workedDeposits = []; town.knownRecipes = [];
     publishBulkStocks(town);
   }
@@ -40,12 +40,26 @@ function site(state: SimulationState, s: Settlement, resourceId: string, overrid
 }
 
 describe('Material lifecycle and accounting', () => {
+  it('creates positive extraction demand for live settlement economies rather than only subtracting legacy stock', () => {
+    const { state, sim, s } = fixture();
+    const settlement = s;
+    residents(state, settlement).forEach((person, index) => {
+      person.occupation = index < 9 ? 'builder' : index < 18 ? 'artisan' : 'forager';
+    });
+    settlement.buildings = 8;
+    settlement.resources.wood = 120;
+    settlement.resources.minerals = 140;
+    sim.step(1);
+    expect(settlement.monthlyBalance.wood).toBeGreaterThan(0);
+    expect(settlement.monthlyBalance.minerals).toBeGreaterThan(0);
+  });
+
   it('does not grant inventory for nearby undiscovered deposits or absent labour', () => {
     const { state, s, system } = fixture();
     site(state, s, 'stone'); s.discoveredDeposits = [];
     residents(state, s).forEach(p => { p.occupation = 'farmer'; });
     for (let month = 1; month <= 24; month++) { state.month = month; system.advanceMonth(state); }
-    expect(s.materials.stone).toBe(0); expect(s.discoveredDeposits).toEqual([]);
+    expect(s.localMaterials.stone).toBe(0); expect(s.discoveredDeposits).toEqual([]);
   });
   it('deducts extraction before transport and conserves finite ore across all settlers', () => {
     const { state, s, other, system } = fixture();
@@ -54,10 +68,10 @@ describe('Material lifecycle and accounting', () => {
     s.knowledge.records = {}; other.knowledge.records = {};
     const d = site(state, s, 'stone', { capacity: 3 }); other.discoveredDeposits.push(d.id);
     state.month = 4; system.advanceMonth(state);
-    expect(s.materials.stone).toBe(0);
+    expect(s.localMaterials.stone).toBe(0);
     expect(materialEconomy(s).inTransit.length).toBeGreaterThan(0);
     state.month++; const events = system.advanceMonth(state);
-    const total = [s, other].reduce((n, town) => n + (town.materials.stone ?? 0) + materialEconomy(town).inTransit.reduce((m, cargo) => m + cargo.quantity, 0), 0);
+    const total = [s, other].reduce((n, town) => n + (town.localMaterials.stone ?? 0) + materialEconomy(town).inTransit.reduce((m, cargo) => m + cargo.quantity, 0), 0);
     expect(total + d.abundance * d.capacity).toBeCloseTo(3, 8);
     expect(d.depleted).toBe(true); expect(events.some(e => e.type === 'resource-site-abandoned') || d.abandonedMonth !== undefined).toBe(true);
   });
@@ -83,7 +97,7 @@ describe('Material lifecycle and accounting', () => {
     expect(addMaterial(s, 'timber', 10, 0.2)).toBe(10);
     addMaterial(s, 'timber', 10, 0.8); expect(materialEconomy(s).quality.timber).toBeCloseTo(0.5);
     s.resources.wood -= 7; reconcileBulkStocks(s); reconcileBulkStocks(s);
-    expect(s.materials.timber).toBe(13); expect(takeMaterial(s, 'timber', 100)).toBe(13);
+    expect(s.localMaterials.timber).toBe(13); expect(takeMaterial(s, 'timber', 100)).toBe(13);
     expect(s.resources.wood).toBe(0);
     addMaterial(s, 'stone', 100000); expect(storedVolume(s)).toBeCloseTo(storageCapacity(s));
     expect(addMaterial(s, 'iron-ore', 10)).toBe(0);
@@ -156,7 +170,7 @@ describe('Blueprints, production and consequences', () => {
     if (missing === 'fuel') takeMaterial(s, 'charcoal', 100);
     if (missing === 'workshop') s.infrastructure.workshops = 0;
     for (let month = 1; month <= 12; month++) { state.month = month; processRecipes(state, s, { artisan: missing === 'labour' ? 0 : 4 }, new SeededRandom(`missing:${month}`)); }
-    expect(s.materials.bronze ?? 0).toBe(0); expect(s.knownRecipes).not.toContain('bronze-ingot');
+    expect(s.localMaterials.bronze ?? 0).toBe(0); expect(s.knownRecipes).not.toContain('bronze-ingot');
   });
   it('rejects insufficient fuel heat even with knowledge and infrastructure', () => {
     const { s } = fixture(); learn(s, 'metal-smelting'); s.infrastructure.workshops = 1;
@@ -171,14 +185,14 @@ describe('Blueprints, production and consequences', () => {
     processRecipes(state, s, budget, new SeededRandom('shared-workers'));
     expect(materialEconomy(s).labourUsed).toBeLessThanOrEqual(1.2);
     expect(budget.artisan).toBeGreaterThanOrEqual(0);
-    expect((s.materials['copper-ore']! < 20 ? 1 : 0) + (s.materials['iron-ore']! < 20 ? 1 : 0)).toBe(1);
+    expect((s.localMaterials['copper-ore']! < 20 ? 1 : 0) + (s.localMaterials['iron-ore']! < 20 ? 1 : 0)).toBe(1);
   });
   it('keeps learned blueprints dormant when their practical knowledge is lost', () => {
     const { state, s } = fixture(); learn(s, 'metal-smelting'); s.infrastructure.workshops = 0.2;
     s.knownRecipes.push('bronze-ingot'); s.knowledge.records['metal-smelting']!.dormant = true;
     for (const [id, n] of Object.entries({ 'copper-ore': 20, 'tin-ore': 8, charcoal: 12 })) addMaterial(s, id, n);
     processRecipes(state, s, { artisan: 4 }, new SeededRandom('dormant'));
-    expect(s.materials.bronze ?? 0).toBe(0); expect(s.materials['copper-ore']).toBe(20);
+    expect(s.localMaterials.bronze ?? 0).toBe(0); expect(s.localMaterials['copper-ore']).toBe(20);
   });
   it('completes discovery through medicine use without seeded inventories', () => {
     const { state, s, system } = fixture(); const d = site(state, s, 'wild-herbs');
@@ -206,7 +220,7 @@ describe('Blueprints, production and consequences', () => {
     expect(deriveMilitaryProfile(s).equipment).not.toContain('metal-weapons');
     addMaterial(s, 'iron-tools', 10); const wealth = s.resources.wealth;
     for (let month = 1; month <= 8; month++) { state.month = month; system.advanceMonth(state); }
-    expect(materialEconomy(s).tools).toBeGreaterThan(0); expect(s.materials['iron-tools']).toBeLessThan(10);
+    expect(materialEconomy(s).tools).toBeGreaterThan(0); expect(s.localMaterials['iron-tools']).toBeLessThan(10);
     expect(s.resources.wealth).toBe(wealth);
     const arms = materialEconomy(s).arms; materialEconomy(s).arms = 10;
     expect(deriveMilitaryProfile(s).equipment).toContain('metal-weapons'); materialEconomy(s).arms = arms;
@@ -216,11 +230,11 @@ describe('Blueprints, production and consequences', () => {
     expect(responseForNeed(developmentContext(state, s), 'housing')!.material).toBe('earth');
     s.knownRecipes.push('timber-framing'); addMaterial(s, 'timber-frame', 10);
     expect(responseForNeed(developmentContext(state, s), 'housing')!.material).toBe('timber');
-    const initial = s.materials['timber-frame']!;
+    const initial = s.localMaterials['timber-frame']!;
     // Housing demand exceeds the four founding shelters.
     state.people.forEach(p => { p.homeId = s.id; });
     for (let month = 12; month <= 48; month++) { state.month = month; advanceSettlementDevelopment(state, s, residents(state, s), 0.1); }
-    expect(s.materials['timber-frame']).toBeLessThan(initial);
+    expect(s.localMaterials['timber-frame']).toBeLessThan(initial);
     expect(s.structurePlots?.some(p => p.development?.material === 'timber')).toBe(true);
   });
 });
@@ -229,18 +243,18 @@ describe('Trade, rendering and replay', () => {
   it('ships missing ore through existing freight with no duplication or delivery before arrival', () => {
     const { state, s, other } = fixture(); other.alive = true;
     connect(state, s, other); const route = state.tradeRoutes[0]!; route.transport!.nextDispatchMonth = 0;
-    const segment = state.transportation.segments['fixture-road']!;
+    const segment = state.transportation.segments[route.transport!.path!.segmentIds[0]!]!;
     segment.from = pointKey(segment.points[0]!); segment.to = pointKey(segment.points.at(-1)!);
     addMaterial(s, 'tin-ore', 30); materialEconomy(s).demand['tin-ore'] = 3; materialEconomy(other).demand['tin-ore'] = 10;
     const transport = new TransportationSystem(state);
     transport.advanceFreight(route, s, other);
     const trip = route.transport!.trip!; expect(trip.materialId).toBe('tin-ore');
-    expect(other.materials['tin-ore'] ?? 0).toBe(0); expect(s.materials['tin-ore']! + trip.quantity).toBeCloseTo(30);
+    expect(other.localMaterials['tin-ore'] ?? 0).toBe(0); expect(s.localMaterials['tin-ore']! + trip.quantity).toBeCloseTo(30);
     route.active = false; state.month++; transport.advanceFreight(route, s, other); expect(trip.status).toBe('blocked');
     route.active = true;
     for (let month = 2; month < 100 && trip.status !== 'arrived'; month++) { state.month = month; transport.advanceFreight(route, s, other); }
-    expect(trip.status).toBe('arrived'); expect(other.materials['tin-ore']).toBeCloseTo(trip.quantity * 0.96);
-    const delivered = other.materials['tin-ore']; transport.advanceFreight(route, s, other); expect(other.materials['tin-ore']).toBe(delivered);
+    expect(trip.status).toBe('arrived'); expect(other.localMaterials['tin-ore']).toBeCloseTo(trip.quantity * 0.96);
+    const delivered = other.localMaterials['tin-ore']; transport.advanceFreight(route, s, other); expect(other.localMaterials['tin-ore']).toBe(delivered);
   });
   it('renders worked and abandoned deposits without mutating simulation state', () => {
     const { state, s } = fixture(); const d = site(state, s, 'stone');
@@ -253,11 +267,11 @@ describe('Trade, rendering and replay', () => {
   it('replays complete material state and histories for a fixed seed and resets on restart', () => {
     const run = (seed: string) => {
       const sim = new Simulation({ seed, startingPopulation: 80, settlementCount: [2, 2], world: { size: 20 } }); sim.step(48);
-      return { sim, snapshot: JSON.stringify({ deposits: sim.state.world.resourceDeposits, settlements: sim.state.settlements.map(s => [s.materials, s.materialEconomy, s.knownRecipes]), events: sim.state.history.filter(e => e.tags.includes('resource')) }) };
+      return { sim, snapshot: JSON.stringify({ deposits: sim.state.world.resourceDeposits, settlements: sim.state.settlements.map(s => [s.localMaterials, s.materialEconomy, s.knownRecipes]), events: sim.state.history.filter(e => e.tags.includes('resource')) }) };
     };
     const first = run('material-replay'); expect(first.snapshot).toBe(run('material-replay').snapshot);
     expect(first.snapshot).not.toBe(run('material-other').snapshot);
     first.sim.restart(); first.sim.step(48);
-    expect(JSON.stringify({ deposits: first.sim.state.world.resourceDeposits, settlements: first.sim.state.settlements.map(s => [s.materials, s.materialEconomy, s.knownRecipes]), events: first.sim.state.history.filter(e => e.tags.includes('resource')) })).toBe(first.snapshot);
+    expect(JSON.stringify({ deposits: first.sim.state.world.resourceDeposits, settlements: first.sim.state.settlements.map(s => [s.localMaterials, s.materialEconomy, s.knownRecipes]), events: first.sim.state.history.filter(e => e.tags.includes('resource')) })).toBe(first.snapshot);
   });
 });

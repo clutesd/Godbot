@@ -202,7 +202,7 @@ export function advanceSettlementResourceExtraction(
   const cells = settlementResourceCatchment(state, settlement);
   const authoritative = cells.some((cell) => cell.naturalResources !== undefined);
   if (!authoritative) {
-    advanceMaterialProcessing(state, settlement, localResidents);
+    if (settlement.materials) advanceMaterialProcessing(state, settlement, localResidents);
     return empty;
   }
 
@@ -226,6 +226,19 @@ export function advanceSettlementResourceExtraction(
   reconcilePositiveBalance(settlement, 'wood', harvestedWood);
   reconcilePositiveBalance(settlement, 'minerals', mineralExtraction.total);
 
+  const extractedAny = harvestedWood > 0 || mineralExtraction.total > 0
+    || Object.values(renewables).some((amount) => (amount ?? 0) > 0);
+  if (!settlement.materials && !extractedAny) {
+    return {
+      authoritative: true,
+      requestedWood,
+      harvestedWood,
+      requestedMinerals,
+      extractedMinerals: mineralExtraction.total,
+      deposits: mineralExtraction.deposits,
+      renewables,
+    };
+  }
   const inventory = ensureMaterialInventory(settlement);
   if (harvestedWood > 0) recordMaterialExtraction(settlement, 'timber', harvestedWood, state.month);
   for (const [kind, amount] of Object.entries(mineralExtraction.deposits) as Array<[DepositResourceKind, number | undefined]>) {

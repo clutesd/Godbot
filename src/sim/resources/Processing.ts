@@ -41,10 +41,10 @@ export function processRecipes(state: SimulationState, s: Settlement, budget: La
   for (const recipe of queue) {
     if (!recipeRequirementsMet(s, recipe, state)) continue;
     const target = recipe.id === 'charcoal' ? 20 : 10;
-    if (Object.keys(recipe.outputs).every(id => (s.materials[id] ?? 0) >= target)) continue;
+    if (Object.keys(recipe.outputs).every(id => (s.localMaterials[id] ?? 0) >= target)) continue;
     const inputs = recipeInputs(recipe);
     for (const [id, quantity] of Object.entries(inputs)) economy.demand[id] = Math.max(economy.demand[id] ?? 0, quantity * 3);
-    const inputCycles = Math.min(...Object.entries(inputs).map(([id, quantity]) => Math.floor((s.materials[id] ?? 0) / quantity)));
+    const inputCycles = Math.min(...Object.entries(inputs).map(([id, quantity]) => Math.floor((s.localMaterials[id] ?? 0) / quantity)));
     const workers = recipe.craftOccupations.reduce((sum, o) => sum + (budget[o] ?? 0), 0);
     const cell = state.world.cells[s.cellIndex];
     const waterWork = (cell?.soil?.waterAccess ?? 0) * s.infrastructure.workshops * mastery(s, 'wheel-axle').practice;

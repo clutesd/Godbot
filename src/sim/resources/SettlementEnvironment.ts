@@ -28,13 +28,13 @@ export function settlementResources(state: SimulationState, s: Settlement, acces
       transportCost: route?.cost ?? Infinity, economicValue: depositControlled(state, s, d) && route ? quantity * d.quality / route.cost : 0,
       exhausted: d.depleted, controlledBy: d.controlledBy, ...knowledge };
   });
-  const shortages = RESOURCE_CATALOG.filter(r => (s.materialEconomy?.demand[r.id] ?? 0) > (s.materials[r.id] ?? 0)
+  const shortages = RESOURCE_CATALOG.filter(r => (s.materialEconomy?.demand[r.id] ?? 0) > (s.localMaterials[r.id] ?? 0)
     && !provinces.some(p => p.resourceId === r.id && p.available > 0 && p.transportCost <= 8)).map(r => r.id);
   return { provinces, shortages, exhausted: provinces.filter(p => p.exhausted).map(p => p.id),
     threats: provinces.filter(p => p.controlledBy && !p.available && !p.exhausted).map(p => p.id),
     tradeOpportunities: state.settlements.filter(other => other.alive && other.id !== s.id && state.relations.some(r => r.contact
       && ((r.a === s.id && r.b === other.id) || (r.b === s.id && r.a === other.id))))
-      .flatMap(other => shortages.filter(id => (other.materials[id] ?? 0) > (other.materialEconomy?.demand[id] ?? 6))
+      .flatMap(other => shortages.filter(id => (other.localMaterials[id] ?? 0) > (other.materialEconomy?.demand[id] ?? 6))
         .map(resourceId => ({ settlementId: other.id, resourceId }))),
     water: waterEconomy(state.world.cells[s.cellIndex]!, s) };
 }

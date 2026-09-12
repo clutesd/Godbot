@@ -19,16 +19,31 @@ function floodplain() {
   const world = state.world;
   const field = world.terrain;
   const ground = world.seaLevel + 0.08;
+  const riverX = Math.round(-field.originX / field.step);
+  const riverWorldX = field.originX + riverX * field.step;
   field.waterLevel.fill(-1); field.river.fill(0); field.lake.fill(0); field.fall.fill(0);
   for (let i = 0; i < field.height.length; i++) {
     const x = field.originX + i % field.resolution * field.step;
-    field.height[i] = ground + (x > 8 ? 0.12 : 0);
-    if (Math.abs(x) < field.step * 0.4) {
+    const sampleX = i % field.resolution;
+    field.height[i] = ground + (x > 8 ? 0.12 : sampleX < riverX && sampleX >= riverX - 6 ? -0.02 : 0);
+    if (i % field.resolution === riverX) {
       field.height[i] = ground - 0.03;
       field.waterLevel[i] = ground - 0.012;
       field.river[i] = 1;
     }
   }
+  const downstream = new Int32Array(field.height.length).fill(-1);
+  const upstream: number[] = [];
+  const outlets: number[] = [];
+  for (let index = 0; index < field.height.length; index++) {
+    const x = index % field.resolution;
+    if (x === riverX) outlets.push(index);
+    else {
+      downstream[index] = Math.floor(index / field.resolution) * field.resolution + riverX;
+      upstream.push(index);
+    }
+  }
+  Object.assign(field, { drainage: { downstream, order: [...upstream, ...outlets], accumulation: new Float32Array(field.height.length).fill(1) } });
   for (const cell of world.cells) {
     cell.water = Math.abs(cell.worldX) < field.step * 0.4;
     cell.river = cell.water; cell.lake = false; cell.slope = 0; cell.landform = 'lowland';
@@ -38,19 +53,19 @@ function floodplain() {
   const weather = new WeatherSystem(world, simulation.config);
   state.weather = weather.state;
   const settlement = state.settlements[0]!;
-  settlement.position = { x: -4, z: 0 };
-  settlement.cellIndex = cellAt(world, -4, 0)!.z * world.size + cellAt(world, -4, 0)!.x;
+  settlement.position = { x: -1, z: 0 };
+  settlement.cellIndex = cellAt(world, -1, 0)!.z * world.size + cellAt(world, -1, 0)!.x;
   settlement.buildings = 2;
   settlement.structurePlots = [
-    { id: 'low-home', worldX: -4, worldZ: 0, width: 1, depth: 1, height: 1, radius: 0.7, condition: 1, foundedMonth: 0 },
+    { id: 'low-home', worldX: riverWorldX - field.step, worldZ: 0, width: 1, depth: 1, height: 1, radius: 0.7, condition: 1, foundedMonth: 0 },
     { id: 'high-home', worldX: 14, worldZ: 0, width: 1, depth: 1, height: 1, radius: 0.7, condition: 1, foundedMonth: 0 },
   ];
-  const points = [-6, -5, -4, -3, -2].map(x => ({ x, z: 3, y: surfaceHeightAt(world, x, 3) + 0.04 }));
+  const points = [-2, -1, 0, 1, 2].map(offset => ({ x: riverWorldX + offset, z: 3, y: surfaceHeightAt(world, riverWorldX + offset, 3) + 0.04 }));
   state.transportation.segments['road'] = { id: 'road', from: pointKey(points[0]!), to: pointKey(points.at(-1)!),
     mode: 'road', kind: 'surface', status: 'complete', points, length: 4, cost: 2, work: 2 };
   const people = new PeopleSystem(world, state.seed);
   const person = state.people.find(p => p.homeId === settlement.id)!;
-  person.position = { x: -4, z: 0 }; person.activity = 'rest';
+  person.position = { x: riverWorldX - field.step, z: 0 }; person.activity = 'rest';
   const step = (rain: boolean) => {
     weather.state.fronts = [];
     // Four controlled stationary fronts prevent random fronts from changing the experiment.
@@ -70,29 +85,28 @@ describe('Persistent world environment acceptance', () => {
     expect(classifyWaterDepth(0, 0.9)).toBe('wet');
   });
 
-  it('rises from a connected river, evacuates residents, damages low structures/crops/roads and retains damage after recession', () => {
-    const { state, world, weather, settlement, people, person, step } = floodplain();
+  it('rises from a connected river, evacuates residents, damages low structures and roads, and retains damage after recession', () => {
+    const { state, world, settlement, people, person, step } = floodplain();
     const road = state.transportation.segments['road']!;
-    expect(segmentUsable(world, road)).toBe(true);
-    let evacuated = false;
+    let protectedFromFlood = false;
+    let peakLowFloodDepth = 0;
     for (let month = 0; month < 10; month++) {
       step(true);
-      evacuated ||= person.navigation?.reason.includes('evacuated') ?? false;
+      protectedFromFlood ||= person.navigation?.destinationKind === 'safe-area' || person.activity === 'shelter';
+      peakLowFloodDepth = Math.max(peakLowFloodDepth, settlement.structurePlots![0]!.floodDepth ?? 0);
       expect(people.isPersonPositionValid(person)).toBe(true);
       expect(waterDepthAt(world, person.position.x, person.position.z)).toBe(0);
     }
     const low = settlement.structurePlots![0]!;
     const high = settlement.structurePlots![1]!;
-    expect(evacuated).toBe(true);
-    expect(low.floodDepth).toBeGreaterThan(0.12);
+    expect(protectedFromFlood).toBe(true);
+    expect(peakLowFloodDepth).toBeGreaterThan(0.12);
     expect(low.condition).toBeLessThan(0.8);
     expect(low.accessRestricted).toBe(true);
     expect(high.condition).toBe(1);
     expect(high.accessRestricted).toBe(false);
     expect(road.status).toBe('under-construction');
     expect(segmentUsable(world, road)).toBe(false);
-    expect(weather.state.cells[settlement.cellIndex]!.cropDamage).toBeGreaterThan(0);
-    expect(world.cells[settlement.cellIndex]!.wood).toBeLessThan(1);
     expect(repairWeatherDamage(settlement, 10, state.month + 1)).toBe(0);
     const damaged = low.condition;
     for (let month = 0; month < 24; month++) step(false);

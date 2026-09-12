@@ -1,6 +1,6 @@
 import type { SeededRandom } from '../prng';
 import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
-import type { MaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
+import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
 import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom, takeMaterial } from './Inventory';
@@ -12,8 +12,8 @@ import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, m
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 export type ResourceEventDraft = KnowledgeEventDraft;
-export function createMaterialState(): { materials: MaterialInventory; discoveredDeposits: string[]; workedDeposits: string[]; knownRecipes: string[] } {
-  return { materials: {}, discoveredDeposits: [], workedDeposits: [], knownRecipes: [] };
+export function createMaterialState(): { localMaterials: LocalMaterialInventory; discoveredDeposits: string[]; workedDeposits: string[]; knownRecipes: string[] } {
+  return { localMaterials: {}, discoveredDeposits: [], workedDeposits: [], knownRecipes: [] };
 }
 export function depositControlled(state: SimulationState, s: Settlement, deposit: ResourceDeposit): boolean {
   const owner = state.settlements.find(other => other.id === deposit.controlledBy && other.alive);
@@ -116,8 +116,8 @@ export class ResourceSystem {
     const economy = materialEconomy(s);
     const value = (d: ResourceDeposit) => d.quality * (d.accessibility ?? 1) / ((this.access!.resolve(s, d)?.cost ?? Infinity) * (1 + (d.extractionDifficulty ?? 0)));
     const queue = nearby.filter(d => s.discoveredDeposits.includes(d.id) && depositControlled(state, s, d) && extractableQuantity(s, d) > 0
-      && (s.materials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))
-      .map(d => ({ d, value: value(d), need: (s.materials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6) }))
+      && (s.localMaterials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))
+      .map(d => ({ d, value: value(d), need: (s.localMaterials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6) }))
       .sort((a, b) => a.need - b.need || b.value - a.value || a.d.id.localeCompare(b.d.id)).map(item => item.d);
     for (const deposit of queue) {
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
@@ -125,8 +125,9 @@ export class ResourceSystem {
       if (available <= 0.00001 || storageRoom(s) <= 0) continue;
       const incoming = economy.inTransit.filter(t => t.resourceId === definition.id).reduce((n, t) => n + t.quantity, 0);
       const desired = Math.max(definition.id === 'timber' ? 35 : 12, (economy.demand[definition.id] ?? 0) * 2);
-      if ((s.materials[definition.id] ?? 0) + incoming >= desired) continue;
+      if ((s.localMaterials[definition.id] ?? 0) + incoming >= desired) continue;
       const cell = state.world.cells[deposit.cellIndex]!;
+      if (cell.water) continue;
       const weather = state.world.weather?.cells[deposit.cellIndex];
       const season = definition.category === 'plant' ? harvestSeason(state.world, deposit, state.month)
         : definition.category === 'timber' ? 0.55 + harvestSeason(state.world, deposit, state.month) * 0.45 : 1;
@@ -143,8 +144,8 @@ export class ResourceSystem {
       if (rate <= 0) continue;
       const surfaceRemaining = deposit.capacity * Math.max(0, (deposit.surfaceShare ?? 1) - (1 - deposit.abundance));
       const fuel = deposit.depth !== undefined ? definition.deepEnergy : undefined;
-      const deepCapacity = fuel ? (s.materials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
-      const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.materials[definition.id] ?? 0) - incoming);
+      const deepCapacity = fuel ? (s.localMaterials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
+      const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.localMaterials[definition.id] ?? 0) - incoming);
       if (amount <= 0.00001) continue;
       economy.labourUsed += useLabour(budget, definition.gatherOccupations, amount / rate);
       if (fuel && amount > surfaceRemaining) {

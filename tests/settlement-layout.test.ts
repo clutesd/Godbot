@@ -31,7 +31,7 @@ function settlement(id: string, x: number, z: number, overrides: Partial<Settlem
     polityId: 'polity',
     institutionIds: [],
     alive: true,
-    materials: {},
+    localMaterials: {},
     discoveredDeposits: [],
     workedDeposits: [],
     knownRecipes: [],

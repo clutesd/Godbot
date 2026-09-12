@@ -43,7 +43,7 @@ describe('Historian archive persistence', () => {
     expect((await reopened.list()).some((candidate) => candidate.identity.runId === identity.runId)).toBe(true);
     expect(reopened.persistent).toBe(true);
     reopened.close();
-  });
+  }, 20_000);
 
   it('falls back to memory when browser persistence is absent', async () => {
     const simulation = new Simulation({ seed: 'memory-archive', startingPopulation: 120 });
@@ -95,7 +95,7 @@ describe('Historian archive persistence', () => {
     replayed.step(ongoing.lastRecordedMonth);
     expect(replayed.summary()).toEqual(original.summary());
     expect(replayed.state.history).toEqual(original.state.history);
-  }, 15_000);
+  }, 45_000);
 
   it('suppresses unstable aggregate claims for small samples', () => {
     const simulation = new Simulation({ seed: 'aggregate-archive', startingPopulation: 120 });

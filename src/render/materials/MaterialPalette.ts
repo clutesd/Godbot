@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import type { CultureStyle } from '../../sim/types';
+import { applySurfaceDetail } from './SurfaceDetail';
 
 export type Era = 'primitive' | 'early' | 'village' | 'preIndustrial' | 'industrial' | 'advanced';
 
@@ -32,7 +33,14 @@ export type SurfaceKey =
   | 'shadow'
   | 'glow'
   | 'forge'
+  | 'garden'
   | 'ground';
+
+/** Every architectural surface, in a stable order. */
+export const SURFACE_KEYS: readonly SurfaceKey[] = [
+  'hide', 'thatch', 'daub', 'plaster', 'stone', 'brick', 'panel', 'timber', 'metal', 'motif',
+  'roof-thatch', 'roof-tile', 'roof-metal', 'cloth', 'shadow', 'glow', 'forge', 'garden', 'ground',
+] as const;
 
 /**
  * The GODBOX built-environment colourway.
@@ -177,6 +185,8 @@ export class MaterialPalette {
     this.createMaterial('metal', blend(MOSAIC.ash, secondary, 0.32), Math.max(0.3, roughness * 0.55), Math.max(0.35, metalness));
     this.createMaterial('cloth', blend(0xffffff, primary, 0.86), 0.86, 0);
     this.createMaterial('shadow', new THREE.Color(0x1d1a1c), 0.99, 0);
+    // Tended planting: infirmary herb beds, temple offerings, courtyard greenery.
+    this.createMaterial('garden', blend(0x5f7a3f, secondary, 0.1), 0.97, 0);
     this.createMaterial('ground', blend(MOSAIC.stone, accent, 0.16), 0.94, 0);
 
     // Roof families: thatch early, deep blue-grey tile once the culture fires clay,
@@ -205,6 +215,13 @@ export class MaterialPalette {
     forge.emissive = heat;
     forge.emissiveIntensity = 1.6;
     this.emissiveBase.set('forge', 1.6);
+
+    // Close-range material character. Each surface keeps its single shared material; the detail
+    // is a fragment-stage program, so draw calls and geometry are unchanged.
+    for (const surface of SURFACE_KEYS) {
+      const material = this.materials.get(surface);
+      if (material) applySurfaceDetail(material, surface, rank);
+    }
     this.applyNightFactor();
   }
 

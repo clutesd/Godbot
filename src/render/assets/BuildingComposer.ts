@@ -46,7 +46,11 @@ export function stageFromName(name: string | undefined): BuildStage {
 class BuildingCanvas {
   private readonly surfaces = new Map<SurfaceKey, GeometryBuilder>();
 
-  constructor(private readonly stage: number) {}
+  constructor(
+    private readonly stage: number,
+    private readonly wear = 0,
+    private readonly tone = 0,
+  ) {}
 
   /** Returns a builder only if the requested part belongs to a stage already built. */
   at(surface: SurfaceKey, requiredStage: number): GeometryBuilder | undefined {
@@ -54,9 +58,20 @@ class BuildingCanvas {
     let builder = this.surfaces.get(surface);
     if (!builder) {
       builder = new GeometryBuilder();
+      builder.setWeathering(this.wear, this.tone);
       this.surfaces.set(surface, builder);
     }
     return builder;
+  }
+
+  /** Raise weathering for parts that age faster: soot around flues, splash at ground level. */
+  stain(builder: GeometryBuilder | undefined, extra: number): void {
+    builder?.setWeathering(Math.min(1, this.wear + extra), this.tone);
+  }
+
+  /** Return a builder to the building's baseline weathering. */
+  clean(builder: GeometryBuilder | undefined): void {
+    builder?.setWeathering(this.wear, this.tone);
   }
 
   build(palette: MaterialPalette): THREE.Group {
@@ -118,6 +133,9 @@ interface RoofShellOptions {
   eaveDrop: number;
   /** Emit proud lips at intermediate rings so tile and thatch roofs read as laid courses. */
   courses?: boolean;
+  /** Plan offset, for porticoes, cupolas and towers that do not sit over the body centre. */
+  centerX?: number;
+  centerZ?: number;
 }
 
 /**
@@ -128,6 +146,8 @@ interface RoofShellOptions {
 function emitRoofShell(builder: GeometryBuilder, soffit: GeometryBuilder | undefined, options: RoofShellOptions): void {
   const exponent = 1 / (1 + Math.max(-0.85, options.concavity));
   const eaveScale = 1 + options.overhang;
+  const offsetX = options.centerX ?? 0;
+  const offsetZ = options.centerZ ?? 0;
   const rings: ReturnType<typeof squareRing>[] = [];
   for (let index = 0; index < options.rings; index += 1) {
     const v = index / (options.rings - 1);
@@ -142,7 +162,11 @@ function emitRoofShell(builder: GeometryBuilder, soffit: GeometryBuilder | undef
       options.segmentsPerSide,
     );
     const lift = options.upturn * Math.pow(1 - v, 1.5);
-    for (const point of ring) point.y += lift * Math.pow(point.cornerWeight, 2.4);
+    for (const point of ring) {
+      point.y += lift * Math.pow(point.cornerWeight, 2.4);
+      point.x += offsetX;
+      point.z += offsetZ;
+    }
     rings.push(ring);
   }
   for (let index = 0; index < rings.length - 1; index += 1) {
@@ -151,13 +175,17 @@ function emitRoofShell(builder: GeometryBuilder, soffit: GeometryBuilder | undef
   if (options.courses) {
     for (let index = 1; index < rings.length - 1; index += 1) {
       const ring = rings[index]!;
-      const lip = ring.map((point) => ({ x: point.x * 1.045, y: point.y + 0.013, z: point.z * 1.045 }));
+      const lip = ring.map((point) => ({
+        x: offsetX + (point.x - offsetX) * 1.045,
+        y: point.y + 0.013,
+        z: offsetZ + (point.z - offsetZ) * 1.045,
+      }));
       builder.addLoft(ring, lip);
     }
   }
   const top = rings[rings.length - 1]!;
-  builder.addFanUp({ x: 0, y: options.baseY + options.height, z: 0 }, top);
-  soffit?.addFanDown({ x: 0, y: options.baseY - options.eaveDrop, z: 0 }, rings[0]!);
+  builder.addFanUp({ x: offsetX, y: options.baseY + options.height, z: offsetZ }, top);
+  soffit?.addFanDown({ x: offsetX, y: options.baseY - options.eaveDrop, z: offsetZ }, rings[0]!);
 }
 
 function roofShellShape(family: RoofFamily): {
@@ -338,7 +366,7 @@ export function composeBuilding(
   seed: string,
   stage: BuildStage,
 ): ComposedBuilding {
-  const canvas = new BuildingCanvas(stage);
+  const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift);
   // Open institutions and productive land have their own physical silhouette, using the same
   // surface batching and footprint contract as enclosed buildings.
   if (grammar.development?.form === 'gathering' && grammar.development.level === 1 || grammar.development?.form === 'field') {
@@ -377,8 +405,11 @@ export function composeBuilding(
   emitGroundworks(canvas, grammar, halfWidth, halfDepth);
   emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
   emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface);
-  const roofTop = emitRoof(canvas, grammar, halfWidth, halfDepth, wallTop, roofSurface, wallSurface, postSurface);
+  const roofTop = emitRoof(canvas, grammar, halfWidth, halfDepth, wallTop, roofSurface, wallSurface, postSurface, random);
+  const crownTop = emitCrown(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, roofSurface, wallSurface, postSurface);
+  emitFrontage(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofSurface, wallSurface, postSurface);
   emitDetails(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, postSurface, random);
+  emitYardProps(canvas, grammar, halfWidth, halfDepth, random);
 
   const group = canvas.build(palette);
   group.userData['grammarRole'] = grammar.role;
@@ -388,7 +419,7 @@ export function composeBuilding(
   // only, and the reserved placement footprint is a circle centred on the origin.
   return {
     group,
-    height: roofTop + (rank >= 4 ? 0.1 : 0),
+    height: Math.max(roofTop, crownTop) + (rank >= 4 ? 0.1 : 0),
     extentX: Math.max(grammar.width, Math.abs(bounds.min.x), Math.abs(bounds.max.x) ) * 2,
     extentZ: Math.max(grammar.depth, Math.abs(bounds.min.z), Math.abs(bounds.max.z)) * 2,
   };
@@ -716,6 +747,7 @@ function emitRoof(
   roofSurface: SurfaceKey,
   wallSurface: SurfaceKey,
   postSurface: SurfaceKey,
+  random: SeededRandom,
 ): number {
   const roof = canvas.at(roofSurface, BUILD_STAGE.ROOF);
   const soffit = canvas.at('shadow', BUILD_STAGE.ROOF);
@@ -777,18 +809,20 @@ function emitRoof(
 
   const shape = roofShellShape(grammar.roofFamily);
   const laidCourses = roofSurface === 'roof-tile' || roofSurface === 'roof-thatch';
+  // Weather reaches a roof first; the covering ages ahead of the walls beneath it.
+  canvas.stain(roof, 0.14);
   let baseY = wallTop;
   let topY = wallTop;
   for (let tier = 0; tier < grammar.roofTiers; tier += 1) {
     const shrink = Math.pow(0.76, tier);
     const height = grammar.width * grammar.roofPitch * Math.pow(0.86, tier);
     emitRoofShell(roof, tier === 0 ? soffit : undefined, {
-      halfWidth: halfWidth * shrink,
-      halfDepth: halfDepth * shrink,
+      halfWidth: halfWidth * shrink * random.range(0.995, 1.012),
+      halfDepth: halfDepth * shrink * random.range(0.995, 1.012),
       baseY,
       height,
       overhang: grammar.eaveOverhang,
-      upturn: grammar.eaveUpturn * shrink,
+      upturn: grammar.eaveUpturn * shrink * random.range(0.9, 1.12),
       concavity: grammar.roofConcavity,
       ridgeXRatio: shape.ridgeXRatio,
       ridgeZRatio: shape.ridgeZRatio,
@@ -805,9 +839,10 @@ function emitRoof(
         const count = Math.max(2, Math.round((grammar.rafterTails * frame.length) / (grammar.width + grammar.depth)));
         for (let index = 0; index < count; index += 1) {
           const u = -frame.length / 2 + (frame.length * (index + 0.5)) / count;
+          const reach = random.range(0.86, 1.0);
           const inner = framePoint(frame, u, baseY - height * 0.05, -grammar.postThickness);
-          const outer = framePoint(frame, u, baseY - height * 0.16 - overhangDepth * 0.12, overhangDepth * 0.9);
-          timber?.addBeam(inner, outer, grammar.postThickness * 0.5, grammar.postThickness * 0.5);
+          const outer = framePoint(frame, u, baseY - height * 0.16 - overhangDepth * 0.12, overhangDepth * reach);
+          timber?.addBeam(inner, outer, grammar.postThickness * random.range(0.44, 0.58), grammar.postThickness * 0.5);
         }
       }
     }
@@ -840,6 +875,7 @@ function emitRoof(
   }
 
   emitStacks(canvas, grammar, halfWidth, halfDepth, topY, postSurface);
+  canvas.clean(roof);
   return topY;
 }
 
@@ -856,9 +892,14 @@ function emitStacks(
   const metal = canvas.at('metal', BUILD_STAGE.ROOF);
   const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
   const trim = canvas.at(postSurface, BUILD_STAGE.ROOF);
+  // Flues are the sootiest fabric on any building.
+  if (grammar.chimneys > 0) canvas.stain(brick, 0.4);
+  if (grammar.vents > 0) canvas.stain(metal, 0.2);
 
-  for (let index = 0; index < grammar.chimneys; index += 1) {
-    const x = (-halfWidth * 0.6 + (halfWidth * 1.2 * (index + 0.5)) / Math.max(1, grammar.chimneys)) * 1;
+  // A stack cluster crown already carries this building's flues; do not raise them twice.
+  const chimneys = grammar.crown === 'stack-cluster' ? 0 : grammar.chimneys;
+  for (let index = 0; index < chimneys; index += 1) {
+    const x = (-halfWidth * 0.6 + (halfWidth * 1.2 * (index + 0.5)) / Math.max(1, chimneys)) * 1;
     const z = -halfDepth * 0.45;
     const height = grammar.wallHeight * (2.1 + index * 0.35);
     brick?.addBox(x, topY + height / 2, z, 0.09, height, 0.09);
@@ -873,6 +914,689 @@ function emitStacks(
     const angle = (index / Math.max(1, grammar.vents)) * Math.PI * 2;
     metal?.addBox(Math.cos(angle) * halfWidth * 0.5, topY + 0.07, Math.sin(angle) * halfDepth * 0.5, 0.07, 0.14, 0.07, angle);
     metal?.addBox(Math.cos(angle) * halfWidth * 0.5, topY + 0.15, Math.sin(angle) * halfDepth * 0.5, 0.11, 0.02, 0.11, angle);
+  }
+  canvas.clean(brick);
+  canvas.clean(metal);
+}
+
+/**
+ * How the building meets the street.
+ *
+ * Frontage is the identity cue that survives furthest: an open stall line, a columned civic
+ * front, a raised loading face and a guarded screen are different silhouettes long before
+ * colour, banners or ornament resolve. All of it lands on surfaces the body already uses.
+ */
+function emitFrontage(
+  canvas: BuildingCanvas,
+  grammar: BuildingGrammar,
+  halfWidth: number,
+  halfDepth: number,
+  plinthTop: number,
+  wallTop: number,
+  roofSurface: SurfaceKey,
+  wallSurface: SurfaceKey,
+  postSurface: SurfaceKey,
+): void {
+  if (grammar.frontage === 'none') return;
+  const thickness = grammar.postThickness;
+  const bodyHeight = wallTop - plinthTop;
+  const posts = canvas.at(postSurface, BUILD_STAGE.FRAME);
+  const timber = canvas.at('timber', BUILD_STAGE.DETAIL);
+  const stone = canvas.at('stone', BUILD_STAGE.FOUNDATION);
+  const ground = canvas.at('ground', BUILD_STAGE.FOUNDATION);
+  const cloth = canvas.at('cloth', BUILD_STAGE.ROOF);
+  const shadow = canvas.at('shadow', BUILD_STAGE.WALLS);
+  const roof = canvas.at(roofSurface, BUILD_STAGE.ROOF);
+  const wall = canvas.at(wallSurface, BUILD_STAGE.WALLS);
+
+  switch (grammar.frontage) {
+    case 'market-stalls': {
+      // Open bays under a continuous awning, with a counter in every bay.
+      const bays = Math.max(3, Math.min(6, grammar.bays));
+      const bayWidth = grammar.width / bays;
+      const reach = Math.max(0.16, halfDepth * 0.85);
+      const openHeight = bodyHeight * 0.66;
+      for (let index = 0; index < bays; index += 1) {
+        const x = -halfWidth + bayWidth * (index + 0.5);
+        shadow?.addBox(x, plinthTop + openHeight / 2, halfDepth + thickness * 0.35, bayWidth * 0.74, openHeight, thickness * 0.8);
+        posts?.addBeam(
+          { x, y: 0, z: halfDepth + reach },
+          { x, y: plinthTop + bodyHeight * 0.92, z: halfDepth + reach },
+          thickness * 0.9,
+          thickness * 0.9,
+        );
+        timber?.addBox(x, plinthTop + bodyHeight * 0.22, halfDepth + reach * 0.42, bayWidth * 0.68, thickness * 1.3, reach * 0.36);
+      }
+      posts?.addBox(0, plinthTop + bodyHeight * 0.93, halfDepth + reach, grammar.width * 1.04, thickness, thickness);
+      cloth?.addBeam(
+        { x: 0, y: plinthTop + bodyHeight * 1.04, z: halfDepth + thickness },
+        { x: 0, y: plinthTop + bodyHeight * 0.94, z: halfDepth + reach * 1.1 },
+        grammar.width * 1.06,
+        0.012,
+      );
+      ground?.addBox(0, 0.006, halfDepth + reach * 0.85, grammar.width * 1.5, 0.012, reach * 1.9);
+      break;
+    }
+    case 'colonnade': {
+      const count = Math.max(4, Math.min(9, grammar.bays + 1));
+      const z = halfDepth * 1.26;
+      const span = grammar.width * 1.02;
+      const columnHeight = bodyHeight * 0.96;
+      stone?.addBox(0, Math.max(0.012, plinthTop * 0.5), (halfDepth + z) / 2, span * 1.08, Math.max(0.024, plinthTop), Math.max(0.05, z - halfDepth + thickness * 3));
+      for (let index = 0; index < count; index += 1) {
+        const x = -span / 2 + (span * index) / (count - 1);
+        posts?.addBox(x, plinthTop + columnHeight / 2, z, thickness * 1.7, columnHeight, thickness * 1.7);
+        posts?.addBox(x, plinthTop + columnHeight, z, thickness * 2.3, thickness * 0.9, thickness * 2.3);
+      }
+      posts?.addBox(0, plinthTop + columnHeight + thickness * 1.2, z, span * 1.06, thickness * 1.6, thickness * 2.4);
+      shadow?.addBox(0, plinthTop + bodyHeight * 0.5, halfDepth + thickness * 0.4, grammar.width * 0.98, bodyHeight * 0.82, thickness * 0.7);
+      break;
+    }
+    case 'portico': {
+      // Symmetry, a flight of steps and a pedimented projecting entrance.
+      const projection = Math.max(0.14, halfDepth * 0.8);
+      const z = halfDepth + projection * 0.55;
+      const width = grammar.width * 0.62;
+      const columnHeight = bodyHeight * 1.04;
+      const treads = 3;
+      for (let index = 0; index < treads; index += 1) {
+        const height = Math.max(0.024, plinthTop) * ((index + 1) / treads);
+        stone?.addBox(0, height * 0.5, halfDepth + projection * 1.04 + (treads - index) * 0.05, width * 1.35, height, 0.05);
+      }
+      stone?.addBox(0, Math.max(0.012, plinthTop * 0.5), z, width * 1.3, Math.max(0.024, plinthTop), projection * 1.15);
+      for (const side of [-1, -0.34, 0.34, 1]) {
+        posts?.addBox(side * width * 0.5, plinthTop + columnHeight / 2, z, thickness * 1.9, columnHeight, thickness * 1.9);
+        posts?.addBox(side * width * 0.5, plinthTop + columnHeight, z, thickness * 2.6, thickness, thickness * 2.6);
+      }
+      posts?.addBox(0, plinthTop + columnHeight + thickness * 1.4, z, width * 1.16, thickness * 1.9, projection * 1.2);
+      if (roof) {
+        emitRoofShell(roof, undefined, {
+          halfWidth: width * 0.58,
+          halfDepth: projection * 0.6,
+          baseY: plinthTop + columnHeight + thickness * 2.4,
+          height: width * 0.2,
+          overhang: 0.12,
+          upturn: grammar.eaveUpturn * 0.8,
+          concavity: grammar.roofConcavity,
+          ridgeXRatio: 0.9,
+          ridgeZRatio: 0.06,
+          segmentsPerSide: 3,
+          rings: 3,
+          eaveDrop: thickness * 0.5,
+          centerZ: z,
+        });
+      }
+      break;
+    }
+    case 'loading-dock': {
+      const dockHeight = Math.max(0.05, bodyHeight * 0.28);
+      const dockDepth = Math.max(0.12, halfDepth * 0.5);
+      stone?.addBox(0, dockHeight / 2, halfDepth + dockDepth / 2, grammar.width * 1.06, dockHeight, dockDepth);
+      for (let index = 0; index < 3; index += 1) {
+        const height = dockHeight * ((index + 1) / 3);
+        stone?.addBox(-halfWidth * 1.04, height / 2, halfDepth + dockDepth * (0.18 + index * 0.3), grammar.width * 0.2, height, dockDepth * 0.3);
+      }
+      const doors = Math.max(2, Math.min(4, Math.round(grammar.bays / 2)));
+      const doorWidth = (grammar.width / doors) * 0.6;
+      const doorHeight = bodyHeight * 0.62;
+      for (let index = 0; index < doors; index += 1) {
+        const x = -halfWidth + (grammar.width * (index + 0.5)) / doors;
+        shadow?.addBox(x, dockHeight + doorHeight / 2, halfDepth + thickness * 0.35, doorWidth, doorHeight, thickness * 0.8);
+        posts?.addBox(x, dockHeight + doorHeight + thickness * 0.6, halfDepth + thickness * 0.7, doorWidth * 1.16, thickness * 1.1, thickness * 1.2);
+      }
+      roof?.addBeam(
+        { x: 0, y: plinthTop + bodyHeight * 0.96, z: halfDepth },
+        { x: 0, y: plinthTop + bodyHeight * 0.86, z: halfDepth + dockDepth * 1.2 },
+        grammar.width * 1.04,
+        0.02,
+      );
+      for (const side of [-1, 1]) {
+        posts?.addBeam(
+          { x: side * halfWidth * 0.92, y: plinthTop + bodyHeight * 0.58, z: halfDepth },
+          { x: side * halfWidth * 0.92, y: plinthTop + bodyHeight * 0.9, z: halfDepth + dockDepth * 1.1 },
+          thickness * 0.7,
+          thickness * 0.7,
+        );
+      }
+      break;
+    }
+    case 'work-yard': {
+      // An open-sided working bay beside the shed: the building is visibly a place of labour.
+      const yardCenter = halfWidth * 1.42;
+      const yardWidth = grammar.width * 0.72;
+      const shedHeight = plinthTop + bodyHeight * 0.72;
+      ground?.addBox(yardCenter, 0.006, 0, yardWidth, 0.012, grammar.depth * 1.12);
+      for (const z of [-halfDepth * 0.78, halfDepth * 0.78]) {
+        posts?.addBeam({ x: halfWidth * 1.78, y: 0, z }, { x: halfWidth * 1.78, y: shedHeight * 0.78, z }, thickness * 0.9, thickness * 0.9);
+        posts?.addBeam({ x: halfWidth * 1.04, y: 0, z }, { x: halfWidth * 1.04, y: shedHeight, z }, thickness * 0.9, thickness * 0.9);
+      }
+      roof?.addBeam(
+        { x: halfWidth * 1.02, y: shedHeight + thickness, z: 0 },
+        { x: halfWidth * 1.8, y: shedHeight * 0.8, z: 0 },
+        grammar.depth * 0.92,
+        0.02,
+      );
+      timber?.addBox(yardCenter, 0.11, halfDepth * 0.2, yardWidth * 0.5, 0.022, 0.12);
+      for (const corner of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+        timber?.addBox(yardCenter + corner[0] * yardWidth * 0.2, 0.05, halfDepth * 0.2 + corner[1] * 0.045, 0.018, 0.1, 0.018);
+      }
+      break;
+    }
+    case 'guard-screen': {
+      const screen = wall ?? stone;
+      const screenZ = halfDepth * 1.5;
+      const screenHeight = Math.max(0.12, bodyHeight * 0.78);
+      for (const side of [-1, 1]) {
+        screen?.addBox(side * grammar.width * 0.34, plinthTop + screenHeight / 2, screenZ, grammar.width * 0.4, screenHeight, thickness * 3.4);
+        screen?.addBox(side * halfWidth * 1.06, plinthTop + screenHeight * 0.66, screenZ, grammar.width * 0.22, screenHeight * 1.32, thickness * 4.2);
+      }
+      const merlons = 7;
+      const span = halfWidth * 2.12;
+      for (let index = 0; index < merlons; index += 1) {
+        const x = -span / 2 + (span * index) / (merlons - 1);
+        if (Math.abs(x) < grammar.width * 0.13) continue;
+        screen?.addBox(x, plinthTop + screenHeight + 0.035, screenZ, grammar.width * 0.08, 0.07, thickness * 3.2);
+      }
+      shadow?.addBox(0, plinthTop + screenHeight * 0.36, screenZ, grammar.width * 0.26, screenHeight * 0.72, thickness * 3.8);
+      posts?.addBox(0, plinthTop + screenHeight * 0.78, screenZ, grammar.width * 0.34, thickness * 1.6, thickness * 3.8);
+      break;
+    }
+    case 'ward-pavilion': {
+      // A long, low, open arcade with a planted strip in front: orderly and unfortified.
+      const z = halfDepth * 1.22;
+      const count = Math.max(5, Math.min(10, grammar.bays + 2));
+      const span = grammar.width * 1.02;
+      const arcadeTop = plinthTop + bodyHeight * 0.8;
+      for (let index = 0; index < count; index += 1) {
+        const x = -span / 2 + (span * index) / (count - 1);
+        posts?.addBeam({ x, y: 0, z }, { x, y: arcadeTop, z }, thickness * 0.7, thickness * 0.7);
+      }
+      posts?.addBox(0, arcadeTop, z, span * 1.02, thickness * 0.9, thickness * 1.2);
+      roof?.addBeam(
+        { x: 0, y: plinthTop + bodyHeight * 0.92, z: halfDepth },
+        { x: 0, y: arcadeTop + thickness, z: z * 1.04 },
+        span * 1.04,
+        0.016,
+      );
+      timber?.addBox(0, Math.max(0.02, plinthTop * 0.6), (halfDepth + z) / 2, span, 0.02, Math.max(0.04, z - halfDepth));
+      ground?.addBox(0, 0.006, halfDepth * 1.85, grammar.width * 1.1, 0.012, halfDepth * 0.75);
+      break;
+    }
+  }
+}
+
+/**
+ * The one large feature that has to survive to the skyline.
+ *
+ * Every crown is built from the same shells, posts and motifs as the body, so a spire, a
+ * watch tower and a cooling mass still read as work of the same civilisation. Returns the
+ * height reached, which becomes the structure's height when it exceeds the roof.
+ */
+function emitCrown(
+  canvas: BuildingCanvas,
+  grammar: BuildingGrammar,
+  halfWidth: number,
+  halfDepth: number,
+  plinthTop: number,
+  wallTop: number,
+  roofTop: number,
+  roofSurface: SurfaceKey,
+  wallSurface: SurfaceKey,
+  postSurface: SurfaceKey,
+): number {
+  if (grammar.crown === 'none') return roofTop;
+  const thickness = grammar.postThickness;
+  const unit = Math.min(halfWidth, halfDepth);
+  const roof = canvas.at(roofSurface, BUILD_STAGE.ROOF);
+  const wall = canvas.at(wallSurface, BUILD_STAGE.ROOF);
+  const posts = canvas.at(postSurface, BUILD_STAGE.ROOF);
+  const metal = canvas.at('metal', BUILD_STAGE.ROOF);
+  const stone = canvas.at('stone', BUILD_STAGE.ROOF);
+  const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
+  const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+  const shadow = canvas.at('shadow', BUILD_STAGE.ROOF);
+  const frontFrame = wallFrames(halfWidth, halfDepth)[0]!;
+
+  switch (grammar.crown) {
+    case 'spire': {
+      const height = grammar.wallHeight * (1.35 + grammar.ornament * 0.95);
+      const shaftHalf = unit * 0.3;
+      wall?.addBox(0, roofTop + height * 0.22, 0, shaftHalf * 1.7, height * 0.44, shaftHalf * 1.7);
+      let tierBase = roofTop + height * 0.4;
+      for (let tier = 0; tier < 3; tier += 1) {
+        const shrink = Math.pow(0.66, tier);
+        const tierHeight = height * 0.2 * Math.pow(0.86, tier);
+        if (roof) {
+          emitRoofShell(roof, undefined, {
+            halfWidth: shaftHalf * 1.5 * shrink,
+            halfDepth: shaftHalf * 1.5 * shrink,
+            baseY: tierBase,
+            height: tierHeight,
+            overhang: 0.28,
+            upturn: grammar.eaveUpturn * shrink,
+            concavity: grammar.roofConcavity,
+            ridgeXRatio: 0.3,
+            ridgeZRatio: 0.3,
+            segmentsPerSide: 4,
+            rings: 3,
+            eaveDrop: tierHeight * 0.2,
+          });
+        }
+        tierBase += tierHeight * 0.88;
+      }
+      const mastTop = tierBase + height * 0.32;
+      posts?.addBeam({ x: 0, y: tierBase, z: 0 }, { x: 0, y: mastTop, z: 0 }, thickness * 1.1, thickness * 1.1);
+      for (let ring = 0; ring < 3; ring += 1) {
+        const size = thickness * (3.2 - ring * 0.7);
+        motif?.addBox(0, tierBase + (mastTop - tierBase) * (0.24 + ring * 0.25), 0, size, thickness * 0.5, size);
+      }
+      emitMotifIcon(motif, grammar.motif, { x: 0, y: mastTop + thickness * 2, z: 0 }, thickness * 2.4, frontFrame, thickness * 0.6);
+      return mastTop + thickness * 3.4;
+    }
+    case 'obelisk': {
+      const height = grammar.wallHeight * (1.6 + grammar.ornament);
+      const segments = 5;
+      for (let index = 0; index < segments; index += 1) {
+        const taper = index / segments;
+        const size = unit * (0.66 - taper * 0.42);
+        stone?.addBox(0, roofTop + (height * (index + 0.5)) / segments, 0, size, height / segments, size);
+      }
+      motif?.addBox(0, roofTop + height + thickness, 0, unit * 0.2, thickness * 2.4, unit * 0.2);
+      emitMotifIcon(motif, grammar.motif, { x: 0, y: roofTop + height * 0.6, z: unit * 0.2 }, thickness * 2, frontFrame, thickness * 0.5);
+      return roofTop + height + thickness * 3;
+    }
+    case 'lantern-cupola': {
+      const drumHeight = grammar.wallHeight * 0.5;
+      const radius = unit * 0.34;
+      wall?.addBox(0, roofTop + drumHeight * 0.5, 0, radius * 2, drumHeight, radius * 2);
+      for (const side of [-1, 1]) {
+        glow?.addBox(side * radius * 0.99, roofTop + drumHeight * 0.55, 0, 0.006, drumHeight * 0.55, radius * 1.1);
+        glow?.addBox(0, roofTop + drumHeight * 0.55, side * radius * 0.99, radius * 1.1, drumHeight * 0.55, 0.006);
+      }
+      posts?.addBox(0, roofTop + drumHeight + thickness * 0.4, 0, radius * 2.3, thickness * 0.8, radius * 2.3);
+      if (roof) {
+        emitRoofShell(roof, undefined, {
+          halfWidth: radius * 1.2,
+          halfDepth: radius * 1.2,
+          baseY: roofTop + drumHeight + thickness * 0.8,
+          height: drumHeight * 0.7,
+          overhang: 0.24,
+          upturn: grammar.eaveUpturn,
+          concavity: grammar.roofConcavity,
+          ridgeXRatio: 0.16,
+          ridgeZRatio: 0.16,
+          segmentsPerSide: 4,
+          rings: 3,
+          eaveDrop: thickness,
+        });
+      }
+      const top = roofTop + drumHeight * 1.7 + thickness;
+      emitMotifIcon(motif, grammar.motif, { x: 0, y: top + thickness * 1.6, z: 0 }, thickness * 1.8, frontFrame, thickness * 0.5);
+      return top + thickness * 2.6;
+    }
+    case 'watch-tower': {
+      const towerHalf = unit * 0.5;
+      const towerTop = wallTop + grammar.wallHeight * 1.9;
+      const cx = -halfWidth * 0.7;
+      const cz = -halfDepth * 0.6;
+      wall?.addBox(cx, plinthTop + (towerTop - plinthTop) / 2, cz, towerHalf * 2, towerTop - plinthTop, towerHalf * 2);
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          posts?.addBeam(
+            { x: cx + sx * towerHalf, y: plinthTop, z: cz + sz * towerHalf },
+            { x: cx + sx * towerHalf, y: towerTop + thickness * 2, z: cz + sz * towerHalf },
+            thickness * 0.9,
+            thickness * 0.9,
+          );
+        }
+      }
+      posts?.addBox(cx, towerTop + thickness, cz, towerHalf * 2.5, thickness * 1.2, towerHalf * 2.5);
+      for (const frame of wallFrames(towerHalf * 1.16, towerHalf * 1.16)) {
+        for (let index = 0; index < 3; index += 1) {
+          const u = -frame.length / 2 + (frame.length * (index + 0.5)) / 3;
+          const point = framePoint(frame, u, towerTop + thickness * 2.6, 0);
+          wall?.addBox(cx + point.x, point.y, cz + point.z, thickness * 2, thickness * 2.4, thickness * 2);
+        }
+      }
+      glow?.addBox(cx, towerTop - grammar.wallHeight * 0.42, cz + towerHalf * 1.02, towerHalf * 0.7, grammar.wallHeight * 0.24, 0.006);
+      return towerTop + thickness * 4;
+    }
+    case 'observatory': {
+      const radius = unit * 0.52;
+      const drumHeight = grammar.wallHeight * 0.46;
+      wall?.addBox(0, roofTop + drumHeight * 0.5, 0, radius * 2, drumHeight, radius * 2);
+      posts?.addBox(0, roofTop + drumHeight + thickness * 0.3, 0, radius * 2.25, thickness * 0.7, radius * 2.25);
+      if (roof) {
+        emitRoofShell(roof, undefined, {
+          halfWidth: radius * 1.06,
+          halfDepth: radius * 1.06,
+          baseY: roofTop + drumHeight + thickness * 0.7,
+          height: radius,
+          overhang: 0.02,
+          upturn: 0,
+          concavity: -0.55,
+          ridgeXRatio: 0.12,
+          ridgeZRatio: 0.12,
+          segmentsPerSide: 6,
+          rings: 4,
+          eaveDrop: 0,
+        });
+      }
+      shadow?.addBox(0, roofTop + drumHeight + radius * 0.6, 0, radius * 0.22, radius * 1.05, radius * 2.1);
+      return roofTop + drumHeight + radius * 1.05 + thickness;
+    }
+    case 'stack-cluster': {
+      const brick = canvas.at(grammar.wallLayer === 'panel' ? 'panel' : 'brick', BUILD_STAGE.ROOF);
+      canvas.stain(brick, 0.55);
+      const stacks = Math.max(2, Math.min(4, grammar.chimneys + 1));
+      let top = roofTop;
+      for (let index = 0; index < stacks; index += 1) {
+        const height = grammar.wallHeight * (2.4 - index * 0.45);
+        const size = unit * (0.26 - index * 0.03);
+        const x = -halfWidth * 0.5 + (halfWidth * index) / (stacks - 1);
+        const z = -halfDepth * 0.42;
+        brick?.addBox(x, roofTop + height / 2, z, size, height, size);
+        for (let band = 0; band < 3; band += 1) {
+          brick?.addBox(x, roofTop + height * (0.3 + band * 0.22), z, size * 1.22, height * 0.03, size * 1.22);
+        }
+        metal?.addBox(x, roofTop + height + 0.015, z, size * 1.4, 0.03, size * 1.4);
+        top = Math.max(top, roofTop + height + 0.05);
+      }
+      canvas.clean(brick);
+      metal?.addBox(0, roofTop + grammar.wallHeight * 0.28, -halfDepth * 0.42, halfWidth * 1.15, unit * 0.14, unit * 0.14);
+      return top;
+    }
+    case 'cooling-mass': {
+      const radius = unit * 0.42;
+      const height = grammar.wallHeight * 2;
+      for (const side of [-1, 1]) {
+        const cx = side * halfWidth * 0.52;
+        const cz = -halfDepth * 0.3;
+        if (metal) {
+          emitRoofShell(metal, undefined, {
+            halfWidth: radius,
+            halfDepth: radius,
+            baseY: roofTop,
+            height,
+            overhang: 0,
+            upturn: 0,
+            concavity: 0.9,
+            ridgeXRatio: 0.72,
+            ridgeZRatio: 0.72,
+            segmentsPerSide: 5,
+            rings: 4,
+            eaveDrop: 0,
+            centerX: cx,
+            centerZ: cz,
+          });
+        }
+        metal?.addBox(cx, roofTop + height + 0.02, cz, radius * 1.55, 0.035, radius * 1.55);
+        glow?.addBox(cx, roofTop + height * 0.93, cz, radius * 1.18, height * 0.05, radius * 1.18);
+      }
+      return roofTop + height + 0.06;
+    }
+    case 'water-tank': {
+      const radius = unit * 0.46;
+      const legHeight = grammar.wallHeight * 1.1;
+      const tankHeight = grammar.wallHeight * 0.9;
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          posts?.addBeam(
+            { x: sx * radius * 0.82, y: roofTop, z: sz * radius * 0.82 },
+            { x: sx * radius * 0.56, y: roofTop + legHeight, z: sz * radius * 0.56 },
+            thickness * 0.9,
+            thickness * 0.9,
+          );
+        }
+        posts?.addBeam(
+          { x: sx * radius * 0.82, y: roofTop, z: -radius * 0.82 },
+          { x: sx * radius * 0.56, y: roofTop + legHeight, z: radius * 0.56 },
+          thickness * 0.4,
+          thickness * 0.4,
+        );
+      }
+      if (metal) {
+        emitRoofShell(metal, undefined, {
+          halfWidth: radius,
+          halfDepth: radius,
+          baseY: roofTop + legHeight,
+          height: tankHeight,
+          overhang: 0,
+          upturn: 0,
+          concavity: 0,
+          ridgeXRatio: 0.94,
+          ridgeZRatio: 0.94,
+          segmentsPerSide: 6,
+          rings: 2,
+          eaveDrop: 0,
+        });
+      }
+      metal?.addBox(0, roofTop + legHeight + tankHeight * 0.55, 0, radius * 2.06, tankHeight * 0.07, radius * 2.06);
+      metal?.addBox(0, roofTop + legHeight + tankHeight + 0.02, 0, radius * 1.5, 0.03, radius * 1.5);
+      return roofTop + legHeight + tankHeight + 0.06;
+    }
+    case 'roof-monitor': {
+      const monitorHeight = grammar.wallHeight * 0.44;
+      const halfLength = halfWidth * 0.82;
+      const halfSpan = Math.max(0.03, halfDepth * 0.2);
+      wall?.addBox(0, roofTop + monitorHeight * 0.5, 0, halfLength * 2, monitorHeight, halfSpan * 2);
+      for (const side of [-1, 1]) {
+        for (let index = 0; index < 4; index += 1) {
+          metal?.addBox(0, roofTop + monitorHeight * (0.24 + index * 0.17), side * halfSpan * 1.06, halfLength * 1.94, monitorHeight * 0.1, 0.008);
+        }
+        glow?.addBox(0, roofTop + monitorHeight * 0.6, side * halfSpan * 1.02, halfLength * 1.9, monitorHeight * 0.42, 0.006);
+      }
+      if (roof) {
+        emitRoofShell(roof, undefined, {
+          halfWidth: halfLength * 1.08,
+          halfDepth: halfSpan * 1.5,
+          baseY: roofTop + monitorHeight,
+          height: monitorHeight * 0.5,
+          overhang: 0.16,
+          upturn: grammar.eaveUpturn * 0.5,
+          concavity: grammar.roofConcavity,
+          ridgeXRatio: 0.92,
+          ridgeZRatio: 0.14,
+          segmentsPerSide: 3,
+          rings: 3,
+          eaveDrop: monitorHeight * 0.08,
+        });
+      }
+      return roofTop + monitorHeight * 1.6;
+    }
+  }
+}
+
+/**
+ * Small deterministic exterior props.
+ *
+ * These never change massing; they are the evidence of daily use that tells you what the
+ * building is for once you are close enough to see a woodpile or an ore heap. Everything reuses
+ * surfaces the building already draws, so props cost triangles rather than draw calls.
+ */
+function emitYardProps(
+  canvas: BuildingCanvas,
+  grammar: BuildingGrammar,
+  halfWidth: number,
+  halfDepth: number,
+  random: SeededRandom,
+): void {
+  if (grammar.props === 'none') return;
+  const timber = canvas.at('timber', BUILD_STAGE.DETAIL);
+  const stone = canvas.at('stone', BUILD_STAGE.DETAIL);
+  const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
+  const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+  const shadow = canvas.at('shadow', BUILD_STAGE.DETAIL);
+  const service = -halfWidth * 1.3;
+  const jitter = (amount: number): number => random.range(-amount, amount);
+
+  switch (grammar.props) {
+    case 'domestic': {
+      // Split firewood, stacked and re-stacked, plus a scrappy yard fence.
+      canvas.stain(timber, 0.16);
+      for (let row = 0; row < 3; row += 1) {
+        for (let log = 0; log < 4; log += 1) {
+          timber?.addBox(
+            service + jitter(0.007),
+            0.022 + row * 0.034,
+            -halfDepth * 0.28 + log * 0.038,
+            0.17,
+            0.032,
+            0.032,
+            jitter(0.06),
+          );
+        }
+      }
+      canvas.clean(timber);
+      for (const end of [-0.036, 4 * 0.038]) {
+        timber?.addBox(service, 0.062, -halfDepth * 0.28 + end, 0.026, 0.124, 0.026);
+      }
+      for (let index = 0; index < 5; index += 1) {
+        const z = halfDepth * (0.3 + index * 0.34);
+        timber?.addBox(-halfWidth * 1.12, 0.05 * random.range(0.88, 1.16), z, 0.02, 0.1, 0.02);
+        if (index > 0) timber?.addBox(-halfWidth * 1.12, 0.072, z - halfDepth * 0.17, 0.012, 0.012, halfDepth * 0.34);
+      }
+      break;
+    }
+    case 'market': {
+      for (let index = 0; index < 5; index += 1) {
+        const size = 0.055 + (index % 2) * 0.016;
+        timber?.addBox(
+          service + jitter(0.022),
+          size / 2 + (index > 2 ? 0.056 : 0),
+          halfDepth * (0.35 + index * 0.26),
+          size,
+          size,
+          size,
+          jitter(0.34),
+        );
+      }
+      for (const side of [-1, 1]) {
+        timber?.addBox(side * halfWidth * 0.62, 0.045, halfDepth * 1.55, 0.07, 0.09, 0.07, jitter(0.2));
+        timber?.addBox(side * halfWidth * 0.62, 0.092, halfDepth * 1.55, 0.078, 0.008, 0.078);
+      }
+      break;
+    }
+    case 'workshop': {
+      canvas.stain(timber, 0.2);
+      for (let row = 0; row < 3; row += 1) {
+        timber?.addBox(service + jitter(0.01), 0.028 + row * 0.05, -halfDepth * 0.1, 0.05, 0.048, halfDepth * 0.9, jitter(0.03));
+      }
+      timber?.addBox(service * 0.82, 0.085, halfDepth * 0.72, 0.14, 0.02, 0.05);
+      for (const side of [-1, 1]) {
+        timber?.addBeam(
+          { x: service * 0.82 + side * 0.05, y: 0, z: halfDepth * 0.72 },
+          { x: service * 0.82, y: 0.085, z: halfDepth * 0.72 },
+          0.016,
+          0.016,
+        );
+      }
+      canvas.clean(timber);
+      break;
+    }
+    case 'foundry': {
+      // Ore in, slag out: the two heaps that always flank a furnace.
+      canvas.stain(stone, 0.5);
+      for (let index = 0; index < 3; index += 1) {
+        const size = 0.2 - index * 0.055;
+        stone?.addBox(service, 0.018 + index * 0.036, -halfDepth * 0.5, size, 0.038, size, jitter(0.4));
+      }
+      canvas.clean(stone);
+      canvas.stain(shadow, 0.8);
+      for (let index = 0; index < 2; index += 1) {
+        const size = 0.17 - index * 0.06;
+        shadow?.addBox(service * 0.92, 0.016 + index * 0.032, halfDepth * 0.55, size, 0.034, size, jitter(0.5));
+      }
+      canvas.clean(shadow);
+      glow?.addBox(service * 0.92, 0.05, halfDepth * 0.55, 0.05, 0.012, 0.05);
+      break;
+    }
+    case 'storage': {
+      for (let index = 0; index < 4; index += 1) {
+        timber?.addBox(service + jitter(0.014), 0.042, -halfDepth * 0.4 + index * 0.1, 0.07, 0.084, 0.07, jitter(0.3));
+        timber?.addBox(service + jitter(0.014), 0.062, -halfDepth * 0.4 + index * 0.1, 0.078, 0.008, 0.078);
+      }
+      for (let index = 0; index < 3; index += 1) {
+        timber?.addBox(service * 0.85, 0.03 + index * 0.058, halfDepth * 0.6, 0.056, 0.056, 0.056, jitter(0.25));
+      }
+      timber?.addBox(service * 0.7, 0.012, halfDepth * 1.05, 0.3, 0.024, 0.2);
+      break;
+    }
+    case 'herb-garden': {
+      const garden = canvas.at('garden', BUILD_STAGE.DETAIL);
+      for (let bed = 0; bed < 3; bed += 1) {
+        const z = -halfDepth * 0.5 + bed * halfDepth * 0.62;
+        timber?.addBox(service, 0.024, z, 0.26, 0.048, 0.16);
+        garden?.addBox(service, 0.056, z, 0.23, 0.026, 0.13);
+        for (let plant = 0; plant < 3; plant += 1) {
+          garden?.addBox(service - 0.075 + plant * 0.075 + jitter(0.008), 0.082, z + jitter(0.02), 0.045, 0.05, 0.045, jitter(0.5));
+        }
+      }
+      for (let index = 0; index < 4; index += 1) {
+        garden?.addBox(-halfWidth * 0.4 + index * halfWidth * 0.28, 0.032, halfDepth * 1.9, 0.1, 0.064, 0.08, jitter(0.3));
+      }
+      break;
+    }
+    case 'altar': {
+      stone?.addBox(0, 0.042, halfDepth * 1.78, 0.24, 0.084, 0.14);
+      stone?.addBox(0, 0.094, halfDepth * 1.78, 0.28, 0.02, 0.17);
+      motif?.addBox(0, 0.112, halfDepth * 1.78, 0.09, 0.018, 0.09);
+      canvas.at('forge', BUILD_STAGE.DETAIL)?.addBox(0, 0.126, halfDepth * 1.78, 0.05, 0.024, 0.05);
+      for (const side of [-1, 1]) {
+        stone?.addBox(side * halfWidth * 0.95, 0.09, halfDepth * 1.5, 0.05, 0.18, 0.05);
+        motif?.addBox(side * halfWidth * 0.95, 0.19, halfDepth * 1.5, 0.066, 0.016, 0.066);
+      }
+      break;
+    }
+    case 'defensive': {
+      for (let index = 0; index < 7; index += 1) {
+        const u = -halfWidth * 1.1 + (halfWidth * 2.2 * index) / 6;
+        timber?.addBeam(
+          { x: u, y: 0, z: halfDepth * 1.85 },
+          { x: u + jitter(0.01), y: 0.14 * random.range(0.85, 1.15), z: halfDepth * 1.62 },
+          0.022,
+          0.022,
+        );
+      }
+      for (const side of [-1, 1]) {
+        timber?.addBox(side * halfWidth * 0.72, 0.075, halfDepth * 1.72, 0.03, 0.15, 0.03);
+        timber?.addBox(side * halfWidth * 0.72, 0.11, halfDepth * 1.72, 0.03, 0.016, 0.14);
+      }
+      stone?.addBox(service, 0.05, halfDepth * 0.4, 0.09, 0.1, 0.09);
+      glow?.addBox(service, 0.108, halfDepth * 0.4, 0.06, 0.03, 0.06);
+      break;
+    }
+    case 'civic': {
+      for (let index = 0; index < 3; index += 1) {
+        const x = -halfWidth * 0.7 + index * halfWidth * 0.7;
+        const height = 0.2 + (index === 1 ? 0.06 : 0);
+        stone?.addBox(x, height / 2, halfDepth * 1.72, 0.06, height, 0.05);
+        motif?.addBox(x, height + 0.012, halfDepth * 1.72, 0.078, 0.022, 0.066);
+      }
+      for (const side of [-1, 1]) {
+        stone?.addBox(side * halfWidth * 1.12, 0.045, halfDepth * 1.2, 0.05, 0.09, 0.05);
+      }
+      break;
+    }
+    case 'utility': {
+      const metal = canvas.at('metal', BUILD_STAGE.DETAIL);
+      canvas.stain(metal, 0.25);
+      metal?.addBeam(
+        { x: service, y: 0.06, z: -halfDepth * 0.8 },
+        { x: service, y: 0.06, z: halfDepth * 0.8 },
+        0.05,
+        0.05,
+      );
+      for (let index = 0; index < 3; index += 1) {
+        const z = -halfDepth * 0.6 + index * halfDepth * 0.6;
+        metal?.addBox(service, 0.024, z, 0.07, 0.048, 0.07);
+        metal?.addBox(service + 0.045, 0.085, z, 0.055, 0.012, 0.012, jitter(0.4));
+      }
+      metal?.addBox(service * 0.78, 0.09, halfDepth * 1.15, 0.16, 0.18, 0.16);
+      metal?.addBox(service * 0.78, 0.185, halfDepth * 1.15, 0.18, 0.016, 0.18);
+      canvas.clean(metal);
+      break;
+    }
   }
 }
 
@@ -1042,15 +1766,6 @@ function emitDetails(
     }
     if (grammar.enclosure === 'court') {
       emitPatternBand(motif, grammar.pattern, radiusX, radiusZ, wallHeight * 0.98, 0.045, 0.014, grammar.patternDensity * 0.7);
-    }
-  }
-
-  // Storage attachments and yard clutter give workshops and granaries their working look.
-  if (grammar.role === 'workshop' || grammar.role === 'granary' || grammar.role === 'warehouse') {
-    for (let index = 0; index < 3; index += 1) {
-      const x = -halfWidth * random.range(0.6, 1.5);
-      const z = halfDepth * random.range(0.9, 1.5);
-      deck?.addBox(x, 0.045, z, 0.09, 0.09, 0.09, random.range(0, Math.PI));
     }
   }
 }

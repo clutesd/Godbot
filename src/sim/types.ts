@@ -1,6 +1,6 @@
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
-import type { RouteTransport, TransportationState } from './transport/types';
+import type { RouteTransport, TransportationState, TraversalPath } from './transport/types';
 import type { SettlementDevelopment, StructureDevelopment } from './development/types';
 import type { ForestCommunity, Geology, LandModification, ModificationKind, Soil } from './environment/types';
 
@@ -122,10 +122,10 @@ export interface ResourceDeposit {
 }
 
 /** Settlement stockpile of specific gathered/crafted materials, keyed by resource or recipe-output id. */
-export type MaterialInventory = Record<string, number>;
+export type LocalMaterialInventory = Record<string, number>;
 
 export interface MaterialShipment {
-  networkPath?: import('./transport/types').TraversalPath;
+  networkPath?: TraversalPath;
   accessPaths?: Vec2[][];
   depositId: string;
   resourceId: string;
@@ -400,6 +400,21 @@ export interface HistoricalIdentity {
   promotedMonth?: number;
 }
 
+/** A notable life the Historian can still cite after the person has left the represented population. */
+export interface NotableFigure {
+  id: string;
+  name: string;
+  status: 'notable' | 'historical';
+  score: number;
+  reasons: string[];
+  eventIds: string[];
+  bornMonth: number;
+  diedMonth?: number;
+  homeId: string;
+  cultureId: string;
+  role?: PersonRole;
+}
+
 export interface Person {
   id: string;
   name: string;
@@ -596,8 +611,8 @@ export interface Settlement {
   polityId: string;
   institutionIds: string[];
   alive: boolean;
-  /** Gathered raw materials and crafted goods from the resource/recipe system. */
-  materials: MaterialInventory;
+  /** Gathered raw materials and crafted goods from the local resource/recipe system. */
+  localMaterials: LocalMaterialInventory;
   /** Deposit IDs this settlement has found (may or may not still be workable). */
   discoveredDeposits: string[];
   /** Deposit IDs this settlement is actively extracting from. */
@@ -1063,6 +1078,8 @@ export interface SimulationState {
   world: WorldState;
   weather: WeatherState;
   people: Person[];
+  /** Living and deceased people the simulation considers historically significant. */
+  notableFigures?: NotableFigure[];
   households?: Household[];
   socialRelationships?: SocialRelationship[];
   ideas?: SocialIdea[];

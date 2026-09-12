@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { clampRoleToEra, eraRank, resolveBuildingGrammar, type BuildingRole } from '../src/render/assets/BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, stageFromName, type BuildStage } from '../src/render/assets/BuildingComposer';
-import { MaterialPalette, type Era } from '../src/render/materials/MaterialPalette';
+import { MaterialPalette, SURFACE_KEYS, type Era, type SurfaceKey } from '../src/render/materials/MaterialPalette';
+import { compileSurfaceDetailPreview, surfaceHasProceduralDetail } from '../src/render/materials/SurfaceDetail';
 import { CultureStyleProfileFactory } from '../src/render/style/CultureStyleProfile';
 import { CANONICAL_ADULT_HEIGHT } from '../src/render/GodboxRenderer';
 import type { CultureStyle } from '../src/sim/types';
@@ -154,6 +155,86 @@ describe('Era ranking', () => {
     for (let index = 1; index < ERAS.length; index += 1) {
       expect(eraRank(ERAS[index]!)).toBeGreaterThan(eraRank(ERAS[index - 1]!));
     }
+  });
+});
+
+describe('Construction materials', () => {
+  const STRUCTURAL: SurfaceKey[] = [
+    'timber', 'stone', 'brick', 'plaster', 'daub', 'thatch', 'roof-thatch', 'roof-tile', 'metal', 'panel', 'roof-metal',
+  ];
+
+  it('gives every construction material its own surface program rather than only a colour', () => {
+    const fragments: string[] = [];
+    for (const surface of STRUCTURAL) {
+      const shader = compileSurfaceDetailPreview(surface);
+      expect(shader, surface).toBeDefined();
+      // Each hook must have been found in Three's standard shader, or the detail silently vanishes.
+      expect(shader!.vertexShader, surface).toContain('vGbLocal = transformed;');
+      expect(shader!.fragmentShader, surface).toContain('diffuseColor.rgb *= clamp(gbTone');
+      expect(shader!.fragmentShader, surface).toContain('roughnessFactor * gbRough');
+      expect(shader!.fragmentShader, surface).toContain('gbPerturbNormal(normal, gbHeight)');
+      fragments.push(shader!.fragmentShader);
+    }
+    // Timber, stone, brick, plaster, thatch, tile and metal must not share one generic program.
+    expect(new Set(fragments).size).toBe(STRUCTURAL.length);
+  });
+
+  it('keeps one shared material per surface and stays safe for geometry without detail data', () => {
+    const palette = new MaterialPalette({ culture: CULTURE, era: 'preIndustrial' });
+    const cacheKeys = new Set<string>();
+    for (const surface of SURFACE_KEYS) {
+      if (!surfaceHasProceduralDetail(surface)) continue;
+      const material = palette.getSurfaceMaterial(surface);
+      const key = material.customProgramCacheKey();
+      expect(cacheKeys.has(key), surface).toBe(false);
+      cacheKeys.add(key);
+      const defaults = (material as unknown as { defaultAttributeValues: Record<string, number[]> }).defaultAttributeValues;
+      expect(defaults['aSurfaceDetail']).toEqual([0, 0, 0, 0]);
+    }
+    palette.dispose();
+  });
+});
+
+describe('Deterministic imperfection', () => {
+  it('ages identically for the same plot and differently between plots, without distorting the architecture', () => {
+    const a = resolveBuildingGrammar(profile(), 'village', 'house', 'plot-11');
+    const b = resolveBuildingGrammar(profile(), 'village', 'house', 'plot-11');
+    const c = resolveBuildingGrammar(profile(), 'village', 'house', 'plot-12');
+
+    expect(a.wear).toBe(b.wear);
+    expect(a.toneShift).toBe(b.toneShift);
+    expect(a.wear).toBeGreaterThan(0);
+    expect(a.wear).not.toBeCloseTo(c.wear, 4);
+    expect([c.role, c.massing, c.roofFamily, c.frontage, c.crown, c.props])
+      .toEqual([a.role, a.massing, a.roofFamily, a.frontage, a.crown, a.props]);
+  });
+
+  it('bakes weathering into geometry without adding meshes or changing vertex counts', () => {
+    const palette = new MaterialPalette({ culture: CULTURE, era: 'village' });
+    const grammar = resolveBuildingGrammar(profile(), 'village', 'house', 'plot-13');
+    const detail = (group: THREE.Group): { values: number[]; meshes: number; vertices: number } => {
+      const values: number[] = [];
+      let meshes = 0;
+      let vertices = 0;
+      group.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        meshes += 1;
+        const positions = object.geometry.getAttribute('position');
+        const attribute = object.geometry.getAttribute('aSurfaceDetail');
+        vertices += positions.count;
+        expect(attribute, object.name).toBeDefined();
+        expect(attribute!.count).toBe(positions.count);
+        for (let index = 0; index < attribute!.count; index += 1) values.push(attribute!.getX(index));
+      });
+      return { values, meshes, vertices };
+    };
+
+    const first = detail(composeBuilding(grammar, palette, 'plot-13', BUILD_STAGE.DETAIL).group);
+    const second = detail(composeBuilding(grammar, palette, 'plot-13', BUILD_STAGE.DETAIL).group);
+    expect(second.values).toEqual(first.values);
+    // Soot and splash raise weathering above the building baseline on some parts only.
+    expect(new Set(first.values).size).toBeGreaterThan(1);
+    palette.dispose();
   });
 });
 

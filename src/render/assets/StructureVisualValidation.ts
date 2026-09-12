@@ -29,6 +29,10 @@ export interface StructureVisualProfile {
   vertexCount: number;
   componentCount: number;
   generationCount: number;
+  /** Street-facing treatment and skyline feature: the two strongest non-colour purpose cues. */
+  frontage: string;
+  crown: string;
+  props: string;
   /** Normal GODBOX settlement-view cues: massing, large precinct features and silhouette. */
   midSignature: string;
   /** Skyline-level cues that should survive aggressive distance simplification. */
@@ -39,6 +43,8 @@ export interface ArchitectureGallerySummary {
   profiles: StructureVisualProfile[];
   midSignatureCount: number;
   farSignatureCount: number;
+  /** Distinct (frontage, crown) purpose cues — identity that does not depend on colour. */
+  purposeCueCount: number;
   maxMeshes: number;
   maxVertices: number;
 }
@@ -128,6 +134,8 @@ export function profileArchitectureCase(
     quantize(verticality, 0.12),
     grammar.roofFamily,
     Math.min(4, grammar.roofTiers),
+    grammar.frontage,
+    grammar.crown,
     grammar.gateway ? 1 : 0,
     grammar.forecourt ? 1 : 0,
     grammar.enclosure,
@@ -142,6 +150,7 @@ export function profileArchitectureCase(
     quantize(verticality, 0.18),
     grammar.roofFamily,
     Math.min(3, grammar.roofTiers),
+    grammar.crown,
     grammar.chimneys > 0 ? 1 : 0,
     grammar.vents > 0 ? 1 : 0,
   ].join(':');
@@ -163,6 +172,9 @@ export function profileArchitectureCase(
     vertexCount,
     componentCount: manifest.components.length,
     generationCount: manifest.generations.length,
+    frontage: grammar.frontage,
+    crown: grammar.crown,
+    props: grammar.props,
     midSignature,
     farSignature,
   };
@@ -174,6 +186,7 @@ export function architectureGallerySummary(cultureId: string, culture: CultureSt
     profiles,
     midSignatureCount: new Set(profiles.map(profile => profile.midSignature)).size,
     farSignatureCount: new Set(profiles.map(profile => profile.farSignature)).size,
+    purposeCueCount: new Set(profiles.map(profile => `${profile.frontage}/${profile.crown}`)).size,
     maxMeshes: Math.max(...profiles.map(profile => profile.meshCount)),
     maxVertices: Math.max(...profiles.map(profile => profile.vertexCount)),
   };

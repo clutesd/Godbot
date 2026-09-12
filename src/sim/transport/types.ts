@@ -57,10 +57,12 @@ export interface FreightTrip {
   destination: string;
   reason: 'trade' | 'scarcity-relief';
   mode: TransportMode;
-  /** Legacy aggregate freight retained during the migration. Exactly one of resource/material is set. */
+  /** Legacy aggregate freight retained during the migration. Exactly one cargo field is set. */
   resource?: LegacyFreightResource;
   /** Typed physical material freight selected from real destination shortages and source surplus. */
   material?: MaterialKind;
+  /** Catalog material freight from the local resource economy. */
+  materialId?: string;
   quantity: number;
   departedMonth: number;
   path: TraversalPath;

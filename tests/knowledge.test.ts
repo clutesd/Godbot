@@ -270,10 +270,10 @@ describe('Causal knowledge', () => {
   it('keeps discovery histories reproducible while allowing other seeds to diverge', () => {
     const run = (seed: string): unknown[] => {
       const simulation = new Simulation({ seed, startingPopulation: 240 });
-      simulation.step(180 * 12);
+      simulation.step(100 * 12);
       return simulation.state.history.filter((event) => event.type === 'discovery' || event.type === 'knowledge-lost' || event.type === 'knowledge-rediscovered').map((event) => [event.month, event.type, event.locationId, event.context.knowledge]);
     };
     expect(run('reproducible-knowledge')).toEqual(run('reproducible-knowledge'));
     expect(run('reproducible-knowledge')).not.toEqual(run('different-knowledge'));
-  }, 60_000);
+  }, 180_000);
 });

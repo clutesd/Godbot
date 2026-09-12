@@ -33,7 +33,7 @@ function provision(settlement: Settlement, industrial = false): void {
   settlement.resources.food = 180;
   settlement.resources.wood = 140;
   settlement.resources.minerals = 160;
-  settlement.materials.timber = 140; settlement.materials.stone = 160;
+  settlement.localMaterials.timber = 140; settlement.localMaterials.stone = 160;
   publishBulkStocks(settlement);
   materialEconomy(settlement).arms = 12;
   materialEconomy(settlement).timberArms = 6;

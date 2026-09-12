@@ -23,7 +23,7 @@ const generate = (seed = 'environment-provinces') => generateWorld(configWith({ 
 function fixture() {
   const { state, settlements: [s, other] } = societyFixture();
   state.world.resourceDeposits = [];
-  for (const town of state.settlements) { town.materials = {}; town.materialEconomy = undefined; town.discoveredDeposits = []; town.workedDeposits = []; town.alive = town === s; publishBulkStocks(town); }
+  for (const town of state.settlements) { town.localMaterials = {}; town.materialEconomy = undefined; town.discoveredDeposits = []; town.workedDeposits = []; town.alive = town === s; publishBulkStocks(town); }
   for (const c of state.world.cells) { c.wood = 0.8; c.forestCapacity = 0.8; c.temperature = 0.5;
     c.ecology = { ageYears: 120, disturbance: 0, lastDisturbanceMonth: -1, family: 'broadleaf' }; }
   for (const w of state.weather.cells) { w.snowpack = 0; w.blizzard = 0; w.cropDamage = 0; }
@@ -131,7 +131,7 @@ describe('Knowledge and economic access', () => {
       accessPaths: route.accessPaths, networkPath: route.networkPath, remainingMonths: 1 });
     state.transportation.segments.test.status = 'planned'; state.transportation.revision++;
     state.month = 1; system.advanceMonth(state);
-    expect(s.materials.stone ?? 0).toBe(0);
+    expect(s.localMaterials.stone ?? 0).toBe(0);
     expect(materialEconomy(s).inTransit[0]!.quantity).toBe(5);
   });
   it('reports shortages and exhausted districts without forcing settlement outcomes', () => {
@@ -177,7 +177,7 @@ describe('Extraction and inherited landscapes', () => {
     state.month = 1; system.advanceMonth(state); expect(deposit.abundance).toBe(0.8);
     addMaterial(s, 'charcoal', 10);
     state.month = 2; system.advanceMonth(state);
-    expect(deposit.abundance).toBeLessThan(0.8); expect(s.materials.charcoal).toBeLessThan(10);
+    expect(deposit.abundance).toBeLessThan(0.8); expect(s.localMaterials.charcoal).toBeLessThan(10);
     expect(materialEconomy(s).energySupplied).toBeGreaterThan(0);
   });
   it('leaves a depleted quarry and carrying route in simulation and rendering after abandonment', () => {

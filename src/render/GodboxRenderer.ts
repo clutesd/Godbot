@@ -4,9 +4,11 @@ import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNe
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
-import type { Culture, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
+import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
 import { CameraDirector, type CurrentObservation } from './CameraDirector';
 import { AnimationController } from './animation/AnimationController';
+import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
+import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
@@ -102,6 +104,27 @@ export interface PlacementSmokeReport {
   routes: { active: number; waterCrossings: number; unresolvedCrossings: number; maxTerrainError: number; roadGradeViolations: number; railGradeViolations: number };
 }
 
+/** Read-only view of one represented person, for the Historian and the CameraDirector. */
+export interface PersonPresentation {
+  id: string;
+  name: string;
+  tier: VisualTier;
+  importance: number;
+  reasons: readonly string[];
+  eventIds: readonly string[];
+  role: PersonRole | undefined;
+  activity: Activity;
+  renderPosition: Vec2;
+  renderY: number;
+  facing: number;
+  speed: number;
+  traveling: boolean;
+  destination: Vec2;
+  destinationKind: DestinationKind | undefined;
+  reason: string | undefined;
+  homeId: string;
+}
+
 /** Camera distance at which the forest re-sorts its detail tiers. */
 const VEGETATION_LOD_INTERVAL_SECONDS = 0.4;
 
@@ -129,6 +152,8 @@ const PERSON_ROLE_CUES = {
 } as const;
 
 export const visiblePersonBudgetForDensity = (density: number): number => Math.max(48, Math.round(384 * density));
+/** Notable and historical lives are the only characters allowed extra geometry. */
+export const NOTABLE_VISUAL_BUDGET = 32;
 
 export class GodboxRenderer {
   readonly observation: CurrentObservation;
@@ -148,6 +173,13 @@ export class GodboxRenderer {
   private readonly peopleTools: THREE.InstancedMesh;
   private readonly peopleHeadwear: THREE.InstancedMesh;
   private readonly peopleCargo: THREE.InstancedMesh;
+  private readonly peopleMantles: THREE.InstancedMesh;
+  private readonly peopleVisuals = new PeopleVisualStateStore();
+  private socialGroups = new Map<string, SocialGroup>();
+  private readonly personGround: PersonVisualGround = {
+    heightAt: (x, z) => this.elevationAt(x, z),
+    isStandable: (x, z) => this.personStandable(x, z),
+  };
   private readonly personMatrix = new THREE.Matrix4();
   private readonly personColor = new THREE.Color();
   private readonly personDetailColor = new THREE.Color();
@@ -288,6 +320,10 @@ export class GodboxRenderer {
     this.peopleTools = new THREE.InstancedMesh(new THREE.BoxGeometry(0.05, 0.36, 0.05), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05, vertexColors: true }), visiblePersonBudget);
     this.peopleHeadwear = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.14, 0.12, 7), new THREE.MeshStandardMaterial({ roughness: 0.86, vertexColors: true }), visiblePersonBudget);
     this.peopleCargo = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), new THREE.MeshStandardMaterial({ roughness: 0.95, vertexColors: true }), visiblePersonBudget);
+    this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.2, 0.46, 7, 1, true).translate(0, -0.23, 0), new THREE.MeshStandardMaterial({ roughness: 0.88, vertexColors: true, side: THREE.DoubleSide }), NOTABLE_VISUAL_BUDGET);
+    this.peopleMantles.castShadow = true;
+    this.peopleMantles.frustumCulled = false;
+    this.peopleMantles.count = 0;
     this.peopleHeads.castShadow = true;
     this.peopleArms.castShadow = true;
     this.peopleLegs.castShadow = true;
@@ -301,7 +337,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.peopleCargo.frustumCulled = false;
-    this.scene.add(this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo);
+    this.scene.add(this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -387,6 +423,7 @@ export class GodboxRenderer {
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
     this.refreshVisiblePeople();
+    this.peopleVisuals.beginFrame();
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
     this.peopleHeads.count = count;
@@ -395,60 +432,87 @@ export class GodboxRenderer {
     this.peopleTools.count = count;
     this.peopleHeadwear.count = count;
     this.peopleCargo.count = count;
+    let mantles = 0;
     for (let index = 0; index < count; index += 1) {
       const person = this.visiblePeople[index];
       if (!person) continue;
-      const display = this.resolvePersonRenderPosition(person);
-      const detailed = Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
+      const group = this.socialGroups.get(groupKeyFor(person) ?? '');
+      const aim = this.personDisplayTarget(person, group);
+      const visual = this.peopleVisuals.resolve(person.id, {
+        destination: aim,
+        ...(person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
+        ...(aim.restFacing === undefined ? {} : { restFacing: aim.restFacing }),
+      }, deltaSeconds, this.personGround);
+      const display = visual;
+      const tier = visualTierFor(person);
+      const detailed = tier !== 'population' || Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
       this.animationController.getOrCreateCharacterState(person.id, person.occupation);
-      if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity);
+      if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity, travelAnimationFor(visual.speed, person));
       const pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
-      const moving = person.navigation?.traveling === true;
-      const bob = Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2) * (moving ? 0.03 : person.activity === 'rest' ? 0.006 : 0.015);
-      const y = this.elevationAt(display.x, display.z);
       const ageScale = person.ageMonths < 14 * 12 ? 0.64 + person.ageMonths / (14 * 12) * 0.08 : person.ageMonths > 68 * 12 ? 0.88 : 1;
       const heightScale = HUMAN_WORLD_SCALE * ageScale * (person.appearance?.heightScale ?? 1);
       const buildScale = person.appearance?.buildScale ?? 1;
-      const facing = Math.atan2(person.target.x - person.position.x, person.target.z - person.position.z);
-      this.setInstanceTransform(this.people, index, display.x, y + 0.44 * heightScale + bob + (pose?.positionOffset.y ?? 0) * 0.08, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
+      // The rendered terrain under the *visual* position is the only anchor: the soles sit on
+      // footY and the body is built upward from there, so bob and crouch can never bury anyone.
+      const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0.035 : person.activity === 'rest' ? 0.006 : 0.014;
+      const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
+      const footY = visual.footY + bob;
+      // Crouching and stooping lower the upper body only; the legs keep their hip pivot so the
+      // feet stay on the ground instead of sinking with the pose.
+      const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * 0.35 * heightScale;
+      const facing = visual.facing;
+      this.setInstanceTransform(this.people, index, display.x, footY + 0.44 * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(culture?.style.primary ?? '#d96c86');
       this.personColor.lerp(this.roleCue(person.role), 0.42);
       this.personColor.offsetHSL(0, 0, ((person.appearance?.materialQuality ?? 0.5) - 0.5) * 0.13);
+      if (tier !== 'population') this.personColor.offsetHSL(0, 0.16, tier === 'historical' ? 0.1 : 0.05);
       this.people.setColorAt(index, this.personColor);
-      this.setInstanceTransform(this.peopleHeads, index, display.x, y + 0.84 * heightScale + bob, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
+      this.setInstanceTransform(this.peopleHeads, index, display.x, footY + 0.84 * heightScale + poseLift, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
       this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, 0.32);
       this.peopleHeads.setColorAt(index, this.personDetailColor);
       const limbScale = detailed ? heightScale : 0.001;
-      this.setLimbInstance(index * 2, display.x, y, display.z, limbScale, heightScale, facing, -0.15 * buildScale * heightScale, 0.62, pose?.leftShoulderRotation ?? 0.1, this.peopleArms);
-      this.setLimbInstance(index * 2 + 1, display.x, y, display.z, limbScale, heightScale, facing, 0.15 * buildScale * heightScale, 0.62, pose?.rightShoulderRotation ?? -0.1, this.peopleArms);
+      this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.15 * buildScale * heightScale, 0.62, pose?.leftShoulderRotation ?? 0.1, this.peopleArms, poseLift);
+      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.15 * buildScale * heightScale, 0.62, pose?.rightShoulderRotation ?? -0.1, this.peopleArms, poseLift);
       this.peopleArms.setColorAt(index * 2, this.personColor);
       this.peopleArms.setColorAt(index * 2 + 1, this.personColor);
-      this.setLimbInstance(index * 2, display.x, y, display.z, limbScale, heightScale, facing, -0.07 * buildScale * heightScale, 0.36, pose?.leftHipRotation ?? 0, this.peopleLegs);
-      this.setLimbInstance(index * 2 + 1, display.x, y, display.z, limbScale, heightScale, facing, 0.07 * buildScale * heightScale, 0.36, pose?.rightHipRotation ?? 0, this.peopleLegs);
+      this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.07 * buildScale * heightScale, 0.36, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
+      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.07 * buildScale * heightScale, 0.36, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
       this.peopleLegs.setColorAt(index * 2, this.personColor);
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
-      const toolScale = detailed && longTool ? heightScale : 0.001;
-      this.setInstanceTransform(this.peopleTools, index, display.x + Math.sin(facing) * 0.17, y + 0.55 * heightScale + bob, display.z + Math.cos(facing) * 0.17, toolScale, toolScale, toolScale, Math.PI / 7, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
+      const toolScale = detailed && longTool ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
+      this.setInstanceTransform(this.peopleTools, index, display.x + Math.sin(facing) * 0.17, footY + 0.55 * heightScale + poseLift, display.z + Math.cos(facing) * 0.17, toolScale, toolScale, toolScale, Math.PI / 7, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
 
-      const headwear = person.appearance?.headwear ?? 'none';
+      const headwear = tier === 'population' ? person.appearance?.headwear ?? 'none' : notableHeadwear(person);
       const hatScale = !detailed || headwear === 'none' ? 0.001 : heightScale;
       const hatWidth = headwear === 'brim' ? 1.35 : headwear === 'helmet' ? 0.82 : 0.95;
       const hatHeight = headwear === 'cap' ? 0.52 : headwear === 'brim' ? 0.32 : 0.86;
-      this.setInstanceTransform(this.peopleHeadwear, index, display.x, y + 0.99 * heightScale + bob, display.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, 0, facing, 0);
+      this.setInstanceTransform(this.peopleHeadwear, index, display.x, footY + 0.99 * heightScale + poseLift, display.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, 0, facing, 0);
       this.personDetailColor.set(culture?.style.secondary ?? '#313550').lerp(this.roleCue(person.role), headwear === 'helmet' ? 0.2 : 0.42);
+      if (tier === 'historical') this.personDetailColor.offsetHSL(0, 0.2, 0.12);
       this.peopleHeadwear.setColorAt(index, this.personDetailColor);
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
       const cargoScale = detailed && cargoVisible ? heightScale : 0.001;
-      this.setInstanceTransform(this.peopleCargo, index, display.x + Math.cos(facing) * 0.2, y + 0.47 * heightScale + bob, display.z - Math.sin(facing) * 0.2, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
+      this.setInstanceTransform(this.peopleCargo, index, display.x + Math.cos(facing) * 0.2, footY + 0.47 * heightScale + poseLift, display.z - Math.sin(facing) * 0.2, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
       this.personDetailColor.set(carried === 'ledger' ? (culture?.style.accent ?? '#d9a748') : '#8b6840');
       this.peopleCargo.setColorAt(index, this.personDetailColor);
+
+      if (tier !== 'population' && mantles < this.peopleMantles.instanceMatrix.count) {
+        // Notable lives read at documentary distance through one extra silhouette element only.
+        const mantleScale = heightScale * (tier === 'historical' ? 1.06 : 1);
+        this.setInstanceTransform(this.peopleMantles, mantles, display.x, footY + 0.7 * heightScale + poseLift, display.z, mantleScale * buildScale, mantleScale, mantleScale * buildScale, 0, facing, 0);
+        this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, tier === 'historical' ? 0.18 : 0.4);
+        this.peopleMantles.setColorAt(mantles, this.personDetailColor);
+        mantles += 1;
+      }
     }
+    this.peopleMantles.count = mantles;
+    this.peopleVisuals.prune((personId) => this.animationController.release(personId));
     this.people.instanceMatrix.needsUpdate = true;
     this.peopleHeads.instanceMatrix.needsUpdate = true;
     this.peopleArms.instanceMatrix.needsUpdate = true;
@@ -456,6 +520,7 @@ export class GodboxRenderer {
     this.peopleTools.instanceMatrix.needsUpdate = true;
     this.peopleHeadwear.instanceMatrix.needsUpdate = true;
     this.peopleCargo.instanceMatrix.needsUpdate = true;
+    this.peopleMantles.instanceMatrix.needsUpdate = true;
     if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
     if (this.peopleHeads.instanceColor) this.peopleHeads.instanceColor.needsUpdate = true;
     if (this.peopleArms.instanceColor) this.peopleArms.instanceColor.needsUpdate = true;
@@ -463,6 +528,49 @@ export class GodboxRenderer {
     if (this.peopleTools.instanceColor) this.peopleTools.instanceColor.needsUpdate = true;
     if (this.peopleHeadwear.instanceColor) this.peopleHeadwear.instanceColor.needsUpdate = true;
     if (this.peopleCargo.instanceColor) this.peopleCargo.instanceColor.needsUpdate = true;
+    if (this.peopleMantles.instanceColor) this.peopleMantles.instanceColor.needsUpdate = true;
+  }
+
+  /**
+   * Everything the Historian and the CameraDirector need to build a shot around one person:
+   * where they are actually drawn, where they are going, and why they matter. Returns undefined
+   * for people who are not currently represented on screen.
+   */
+  getPersonPresentation(personId: string): PersonPresentation | undefined {
+    const person = this.state.people.find((candidate) => candidate.alive && candidate.id === personId);
+    const visual = this.peopleVisuals.get(personId);
+    if (!person || !visual) return undefined;
+    return {
+      id: person.id,
+      name: person.name,
+      tier: visualTierFor(person),
+      importance: person.historical?.score ?? 0,
+      reasons: person.historical?.reasons ?? [],
+      eventIds: person.historical?.eventIds ?? [],
+      role: person.role,
+      activity: person.activity,
+      renderPosition: { x: visual.x, z: visual.z },
+      renderY: visual.footY,
+      facing: visual.facing,
+      speed: visual.speed,
+      traveling: visual.traveling,
+      destination: { x: visual.destinationX, z: visual.destinationZ },
+      destinationKind: person.navigation?.destinationKind,
+      reason: person.navigation?.reason,
+      homeId: person.homeId,
+    };
+  }
+
+  /** Camera-eligible subjects, most historically significant first. */
+  getNotablePresentations(limit = 12): PersonPresentation[] {
+    const candidates: PersonPresentation[] = [];
+    for (const person of this.visiblePeople) {
+      if (visualTierFor(person) === 'population') continue;
+      const presentation = this.getPersonPresentation(person.id);
+      if (presentation) candidates.push(presentation);
+    }
+    candidates.sort((a, b) => b.importance - a.importance || a.id.localeCompare(b.id));
+    return candidates.slice(0, limit);
   }
 
   private refreshVisiblePeople(): void {
@@ -470,10 +578,19 @@ export class GodboxRenderer {
     this.visiblePeopleMonth = this.state.month;
     this.visiblePeoplePopulation = this.state.people.length;
     const capacity = this.people.instanceMatrix.count;
-    this.visiblePeople = this.state.people
-      .filter((person) => person.alive && this.personOnRenderableGround(person))
-      .sort((a, b) => stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
+    const alive = this.state.people.filter((person) => person.alive && this.personOnRenderableGround(person));
+    this.visiblePeople = alive
+      // Notable and historical lives always hold a slot so a documentary subject cannot vanish.
+      .sort((a, b) => tierRank(b) - tierRank(a)
+        || stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
       .slice(0, capacity);
+    this.socialGroups = buildSocialGroups(this.visiblePeople);
+    if (this.lastPersonGroundPosition.size > this.state.people.length * 2) {
+      const living = new Set(this.state.people.map((person) => person.id));
+      for (const id of this.lastPersonGroundPosition.keys()) {
+        if (!living.has(id)) this.lastPersonGroundPosition.delete(id);
+      }
+    }
   }
 
   private personOnRenderableGround(person: Person): boolean {
@@ -481,8 +598,24 @@ export class GodboxRenderer {
     return Boolean(terrain && !terrain.water && terrain.maxSlope <= 40);
   }
 
+  private personStandable(x: number, z: number): boolean {
+    const terrain = this.terrainQueries.queryTerrainAt(x, z);
+    return Boolean(terrain && !terrain.water && terrain.maxSlope <= 40);
+  }
+
   private resolvePersonRenderPosition(person: Person): Vec2 {
-    let position = { ...person.position };
+    const target = this.personDisplayTarget(person, undefined);
+    return { x: target.x, z: target.z };
+  }
+
+  /**
+   * The logical destination a character should be drawn heading toward: their authoritative
+   * position, nudged by the gathering they belong to, pushed clear of building footprints, and
+   * finally guaranteed to stand on renderable ground.
+   */
+  private personDisplayTarget(person: Person, group: SocialGroup | undefined): { x: number; z: number; restFacing?: number } {
+    let position: Vec2 = { ...person.position };
+    let restFacing: number | undefined;
     const settlement = this.state.settlements.find((candidate) => candidate.id === person.homeId);
     const placements = settlement ? this.settlementBuildingPlacements.get(settlement.id) ?? [] : [];
     if (settlement && person.navigation?.destinationKind === 'construction-site' && !person.navigation.traveling && settlement.constructionProgress > 0) {
@@ -491,7 +624,12 @@ export class GodboxRenderer {
         const angle = stableUnit(`${person.id}:construction-ring`) * Math.PI * 2;
         const radius = Math.max(site.width, site.depth) * 0.68 + 0.34;
         position = { x: site.worldX + Math.cos(angle) * radius, z: site.worldZ + Math.sin(angle) * radius };
+        restFacing = Math.atan2(site.worldX - position.x, site.worldZ - position.z);
       }
+    } else if (group) {
+      const placement = placeInGroup(person, group, position);
+      position = { x: placement.x, z: placement.z };
+      restFacing = placement.restFacing;
     }
     for (let pass = 0; pass < 3; pass += 1) {
       for (const placement of placements) {
@@ -504,15 +642,17 @@ export class GodboxRenderer {
         position = { x: placement.worldX + Math.cos(angle) * clearance, z: placement.worldZ + Math.sin(angle) * clearance };
       }
     }
-    const terrain = this.terrainQueries.queryTerrainAt(position.x, position.z);
-    if (!terrain || terrain.water || terrain.maxSlope > 40) {
+    if (!this.personStandable(position.x, position.z)) {
       const previous = this.lastPersonGroundPosition.get(person.id);
-      const previousTerrain = previous && this.terrainQueries.queryTerrainAt(previous.x, previous.z);
-      position = previous && previousTerrain && !previousTerrain.water && previousTerrain.maxSlope <= 40
+      position = previous && this.personStandable(previous.x, previous.z)
         ? previous : this.nearestRenderableGround(person.position, person.id);
     }
-    this.lastPersonGroundPosition.set(person.id, { ...position });
-    return position;
+    const remembered = this.lastPersonGroundPosition.get(person.id);
+    if (remembered) {
+      remembered.x = position.x;
+      remembered.z = position.z;
+    } else this.lastPersonGroundPosition.set(person.id, { x: position.x, z: position.z });
+    return { x: position.x, z: position.z, ...(restFacing === undefined ? {} : { restFacing }) };
   }
 
   private nearestRenderableGround(origin: Vec2, identity: string): Vec2 {
@@ -541,12 +681,12 @@ export class GodboxRenderer {
     return PERSON_ROLE_CUES.ordinary;
   }
 
-  private setLimbInstance(index: number, x: number, y: number, z: number, scale: number, heightScale: number, facing: number, side: number, height: number, swing: number, mesh: THREE.InstancedMesh): void {
+  private setLimbInstance(index: number, x: number, y: number, z: number, scale: number, heightScale: number, facing: number, side: number, height: number, swing: number, mesh: THREE.InstancedMesh, poseLift: number): void {
     const sideX = Math.cos(facing) * side;
     const sideZ = -Math.sin(facing) * side;
     // Position the pivot (shoulder/hip) with the body's real height scale, never the LOD scale,
     // so limbs stay attached to the torso even when the limb geometry itself is collapsed.
-    this.setInstanceTransform(mesh, index, x + sideX, y + height * heightScale, z + sideZ, scale, scale, scale, swing, facing, 0);
+    this.setInstanceTransform(mesh, index, x + sideX, y + height * heightScale + poseLift, z + sideZ, scale, scale, scale, swing, facing, 0);
   }
 
   private setInstanceTransform(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number): void {
@@ -2149,6 +2289,9 @@ export class GodboxRenderer {
     this.waterSystem.dispose();
     this.warRenderer.dispose();
     this.weatherRenderer.dispose();
+    this.peopleVisuals.clear();
+    this.animationController.dispose();
+    this.lastPersonGroundPosition.clear();
     window.removeEventListener('resize', this.resizeHandler);
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
@@ -2191,6 +2334,17 @@ function stableHash(value: string): number {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
+}
+
+function tierRank(person: Person): number {
+  const tier = visualTierFor(person);
+  return tier === 'historical' ? 2 : tier === 'notable' ? 1 : 0;
+}
+
+/** Notable lives keep their own headwear but never read as bare-headed at documentary distance. */
+function notableHeadwear(person: Person): NonNullable<Person['appearance']>['headwear'] {
+  const headwear = person.appearance?.headwear ?? 'none';
+  return headwear === 'none' ? 'wrap' : headwear;
 }
 
 function stableUnit(value: string): number {

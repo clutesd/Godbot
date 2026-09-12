@@ -52,6 +52,139 @@ export interface AssetCacheStats {
   cultureProfiles: number;
 }
 
+/** Share of the total structure height the crown occupies. Keeps LOD tiers the same height as full detail. */
+function crownHeightShare(crown: BuildingGrammar['crown']): number {
+  switch (crown) {
+    case 'spire': return 0.44;
+    case 'obelisk': return 0.4;
+    case 'cooling-mass': return 0.42;
+    case 'water-tank': return 0.36;
+    case 'watch-tower': return 0.3;
+    case 'observatory': return 0.22;
+    case 'lantern-cupola': return 0.18;
+    case 'roof-monitor': return 0.12;
+    case 'stack-cluster':
+    case 'none':
+      return 0;
+  }
+}
+
+/**
+ * Mid-distance massing for the grammar's crown feature.
+ * Approach views must still tell a spire from a watch tower from a cooling mass, so the crown
+ * is the one piece of fine detail that is worth re-stating in simplified form.
+ */
+function buildCrownLod(
+  grammar: BuildingGrammar,
+  width: number,
+  depth: number,
+  roofY: number,
+  crownHeight: number,
+  roofMaterial: THREE.Material,
+  stoneMaterial: THREE.Material,
+  metalMaterial: THREE.Material,
+): THREE.Object3D | undefined {
+  const unit = Math.min(width, depth);
+  switch (grammar.crown) {
+    case 'spire': {
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(unit * 0.24, crownHeight, 6), roofMaterial);
+      spire.position.y = roofY + crownHeight * 0.5;
+      return spire;
+    }
+    case 'obelisk': {
+      const shaft = new THREE.Mesh(new THREE.ConeGeometry(unit * 0.3, crownHeight, 4), stoneMaterial);
+      shaft.position.y = roofY + crownHeight * 0.5;
+      shaft.rotation.y = Math.PI / 4;
+      return shaft;
+    }
+    case 'lantern-cupola': {
+      const cupola = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.2, unit * 0.24, crownHeight, 6), roofMaterial);
+      cupola.position.y = roofY + crownHeight * 0.5;
+      return cupola;
+    }
+    case 'watch-tower': {
+      const height = roofY + crownHeight;
+      const tower = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.52, height, unit * 0.52), stoneMaterial);
+      tower.position.set(-width * 0.34, height * 0.5, -depth * 0.3);
+      return tower;
+    }
+    case 'observatory': {
+      const dome = new THREE.Mesh(
+        new THREE.SphereGeometry(crownHeight, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2),
+        roofMaterial,
+      );
+      dome.position.y = roofY;
+      return dome;
+    }
+    case 'stack-cluster':
+      // Chimney massing is already emitted above; a second cluster would only double the cost.
+      return undefined;
+    case 'cooling-mass': {
+      const group = new THREE.Group();
+      for (const side of [-1, 1]) {
+        const mass = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.3, unit * 0.42, crownHeight, 6), metalMaterial);
+        mass.position.set(side * width * 0.26, roofY + crownHeight * 0.5, -depth * 0.15);
+        group.add(mass);
+      }
+      return group;
+    }
+    case 'water-tank': {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.34, unit * 0.34, crownHeight * 0.55, 6), metalMaterial);
+      tank.position.y = roofY + crownHeight * 0.72;
+      return tank;
+    }
+    case 'roof-monitor': {
+      const monitor = new THREE.Mesh(new THREE.BoxGeometry(width * 0.78, crownHeight, depth * 0.3), metalMaterial);
+      monitor.position.y = roofY + crownHeight * 0.5;
+      return monitor;
+    }
+    case 'none':
+      return undefined;
+  }
+}
+
+/** Skyline-only crown massing. One box at most, so the far tier stays a silhouette. */
+function farCrownSilhouette(
+  grammar: BuildingGrammar,
+  width: number,
+  depth: number,
+  bodyTop: number,
+  crownHeight: number,
+  material: THREE.Material,
+): THREE.Mesh | undefined {
+  const unit = Math.min(width, depth);
+  switch (grammar.crown) {
+    case 'spire':
+    case 'obelisk': {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.36, crownHeight, unit * 0.36), material);
+      mesh.position.y = bodyTop + crownHeight * 0.5;
+      return mesh;
+    }
+    case 'watch-tower': {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.55, bodyTop + crownHeight, unit * 0.55), material);
+      mesh.position.set(-width * 0.3, (bodyTop + crownHeight) * 0.5, -depth * 0.28);
+      return mesh;
+    }
+    case 'cooling-mass': {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width * 0.7, crownHeight, depth * 0.4), material);
+      mesh.position.set(0, bodyTop + crownHeight * 0.5, -depth * 0.15);
+      return mesh;
+    }
+    case 'water-tank': {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.7, crownHeight * 0.6, unit * 0.7), material);
+      mesh.position.y = bodyTop + crownHeight * 0.7;
+      return mesh;
+    }
+    case 'observatory': {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.64, crownHeight, unit * 0.64), material);
+      mesh.position.y = bodyTop + crownHeight * 0.5;
+      return mesh;
+    }
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Central factory for creating procedural assets
  * Caches results to avoid redundant generation
@@ -321,7 +454,8 @@ export class AssetBuilder {
     }
 
     // Simplified roof language keeps sacred/industrial/civic skylines distinct.
-    const roofHeight = Math.max(0.14, height - bodyHeight);
+    const crownHeight = height * crownHeightShare(grammar.crown);
+    const roofHeight = Math.max(0.14, height - bodyHeight - crownHeight);
     let roof: THREE.Mesh;
     if (grammar.roofFamily === 'shell-dome' || grammar.roofFamily === 'canopy-shell') {
       roof = new THREE.Mesh(new THREE.SphereGeometry(Math.max(width, depth) * 0.48, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), roofMaterial);
@@ -366,14 +500,66 @@ export class AssetBuilder {
       }
     }
 
+    // Frontage and crown are the two cues the mid LOD must not throw away: they are what makes
+    // a market, a council, a garrison and a foundry different shapes rather than different colours.
+    const roofY = bodyHeight + roofHeight;
+    switch (grammar.frontage) {
+      case 'market-stalls': {
+        const awning = new THREE.Mesh(new THREE.BoxGeometry(width * 1.05, height * 0.035, depth * 0.8), roofMaterial);
+        awning.position.set(0, bodyHeight * 0.86, depth * 0.86);
+        lod1.add(awning);
+        break;
+      }
+      case 'colonnade':
+      case 'ward-pavilion': {
+        const arcade = new THREE.Mesh(new THREE.BoxGeometry(width * 1.02, bodyHeight * 0.82, depth * 0.2), bodyMaterial);
+        arcade.position.set(0, bodyHeight * 0.41, depth * 0.62);
+        lod1.add(arcade);
+        break;
+      }
+      case 'portico': {
+        const block = new THREE.Mesh(new THREE.BoxGeometry(width * 0.62, bodyHeight * 1.12, depth * 0.44), stoneMaterial);
+        block.position.set(0, bodyHeight * 0.56, depth * 0.6);
+        lod1.add(block);
+        break;
+      }
+      case 'loading-dock': {
+        const dock = new THREE.Mesh(new THREE.BoxGeometry(width * 1.06, bodyHeight * 0.28, depth * 0.5), stoneMaterial);
+        dock.position.set(0, bodyHeight * 0.14, depth * 0.74);
+        lod1.add(dock);
+        break;
+      }
+      case 'work-yard': {
+        const shed = new THREE.Mesh(new THREE.BoxGeometry(width * 0.72, bodyHeight * 0.7, depth * 1.1), bodyMaterial);
+        shed.position.set(width * 0.71, bodyHeight * 0.35, 0);
+        lod1.add(shed);
+        break;
+      }
+      case 'guard-screen': {
+        const screen = new THREE.Mesh(new THREE.BoxGeometry(width * 1.12, bodyHeight * 0.9, depth * 0.14), stoneMaterial);
+        screen.position.set(0, bodyHeight * 0.45, depth * 0.75);
+        lod1.add(screen);
+        break;
+      }
+      case 'none':
+        break;
+    }
+
+    const crown = buildCrownLod(grammar, width, depth, roofY, crownHeight, roofMaterial, stoneMaterial, metalMaterial);
+    if (crown) lod1.add(crown);
+
+    const farBodyHeight = Math.max(0.1, (height - crownHeight) * 0.9);
     const lod2 = new THREE.Mesh(
-      new THREE.BoxGeometry(width * 0.92, height * 0.82, depth * 0.92),
+      new THREE.BoxGeometry(width * 0.92, farBodyHeight, depth * 0.92),
       bodyMaterial,
     );
     // BoxGeometry is centred; lift it so the distant silhouette remains grounded.
-    lod2.position.y = height * 0.41;
-
-    return [lod1, lod2];
+    lod2.position.y = farBodyHeight * 0.5;
+    const farCrown = farCrownSilhouette(grammar, width, depth, farBodyHeight, crownHeight, bodyMaterial);
+    if (!farCrown) return [lod1, lod2];
+    const far = new THREE.Group();
+    far.add(lod2, farCrown);
+    return [lod1, far];
   }
 
   /**

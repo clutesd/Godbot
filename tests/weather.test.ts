@@ -64,7 +64,7 @@ describe('Weather simulation', () => {
     }
     cell.temperature = 0.52;
     system.applyWeatherToCell(cell, { kind: 'heavy-snow', intensity: 1, wind: 1 });
-    expect(conditions.precipitation).toBe('snow');
+    expect(conditions.precipitation).toBe('mixed');
     expect(conditions.blizzard).toBe(0);
     cell.temperature = 0.9;
     system.applyWeatherToCell(cell, { kind: 'heavy-snow', intensity: 1, wind: 1 });

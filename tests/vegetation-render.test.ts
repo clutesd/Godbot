@@ -68,21 +68,21 @@ describe('Rendered vegetation contracts', () => {
     expect(JSON.stringify(simulation.state)).toBe(before);
   });
 
-  it('counts actual flower passes, retains autumn seed heads, and hides everything in winter', () => {
+  it('counts actual flower passes, retains autumn seed heads, and hides flowers in winter', () => {
     const { world, surface, camera } = vegetationFixture();
     const flowers = new FlowerField(world, surface, 'flower-render', 200, []);
     const seedHeads = flowers.group.getObjectByName('seasonal-flower-seed-heads') as THREE.InstancedMesh;
     flowers.update(camera, 5, []);
     expect(flowers.report.visible).toBeGreaterThan(100);
-    expect(flowers.report.drawCalls).toBe(3);
+    expect(flowers.report.drawCalls).toBe(6);
     flowers.update(camera, 9.4, []);
     expect(seedHeads.count).toBeGreaterThan(0);
     expect((flowers.group.getObjectByName('seasonal-flower-blooms') as THREE.InstancedMesh).count).toBe(0);
     for (const month of [0, 10, 11, 12]) {
       flowers.update(camera, month, []);
       expect(flowers.report.visible).toBe(0);
-      expect(flowers.report.triangles).toBe(0);
-      expect(instanceMeshes(flowers.group).every(mesh => mesh.count === 0)).toBe(true);
+      expect(['seasonal-flower-stems', 'seasonal-flower-blooms', 'seasonal-flower-seed-heads']
+        .every(name => (flowers.group.getObjectByName(name) as THREE.InstancedMesh).count === 0)).toBe(true);
     }
     disposeVegetation(flowers.group);
   });

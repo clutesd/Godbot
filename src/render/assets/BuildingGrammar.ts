@@ -54,6 +54,48 @@ export type BannerStyle = 'none' | 'pennant' | 'cloth' | 'standard';
 export type EnclosureStyle = 'none' | 'stakes' | 'yard' | 'court';
 export type WallLayer = 'hide' | 'thatch' | 'daub' | 'plaster' | 'stone' | 'brick' | 'panel';
 
+/**
+ * How the building meets the street. This is the single strongest legibility cue at settlement
+ * distance: an open stall line, a columned civic front and a raised loading face read differently
+ * long before colour or ornament resolves.
+ */
+export type FrontageStyle =
+  | 'none'
+  | 'market-stalls'
+  | 'colonnade'
+  | 'portico'
+  | 'loading-dock'
+  | 'work-yard'
+  | 'guard-screen'
+  | 'ward-pavilion';
+
+/** The one large feature that survives to the skyline. */
+export type CrownFeature =
+  | 'none'
+  | 'spire'
+  | 'obelisk'
+  | 'lantern-cupola'
+  | 'watch-tower'
+  | 'observatory'
+  | 'stack-cluster'
+  | 'cooling-mass'
+  | 'water-tank'
+  | 'roof-monitor';
+
+/** Small deterministic exterior props that tell you what happens here. */
+export type YardProps =
+  | 'none'
+  | 'domestic'
+  | 'market'
+  | 'workshop'
+  | 'foundry'
+  | 'storage'
+  | 'herb-garden'
+  | 'altar'
+  | 'defensive'
+  | 'civic'
+  | 'utility';
+
 export interface BuildingGrammar {
   development?: Pick<DevelopmentResponse, 'form' | 'need' | 'level' | 'material'>;
   role: BuildingRole;
@@ -95,9 +137,16 @@ export interface BuildingGrammar {
   enclosure: EnclosureStyle;
   chimneys: number;
   vents: number;
+  frontage: FrontageStyle;
+  crown: CrownFeature;
+  props: YardProps;
   massing: 'single' | 'wing' | 'twin' | 'court';
   /** 0..1 civic ornament level: brackets, finials, motif inlay, ceremonial framing. */
   ornament: number;
+  /** 0..1 age and use. Drives shading only — soot, damp, faded facades, dulled metal. */
+  wear: number;
+  /** -1..1 deterministic lightness offset so neighbouring buildings are not identically toned. */
+  toneShift: number;
   /** 0..1 strength of emissive windows and lanterns at night. */
   emissive: number;
   /** 0..1 heat/energy glow for forges, foundries, reactors. */
@@ -269,6 +318,93 @@ function roleShape(role: BuildingRole): RoleShape {
 }
 
 /**
+ * Street-facing treatment by role. Gated on era so a village market does not acquire a
+ * colonnade it could not build.
+ */
+function frontageFor(role: BuildingRole, rank: number): FrontageStyle {
+  if (rank === 0) return 'none';
+  switch (role) {
+    case 'market':
+      return 'market-stalls';
+    case 'hall':
+      return rank >= 2 ? 'portico' : 'none';
+    case 'research':
+      return 'colonnade';
+    case 'warehouse':
+      return 'loading-dock';
+    case 'granary':
+      return rank >= 2 ? 'loading-dock' : 'none';
+    case 'workshop':
+    case 'factory':
+    case 'foundry':
+    case 'energy':
+      return 'work-yard';
+    case 'gate-tower':
+      return 'guard-screen';
+    default:
+      return 'none';
+  }
+}
+
+function crownFor(role: BuildingRole, rank: number): CrownFeature {
+  if (rank === 0) return role === 'ritual-marker' ? 'obelisk' : 'none';
+  switch (role) {
+    case 'shrine':
+      return 'spire';
+    case 'ritual-marker':
+      return 'obelisk';
+    case 'hall':
+      return rank >= 2 ? 'lantern-cupola' : 'none';
+    case 'gate-tower':
+      return 'watch-tower';
+    case 'research':
+      return 'observatory';
+    case 'foundry':
+      return 'stack-cluster';
+    case 'factory':
+      return 'roof-monitor';
+    case 'energy':
+      return 'cooling-mass';
+    case 'warehouse':
+      return rank >= 3 ? 'roof-monitor' : 'none';
+    default:
+      return 'none';
+  }
+}
+
+function propsFor(role: BuildingRole): YardProps {
+  switch (role) {
+    case 'shelter':
+    case 'lean-to':
+    case 'hut':
+    case 'house':
+    case 'compound':
+      return 'domestic';
+    case 'market':
+      return 'market';
+    case 'workshop':
+    case 'factory':
+      return 'workshop';
+    case 'foundry':
+      return 'foundry';
+    case 'granary':
+    case 'warehouse':
+    case 'store-pit':
+      return 'storage';
+    case 'shrine':
+    case 'ritual-marker':
+      return 'altar';
+    case 'hall':
+    case 'research':
+      return 'civic';
+    case 'gate-tower':
+      return 'defensive';
+    case 'energy':
+      return 'utility';
+  }
+}
+
+/**
  * Step 1 structure identity: preserve the shared architectural grammar while making a
  * development's social purpose legible through massing, approach, enclosure, lighting and
  * working details. These are presentation cues only; they never invent simulation state.
@@ -277,18 +413,25 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
   const level = development.level;
   const developed = level > 1;
   const major = level >= 3;
+  const rank = eraRank(grammar.era);
   switch (development.need) {
     case 'housing':
       grammar.veranda = developed ? 'wrap' : grammar.veranda;
       grammar.enclosure = developed ? 'yard' : grammar.enclosure;
       grammar.banner = 'none';
       grammar.lanterns = Math.max(grammar.lanterns, developed ? 2 : 1);
+      grammar.frontage = 'none';
+      grammar.crown = 'none';
+      grammar.props = 'domestic';
       break;
     case 'food':
       grammar.banner = 'none';
       grammar.enclosure = developed ? 'yard' : grammar.enclosure;
       grammar.ornament = Math.min(grammar.ornament, 0.38);
       grammar.lanterns = Math.min(grammar.lanterns, 1);
+      grammar.frontage = developed ? 'loading-dock' : 'none';
+      grammar.crown = 'none';
+      grammar.props = 'storage';
       break;
     case 'trade':
       grammar.forecourt = true;
@@ -297,6 +440,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.lanterns = Math.max(grammar.lanterns, major ? 4 : 2);
       grammar.massing = major ? 'court' : developed ? 'wing' : grammar.massing;
       grammar.enclosure = major ? 'court' : 'none';
+      grammar.frontage = 'market-stalls';
+      grammar.crown = 'none';
+      grammar.props = 'market';
       break;
     case 'government':
       grammar.forecourt = true;
@@ -307,6 +453,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.massing = developed ? 'court' : grammar.massing;
       grammar.ornament = Math.max(grammar.ornament, major ? 0.95 : 0.78);
       grammar.lanterns = Math.max(grammar.lanterns, major ? 5 : 3);
+      grammar.frontage = 'portico';
+      grammar.crown = developed ? 'lantern-cupola' : 'none';
+      grammar.props = 'civic';
       break;
     case 'security':
       grammar.forecourt = false;
@@ -317,6 +466,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.veranda = 'none';
       grammar.ornament = Math.min(Math.max(grammar.ornament, 0.34), 0.72);
       grammar.lanterns = Math.min(grammar.lanterns, 2);
+      grammar.frontage = 'guard-screen';
+      grammar.crown = 'watch-tower';
+      grammar.props = 'defensive';
       break;
     case 'religion':
       grammar.forecourt = developed;
@@ -326,6 +478,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.roofTiers = Math.max(grammar.roofTiers, level);
       grammar.ornament = Math.max(grammar.ornament, 0.9);
       grammar.lanterns = Math.max(grammar.lanterns, 2 + level);
+      grammar.frontage = 'none';
+      grammar.crown = 'spire';
+      grammar.props = 'altar';
       break;
     case 'knowledge':
       grammar.forecourt = developed;
@@ -337,6 +492,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.windowRows = Math.max(grammar.windowRows, developed ? 2 : 1);
       grammar.ornament = Math.min(Math.max(grammar.ornament, 0.48), 0.72);
       grammar.lanterns = Math.max(grammar.lanterns, major ? 4 : 2);
+      grammar.frontage = 'colonnade';
+      grammar.crown = major ? 'observatory' : 'none';
+      grammar.props = 'civic';
       break;
     case 'healthcare':
       grammar.forecourt = developed;
@@ -348,6 +506,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.windowRows = Math.max(grammar.windowRows, developed ? 2 : 1);
       grammar.ornament = Math.min(grammar.ornament, 0.52);
       grammar.lanterns = Math.max(grammar.lanterns, major ? 4 : 2);
+      grammar.frontage = 'ward-pavilion';
+      grammar.crown = 'none';
+      grammar.props = 'herb-garden';
       break;
     case 'manufacturing':
       grammar.forecourt = false;
@@ -357,6 +518,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.ornament = Math.min(grammar.ornament, 0.32);
       grammar.chimneys = Math.max(grammar.chimneys, major ? 2 : developed ? 1 : 0);
       grammar.forgeGlow = Math.max(grammar.forgeGlow, major ? 0.7 : 0.35);
+      grammar.frontage = 'work-yard';
+      grammar.crown = major ? 'stack-cluster' : 'roof-monitor';
+      grammar.props = major ? 'foundry' : 'workshop';
       break;
     case 'transport':
       grammar.forecourt = true;
@@ -365,6 +529,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.massing = developed ? 'wing' : grammar.massing;
       grammar.veranda = 'front';
       grammar.ornament = Math.min(grammar.ornament, 0.35);
+      grammar.frontage = 'loading-dock';
+      grammar.crown = major ? 'roof-monitor' : 'none';
+      grammar.props = 'storage';
       break;
     case 'energy':
       grammar.forecourt = false;
@@ -374,6 +541,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.vents = Math.max(grammar.vents, major ? 4 : developed ? 2 : 1);
       grammar.forgeGlow = Math.max(grammar.forgeGlow, major ? 0.95 : 0.55);
       grammar.ornament = Math.min(grammar.ornament, 0.5);
+      grammar.frontage = 'work-yard';
+      grammar.crown = 'cooling-mass';
+      grammar.props = 'utility';
       break;
     case 'water':
       grammar.forecourt = false;
@@ -385,6 +555,9 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.vents = Math.max(grammar.vents, major ? 2 : 0);
       grammar.ornament = Math.min(grammar.ornament, 0.38);
       grammar.lanterns = Math.min(grammar.lanterns, 1);
+      grammar.frontage = 'none';
+      grammar.crown = 'water-tank';
+      grammar.props = 'utility';
       break;
     case 'memory':
       grammar.forecourt = developed;
@@ -395,7 +568,15 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
       grammar.ornament = Math.max(grammar.ornament, major ? 1 : 0.82);
       grammar.lanterns = Math.max(grammar.lanterns, developed ? 3 : 1);
       grammar.ridgeFinials = true;
+      grammar.frontage = 'none';
+      grammar.crown = 'obelisk';
+      grammar.props = 'civic';
       break;
+  }
+  // A civilisation cannot raise an observatory or a cooling mass before it can build one.
+  if (rank === 0) {
+    grammar.frontage = 'none';
+    grammar.crown = grammar.crown === 'obelisk' ? 'obelisk' : 'none';
   }
 }
 
@@ -481,11 +662,24 @@ export function resolveBuildingGrammar(
           : 'none',
     chimneys: role === 'foundry' ? 3 : role === 'factory' ? 2 : role === 'workshop' && rank >= 3 ? 1 : 0,
     vents: role === 'energy' || role === 'research' ? 3 : industrialRole ? 2 : 0,
+    frontage: frontageFor(role, rank),
+    crown: crownFor(role, rank),
+    props: propsFor(role),
     massing: shape.massing,
     ornament,
+    wear: 0,
+    toneShift: 0,
     emissive: rank <= 1 ? 0.25 : rank === 2 ? 0.5 : rank === 3 ? 0.68 : rank === 4 ? 0.85 : 1,
     forgeGlow: role === 'foundry' ? 1 : role === 'factory' ? 0.55 : role === 'energy' ? 0.9 : role === 'workshop' ? 0.35 : 0,
   };
+  // Age and use, not structural distortion: a deterministic weathering level and a small tone
+  // offset per plot so a street of identical grammars is not a street of identical surfaces.
+  grammar.wear = Math.min(
+    1,
+    Math.max(0, (0.38 - rank * 0.05) * random.range(0.55, 1.4) + (industrialRole || role === 'workshop' ? 0.14 : 0)),
+  );
+  grammar.toneShift = random.range(-0.85, 0.85);
+  grammar.postThickness *= random.range(0.93, 1.08);
   if (development) {
     grammar.development = { form: development.form, need: development.need, level: development.level, material: development.material };
     grammar.postStyle = development.material === 'metal' ? 'steel' : development.material === 'masonry' ? 'stone' : 'timber';

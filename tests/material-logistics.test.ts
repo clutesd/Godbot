@@ -22,7 +22,7 @@ function flatWorld(): WorldState {
   }
   const resolution = (size - 1) * 3 + 1;
   const count = resolution ** 2;
-  return { size, cellSize: 2, cells, seaLevel: 0.2, mountainLevel: 0.72, landmarks: [], environmentRevision: 0,
+  return { size, cellSize: 2, cells, seaLevel: 0.2, mountainLevel: 0.72, landmarks: [], resourceDeposits: [], environmentRevision: 0,
     terrain: { resolution, step: 2 / 3, originX: -13, originZ: -13, height: new Float32Array(count).fill(0.45),
       waterLevel: new Float32Array(count).fill(-1), river: new Uint8Array(count), lake: new Uint8Array(count),
       flow: new Float32Array(count), rock: new Float32Array(count), fall: new Float32Array(count) } };

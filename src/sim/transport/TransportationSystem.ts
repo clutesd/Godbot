@@ -8,6 +8,7 @@ import {
   dispatchMaterialShipment,
 } from '../resources/MaterialLogistics';
 import type { MaterialKind } from '../resources/MaterialEconomy';
+import { addMaterial, materialEconomy, takeMaterial } from '../resources/Inventory';
 import { consumeMaterial } from '../resources/MaterialUse';
 import { surfaceHeightAt, surfaceWaterAt } from '../terrain/SurfaceGeometry';
 import type { Settlement, SimulationState, TradeRoute } from '../types';
@@ -164,9 +165,11 @@ export class TransportationSystem {
       trip.distance = Math.min(trip.path.length, trip.distance + speed / weatherCost);
       route.caravanProgress = trip.path.length ? trip.distance / trip.path.length : 0;
       if (trip.distance < trip.path.length) return undefined;
+      trip.status = 'arrived';
       const target = trip.destination === a.id ? a : b;
       const source = trip.origin === a.id ? a : b;
       if (trip.material) deliverMaterialShipment(source, target, trip.material, trip.quantity, 0.96, this.state.month);
+      else if (trip.materialId) addMaterial(target, trip.materialId, trip.quantity * 0.96);
       else if (trip.resource) target.resources[trip.resource] += trip.quantity * 0.96;
       else throw new Error(`freight trip ${trip.id} has no cargo`);
       transport.nextDispatchMonth = this.state.month + 3 + Math.floor(stableHash(route.id, this.state.month, 0) * 13);
@@ -182,6 +185,7 @@ export class TransportationSystem {
       target: Settlement;
       resource?: NonNullable<FreightTrip['resource']>;
       material?: MaterialKind;
+      materialId?: string;
       quantity: number;
       reason: FreightTrip['reason'];
     } | undefined;
@@ -205,6 +209,22 @@ export class TransportationSystem {
     }
 
     if (!shipment) {
+      const ids = [...new Set([...Object.keys(materialEconomy(a).demand), ...Object.keys(materialEconomy(b).demand)])].sort();
+      for (const materialId of ids) {
+        for (const [source, target] of [[a, b], [b, a]] as const) {
+          const sourceDemand = materialEconomy(source).demand[materialId] ?? 0;
+          const targetDemand = materialEconomy(target).demand[materialId] ?? 0;
+          const surplus = Math.max(0, (source.localMaterials[materialId] ?? 0) - sourceDemand * 2);
+          const shortage = Math.max(0, targetDemand - (target.localMaterials[materialId] ?? 0));
+          const quantity = Math.min(surplus * 0.32, shortage, route.volume * 4.2);
+          if (quantity <= 0.08 || quantity <= (shipment?.quantity ?? 0)) continue;
+          shipment = { source, target, materialId, quantity, reason: 'scarcity-relief' };
+        }
+      }
+      if (shipment?.materialId) shipment.quantity = takeMaterial(shipment.source, shipment.materialId, shipment.quantity);
+    }
+
+    if (!shipment) {
       for (const resource of ['food', 'wood', 'minerals', 'goods'] as const) {
         const gap = a.resources[resource] / aPopulation - b.resources[resource] / bPopulation;
         const source = gap > 0 ? a : b;
@@ -222,7 +242,7 @@ export class TransportationSystem {
     const mode = path.mode === 'road' && capabilityPractice(shipment.source, 'wheel-axle', 'adopted') < 0.22 ? 'walk' : path.mode;
     transport.trip = {
       id: `${route.id}:freight:${this.state.month}`, origin: shipment.source.id, destination: shipment.target.id,
-      reason: shipment.reason, mode, resource: shipment.resource, material: shipment.material,
+      reason: shipment.reason, mode, resource: shipment.resource, material: shipment.material, materialId: shipment.materialId,
       quantity: shipment.quantity, departedMonth: this.state.month,
       distance: 0, status: 'moving',
       path: { ...path, points: (reverse ? [...path.points].reverse() : path.points).map(p => ({ ...p })), segmentIds: reverse ? [...path.segmentIds].reverse() : [...path.segmentIds] },

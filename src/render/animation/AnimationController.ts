@@ -63,6 +63,10 @@ export interface CharacterAnimationState {
   currentState: AnimationState;
   elapsedTime: number;
   currentPoseIndex: number;
+  /** 0..1 through the current keyframe, used to interpolate toward the next one. */
+  poseFraction: number;
+  /** Pose held when the state changed, blended out over the new clip's blendDuration. */
+  previousPose: AnimationPose;
   blendFactor: number; // 0 (old pose) to 1 (new pose)
   playbackSpeed: number; // 0.8 to 1.2, slight variation per character
   phaseOffset: number; // 0 to 1, prevents synchronized crowds
@@ -75,6 +79,9 @@ export class AnimationController {
   private readonly clips: Map<AnimationState, AnimationClip>;
   private readonly characterStates: Map<string, CharacterAnimationState>;
   private readonly random: SeededRandom;
+  /** Reused so per-frame pose interpolation for hundreds of characters allocates nothing. */
+  private readonly poseBuffer: AnimationPose = emptyPose();
+  private readonly blendBuffer: AnimationPose = emptyPose();
 
   constructor(seed: string = 'animations') {
     this.random = new SeededRandom(seed);
@@ -595,6 +602,8 @@ export class AnimationController {
       currentState: initialState,
       elapsedTime: 0,
       currentPoseIndex: 0,
+      poseFraction: 0,
+      previousPose: emptyPose(),
       blendFactor: 1.0,
       playbackSpeed: 0.9 + this.random.float() * 0.2, // ±10% variation
       phaseOffset: this.random.float(), // 0 to 1
@@ -605,14 +614,16 @@ export class AnimationController {
   }
 
   /**
-   * Update animation state based on elapsed delta time
+   * Update animation state based on elapsed delta time. `override` lets the renderer assert a
+   * locomotion state derived from visual travel, which is authoritative over the logical activity
+   * whenever the character is actually seen to move.
    */
-  updateCharacterAnimation(personId: string, deltaTime: number, newActivity: Activity): void {
+  updateCharacterAnimation(personId: string, deltaTime: number, newActivity: Activity, override?: AnimationState): void {
     const charState = this.characterStates.get(personId);
     if (!charState) return;
 
     // Map activity to animation state
-    const newAnimState = this.activityToAnimationState(newActivity, charState.occupation);
+    const newAnimState = override ?? this.activityToAnimationState(newActivity, charState.occupation);
 
     // Update animation time
     charState.elapsedTime += deltaTime;
@@ -623,10 +634,13 @@ export class AnimationController {
       const newClip = this.clips.get(newAnimState);
 
       if (newClip && currentClip) {
+        const held = this.samplePose(charState);
+        if (held) copyPose(held, charState.previousPose);
         charState.currentState = newAnimState;
-        charState.blendFactor = 0;
+        charState.blendFactor = held ? 0 : 1;
         charState.elapsedTime = 0;
         charState.currentPoseIndex = 0;
+        charState.poseFraction = 0;
       }
     }
 
@@ -643,9 +657,11 @@ export class AnimationController {
       for (let i = 0; i < clip.poses.length; i++) {
         const pose = clip.poses[i];
         if (!pose) continue;
+        const start = accum;
         accum += pose.duration;
         if (cycleTime < accum) {
           charState.currentPoseIndex = i;
+          charState.poseFraction = pose.duration > 0 ? (cycleTime - start) / pose.duration : 0;
           break;
         }
       }
@@ -653,16 +669,27 @@ export class AnimationController {
   }
 
   /**
-   * Get current animation pose for a character
+   * Current pose, interpolated between keyframes and across a state change. Returns a shared
+   * buffer: read it before the next call. Keyframes alone read as three discrete snapshots, which
+   * is what made walk cycles look like stuttering rather than motion.
    */
   getCurrentPose(personId: string): AnimationPose | null {
     const charState = this.characterStates.get(personId);
     if (!charState) return null;
+    const sampled = this.samplePose(charState);
+    if (!sampled) return null;
+    if (charState.blendFactor >= 1) return sampled;
+    return lerpPose(charState.previousPose, sampled, charState.blendFactor, this.blendBuffer);
+  }
 
+  private samplePose(charState: CharacterAnimationState): AnimationPose | null {
     const clip = this.clips.get(charState.currentState);
-    if (!clip) return null;
-
-    return clip.poses[charState.currentPoseIndex] || null;
+    if (!clip || clip.poses.length === 0) return null;
+    const current = clip.poses[charState.currentPoseIndex];
+    if (!current) return null;
+    const next = clip.poses[(charState.currentPoseIndex + 1) % clip.poses.length];
+    if (!next || next === current) return current;
+    return lerpPose(current, next, smoothstep(charState.poseFraction), this.poseBuffer);
   }
 
   /**
@@ -722,4 +749,62 @@ export class AnimationController {
   dispose(): void {
     this.characterStates.clear();
   }
+
+  /** Drops per-character state for people who are dead or no longer represented. */
+  release(personId: string): void {
+    this.characterStates.delete(personId);
+  }
+
+  get trackedCharacters(): number {
+    return this.characterStates.size;
+  }
+}
+
+function emptyPose(): AnimationPose {
+  return {
+    name: 'blend',
+    duration: 0,
+    pelvisRotation: 0,
+    spineRotation: 0,
+    headRotation: 0,
+    leftShoulderRotation: 0,
+    leftElbowRotation: 0,
+    rightShoulderRotation: 0,
+    rightElbowRotation: 0,
+    leftHipRotation: 0,
+    leftKneeRotation: 0,
+    rightHipRotation: 0,
+    rightKneeRotation: 0,
+    positionOffset: { x: 0, y: 0, z: 0 },
+  };
+}
+
+function copyPose(from: AnimationPose, out: AnimationPose): AnimationPose {
+  return lerpPose(from, from, 0, out);
+}
+
+function lerpPose(from: AnimationPose, to: AnimationPose, t: number, out: AnimationPose): AnimationPose {
+  const mix = (a: number, b: number): number => a + (b - a) * t;
+  out.name = to.name;
+  out.duration = to.duration;
+  out.pelvisRotation = mix(from.pelvisRotation, to.pelvisRotation);
+  out.spineRotation = mix(from.spineRotation, to.spineRotation);
+  out.headRotation = mix(from.headRotation, to.headRotation);
+  out.leftShoulderRotation = mix(from.leftShoulderRotation, to.leftShoulderRotation);
+  out.leftElbowRotation = mix(from.leftElbowRotation, to.leftElbowRotation);
+  out.rightShoulderRotation = mix(from.rightShoulderRotation, to.rightShoulderRotation);
+  out.rightElbowRotation = mix(from.rightElbowRotation, to.rightElbowRotation);
+  out.leftHipRotation = mix(from.leftHipRotation, to.leftHipRotation);
+  out.leftKneeRotation = mix(from.leftKneeRotation, to.leftKneeRotation);
+  out.rightHipRotation = mix(from.rightHipRotation, to.rightHipRotation);
+  out.rightKneeRotation = mix(from.rightKneeRotation, to.rightKneeRotation);
+  out.positionOffset.x = mix(from.positionOffset.x, to.positionOffset.x);
+  out.positionOffset.y = mix(from.positionOffset.y, to.positionOffset.y);
+  out.positionOffset.z = mix(from.positionOffset.z, to.positionOffset.z);
+  return out;
+}
+
+function smoothstep(t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  return clamped * clamped * (3 - 2 * clamped);
 }

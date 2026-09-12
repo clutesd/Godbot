@@ -256,7 +256,7 @@ function freightFixture() {
     settlement.prosperity = 0.8;
     settlement.buildings = 1;
     settlement.resources = { food: 100, wood: 100, minerals: 100, goods: i ? 0 : 200, wealth: 100 };
-    settlement.materials = { timber: 100, stone: 100 };
+    settlement.localMaterials = { timber: 100, stone: 100 };
     settlement.materialEconomy = undefined;
   }
   const route: TradeRoute = { id: 'freight-test', a: a!.id, b: b!.id, active: true, mode: 'land', volume: 1,

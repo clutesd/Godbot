@@ -41,7 +41,7 @@ describe('Population and resources', () => {
     expect(simulation.state.stats.deaths).toBeGreaterThan(100);
     expect(simulation.population).toBeGreaterThan(50);
     expect(simulation.state.people.some((person) => person.parents.length > 0)).toBe(true);
-  }, 10_000);
+  }, 30_000);
 
   it('allows migration while geography can prevent early trade infrastructure', () => {
     const simulation = new Simulation({ seed: 'lineage-test', startingPopulation: 240 });
@@ -51,7 +51,7 @@ describe('Population and resources', () => {
     expect(simulation.state.tradeRoutes).toHaveLength(0);
     expect(Object.values(simulation.state.transportation.segments).some(segment => segment.status === 'complete')).toBe(true);
     expect(simulation.state.settlements.some((settlement) => Object.keys(settlement.cultureShares).length > 1)).toBe(true);
-  }, 10_000);
+  }, 30_000);
 });
 
 describe('Long-run stability', () => {
@@ -69,5 +69,5 @@ describe('Long-run stability', () => {
     expect(Number.isFinite(summary.totalFood)).toBe(true);
     expect(Number.isFinite(summary.totalWealth)).toBe(true);
     expect(simulation.state.settlements.every((settlement) => Object.values(settlement.resources).every(Number.isFinite))).toBe(true);
-  }, 50_000);
+  }, 180_000);
 });

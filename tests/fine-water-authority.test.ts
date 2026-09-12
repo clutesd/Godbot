@@ -59,6 +59,7 @@ function narrowRiverWorld(): WorldState {
     seaLevel: 0.2,
     mountainLevel: 0.72,
     landmarks: [],
+    resourceDeposits: [],
     environmentRevision: 0,
     terrain: {
       resolution,
