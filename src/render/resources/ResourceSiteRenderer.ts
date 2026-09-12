@@ -3,7 +3,7 @@ import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
 
-const FOOTPATH_LINKS = [[1, 0], [0, 1], [1, 1], [-1, 1]] as const;
+const FOOTPATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
 const FOOTPATH_FRESH = new THREE.Color('#886b4c');
 const FOOTPATH_WORN = new THREE.Color('#594535');
 const FOOTPATH_VISIBLE_THRESHOLD = 0.022;
@@ -114,42 +114,41 @@ export class ResourceSiteRenderer {
     const positions: number[] = [];
     const colours: number[] = [];
     const indices: number[] = [];
+    const emitted = new Set<string>();
 
     for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
       const cell = this.world.cells[cellIndex]!;
       const intensity = cell.modifications?.footpath?.intensity ?? 0;
       if (cell.water || intensity < FOOTPATH_VISIBLE_THRESHOLD) continue;
+      const neighbourIndex = this.strongestFootpathNeighbour(cellIndex);
+      if (neighbourIndex === undefined) continue;
+      const neighbour = this.world.cells[neighbourIndex]!;
+      const neighbourIntensity = neighbour.modifications?.footpath?.intensity ?? 0;
+      const edgeKey = cellIndex < neighbourIndex ? `${cellIndex}:${neighbourIndex}` : `${neighbourIndex}:${cellIndex}`;
+      if (emitted.has(edgeKey)) continue;
+      emitted.add(edgeKey);
 
-      for (const [dx, dz] of FOOTPATH_LINKS) {
-        const x = cell.x + dx;
-        const z = cell.z + dz;
-        if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
-        const neighbour = this.world.cells[z * this.world.size + x];
-        const neighbourIntensity = neighbour?.modifications?.footpath?.intensity ?? 0;
-        if (!neighbour || neighbour.water || neighbourIntensity < FOOTPATH_VISIBLE_THRESHOLD) continue;
+      const vx = neighbour.worldX - cell.worldX;
+      const vz = neighbour.worldZ - cell.worldZ;
+      const length = Math.hypot(vx, vz);
+      if (length < 0.001) continue;
+      const sideX = -vz / length;
+      const sideZ = vx / length;
+      const widthA = this.pathWidth(intensity);
+      const widthB = this.pathWidth(neighbourIntensity);
+      const base = positions.length / 3;
+      const corners = [
+        [cell.worldX + sideX * widthA, cell.worldZ + sideZ * widthA],
+        [cell.worldX - sideX * widthA, cell.worldZ - sideZ * widthA],
+        [neighbour.worldX + sideX * widthB, neighbour.worldZ + sideZ * widthB],
+        [neighbour.worldX - sideX * widthB, neighbour.worldZ - sideZ * widthB],
+      ] as const;
+      for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.022, worldZ);
+      indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
 
-        const vx = neighbour.worldX - cell.worldX;
-        const vz = neighbour.worldZ - cell.worldZ;
-        const length = Math.hypot(vx, vz);
-        if (length < 0.001) continue;
-        const sideX = -vz / length;
-        const sideZ = vx / length;
-        const widthA = this.pathWidth(intensity);
-        const widthB = this.pathWidth(neighbourIntensity);
-        const base = positions.length / 3;
-        const corners = [
-          [cell.worldX + sideX * widthA, cell.worldZ + sideZ * widthA],
-          [cell.worldX - sideX * widthA, cell.worldZ - sideZ * widthA],
-          [neighbour.worldX + sideX * widthB, neighbour.worldZ + sideZ * widthB],
-          [neighbour.worldX - sideX * widthB, neighbour.worldZ - sideZ * widthB],
-        ] as const;
-        for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.022, worldZ);
-        indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
-
-        const visualIntensity = Math.min(1, (intensity + neighbourIntensity) * 0.6);
-        this.colour.copy(FOOTPATH_FRESH).lerp(FOOTPATH_WORN, visualIntensity);
-        for (let corner = 0; corner < 4; corner += 1) colours.push(this.colour.r, this.colour.g, this.colour.b);
-      }
+      const visualIntensity = Math.min(1, (intensity + neighbourIntensity) * 0.6);
+      this.colour.copy(FOOTPATH_FRESH).lerp(FOOTPATH_WORN, visualIntensity);
+      for (let corner = 0; corner < 4; corner += 1) colours.push(this.colour.r, this.colour.g, this.colour.b);
     }
 
     const geometry = new THREE.BufferGeometry();
@@ -159,6 +158,26 @@ export class ResourceSiteRenderer {
     if (positions.length > 0) geometry.computeVertexNormals();
     this.footpaths.geometry.dispose();
     this.footpaths.geometry = geometry;
+  }
+
+  private strongestFootpathNeighbour(cellIndex: number): number | undefined {
+    const cell = this.world.cells[cellIndex];
+    if (!cell) return undefined;
+    let bestIndex: number | undefined;
+    let bestScore = FOOTPATH_VISIBLE_THRESHOLD;
+    for (const [dx, dz] of FOOTPATH_NEIGHBOURS) {
+      const x = cell.x + dx;
+      const z = cell.z + dz;
+      if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
+      const index = z * this.world.size + x;
+      const neighbour = this.world.cells[index];
+      if (!neighbour || neighbour.water) continue;
+      const intensity = neighbour.modifications?.footpath?.intensity ?? 0;
+      if (intensity <= bestScore) continue;
+      bestScore = intensity;
+      bestIndex = index;
+    }
+    return bestIndex;
   }
 
   private pathWidth(intensity: number): number {
