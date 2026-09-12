@@ -31,7 +31,8 @@ describe('transport structure presentation', () => {
         { x: 4, y: 1.1, z: 0 },
         { x: 6, y: 1.1, z: 0 },
       ],
-      length: 6, cost: 5, work: 5, materialSpent: { steel: 2.5, stone: 0.8 },
+      // Mirrors the bridge capital recipe: masonry foundations can outweigh the steel span.
+      length: 6, cost: 5, work: 5, materialSpent: { steel: 0.18, stone: 0.34 },
     };
 
     const bridge = createBridgeStructure({
