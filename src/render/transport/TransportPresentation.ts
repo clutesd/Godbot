@@ -1,3 +1,4 @@
+import '../settlement/SettlementStreetPresentation';
 import * as THREE from 'three';
 import type { TransportSegment } from '../../sim/transport/types';
 
