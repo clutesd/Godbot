@@ -1,5 +1,6 @@
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { consumeMaterial } from '../resources/MaterialUse';
+import { TransportationSystem } from '../transport/TransportationSystem';
 import type { LandModification } from './types';
 import type { Settlement, SimulationState, WorldCell } from '../types';
 
@@ -61,6 +62,24 @@ function canAffordRoadSurface(settlement: Settlement, requested: number, month: 
   let supplied = consumeMaterial(settlement, 'stone', requested, month);
   if (supplied + 1e-9 < requested) supplied += consumeMaterial(settlement, 'brick', requested - supplied, month);
   return supplied;
+}
+
+let movementRoadAuthorityInstalled = false;
+
+/**
+ * The legacy local-access planner draws three abstract roads from settlement centre to template
+ * district anchors. Those roads are exactly the spoke pattern the movement model replaces. Keep
+ * inter-settlement trade/rail/bridge projects intact, but stop creating synthetic district-access
+ * projects so local roads have one authority: repeated real movement followed by promotion.
+ */
+export function installMovementRoadAuthority(): void {
+  if (movementRoadAuthorityInstalled) return;
+  movementRoadAuthorityInstalled = true;
+  const prototype = TransportationSystem.prototype as unknown as Record<string, unknown>;
+  if (typeof prototype['planLocalAccess'] !== 'function') return;
+  prototype['planLocalAccess'] = function movementDrivenLocalAccess(): void {
+    // Intentionally empty. Step 3 can reintroduce deliberate urban planning as an institutional act.
+  };
 }
 
 /**
