@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSettlementLayoutPlan, districtForPlot } from '../src/render/placement/SettlementLayoutPlan';
 import type { Settlement, TradeRoute } from '../src/sim/types';
+import { createTransportationState } from '../src/sim/transport/types';
 
 function settlement(id: string, x: number, z: number, overrides: Partial<Settlement> = {}): Settlement {
   return {
@@ -82,6 +83,38 @@ describe('Settlement layout plan', () => {
     expect(plan.portals.find((portal) => portal.routeId === 'rail-route')?.kind).toBe('station');
     expect(plan.portals.find((portal) => portal.routeId === 'rail-route')?.worldX).toBe(10);
     expect(plan.portals.find((portal) => portal.routeId === 'water-route')?.kind).toBe('dock');
+  });
+
+  it('renders one physical harbour for multiple water routes and never borrows it for land routes', () => {
+    const harbor = settlement('harbor', 0, 0);
+    const islandA = settlement('island-a', 0, 40);
+    const islandB = settlement('island-b', 30, 40);
+    const inland = settlement('inland', 40, 0);
+    const routes = [
+      route('water-a', harbor.id, islandA.id, 'water'),
+      route('water-b', harbor.id, islandB.id, 'water'),
+      route('road-route', harbor.id, inland.id, 'land'),
+    ];
+    const transportation = createTransportationState();
+    transportation.stops['harbor:water'] = {
+      id: 'harbor:water', settlementId: harbor.id, kind: 'port', node: 'harbor-water', position: { x: 0, z: 8 },
+      access: [{ x: 0, z: 0 }, { x: 0, z: 6 }], status: 'complete',
+    };
+    transportation.stops['harbor:road'] = {
+      id: 'harbor:road', settlementId: harbor.id, kind: 'market', node: 'harbor-road', position: { x: 0, z: 0 },
+      access: [{ x: 0, z: 0 }], status: 'complete',
+    };
+
+    const plan = createSettlementLayoutPlan({ settlement: harbor, settlements: [harbor, islandA, islandB, inland], routes, transportation, eraRank: 3, seed: 'layout-seed' });
+    const docks = plan.portals.filter((portal) => portal.kind === 'dock');
+    const gates = plan.portals.filter((portal) => portal.kind === 'gate');
+
+    expect(docks).toHaveLength(1);
+    expect(docks[0]?.worldX).toBe(0);
+    expect(docks[0]?.worldZ).toBe(8);
+    expect(docks[0]?.bank).toEqual({ x: 0, z: 6 });
+    expect(gates).toHaveLength(1);
+    expect(plan.streets.some((street) => street.fromX === 0 && street.fromZ === 6)).toBe(true);
   });
 
   it('keeps industrial plots on the industrial district only when the settlement supports it', () => {
