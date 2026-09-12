@@ -79,7 +79,7 @@ export function installFootTrafficTracking(): void {
 
     if (crossingMode !== 'walk' || !person.alive) return;
     const distance = Math.hypot(person.position.x - from.x, person.position.z - from.z);
-    if (distance < 0.025 || distance > this.walkability['world'].cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
+    if (distance < 0.025 || distance > state.world.cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
     if (!this.walkability.isWalkable(from) || !this.walkability.isWalkable(person.position)) return;
     if (!this.walkability.isSegmentWalkable(from, person.position)) return;
 
