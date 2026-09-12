@@ -1,9 +1,11 @@
+import { stableHash } from '../prng';
 import { cellAt } from '../world';
 import type { Person, Settlement, SimulationState, Vec2, WorldCell, WorldState } from '../types';
 import { PeopleSystem } from './PeopleSystem';
 
 const BASE_WEAR_PER_PASS = 0.0008;
 const MAX_RECORDED_STEP_MULTIPLIER = 3.5;
+const TRAFFIC_SAMPLE_PERIOD = 2;
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -56,13 +58,20 @@ function trafficWeight(person: Person): number {
   return 1;
 }
 
+function sampledThisMonth(person: Person, state: SimulationState): boolean {
+  const phase = Math.floor(stableHash(`${state.seed}:foot-traffic:${person.id}`) * TRAFFIC_SAMPLE_PERIOD) % TRAFFIC_SAMPLE_PERIOD;
+  return state.month % TRAFFIC_SAMPLE_PERIOD === phase;
+}
+
 let installed = false;
 
 /**
  * Instruments the existing PeopleSystem without changing its navigation authority. We observe the
  * position before and after `advancePerson`; only a short movement that began as an on-foot trip is
  * allowed to wear the ground. The PeopleSystem already validates every walking leg before moving,
- * so this observer deliberately avoids repeating its expensive segment-validation work.
+ * so this observer deliberately avoids repeating its expensive segment-validation work. Every
+ * person contributes on a deterministic alternating month and carries double wear on sampled
+ * months, preserving long-run traffic pressure while roughly halving bookkeeping cost.
  */
 export function installFootTrafficTracking(): void {
   if (installed) return;
@@ -79,12 +88,12 @@ export function installFootTrafficTracking(): void {
     const crossingMode = person.navigation?.crossingMode ?? 'walk';
     original.call(this, person, settlement, state);
 
-    if (!wasTraveling || crossingMode !== 'walk' || !person.alive) return;
+    if (!wasTraveling || crossingMode !== 'walk' || !person.alive || !sampledThisMonth(person, state)) return;
     if (person.navigation?.schedulePhase === 'emergency') return;
     const distance = Math.hypot(person.position.x - from.x, person.position.z - from.z);
     if (distance < 0.025 || distance > state.world.cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
     if (!this.walkability.isWalkable(from) || !this.walkability.isWalkable(person.position)) return;
 
-    recordFootTrafficSegment(state.world, from, person.position, state.month, settlement.id, trafficWeight(person));
+    recordFootTrafficSegment(state.world, from, person.position, state.month, settlement.id, trafficWeight(person) * TRAFFIC_SAMPLE_PERIOD);
   };
 }
