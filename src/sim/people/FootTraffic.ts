@@ -11,11 +11,11 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function applyTrackWear(cell: WorldCell, amount: number, month: number, ownerId: string): void {
+function applyFootpathWear(cell: WorldCell, amount: number, month: number, ownerId: string): void {
   if (cell.water || amount <= 0) return;
   cell.modifications ??= {};
-  const previous = cell.modifications.track;
-  cell.modifications.track = {
+  const previous = cell.modifications.footpath;
+  cell.modifications.footpath = {
     intensity: clamp01((previous?.intensity ?? 0) + amount),
     firstMonth: previous?.firstMonth ?? month,
     lastMonth: month,
@@ -26,8 +26,9 @@ function applyTrackWear(cell: WorldCell, amount: number, month: number, ownerId:
 /**
  * Records one actually-walked segment as persistent landscape wear. This is deliberately much
  * weaker than an engineered road: a single traveller leaves almost nothing, while repeated
- * movement by a community gradually exposes a desire path. The state lives in the existing
- * `track` land modification so abandoned routes inherit the normal environmental fade/recovery.
+ * movement by a community gradually exposes a desire path. Pedestrian wear uses its own
+ * `footpath` modification so Step 1 remains observational: existing extraction-track economics
+ * are unchanged until a later road-promotion step explicitly chooses to use this evidence.
  */
 export function recordFootTrafficSegment(
   world: WorldState,
@@ -48,7 +49,7 @@ export function recordFootTrafficSegment(
     const cell = cellAt(world, from.x + (to.x - from.x) * t, from.z + (to.z - from.z) * t);
     if (!cell || cell === previousCell) continue;
     previousCell = cell;
-    applyTrackWear(cell, wear, month, ownerId);
+    applyFootpathWear(cell, wear, month, ownerId);
   }
 }
 
