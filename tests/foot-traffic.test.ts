@@ -8,6 +8,14 @@ import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { ResourceSiteRenderer } from '../src/render/resources/ResourceSiteRenderer';
 
 describe('movement-driven desire paths', () => {
+  it('records actual represented pedestrian movement during a simulation', () => {
+    const simulation = new Simulation({ seed: 'desire-path-live', startingPopulation: 30, settlementCount: [2, 2] });
+    simulation.step(10);
+    const worn = simulation.state.world.cells.filter(cell => (cell.modifications?.footpath?.intensity ?? 0) > 0);
+    expect(worn.length).toBeGreaterThan(0);
+    expect(worn.some(cell => cell.modifications?.track === undefined)).toBe(true);
+  });
+
   it('turns repeated real pedestrian movement into persistent visible footpath wear', () => {
     const simulation = new Simulation({ seed: 'desire-path-regression', startingPopulation: 36, settlementCount: [2, 2] });
     const world = simulation.state.world;
