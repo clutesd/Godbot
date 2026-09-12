@@ -11,6 +11,13 @@ import type { TerrainQueries } from './placement/TerrainQueries';
 import type { TerrainSurface } from './terrain/TerrainSurface';
 import type { WeatherRenderer } from './atmosphere/WeatherRenderer';
 import { createBridgeStructure, createDockStructure } from './transport/TransportStructures';
+import {
+  collectTransportDebugRecords,
+  createPortalDebugOverlay,
+  createSegmentDebugOverlay,
+  setTransportDebugVisibility,
+  type TransportDebugRecord,
+} from './transport/TransportDebug';
 
 interface RoutePlacementReportLike {
   routeId: string;
@@ -34,6 +41,20 @@ interface RendererInternals {
   scene: THREE.Scene;
   elevationAt: (x: number, z: number) => number;
   clearGroup: (group: THREE.Group) => void;
+}
+
+let transportDebugEnabled = false;
+
+export function setTransportDebugMode(renderer: GodboxRenderer, enabled?: boolean): boolean {
+  const self = renderer as unknown as RendererInternals;
+  transportDebugEnabled = enabled ?? !transportDebugEnabled;
+  setTransportDebugVisibility(self.scene, transportDebugEnabled);
+  return transportDebugEnabled;
+}
+
+export function transportDebugReport(renderer: GodboxRenderer): TransportDebugRecord[] {
+  const self = renderer as unknown as RendererInternals;
+  return collectTransportDebugRecords(self.scene);
 }
 
 function markWeatherSurface(object: THREE.Object3D): void {
@@ -114,9 +135,11 @@ function enhancedAddRoutePortals(
       const bankX = portal.bank.x - settlement.position.x;
       const bankZ = portal.bank.z - settlement.position.z;
       const bankY = self.elevationAt(portal.bank.x, portal.bank.z) - settlementY + 0.06;
+      const bankPoint = new THREE.Vector3(bankX, bankY, bankZ);
+      const waterPoint = new THREE.Vector3(portal.localX, localY, portal.localZ);
       const dock = createDockStructure({
-        bank: new THREE.Vector3(bankX, bankY, bankZ),
-        water: new THREE.Vector3(portal.localX, localY, portal.localZ),
+        bank: bankPoint,
+        water: waterPoint,
         eraRank: rank,
         identity: `${settlement.id}:${portal.routeId}`,
         activity: harbourActivity,
@@ -133,6 +156,16 @@ function enhancedAddRoutePortals(
       });
       dock.userData['routeId'] = portal.routeId;
       group.add(dock);
+      const debug = createPortalDebugOverlay({
+        kind: 'dock',
+        id: `dock:${settlement.id}`,
+        settlementId: settlement.id,
+        routeId: portal.routeId,
+        from: bankPoint,
+        to: waterPoint,
+      });
+      debug.visible = transportDebugEnabled;
+      group.add(debug);
       continue;
     }
 
@@ -170,6 +203,15 @@ function enhancedAddRoutePortals(
       station.rotation.y = portal.angle + Math.PI / 2;
       station.userData['portalKind'] = portal.kind;
       group.add(station);
+      const stationDebug = createPortalDebugOverlay({
+        kind: 'station',
+        id: `station:${settlement.id}:${portal.routeId}`,
+        settlementId: settlement.id,
+        routeId: portal.routeId,
+        from: new THREE.Vector3(portal.localX, localY, portal.localZ),
+      });
+      stationDebug.visible = transportDebugEnabled;
+      group.add(stationDebug);
       continue;
     }
 
@@ -198,6 +240,15 @@ function enhancedAddRoutePortals(
     gate.rotation.y = portal.angle + Math.PI / 2;
     gate.userData['portalKind'] = portal.kind;
     group.add(gate);
+    const gateDebug = createPortalDebugOverlay({
+      kind: 'gate',
+      id: `gate:${settlement.id}:${portal.routeId}`,
+      settlementId: settlement.id,
+      routeId: portal.routeId,
+      from: new THREE.Vector3(portal.localX, localY, portal.localZ),
+    });
+    gateDebug.visible = transportDebugEnabled;
+    group.add(gateDebug);
   }
 }
 
@@ -211,6 +262,11 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
   self.routePlacementReports.clear();
 
   for (const segment of Object.values(network.segments) as TransportSegment[]) {
+    if (segment.mode !== 'water') {
+      const debug = createSegmentDebugOverlay(self.state.world, segment);
+      debug.visible = transportDebugEnabled;
+      self.routeGroup.add(debug);
+    }
     if (segment.mode === 'water' || segment.status === 'planned') continue;
     if (segment.status === 'under-construction') {
       const marker = constructionMarker(segment);
@@ -285,4 +341,4 @@ const rendererPrototype = GodboxRenderer.prototype as unknown as Record<string, 
 rendererPrototype['addRoutePortals'] = enhancedAddRoutePortals;
 rendererPrototype['syncRoutes'] = enhancedSyncRoutes;
 
-export {};
+export type { TransportDebugRecord };
