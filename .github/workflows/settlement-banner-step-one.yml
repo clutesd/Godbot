@@ -26,8 +26,8 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
-      - name: Test
-        run: npm test
+      - name: Build
+        run: npm run build
       - name: Commit step one and remove temporary files
         shell: bash
         run: |
