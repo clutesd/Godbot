@@ -3,6 +3,10 @@ import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
 
+const TRACK_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
+const TRACK_FRESH = new THREE.Color('#886b4c');
+const TRACK_WORN = new THREE.Color('#594535');
+
 /** Small ground-level work piles: only discovered working/abandoned sites become visible. */
 export class ResourceSiteRenderer {
   readonly group = new THREE.Group();
@@ -11,7 +15,13 @@ export class ResourceSiteRenderer {
   private readonly colour = new THREE.Color();
   private readonly scars: THREE.InstancedMesh;
   private readonly trails = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#796b4f', transparent: true, opacity: 0.42 }));
+  private readonly footpaths: THREE.InstancedMesh;
+  private readonly pathNormal = new THREE.Vector3();
+  private readonly pathTangent = new THREE.Vector3();
+  private readonly pathSide = new THREE.Vector3();
+  private readonly pathBasis = new THREE.Matrix4();
   private revision = '';
+
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface) {
     this.group.name = 'Resource extraction sites';
     this.piles = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.5, 0), new THREE.MeshStandardMaterial({ roughness: 1 }), Math.max(1, world.resourceDeposits.length));
@@ -20,8 +30,18 @@ export class ResourceSiteRenderer {
     this.group.add(this.piles);
     this.scars = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 9), new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.65, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }), Math.max(1, world.cells.length));
     this.scars.count = 0; this.scars.frustumCulled = false;
-    this.group.add(this.scars, this.trails);
+    this.footpaths = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 0.018, 1),
+      new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.78, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, vertexColors: true }),
+      Math.max(1, world.cells.length),
+    );
+    this.footpaths.name = 'Movement-worn desire paths';
+    this.footpaths.count = 0;
+    this.footpaths.receiveShadow = true;
+    this.footpaths.frustumCulled = false;
+    this.group.add(this.scars, this.trails, this.footpaths);
   }
+
   update(): void {
     const revision = `${this.world.weather?.month ?? 0}:${this.world.resourceDeposits.filter(d => d.establishedMonth !== undefined).length}`;
     if (revision === this.revision) return;
@@ -43,6 +63,7 @@ export class ResourceSiteRenderer {
     }
     this.piles.count = index; this.piles.instanceMatrix.needsUpdate = true;
     if (this.piles.instanceColor) this.piles.instanceColor.needsUpdate = true;
+
     let scarIndex = 0;
     for (const cell of this.world.cells) {
       if (cell.water || !cell.modifications) continue;
@@ -65,6 +86,7 @@ export class ResourceSiteRenderer {
     this.marker.rotation.set(0, 0, 0);
     this.scars.count = scarIndex; this.scars.instanceMatrix.needsUpdate = true;
     if (this.scars.instanceColor) this.scars.instanceColor.needsUpdate = true;
+
     const vertices: number[] = [];
     for (const deposit of this.world.resourceDeposits) {
       if (deposit.establishedMonth === undefined || (deposit.extracted ?? 0) < 8) continue;
@@ -80,5 +102,61 @@ export class ResourceSiteRenderer {
     this.trails.geometry.dispose();
     this.trails.geometry = new THREE.BufferGeometry();
     this.trails.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+
+    let footpathIndex = 0;
+    const normalSample = Math.max(0.16, this.world.cellSize * 0.12);
+    for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
+      const cell = this.world.cells[cellIndex]!;
+      const intensity = cell.modifications?.track?.intensity ?? 0;
+      if (cell.water || intensity < 0.025) continue;
+      const direction = this.trackDirection(cellIndex);
+      if (!direction) continue;
+
+      this.pathNormal.set(
+        this.surface.heightAt(cell.worldX - normalSample, cell.worldZ) - this.surface.heightAt(cell.worldX + normalSample, cell.worldZ),
+        normalSample * 2,
+        this.surface.heightAt(cell.worldX, cell.worldZ - normalSample) - this.surface.heightAt(cell.worldX, cell.worldZ + normalSample),
+      ).normalize();
+      this.pathTangent.set(direction.x, 0, direction.z).projectOnPlane(this.pathNormal).normalize();
+      if (this.pathTangent.lengthSq() < 0.001) continue;
+      this.pathSide.copy(this.pathNormal).cross(this.pathTangent).normalize();
+      this.pathBasis.makeBasis(this.pathSide, this.pathNormal, this.pathTangent);
+      this.marker.position.set(cell.worldX, this.surface.heightAt(cell.worldX, cell.worldZ) + 0.022, cell.worldZ);
+      this.marker.quaternion.setFromRotationMatrix(this.pathBasis);
+      this.marker.scale.set(
+        this.world.cellSize * (0.045 + Math.sqrt(intensity) * 0.085),
+        1,
+        this.world.cellSize * (0.62 + Math.min(1, intensity) * 0.24),
+      );
+      this.marker.updateMatrix();
+      this.footpaths.setMatrixAt(footpathIndex, this.marker.matrix);
+      this.colour.copy(TRACK_FRESH).lerp(TRACK_WORN, Math.min(1, intensity * 1.2));
+      this.footpaths.setColorAt(footpathIndex++, this.colour);
+    }
+    this.footpaths.count = footpathIndex;
+    this.footpaths.instanceMatrix.needsUpdate = true;
+    if (this.footpaths.instanceColor) this.footpaths.instanceColor.needsUpdate = true;
+  }
+
+  private trackDirection(cellIndex: number): { x: number; z: number } | undefined {
+    const cell = this.world.cells[cellIndex];
+    if (!cell) return undefined;
+    let bestWeight = 0;
+    let bestX = 0;
+    let bestZ = 0;
+    for (const [dx, dz] of TRACK_NEIGHBOURS) {
+      const x = cell.x + dx;
+      const z = cell.z + dz;
+      if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
+      const neighbour = this.world.cells[z * this.world.size + x];
+      const weight = neighbour?.modifications?.track?.intensity ?? 0;
+      if (weight <= bestWeight) continue;
+      bestWeight = weight;
+      bestX = dx;
+      bestZ = dz;
+    }
+    if (bestWeight < 0.01) return undefined;
+    const length = Math.max(0.001, Math.hypot(bestX, bestZ));
+    return { x: bestX / length, z: bestZ / length };
   }
 }
