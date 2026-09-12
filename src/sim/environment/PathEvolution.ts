@@ -57,7 +57,7 @@ function ownerFor(state: SimulationState, mark: LandModification): Settlement | 
 }
 
 function canAffordRoadSurface(settlement: Settlement, requested: number, month: number): number {
-  if (!settlement.materials) return 0;
+  if (!settlement.materials || requested <= 0) return 0;
   let supplied = consumeMaterial(settlement, 'stone', requested, month);
   if (supplied + 1e-9 < requested) supplied += consumeMaterial(settlement, 'brick', requested - supplied, month);
   return supplied;
@@ -98,22 +98,28 @@ export function advanceMovementPaths(state: SimulationState): void {
     if (foot.intensity < ROAD_PROMOTION || cart.intensity < 0.16 || improvedRoads < 0.22) continue;
     if (settlement.infrastructure.workshops < 0.08 || settlement.resources.wealth < 8) continue;
 
-    // Surfacing cost is intentionally small per world cell but conservation-safe. A long road now
-    // competes for the same stone/brick inventory as bridges, structures and other capital.
-    const requested = 0.018 + 0.032 * Math.min(1, foot.intensity);
+    const previousRoad = cell.modifications?.road;
+    const previousIntensity = previousRoad?.intensity ?? 0;
+    const roadTarget = clamp01(0.05 + cart.intensity * 0.68 + improvedRoads * 0.22);
+    const improvement = Math.max(0, roadTarget - previousIntensity);
+    // First construction and later upgrades consume meaningful surface material. Existing roads
+    // consume a tiny maintenance quantity while busy; if stone/brick disappears, their maintenance
+    // clock stops and the environmental recovery system can eventually degrade them.
+    const requested = improvement > 0.002
+      ? 0.012 + improvement * 0.07
+      : previousRoad ? 0.0025 : 0.012;
     const supplied = canAffordRoadSurface(settlement, requested, state.month);
     if (supplied < requested * 0.82) continue;
 
-    const roadTarget = clamp01(0.05 + cart.intensity * 0.68 + improvedRoads * 0.22);
     upsert(cell, 'road', roadTarget, state.month, settlement.id);
-    roadGain.set(settlement.id, (roadGain.get(settlement.id) ?? 0) + 1);
+    if (improvement > 0.002) roadGain.set(settlement.id, (roadGain.get(settlement.id) ?? 0) + improvement);
   }
 
-  // The settlement-level scalar remains useful to the economy/military, but it now rises partly
-  // because real local corridors were built rather than only because an abstract project existed.
-  for (const [settlementId, cells] of roadGain) {
+  // The settlement-level scalar remains useful to the economy/military, but now rises only when
+  // actual local road capital is added or improved, not every year merely because an old road exists.
+  for (const [settlementId, improvement] of roadGain) {
     const settlement = state.settlements.find(candidate => candidate.id === settlementId);
     if (!settlement) continue;
-    settlement.infrastructure.roads = clamp01(settlement.infrastructure.roads + Math.min(0.012, cells * 0.0008));
+    settlement.infrastructure.roads = clamp01(settlement.infrastructure.roads + Math.min(0.012, improvement * 0.01));
   }
 }
