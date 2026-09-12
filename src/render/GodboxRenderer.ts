@@ -243,6 +243,8 @@ export class GodboxRenderer {
   private readonly sunHighColor = new THREE.Color('#fff1d6');
   private lastRouteSignature = '';
   private lastSettlementSignature = '';
+  private bannerHistoryIndexLength = -1;
+  private readonly bannerHistoryByEntity = new Map<string, SimulationState['history']>();
   private structuralAccumulator = 0;
   private lastVisualSeason = -1;
   private latestCatastrophe?: SimulationState['history'][number];
@@ -702,10 +704,13 @@ export class GodboxRenderer {
   }
 
   private syncSettlements(force = false): void {
+    const bannerSignatures = new Map<string, string>();
     const signature = this.state.settlements.map((settlement) => {
       const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
       const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
-      return `${settlement.id}:${settlement.alive ? settlement.buildings : 0}:${settlement.institutionIds.length}:${routeCount}:${politySize}:${this.bannerSignatureForSettlement(settlement)}:${this.developmentSignature(settlement)}:${this.constructionSignature(settlement.id)}`;
+      const bannerSignature = this.bannerSignatureForSettlement(settlement);
+      bannerSignatures.set(settlement.id, bannerSignature);
+      return `${settlement.id}:${settlement.alive ? settlement.buildings : 0}:${settlement.institutionIds.length}:${routeCount}:${politySize}:${bannerSignature}:${this.developmentSignature(settlement)}:${this.constructionSignature(settlement.id)}`;
     }).join('|');
     if (!force && signature === this.lastSettlementSignature) return;
     this.lastSettlementSignature = signature;
@@ -720,7 +725,7 @@ export class GodboxRenderer {
       const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
       const developmentSignature = this.developmentSignature(settlement);
       const constructionSignature = this.constructionSignature(settlement.id);
-      const bannerSignature = this.bannerSignatureForSettlement(settlement);
+      const bannerSignature = bannerSignatures.get(settlement.id) ?? this.bannerSignatureForSettlement(settlement);
       const event = this.visualStateResolver.trackEntity(settlement.id, 'settlement', { infrastructure: settlement.infrastructure, buildings: settlement.buildings, alive: settlement.alive }, this.state.month);
       if (event?.kind === 'infrastructure-added') this.transitionTimeline.createBuildingUpgrade(settlement.id, 0, 1, event.associatedData);
       if (existing && existing.buildingCount === settlement.buildings && existing.institutionCount === settlement.institutionIds.length && existing.routeCount === routeCount && existing.politySize === politySize && existing.bannerSignature === bannerSignature && existing.developmentSignature === developmentSignature && existing.constructionSignature === constructionSignature) continue;
@@ -1556,6 +1561,35 @@ export class GodboxRenderer {
     });
   }
 
+  /**
+   * Index history once per history-length revision. Long GODBOX runs can contain enormous
+   * chronicles; scanning the entire archive once per settlement would make decorative flags an
+   * accidental O(settlements × history) hot path.
+   */
+  private bannerHistoryForSettlement(settlement: Settlement, culture?: Culture): SimulationState['history'] {
+    if (this.bannerHistoryIndexLength !== this.state.history.length) {
+      this.bannerHistoryByEntity.clear();
+      for (const event of this.state.history) {
+        const keys = new Set<string>();
+        if (event.locationId) keys.add(event.locationId);
+        for (const actor of event.actors) keys.add(actor);
+        for (const key of keys) {
+          const bucket = this.bannerHistoryByEntity.get(key) ?? [];
+          bucket.push(event);
+          this.bannerHistoryByEntity.set(key, bucket);
+        }
+      }
+      this.bannerHistoryIndexLength = this.state.history.length;
+    }
+
+    const ids = [settlement.id, settlement.polityId, culture?.id].filter((id): id is string => Boolean(id));
+    const merged = new Map<string, SimulationState['history'][number]>();
+    for (const id of ids) {
+      for (const event of this.bannerHistoryByEntity.get(id) ?? []) merged.set(event.id, event);
+    }
+    return [...merged.values()];
+  }
+
   /** Historical layer: the same people keep a recognizable standard, but history leaves marks. */
   private bannerLegacyForSettlement(
     settlement: Settlement,
@@ -1584,7 +1618,7 @@ export class GodboxRenderer {
       isCapital: polity?.capitalId === settlement.id,
       institutions,
       identity,
-      history: this.state.history,
+      history: this.bannerHistoryForSettlement(settlement, culture),
       hasLandGate: layout.portals.some(portal => portal.kind === 'gate'),
       hasAnyPortal: layout.portals.length > 0,
     });
