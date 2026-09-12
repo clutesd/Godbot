@@ -39,13 +39,13 @@ export function recordFootTrafficSegment(
   if (distance < 0.025 || distance > world.cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
 
   const steps = Math.max(1, Math.ceil(distance / Math.max(0.15, world.cellSize * 0.45)));
-  const seen = new Set<WorldCell>();
   const wear = BASE_WEAR_PER_PASS * Math.max(0.25, Math.min(2.5, weight));
+  let previousCell: WorldCell | undefined;
   for (let index = 0; index <= steps; index += 1) {
     const t = index / steps;
     const cell = cellAt(world, from.x + (to.x - from.x) * t, from.z + (to.z - from.z) * t);
-    if (!cell || seen.has(cell)) continue;
-    seen.add(cell);
+    if (!cell || cell === previousCell) continue;
+    previousCell = cell;
     applyTrackWear(cell, wear, month, ownerId);
   }
 }
