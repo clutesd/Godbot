@@ -18,6 +18,7 @@ import { Simulation } from './sim/Simulation';
 import { representedPopulation } from './sim/advanced/AdvancedCivilizationSystem';
 import type { SimulationState } from './sim/types';
 import type { GodboxRenderer, PlacementSmokeReport } from './render/GodboxRenderer';
+import { setTransportDebugMode, transportDebugReport, type TransportDebugRecord } from './render/GodboxRendererEnhanced';
 import { WarChronicle } from './render/war/WarChronicle';
 
 declare global {
@@ -27,6 +28,8 @@ declare global {
     __godboxDebugAdvance?: (months: number) => { month: number; year: number; placement: PlacementSmokeReport };
     __godboxPacing?: () => PresentationTelemetry;
     __godboxRestart?: (seed?: string) => Promise<void>;
+    __godboxTransportDebug?: (enabled?: boolean) => boolean;
+    __godboxTransportReport?: () => TransportDebugRecord[];
   }
 }
 
@@ -42,6 +45,18 @@ app.innerHTML = `
   <main class="world" aria-label="Autonomous GODBOX historical observation">
     <div class="viewport" id="viewport"></div>
     <div class="grain" aria-hidden="true"></div>
+    <aside class="transport-debug-legend" id="transport-debug-legend" hidden aria-label="Transport debug legend">
+      <strong>TRANSPORT DEBUG</strong>
+      <span><i class="debug-swatch dock"></i>dock / port span</span>
+      <span><i class="debug-swatch bridge"></i>bridge</span>
+      <span><i class="debug-swatch road"></i>road</span>
+      <span><i class="debug-swatch rail"></i>rail</span>
+      <span><i class="debug-swatch construction"></i>under construction</span>
+      <span><i class="debug-swatch planned"></i>planned</span>
+      <span><i class="debug-swatch station"></i>station</span>
+      <span><i class="debug-swatch gate"></i>gate</span>
+      <small>/transport-report prints ids, lengths and anchors</small>
+    </aside>
     <header class="identity">
       <div class="sigil" aria-hidden="true"><i></i><b></b></div>
       <div>
@@ -90,6 +105,7 @@ const seedElement = requiredElement<HTMLElement>('#seed');
 const observationElement = requiredElement<HTMLElement>('#observation');
 const runStatusElement = requiredElement<HTMLElement>('#run-status');
 const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
+const transportDebugLegendElement = requiredElement<HTMLElement>('#transport-debug-legend');
 const openingElement = requiredElement<HTMLElement>('#opening');
 const openingTitleElement = requiredElement<HTMLElement>('#opening-title');
 const openingObservationElement = requiredElement<HTMLElement>('#opening-observation');
@@ -98,7 +114,7 @@ const openingSeedElement = requiredElement<HTMLElement>('#opening-seed');
 const openingStatusElement = requiredElement<HTMLElement>('#opening-status');
 const commandLineElement = requiredElement<HTMLElement>('#commandline');
 const commandInputElement = requiredElement<HTMLInputElement>('#command-input');
-const COMMAND_PLACEHOLDER = 'restart · restart seed · restart <seed>';
+const COMMAND_PLACEHOLDER = 'restart · restart seed · restart <seed> · transport-debug [on|off] · transport-report';
 const AUDIO_MUTED_KEY = 'godbox.audio.muted';
 commandInputElement.placeholder = COMMAND_PLACEHOLDER;
 
@@ -210,6 +226,30 @@ function executeObserverCommand(raw: string): string {
     void restartObservation(seed);
     return `RESTARTING · SEED ${seed.toUpperCase()}`;
   }
+  if (command === 'transport-debug') {
+    if (!window.__godboxTransportDebug) return 'Transport renderer is not ready yet.';
+    const argument = (parts[1] ?? 'toggle').toLowerCase();
+    if (!['toggle', 'on', 'off'].includes(argument)) return 'Use /transport-debug, /transport-debug on, or /transport-debug off.';
+    const requested = argument === 'on' ? true : argument === 'off' ? false : undefined;
+    const enabled = window.__godboxTransportDebug(requested);
+    return `TRANSPORT DEBUG ${enabled ? 'ON' : 'OFF'}${enabled ? ' · COLOURS IDENTIFY THE REAL RENDERED TYPE' : ''}`;
+  }
+  if (command === 'transport-report') {
+    const report = window.__godboxTransportReport?.();
+    if (!report) return 'Transport renderer is not ready yet.';
+    console.table(report.map(record => ({
+      kind: record.kind,
+      id: record.id,
+      length: Number(record.length.toFixed(2)),
+      mode: record.mode ?? '-',
+      status: record.status ?? '-',
+      settlement: record.settlementId ?? '-',
+      route: record.routeId ?? '-',
+      from: record.from ? `${record.from.x.toFixed(2)}, ${record.from.z.toFixed(2)}` : '-',
+      to: record.to ? `${record.to.x.toFixed(2)}, ${record.to.z.toFixed(2)}` : '-',
+    })));
+    return `TRANSPORT REPORT · ${report.length} OBJECTS · OPEN DEVTOOLS CONSOLE FOR IDS, LENGTHS AND ANCHORS`;
+  }
   if (command === 'help') return COMMAND_PLACEHOLDER;
   return `Unknown command: /${command}`;
 }
@@ -285,6 +325,14 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   warChronicle.update(simulation.state);
   window.__godboxRenderer = view;
   window.__godboxPlacementReport = () => view.getPlacementSmokeReport();
+  setTransportDebugMode(view, false);
+  transportDebugLegendElement.hidden = true;
+  window.__godboxTransportDebug = (enabled?: boolean) => {
+    const state = setTransportDebugMode(view, enabled);
+    transportDebugLegendElement.hidden = !state;
+    return state;
+  };
+  window.__godboxTransportReport = () => transportDebugReport(view);
   if (import.meta.env.DEV) {
     window.__godboxDebugAdvance = (months: number) => {
       simulation.step(Math.max(0, Math.floor(months)));
