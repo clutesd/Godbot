@@ -1,14 +1,14 @@
 import type { HistoricalIdentity, NotableFigure, Person, SimulationState } from '../types';
-import { advanceSocialDynamics } from './SocialDynamicsSystem';
+import { advanceSocialDynamics, socialInfluenceFor } from './SocialDynamicsSystem';
 
 /**
  * Deterministic historical importance.
  *
  * Nothing here invents celebrity: a person only rises above `ordinary` because the simulation
- * already gave them an office, a command, an attributed discovery, a founding role, or repeated
- * mentions in the chronicle. Scores are bounded, monotonic for a life (an earned status is never
- * revoked), and derived only from state that already exists, so the same seed always produces the
- * same notable people.
+ * already gave them an office, a command, an attributed discovery, a founding role, repeated
+ * mentions in the chronicle, or a socially consequential network position. Scores are bounded,
+ * monotonic for a life (an earned status is never revoked), and derived only from state that already
+ * exists, so the same seed always produces the same notable people.
  */
 
 const NOTABLE_THRESHOLD = 0.42;
@@ -55,8 +55,8 @@ export class HistoricalImportanceSystem {
    * added this month, never to the length of the chronicle or the size of the population.
    */
   ingest(state: SimulationState): void {
-    // Keep the documentary social graph current before historical scoring. This pass only records
-    // relationships implied by represented life; it does not alter decisions or historical outcomes.
+    // Keep the social graph current before historical scoring. Step 2 permits bounded social
+    // influence, but the graph still cannot directly fabricate events or historical outcomes.
     advanceSocialDynamics(state);
     for (let index = this.processedEvents; index < state.history.length; index += 1) {
       const event = state.history[index];
@@ -130,6 +130,22 @@ export class HistoricalImportanceSystem {
       score += Math.max(0, standing.politicalInfluence - 0.55) * 0.3;
       score += standing.institutionalPosition > 0.7 ? 0.08 : 0;
     }
+
+    const social = socialInfluenceFor(person.id, state.socialRelationships ?? []);
+    if (social.positiveTies >= 4 && social.support > 0.38) {
+      reasons.add('community-network');
+      score += Math.min(0.06, 0.025 + social.support * 0.04 + social.centrality * 0.02);
+    }
+    if ((social.mentorTies > 0 || social.collaboratorTies > 0) && social.learning > 0.22) {
+      reasons.add(social.mentorTies > 0 ? 'mentor-network' : 'intellectual-network');
+      score += Math.min(0.045, social.learning * 0.055);
+    }
+    if (social.politicalTies > 0 && social.political > 0.2) {
+      reasons.add('political-network');
+      score += Math.min(0.065, social.political * 0.075);
+    }
+    if (social.rivalTies > 0 && social.tension > 0.16) reasons.add('contested-figure');
+
     if (person.ageMonths > 88 * 12) {
       reasons.add('long-lived');
       score += 0.1;
