@@ -1,5 +1,4 @@
 import type { HistoricalIdentity, NotableFigure, Person, SimulationState } from '../types';
-import { advanceSocialDynamics } from './SocialDynamicsSystem';
 
 /**
  * Deterministic historical importance.
@@ -55,9 +54,6 @@ export class HistoricalImportanceSystem {
    * added this month, never to the length of the chronicle or the size of the population.
    */
   ingest(state: SimulationState): void {
-    // Keep the documentary social graph current before historical scoring. This pass only records
-    // relationships implied by represented life; it does not alter decisions or historical outcomes.
-    advanceSocialDynamics(state);
     for (let index = this.processedEvents; index < state.history.length; index += 1) {
       const event = state.history[index];
       if (!event) continue;
