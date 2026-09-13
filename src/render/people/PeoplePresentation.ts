@@ -1,4 +1,5 @@
 import type { DestinationKind, Person, Vec2 } from '../../sim/types';
+import { memoryInfluenceFor, socialWithdrawalFor } from '../../sim/people/PersonalMemorySystem';
 import type { AnimationState } from '../animation/AnimationController';
 import { RUN_SPEED_THRESHOLD, WALK_SPEED_THRESHOLD } from './PeopleVisualState';
 
@@ -12,6 +13,7 @@ import { RUN_SPEED_THRESHOLD, WALK_SPEED_THRESHOLD } from './PeopleVisualState';
  */
 
 export type VisualTier = 'population' | 'notable' | 'historical';
+export type HumanStoryCue = 'ordinary' | 'bereaved' | 'survivor' | 'migrant' | 'legacy' | 'accomplished';
 
 type SocialPerson = Person & { socialAffinityIds?: string[]; socialAvoidIds?: string[] };
 
@@ -103,8 +105,9 @@ export function buildSocialGroups(people: readonly Person[]): Map<string, Social
 /**
  * Places one member of a gathering using destination-specific occupancy geometry. Markets resolve
  * into conversational pods, shrines into audience arcs, docks/patrols into lanes, work sites into
- * loose grids, and homes into compact household groups. The result is blended with the authoritative
- * position and clamped, so presentation reveals social structure without inventing simulation travel.
+ * loose grids, and homes into compact household groups. Recent grief/adversity produces a restrained
+ * presentation-only tendency to stand slightly outside the social centre. The simulation position
+ * stays authoritative and every displacement remains tightly bounded.
  */
 export function placeInGroup(person: Person, group: SocialGroup | undefined, simPosition: Vec2): GroupPlacement {
   if (!group) return { x: simPosition.x, z: simPosition.z };
@@ -112,9 +115,22 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
   if (index < 0) return { x: simPosition.x, z: simPosition.z };
 
   const target = occupancyPlacement(group, index);
-  const cohesion = COHESION[group.kind] ?? 0.3;
-  const blendedX = simPosition.x + (target.x - simPosition.x) * cohesion;
-  const blendedZ = simPosition.z + (target.z - simPosition.z) * cohesion;
+  const withdrawal = socialWithdrawalFor(person);
+  const baseCohesion = COHESION[group.kind] ?? 0.3;
+  const cohesion = baseCohesion * (1 - withdrawal * (CONVERSATIONAL.has(group.kind) ? 0.34 : 0.16));
+  let targetX = target.x;
+  let targetZ = target.z;
+  if (withdrawal > 0.05 && group.members.length > 2 && (CONVERSATIONAL.has(group.kind) || group.kind === 'shrine' || group.kind === 'home')) {
+    let outwardX = target.x - group.centerX;
+    let outwardZ = target.z - group.centerZ;
+    const outwardLength = Math.hypot(outwardX, outwardZ) || 1;
+    outwardX /= outwardLength;
+    outwardZ /= outwardLength;
+    targetX += outwardX * Math.min(0.34, withdrawal * 0.38);
+    targetZ += outwardZ * Math.min(0.34, withdrawal * 0.38);
+  }
+  const blendedX = simPosition.x + (targetX - simPosition.x) * cohesion;
+  const blendedZ = simPosition.z + (targetZ - simPosition.z) * cohesion;
   const offsetX = blendedX - simPosition.x;
   const offsetZ = blendedZ - simPosition.z;
   const displacement = Math.hypot(offsetX, offsetZ);
@@ -129,6 +145,20 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
 export function visualTierFor(person: Person): VisualTier {
   const status = person.historical?.status;
   return status === 'historical' ? 'historical' : status === 'notable' ? 'notable' : 'population';
+}
+
+/**
+ * Read-only storytelling cue for renderers/camera/debug UI. It never invents state; it only reduces
+ * the bounded memory profile to one dominant visual interpretation.
+ */
+export function humanStoryCueFor(person: Person): HumanStoryCue {
+  const memory = memoryInfluenceFor(person);
+  if (memory.recentShock > 0.35 || memory.grief > 0.5) return 'bereaved';
+  if (memory.adversity > 0.5) return 'survivor';
+  if (memory.displacement > 0.5) return 'migrant';
+  if (memory.legacy > 0.48) return 'legacy';
+  if (memory.achievement > 0.5) return 'accomplished';
+  return 'ordinary';
 }
 
 /**
