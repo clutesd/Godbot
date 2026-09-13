@@ -2,7 +2,7 @@ import type { Person, SimulationState, SocialRelationship, SocialRelationshipKin
 
 const MAX_AFFINITIES = 4;
 const MAX_NON_FAMILY_TIES = 7;
-const SOCIAL_UPDATE_MONTHS = 3;
+const SOCIAL_UPDATE_MONTHS = 12;
 const SOCIAL_DESTINATIONS = new Set(['market', 'plaza', 'shrine', 'safe-area']);
 const RELATION_PRIORITY: Record<SocialRelationshipKind, number> = {
   family: 9,
@@ -29,8 +29,8 @@ interface SocialPerson extends Person {
  * bounded list of strong ties for crowd presentation. Later systems may consume the authoritative graph.
  */
 export function advanceSocialDynamics(state: SimulationState): void {
-  // Social structure changes much more slowly than walking. Quarterly maintenance keeps the graph cheap enough
-  // for deep-time runs while month 1 still establishes the starting households and work circles immediately.
+  // Social structure evolves on human timescales, not every walking tick. Annual maintenance keeps deep-time
+  // runs cheap while month 1 still establishes the starting households and work circles immediately.
   if (state.month > 1 && state.month % SOCIAL_UPDATE_MONTHS !== 0) return;
 
   const living = state.people.filter((person) => person.alive);
