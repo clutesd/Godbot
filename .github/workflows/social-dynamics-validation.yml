@@ -4,9 +4,11 @@ on:
   pull_request:
     paths:
       - 'src/sim/people/SocialDynamicsSystem.ts'
+      - 'src/sim/people/PersonalMemorySystem.ts'
       - 'src/sim/people/HistoricalImportance.ts'
       - 'src/render/people/PeoplePresentation.ts'
       - 'tests/social-dynamics.test.ts'
+      - 'tests/personal-memory.test.ts'
       - 'tests/people-presentation.test.ts'
       - 'tests/society.test.ts'
       - '.github/workflows/social-dynamics-validation.yml'
@@ -24,6 +26,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/sim/people/SocialDynamicsSystem.ts src/sim/people/HistoricalImportance.ts src/render/people/PeoplePresentation.ts tests/social-dynamics.test.ts tests/people-presentation.test.ts tests/society.test.ts
-      - run: npx vitest run tests/social-dynamics.test.ts tests/people-presentation.test.ts tests/society.test.ts
+      - run: npx eslint src/sim/people/SocialDynamicsSystem.ts src/sim/people/PersonalMemorySystem.ts src/sim/people/HistoricalImportance.ts src/render/people/PeoplePresentation.ts tests/social-dynamics.test.ts tests/personal-memory.test.ts tests/people-presentation.test.ts tests/society.test.ts
+      - run: npx vitest run tests/social-dynamics.test.ts tests/personal-memory.test.ts tests/people-presentation.test.ts tests/society.test.ts
       - run: npm run build
