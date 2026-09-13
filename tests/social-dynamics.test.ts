@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSocialGroups, placeInGroup } from '../src/render/people/PeoplePresentation';
+import { Simulation } from '../src/sim/Simulation';
 import { advanceSocialDynamics } from '../src/sim/people/SocialDynamicsSystem';
 import type { Person, SimulationState } from '../src/sim/types';
 
@@ -66,6 +67,14 @@ describe('SocialDynamicsSystem', () => {
     expect(relationships.some((relationship) => relationship.kind === 'colleague'
       && new Set([relationship.a, relationship.b]).has(parent.id)
       && new Set([relationship.a, relationship.b]).has(colleague.id))).toBe(true);
+  });
+
+  it('is maintained automatically by a live simulation', () => {
+    const simulation = new Simulation({ seed: 'social-live-integration', startingPopulation: 72, settlementCount: [2, 2], world: { size: 24 } });
+    simulation.step(1);
+
+    expect(simulation.state.socialRelationships?.length).toBeGreaterThan(0);
+    expect(simulation.state.socialRelationships?.some((relationship) => relationship.kind === 'family' || relationship.kind === 'colleague')).toBe(true);
   });
 
   it('turns repeated face-to-face contact into a visible social affinity over time', () => {
