@@ -38,8 +38,14 @@ export interface MemoryPerson extends Person {
   personalMemories?: PersonalMemory[];
 }
 
+interface MemoryCursor {
+  index: number;
+  lastEventId?: string;
+}
+
 const MAX_MEMORIES = 6;
 const RECENT_WINDOW_MONTHS = 30;
+const cursors = new WeakMap<SimulationState, MemoryCursor>();
 const LOCAL_EVENT_KINDS = new Set<HistoricalEvent['type']>([
   'natural-catastrophe', 'harvest-crisis', 'civilization-collapse', 'pandemic', 'ecological-crisis', 'climate-crisis', 'resource-crisis',
 ]);
@@ -48,18 +54,23 @@ const WAR_EVENT_KINDS = new Set<HistoricalEvent['type']>(['war-declared', 'war-c
 /**
  * Converts already-recorded simulation truth into a tiny personal memory layer.
  *
- * The system deliberately scans only the current and immediately previous month. This lets a death
- * event reach surviving social ties on the next monthly pass before SocialDynamics prunes the dead
- * endpoint, while per-person event ids make the pass idempotent. Memories are capped and scored so
- * deep-time runs never grow an unbounded diary.
+ * History is consumed incrementally. Events created after this month's people pass are processed on
+ * the next pass, which is exactly what death needs: the relationship edge to the deceased still exists
+ * until memory runs, then SocialDynamics can prune it. A cursor check self-recovers if history trimming
+ * shifts the array. Memories themselves are capped and idempotent, so deep-time runs stay bounded.
  */
 export function advancePersonalMemory(state: SimulationState): void {
   const people = state.people as MemoryPerson[];
   if (people.length === 0) return;
   const livingById = new Map(people.filter((person) => person.alive).map((person) => [person.id, person]));
-  const recentEvents = state.history.filter((event) => event.month >= state.month - 1 && event.month <= state.month);
+  const cursor = cursors.get(state) ?? { index: 0 };
+  if (cursor.index > 0 && state.history[cursor.index - 1]?.id !== cursor.lastEventId) {
+    const recovered = cursor.lastEventId ? state.history.findIndex((event) => event.id === cursor.lastEventId) : -1;
+    cursor.index = recovered >= 0 ? recovered + 1 : 0;
+  }
+  const newEvents = state.history.slice(cursor.index);
 
-  for (const event of recentEvents) {
+  for (const event of newEvents) {
     if (event.type === 'death') {
       rememberDeath(event, livingById, state.socialRelationships ?? []);
       continue;
@@ -91,9 +102,13 @@ export function advancePersonalMemory(state: SimulationState): void {
       rememberLocalWitnesses(event, people, 'war', -1, 'war-witness');
       continue;
     }
-    if (LOCAL_EVENT_KINDS.has(event.type)) {
-      rememberLocalWitnesses(event, people, 'catastrophe', -1, event.type);
-    }
+    if (LOCAL_EVENT_KINDS.has(event.type)) rememberLocalWitnesses(event, people, 'catastrophe', -1, event.type);
+  }
+
+  if (state.history.length > 0) {
+    cursor.index = state.history.length;
+    cursor.lastEventId = state.history[state.history.length - 1]?.id;
+    cursors.set(state, cursor);
   }
 
   // Existing mentor relationships are meaningful even before a headline event occurs. Once the tie
