@@ -73,7 +73,7 @@ describe('SocialDynamicsSystem', () => {
     const b = person('person-2', { workplaceId: 'work-b' });
     const simulation = state([a, b]);
 
-    for (let month = 1; month <= 4; month += 1) {
+    for (let month = 1; month <= 9; month += 1) {
       simulation.month = month;
       advanceSocialDynamics(simulation);
     }
