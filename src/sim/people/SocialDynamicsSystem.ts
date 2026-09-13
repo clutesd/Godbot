@@ -155,7 +155,9 @@ export function advanceSocialDynamics(state: SimulationState): void {
     const key = pairKey(first, second);
     const existing = byPair.get(key);
     if (existing) {
-      if (RELATION_PRIORITY[kind] > RELATION_PRIORITY[existing.kind]) existing.kind = kind;
+      if (kind === 'family') existing.kind = 'family';
+      else if (kind === 'rival' && existing.kind !== 'family' && existing.kind !== 'mentor') existing.kind = 'rival';
+      else if (existing.kind !== 'rival' && RELATION_PRIORITY[kind] > RELATION_PRIORITY[existing.kind]) existing.kind = kind;
       existing.trust = clamp(existing.trust * 0.88 + trustTarget * 0.12);
       existing.strength = clamp(existing.strength + strengthGain);
       existing.lastContactMonth = state.month;
@@ -454,6 +456,7 @@ function assignPresentationSignals(people: readonly Person[], relationships: rea
 function applyBoundedSocialEffects(people: readonly Person[], relationships: readonly SocialRelationship[]): void {
   for (const person of people) {
     const influence = socialInfluenceFor(person.id, relationships);
+    if (influence.centrality <= 0) continue;
     const networkTarget = clamp(
       0.13
       + influence.support * 0.3
