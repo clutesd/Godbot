@@ -7,37 +7,43 @@ import { RUN_SPEED_THRESHOLD, WALK_SPEED_THRESHOLD } from './PeopleVisualState';
  *
  * Presentation-only reading of simulation state: who belongs to which visible gathering, where a
  * character stands within it, how much individuality it earns, and which animation its visual
- * travel implies. Nothing here changes simulation state; every offset is deterministic in the
+ * travel implies. Nothing here changes simulation authority; every offset is deterministic in the
  * person's identity so a crowd is stable between frames instead of reshuffling.
  */
 
 export type VisualTier = 'population' | 'notable' | 'historical';
 
-/** How strongly members of a gathering are drawn toward its centre, by destination. */
+type SocialPerson = Person & { socialAffinityIds?: string[] };
+
+/** How strongly members of a gathering are drawn toward its occupancy geometry, by destination. */
 const COHESION: Partial<Record<DestinationKind, number>> = {
-  market: 0.55,
-  plaza: 0.55,
-  shrine: 0.6,
-  'construction-site': 0.5,
-  'safe-area': 0.45,
-  workshop: 0.4,
-  warehouse: 0.4,
-  dock: 0.4,
-  station: 0.4,
-  'civic-building': 0.4,
-  'knowledge-institution': 0.4,
-  'industrial-site': 0.4,
-  field: 0.22,
-  'patrol-route': 0.15,
-  home: 0.12,
+  market: 0.84,
+  plaza: 0.82,
+  shrine: 0.88,
+  'construction-site': 0.78,
+  'safe-area': 0.76,
+  workshop: 0.7,
+  warehouse: 0.72,
+  dock: 0.82,
+  station: 0.82,
+  'civic-building': 0.7,
+  'knowledge-institution': 0.72,
+  'industrial-site': 0.72,
+  field: 0.5,
+  'patrol-route': 0.78,
+  home: 0.72,
 };
 
 /** Destinations people attend by talking to each other rather than by working. */
 const CONVERSATIONAL = new Set<DestinationKind>(['market', 'plaza']);
 /** Destinations with a focal point every attendant turns toward. */
 const FOCAL = new Set<DestinationKind>(['shrine', 'construction-site']);
+const LINEAR = new Set<DestinationKind>(['dock', 'station', 'patrol-route']);
+const WORK_GRID = new Set<DestinationKind>([
+  'field', 'workshop', 'construction-site', 'warehouse', 'industrial-site', 'knowledge-institution', 'civic-building',
+]);
 
-/** A cluster never pulls a character further than this from its authoritative position. */
+/** A visual gathering never drags a character far from the authoritative simulation position. */
 const MAX_DISPLACEMENT = 1.6;
 const GOLDEN_ANGLE = 2.39996323;
 
@@ -46,7 +52,7 @@ export interface SocialGroup {
   kind: DestinationKind;
   centerX: number;
   centerZ: number;
-  /** Person ids in deterministic order; a member's index fixes its place in the cluster. */
+  /** Deterministic social order: close ties are adjacent when possible, then stable id order. */
   members: string[];
 }
 
@@ -67,6 +73,7 @@ export function groupKeyFor(person: Person): string | undefined {
 
 export function buildSocialGroups(people: readonly Person[]): Map<string, SocialGroup> {
   const groups = new Map<string, SocialGroup>();
+  const peopleById = new Map(people.map((person) => [person.id, person as SocialPerson]));
   for (const person of people) {
     const key = groupKeyFor(person);
     if (!key) continue;
@@ -88,48 +95,26 @@ export function buildSocialGroups(people: readonly Person[]): Map<string, Social
   for (const group of groups.values()) {
     group.centerX /= group.members.length;
     group.centerZ /= group.members.length;
-    group.members.sort();
+    group.members = sociallyOrderMembers(group.members, peopleById, group.kind);
   }
   return groups;
 }
 
 /**
- * Places one member of a gathering. Conversational destinations resolve into pairs facing each
- * other; focal destinations into a loose arc turned toward the centre; work destinations into a
- * spiral cluster. The result is blended with the authoritative position and clamped, so a crowd
- * reads as a crowd without the renderer inventing locations the simulation never chose.
+ * Places one member of a gathering using destination-specific occupancy geometry. Markets resolve
+ * into conversational pods, shrines into audience arcs, docks/patrols into lanes, work sites into
+ * loose grids, and homes into compact household groups. The result is blended with the authoritative
+ * position and clamped, so presentation reveals social structure without inventing simulation travel.
  */
 export function placeInGroup(person: Person, group: SocialGroup | undefined, simPosition: Vec2): GroupPlacement {
   if (!group) return { x: simPosition.x, z: simPosition.z };
   const index = group.members.indexOf(person.id);
   if (index < 0) return { x: simPosition.x, z: simPosition.z };
-  const count = group.members.length;
+
+  const target = occupancyPlacement(group, index);
   const cohesion = COHESION[group.kind] ?? 0.3;
-  const conversational = CONVERSATIONAL.has(group.kind) && count >= 2;
-  const slot = conversational ? Math.floor(index / 2) : index;
-  const slots = conversational ? Math.ceil(count / 2) : count;
-  const spread = 0.55 + Math.sqrt(slots) * 0.42;
-  const phase = unit(`${group.key}:phase`) * Math.PI * 2;
-  const angle = phase + slot * GOLDEN_ANGLE;
-  const radial = spread * Math.sqrt((slot + 0.6) / Math.max(1, slots)) * (0.78 + unit(`${person.id}:cluster`) * 0.4);
-  let x = group.centerX + Math.cos(angle) * radial;
-  let z = group.centerZ + Math.sin(angle) * radial;
-  let restFacing: number | undefined;
-
-  if (conversational) {
-    // Pair members stand a step apart on a shared axis and turn to face one another.
-    const partnerSide = index % 2 === 0 ? 1 : -1;
-    const axis = unit(`${group.key}:${slot}:axis`) * Math.PI * 2;
-    const separation = 0.24 + unit(`${group.key}:${slot}:gap`) * 0.1;
-    x += Math.cos(axis) * separation * partnerSide;
-    z += Math.sin(axis) * separation * partnerSide;
-    restFacing = Math.atan2(-Math.cos(axis) * partnerSide, -Math.sin(axis) * partnerSide);
-  } else if (FOCAL.has(group.kind)) {
-    restFacing = Math.atan2(group.centerX - x, group.centerZ - z);
-  }
-
-  const blendedX = simPosition.x + (x - simPosition.x) * cohesion;
-  const blendedZ = simPosition.z + (z - simPosition.z) * cohesion;
+  const blendedX = simPosition.x + (target.x - simPosition.x) * cohesion;
+  const blendedZ = simPosition.z + (target.z - simPosition.z) * cohesion;
   const offsetX = blendedX - simPosition.x;
   const offsetZ = blendedZ - simPosition.z;
   const displacement = Math.hypot(offsetX, offsetZ);
@@ -137,7 +122,7 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
   return {
     x: simPosition.x + offsetX * limit,
     z: simPosition.z + offsetZ * limit,
-    ...(restFacing === undefined ? {} : { restFacing }),
+    ...(target.restFacing === undefined ? {} : { restFacing: target.restFacing }),
   };
 }
 
@@ -155,6 +140,127 @@ export function travelAnimationFor(speed: number, person: Person): AnimationStat
   if (person.activity === 'flee' || speed >= RUN_SPEED_THRESHOLD) return 'run';
   if (person.activity === 'transport' || person.appearance?.carriedItem === 'basket' || person.appearance?.carriedItem === 'bag') return 'carry';
   return 'walk';
+}
+
+function occupancyPlacement(group: SocialGroup, index: number): GroupPlacement {
+  const count = group.members.length;
+  const phase = unit(`${group.key}:phase`) * Math.PI * 2;
+  if (CONVERSATIONAL.has(group.kind) && count >= 2) return conversationalPod(group, index, phase);
+  if (group.kind === 'shrine') return audienceArc(group, index, phase);
+  if (LINEAR.has(group.kind)) return linearLane(group, index, phase);
+  if (WORK_GRID.has(group.kind)) return workGrid(group, index, phase);
+  if (group.kind === 'home') return householdCluster(group, index, phase);
+  return radialCluster(group, index, phase);
+}
+
+function conversationalPod(group: SocialGroup, index: number, phase: number): GroupPlacement {
+  const count = group.members.length;
+  const pod = Math.floor(index / 2);
+  const podCount = Math.ceil(count / 2);
+  const side = index % 2 === 0 ? 1 : -1;
+  const angle = phase + pod * GOLDEN_ANGLE;
+  const radius = 0.42 + Math.sqrt(podCount) * 0.24 + Math.sqrt((pod + 0.5) / Math.max(1, podCount)) * 0.35;
+  const centerX = group.centerX + Math.cos(angle) * radius;
+  const centerZ = group.centerZ + Math.sin(angle) * radius;
+  const axis = angle + Math.PI * 0.5 + (unit(`${group.key}:${pod}:axis`) - 0.5) * 0.45;
+  const separation = 0.25 + unit(`${group.key}:${pod}:gap`) * 0.08;
+  return {
+    x: centerX + Math.cos(axis) * separation * side,
+    z: centerZ + Math.sin(axis) * separation * side,
+    restFacing: Math.atan2(-Math.cos(axis) * side, -Math.sin(axis) * side),
+  };
+}
+
+function audienceArc(group: SocialGroup, index: number, phase: number): GroupPlacement {
+  const perRow = Math.min(6, Math.max(3, Math.ceil(Math.sqrt(group.members.length) * 1.5)));
+  const row = Math.floor(index / perRow);
+  const rowStart = row * perRow;
+  const inRow = Math.min(perRow, group.members.length - rowStart);
+  const column = index - rowStart;
+  const span = Math.min(Math.PI * 1.15, 0.42 * Math.max(1, inRow - 1));
+  const angle = phase - span * 0.5 + (inRow <= 1 ? 0 : column / (inRow - 1) * span);
+  const radius = 0.52 + row * 0.42;
+  const x = group.centerX + Math.cos(angle) * radius;
+  const z = group.centerZ + Math.sin(angle) * radius;
+  return { x, z, restFacing: Math.atan2(group.centerX - x, group.centerZ - z) };
+}
+
+function linearLane(group: SocialGroup, index: number, phase: number): GroupPlacement {
+  const perRow = Math.min(7, Math.max(2, Math.ceil(Math.sqrt(group.members.length) * 1.8)));
+  const row = Math.floor(index / perRow);
+  const column = index % perRow;
+  const membersThisRow = Math.min(perRow, group.members.length - row * perRow);
+  const lateral = (column - (membersThisRow - 1) / 2) * (group.kind === 'patrol-route' ? 0.42 : 0.48);
+  const depth = (row - 0.5) * 0.42;
+  const alongX = Math.cos(phase);
+  const alongZ = Math.sin(phase);
+  const acrossX = -alongZ;
+  const acrossZ = alongX;
+  const x = group.centerX + alongX * lateral + acrossX * depth;
+  const z = group.centerZ + alongZ * lateral + acrossZ * depth;
+  return { x, z, ...(group.kind === 'patrol-route' ? { restFacing: Math.atan2(alongX, alongZ) } : {}) };
+}
+
+function workGrid(group: SocialGroup, index: number, phase: number): GroupPlacement {
+  const columns = Math.max(2, Math.ceil(Math.sqrt(group.members.length)));
+  const rows = Math.ceil(group.members.length / columns);
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const spacing = group.kind === 'field' ? 0.72 : group.kind === 'industrial-site' ? 0.58 : 0.52;
+  const localX = (column - (columns - 1) / 2) * spacing;
+  const localZ = (row - (rows - 1) / 2) * spacing;
+  const cos = Math.cos(phase);
+  const sin = Math.sin(phase);
+  const x = group.centerX + localX * cos - localZ * sin;
+  const z = group.centerZ + localX * sin + localZ * cos;
+  return { x, z, ...(FOCAL.has(group.kind) ? { restFacing: Math.atan2(group.centerX - x, group.centerZ - z) } : {}) };
+}
+
+function householdCluster(group: SocialGroup, index: number, phase: number): GroupPlacement {
+  if (group.members.length === 1) return { x: group.centerX, z: group.centerZ };
+  const angle = phase + index / group.members.length * Math.PI * 2;
+  const radius = 0.28 + Math.min(0.42, Math.sqrt(group.members.length) * 0.11);
+  return { x: group.centerX + Math.cos(angle) * radius, z: group.centerZ + Math.sin(angle) * radius };
+}
+
+function radialCluster(group: SocialGroup, index: number, phase: number): GroupPlacement {
+  const count = group.members.length;
+  const angle = phase + index * GOLDEN_ANGLE;
+  const radius = (0.34 + Math.sqrt(count) * 0.18) * Math.sqrt((index + 0.6) / Math.max(1, count));
+  return { x: group.centerX + Math.cos(angle) * radius, z: group.centerZ + Math.sin(angle) * radius };
+}
+
+function sociallyOrderMembers(ids: readonly string[], peopleById: ReadonlyMap<string, SocialPerson>, kind: DestinationKind): string[] {
+  const remaining = new Set([...ids].sort());
+  const ordered: string[] = [];
+  let current = [...remaining][0];
+  while (current) {
+    ordered.push(current);
+    remaining.delete(current);
+    if (remaining.size === 0) break;
+    const person = peopleById.get(current);
+    const affinities = person?.socialAffinityIds ?? [];
+    const candidates = [...remaining];
+    candidates.sort((aId, bId) => {
+      const a = peopleById.get(aId);
+      const b = peopleById.get(bId);
+      const aAffinity = affinities.indexOf(aId);
+      const bAffinity = affinities.indexOf(bId);
+      const aRank = aAffinity >= 0 ? aAffinity
+        : person && a?.householdId === person.householdId ? 10
+          : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
+      const bRank = bAffinity >= 0 ? bAffinity
+        : person && b?.householdId === person.householdId ? 10
+          : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
+      return aRank - bRank || aId.localeCompare(bId);
+    });
+    current = candidates[0];
+  }
+  return ordered;
+}
+
+function isWorkDestination(kind: DestinationKind): boolean {
+  return WORK_GRID.has(kind) || LINEAR.has(kind);
 }
 
 function unit(value: string): number {
