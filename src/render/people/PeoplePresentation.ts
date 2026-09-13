@@ -13,7 +13,7 @@ import { RUN_SPEED_THRESHOLD, WALK_SPEED_THRESHOLD } from './PeopleVisualState';
 
 export type VisualTier = 'population' | 'notable' | 'historical';
 
-type SocialPerson = Person & { socialAffinityIds?: string[] };
+type SocialPerson = Person & { socialAffinityIds?: string[]; socialAvoidIds?: string[] };
 
 /** How strongly members of a gathering are drawn toward its occupancy geometry, by destination. */
 const COHESION: Partial<Record<DestinationKind, number>> = {
@@ -240,18 +240,23 @@ function sociallyOrderMembers(ids: readonly string[], peopleById: ReadonlyMap<st
     if (remaining.size === 0) break;
     const person = peopleById.get(current);
     const affinities = person?.socialAffinityIds ?? [];
+    const avoidances = person?.socialAvoidIds ?? [];
     const candidates = [...remaining];
     candidates.sort((aId, bId) => {
       const a = peopleById.get(aId);
       const b = peopleById.get(bId);
       const aAffinity = affinities.indexOf(aId);
       const bAffinity = affinities.indexOf(bId);
-      const aRank = aAffinity >= 0 ? aAffinity
-        : person && a?.householdId === person.householdId ? 10
-          : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
-      const bRank = bAffinity >= 0 ? bAffinity
-        : person && b?.householdId === person.householdId ? 10
-          : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
+      const aAvoided = avoidances.includes(aId) || Boolean(a?.socialAvoidIds?.includes(current!));
+      const bAvoided = avoidances.includes(bId) || Boolean(b?.socialAvoidIds?.includes(current!));
+      const aRank = aAvoided ? 1000
+        : aAffinity >= 0 ? aAffinity
+          : person && a?.householdId === person.householdId ? 10
+            : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
+      const bRank = bAvoided ? 1000
+        : bAffinity >= 0 ? bAffinity
+          : person && b?.householdId === person.householdId ? 10
+            : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
       return aRank - bRank || aId.localeCompare(bId);
     });
     current = candidates[0];
