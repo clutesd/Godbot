@@ -247,8 +247,8 @@ function sociallyOrderMembers(ids: readonly string[], peopleById: ReadonlyMap<st
       const b = peopleById.get(bId);
       const aAffinity = affinities.indexOf(aId);
       const bAffinity = affinities.indexOf(bId);
-      const aAvoided = avoidances.includes(aId) || Boolean(a?.socialAvoidIds?.includes(current));
-      const bAvoided = avoidances.includes(bId) || Boolean(b?.socialAvoidIds?.includes(current));
+      const aAvoided = avoidances.includes(aId) || Boolean(a?.socialAvoidIds?.includes(current!));
+      const bAvoided = avoidances.includes(bId) || Boolean(b?.socialAvoidIds?.includes(current!));
       const aRank = aAvoided ? 1000
         : aAffinity >= 0 ? aAffinity
           : person && a?.householdId === person.householdId ? 10
