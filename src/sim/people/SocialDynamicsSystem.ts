@@ -2,6 +2,7 @@ import type { Person, SimulationState, SocialRelationship, SocialRelationshipKin
 
 const MAX_AFFINITIES = 4;
 const MAX_NON_FAMILY_TIES = 7;
+const SOCIAL_UPDATE_MONTHS = 3;
 const SOCIAL_DESTINATIONS = new Set(['market', 'plaza', 'shrine', 'safe-area']);
 const RELATION_PRIORITY: Record<SocialRelationshipKind, number> = {
   family: 9,
@@ -28,6 +29,10 @@ interface SocialPerson extends Person {
  * bounded list of strong ties for crowd presentation. Later systems may consume the authoritative graph.
  */
 export function advanceSocialDynamics(state: SimulationState): void {
+  // Social structure changes much more slowly than walking. Quarterly maintenance keeps the graph cheap enough
+  // for deep-time runs while month 1 still establishes the starting households and work circles immediately.
+  if (state.month > 1 && state.month % SOCIAL_UPDATE_MONTHS !== 0) return;
+
   const living = state.people.filter((person) => person.alive);
   const livingById = new Map(living.map((person) => [person.id, person]));
   const relationships = (state.socialRelationships ??= [])
@@ -79,8 +84,8 @@ export function advanceSocialDynamics(state: SimulationState): void {
   for (const relationship of relationships) {
     if (relationship.kind === 'family' || touchedThisMonth.has(relationship.id)) continue;
     const staleMonths = state.month - relationship.lastContactMonth;
-    if (staleMonths > 12) relationship.strength = clamp(relationship.strength - 0.0035);
-    if (staleMonths > 36) relationship.trust = clamp(relationship.trust - 0.0015);
+    if (staleMonths > 12) relationship.strength = clamp(relationship.strength - 0.0035 * SOCIAL_UPDATE_MONTHS);
+    if (staleMonths > 36) relationship.trust = clamp(relationship.trust - 0.0015 * SOCIAL_UPDATE_MONTHS);
   }
 
   state.socialRelationships = capAndPruneRelationships(relationships, state.month);
