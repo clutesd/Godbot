@@ -1,4 +1,5 @@
 import type { HistoricalIdentity, NotableFigure, Person, SimulationState } from '../types';
+import { advancePersonalMemory, memoriesFor, memoryInfluenceFor } from './PersonalMemorySystem';
 import { advanceSocialDynamics, socialInfluenceFor } from './SocialDynamicsSystem';
 
 /**
@@ -6,9 +7,8 @@ import { advanceSocialDynamics, socialInfluenceFor } from './SocialDynamicsSyste
  *
  * Nothing here invents celebrity: a person only rises above `ordinary` because the simulation
  * already gave them an office, a command, an attributed discovery, a founding role, repeated
- * mentions in the chronicle, or a socially consequential network position. Scores are bounded,
- * monotonic for a life (an earned status is never revoked), and derived only from state that already
- * exists, so the same seed always produces the same notable people.
+ * mentions in the chronicle, a consequential social network, or durable memories of real events.
+ * Scores are bounded and monotonic for a life, so the same seed always produces the same notable people.
  */
 
 const NOTABLE_THRESHOLD = 0.42;
@@ -51,12 +51,12 @@ export class HistoricalImportanceSystem {
   }
 
   /**
-   * Fold newly recorded history into the per-person index. Cost is proportional to the events
-   * added this month, never to the length of the chronicle or the size of the population.
+   * Fold newly recorded history into the per-person index. Memory runs before social pruning so a
+   * death from the previous month can still reach surviving family/friends/mentors through the old
+   * relationship edge; SocialDynamics can then safely remove the deceased endpoint.
    */
   ingest(state: SimulationState): void {
-    // Keep the social graph current before historical scoring. Step 2 permits bounded social
-    // influence, but the graph still cannot directly fabricate events or historical outcomes.
+    advancePersonalMemory(state);
     advanceSocialDynamics(state);
     for (let index = this.processedEvents; index < state.history.length; index += 1) {
       const event = state.history[index];
@@ -146,6 +146,17 @@ export class HistoricalImportanceSystem {
     }
     if (social.rivalTies > 0 && social.tension > 0.16) reasons.add('contested-figure');
 
+    const memory = memoryInfluenceFor(person, month);
+    if (memory.count > 0) {
+      if (memory.legacy > 0.2) reasons.add('legacy-bearer');
+      if (memory.displacement > 0.26) reasons.add('migration-memory');
+      if (memory.adversity > 0.32) reasons.add('survivor');
+      if (memory.achievement > 0.3) reasons.add('remembered-achievement');
+      if (memory.grief > 0.34) reasons.add('bereaved');
+      // Memory can distinguish lives with genuine continuity, but never manufacture a notable life.
+      score += Math.min(0.075, memory.legacy * 0.025 + memory.adversity * 0.018 + memory.achievement * 0.045 + memory.displacement * 0.012);
+    }
+
     if (person.ageMonths > 88 * 12) {
       reasons.add('long-lived');
       score += 0.1;
@@ -155,11 +166,13 @@ export class HistoricalImportanceSystem {
     const earned: HistoricalIdentity['status'] = score >= HISTORICAL_THRESHOLD ? 'historical' : score >= NOTABLE_THRESHOLD ? 'notable' : 'ordinary';
     const previous = person.historical;
     const status = rankOf(earned) >= rankOf(previous?.status ?? 'ordinary') ? earned : previous!.status;
+    const memoryEventIds = memoriesFor(person).flatMap((memoryItem) => memoryItem.eventId ? [memoryItem.eventId] : []);
+    const eventIds = [...new Set([...(chronicle?.eventIds ?? previous?.eventIds ?? []), ...memoryEventIds])].slice(0, MAX_CITED_EVENTS);
     const identity: HistoricalIdentity = {
       status,
       score: Math.max(score, previous?.score ?? 0),
       reasons: [...reasons].sort(),
-      eventIds: chronicle?.eventIds.slice(0, MAX_CITED_EVENTS) ?? previous?.eventIds ?? [],
+      eventIds,
       ...(status === 'ordinary' ? {} : { promotedMonth: previous?.promotedMonth ?? month }),
     };
     person.historical = identity;
@@ -173,12 +186,18 @@ export class HistoricalImportanceSystem {
       this.chronicles.delete(person.id);
       return;
     }
+    const memory = memoryInfluenceFor(person, month);
+    const legacyReasons = [
+      ...(memory.legacy > 0.2 ? ['legacy-bearer'] : []),
+      ...(memory.adversity > 0.32 ? ['survivor'] : []),
+      ...(memory.displacement > 0.26 ? ['migration-memory'] : []),
+    ];
     this.retired.set(person.id, {
       id: person.id,
       name: person.name,
       status: identity.status,
       score: identity.score,
-      reasons: identity.reasons,
+      reasons: [...new Set([...identity.reasons, ...legacyReasons])],
       eventIds: identity.eventIds,
       bornMonth: person.bornMonth,
       diedMonth: month,
