@@ -111,6 +111,29 @@ describe('SocialDynamicsSystem', () => {
       expect(degree).toBeLessThanOrEqual(7);
     }
   });
+
+  it('keeps family size outside the non-family relationship budget', () => {
+    const worker = person('person-1', { householdId: 'large-family', workplaceId: 'shared-work' });
+    const relatives = Array.from({ length: 8 }, (_, index) => person(`person-child-${index + 1}`, {
+      householdId: 'large-family',
+      ageMonths: 10 * 12,
+      role: 'child',
+      occupation: 'child',
+      workplaceId: undefined,
+    }));
+    const colleague = person('person-99', { householdId: 'other-house', workplaceId: 'shared-work' });
+    const simulation = state([worker, ...relatives, colleague]);
+
+    advanceSocialDynamics(simulation);
+
+    const relationships = simulation.socialRelationships ?? [];
+    const familyDegree = relationships.filter((relationship) => relationship.kind === 'family'
+      && (relationship.a === worker.id || relationship.b === worker.id)).length;
+    expect(familyDegree).toBe(8);
+    expect(relationships.some((relationship) => relationship.kind === 'colleague'
+      && new Set([relationship.a, relationship.b]).has(worker.id)
+      && new Set([relationship.a, relationship.b]).has(colleague.id))).toBe(true);
+  });
 });
 
 describe('Socially structured crowd presentation', () => {
