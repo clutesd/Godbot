@@ -219,19 +219,15 @@ function capAndPruneRelationships(relationships: readonly SocialRelationship[], 
   const family = viable.filter((relationship) => relationship.kind === 'family');
   const ordinary = viable.filter((relationship) => relationship.kind !== 'family')
     .sort((a, b) => relationshipScore(b) - relationshipScore(a) || a.id.localeCompare(b.id));
-  const counts = new Map<string, number>();
+  const nonFamilyCounts = new Map<string, number>();
   const kept = [...family];
-  for (const relationship of family) {
-    counts.set(relationship.a, (counts.get(relationship.a) ?? 0) + 1);
-    counts.set(relationship.b, (counts.get(relationship.b) ?? 0) + 1);
-  }
   for (const relationship of ordinary) {
-    const aCount = counts.get(relationship.a) ?? 0;
-    const bCount = counts.get(relationship.b) ?? 0;
+    const aCount = nonFamilyCounts.get(relationship.a) ?? 0;
+    const bCount = nonFamilyCounts.get(relationship.b) ?? 0;
     if (aCount >= MAX_NON_FAMILY_TIES || bCount >= MAX_NON_FAMILY_TIES) continue;
     kept.push(relationship);
-    counts.set(relationship.a, aCount + 1);
-    counts.set(relationship.b, bCount + 1);
+    nonFamilyCounts.set(relationship.a, aCount + 1);
+    nonFamilyCounts.set(relationship.b, bCount + 1);
   }
   return kept.sort((a, b) => a.id.localeCompare(b.id));
 }
