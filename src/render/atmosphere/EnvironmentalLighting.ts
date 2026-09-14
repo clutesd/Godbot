@@ -24,15 +24,18 @@ export interface EnvironmentalLightingState {
   groundFillColor: THREE.Color;
 }
 
-const SUN_LOW = new THREE.Color('#ff9857');
-const SUN_HIGH = new THREE.Color('#fff1d2');
-const MOON_LOW = new THREE.Color('#7890c5');
-const MOON_HIGH = new THREE.Color('#aebfe4');
-const SKY_NIGHT = new THREE.Color('#26344e');
-const SKY_TWILIGHT = new THREE.Color('#718bab');
-const SKY_DAY = new THREE.Color('#9cc2dc');
-const GROUND_NIGHT = new THREE.Color('#25252d');
-const GROUND_DAY = new THREE.Color('#515048');
+// Low sun is deliberately amber rather than orange. The first real Step-2 captures showed that
+// saturated #ff98xx light could paint whole mountain faces copper while the opposite faces fell to
+// black. Warmth now comes from separation between direct sun and cool sky fill, not from a filter.
+const SUN_LOW = new THREE.Color('#ffc184');
+const SUN_HIGH = new THREE.Color('#fff5df');
+const MOON_LOW = new THREE.Color('#7f96c8');
+const MOON_HIGH = new THREE.Color('#b4c5e7');
+const SKY_NIGHT = new THREE.Color('#30405d');
+const SKY_TWILIGHT = new THREE.Color('#8298b2');
+const SKY_DAY = new THREE.Color('#a6c6da');
+const GROUND_NIGHT = new THREE.Color('#2d2d34');
+const GROUND_DAY = new THREE.Color('#5a584f');
 
 /**
  * One coherent outdoor-lighting model for GODBOX.
@@ -52,36 +55,40 @@ export function resolveEnvironmentalLighting(input: EnvironmentalLightingInput):
   const goldenHour = (1 - solarHeight) * daylight;
   const weatherSoftening = smoothstep(0.009, 0.043, Math.max(0, input.fogDensity));
 
-  // Direct light is the scene's principal sculpting force. Weather softens it but never erases
-  // directional form entirely, otherwise mountains and buildings collapse back into flat ambient.
-  const sunIntensity = (0.035 + daylight * (2.45 + solarHeight * 1.35)) * (1 - weatherSoftening * 0.52);
+  // Direct sun remains the principal sculpting force, but the ratio is calibrated for GODBOX's
+  // steep low-poly terrain. The old ~5:1 midday and much harsher low-sun separation produced near-
+  // black valleys and clipped copper faces. Around 3:1 midday preserves modelling without losing
+  // readable shadow information.
+  const sunIntensity = (0.035 + daylight * (1.72 + solarHeight * 1.18)) * (1 - weatherSoftening * 0.42);
 
-  // Sky fill intentionally sits well below the previous broad daylight fill. This leaves readable
-  // cool shadows while retaining enough indirect light for stylised materials and tiny people.
-  const hemisphereIntensity = 0.12
-    + daylight * (0.44 + solarHeight * 0.22)
-    + twilight * 0.12
-    + weatherSoftening * daylight * 0.08;
+  // Sky fill is intentionally cool and substantial enough to keep snow, people and settlement
+  // silhouettes readable on the unlit side of mountains. It still remains clearly subordinate to
+  // direct sun at normal daylight elevations.
+  const hemisphereIntensity = 0.17
+    + daylight * (0.53 + solarHeight * 0.18)
+    + twilight * 0.16
+    + weatherSoftening * daylight * 0.1;
 
-  const moonIntensity = 0.055 + night * (0.38 + (1 - weatherSoftening) * 0.08);
+  const moonIntensity = 0.055 + night * (0.34 + (1 - weatherSoftening) * 0.08);
 
-  const sunColor = SUN_LOW.clone().lerp(SUN_HIGH, smoothstep(0.18, 0.7, solarElevation));
+  const sunColor = SUN_LOW.clone().lerp(SUN_HIGH, smoothstep(0.16, 0.68, solarElevation));
   const moonColor = MOON_LOW.clone().lerp(MOON_HIGH, 1 - weatherSoftening * 0.45);
 
   const skyFillColor = SKY_NIGHT.clone()
-    .lerp(SKY_TWILIGHT, THREE.MathUtils.clamp(twilight + daylight * 0.22, 0, 1))
-    .lerp(SKY_DAY, smoothstep(0.22, 0.85, daylight) * (0.65 + solarHeight * 0.35));
+    .lerp(SKY_TWILIGHT, THREE.MathUtils.clamp(twilight + daylight * 0.24, 0, 1))
+    .lerp(SKY_DAY, smoothstep(0.22, 0.85, daylight) * (0.64 + solarHeight * 0.36));
   // Overcast skies become a little more neutral, avoiding candy-blue shadows during storms.
-  skyFillColor.lerp(new THREE.Color('#a7b4bc'), weatherSoftening * daylight * 0.28);
+  skyFillColor.lerp(new THREE.Color('#adb9bf'), weatherSoftening * daylight * 0.27);
 
-  const groundFillColor = GROUND_NIGHT.clone().lerp(GROUND_DAY, daylight * 0.86);
+  const groundFillColor = GROUND_NIGHT.clone().lerp(GROUND_DAY, daylight * 0.88);
 
-  // ACES exposure is deliberately restrained in bright daylight to preserve snow/cloud detail,
-  // with a gentle lift toward twilight/night. There is no aggressive auto-exposure pumping.
+  // ACES still owns highlight compression. Exposure therefore stays very stable: the scene should
+  // not pulse as the documentary camera crosses bright snow, nor compensate for golden hour by
+  // bleaching it. Shadow readability is handled by actual fill light and the Step-3 toe lift.
   const exposure = THREE.MathUtils.clamp(
-    1.015 + goldenHour * 0.055 + night * 0.09 + weatherSoftening * 0.025,
+    1.0 + goldenHour * 0.025 + night * 0.08 + weatherSoftening * 0.012,
     0.98,
-    1.17,
+    1.1,
   );
 
   return {
