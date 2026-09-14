@@ -18,6 +18,8 @@ export interface PresentationTelemetry {
   readonly mode: PresentationMode;
   readonly tempo: CinematicTempo;
   readonly holdSecondsRemaining: number;
+  readonly seasonalTransition: boolean;
+  readonly seasonalHoldSecondsRemaining: number;
   readonly viewingSeconds: Readonly<Record<PresentationMode, number>>;
 }
 
@@ -42,6 +44,8 @@ const PERSONAL_KINDS = new Set<ObservationKind>(['worker-follow', 'traveler-foll
 const CITY_KINDS = new Set<ObservationKind>(['street-observation', 'settlement-approach', 'city-growth-timelapse', 'institution-exterior', 'infrastructure-scene']);
 const MOMENTOUS_KINDS = new Set<ObservationKind>(['battle-overview', 'aftermath-pullback', 'atomic-threshold', 'civilization-ending']);
 const SIGNIFICANT_KINDS = new Set<ObservationKind>(['discovery-scene', 'infrastructure-scene', 'orbital-establishing']);
+/** Early spring, early summer, early autumn and early winter in the 12-part presentation calendar. */
+const SEASON_TRANSITION_MONTHS = new Set([1, 4, 7, 10]);
 
 /**
  * Controls observer-time only. It never mutates authoritative simulation state.
@@ -56,6 +60,8 @@ export class PresentationDirector {
   private quietSeconds = 0;
   private tempo: CinematicTempo = 'observe';
   private holdSecondsRemaining = 0;
+  private seasonalHoldSecondsRemaining = 0;
+  private lastSeasonalTransitionKey = '';
   private lastFocusKey = '';
   private heldUrgency = 0;
   private readonly viewingSeconds: Record<PresentationMode, number> = { 'ordinary-life': 0, 'city-life': 0, 'major-event': 0, 'accelerated-quiet': 0 };
@@ -68,6 +74,16 @@ export class PresentationDirector {
   update(deltaSeconds: number, state: SimulationState, observation: PresentationObservation): number {
     const urgency = this.urgency(state, observation);
     const focusKey = `${observation.kind}:${observation.eventType ?? 'none'}:${observation.eventMonth ?? -1}`;
+    const seasonalKey = this.seasonalTransitionKey(state.month);
+
+    // Four times per simulated year, deliberately create a quiet cinematic breathing window.
+    // This gives the renderer and deferred presentation work several uninterrupted frames between
+    // authoritative month steps instead of charging straight through a season boundary.
+    if (seasonalKey && seasonalKey !== this.lastSeasonalTransitionKey) {
+      this.lastSeasonalTransitionKey = seasonalKey;
+      const cinematicSeconds = Math.max(8, this.config.camera.transitionSeconds + 2);
+      this.seasonalHoldSecondsRemaining = Math.max(this.seasonalHoldSecondsRemaining, cinematicSeconds);
+    }
 
     // A new important observation earns a real-time viewing window. The simulation remains free
     // to advance, but presentation does not immediately snap back to deep-time acceleration.
@@ -77,18 +93,22 @@ export class PresentationDirector {
       this.holdSecondsRemaining = Math.max(this.holdSecondsRemaining, urgency >= 2 ? 11 : 6.5);
     }
 
-    if (urgency === 0 && observation.interest < 0.48 && this.holdSecondsRemaining <= 0) this.quietSeconds += deltaSeconds;
+    if (urgency === 0 && observation.interest < 0.48 && this.holdSecondsRemaining <= 0 && this.seasonalHoldSecondsRemaining <= 0) this.quietSeconds += deltaSeconds;
     else this.quietSeconds = Math.max(0, this.quietSeconds - deltaSeconds * (urgency >= 2 ? 5 : 2.5));
 
     const directTarget = this.targetSpeed(state, observation);
     const heldTarget = this.heldUrgency >= 2
       ? this.config.presentation.momentousMonthsPerSecond
       : this.config.presentation.significantMonthsPerSecond;
-    this.targetMonthsPerSecond = this.holdSecondsRemaining > 0
+    const eventTarget = this.holdSecondsRemaining > 0
       ? Math.min(directTarget, heldTarget)
       : directTarget;
+    this.targetMonthsPerSecond = this.seasonalHoldSecondsRemaining > 0
+      ? Math.min(eventTarget, this.seasonalTransitionSpeed())
+      : eventTarget;
 
     this.holdSecondsRemaining = Math.max(0, this.holdSecondsRemaining - deltaSeconds);
+    this.seasonalHoldSecondsRemaining = Math.max(0, this.seasonalHoldSecondsRemaining - deltaSeconds);
     if (this.holdSecondsRemaining === 0 && urgency === 0) this.heldUrgency = 0;
 
     // Deceleration should feel responsive; returning to fast history should feel deliberate.
@@ -160,6 +180,10 @@ export class PresentationDirector {
 
   /** Quiet worlds may run more months per frame; complex worlds get finer, smaller steps. */
   tickBudget(state: SimulationState): number {
+    // A cinematic season transition is explicitly a one-month-at-a-time observation window.
+    // This prevents catch-up logic from immediately undoing the slowdown with several expensive
+    // synchronous month steps in the same rendered frame.
+    if (this.seasonalHoldSecondsRemaining > 0) return 1;
     const base = Math.max(1, this.config.simulation.maxTicksPerFrame);
     const headroom = 1 + (1 - this.structuralComplexity(state)) * (Math.max(1, this.config.presentation.deepTimeAcceleration) - 1) * 0.5;
     return Math.max(2, Math.round(base * headroom));
@@ -171,7 +195,9 @@ export class PresentationDirector {
       yearsPerRealMinute: Number((this.monthsPerSecond * 5).toFixed(2)),
       mode: this.mode,
       tempo: this.tempo,
-      holdSecondsRemaining: Number(this.holdSecondsRemaining.toFixed(2)),
+      holdSecondsRemaining: Number(Math.max(this.holdSecondsRemaining, this.seasonalHoldSecondsRemaining).toFixed(2)),
+      seasonalTransition: this.seasonalHoldSecondsRemaining > 0,
+      seasonalHoldSecondsRemaining: Number(this.seasonalHoldSecondsRemaining.toFixed(2)),
       viewingSeconds: { ...this.viewingSeconds },
     };
   }
@@ -179,6 +205,18 @@ export class PresentationDirector {
   private deepTimeFactor(state: SimulationState): number {
     const multiplier = Math.max(1, this.config.presentation.deepTimeAcceleration);
     return 1 + (multiplier - 1) * (1 - this.structuralComplexity(state));
+  }
+
+  private seasonalTransitionKey(month: number): string | undefined {
+    const monthOfYear = ((month % 12) + 12) % 12;
+    if (!SEASON_TRANSITION_MONTHS.has(monthOfYear)) return undefined;
+    return `${Math.floor(month / 12)}:${monthOfYear}`;
+  }
+
+  private seasonalTransitionSpeed(): number {
+    // At defaults this is 0.24 months/sec: roughly four seconds of observer-time per simulated
+    // month. It remains relative to the configured ordinary pace for alternate time presets.
+    return Math.max(0.08, Math.min(this.config.presentation.momentousMonthsPerSecond, this.config.presentation.ordinaryMonthsPerSecond * 0.12));
   }
 
   /**
@@ -228,7 +266,7 @@ export class PresentationDirector {
   }
 
   private tempoFor(urgency: number, target: number): CinematicTempo {
-    if (this.holdSecondsRemaining > 0) return 'linger';
+    if (this.holdSecondsRemaining > 0 || this.seasonalHoldSecondsRemaining > 0) return 'linger';
     if (urgency > 0 || target <= this.config.presentation.significantMonthsPerSecond * 1.15) return 'focus';
     if (target > this.config.presentation.ordinaryMonthsPerSecond * 1.15) return 'accelerate';
     return 'observe';
