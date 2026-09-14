@@ -9,6 +9,7 @@ import { AmbientBirds } from './AmbientBirds';
 import { planForest, resolveForestSuccession, resolveTreeLifecycle, type ResolvedTreeLifecycle, type TreePlacement } from './ForestPlanner';
 import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
+import { resolveTreeMorphology, resolveTreePhenotype, type TreeMorphology, type TreePhenotype } from './TreeMorphology';
 import { resolveTreePhenology, treeFoliageColour } from './TreePhenology';
 import { insideVegetationTerrain } from './VegetationPlacement';
 import { BioluminescentFlora } from './BioluminescentFlora';
@@ -58,6 +59,7 @@ const MANAGED_CHERRY_RESERVE_PER_VARIANT = 512;
 const MANAGED_TREE_SCALE = 2.5;
 const RECOVERY_ZONE_RETENTION_YEARS = 80;
 const MAX_RECOVERY_ZONES = 128;
+const ROOT_PLATE_CAPACITY = 512;
 
 /**
  * The forest. Trees are planned once, then drawn through two instanced tiers whose membership is
@@ -67,11 +69,15 @@ const MAX_RECOVERY_ZONES = 128;
 export class VegetationRenderer {
   readonly group = new THREE.Group();
   private readonly placements: TreePlacement[];
+  private readonly phenotypes: TreePhenotype[];
   private readonly nearBuckets = new Map<string, Bucket>();
   private readonly farBuckets = new Map<string, Bucket>();
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
+  private readonly crownOffset = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
+  private readonly tilt = new THREE.Quaternion();
+  private readonly tiltEuler = new THREE.Euler();
   private readonly scale = new THREE.Vector3();
   private readonly tint = new THREE.Color();
   private readonly axis = new THREE.Vector3(0, 1, 0);
@@ -83,6 +89,9 @@ export class VegetationRenderer {
   private readonly flowers: FlowerField;
   private readonly birds: AmbientBirds;
   private readonly luminousFlora?: BioluminescentFlora;
+  private readonly rootPlates: THREE.InstancedMesh;
+  private readonly rootPlateTriangles: number;
+  private rootPlateCount = 0;
   private ecologyYear = 0;
   private season = 0;
   private targetSeason = 0;
@@ -96,7 +105,6 @@ export class VegetationRenderer {
   private readonly leaves = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: '#c99435', size: 0.075, transparent: true, opacity: 0.8, depthWrite: false }));
   private readonly leafSites: { tree: TreePlacement; height: number; blossom: boolean }[] = [];
   private readonly particleColour = new THREE.Color();
-  private readonly fallenRotation = new THREE.Quaternion().setFromAxisAngle(this.fallenAxis, Math.PI * 0.46);
   private occupiedGround: { x: number; z: number; radius: number }[] = [];
   private scarSignature = '';
   private readonly scarsByCell = new Map<number, TornadoState[]>();
@@ -115,8 +123,24 @@ export class VegetationRenderer {
     this.leaves.geometry.setDrawRange(0, 0);
     this.leaves.frustumCulled = false;
     this.group.add(this.leaves);
+
+    const rootGeometry = new THREE.CylinderGeometry(0.5, 0.38, 0.18, 8, 1);
+    rootGeometry.rotateZ(Math.PI * 0.5);
+    const rootMaterial = new THREE.MeshStandardMaterial({ color: '#514131', roughness: 0.98, metalness: 0 });
+    this.rootPlates = new THREE.InstancedMesh(rootGeometry, rootMaterial, Math.max(1, Math.min(ROOT_PLATE_CAPACITY, budget)));
+    this.rootPlates.name = 'tree-uprooted-root-plates';
+    this.rootPlates.userData['weatherSurface'] = true;
+    this.rootPlates.castShadow = true;
+    this.rootPlates.receiveShadow = true;
+    this.rootPlates.frustumCulled = false;
+    this.rootPlates.count = 0;
+    this.rootPlates.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.rootPlateTriangles = (rootGeometry.index?.count ?? rootGeometry.getAttribute('position').count) / 3;
+    this.group.add(this.rootPlates);
+
     const plan = planForest(world, surface, seed, budget, VARIANTS_PER_FAMILY, anchors);
     this.placements = plan.trees;
+    this.phenotypes = this.placements.map((placement) => resolveTreePhenotype(seed, placement));
     this.byFamily = plan.byFamily;
     this.lifecycle = this.placements.map((placement) => resolveTreeLifecycle(placement, this.ecologyYear));
     const flowerBudget = budget <= 0 ? 0 : Math.max(400, Math.min(2800, Math.round(budget * 0.8)));
@@ -170,8 +194,9 @@ export class VegetationRenderer {
       underwater: this.placements.filter(placement => this.surface.waterYAt(placement.worldX, placement.worldZ) > placement.y).length,
       flowers: { placed: flowerReport.placements, visible: flowerReport.visible },
       drawCalls: [...this.nearBuckets.values(), ...this.farBuckets.values()].filter(bucket => bucket.count > 0).length * 2
-        + flowerReport.drawCalls + (this.leaves.geometry.drawRange.count > 0 ? 1 : 0) + (this.luminousFlora?.report.drawCalls ?? 0),
-      triangles: triangles + flowerReport.triangles + (this.luminousFlora?.report.triangles ?? 0),
+        + flowerReport.drawCalls + (this.leaves.geometry.drawRange.count > 0 ? 1 : 0) + (this.rootPlateCount > 0 ? 1 : 0)
+        + (this.luminousFlora?.report.drawCalls ?? 0),
+      triangles: triangles + this.rootPlateCount * this.rootPlateTriangles + flowerReport.triangles + (this.luminousFlora?.report.triangles ?? 0),
       byFamily: { ...this.byFamily },
       bioluminescence: this.luminousFlora?.report,
     };
@@ -255,6 +280,7 @@ export class VegetationRenderer {
     }
     for (const bucket of this.nearBuckets.values()) bucket.count = 0;
     for (const bucket of this.farBuckets.values()) bucket.count = 0;
+    this.rootPlateCount = 0;
     this.clearedCount = 0;
     this.nearCount = 0;
     this.farCount = 0;
@@ -309,13 +335,16 @@ export class VegetationRenderer {
         placement.disturbedYear = Math.max(placement.disturbedYear ?? -Infinity, weather.lastWindthrowMonth / 12);
       }
       if (placement.disturbedYear !== undefined) lifecycle = resolveTreeLifecycle(placement, (this.world.weather?.month ?? this.ecologyYear * 12) / 12);
-      this.write(target, placement, lifecycle);
+      const phenotype = this.phenotypes[index] ?? resolveTreePhenotype(this.seed, placement);
+      const morphology = resolveTreeMorphology(phenotype, lifecycle);
+      this.write(target, placement, lifecycle, phenotype, morphology);
+      if (lifecycle.fallen && distance < NEAR_RANGE) this.writeRootPlate(placement, lifecycle, phenotype);
       if (distance < 24 && this.leafSites.length < 96 && lifecycle.foliageVisible && !windthrown && cell) {
-        const phase = resolveTreePhenology(this.season, cell, weather ?? cell, placement.family, placement.rotation / (Math.PI * 2));
+        const phase = resolveTreePhenology(this.season, cell, weather ?? cell, placement.family, phenotype.phenology);
         if (phase.leafFall > 0.2 || phase.blossom > 0.3) {
           const blossom = phase.blossom > 0.3;
           for (let particle = 0; particle < (blossom ? 4 : 2) && this.leafSites.length < 96; particle++) {
-            this.leafSites.push({ tree: placement, height: lifecycle.scale * target.crownHeight * 0.82, blossom });
+            this.leafSites.push({ tree: placement, height: lifecycle.scale * target.crownHeight * morphology.crownHeight * 0.82, blossom });
           }
         }
       }
@@ -330,6 +359,8 @@ export class VegetationRenderer {
       bucket.foliage.instanceMatrix.needsUpdate = true;
       if (bucket.foliage.instanceColor) bucket.foliage.instanceColor.needsUpdate = true;
     }
+    this.rootPlates.count = this.rootPlateCount;
+    this.rootPlates.instanceMatrix.needsUpdate = true;
     const winter = this.targetSeason < 1 || this.targetSeason >= 10;
     this.flowers.update(camera, winter ? this.targetSeason : this.season, [...this.disturbance, ...this.occupiedGround]);
     this.luminousFlora?.updateLod(camera, this.world.weather?.month ?? this.ecologyYear * 12 + this.targetSeason, [...this.disturbance, ...this.occupiedGround]);
@@ -373,6 +404,7 @@ export class VegetationRenderer {
       this.byFamily[placement.family] = Math.max(0, this.byFamily[placement.family] - 1);
       this.placements.splice(index, 1);
       this.lifecycle.splice(index, 1);
+      this.phenotypes.splice(index, 1);
     }
     for (const settlementId of [...this.managedSettlementIds]) {
       if (!living.has(settlementId)) this.managedSettlementIds.delete(settlementId);
@@ -422,6 +454,7 @@ export class VegetationRenderer {
         if (!placement) continue;
         this.placements.push(placement);
         this.lifecycle.push(resolveTreeLifecycle(placement, currentYear));
+        this.phenotypes.push(resolveTreePhenotype(this.seed, placement));
         this.byFamily.cherry += 1;
       }
     }
@@ -453,11 +486,11 @@ export class VegetationRenderer {
     if (succession === 'cleared') return null;
     if (succession === 'regrowth') {
       const progress = clamp01(years / 12);
-      return { stage: 'sapling', scale: placement.scale * (0.16 + progress * 0.22), foliageVisible: true, fallen: false };
+      return { stage: 'sapling', scale: placement.scale * (0.16 + progress * 0.22), foliageVisible: true, fallen: false, maturity: progress * 0.12 };
     }
     if (succession === 'young-woodland') {
       const progress = clamp01((years - 10) / 34);
-      return { stage: 'young', scale: placement.scale * (0.48 + progress * 0.34), foliageVisible: true, fallen: false };
+      return { stage: 'young', scale: placement.scale * (0.48 + progress * 0.34), foliageVisible: true, fallen: false, maturity: 0.12 + progress * 0.24 };
     }
     return undefined;
   }
@@ -498,24 +531,48 @@ export class VegetationRenderer {
     return { family, variant, bark, foliage, capacity: Math.max(1, capacity), count: 0, crownHeight: source.height };
   }
 
-  private write(bucket: Bucket, placement: TreePlacement, lifecycle: ResolvedTreeLifecycle): void {
+  private write(bucket: Bucket, placement: TreePlacement, lifecycle: ResolvedTreeLifecycle,
+    phenotype: TreePhenotype, morphology: TreeMorphology): void {
     this.position.set(placement.worldX, placement.y, placement.worldZ);
     this.quaternion.setFromAxisAngle(this.axis, placement.rotation);
     if (lifecycle.fallen) {
-      this.position.y += placement.scale * 0.08;
-      this.quaternion.multiply(this.fallenRotation);
+      this.position.y += lifecycle.scale * 0.055;
+      this.tilt.setFromAxisAngle(this.fallenAxis, morphology.fallAngle);
+      this.quaternion.multiply(this.tilt);
     }
-    this.scale.setScalar(lifecycle.scale);
+    else {
+      this.tiltEuler.set(morphology.leanZ, 0, -morphology.leanX, 'XYZ');
+      this.tilt.setFromEuler(this.tiltEuler);
+      this.quaternion.multiply(this.tilt);
+    }
+
+    this.scale.set(
+      lifecycle.scale * morphology.trunkRadiusX,
+      lifecycle.scale * morphology.trunkHeight,
+      lifecycle.scale * morphology.trunkRadiusZ,
+    );
     this.matrix.compose(this.position, this.quaternion, this.scale);
     bucket.bark.setMatrixAt(bucket.count, this.matrix);
+
     if (lifecycle.foliageVisible) {
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
       const canopy = cell ? resolveTreePhenology(this.season, cell, weather ?? cell,
-        placement.family, placement.rotation / (Math.PI * 2)).canopy : 1;
-      const size = Math.max(0.0001, Math.cbrt(canopy));
-      this.scale.multiplyScalar(size);
-      this.position.y += lifecycle.scale * (1 - size) * 0.6;
+        placement.family, phenotype.phenology).canopy : 1;
+      const size = Math.max(0.0001, Math.cbrt(clamp01(canopy * morphology.foliageDensity)));
+      this.position.set(placement.worldX, placement.y, placement.worldZ);
+      this.crownOffset.set(
+        morphology.crownOffsetX * lifecycle.scale,
+        morphology.crownLift * lifecycle.scale,
+        morphology.crownOffsetZ * lifecycle.scale,
+      ).applyAxisAngle(this.axis, placement.rotation);
+      this.position.add(this.crownOffset);
+      this.position.y += lifecycle.scale * (1 - size) * 0.6 * morphology.crownHeight;
+      this.scale.set(
+        lifecycle.scale * morphology.crownWidthX * size,
+        lifecycle.scale * morphology.crownHeight * size,
+        lifecycle.scale * morphology.crownWidthZ * size,
+      );
       this.matrix.compose(this.position, this.quaternion, this.scale);
       bucket.foliage.setMatrixAt(bucket.count, this.matrix);
     }
@@ -524,20 +581,37 @@ export class VegetationRenderer {
       this.matrix.compose(this.position, this.quaternion, this.scale);
       bucket.foliage.setMatrixAt(bucket.count, this.matrix);
     }
-    bucket.foliage.setColorAt(bucket.count, this.foliageTint(placement, lifecycle));
+    bucket.foliage.setColorAt(bucket.count, this.foliageTint(placement, lifecycle, phenotype));
     bucket.count += 1;
   }
 
+  private writeRootPlate(placement: TreePlacement, lifecycle: ResolvedTreeLifecycle, phenotype: TreePhenotype): void {
+    if (this.rootPlateCount >= this.rootPlates.instanceMatrix.count) return;
+    this.position.set(placement.worldX, placement.y + lifecycle.scale * 0.22, placement.worldZ);
+    this.quaternion.setFromAxisAngle(this.axis, placement.rotation);
+    this.tiltEuler.set(0, 0, phenotype.fallBias * 0.14, 'XYZ');
+    this.tilt.setFromEuler(this.tiltEuler);
+    this.quaternion.multiply(this.tilt);
+    this.scale.set(
+      lifecycle.scale * (0.42 + Math.abs(phenotype.fallBias) * 0.08),
+      lifecycle.scale * phenotype.girth * 0.86,
+      lifecycle.scale * phenotype.girth * (0.72 + phenotype.fullness * 0.08),
+    );
+    this.matrix.compose(this.position, this.quaternion, this.scale);
+    this.rootPlates.setMatrixAt(this.rootPlateCount, this.matrix);
+    this.rootPlateCount += 1;
+  }
+
   /**
-   * Seasonal color is absolute; geometry contributes only subtle crown shading.
+   * Seasonal color is absolute; geometry contributes only subtle crown shading. Pigment and
+   * phenology are independent stable traits rather than accidental functions of tree rotation.
    */
-  private foliageTint(placement: TreePlacement, lifecycle: ResolvedTreeLifecycle): THREE.Color {
+  private foliageTint(placement: TreePlacement, lifecycle: ResolvedTreeLifecycle, phenotype: TreePhenotype): THREE.Color {
     const cell = cellAt(this.world, placement.worldX, placement.worldZ);
     const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
     const climate = cell ?? { temperature: 0.46, moisture: 0.5 };
-    const variation = placement.rotation / (Math.PI * 2);
-    const phase = resolveTreePhenology(this.season, climate, weather ?? climate, placement.family, variation);
-    treeFoliageColour(placement.family, phase, variation, this.tint, climate.moisture);
+    const phase = resolveTreePhenology(this.season, climate, weather ?? climate, placement.family, phenotype.phenology);
+    treeFoliageColour(placement.family, phase, phenotype.pigment, this.tint, climate.moisture);
     const maturity = lifecycle.stage === 'sapling' ? 0.84
       : lifecycle.stage === 'young' ? 0.91
         : lifecycle.stage === 'old' ? 1.06
