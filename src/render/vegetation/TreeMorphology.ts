@@ -110,31 +110,32 @@ interface FormProfile {
   crownLift: number;
   asymmetry: number;
   foliage: number;
+  lean: number;
 }
 
 const SEEDLING: FormProfile = {
   trunkRadius: 0.5, trunkHeight: 1.08, crownWidth: 0.48, crownHeight: 0.72,
-  crownLift: 0.08, asymmetry: 0.42, foliage: 0.78,
+  crownLift: 0.08, asymmetry: 0.42, foliage: 0.78, lean: 0.55,
 };
 const YOUNG: FormProfile = {
   trunkRadius: 0.68, trunkHeight: 1.03, crownWidth: 0.7, crownHeight: 0.86,
-  crownLift: 0.05, asymmetry: 0.5, foliage: 0.9,
+  crownLift: 0.05, asymmetry: 0.5, foliage: 0.9, lean: 0.78,
 };
 const MATURE: FormProfile = {
   trunkRadius: 0.95, trunkHeight: 1, crownWidth: 0.98, crownHeight: 1,
-  crownLift: 0.015, asymmetry: 0.75, foliage: 1,
+  crownLift: 0.015, asymmetry: 0.75, foliage: 1, lean: 1,
 };
 const VETERAN: FormProfile = {
   trunkRadius: 1.08, trunkHeight: 0.98, crownWidth: 1.08, crownHeight: 0.96,
-  crownLift: -0.01, asymmetry: 1.05, foliage: 0.97,
+  crownLift: -0.01, asymmetry: 1.05, foliage: 0.97, lean: 1,
 };
 const OLD: FormProfile = {
   trunkRadius: 1.2, trunkHeight: 0.94, crownWidth: 1.16, crownHeight: 0.88,
-  crownLift: -0.02, asymmetry: 1.35, foliage: 0.9,
+  crownLift: -0.02, asymmetry: 1.35, foliage: 0.9, lean: 1.02,
 };
 const SENESCENT: FormProfile = {
   trunkRadius: 1.26, trunkHeight: 0.88, crownWidth: 0.98, crownHeight: 0.74,
-  crownLift: -0.025, asymmetry: 1.6, foliage: 0.5,
+  crownLift: -0.025, asymmetry: 1.6, foliage: 0.5, lean: 1.05,
 };
 
 function blendProfile(from: FormProfile, to: FormProfile, amount: number): FormProfile {
@@ -146,6 +147,7 @@ function blendProfile(from: FormProfile, to: FormProfile, amount: number): FormP
     crownLift: lerp(from.crownLift, to.crownLift, amount),
     asymmetry: lerp(from.asymmetry, to.asymmetry, amount),
     foliage: lerp(from.foliage, to.foliage, amount),
+    lean: lerp(from.lean, to.lean, amount),
   };
 }
 
@@ -225,8 +227,8 @@ export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: Resol
     crownOffsetX: phenotype.crownOffsetX * asymmetry,
     crownOffsetZ: phenotype.crownOffsetZ * asymmetry,
     crownLift: stage.crownLift,
-    leanX: phenotype.leanX * (lifecycle.stage === 'sapling' ? 0.55 : lifecycle.stage === 'young' ? 0.78 : 1),
-    leanZ: phenotype.leanZ * (lifecycle.stage === 'sapling' ? 0.55 : lifecycle.stage === 'young' ? 0.78 : 1),
+    leanX: phenotype.leanX * stage.lean,
+    leanZ: phenotype.leanZ * stage.lean,
     foliageDensity: clamp01(stage.foliage * phenotype.fullness),
     fallAngle: Math.PI * (0.44 + phenotype.fallBias * 0.035),
   };
