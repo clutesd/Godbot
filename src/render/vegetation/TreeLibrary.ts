@@ -1,17 +1,30 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { SeededRandom } from '../../sim/prng';
+import { BIRCH_FOLIAGE_COLOUR, createBirchVariant } from './BirchTree';
 import {
   buildTreeLibrary as buildBaseTreeLibrary,
   TREE_LOD_FAR,
   TREE_LOD_NEAR,
-  speciesFoliageColour,
-  type TreeFamily,
+  speciesFoliageColour as baseSpeciesFoliageColour,
+  type TreeFamily as BaseTreeFamily,
   type TreeLod,
-  type TreeVariant,
 } from './TreeLibraryBase';
 
-export { TREE_LOD_FAR, TREE_LOD_NEAR, speciesFoliageColour };
-export type { TreeFamily, TreeLod, TreeVariant };
+export { TREE_LOD_FAR, TREE_LOD_NEAR };
+export type { TreeLod };
+export type TreeFamily = BaseTreeFamily | 'birch';
+
+export interface TreeVariant {
+  family: TreeFamily;
+  bark: THREE.BufferGeometry;
+  foliage: THREE.BufferGeometry;
+  height: number;
+  radius: number;
+}
+
+export function speciesFoliageColour(family: TreeFamily): THREE.Color {
+  return family === 'birch' ? new THREE.Color(BIRCH_FOLIAGE_COLOUR) : baseSpeciesFoliageColour(family);
+}
 
 type Range = readonly [number, number];
 
@@ -42,6 +55,11 @@ const CROWN_RHYTHM: Record<TreeFamily, CrownRhythmGrammar> = {
     width: [1.01, 1.12], depthBias: [-0.08, 0.08], height: [1, 1.1], offset: [0.012, 0.05],
     lobeStrength: [0.045, 0.105], lobeCount: [4, 6], topVariation: [-0.02, 0.05],
     notchDepth: [0, 0.05], notchWidth: [0.16, 0.3],
+  },
+  birch: {
+    width: [0.96, 1.06], depthBias: [-0.06, 0.06], height: [1.02, 1.11], offset: [0.012, 0.045],
+    lobeStrength: [0.035, 0.085], lobeCount: [4, 6], topVariation: [-0.018, 0.035],
+    notchDepth: [0, 0.045], notchWidth: [0.14, 0.28],
   },
   conifer: {
     width: [1, 1.08], depthBias: [-0.04, 0.04], height: [1, 1.08], offset: [0.004, 0.022],
@@ -102,6 +120,7 @@ interface CanopyDepthProfile {
 const CANOPY_DEPTH: Record<TreeFamily, CanopyDepthProfile> = {
   cherry: { interior: 0.62, edge: 1.03, underside: 0.86, upper: 1.06, directional: 0.045 },
   broadleaf: { interior: 0.58, edge: 1.01, underside: 0.84, upper: 1.06, directional: 0.05 },
+  birch: { interior: 0.61, edge: 1.04, underside: 0.86, upper: 1.07, directional: 0.045 },
   conifer: { interior: 0.55, edge: 0.98, underside: 0.82, upper: 1.04, directional: 0.035 },
   dry: { interior: 0.66, edge: 1.05, underside: 0.88, upper: 1.07, directional: 0.055 },
   riverbank: { interior: 0.58, edge: 1.02, underside: 0.84, upper: 1.06, directional: 0.05 },
@@ -176,24 +195,19 @@ function applyCrownRhythm(tree: TreeVariant, profile: CrownRhythmProfile): void 
     const radial = clamp01(radius / baseRadius);
     const angle = Math.atan2(z, x);
 
-    // Lobing grows toward the crown perimeter and breaks the smooth hedge-like outline.
     const lobe = 1 + Math.sin(angle * profile.lobeCount + profile.lobePhase)
       * profile.lobeStrength * smoothstep(0.22, 0.92, radial);
     x *= profile.widthX * lobe;
     z *= profile.widthZ * lobe;
 
-    // High foliage carries more directional bias, producing off-centre crowns without detaching the
-    // lower canopy from its supporting branches.
     const bias = smoothstep(0.12, 0.92, normalizedY);
     x += profile.offsetX * tree.height * bias;
     z += profile.offsetZ * tree.height * bias;
 
-    // Gentle azimuth-dependent crown height creates peaks and dips instead of a level tree-line.
     const topWeight = smoothstep(0.5, 1, normalizedY);
     const topWave = Math.sin(angle * 2 + profile.topPhase) * profile.topVariation * tree.height * topWeight;
     y = bounds.minY + (y - bounds.minY) * profile.height + topWave;
 
-    // Dry/ancient crowns can carry a stable missing sector, while healthy families keep this subtle.
     if (profile.notchDepth > 0 && angularDistance(angle, profile.notchAngle) < profile.notchWidth) {
       const notch = 1 - profile.notchDepth * smoothstep(0.45, 1, normalizedY) * smoothstep(0.3, 1, radial);
       x *= notch;
@@ -209,8 +223,6 @@ function applyCrownRhythm(tree: TreeVariant, profile: CrownRhythmProfile): void 
   tree.foliage.computeBoundingBox();
   tree.foliage.computeBoundingSphere();
 
-  // Keep metadata deterministic and identical across near/far tiers. The values are conservative so
-  // culling never clips a lobe or an offset crown even though the two LOD geometries differ.
   const horizontal = Math.max(profile.widthX, profile.widthZ) * (1 + Math.abs(profile.lobeStrength));
   const offset = Math.hypot(profile.offsetX, profile.offsetZ) * tree.height;
   tree.radius = tree.radius * horizontal + offset;
@@ -238,8 +250,6 @@ function applyCanopyDepth(tree: TreeVariant, family: TreeFamily, seed: string, v
     const angle = Math.atan2(z, x);
     const original = (colour.getX(index) + colour.getY(index) + colour.getZ(index)) / 3;
 
-    // The base generator already tags core/middle/edge sites with brightness. Expand that compressed
-    // range so the crown has a real interior rather than every cluster sitting near the same value.
     const sitePosition = smoothstep(0.74, 1.06, original);
     const siteDepth = lerp(profile.interior, profile.edge, sitePosition);
     const normalUp = clamp01(normal.getY(index) * 0.5 + 0.5);
@@ -254,12 +264,21 @@ function applyCanopyDepth(tree: TreeVariant, family: TreeFamily, seed: string, v
 }
 
 /**
- * Build the existing deterministic tree library, then add whole-crown rhythm and neutral depth
- * grading without changing the branch, leaf-site or triangle budgets. Near and far tiers use the
- * same seeded presentation profile for every variant.
+ * Build the existing deterministic tree library, add a birch presentation family from a separately
+ * cloned broadleaf skeleton, then apply the shared crown-rhythm and depth passes to every family.
+ * Birch therefore inherits the proven branch/canopy budgets without duplicating the generator.
  */
 export function buildTreeLibrary(seed: string, variantsPerFamily: number, lod: TreeLod): Map<TreeFamily, TreeVariant[]> {
-  const library = buildBaseTreeLibrary(seed, variantsPerFamily, lod);
+  const baseLibrary = buildBaseTreeLibrary(seed, variantsPerFamily, lod);
+  const library = new Map<TreeFamily, TreeVariant[]>();
+  for (const [family, variants] of baseLibrary) library.set(family, variants as TreeVariant[]);
+
+  const broadleaf = baseLibrary.get('broadleaf') ?? [];
+  library.set('birch', broadleaf.map((source, variant) => ({
+    family: 'birch' as const,
+    ...createBirchVariant(source, seed, variant),
+  })));
+
   for (const [family, variants] of library) {
     for (let variant = 0; variant < variants.length; variant += 1) {
       const tree = variants[variant];
