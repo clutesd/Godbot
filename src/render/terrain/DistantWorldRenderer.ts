@@ -72,7 +72,7 @@ export function buildDistantWorld(world: WorldState, surface: TerrainSurface): T
 
   for (let index = 0; index < specs.length; index += 1) {
     const spec = specs[index]!;
-    const mesh = buildLandform(world, surface, signature, spec, index, centerX, centerZ, span);
+    const mesh = buildLandform(surface, signature, spec, index, centerX, centerZ, span);
     totalVertices += spec.grid * spec.grid;
     nearestCenterDistance = Math.min(nearestCenterDistance, spec.centerDistance);
     farthestCenterDistance = Math.max(farthestCenterDistance, spec.centerDistance);
@@ -123,7 +123,6 @@ function buildLandformSpecs(signature: string, span: number): LandformSpec[] {
 }
 
 function buildLandform(
-  world: WorldState,
   surface: TerrainSurface,
   signature: string,
   spec: LandformSpec,
