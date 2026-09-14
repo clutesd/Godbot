@@ -6,6 +6,8 @@ import {
 } from './EnvironmentalLighting';
 
 export interface EnvironmentFrameInput extends EnvironmentalLightingInput {
+  /** Final normalized sun direction from the authoritative celestial transform. */
+  sunDirection?: THREE.Vector3;
   /** Fog after simulation/weather/catastrophe presentation has authored this frame. */
   sourceFogColor: THREE.Color;
   /** Exposure authored before the final renderer pass. Used only as an event dimmer when fog confirms it. */
@@ -18,11 +20,12 @@ export interface EnvironmentFrameInput extends EnvironmentalLightingInput {
  * The single final environmental truth consumed by every renderer-side lighting/depth/material pass.
  *
  * Legacy presentation code may still author source signals earlier in the frame, but none of those
- * writes are final once this object exists. This state owns the final sun/moon/fill/exposure palette
- * and carries the authored fog/background forward as explicit inputs instead of letting independent
- * systems silently overwrite each other in execution-order-dependent ways.
+ * writes are final once this object exists. This state owns the final sun/moon/fill/exposure palette,
+ * the authoritative sun direction, and carries authored fog/background forward as explicit inputs
+ * instead of letting independent systems silently overwrite each other in execution-order-dependent ways.
  */
 export interface EnvironmentFrameState extends EnvironmentalLightingState {
+  sunDirection: THREE.Vector3;
   eventDimmer: number;
   atmosphericObscuration: number;
   sourceFogDensity: number;
@@ -64,9 +67,18 @@ export function resolveEnvironmentFrame(input: EnvironmentFrameInput): Environme
   const skyFillColor = base.skyFillColor.clone().lerp(input.sourceFogColor, eventTint);
   const groundFillColor = base.groundFillColor.clone().lerp(input.sourceFogColor, eventDimmer * 0.16);
   const backgroundColor = input.sourceBackground.clone().lerp(skyFillColor, 0.05 + atmosphericObscuration * 0.035);
+  const fallbackDirection = new THREE.Vector3(
+    Math.sqrt(Math.max(0, 1 - base.solarElevation * base.solarElevation)),
+    base.solarElevation,
+    0,
+  ).normalize();
+  const sunDirection = input.sunDirection?.lengthSq()
+    ? input.sunDirection.clone().normalize()
+    : fallbackDirection;
 
   return {
     ...base,
+    sunDirection,
     sunIntensity,
     moonIntensity,
     hemisphereIntensity,
@@ -120,9 +132,14 @@ export class EnvironmentFrameRig {
     const sourceBackground = this.scene.background instanceof THREE.Color
       ? this.scene.background.clone()
       : this.fallbackBackground.clone();
+    // GodboxRenderer authors the celestial vector around world origin before the shadow-focus pass.
+    // Keep that direction independent from the directional-light target, which is intentionally
+    // moved by EnvironmentalDepthRig to improve shadow-map precision around the active camera shot.
+    const sunDirection = this.sun.position.clone().normalize();
 
     const frame = resolveEnvironmentFrame({
       sunElevation: this.sun.position.y / sunLength,
+      sunDirection,
       night,
       fogDensity: fog?.density ?? 0,
       sourceFogColor,
@@ -155,6 +172,7 @@ export class EnvironmentFrameRig {
       exposure: frame.exposure,
       sunColor: `#${frame.sunColor.getHexString()}`,
       skyFillColor: `#${frame.skyFillColor.getHexString()}`,
+      sunDirection: frame.sunDirection.toArray(),
       eventDimmer: frame.eventDimmer,
     };
     return frame;

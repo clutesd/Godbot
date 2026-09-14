@@ -5,6 +5,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { DirectionalAtmosphereRig } from './AtmosphericScattering';
 import { EnvironmentFrameRig } from './EnvironmentFrameState';
 import { EnvironmentalDepthRig } from './EnvironmentalDepth';
 import {
@@ -18,7 +19,8 @@ import {
  *
  * Every renderer-side environmental consumer now receives one EnvironmentFrameState. Legacy
  * day/night, weather and catastrophe presentation may author source signals earlier in the frame,
- * but this pipeline is the single final authority for lights, exposure, depth and material polish.
+ * but this pipeline is the single final authority for lights, exposure, directional sky scattering,
+ * depth and material polish.
  */
 export class EcologyPostProcessing {
   private readonly composer?: EffectComposer;
@@ -27,12 +29,14 @@ export class EcologyPostProcessing {
   private readonly grade?: ShaderPass;
   private readonly output?: OutputPass;
   private readonly environmentFrame: EnvironmentFrameRig;
+  private readonly directionalAtmosphere: DirectionalAtmosphereRig;
   private readonly environmentalDepth: EnvironmentalDepthRig;
   private readonly materialPolish: CinematicMaterialPolish;
 
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
     private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
     this.environmentFrame = new EnvironmentFrameRig(renderer, scene);
+    this.directionalAtmosphere = new DirectionalAtmosphereRig(scene);
     this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
     this.materialPolish = new CinematicMaterialPolish(scene);
     if (quality === 0) return;
@@ -72,6 +76,7 @@ export class EcologyPostProcessing {
   render(night: number): void {
     const frame = this.environmentFrame.update(night);
     if (frame) {
+      this.directionalAtmosphere.update(frame);
       this.environmentalDepth.update(frame);
       const polish = resolveCinematicLightPolish(frame);
       this.materialPolish.update(frame, polish);
