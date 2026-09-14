@@ -73,9 +73,9 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
   const barkPosition = bark.getAttribute('position');
   const barkColour = bark.getAttribute('color');
   const barkBounds = bounds(bark);
-  const ivory = new THREE.Color('#d8d2c0');
-  const silver = new THREE.Color('#b8b3a5');
-  const twig = new THREE.Color('#5c554c');
+  const ivory = new THREE.Color('#e4dfd2');
+  const silver = new THREE.Color('#cbc6b8');
+  const twig = new THREE.Color('#746d62');
   const charcoal = new THREE.Color('#3d3934');
   const working = new THREE.Color();
 
@@ -94,13 +94,13 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     y *= birch.height;
     barkPosition.setXYZ(index, x, y, z);
 
-    // Pale lower/central bark transitions toward grey-brown fine branches. Horizontal lenticel-like
-    // marks are deliberately subtle: enough to read as birch, not enough to become zebra striping.
+    // Keep even the fine scaffold visibly silver-grey at forest distance. Upper twigs darken enough
+    // to separate against the crown, while the pale bole remains the dominant read of the whole tree.
     const branchiness = smoothstep(0.2, 0.78, radial) * smoothstep(0.18, 0.92, normalizedY);
-    working.copy(ivory).lerp(silver, normalizedY * 0.18 + branchiness * 0.42).lerp(twig, branchiness * 0.68);
+    working.copy(ivory).lerp(silver, normalizedY * 0.14 + branchiness * 0.3).lerp(twig, branchiness * 0.48);
     const angle = Math.atan2(z, x);
     const bandWave = 0.5 + 0.5 * Math.sin(normalizedY * 72 + angle * 1.4 + birch.bandPhase);
-    const band = Math.pow(bandWave, 11) * (1 - smoothstep(0.28, 0.56, radial)) * (0.08 + normalizedY * 0.12);
+    const band = Math.pow(bandWave, 11) * (1 - smoothstep(0.28, 0.56, radial)) * (0.07 + normalizedY * 0.1);
     working.lerp(charcoal, band);
     barkColour.setXYZ(index, working.r, working.g, working.b);
   }
@@ -118,7 +118,6 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     let y = foliagePosition.getY(index);
     let z = foliagePosition.getZ(index);
     const normalizedY = clamp01((y - foliageBounds.minY) / span);
-    // Narrow, airy, lightly tapered crowns separate birch from the heavier broadleaf family.
     const crownProfile = 0.78 + Math.sin(normalizedY * Math.PI) * 0.22;
     const width = birch.crownWidth * crownProfile;
     x *= width;
@@ -134,8 +133,6 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
   foliage.computeBoundingBox();
   foliage.computeBoundingSphere();
 
-  // Derive metadata only from the base contract and deterministic profile so near/far LOD tiers
-  // remain numerically identical even though their sampled geometry is cheaper at distance.
   return {
     bark,
     foliage,
