@@ -22,5 +22,5 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npx eslint src/render/atmosphere/EnvironmentalLighting.ts src/render/atmosphere/EcologyPostProcessing.ts tests/environmental-lighting.test.ts
-      - run: npx vitest run tests/environmental-lighting.test.ts tests/weather-presentation.test.ts
+      - run: npx vitest run tests/environmental-lighting.test.ts tests/weather-render.test.ts
       - run: npm run build
