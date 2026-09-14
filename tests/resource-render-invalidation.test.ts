@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { configWith } from '../src/config';
 import { ResourceSiteRenderer } from '../src/render/resources/ResourceSiteRenderer';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
