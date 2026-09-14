@@ -1,5 +1,5 @@
+import type * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
 import { VegetationRenderer } from '../src/render/vegetation/VegetationRenderer';
 import { disposeVegetation, vegetationFixture } from './fixtures/vegetation';
 
