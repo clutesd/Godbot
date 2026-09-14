@@ -132,7 +132,10 @@ export class EnvironmentFrameRig {
     const sourceBackground = this.scene.background instanceof THREE.Color
       ? this.scene.background.clone()
       : this.fallbackBackground.clone();
-    const sunDirection = this.sun.position.clone().sub(this.sun.target.position).normalize();
+    // GodboxRenderer authors the celestial vector around world origin before the shadow-focus pass.
+    // Keep that direction independent from the directional-light target, which is intentionally
+    // moved by EnvironmentalDepthRig to improve shadow-map precision around the active camera shot.
+    const sunDirection = this.sun.position.clone().normalize();
 
     const frame = resolveEnvironmentFrame({
       sunElevation: this.sun.position.y / sunLength,
