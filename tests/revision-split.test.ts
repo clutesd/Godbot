@@ -7,33 +7,39 @@ import { WeatherSystem } from '../src/sim/weather/WeatherSystem';
 import { generateWorld } from '../src/sim/world';
 
 describe('weather and topology revision split', () => {
-  it('keeps topology stable for ordinary weather and advances it when the fine wet footprint changes', () => {
+  it('keeps topology stable for ordinary weather and invalidates only during dynamic flood/recession', () => {
     const config = configWith({ seed: 'revision-split-topology', world: { size: 12, seaLevel: 0.28 } });
     const world = generateWorld(config);
     const weather = new WeatherSystem(world, config);
     world.environmentRevision = 0;
 
     const internals = weather as unknown as {
-      hydrology: { advance: (conditions: typeof weather.state.cells) => void };
+      hydrology: {
+        advance: (conditions: typeof weather.state.cells) => void;
+        lastBudget: { floodedStorage: number };
+      };
     };
 
-    // A month of weather with no hydrology footprint change must not invalidate topology consumers.
-    internals.hydrology.advance = () => {};
+    // Ordinary weather must not invalidate topology consumers. The hydrology solver has already
+    // visited the fine field, so WeatherSystem should not rescan/hash that field just to prove it.
+    internals.hydrology.advance = () => { internals.hydrology.lastBudget.floodedStorage = 0; };
     weather.advanceMonth();
     expect(world.environmentRevision).toBe(0);
 
-    const dryIndex = world.terrain.waterLevel.findIndex((level, index) => level < 0
-      && world.terrain.height[index]! >= world.seaLevel
-      && !world.terrain.river[index]
-      && !world.terrain.lake[index]);
-    expect(dryIndex).toBeGreaterThanOrEqual(0);
-
-    // A new fine-water sample is a real traversal/geometry change and must invalidate once.
-    internals.hydrology.advance = () => {
-      world.terrain.waterLevel[dryIndex] = world.terrain.height[dryIndex]! + 0.02;
-    };
+    // Dynamic floodwater makes the fine wet footprint potentially different, so presentation and
+    // traversal consumers receive one conservative topology revision for that month.
+    internals.hydrology.advance = () => { internals.hydrology.lastBudget.floodedStorage = 0.25; };
     weather.advanceMonth();
     expect(world.environmentRevision).toBe(1);
+
+    // The first dry month invalidates once more so flood recession is visible.
+    internals.hydrology.advance = () => { internals.hydrology.lastBudget.floodedStorage = 0; };
+    weather.advanceMonth();
+    expect(world.environmentRevision).toBe(2);
+
+    // Once dry topology is settled, later ordinary months stay quiet again.
+    weather.advanceMonth();
+    expect(world.environmentRevision).toBe(2);
   });
 
   it('refreshes weather presentation from the weather month without requiring a topology revision', () => {
