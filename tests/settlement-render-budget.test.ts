@@ -3,7 +3,20 @@ import * as THREE from 'three';
 import { GodboxRenderer } from '../src/render/GodboxRenderer';
 import '../src/render/GodboxRendererEnhanced';
 import { Simulation } from '../src/sim/Simulation';
-import type { SettlementVisualState } from './support/settlementRenderBudgetTypes';
+
+interface SettlementVisualState {
+  group: THREE.Group;
+  buildingCount: number;
+  institutionCount: number;
+  routeCount: number;
+  politySize: number;
+  developmentSignature: string;
+  constructionSignature: string;
+  powerLevel: number;
+  bannerSignature: string;
+  lights: unknown[];
+  smokeSources: unknown[];
+}
 
 interface BudgetReport {
   pending: number;
