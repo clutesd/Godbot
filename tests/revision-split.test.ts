@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { configWith } from '../src/config';
 import { WeatherRenderer } from '../src/render/atmosphere/WeatherRenderer';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
+import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { WeatherSystem } from '../src/sim/weather/WeatherSystem';
 import { generateWorld } from '../src/sim/world';
 
@@ -64,5 +65,24 @@ describe('weather and topology revision split', () => {
     expect(pixels[index * 4]).not.toBe(before);
     expect(world.environmentRevision ?? 0).toBe(topologyRevision);
     renderer.dispose();
+  });
+
+  it('does not rescan the fine terrain merely because the weather month changes', () => {
+    const config = configWith({ seed: 'revision-split-walkability', world: { size: 12 } });
+    const world = generateWorld(config);
+    const weather = new WeatherSystem(world, config);
+    const walking = new WalkabilityLayer(world);
+    const sync = (walking as unknown as { syncTraversalRevision: () => void }).syncTraversalRevision.bind(walking);
+
+    sync();
+    expect(walking.revisionScanCounts()).toEqual({ coarse: 1, fine: 1 });
+
+    weather.state.month += 1;
+    sync();
+    expect(walking.revisionScanCounts()).toEqual({ coarse: 2, fine: 1 });
+
+    world.environmentRevision = (world.environmentRevision ?? 0) + 1;
+    sync();
+    expect(walking.revisionScanCounts()).toEqual({ coarse: 2, fine: 2 });
   });
 });
