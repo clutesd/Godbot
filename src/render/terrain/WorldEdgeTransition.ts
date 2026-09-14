@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { stableHash } from '../../sim/prng';
 import { clamp01, fbmSeeded, octaveSeeds, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
+import { buildDistantWorld } from './DistantWorldRenderer';
 import type { SurfaceSample, TerrainSurface } from './TerrainSurface';
 
 interface EdgePoint {
@@ -179,6 +180,9 @@ export function buildWorldEdgeTransition(world: WorldState, surface: TerrainSurf
     radialSegments,
     perimeterSamples,
   } satisfies WorldEdgeTransitionMetadata;
+  // Layer 2 lives under the same presentation root so existing renderer integration stays simple,
+  // while remaining separately named/marked and impossible to reach through TerrainSurface queries.
+  mesh.add(buildDistantWorld(world, surface));
   return mesh;
 }
 
