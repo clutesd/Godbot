@@ -103,7 +103,9 @@ describe('Tree condition presentation', () => {
       const weathered = resolveTreeMorphology(phenotype, lifecycle({
         stage: 'dead-standing', foliageVisible: false, maturity: 1, ageYears: 152, mortalityAge: 140,
       }));
-      expect(weathered.trunkHeight).toBeLessThan(fresh.trunkHeight);
+      expect(weathered.trunkHeight).toBe(fresh.trunkHeight);
+      expect(weathered.barkBreakFraction).toBeLessThan(fresh.barkBreakFraction);
+      expect(weathered.barkWeathering).toBeGreaterThan(fresh.barkWeathering);
       expect(weathered.foliageDensity).toBe(0);
     }
   });
@@ -115,7 +117,9 @@ describe('Tree condition presentation', () => {
         ageYears: 140, mortalityAge: 140 });
       const snapped = resolveTreeMorphology({ ...base, breakage: 1, uprooting: 0 }, state);
       const uprooted = resolveTreeMorphology({ ...base, breakage: 1, uprooting: 1 }, state);
-      expect(snapped.trunkHeight).toBeLessThan(uprooted.trunkHeight);
+      expect(snapped.trunkHeight).toBe(uprooted.trunkHeight);
+      expect(snapped.barkBreakFraction).toBeLessThan(uprooted.barkBreakFraction);
+      expect(uprooted.barkBreakFraction).toBe(1);
       expect(snapped.fallAngle).toBeCloseTo(uprooted.fallAngle, 12);
     }
   });

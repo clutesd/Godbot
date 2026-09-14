@@ -45,8 +45,8 @@ function project(group: THREE.Group, camera: THREE.Camera): Triangle[] {
 }
 
 const library = buildTreeLibrary('botanical-preview', 3, TREE_LOD_NEAR);
-const camera = new THREE.OrthographicCamera(-7, 7, 5.4, -2.6, 0.1, 100);
-camera.position.set(5, 6.5, 16); camera.lookAt(0, 2.5, 0);
+const camera = new THREE.OrthographicCamera(-7, 7, 2.7, -2.7, 0.1, 100);
+camera.position.set(5, 6.5, 16); camera.lookAt(0, 1.8, 0);
 const climate = { temperature: 0.46, moisture: 0.6 };
 for (const [title, description, month] of [
   ['Spring / blossom', 'Cherry petals, emerging broadleaf, evergreen canopy', 2.2],
@@ -59,14 +59,22 @@ for (const [title, description, month] of [
     const source = library.get(family)![0]!;
     const bark = new THREE.Mesh(source.bark, new THREE.MeshStandardMaterial({ vertexColors: true }));
     const phase = resolveTreePhenology(month, climate, { temperature: month === 11 ? 0.2 : 0.6 }, family);
-    const foliage = new THREE.Mesh(source.foliage, new THREE.MeshStandardMaterial({ vertexColors: true,
+    const foliage = new THREE.Mesh(source.foliage.clone(), new THREE.MeshStandardMaterial({ vertexColors: true,
       color: treeFoliageColour(family, phase, 0.5, new THREE.Color()) }));
     bark.position.x = (index - 1) * 4;
     bark.scale.setScalar(2.5);
     foliage.position.copy(bark.position);
     const size = Math.cbrt(phase.canopy);
-    foliage.position.y = 2.5 * (1 - size) * 0.6;
-    foliage.scale.setScalar(2.5 * size);
+    // CPU equivalent of the production tree shader's per-mass emergence/recession.
+    const positions = foliage.geometry.getAttribute('position');
+    const anchors = foliage.geometry.getAttribute('canopyAnchor');
+    for (let vertex = 0; vertex < positions.count; vertex++) {
+      positions.setXYZ(vertex,
+        anchors.getX(vertex) + (positions.getX(vertex) - anchors.getX(vertex)) * size,
+        anchors.getY(vertex) + (positions.getY(vertex) - anchors.getY(vertex)) * size,
+        anchors.getZ(vertex) + (positions.getZ(vertex) - anchors.getZ(vertex)) * size);
+    }
+    foliage.scale.setScalar(2.5);
     group.add(bark);
     if (size > 0) group.add(foliage);
   }

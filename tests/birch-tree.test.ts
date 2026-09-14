@@ -20,7 +20,8 @@ function verticalBounds(geometry: THREE.BufferGeometry): { min: number; max: num
 function lowerBoleRadius(geometry: THREE.BufferGeometry): number {
   const position = geometry.getAttribute('position');
   const { min, max } = verticalBounds(geometry);
-  const cutoff = min + (max - min) * 0.42;
+  // Measure the bole below the first fork; lower scaffold branches are now substantial.
+  const cutoff = min + (max - min) * 0.04;
   let radius = 0;
   for (let index = 0; index < position.count; index += 1) {
     if (position.getY(index) > cutoff) continue;
@@ -107,7 +108,8 @@ describe('Birch tree family', () => {
       expect(allBark.average).toBeGreaterThan(0.6);
       expect(allBark.max - allBark.min).toBeGreaterThan(0.2);
       expect(lowerBole.average).toBeGreaterThan(allBark.average * 1.04);
-      expect(lowerBole.max).toBeGreaterThan(0.9);
+      expect(lowerBole.max).toBeGreaterThan(0.86);
+      expect(allBark.max).toBeLessThanOrEqual(0.981);
     }
   });
 

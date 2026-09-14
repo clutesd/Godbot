@@ -72,7 +72,12 @@ export class WeatherRenderer {
         if (!(material instanceof THREE.MeshStandardMaterial) || this.bound.has(material)) continue;
         this.bound.add(material);
         const foliage = object.name === 'weather-foliage';
-        material.onBeforeCompile = (shader) => {
+        // Tree foliage owns a seasonal deformation. Preserve it when adding the existing wind
+        // and snow pass; other weather surfaces retain their established binding behavior.
+        const previousCompile = foliage ? material.onBeforeCompile : undefined;
+        const previousKey = foliage ? `${material.customProgramCacheKey()}:` : '';
+        material.onBeforeCompile = (shader, renderer) => {
+          previousCompile?.call(material, shader, renderer);
           shader.uniforms.weatherMap = this.windTexture;
           shader.uniforms.weatherTime = this.time;
           shader.uniforms.waterMap = { value: this.waterTexture };
@@ -105,7 +110,7 @@ export class WeatherRenderer {
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.92, 0.95), snowCover * ${foliage ? '0.86' : '0.98'});
           `);
         };
-        material.customProgramCacheKey = () => `weather-snow-flood-${foliage}-${this.world.size}`;
+        material.customProgramCacheKey = () => `${previousKey}weather-snow-flood-${foliage}-${this.world.size}`;
         material.needsUpdate = true;
       }
     });

@@ -11,6 +11,7 @@ import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
 import { resolveTreeMorphology, resolveTreePhenotype, type TreeMorphology, type TreePhenotype } from './TreeMorphology';
 import { resolveTreePhenology, treeFoliageColour } from './TreePhenology';
+import { bindTreeMaterial } from './TreeMaterials';
 import { insideVegetationTerrain } from './VegetationPlacement';
 import { BioluminescentFlora } from './BioluminescentFlora';
 import { DEFAULT_ECOLOGY_QUALITY, type EcologyField, type EcologyQuality } from '../ecology/EcologyField';
@@ -37,6 +38,8 @@ interface Bucket {
   capacity: number;
   count: number;
   crownHeight: number;
+  barkState: THREE.InstancedBufferAttribute;
+  canopyState: THREE.InstancedBufferAttribute;
 }
 
 interface DisturbanceZone {
@@ -356,6 +359,8 @@ export class VegetationRenderer {
       bucket.foliage.count = bucket.count;
       bucket.bark.instanceMatrix.needsUpdate = true;
       bucket.foliage.instanceMatrix.needsUpdate = true;
+      bucket.barkState.needsUpdate = true;
+      bucket.canopyState.needsUpdate = true;
       if (bucket.foliage.instanceColor) bucket.foliage.instanceColor.needsUpdate = true;
     }
     this.rootPlates.count = this.rootPlateCount;
@@ -511,6 +516,8 @@ export class VegetationRenderer {
     const foliageMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
     const bark = new THREE.InstancedMesh(source.bark, barkMaterial, Math.max(1, capacity));
     const foliage = new THREE.InstancedMesh(source.foliage, foliageMaterial, Math.max(1, capacity));
+    const barkState = bindTreeMaterial(bark, 'bark', family, source.height);
+    const canopyState = bindTreeMaterial(foliage, 'foliage', family, source.height);
     foliage.name = 'weather-foliage';
     bark.castShadow = true;
     bark.receiveShadow = true;
@@ -525,7 +532,7 @@ export class VegetationRenderer {
     foliage.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     foliage.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, capacity) * 3), 3);
     this.group.add(bark, foliage);
-    return { family, variant, bark, foliage, capacity: Math.max(1, capacity), count: 0, crownHeight: source.height };
+    return { family, variant, bark, foliage, barkState, canopyState, capacity: Math.max(1, capacity), count: 0, crownHeight: source.height };
   }
 
   private write(bucket: Bucket, placement: TreePlacement, lifecycle: ResolvedTreeLifecycle,
@@ -550,13 +557,19 @@ export class VegetationRenderer {
     );
     this.matrix.compose(this.position, this.quaternion, this.scale);
     bucket.bark.setMatrixAt(bucket.count, this.matrix);
+    bucket.barkState.setXYZW(bucket.count, morphology.barkBreakFraction, morphology.barkWeathering,
+      phenotype.pigment * Math.PI * 2, 0);
+    bucket.canopyState.setXYZW(bucket.count, 0, 0, 0, 0);
 
     if (lifecycle.foliageVisible) {
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
       const canopy = cell ? resolveTreePhenology(this.season, cell, weather ?? cell,
         placement.family, phenotype.phenology).canopy : 1;
-      const size = Math.max(0.0001, Math.cbrt(clamp01(canopy * morphology.foliageDensity)));
+      // Leaves emerge and recede around their own twigs, keeping the crown/scaffold anchored.
+      // Scaling the entire crown pulled autumn foliage away from its branches into a tiny ball.
+      const size = Math.cbrt(clamp01(canopy * morphology.foliageDensity));
+      bucket.canopyState.setX(bucket.count, size);
       this.position.set(placement.worldX, placement.y, placement.worldZ);
       this.crownOffset.set(
         morphology.crownOffsetX * lifecycle.scale,
@@ -564,11 +577,10 @@ export class VegetationRenderer {
         morphology.crownOffsetZ * lifecycle.scale,
       ).applyAxisAngle(this.axis, placement.rotation);
       this.position.add(this.crownOffset);
-      this.position.y += lifecycle.scale * (1 - size) * 0.6 * morphology.crownHeight;
       this.scale.set(
-        lifecycle.scale * morphology.crownWidthX * size,
-        lifecycle.scale * morphology.crownHeight * size,
-        lifecycle.scale * morphology.crownWidthZ * size,
+        lifecycle.scale * morphology.crownWidthX,
+        lifecycle.scale * morphology.crownHeight,
+        lifecycle.scale * morphology.crownWidthZ,
       );
       this.matrix.compose(this.position, this.quaternion, this.scale);
       bucket.foliage.setMatrixAt(bucket.count, this.matrix);

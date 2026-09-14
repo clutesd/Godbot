@@ -163,65 +163,58 @@ function rhythmProfile(seed: string, family: TreeFamily, variant: number): Crown
   };
 }
 
-function foliageBounds(geometry: THREE.BufferGeometry): { minY: number; maxY: number; radius: number } {
-  const position = geometry.getAttribute('position');
-  let minY = Infinity;
-  let maxY = -Infinity;
-  let radius = 0;
-  for (let index = 0; index < position.count; index += 1) {
-    const x = position.getX(index);
-    const y = position.getY(index);
-    const z = position.getZ(index);
-    minY = Math.min(minY, y);
-    maxY = Math.max(maxY, y);
-    radius = Math.max(radius, Math.hypot(x, z));
-  }
-  return { minY, maxY, radius };
-}
-
 function applyCrownRhythm(tree: TreeVariant, profile: CrownRhythmProfile): void {
   const position = tree.foliage.getAttribute('position');
   if (position.count === 0) return;
-  const bounds = foliageBounds(tree.foliage);
+  // Use the canonical architecture envelope, never LOD-dependent sampled mesh bounds.
+  const bounds = { minY: tree.height * 0.18, maxY: tree.height, radius: tree.radius };
   const verticalSpan = Math.max(1e-4, bounds.maxY - bounds.minY);
   const baseRadius = Math.max(1e-4, bounds.radius);
 
-  for (let index = 0; index < position.count; index += 1) {
-    let x = position.getX(index);
-    let y = position.getY(index);
-    let z = position.getZ(index);
-    const normalizedY = clamp01((y - bounds.minY) / verticalSpan);
-    const radius = Math.hypot(x, z);
-    const radial = clamp01(radius / baseRadius);
-    const angle = Math.atan2(z, x);
+  // The same crown field bends wood and leaves. Moving only the leaves detached them from
+  // their supporting limbs, most conspicuously on spreading veterans and at LOD swaps.
+  for (const geometry of [tree.bark, tree.foliage]) {
+    for (const name of ['position', 'canopyAnchor']) {
+      const position = geometry.getAttribute(name);
+      if (!position) continue;
+      for (let index = 0; index < position.count; index += 1) {
+        let x = position.getX(index);
+        let y = position.getY(index);
+        let z = position.getZ(index);
+        const normalizedY = clamp01((y - bounds.minY) / verticalSpan);
+        const radius = Math.hypot(x, z);
+        const radial = clamp01(radius / baseRadius);
+        const angle = Math.atan2(z, x);
 
-    const lobe = 1 + Math.sin(angle * profile.lobeCount + profile.lobePhase)
-      * profile.lobeStrength * smoothstep(0.22, 0.92, radial);
-    x *= profile.widthX * lobe;
-    z *= profile.widthZ * lobe;
+        const lobe = 1 + Math.sin(angle * profile.lobeCount + profile.lobePhase)
+          * profile.lobeStrength * smoothstep(0.22, 0.92, radial);
+        const scaffold = smoothstep(0, 0.42, normalizedY);
+        x *= lerp(1, profile.widthX * lobe, scaffold);
+        z *= lerp(1, profile.widthZ * lobe, scaffold);
 
-    const bias = smoothstep(0.12, 0.92, normalizedY);
-    x += profile.offsetX * tree.height * bias;
-    z += profile.offsetZ * tree.height * bias;
+        const bias = smoothstep(0.12, 0.92, normalizedY);
+        x += profile.offsetX * tree.height * bias;
+        z += profile.offsetZ * tree.height * bias;
 
-    const topWeight = smoothstep(0.5, 1, normalizedY);
-    const topWave = Math.sin(angle * 2 + profile.topPhase) * profile.topVariation * tree.height * topWeight;
-    y = bounds.minY + (y - bounds.minY) * profile.height + topWave;
+        const topWeight = smoothstep(0.5, 1, normalizedY);
+        const topWave = Math.sin(angle * 2 + profile.topPhase) * profile.topVariation * tree.height * topWeight;
+        y += (y - bounds.minY) * (profile.height - 1) * scaffold + topWave;
 
-    if (profile.notchDepth > 0 && angularDistance(angle, profile.notchAngle) < profile.notchWidth) {
-      const notch = 1 - profile.notchDepth * smoothstep(0.45, 1, normalizedY) * smoothstep(0.3, 1, radial);
-      x *= notch;
-      z *= notch;
-      y -= profile.notchDepth * tree.height * 0.35 * smoothstep(0.55, 1, normalizedY);
+        if (profile.notchDepth > 0 && angularDistance(angle, profile.notchAngle) < profile.notchWidth) {
+          const notch = 1 - profile.notchDepth * smoothstep(0.45, 1, normalizedY) * smoothstep(0.3, 1, radial);
+          x *= notch;
+          z *= notch;
+          y -= profile.notchDepth * tree.height * 0.35 * smoothstep(0.55, 1, normalizedY);
+        }
+
+        position.setXYZ(index, x, y, z);
+      }
+      position.needsUpdate = true;
     }
-
-    position.setXYZ(index, x, y, z);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
   }
-
-  position.needsUpdate = true;
-  tree.foliage.computeVertexNormals();
-  tree.foliage.computeBoundingBox();
-  tree.foliage.computeBoundingSphere();
 
   const horizontal = Math.max(profile.widthX, profile.widthZ) * (1 + Math.abs(profile.lobeStrength));
   const offset = Math.hypot(profile.offsetX, profile.offsetZ) * tree.height;
@@ -236,7 +229,7 @@ function applyCanopyDepth(tree: TreeVariant, family: TreeFamily, seed: string, v
   if (position.count === 0 || normal.count !== position.count || colour.count !== position.count) return;
 
   const profile = CANOPY_DEPTH[family];
-  const bounds = foliageBounds(tree.foliage);
+  const bounds = { minY: tree.height * 0.18, maxY: tree.height, radius: tree.radius };
   const verticalSpan = Math.max(1e-4, bounds.maxY - bounds.minY);
   const baseRadius = Math.max(1e-4, bounds.radius);
   const lightPhase = new SeededRandom(`${seed}:canopy-depth:${family}:${variant}`).range(0, Math.PI * 2);
@@ -263,6 +256,29 @@ function applyCanopyDepth(tree: TreeVariant, family: TreeFamily, seed: string, v
   colour.needsUpdate = true;
 }
 
+/** Share some light across the duplicated corners of a mass, retaining the low-poly facets.
+ * Hard per-triangle normals on the core made those masses look like rocks in close sunlight. */
+function softenCanopyNormals(geometry: THREE.BufferGeometry): void {
+  const position = geometry.getAttribute('position');
+  const normal = geometry.getAttribute('normal');
+  const shared = new Map<string, THREE.Vector3>();
+  const keys: string[] = [];
+  const face = new THREE.Vector3();
+  for (let index = 0; index < position.count; index++) {
+    const key = `${position.getX(index).toFixed(6)},${position.getY(index).toFixed(6)},${position.getZ(index).toFixed(6)}`;
+    keys.push(key);
+    let sum = shared.get(key);
+    if (!sum) { sum = new THREE.Vector3(); shared.set(key, sum); }
+    sum.add(face.fromBufferAttribute(normal, index));
+  }
+  for (const sum of shared.values()) sum.normalize();
+  for (let index = 0; index < normal.count; index++) {
+    face.fromBufferAttribute(normal, index).lerp(shared.get(keys[index]!)!, 0.55).normalize();
+    normal.setXYZ(index, face.x, face.y, face.z);
+  }
+  normal.needsUpdate = true;
+}
+
 /**
  * Build the existing deterministic tree library, add a birch presentation family from a separately
  * cloned broadleaf skeleton, then apply the shared crown-rhythm and depth passes to every family.
@@ -276,7 +292,7 @@ export function buildTreeLibrary(seed: string, variantsPerFamily: number, lod: T
   const broadleaf = baseLibrary.get('broadleaf') ?? [];
   library.set('birch', broadleaf.map((source, variant) => ({
     family: 'birch' as const,
-    ...createBirchVariant(source, seed, variant),
+    ...createBirchVariant(source, seed, variant, lod),
   })));
 
   for (const [family, variants] of library) {
@@ -284,6 +300,7 @@ export function buildTreeLibrary(seed: string, variantsPerFamily: number, lod: T
       const tree = variants[variant];
       if (!tree) continue;
       applyCrownRhythm(tree, rhythmProfile(seed, family, variant));
+      softenCanopyNormals(tree.foliage);
       applyCanopyDepth(tree, family, seed, variant);
     }
   }

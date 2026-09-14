@@ -31,13 +31,16 @@ class MeshAccumulator {
   private readonly normals: number[] = [];
   private readonly colors: number[] = [];
   private readonly indices: number[] = [];
+  private readonly anchors: number[] = [];
+  private readonly anchor = new THREE.Vector3();
+  private foliage = false;
 
   get empty(): boolean {
     return this.indices.length === 0;
   }
 
   /** A tapered tube between two points; the workhorse for trunks and branches. */
-  tube(from: THREE.Vector3, to: THREE.Vector3, radiusFrom: number, radiusTo: number, sides: number, colour: THREE.Color): void {
+  tube(from: THREE.Vector3, to: THREE.Vector3, radiusFrom: number, radiusTo: number, sides: number, colour: THREE.Color, curved = false): void {
     const axis = new THREE.Vector3().subVectors(to, from);
     const length = axis.length();
     if (length < 1e-5) return;
@@ -46,26 +49,42 @@ class MeshAccumulator {
     const right = new THREE.Vector3().crossVectors(axis, reference).normalize();
     const forward = new THREE.Vector3().crossVectors(axis, right).normalize();
     const base = this.positions.length / 3;
+    const rings = curved ? 3 : 2;
+    const shade = new THREE.Color();
     for (let index = 0; index < sides; index += 1) {
       const angle = (index / sides) * Math.PI * 2;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
       const normal = new THREE.Vector3().addScaledVector(right, cos).addScaledVector(forward, sin);
-      this.push(from.x + normal.x * radiusFrom, from.y + normal.y * radiusFrom, from.z + normal.z * radiusFrom, normal, colour);
-      this.push(to.x + normal.x * radiusTo, to.y + normal.y * radiusTo, to.z + normal.z * radiusTo, normal, colour);
+      // Longitudinal ridges and a modest root flare replace the perfectly round, uniform rods.
+      const ridge = 1 + Math.sin(angle * 3 + from.y * 4) * 0.065;
+      shade.copy(colour).multiplyScalar(0.88 + 0.18 * (0.5 + 0.5 * Math.cos(angle * 3 + from.y * 4)));
+      for (let ring = 0; ring < rings; ring += 1) {
+        const t = ring / (rings - 1);
+        const radius = THREE.MathUtils.lerp(radiusFrom, radiusTo, t) * ridge
+          * (from.y === 0 ? 1 + 0.24 * (1 - t) ** 4 : 1);
+        const centre = from.clone().lerp(to, t);
+        if (curved) centre.addScaledVector(forward, Math.sin(t * Math.PI) * length * 0.045);
+        const surfaceNormal = normal.clone().addScaledVector(axis, (radiusFrom - radiusTo) / length).normalize();
+        this.push(centre.x + normal.x * radius, centre.y + normal.y * radius, centre.z + normal.z * radius, surfaceNormal, shade);
+      }
     }
     for (let index = 0; index < sides; index += 1) {
-      const a = base + index * 2;
-      const b = base + ((index + 1) % sides) * 2;
-      this.indices.push(a, a + 1, b, b, a + 1, b + 1);
+      for (let ring = 0; ring < rings - 1; ring += 1) {
+        const a = base + index * rings + ring;
+        const b = base + ((index + 1) % sides) * rings + ring;
+        this.indices.push(a, a + 1, b, b, a + 1, b + 1);
+      }
     }
   }
 
   /**
    * A compact crown mass. These are now reserved mostly for the deep canopy core; outer foliage
-   * uses smaller elongated sprays so a close tree stops reading as a pile of green boulders.
+   * uses branch-aligned sprays; middle masses connect these into a continuous living crown.
    */
   clump(centre: THREE.Vector3, radius: number, squash: number, random: SeededRandom, colour: THREE.Color): void {
+    this.anchor.copy(centre);
+    this.foliage = true;
     const source = new THREE.IcosahedronGeometry(radius, 0);
     const position = source.getAttribute('position');
     const jitterByCorner = new Map<string, number>();
@@ -83,7 +102,7 @@ class MeshAccumulator {
       const key = `${px.toFixed(4)},${py.toFixed(4)},${pz.toFixed(4)}`;
       let jitter = jitterByCorner.get(key);
       if (jitter === undefined) {
-        jitter = 1 + random.range(-0.22, 0.22);
+        jitter = 1 + random.range(-0.14, 0.14);
         jitterByCorner.set(key, jitter);
       }
       const localX = px * jitter * stretchX;
@@ -107,15 +126,19 @@ class MeshAccumulator {
    * Ten-triangle elongated leaf bundle. Two of these replace one outer icosahedral clump, keeping
    * the old 20-triangle/site ceiling while giving the near canopy a finer, leafy silhouette.
    */
-  spray(centre: THREE.Vector3, radius: number, squash: number, random: SeededRandom, colour: THREE.Color): void {
+  spray(centre: THREE.Vector3, radius: number, squash: number, random: SeededRandom, colour: THREE.Color, direction?: THREE.Vector3): void {
+    this.anchor.copy(centre);
+    this.foliage = true;
     const azimuth = random.range(0, Math.PI * 2);
-    const axis = new THREE.Vector3(Math.cos(azimuth), random.range(-0.22, 0.3), Math.sin(azimuth)).normalize();
+    const axis = new THREE.Vector3(Math.cos(azimuth), random.range(-0.22, 0.3), Math.sin(azimuth));
+    if (direction) axis.multiplyScalar(0.18).add(direction);
+    axis.normalize();
     const reference = Math.abs(axis.y) > 0.88 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
     const right = new THREE.Vector3().crossVectors(axis, reference).normalize();
     const up = new THREE.Vector3().crossVectors(right, axis).normalize();
     const lengthFront = radius * random.range(1.02, 1.28);
     const lengthBack = radius * random.range(0.7, 0.94);
-    const width = radius * random.range(0.38, 0.54);
+    const width = radius * random.range(0.62, 0.78);
     const vertical = width * Math.max(0.45, Math.min(1.3, squash)) * random.range(0.82, 1.08);
     const front = centre.clone().addScaledVector(axis, lengthFront);
     const back = centre.clone().addScaledVector(axis, -lengthBack);
@@ -147,6 +170,7 @@ class MeshAccumulator {
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(this.normals, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
+    if (this.foliage) geometry.setAttribute('canopyAnchor', new THREE.Float32BufferAttribute(this.anchors, 3));
     geometry.setIndex(this.indices);
     geometry.computeBoundingSphere();
     return geometry;
@@ -156,6 +180,7 @@ class MeshAccumulator {
     this.positions.push(x, y, z);
     this.normals.push(normal.x, normal.y, normal.z);
     this.colors.push(colour.r, colour.g, colour.b);
+    this.anchors.push(this.anchor.x, this.anchor.y, this.anchor.z);
   }
 }
 
@@ -165,6 +190,7 @@ interface BranchState {
   length: number;
   radius: number;
   depth: number;
+  leader: boolean;
 }
 
 interface Species {
@@ -221,7 +247,7 @@ const SPECIES: Record<TreeFamily, Species> = {
   riverbank: {
     clearTrunk: 0.26, taper: 0.6, forks: [2, 3], spread: [0.78, 1.16], droop: 0.62, depth: 4, lengthDecay: 0.72,
     continuationBias: 1.45, lateralLength: [0.62, 0.86], lateralRadius: [0.42, 0.62], branchReach: 0.64, branchHeight: 1.08, twigTaper: 0.18,
-    clumpRadius: 0.17, clumpSquash: 1.35, clumpsPerTip: 3, lean: 0.3, bark: '#4f4231', foliage: '#63864a', crownLift: -0.05, crownSpread: 1.3,
+    clumpRadius: 0.22, clumpSquash: 1.35, clumpsPerTip: 3, lean: 0.3, bark: '#4f4231', foliage: '#63864a', crownLift: -0.05, crownSpread: 1.3,
   },
   alpine: {
     clearTrunk: 0.34, taper: 0.56, forks: [2, 2], spread: [0.7, 1.25], droop: 0.24, depth: 3, lengthDecay: 0.66,
@@ -261,8 +287,8 @@ interface CanopyGrammar {
 }
 
 /**
- * Fine-grained crown grammar. Only a few compact core masses remain; most of the canopy budget is
- * pushed into smaller, spaced middle/edge sites that become paired leaf sprays at near LOD.
+ * Crown grammar balances overlapping core/middle masses with fine peripheral sprays.
+ * Persistent openings, subordinate tips and a shared LOD site list keep the crown legible.
  */
 const CANOPY: Record<'cherry' | 'broadleaf' | 'dry' | 'riverbank' | 'ancient', CanopyGrammar> = {
   cherry: {
@@ -299,6 +325,7 @@ const CANOPY: Record<'cherry' | 'broadleaf' | 'dry' | 'riverbank' | 'ancient', C
 
 interface CanopySite {
   centre: THREE.Vector3;
+  direction: THREE.Vector3;
   size: number;
   squash: number;
   shade: number;
@@ -352,39 +379,55 @@ function createCanopySites(tips: readonly BranchState[], species: Species, gramm
   const gapAngles = Array.from({ length: grammar.gapCount }, (_, index) =>
     (gapRandom.range(0, Math.PI * 2) + index * Math.PI * 2 / Math.max(1, grammar.gapCount)) % (Math.PI * 2));
   const sites: CanopySite[] = [];
+  const orderedTips: BranchState[] = [];
+  const remaining = [...tips].sort((a, b) => b.origin.y - a.origin.y);
+  while (remaining.length) {
+    let best = 0;
+    let separation = -1;
+    if (orderedTips.length) {
+      for (let index = 0; index < remaining.length; index += 1) {
+        const distance = Math.min(...orderedTips.map(tip => tip.origin.distanceToSquared(remaining[index]!.origin)));
+        if (distance > separation) { best = index; separation = distance; }
+      }
+    }
+    orderedTips.push(remaining.splice(best, 1)[0]!);
+  }
 
   const buildTier = (tier: CanopyTier, target: number): void => {
     let accepted = 0;
     const maxAttempts = Math.max(target * 12, 12);
     for (let attempt = 0; attempt < maxAttempts && accepted < target; attempt += 1) {
       const siteRandom = random.fork(`canopy:${tier}:${attempt}`);
-      const tip = tips[siteRandom.int(0, tips.length)];
+      // Visit the apex and separated scaffold tips before revisiting one: small crowns must
+      // not spend their entire foliage budget on the same leader. Both LODs share this order.
+      const tip = orderedTips[attempt % orderedTips.length];
       if (!tip) continue;
       const anchor = tierAnchor(grammar, tier);
       const centre = tip.origin.clone();
       centre.x *= anchor;
       centre.z *= anchor;
-      centre.addScaledVector(tip.direction, referenceRadius * siteRandom.range(0.03, tier === 'edge' ? 0.3 : 0.18));
-      const drift = referenceRadius * species.crownSpread * tierDrift(grammar, tier);
+      centre.addScaledVector(tip.direction, -referenceRadius * (tier === 'core' ? 0.55 : 0.15));
+      const drift = referenceRadius * species.crownSpread * tierDrift(grammar, tier) * 0.4;
       centre.x += siteRandom.range(-drift, drift);
       centre.z += siteRandom.range(-drift, drift);
-      centre.y += siteRandom.range(-referenceRadius * grammar.verticalScatter, referenceRadius * grammar.verticalScatter)
+      centre.y += siteRandom.range(-referenceRadius * grammar.verticalScatter, referenceRadius * grammar.verticalScatter) * 0.45
         + species.crownLift * height;
       if (tier === 'edge') centre.y -= grammar.edgeDrop * height * siteRandom.range(0.7, 1.15);
 
-      if (tier !== 'core' && Math.hypot(centre.x, centre.z) > referenceRadius * 0.3) {
+      if (tier === 'edge' && Math.hypot(centre.x, centre.z) > referenceRadius * 0.3) {
         const angle = Math.atan2(centre.z, centre.x);
         const gapScale = tier === 'edge' ? 1 : 0.72;
-        const inGap = gapAngles.some(gap => angularDistance(angle, gap) < grammar.gapWidth * gapScale);
+        const inGap = gapAngles.some(gap => angularDistance(angle, gap) < grammar.gapWidth * gapScale * 0.65);
         if (inGap) continue;
       }
 
       const scale = tierScale(grammar, tier);
-      const size = referenceRadius * siteRandom.range(scale[0], scale[1]);
+      const size = Math.min(height * 0.21,
+        referenceRadius * siteRandom.range(scale[0], scale[1]) * (tier === 'core' ? 1.22 : tier === 'middle' ? 2.1 : 2.4));
       const spacing = tierSpacing(grammar, tier);
       const tooClose = sites.some(existing => {
         const sharedSpacing = Math.min(spacing, tierSpacing(grammar, existing.tier));
-        return centre.distanceTo(existing.centre) < (size + existing.size) * sharedSpacing;
+        return centre.distanceTo(existing.centre) < (size + existing.size) * sharedSpacing * 0.65;
       });
       if (tooClose) continue;
 
@@ -394,6 +437,8 @@ function createCanopySites(tips: readonly BranchState[], species: Species, gramm
         : tier === 'middle' ? siteRandom.range(0.84, 0.98) : siteRandom.range(0.93, 1.06);
       sites.push({
         centre,
+        direction: new THREE.Vector3(tip.direction.x, species.droop > 0.4 ? -0.85 : tip.direction.y * 0.25,
+          tip.direction.z).normalize(),
         size,
         squash: species.clumpSquash * tierSquash * siteRandom.range(0.9, 1.08),
         shade,
@@ -419,7 +464,7 @@ function evenlySelect(indices: readonly number[], count: number, selected: Set<n
   }
 }
 
-/** Preserve a little crown core and plenty of silhouette at far LOD instead of arbitrary clumps. */
+/** Preserve structural crown masses at far LOD, with a few fine edge sites for the silhouette. */
 function selectCanopySites(sites: readonly CanopySite[], visibleCount: number): Set<number> {
   if (visibleCount >= sites.length) return new Set(sites.map((_, index) => index));
   const selected = new Set<number>();
@@ -433,7 +478,7 @@ function selectCanopySites(sites: readonly CanopySite[], visibleCount: number): 
     else edge.push(index);
   }
   const coreQuota = Math.min(core.length, Math.max(1, Math.round(visibleCount * 0.18)));
-  const edgeQuota = Math.min(edge.length, Math.max(1, Math.round(visibleCount * 0.5)));
+  const edgeQuota = Math.min(edge.length, Math.max(1, Math.round(visibleCount * 0.2)));
   evenlySelect(core, coreQuota, selected);
   evenlySelect(edge, edgeQuota, selected);
   evenlySelect(middle, visibleCount - selected.size, selected);
@@ -464,8 +509,8 @@ function constrainBranchLength(origin: THREE.Vector3, direction: THREE.Vector3, 
 }
 
 function childDirection(branch: BranchState, species: Species, index: number, forks: number,
-  random: SeededRandom): THREE.Vector3 {
-  const angle = (index / Math.max(1, forks)) * Math.PI * 2 + random.range(-0.48, 0.48);
+  random: SeededRandom, phase: number): THREE.Vector3 {
+  const angle = phase + (index / Math.max(1, forks)) * Math.PI * 2 + random.range(-0.3, 0.3);
   if (index === 0) {
     const deflection = random.range(0.12, 0.3) + Math.min(0.08, branch.depth * 0.02);
     const continuation = new THREE.Vector3(
@@ -475,10 +520,10 @@ function childDirection(branch: BranchState, species: Species, index: number, fo
     );
     return continuation.addScaledVector(branch.direction, species.continuationBias).normalize();
   }
-  const spread = random.range(species.spread[0], species.spread[1]) * (branch.depth === 0 ? 0.74 : 1);
+  const spread = random.range(species.spread[0], species.spread[1]) * (branch.depth === 0 ? 1.12 : 1);
   const lateral = new THREE.Vector3(
     Math.cos(angle) * Math.sin(spread),
-    Math.cos(spread) - species.droop * random.range(0.4, 1.05),
+    Math.cos(spread) - species.droop * random.range(0.4, 1.05) * (branch.depth === 0 ? 0.15 : 1),
     Math.sin(angle) * Math.sin(spread),
   );
   return lateral.addScaledVector(branch.direction, 0.36).normalize();
@@ -504,6 +549,7 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
   const maxReach = height * species.branchReach;
   const maxHeight = height * species.branchHeight;
   const tips: BranchState[] = [];
+  const wood: { branch: BranchState; end: THREE.Vector3; radiusTo: number }[] = [];
   let segments = 0;
   let architectureRadius = 0;
   let architectureTop = 0;
@@ -512,9 +558,10 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
   const queue: BranchState[] = [{
     origin: new THREE.Vector3(0, 0, 0),
     direction: trunkDirection,
-    length: height * (0.42 + species.clearTrunk * 0.6),
-    radius: height * 0.062 * (family === 'ancient' ? 1.9 : 1),
+    length: height * species.clearTrunk,
+    radius: height * 0.044 * (family === 'ancient' ? 1.9 : 1),
     depth: 0,
+    leader: true,
   }];
 
   // Breadth-first means the segment budget preserves the whole silhouette rather than over-growing
@@ -530,7 +577,7 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
       continue;
     }
     const terminal = branch.depth >= maxDepth
-      || segments + queue.length >= TREE_LOD_NEAR.maxSegments
+      || segments + queue.length + 1 >= TREE_LOD_NEAR.maxSegments
       || nominalLength < height * 0.045
       || branch.radius < height * 0.0032;
     const end = new THREE.Vector3().copy(branch.origin).addScaledVector(branch.direction, nominalLength);
@@ -539,10 +586,7 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
     const radiusTo = terminal
       ? Math.min(inheritedRadius, Math.max(height * 0.0008, branch.radius * species.twigTaper))
       : inheritedRadius;
-    if (segments < lod.maxSegments) {
-      bark.tube(branch.origin, end, branch.radius, radiusTo,
-        Math.max(3, lod.sides - Math.min(2, branch.depth)), barkColour);
-    }
+    wood.push({ branch, end, radiusTo });
     segments += 1;
     architectureRadius = Math.max(architectureRadius, Math.hypot(end.x, end.z) + branch.radius);
     architectureTop = Math.max(architectureTop, end.y + branch.radius);
@@ -551,20 +595,27 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
       continue;
     }
 
-    const forks = random.int(species.forks[0], species.forks[1] + 1);
+    const requestedForks = branch.depth === 0 ? 4 : random.int(species.forks[0], species.forks[1] + 1);
+    const forks = Math.min(requestedForks, TREE_LOD_NEAR.maxSegments - segments - queue.length);
+    const forkPhase = random.range(0, Math.PI * 2);
     for (let index = 0; index < forks; index += 1) {
       const continuation = index === 0;
       const childOrigin = continuation
         ? end.clone()
         : new THREE.Vector3().lerpVectors(branch.origin, end,
-          branch.depth === 0 ? random.range(0.68, 0.94) : random.range(0.82, 0.98));
-      const direction = childDirection(branch, species, index, forks, random);
+          branch.depth === 0 ? random.range(0.78, 0.98) : random.range(0.74, 0.96));
+      const direction = childDirection(branch, species, index, forks, random, forkPhase);
       const depthShortening = 1 - Math.min(0.2, branch.depth * 0.05);
-      const childLength = nominalLength * species.lengthDecay * depthShortening * (continuation
-        ? random.range(0.9, 1.04)
-        : random.range(species.lateralLength[0], species.lateralLength[1]));
-      const childRadius = radiusTo * (continuation
-        ? random.range(0.72, 0.86)
+      const growthLength = branch.depth === 0 ? height * (family === 'dry' ? 0.7 : 0.66) : nominalLength;
+      const primaryLeader = family === 'broadleaf' ? 0.92 : family === 'dry' || family === 'ancient' ? 0.64 : 0.78;
+      const lengthHierarchy = branch.depth === 0
+        ? (continuation ? primaryLeader : random.range(0.96, 1.12))
+        : (continuation ? random.range(0.9, 1.04) : random.range(species.lateralLength[0], species.lateralLength[1]));
+      const childLength = growthLength * species.lengthDecay * depthShortening * lengthHierarchy;
+      const attachmentRadius = THREE.MathUtils.lerp(branch.radius, radiusTo,
+        childOrigin.distanceTo(branch.origin) / Math.max(1e-5, nominalLength));
+      const childRadius = attachmentRadius * (continuation
+        ? random.range(0.9, 0.98)
         : random.range(species.lateralRadius[0], species.lateralRadius[1]));
       queue.push({
         origin: childOrigin,
@@ -572,33 +623,47 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
         length: childLength,
         radius: childRadius,
         depth: branch.depth + 1,
+        leader: continuation && branch.leader,
       });
     }
   }
 
-  const requestedClumps = Math.min(TREE_LOD_NEAR.maxClumps, tips.length * species.clumpsPerTip);
+  // Keep the complete leader and primary scaffold at distance, then spend the remaining
+  // budget on laterals. The former BFS prefix chopped the top off healthy winter trees.
+  const priority = (branch: BranchState): number => branch.depth <= 1 ? branch.depth : branch.leader ? 2 : branch.depth + 2;
+  const visibleWood = [...wood].sort((a, b) => priority(a.branch) - priority(b.branch)).slice(0, lod.maxSegments);
+  for (const { branch, end, radiusTo } of visibleWood) {
+    const continues = visibleWood.some(next => next.branch.origin.distanceToSquared(end) < 1e-10);
+    const tipRadius = continues ? radiusTo : Math.min(radiusTo, Math.max(height * 0.0008, branch.radius * species.twigTaper));
+    bark.tube(branch.origin, end, branch.radius, tipRadius,
+      Math.max(3, lod.sides - Math.min(2, branch.depth)), barkColour,
+      lod.sides > 3 && branch.depth <= 1);
+  }
+
+  // Fund the fuller winter scaffold by retiring four peripheral foliage sites. Hard LOD
+  // budgets stay unchanged, and the coherent middle crown does more work than extra sprays.
+  const requestedClumps = Math.min(TREE_LOD_NEAR.maxClumps, 22, tips.length * species.clumpsPerTip);
   const sites = createCanopySites(tips, species, grammar, height, requestedClumps, random);
   const visibleClumps = Math.min(sites.length, lod.maxClumps);
   const selected = selectCanopySites(sites, visibleClumps);
-  const nearDetail = lod.maxClumps >= TREE_LOD_NEAR.maxClumps;
   let radius = Math.max(0.1, architectureRadius);
   let crown = Math.max(height, architectureTop);
   for (let index = 0; index < sites.length; index += 1) {
     const site = sites[index]!;
     if (selected.has(index)) {
       foliageColour.setScalar(site.shade);
-      if (nearDetail && site.tier !== 'core') {
+      if (site.tier === 'edge' || (family === 'riverbank' && site.tier === 'middle')) {
         const pairRandom = random.fork(`${site.seed}:pair`);
-        const angle = pairRandom.range(0, Math.PI * 2);
-        const offset = new THREE.Vector3(Math.cos(angle), pairRandom.range(-0.22, 0.22), Math.sin(angle))
-          .normalize().multiplyScalar(site.size * 0.24);
-        foliage.spray(site.centre.clone().add(offset), site.size * 0.72 * lod.clusterScale,
-          site.squash, random.fork(`${site.seed}:spray:a`), foliageColour);
-        foliage.spray(site.centre.clone().addScaledVector(offset, -0.7), site.size * 0.56 * lod.clusterScale,
-          site.squash * 0.9, random.fork(`${site.seed}:spray:b`), foliageColour);
+        const offset = new THREE.Vector3(-site.direction.z, pairRandom.range(-0.12, 0.12), site.direction.x)
+          .normalize().multiplyScalar(site.size * 0.3);
+        const pendant = family === 'riverbank' && site.tier === 'middle';
+        foliage.spray(site.centre.clone().add(offset), site.size * (pendant ? 0.95 : 0.72) * lod.clusterScale,
+          site.squash, random.fork(`${site.seed}:spray:a`), foliageColour, site.direction);
+        foliage.spray(site.centre.clone().addScaledVector(offset, -0.7), site.size * (pendant ? 0.82 : 0.56) * lod.clusterScale,
+          site.squash * 0.9, random.fork(`${site.seed}:spray:b`), foliageColour, site.direction);
       } else {
         const massScale = site.tier === 'core' ? 1 : 0.86;
-        foliage.clump(site.centre, site.size * massScale * lod.clusterScale, site.squash,
+        foliage.clump(site.centre, site.size * massScale * lod.clusterScale, site.squash * (family === 'riverbank' ? 0.65 : 1),
           random.fork(site.seed), foliageColour);
       }
     }
@@ -622,29 +687,40 @@ function growEvergreen(family: 'conifer' | 'alpine', random: SeededRandom, lod: 
   const color = new THREE.Color();
   const layers = 5;
   let segments = 0;
+  const phase = random.range(0, Math.PI * 2);
   for (let layer = 0; layer < layers; layer++) {
     const fraction = layer / layers;
-    const base = lean.clone().multiplyScalar(height * (0.2 + fraction * 0.68));
-    const tip = lean.clone().multiplyScalar(height * (0.55 + fraction * 0.57));
+    const base = lean.clone().multiplyScalar(height * (0.25 + fraction * 0.74));
     const radius = width * (1 - fraction * 0.9) * random.range(0.9, 1.08);
     color.setScalar(0.78 + fraction * 0.19);
-    foliage.tube(base, tip, radius, 0.002, lod.sides + 2, color);
     const branchCount = 3;
-    const twist = random.range(0, Math.PI * 2);
+    const twist = phase + layer * 2.39996 + random.range(-0.2, 0.2);
     for (let branch = 0; branch < branchCount; branch += 1) {
       const angle = twist + branch / branchCount * Math.PI * 2;
-      const end = new THREE.Vector3(base.x + Math.cos(angle) * radius * 0.86, base.y - height * 0.035,
-        base.z + Math.sin(angle) * radius * 0.86);
+      const exposure = family === 'alpine' ? 0.76 + 0.3 * Math.cos(angle - phase) : 1;
+      const direction = new THREE.Vector3(Math.cos(angle), family === 'alpine' ? 0.06 : -0.18, Math.sin(angle)).normalize();
+      const end = base.clone().addScaledVector(direction, radius * exposure);
       if (segments++ < lod.maxSegments - 1) {
         const branchRadius = height * 0.012 * (1 - fraction * 0.45);
         bark.tube(base, end, branchRadius, Math.max(0.0015, branchRadius * 0.18), 3, barkColour);
       }
-      if (lod.maxClumps >= 15 || branch === 0) {
-        foliage.clump(end, radius * 0.29, 0.52, random.fork(`spray:${layer}:${branch}`), color);
+      const centre = base.clone().lerp(end, 0.56);
+      // Overlapping boughs, alternating windows and lifted tips replace the solid cone stack.
+      // Every tier and azimuth survives in far LOD; only subordinate sprays disappear.
+      foliage.spray(centre, radius * 0.68, family === 'alpine' ? 0.9 : 1.1,
+        random.fork(`bough:${layer}:${branch}`), color, direction);
+      if (lod.maxClumps >= 15) {
+        foliage.spray(end.clone().addScaledVector(lean, height * 0.025), radius * 0.42, 0.9,
+          random.fork(`spray:${layer}:${branch}`), color, direction.clone().setY(0.32));
       }
     }
   }
-  bark.tube(new THREE.Vector3(), lean.clone().multiplyScalar(height), height * 0.045, 0.004, lod.sides, barkColour);
+
+  color.setScalar(1.02);
+  foliage.spray(lean.clone().multiplyScalar(height * 0.94), height * 0.075, 0.72,
+    random.fork('leader-foliage'), color, lean);
+  bark.tube(new THREE.Vector3(), lean.clone().multiplyScalar(height), height * 0.035, 0.0012,
+    lod.sides, barkColour, lod.sides > 3);
   return { family, bark: bark.build(), foliage: foliage.build(), height: height * 1.08,
     radius: width * 1.25 + height * Math.hypot(lean.x, lean.z) };
 }

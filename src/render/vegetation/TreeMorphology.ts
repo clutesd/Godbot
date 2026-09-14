@@ -48,6 +48,9 @@ export interface TreeMorphology {
   leanZ: number;
   foliageDensity: number;
   fallAngle: number;
+  /** Intact height remains unchanged; the bark shader removes the failed leader locally. */
+  barkBreakFraction: number;
+  barkWeathering: number;
 }
 
 interface FamilyMorphology {
@@ -243,7 +246,7 @@ export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: Resol
     uprooted,
     deadwoodProgress,
   );
-  const structuralHeight = treeBarkHeightScale(condition) * (breakFraction > 0 ? breakFraction : 1);
+  const structuralHeight = treeBarkHeightScale(condition);
   const ellipse = phenotype.crownEllipticity;
   const asymmetry = stage.asymmetry;
   const value: TreeMorphology = {
@@ -260,6 +263,10 @@ export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: Resol
     leanZ: phenotype.leanZ * stage.lean,
     foliageDensity: clamp01(stage.foliage * phenotype.fullness * treeConditionFoliageVitality(condition)),
     fallAngle: Math.PI * (0.44 + phenotype.fallBias * 0.035),
+    barkBreakFraction: breakFraction > 0 ? breakFraction : 1,
+    barkWeathering: condition === 'dead-standing' ? 0.4 + deadwoodProgress * 0.6
+      : condition === 'fallen-natural' ? 1 : condition === 'fallen-disturbance' ? 0.28
+        : condition === 'declining' ? 0.22 : condition === 'veteran' ? 0.12 : 0,
   };
   MORPHOLOGY_CACHE.set(phenotype, {
     stage: lifecycle.stage,

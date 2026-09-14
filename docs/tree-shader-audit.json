@@ -1,0 +1,642 @@
+[
+  {
+    "name": "cherry-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "cherry-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "cherry-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "cherry-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "cherry-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "cherry-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "cherry-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "cherry-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "broadleaf-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "broadleaf-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "broadleaf-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "broadleaf-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "broadleaf-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "broadleaf-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "broadleaf-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "broadleaf-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "conifer-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "conifer-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "conifer-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "conifer-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "conifer-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "conifer-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "conifer-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "conifer-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "dry-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "dry-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "dry-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "dry-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "dry-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "dry-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "dry-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "dry-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "riverbank-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "riverbank-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "riverbank-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "riverbank-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "riverbank-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "riverbank-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "riverbank-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "riverbank-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "alpine-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "alpine-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "alpine-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "alpine-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "alpine-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "alpine-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "alpine-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "alpine-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "ancient-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "ancient-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "ancient-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "ancient-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "ancient-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "ancient-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "ancient-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "ancient-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "birch-near-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "birch-near-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "birch-near-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "birch-near-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "birch-near-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "birch-near-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "birch-near-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "birch-near-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "cherry-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "cherry-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "cherry-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "cherry-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "cherry-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "cherry-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "cherry-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "cherry-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "broadleaf-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "broadleaf-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "broadleaf-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "broadleaf-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "broadleaf-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "broadleaf-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "broadleaf-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "broadleaf-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "conifer-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "conifer-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "conifer-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "conifer-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "conifer-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "conifer-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "conifer-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "conifer-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "dry-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "dry-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "dry-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "dry-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "dry-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "dry-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "dry-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "dry-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "riverbank-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "riverbank-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "riverbank-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "riverbank-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "riverbank-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "riverbank-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "riverbank-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "riverbank-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "alpine-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "alpine-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "alpine-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "alpine-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "alpine-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "alpine-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "alpine-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "alpine-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "ancient-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "ancient-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "ancient-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "ancient-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "ancient-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "ancient-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "ancient-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "ancient-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "birch-far-bark-standard",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "birch-far-bark-hdr",
+    "linked": true,
+    "attributeSlots": 8
+  },
+  {
+    "name": "birch-far-bark-depth",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "birch-far-bark-distance",
+    "linked": true,
+    "attributeSlots": 6
+  },
+  {
+    "name": "birch-far-foliage-standard",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "birch-far-foliage-hdr",
+    "linked": true,
+    "attributeSlots": 10
+  },
+  {
+    "name": "birch-far-foliage-depth",
+    "linked": true,
+    "attributeSlots": 7
+  },
+  {
+    "name": "birch-far-foliage-distance",
+    "linked": true,
+    "attributeSlots": 7
+  }
+]
