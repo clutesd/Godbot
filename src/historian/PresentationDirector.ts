@@ -76,12 +76,13 @@ export class PresentationDirector {
     const focusKey = `${observation.kind}:${observation.eventType ?? 'none'}:${observation.eventMonth ?? -1}`;
     const seasonalKey = this.seasonalTransitionKey(state.month);
 
-    // Four times per simulated year, deliberately create a quiet cinematic breathing window.
-    // This gives the renderer and deferred presentation work several uninterrupted frames between
-    // authoritative month steps instead of charging straight through a season boundary.
+    // Arm the transition one month before the boundary as well as on the boundary itself. The
+    // simulation can advance several months inside one rendered frame, so waiting until EARLY
+    // SPRING/SUMMER/AUTUMN/WINTER is already authoritative can let catch-up skip the visual beat.
+    // Pre-arming guarantees the slowdown exists before the expensive transition month is entered.
     if (seasonalKey && seasonalKey !== this.lastSeasonalTransitionKey) {
       this.lastSeasonalTransitionKey = seasonalKey;
-      const cinematicSeconds = Math.max(8, this.config.camera.transitionSeconds + 2);
+      const cinematicSeconds = Math.max(10, this.config.camera.transitionSeconds + 3.5);
       this.seasonalHoldSecondsRemaining = Math.max(this.seasonalHoldSecondsRemaining, cinematicSeconds);
     }
 
@@ -116,7 +117,7 @@ export class PresentationDirector {
     // simulation was still running near its previous deep-time speed.
     const slowing = this.targetMonthsPerSecond < this.monthsPerSecond;
     const seasonalSlowing = slowing && this.seasonalHoldSecondsRemaining > 0;
-    const transitionFactor = seasonalSlowing ? 0.16 : slowing ? 0.34 : 1.35;
+    const transitionFactor = seasonalSlowing ? 0.12 : slowing ? 0.34 : 1.35;
     const timeConstant = Math.max(0.18, this.config.presentation.transitionSeconds * transitionFactor);
     const transition = 1 - Math.exp(-deltaSeconds / timeConstant);
     this.monthsPerSecond += (this.targetMonthsPerSecond - this.monthsPerSecond) * transition;
@@ -210,14 +211,18 @@ export class PresentationDirector {
 
   private seasonalTransitionKey(month: number): string | undefined {
     const monthOfYear = ((month % 12) + 12) % 12;
-    if (!SEASON_TRANSITION_MONTHS.has(monthOfYear)) return undefined;
-    return `${Math.floor(month / 12)}:${monthOfYear}`;
+    if (SEASON_TRANSITION_MONTHS.has(monthOfYear)) return `${Math.floor(month / 12)}:${monthOfYear}`;
+
+    const nextMonth = month + 1;
+    const nextMonthOfYear = ((nextMonth % 12) + 12) % 12;
+    if (!SEASON_TRANSITION_MONTHS.has(nextMonthOfYear)) return undefined;
+    return `${Math.floor(nextMonth / 12)}:${nextMonthOfYear}`;
   }
 
   private seasonalTransitionSpeed(): number {
-    // At defaults this is 0.24 months/sec: roughly four seconds of observer-time per simulated
-    // month. It remains relative to the configured ordinary pace for alternate time presets.
-    return Math.max(0.08, Math.min(this.config.presentation.momentousMonthsPerSecond, this.config.presentation.ordinaryMonthsPerSecond * 0.12));
+    // The frame loop clamps simulation speed at 0.1 months/sec, so this intentionally requests a
+    // near-pause: roughly ten real seconds per simulated month while the cinematic window is live.
+    return 0.08;
   }
 
   /**
