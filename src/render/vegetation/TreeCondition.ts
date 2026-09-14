@@ -86,20 +86,24 @@ export function treeLikelyUprooted(family: TreeFamily, uprooting: number): boole
 /**
  * Fraction of original structural height retained after leader loss. A zero value means the tree
  * keeps its intact skeleton. Uprooted disturbance trees remain intact because the roots, not trunk,
- * failed. Morphology uses this to create distinct snag/broken silhouettes without extra draw calls.
+ * failed. Dead-standing breakage ramps in with decayProgress so death itself never causes a pop.
  */
 export function treeBarkBreakFraction(
   family: TreeFamily,
   condition: TreeVisualCondition,
   breakage: number,
   uprooted = false,
+  decayProgress = 1,
 ): number {
   const damage = clamp01(breakage);
   const rule = DEAD_BREAK[family];
   if (condition === 'dead-standing') {
     if (damage < rule.threshold) return 0;
     const severity = (damage - rule.threshold) / Math.max(1e-6, 1 - rule.threshold);
-    return 0.9 - severity * (0.9 - rule.intactFloor);
+    const target = 0.9 - severity * (0.9 - rule.intactFloor);
+    const decay = clamp01(decayProgress);
+    if (decay <= 0) return 0;
+    return 1 - decay * (1 - target);
   }
   if (condition === 'fallen-disturbance') {
     if (uprooted) return 0;
@@ -112,39 +116,21 @@ export function treeBarkBreakFraction(
   return 0;
 }
 
-/** Small whole-structure adjustments preserve identity while making condition readable. */
+/** Event-driven height changes only; living age transitions remain on the continuous morphology curve. */
 export function treeBarkHeightScale(condition: TreeVisualCondition): number {
   switch (condition) {
-    case 'veteran': return 0.99;
-    case 'declining': return 0.985;
-    case 'dead-standing': return 0.98;
     case 'fallen-disturbance': return 0.96;
     case 'fallen-natural': return 0.97;
     default: return 1;
   }
 }
 
-/** Living foliage vitality layered on top of seasonal phenology and continuous age morphology. */
+/** Living foliage decline is already continuous in TreeMorphology; death/fall simply remove it. */
 export function treeConditionFoliageVitality(condition: TreeVisualCondition): number {
   switch (condition) {
-    case 'evergreen-winter': return 0.97;
-    case 'veteran': return 0.94;
-    case 'declining': return 0.78;
     case 'dead-standing':
     case 'fallen-natural':
     case 'fallen-disturbance': return 0;
-    default: return 1;
-  }
-}
-
-/** Relative crown-width response to condition; for dead/fallen trees this also shapes branch reach. */
-export function treeConditionCrownSpread(condition: TreeVisualCondition, family: TreeFamily): number {
-  switch (condition) {
-    case 'veteran': return family === 'ancient' ? 1.06 : 1.025;
-    case 'declining': return family === 'riverbank' ? 0.94 : 0.96;
-    case 'dead-standing': return isEvergreenFamily(family) ? 0.84 : 0.9;
-    case 'fallen-natural': return 0.91;
-    case 'fallen-disturbance': return 0.94;
     default: return 1;
   }
 }
