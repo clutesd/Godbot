@@ -39,6 +39,12 @@ export interface ResolvedTreeLifecycle {
   fallen: boolean;
   /** Continuous 0..1 progress through the current individual's living lifespan. */
   maturity: number;
+  /** Biological age of the current generation. Optional for coarse recovery presentation states. */
+  ageYears?: number;
+  /** Effective mortality age after any disturbance rule. */
+  mortalityAge?: number;
+  /** Age at which the crown begins its veteran form; used only for continuous presentation. */
+  veteranAge?: number;
 }
 
 export type ForestSuccessionStage = 'cleared' | 'regrowth' | 'young-woodland' | 'mature-forest';
@@ -63,22 +69,26 @@ const MAX_REESTABLISH_YEARS = 18;
  * Stable significant-tree identities are not recycled into a different individual.
  */
 export function resolveTreeLifecycle(tree: TreePlacement, year: number, disturbed = false): ResolvedTreeLifecycle {
-  const damageYear = tree.disturbedYear;
-  if (damageYear !== undefined && year >= damageYear && (tree.id !== undefined || year < damageYear + 3)) {
-    return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true, maturity: 1 };
-  }
-  const establishedYear = damageYear !== undefined && year >= damageYear ? Math.max(tree.establishedYear, damageYear + 3) : tree.establishedYear;
-  const chronologicalAge = Math.max(0, year - establishedYear);
   const lifespan = tree.lifespanYears;
   const significant = tree.id !== undefined;
   const mortalityAge = disturbed && !significant ? Math.min(lifespan, 18 + Math.round((1 - tree.regrowth) * 20)) : lifespan;
+  const veteranAge = Math.min(significant ? 55 : 90, mortalityAge * 0.75);
+  const damageYear = tree.disturbedYear;
+  if (damageYear !== undefined && year >= damageYear && (significant || year < damageYear + 3)) {
+    return {
+      stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true, maturity: 1,
+      ageYears: mortalityAge, mortalityAge, veteranAge,
+    };
+  }
+  const establishedYear = damageYear !== undefined && year >= damageYear ? Math.max(tree.establishedYear, damageYear + 3) : tree.establishedYear;
+  const chronologicalAge = Math.max(0, year - establishedYear);
   const reestablishYears = Math.round(MIN_REESTABLISH_YEARS + (1 - clamp01(tree.regrowth)) * (MAX_REESTABLISH_YEARS - MIN_REESTABLISH_YEARS));
   const generationSpan = mortalityAge + DEAD_STANDING_YEARS + reestablishYears;
   const ageYears = !significant && chronologicalAge >= generationSpan ? chronologicalAge % generationSpan : chronologicalAge;
   const maturity = clamp01(ageYears / Math.max(1, mortalityAge));
   const growthStops: readonly (readonly [number, number])[] = [
     [0, 0.25], [Math.min(15, mortalityAge * 0.25), 0.7], [Math.min(35, mortalityAge * 0.5), 1],
-    [Math.min(significant ? 55 : 90, mortalityAge * 0.75), 1.2], [mortalityAge * 0.82, 1.03], [mortalityAge, 0.82],
+    [veteranAge, 1.2], [mortalityAge * 0.82, 1.03], [mortalityAge, 0.82],
   ];
   let scale = tree.scale * 0.82;
   for (let index = 1; index < growthStops.length; index++) {
@@ -90,13 +100,18 @@ export function resolveTreeLifecycle(tree: TreePlacement, year: number, disturbe
     }
   }
 
-  if (ageYears >= mortalityAge + DEAD_STANDING_YEARS) return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true, maturity: 1 };
-  if (ageYears >= mortalityAge) return { stage: 'dead-standing', scale: tree.scale * 0.82, foliageVisible: false, fallen: false, maturity: 1 };
-  if (ageYears >= mortalityAge * 0.82) return { stage: 'declining', scale, foliageVisible: true, fallen: false, maturity };
-  if (ageYears >= 90 || (significant && ageYears >= 55)) return { stage: 'old', scale, foliageVisible: true, fallen: false, maturity };
-  if (ageYears >= 35) return { stage: 'mature', scale, foliageVisible: true, fallen: false, maturity };
-  if (ageYears >= 15) return { stage: 'young', scale, foliageVisible: true, fallen: false, maturity };
-  return { stage: 'sapling', scale, foliageVisible: true, fallen: false, maturity };
+  const common = { maturity, ageYears, mortalityAge, veteranAge };
+  if (ageYears >= mortalityAge + DEAD_STANDING_YEARS) {
+    return { stage: 'fallen', scale: tree.scale * 0.72, foliageVisible: false, fallen: true, ...common };
+  }
+  if (ageYears >= mortalityAge) {
+    return { stage: 'dead-standing', scale: tree.scale * 0.82, foliageVisible: false, fallen: false, ...common };
+  }
+  if (ageYears >= mortalityAge * 0.82) return { stage: 'declining', scale, foliageVisible: true, fallen: false, ...common };
+  if (ageYears >= 90 || (significant && ageYears >= 55)) return { stage: 'old', scale, foliageVisible: true, fallen: false, ...common };
+  if (ageYears >= 35) return { stage: 'mature', scale, foliageVisible: true, fallen: false, ...common };
+  if (ageYears >= 15) return { stage: 'young', scale, foliageVisible: true, fallen: false, ...common };
+  return { stage: 'sapling', scale, foliageVisible: true, fallen: false, ...common };
 }
 
 /** Coarse stand succession: a regional rule, never an individual sapling simulation. */
