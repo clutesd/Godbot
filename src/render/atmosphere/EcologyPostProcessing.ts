@@ -9,6 +9,7 @@ import { AERIAL_PERSPECTIVE_SHADER, updateAerialPerspectivePass } from './Aerial
 import { DirectionalAtmosphereRig } from './AtmosphericScattering';
 import { EnvironmentFrameRig } from './EnvironmentFrameState';
 import { EnvironmentalDepthRig } from './EnvironmentalDepth';
+import type { LowMistField } from './LowMistField';
 import {
   CINEMATIC_LIGHT_GRADE_SHADER,
   CinematicMaterialPolish,
@@ -18,10 +19,9 @@ import {
 /**
  * Final GODBOX image pipeline.
  *
- * Every renderer-side environmental consumer receives one EnvironmentFrameState. Layer-one
- * atmospheric scattering now has two coordinated pieces: the directional sky dome and a
- * depth-aware aerial perspective pass over actual terrain. That distinction matters for GODBOX's
- * frequent oblique/top-down documentary shots, where little sky may be visible at all.
+ * Every renderer-side environmental consumer receives one EnvironmentFrameState. Clear-air aerial
+ * perspective and terrain/water-aware low mist now resolve in the same depth-aware pass, so local
+ * moisture can create visible layers without turning the whole camera volume grey.
  */
 export class EcologyPostProcessing {
   private readonly composer?: EffectComposer;
@@ -36,7 +36,8 @@ export class EcologyPostProcessing {
   private readonly materialPolish: CinematicMaterialPolish;
 
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
-    private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
+    private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2,
+    private readonly lowMistField: LowMistField) {
     this.environmentFrame = new EnvironmentFrameRig(renderer, scene);
     this.directionalAtmosphere = new DirectionalAtmosphereRig(scene);
     this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
@@ -90,7 +91,7 @@ export class EcologyPostProcessing {
     const frame = this.environmentFrame.update(night);
     if (frame) {
       const scattering = this.directionalAtmosphere.update(frame);
-      this.environmentalDepth.update(frame);
+      const depthState = this.environmentalDepth.update(frame);
       const polish = resolveCinematicLightPolish(frame);
       this.materialPolish.update(frame, polish);
 
@@ -101,6 +102,8 @@ export class EcologyPostProcessing {
           this.aerialPerspective,
           frame,
           scattering,
+          depthState,
+          this.lowMistField,
           this.camera,
           this.composer.readBuffer.depthTexture,
         );
