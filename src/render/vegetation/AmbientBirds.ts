@@ -65,6 +65,7 @@ const BIRD_COLOURS = [
 const FAMILY_HEIGHT: Record<TreeFamily, number> = {
   cherry: 0.92,
   broadleaf: 1.02,
+  birch: 1.12,
   conifer: 1.55,
   dry: 0.98,
   riverbank: 1.08,
@@ -183,7 +184,6 @@ export class AmbientBirds {
       const to = perchPoint(route.to, toLifecycle.scale, route.toAngle);
       const phase = (elapsed / route.cycleSeconds + route.offset) % 1;
       let journey = resolveBirdJourney(phase);
-      // Strong regional wind keeps birds tucked into the canopy rather than flying unrealistically.
       if (wind >= STRONG_WIND_THRESHOLD && journey.flying) {
         journey = phase < 0.72
           ? { flying: false, reverse: false, progress: 0, perch: 'from' }

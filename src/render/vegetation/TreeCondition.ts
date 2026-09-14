@@ -61,6 +61,7 @@ interface BreakRule {
 const DEAD_BREAK: Record<TreeFamily, BreakRule> = {
   cherry: { threshold: 0.48, intactFloor: 0.75 },
   broadleaf: { threshold: 0.42, intactFloor: 0.72 },
+  birch: { threshold: 0.39, intactFloor: 0.7 },
   conifer: { threshold: 0.34, intactFloor: 0.66 },
   dry: { threshold: 0.38, intactFloor: 0.68 },
   riverbank: { threshold: 0.44, intactFloor: 0.7 },
@@ -71,6 +72,7 @@ const DEAD_BREAK: Record<TreeFamily, BreakRule> = {
 const UPROOTING_THRESHOLD: Record<TreeFamily, number> = {
   cherry: 0.5,
   broadleaf: 0.54,
+  birch: 0.48,
   conifer: 0.42,
   dry: 0.64,
   riverbank: 0.48,

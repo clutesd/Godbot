@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { buildTreeLibrary, TREE_LOD_NEAR, type TreeFamily } from '../src/render/vegetation/TreeLibrary';
 import { resolveTreePhenology, treeFoliageColour } from '../src/render/vegetation/TreePhenology';
 
-const FAMILIES: readonly TreeFamily[] = ['cherry', 'broadleaf', 'conifer', 'dry', 'riverbank', 'alpine', 'ancient'];
+const FAMILIES: readonly TreeFamily[] = ['cherry', 'broadleaf', 'birch', 'conifer', 'dry', 'riverbank', 'alpine', 'ancient'];
 
 function foliageValueRange(geometry: THREE.BufferGeometry): { min: number; max: number } {
   const colour = geometry.getAttribute('color');
@@ -46,14 +46,23 @@ describe('Tree colour and canopy depth', () => {
     expect(distance(colours.get('dry')!, colours.get('conifer')!)).toBeGreaterThan(0.08);
     expect(distance(colours.get('riverbank')!, colours.get('broadleaf')!)).toBeGreaterThan(0.025);
     expect(distance(colours.get('cherry')!, colours.get('ancient')!)).toBeGreaterThan(0.04);
+    expect(distance(colours.get('birch')!, colours.get('broadleaf')!)).toBeGreaterThan(0.035);
   });
 
-  it('retains seasonal readability after the palette split', () => {
+  it('retains seasonal readability and gives birch a predominantly golden autumn', () => {
     const cell = { temperature: 0.46, moisture: 0.6 };
     const cherry = (month: number) => treeFoliageColour('cherry',
       resolveTreePhenology(month, cell, { temperature: 0.6 }, 'cherry'), 0.5, new THREE.Color(), cell.moisture);
     expect(cherry(2.2).r).toBeGreaterThan(cherry(2.2).g);
     expect(cherry(5).g).toBeGreaterThan(cherry(5).r);
     expect(cherry(9).r).toBeGreaterThan(cherry(9).g);
+
+    const birchSummer = treeFoliageColour('birch', resolveTreePhenology(5, cell, { temperature: 0.6 }, 'birch'),
+      0.5, new THREE.Color(), cell.moisture);
+    const birchAutumn = treeFoliageColour('birch', resolveTreePhenology(9, cell, { temperature: 0.5 }, 'birch'),
+      0.5, new THREE.Color(), cell.moisture);
+    expect(birchSummer.g).toBeGreaterThan(birchSummer.r);
+    expect(birchAutumn.r).toBeGreaterThan(birchAutumn.g * 0.95);
+    expect(birchAutumn.g).toBeGreaterThan(birchAutumn.b * 1.45);
   });
 });

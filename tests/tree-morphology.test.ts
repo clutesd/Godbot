@@ -44,11 +44,11 @@ describe('Tree morphology', () => {
   });
 
   it('keeps phenotype ranges biologically restrained', () => {
-    for (const family of ['cherry', 'broadleaf', 'conifer', 'dry', 'riverbank', 'alpine', 'ancient'] as const) {
+    for (const family of ['cherry', 'broadleaf', 'birch', 'conifer', 'dry', 'riverbank', 'alpine', 'ancient'] as const) {
       const phenotype = resolveTreePhenotype('ranges', placement({ family }));
-      expect(phenotype.stature).toBeGreaterThan(0.75);
-      expect(phenotype.stature).toBeLessThan(1.15);
-      expect(phenotype.girth).toBeGreaterThan(0.8);
+      expect(phenotype.stature).toBeGreaterThan(0.72);
+      expect(phenotype.stature).toBeLessThan(1.2);
+      expect(phenotype.girth).toBeGreaterThan(0.72);
       expect(phenotype.girth).toBeLessThan(1.3);
       expect(phenotype.crownWidth).toBeGreaterThan(0.75);
       expect(phenotype.crownWidth).toBeLessThan(1.3);
@@ -60,6 +60,15 @@ describe('Tree morphology', () => {
       expect(phenotype.uprooting).toBeGreaterThanOrEqual(0);
       expect(phenotype.uprooting).toBeLessThanOrEqual(1);
     }
+  });
+
+  it('keeps birch recognizably tall and slender within the shared age curve', () => {
+    const birch = resolveTreePhenotype('birch-form', placement({ family: 'birch', lifespanYears: 110 }));
+    const broadleaf = resolveTreePhenotype('birch-form', placement({ family: 'broadleaf', lifespanYears: 160 }));
+    const birchForm = resolveTreeMorphology(birch, lifecycle({ stage: 'mature', maturity: 0.5 }));
+    const broadleafForm = resolveTreeMorphology(broadleaf, lifecycle({ stage: 'mature', maturity: 0.5 }));
+    expect(birchForm.trunkHeight / birchForm.trunkRadiusX).toBeGreaterThan(broadleafForm.trunkHeight / broadleafForm.trunkRadiusX);
+    expect(birchForm.crownHeight / birchForm.crownWidthX).toBeGreaterThan(broadleafForm.crownHeight / broadleafForm.crownWidthX * 0.9);
   });
 
   it('changes silhouette with age instead of only uniformly scaling an adult tree', () => {
@@ -91,9 +100,10 @@ describe('Tree morphology', () => {
     expect(fallen.fallAngle).toBeLessThan(Math.PI * 0.5);
   });
 
-  it('stays continuous across every living age-class boundary, including ancient veterans', () => {
+  it('stays continuous across every living age-class boundary, including birch and ancient veterans', () => {
     const trees = [
       placement({ family: 'cherry', lifespanYears: 70, establishedYear: 0 }),
+      placement({ family: 'birch', lifespanYears: 110, establishedYear: 0 }),
       placement({ family: 'broadleaf', lifespanYears: 160, establishedYear: 0 }),
       placement({ id: 'ancient:continuity', family: 'ancient', lifespanYears: 700, establishedYear: 0 }),
     ];
