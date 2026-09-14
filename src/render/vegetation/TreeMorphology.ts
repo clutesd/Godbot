@@ -21,6 +21,8 @@ export interface TreePhenotype {
   fallBias: number;
   /** Stable presentation tendency for storm-felled trees to uproot rather than snap. */
   uprooting: number;
+  /** Stable presentation tendency for old/dead/storm-damaged crowns to lose their leader. */
+  breakage: number;
 }
 
 /** Per-instance proportions applied to the shared seeded skeleton. */
@@ -99,6 +101,7 @@ export function resolveTreePhenotype(seed: string, tree: Pick<TreePlacement,
     stiffness: 0.72 + trait(seed, tree, 'stiffness') * 0.56,
     fallBias: trait(seed, tree, 'fall-bias') * 2 - 1,
     uprooting: trait(seed, tree, 'uprooting'),
+    breakage: trait(seed, tree, 'breakage'),
   };
 }
 
