@@ -131,6 +131,16 @@ interface Species {
   droop: number;
   depth: number;
   lengthDecay: number;
+  /** Weight given to the inherited branch direction for the dominant continuation child. */
+  continuationBias: number;
+  /** Lateral children are deliberately subordinate to the dominant continuation. */
+  lateralLength: readonly [number, number];
+  lateralRadius: readonly [number, number];
+  /** Maximum woody reach and height relative to nominal tree height. */
+  branchReach: number;
+  branchHeight: number;
+  /** Terminal twigs finish sharply instead of ending as blunt, equally thick rods. */
+  twigTaper: number;
   clumpRadius: number;
   clumpSquash: number;
   clumpsPerTip: number;
@@ -144,38 +154,88 @@ interface Species {
 
 const SPECIES: Record<TreeFamily, Species> = {
   cherry: {
-    clearTrunk: 0.3, taper: 0.6, forks: [2, 3], spread: [0.7, 1.25], droop: 0.16, depth: 4, lengthDecay: 0.8,
+    clearTrunk: 0.3, taper: 0.6, forks: [2, 3], spread: [0.7, 1.22], droop: 0.16, depth: 4, lengthDecay: 0.72,
+    continuationBias: 1.75, lateralLength: [0.62, 0.84], lateralRadius: [0.44, 0.62], branchReach: 0.62, branchHeight: 1.08, twigTaper: 0.2,
     clumpRadius: 0.2, clumpSquash: 0.55, clumpsPerTip: 3, lean: 0.16, bark: '#4d3a35', foliage: '#648348', crownLift: 0, crownSpread: 1.5,
   },
   broadleaf: {
-    clearTrunk: 0.36, taper: 0.64, forks: [2, 3], spread: [0.55, 1], droop: 0.06, depth: 4, lengthDecay: 0.78,
+    clearTrunk: 0.36, taper: 0.64, forks: [2, 3], spread: [0.55, 0.98], droop: 0.06, depth: 4, lengthDecay: 0.7,
+    continuationBias: 2.1, lateralLength: [0.58, 0.8], lateralRadius: [0.46, 0.64], branchReach: 0.58, branchHeight: 1.12, twigTaper: 0.18,
     clumpRadius: 0.22, clumpSquash: 0.82, clumpsPerTip: 3, lean: 0.08, bark: '#5c4436', foliage: '#4d7340', crownLift: 0.05, crownSpread: 1.15,
   },
   conifer: {
     clearTrunk: 0.18, taper: 0.52, forks: [3, 4], spread: [1.05, 1.35], droop: 0.5, depth: 3, lengthDecay: 0.66,
+    continuationBias: 2.6, lateralLength: [0.55, 0.74], lateralRadius: [0.4, 0.56], branchReach: 0.42, branchHeight: 1.08, twigTaper: 0.16,
     clumpRadius: 0.19, clumpSquash: 0.45, clumpsPerTip: 2, lean: 0.03, bark: '#4a3a2c', foliage: '#2f5540', crownLift: -0.08, crownSpread: 0.85,
   },
   dry: {
-    clearTrunk: 0.48, taper: 0.68, forks: [2, 3], spread: [0.95, 1.3], droop: -0.22, depth: 4, lengthDecay: 0.74,
+    clearTrunk: 0.48, taper: 0.68, forks: [2, 3], spread: [0.92, 1.26], droop: -0.22, depth: 4, lengthDecay: 0.7,
+    continuationBias: 1.35, lateralLength: [0.64, 0.88], lateralRadius: [0.42, 0.6], branchReach: 0.72, branchHeight: 1.04, twigTaper: 0.18,
     clumpRadius: 0.2, clumpSquash: 0.3, clumpsPerTip: 2, lean: 0.2, bark: '#6b5540', foliage: '#7f8a4a', crownLift: 0.08, crownSpread: 1.7,
   },
   riverbank: {
-    clearTrunk: 0.26, taper: 0.6, forks: [2, 3], spread: [0.8, 1.2], droop: 0.62, depth: 4, lengthDecay: 0.78,
+    clearTrunk: 0.26, taper: 0.6, forks: [2, 3], spread: [0.78, 1.16], droop: 0.62, depth: 4, lengthDecay: 0.72,
+    continuationBias: 1.45, lateralLength: [0.62, 0.86], lateralRadius: [0.42, 0.62], branchReach: 0.64, branchHeight: 1.08, twigTaper: 0.18,
     clumpRadius: 0.17, clumpSquash: 1.35, clumpsPerTip: 3, lean: 0.3, bark: '#4f4231', foliage: '#63864a', crownLift: -0.05, crownSpread: 1.3,
   },
   alpine: {
     clearTrunk: 0.34, taper: 0.56, forks: [2, 2], spread: [0.7, 1.25], droop: 0.24, depth: 3, lengthDecay: 0.66,
+    continuationBias: 2.2, lateralLength: [0.52, 0.72], lateralRadius: [0.4, 0.56], branchReach: 0.44, branchHeight: 1.06, twigTaper: 0.16,
     clumpRadius: 0.15, clumpSquash: 0.65, clumpsPerTip: 2, lean: 0.42, bark: '#54473c', foliage: '#42604a', crownLift: 0, crownSpread: 1,
   },
   ancient: {
-    clearTrunk: 0.22, taper: 0.76, forks: [2, 3], spread: [0.8, 1.3], droop: 0.14, depth: 5, lengthDecay: 0.82,
+    clearTrunk: 0.22, taper: 0.76, forks: [2, 3], spread: [0.78, 1.25], droop: 0.14, depth: 5, lengthDecay: 0.74,
+    continuationBias: 1.7, lateralLength: [0.62, 0.86], lateralRadius: [0.5, 0.68], branchReach: 0.76, branchHeight: 1.16, twigTaper: 0.2,
     clumpRadius: 0.24, clumpSquash: 0.68, clumpsPerTip: 4, lean: 0.12, bark: '#4a3b30', foliage: '#3f6238', crownLift: 0.02, crownSpread: 1.75,
   },
 };
 
+function constrainBranchLength(origin: THREE.Vector3, direction: THREE.Vector3, desired: number,
+  maxReach: number, maxHeight: number): number {
+  let length = desired;
+  const horizontalSq = direction.x * direction.x + direction.z * direction.z;
+  if (horizontalSq > 1e-6) {
+    const b = 2 * (origin.x * direction.x + origin.z * direction.z);
+    const c = origin.x * origin.x + origin.z * origin.z - maxReach * maxReach;
+    const discriminant = b * b - 4 * horizontalSq * c;
+    if (discriminant >= 0) {
+      const exit = (-b + Math.sqrt(discriminant)) / (2 * horizontalSq);
+      if (exit >= 0) length = Math.min(length, exit * 0.97);
+    }
+  }
+  if (direction.y > 1e-5) {
+    const vertical = (maxHeight - origin.y) / direction.y;
+    if (vertical >= 0) length = Math.min(length, vertical * 0.985);
+  }
+  return Math.max(0, length);
+}
+
+function childDirection(branch: BranchState, species: Species, index: number, forks: number,
+  random: SeededRandom): THREE.Vector3 {
+  const angle = (index / Math.max(1, forks)) * Math.PI * 2 + random.range(-0.48, 0.48);
+  if (index === 0) {
+    const deflection = random.range(0.12, 0.3) + Math.min(0.08, branch.depth * 0.02);
+    const continuation = new THREE.Vector3(
+      Math.cos(angle) * Math.sin(deflection),
+      Math.cos(deflection) - species.droop * random.range(0.08, 0.24),
+      Math.sin(angle) * Math.sin(deflection),
+    );
+    return continuation.addScaledVector(branch.direction, species.continuationBias).normalize();
+  }
+  const spread = random.range(species.spread[0], species.spread[1]) * (branch.depth === 0 ? 0.74 : 1);
+  const lateral = new THREE.Vector3(
+    Math.cos(angle) * Math.sin(spread),
+    Math.cos(spread) - species.droop * random.range(0.4, 1.05),
+    Math.sin(angle) * Math.sin(spread),
+  );
+  return lateral.addScaledVector(branch.direction, 0.36).normalize();
+}
+
 /**
- * Grows one tree. Branch angle, length and radius all inherit with noise, so no two trees share a
- * silhouette even when they share a species and a seed lineage.
+ * Grows one tree. The woody skeleton follows a leader/lateral hierarchy: each fork keeps one
+ * dominant continuation while lateral children become shorter and thinner with depth. The whole
+ * skeleton is constrained to a family-specific crown envelope so leafless trees still read as
+ * believable organisms rather than radiating antennae.
  */
 function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeVariant {
   if (family === 'conifer' || family === 'alpine') return growEvergreen(family, random, lod);
@@ -187,8 +247,12 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
   const height = random.range(0.86, 1.18);
   // Both tiers grow the same skeleton. LOD changes tessellation, never the tree's identity.
   const maxDepth = Math.max(1, species.depth);
+  const maxReach = height * species.branchReach;
+  const maxHeight = height * species.branchHeight;
   const tips: BranchState[] = [];
   let segments = 0;
+  let architectureRadius = 0;
+  let architectureTop = 0;
 
   const trunkDirection = new THREE.Vector3(random.range(-1, 1) * species.lean, 1, random.range(-1, 1) * species.lean).normalize();
   const queue: BranchState[] = [{
@@ -199,54 +263,81 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
     depth: 0,
   }];
 
-  // Breadth-first, so when the segment budget runs out the tree still has a complete silhouette
-  // rather than one over-grown limb.
+  // Breadth-first means the segment budget preserves the whole silhouette rather than over-growing
+  // one limb. Terminal decisions use the near budget so both LOD tiers retain the same skeleton.
   while (queue.length > 0) {
     const branch = queue.shift();
     if (!branch) break;
-    const end = new THREE.Vector3().copy(branch.origin).addScaledVector(branch.direction, branch.length);
-    const radiusTo = branch.radius * species.taper;
-    if (segments < lod.maxSegments) bark.tube(branch.origin, end, branch.radius, radiusTo, Math.max(3, lod.sides - Math.min(2, branch.depth)), barkColour);
-    segments += 1;
-    if (branch.depth >= maxDepth || segments + queue.length >= TREE_LOD_NEAR.maxSegments) {
-      tips.push({ ...branch, origin: end });
+    const nominalLength = branch.depth === 0
+      ? branch.length
+      : constrainBranchLength(branch.origin, branch.direction, branch.length, maxReach, maxHeight);
+    if (nominalLength < height * 0.012) {
+      tips.push({ ...branch, length: nominalLength });
       continue;
     }
+    const terminal = branch.depth >= maxDepth
+      || segments + queue.length >= TREE_LOD_NEAR.maxSegments
+      || nominalLength < height * 0.045
+      || branch.radius < height * 0.0032;
+    const end = new THREE.Vector3().copy(branch.origin).addScaledVector(branch.direction, nominalLength);
+    const depthTaper = 1 - Math.min(0.24, branch.depth * 0.055);
+    const inheritedRadius = branch.radius * species.taper * depthTaper;
+    const radiusTo = terminal
+      ? Math.min(inheritedRadius, Math.max(height * 0.0008, branch.radius * species.twigTaper))
+      : inheritedRadius;
+    if (segments < lod.maxSegments) {
+      bark.tube(branch.origin, end, branch.radius, radiusTo,
+        Math.max(3, lod.sides - Math.min(2, branch.depth)), barkColour);
+    }
+    segments += 1;
+    architectureRadius = Math.max(architectureRadius, Math.hypot(end.x, end.z) + branch.radius);
+    architectureTop = Math.max(architectureTop, end.y + branch.radius);
+    if (terminal) {
+      tips.push({ ...branch, origin: end, length: nominalLength, radius: radiusTo });
+      continue;
+    }
+
     const forks = random.int(species.forks[0], species.forks[1] + 1);
     for (let index = 0; index < forks; index += 1) {
-      const angle = (index / forks) * Math.PI * 2 + random.range(-0.5, 0.5);
-      const spread = random.range(species.spread[0], species.spread[1]) * (branch.depth === 0 ? 0.72 : 1);
-      const direction = new THREE.Vector3(
-        Math.cos(angle) * Math.sin(spread),
-        Math.cos(spread) - species.droop * random.range(0.4, 1.1),
-        Math.sin(angle) * Math.sin(spread),
-      );
-      direction.addScaledVector(branch.direction, 0.55).normalize();
+      const continuation = index === 0;
+      const childOrigin = continuation
+        ? end.clone()
+        : new THREE.Vector3().lerpVectors(branch.origin, end,
+          branch.depth === 0 ? random.range(0.68, 0.94) : random.range(0.82, 0.98));
+      const direction = childDirection(branch, species, index, forks, random);
+      const depthShortening = 1 - Math.min(0.2, branch.depth * 0.05);
+      const childLength = nominalLength * species.lengthDecay * depthShortening * (continuation
+        ? random.range(0.9, 1.04)
+        : random.range(species.lateralLength[0], species.lateralLength[1]));
+      const childRadius = radiusTo * (continuation
+        ? random.range(0.72, 0.86)
+        : random.range(species.lateralRadius[0], species.lateralRadius[1]));
       queue.push({
-        origin: end,
+        origin: childOrigin,
         direction,
-        length: branch.length * species.lengthDecay * random.range(0.82, 1.14),
-        radius: radiusTo * random.range(0.56, 0.78),
+        length: childLength,
+        radius: childRadius,
         depth: branch.depth + 1,
       });
     }
   }
-  for (const remaining of queue) tips.push({ ...remaining, origin: new THREE.Vector3().copy(remaining.origin) });
 
   const clumpRadius = species.clumpRadius * height;
   const clumpCount = Math.min(TREE_LOD_NEAR.maxClumps, tips.length * species.clumpsPerTip);
-  const selected = new Set(Array.from({ length: Math.min(clumpCount, lod.maxClumps) }, (_, index) =>
-    Math.floor(index * clumpCount / Math.min(clumpCount, lod.maxClumps))));
-  let radius = 0.1;
-  let crown = 0;
+  const visibleClumps = Math.min(clumpCount, lod.maxClumps);
+  const selected = new Set(Array.from({ length: visibleClumps }, (_, index) =>
+    Math.floor(index * clumpCount / Math.max(1, visibleClumps))));
+  let radius = Math.max(0.1, architectureRadius);
+  let crown = Math.max(height, architectureTop);
   for (let index = 0; index < clumpCount; index += 1) {
-    const tip = tips[Math.floor(index * tips.length / clumpCount)]!;
-    const centre = new THREE.Vector3().copy(tip.origin).addScaledVector(tip.direction, clumpRadius * random.range(0.2, 1.1));
+    const tip = tips[Math.floor(index * tips.length / Math.max(1, clumpCount))];
+    if (!tip) continue;
+    const centre = new THREE.Vector3().copy(tip.origin).addScaledVector(tip.direction, clumpRadius * random.range(0.12, 0.72));
     const drift = clumpRadius * species.crownSpread;
     centre.x += random.range(-drift, drift);
     centre.z += random.range(-drift, drift);
-    centre.y += random.range(-clumpRadius * 0.5, clumpRadius * 0.7) + species.crownLift * height;
-    const size = clumpRadius * random.range(0.7, 1.25);
+    centre.y += random.range(-clumpRadius * 0.45, clumpRadius * 0.62) + species.crownLift * height;
+    const size = clumpRadius * random.range(0.72, 1.22);
     if (selected.has(index)) {
       foliageColour.setScalar(random.fork(`shade:${index}`).range(0.78, 1));
       foliage.clump(centre, size * lod.clusterScale, species.clumpSquash, random.fork(`clump:${index}`), foliageColour);
@@ -255,7 +346,7 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
     crown = Math.max(crown, centre.y + size * species.clumpSquash * 1.3);
   }
 
-  return { family, bark: bark.build(), foliage: foliage.build(), height: Math.max(crown, height), radius };
+  return { family, bark: bark.build(), foliage: foliage.build(), height: crown, radius };
 }
 
 /** A persistent leader and tapering branch whorls give needle trees their upright silhouette. */
@@ -283,7 +374,10 @@ function growEvergreen(family: 'conifer' | 'alpine', random: SeededRandom, lod: 
       const angle = twist + branch / branchCount * Math.PI * 2;
       const end = new THREE.Vector3(base.x + Math.cos(angle) * radius * 0.86, base.y - height * 0.035,
         base.z + Math.sin(angle) * radius * 0.86);
-      if (segments++ < lod.maxSegments - 1) bark.tube(base, end, height * 0.012, 0.003, 3, barkColour);
+      if (segments++ < lod.maxSegments - 1) {
+        const branchRadius = height * 0.012 * (1 - fraction * 0.45);
+        bark.tube(base, end, branchRadius, Math.max(0.0015, branchRadius * 0.18), 3, barkColour);
+      }
       if (lod.maxClumps >= 15 || branch === 0) {
         foliage.clump(end, radius * 0.29, 0.52, random.fork(`spray:${layer}:${branch}`), color);
       }
