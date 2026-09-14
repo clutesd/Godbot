@@ -5,6 +5,7 @@ import { stableHash } from '../../sim/prng';
 import { clamp01, fbmSeeded, octaveSeeds, smoothstep } from '../../sim/terrain/noise';
 import { nearestIndex, sampleField } from '../../sim/terrain/TerrainField';
 import type { WorldCell, WorldState } from '../../sim/types';
+import { buildWorldEdgeTransition } from './WorldEdgeTransition';
 
 export interface SurfaceSample {
   elevation: number;
@@ -202,37 +203,12 @@ export class TerrainSurface {
     return mesh;
   }
 
-  /** A downward apron around the border so the world reads as a mass, not a sheet. */
+  /**
+   * Legacy renderer entry point. This used to create a vertical diorama wall; it now returns a
+   * presentation-only terrain continuation band so the canonical square border is never exposed.
+   */
   buildApron(): THREE.Mesh {
-    const { terrain, seaLevel } = this.world;
-    const { resolution, step, originX, originZ } = terrain;
-    const bottom = elevationToY(0, seaLevel) - 6;
-    const positions: number[] = [];
-    const indices: number[] = [];
-    const edge: Array<[number, number]> = [];
-    for (let x = 0; x < resolution; x += 1) edge.push([x, 0]);
-    for (let z = 1; z < resolution; z += 1) edge.push([resolution - 1, z]);
-    for (let x = resolution - 2; x >= 0; x -= 1) edge.push([x, resolution - 1]);
-    for (let z = resolution - 2; z >= 0; z -= 1) edge.push([0, z]);
-
-    for (const [x, z] of edge) {
-      const worldX = originX + x * step;
-      const worldZ = originZ + z * step;
-      const y = this.heightAt(worldX, worldZ);
-      positions.push(worldX, y, worldZ, worldX, bottom, worldZ);
-    }
-    const rings = edge.length;
-    for (let index = 0; index < rings - 1; index += 1) {
-      const a = index * 2;
-      indices.push(a, a + 1, a + 2, a + 2, a + 1, a + 3);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: '#4a463f', roughness: 1 }));
-    mesh.name = 'terrain-apron';
-    return mesh;
+    return buildWorldEdgeTransition(this.world, this);
   }
 
   /**
