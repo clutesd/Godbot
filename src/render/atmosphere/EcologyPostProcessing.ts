@@ -34,14 +34,16 @@ export class EcologyPostProcessing {
   private readonly directionalAtmosphere: DirectionalAtmosphereRig;
   private readonly environmentalDepth: EnvironmentalDepthRig;
   private readonly materialPolish: CinematicMaterialPolish;
+  private readonly lowMistField?: LowMistField;
 
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
-    private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2,
-    private readonly lowMistField: LowMistField) {
+    private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
     this.environmentFrame = new EnvironmentFrameRig(renderer, scene);
     this.directionalAtmosphere = new DirectionalAtmosphereRig(scene);
     this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
     this.materialPolish = new CinematicMaterialPolish(scene);
+    const candidate = scene.getObjectByName('atmosphere')?.userData['lowMistField'] as LowMistField | undefined;
+    if (candidate && typeof candidate.sample === 'function') this.lowMistField = candidate;
     if (quality === 0) return;
 
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 2 });
