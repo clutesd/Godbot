@@ -62,6 +62,7 @@ interface FamilyMorphology {
 const FAMILY: Record<TreeFamily, FamilyMorphology> = {
   cherry: { lean: 0.055, crownOffset: 0.13, girth: [0.84, 1.16], stature: [0.9, 1.08], crownWidth: [0.82, 1.22], crownDepth: [0.9, 1.08] },
   broadleaf: { lean: 0.04, crownOffset: 0.12, girth: [0.84, 1.2], stature: [0.9, 1.12], crownWidth: [0.84, 1.2], crownDepth: [0.88, 1.12] },
+  birch: { lean: 0.052, crownOffset: 0.105, girth: [0.76, 1.02], stature: [0.98, 1.16], crownWidth: [0.8, 1.08], crownDepth: [0.96, 1.12] },
   conifer: { lean: 0.025, crownOffset: 0.065, girth: [0.88, 1.14], stature: [0.92, 1.12], crownWidth: [0.86, 1.14], crownDepth: [0.94, 1.08] },
   dry: { lean: 0.075, crownOffset: 0.18, girth: [0.82, 1.22], stature: [0.86, 1.1], crownWidth: [0.78, 1.28], crownDepth: [0.84, 1.08] },
   riverbank: { lean: 0.085, crownOffset: 0.16, girth: [0.82, 1.18], stature: [0.9, 1.12], crownWidth: [0.82, 1.24], crownDepth: [0.92, 1.16] },
