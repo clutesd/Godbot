@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { SeededRandom } from '../../sim/prng';
 import {
   buildTreeLibrary as buildBaseTreeLibrary,
