@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - 'src/render/atmosphere/EnvironmentalLighting.ts'
+      - 'src/render/atmosphere/EnvironmentFrameState.ts'
       - 'src/render/atmosphere/EnvironmentalDepth.ts'
       - 'src/render/atmosphere/CinematicLightPolish.ts'
       - 'src/render/atmosphere/EcologyPostProcessing.ts'
       - 'tests/environmental-lighting.test.ts'
+      - 'tests/environment-frame.test.ts'
       - 'tests/environmental-depth.test.ts'
       - 'tests/cinematic-light-polish.test.ts'
       - '.github/workflows/environmental-lighting-validation.yml'
@@ -25,6 +27,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/render/atmosphere/EnvironmentalLighting.ts src/render/atmosphere/EnvironmentalDepth.ts src/render/atmosphere/CinematicLightPolish.ts src/render/atmosphere/EcologyPostProcessing.ts tests/environmental-lighting.test.ts tests/environmental-depth.test.ts tests/cinematic-light-polish.test.ts
-      - run: npx vitest run tests/environmental-lighting.test.ts tests/environmental-depth.test.ts tests/cinematic-light-polish.test.ts tests/weather-render.test.ts
+      - run: npx eslint src/render/atmosphere/EnvironmentalLighting.ts src/render/atmosphere/EnvironmentFrameState.ts src/render/atmosphere/EnvironmentalDepth.ts src/render/atmosphere/CinematicLightPolish.ts src/render/atmosphere/EcologyPostProcessing.ts tests/environmental-lighting.test.ts tests/environment-frame.test.ts tests/environmental-depth.test.ts tests/cinematic-light-polish.test.ts
+      - run: npx vitest run tests/environmental-lighting.test.ts tests/environment-frame.test.ts tests/environmental-depth.test.ts tests/cinematic-light-polish.test.ts tests/weather-render.test.ts
       - run: npm run build
