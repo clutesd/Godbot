@@ -10,8 +10,8 @@ import {
 import { resolveTreeMorphology, resolveTreePhenotype } from '../src/render/vegetation/TreeMorphology';
 import type { TreeFamily } from '../src/render/vegetation/TreeLibrary';
 
-const FAMILIES: readonly TreeFamily[] = ['cherry', 'broadleaf', 'conifer', 'dry', 'riverbank', 'alpine', 'ancient'];
-const DECIDUOUS: readonly TreeFamily[] = ['cherry', 'broadleaf', 'dry', 'riverbank'];
+const FAMILIES: readonly TreeFamily[] = ['cherry', 'broadleaf', 'birch', 'conifer', 'dry', 'riverbank', 'alpine', 'ancient'];
+const DECIDUOUS: readonly TreeFamily[] = ['cherry', 'broadleaf', 'birch', 'dry', 'riverbank'];
 
 const lifecycle = (overrides: Partial<ResolvedTreeLifecycle> = {}): ResolvedTreeLifecycle => ({
   stage: 'mature',
@@ -80,10 +80,13 @@ describe('Tree condition presentation', () => {
     }
     expect(treeBarkBreakFraction('conifer', 'dead-standing', 1, false, 1))
       .toBeLessThan(treeBarkBreakFraction('ancient', 'dead-standing', 1, false, 1));
+    expect(treeBarkBreakFraction('birch', 'dead-standing', 1, false, 1))
+      .toBeLessThan(treeBarkBreakFraction('broadleaf', 'dead-standing', 1, false, 1));
   });
 
   it('keeps root-failure identity family-aware', () => {
     expect(treeLikelyUprooted('conifer', 0.5)).toBe(true);
+    expect(treeLikelyUprooted('birch', 0.5)).toBe(true);
     expect(treeLikelyUprooted('dry', 0.5)).toBe(false);
     for (const family of FAMILIES) {
       expect(treeLikelyUprooted(family, 0)).toBe(false);
