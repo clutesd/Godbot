@@ -39,7 +39,7 @@ function profile(seed: string, variant: number): BirchProfile {
     height: random.range(1.15, 1.24),
     crownWidth: random.range(0.7, 0.84),
     crownHeight: random.range(1.06, 1.15),
-    crownLift: random.range(0.1, 0.15),
+    crownLift: random.range(0.115, 0.165),
     phase: random.range(0, Math.PI * 2),
     bandPhase: random.range(0, Math.PI * 2),
   };
@@ -151,7 +151,7 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     x *= width;
     z *= width;
     y = foliageBounds.minY + (y - foliageBounds.minY) * birch.crownHeight
-      + source.height * (birch.crownLift + lowerOpening * 0.025);
+      + source.height * (birch.crownLift + lowerOpening * 0.035);
 
     // Small coherent bends keep silhouettes alive without making the tree look permanently wind-blown.
     const sway = Math.sin(normalizedY * 5.2 + birch.phase) * source.height * 0.018 * smoothstep(0.22, 1, normalizedY);
