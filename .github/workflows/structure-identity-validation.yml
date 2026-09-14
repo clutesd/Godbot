@@ -3,6 +3,7 @@ name: Structure identity validation
 on:
   pull_request:
     paths:
+      - 'src/render/GodboxRendererEnhanced.ts'
       - 'src/render/assets/AssetBuilder.ts'
       - 'src/render/assets/BuildingGrammar.ts'
       - 'src/render/assets/BuildingComposer.ts'
@@ -13,6 +14,7 @@ on:
       - 'src/render/assets/StructureVisualSignature.ts'
       - 'src/render/assets/StructureVisualValidation.ts'
       - 'src/render/materials/MaterialPalette.ts'
+      - 'tests/settlement-render-budget.test.ts'
       - 'tests/structure-identity.test.ts'
       - 'tests/structure-heritage.test.ts'
       - 'tests/structure-components.test.ts'
@@ -34,6 +36,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/render/assets/AssetBuilder.ts src/render/assets/BuildingGrammar.ts src/render/assets/StructureComposition.ts src/render/assets/StructureHeritage.ts src/render/assets/StructureComponents.ts src/render/assets/StructureGenerations.ts src/render/assets/StructureVisualSignature.ts src/render/assets/StructureVisualValidation.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/structure-generations.test.ts tests/structure-visual-validation.test.ts
-      - run: npx vitest run tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/structure-generations.test.ts tests/structure-visual-validation.test.ts tests/architecture.test.ts
+      - run: npx eslint src/render/GodboxRendererEnhanced.ts src/render/assets/AssetBuilder.ts src/render/assets/BuildingGrammar.ts src/render/assets/StructureComposition.ts src/render/assets/StructureHeritage.ts src/render/assets/StructureComponents.ts src/render/assets/StructureGenerations.ts src/render/assets/StructureVisualSignature.ts src/render/assets/StructureVisualValidation.ts tests/settlement-render-budget.test.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/structure-generations.test.ts tests/structure-visual-validation.test.ts
+      - run: npx vitest run tests/settlement-render-budget.test.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/structure-generations.test.ts tests/structure-visual-validation.test.ts tests/architecture.test.ts
       - run: npm run build
