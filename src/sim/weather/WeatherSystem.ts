@@ -27,6 +27,7 @@ export class WeatherSystem {
   private variationMonth = -1;
   private seasonalMonth = -1;
   private seasonalCosine = 1;
+  private hydrologyFloodedLastMonth = false;
   private readonly resolvedWeather: WeatherDescriptor = { kind: 'clear', intensity: 0, wind: 0, precipitation: 'none' };
 
   constructor(
@@ -63,23 +64,6 @@ export class WeatherSystem {
       this.seasonalCosine = Math.cos(this.state.month / 12 * Math.PI * 2);
     }
     return this.seasonalCosine;
-  }
-
-  /**
-   * environmentRevision is a topology/traversal revision, not a weather clock. Hash only the
-   * authoritative fine wet/dry footprint so ordinary monthly weather does not invalidate route,
-   * walkability and water-geometry caches. Flooding/recession still advances the revision.
-   */
-  private hydrologyTopologySignature(): number {
-    const field = this.world.terrain;
-    let hash = 2166136261;
-    for (let index = 0; index < field.height.length; index += 1) {
-      const wet = field.height[index]! < this.world.seaLevel || field.river[index] === 1
-        || field.lake[index] === 1 || field.waterLevel[index]! >= 0;
-      hash ^= Number(wet);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash >>> 0;
   }
 
   createFront(position: Vec2, kind: WeatherKind, intensity = 0.5, radius = 12, velocity = 1, lifespan = 3): WeatherFront {
@@ -133,11 +117,16 @@ export class WeatherSystem {
       const cell = cellAt(this.world, x, z);
       if (cell && this.temperatureAt(cell) > FREEZING) this.state.lightning.push({ id: `lightning:${front.id}:${this.state.month}`, month: this.state.month, x, z, intensity: front.intensity });
     }
-    const topologyBefore = this.hydrologyTopologySignature();
     this.hydrology.advance(this.state.cells);
-    if (this.hydrologyTopologySignature() !== topologyBefore) {
+    // DynamicHydrology already tracks floodplain storage while it advances the fine field. Use
+    // that authoritative result instead of hashing the entire fine terrain before and after every
+    // month. While a dynamic flood is active we conservatively advance the topology revision each
+    // month; the first dry month advances it once more so recession is presented correctly.
+    const dynamicallyFlooded = this.hydrology.lastBudget.floodedStorage > 1e-9;
+    if (dynamicallyFlooded || this.hydrologyFloodedLastMonth) {
       this.world.environmentRevision = (this.world.environmentRevision ?? 0) + 1;
     }
+    this.hydrologyFloodedLastMonth = dynamicallyFlooded;
   }
 
   private advanceTornadoes(): void {
