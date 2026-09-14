@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import type { EnvironmentalLightingState } from './EnvironmentalLighting';
+import type { EnvironmentFrameState } from './EnvironmentFrameState';
 
 export interface EnvironmentalDepthInput {
   daylight: number;
   twilight: number;
-  weatherSoftening: number;
+  atmosphericObscuration: number;
   baseFogDensity: number;
   cameraHeight: number;
 }
@@ -21,32 +21,28 @@ export interface EnvironmentalDepthState {
 }
 
 /**
- * Resolve the world-depth presentation from the same environmental state that drives sunlight.
- * This deliberately stays conservative: the objective is stronger scale separation and grounding,
- * not a theatrical fog filter. Severe weather can thicken the atmosphere, but clear scenes retain
- * crisp foreground detail and only gain enough haze to push distant ridges back.
+ * Resolve world depth from the same final EnvironmentFrameState that owns the lights/exposure.
+ * Clear scenes remain crisp; weather and catastrophe can deepen aerial perspective without a
+ * second subsystem inventing its own interpretation of the frame.
  */
 export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): EnvironmentalDepthState {
   const daylight = THREE.MathUtils.clamp(input.daylight, 0, 1);
   const twilight = THREE.MathUtils.clamp(input.twilight, 0, 1);
-  const weather = THREE.MathUtils.clamp(input.weatherSoftening, 0, 1);
+  const obscuration = THREE.MathUtils.clamp(input.atmosphericObscuration, 0, 1);
   const baseFog = Math.max(0, input.baseFogDensity);
   const cameraHeight = Math.max(0, input.cameraHeight);
 
   const clearAirFloor = 0.00035 + Math.min(0.00055, cameraHeight * 0.000006);
   const fogDensity = Math.min(0.075,
-    baseFog * (0.9 + weather * 0.13 + (1 - daylight) * 0.045) + clearAirFloor,
+    baseFog * (0.9 + obscuration * 0.13 + (1 - daylight) * 0.045) + clearAirFloor,
   );
-  const fogSkyBlend = THREE.MathUtils.clamp(0.16 + weather * 0.22 + twilight * 0.08, 0.12, 0.46);
+  const fogSkyBlend = THREE.MathUtils.clamp(0.16 + obscuration * 0.22 + twilight * 0.08, 0.12, 0.46);
   const valleyMistMultiplier = THREE.MathUtils.clamp(
-    0.72 + twilight * 0.22 + weather * 0.28 + (1 - daylight) * 0.08,
+    0.72 + twilight * 0.22 + obscuration * 0.28 + (1 - daylight) * 0.08,
     0.68,
     1.22,
   );
 
-  // The old fixed +/-75 world-unit frustum spread 2048 shadow texels over far more terrain than
-  // most documentary shots needed. Camera-aware coverage materially improves local texel density
-  // while preserving enough context for wide landscape shots.
   const shadowHalfSpan = THREE.MathUtils.clamp(38 + cameraHeight * 0.26, 42, 64);
 
   return {
@@ -62,9 +58,8 @@ export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): Envir
 }
 
 /**
- * Renderer-only depth rig. It tightens and follows the sun's shadow camera around the current shot,
- * harmonizes exponential distance fog with the lighting palette, and modulates the existing
- * terrain-derived valley mist. It never mutates simulation state.
+ * Renderer-only depth rig. It no longer reads mutable light/fog values to derive a second truth;
+ * every decision comes from the authoritative EnvironmentFrameState resolved earlier this frame.
  */
 export class EnvironmentalDepthRig {
   private readonly sun?: THREE.DirectionalLight;
@@ -94,23 +89,24 @@ export class EnvironmentalDepthRig {
     }
   }
 
-  update(lighting: EnvironmentalLightingState): EnvironmentalDepthState {
+  update(frame: EnvironmentFrameState): EnvironmentalDepthState {
     const fog = this.scene.fog instanceof THREE.FogExp2 ? this.scene.fog : undefined;
-    const baseFogDensity = fog?.density ?? 0;
     const state = resolveEnvironmentalDepth({
-      daylight: lighting.daylight,
-      twilight: lighting.twilight,
-      weatherSoftening: lighting.weatherSoftening,
-      baseFogDensity,
+      daylight: frame.daylight,
+      twilight: frame.twilight,
+      atmosphericObscuration: frame.atmosphericObscuration,
+      baseFogDensity: frame.sourceFogDensity,
       cameraHeight: this.camera.position.y,
     });
 
     if (fog) {
       fog.density = state.fogDensity;
-      fog.color.lerp(lighting.skyFillColor, state.fogSkyBlend);
+      // Preserve authored event/weather colour as part of the frame, then harmonize it with the
+      // coherent sky. This avoids the old order-dependent chain of repeated lerps.
+      fog.color.copy(frame.sourceFogColor).lerp(frame.skyFillColor, state.fogSkyBlend);
     }
 
-    this.updateValleyMist(state, lighting);
+    this.updateValleyMist(state, frame);
     this.updateShadowFocus(state);
 
     this.scene.userData['environmentDepth'] = {
@@ -119,20 +115,19 @@ export class EnvironmentalDepthRig {
       shadowHalfSpan: state.shadowHalfSpan,
       shadowBias: state.shadowBias,
       shadowNormalBias: state.shadowNormalBias,
+      atmosphericObscuration: frame.atmosphericObscuration,
     };
     return state;
   }
 
-  private updateValleyMist(state: EnvironmentalDepthState, lighting: EnvironmentalLightingState): void {
+  private updateValleyMist(state: EnvironmentalDepthState, frame: EnvironmentFrameState): void {
     if (!this.mist || !(this.mist.material instanceof THREE.MeshBasicMaterial)) return;
     const material = this.mist.material;
-    // Seasonal presentation updates the mist before this render pass. Detect that external write so
-    // our multiplier never compounds and autumn/winter/spring retain their existing identities.
     if (!Number.isNaN(this.lastAppliedMist) && Math.abs(material.opacity - this.lastAppliedMist) > 0.002) {
       this.seasonalMistBase = material.opacity;
     }
     material.opacity = THREE.MathUtils.clamp(this.seasonalMistBase * state.valleyMistMultiplier, 0.08, 0.74);
-    material.color.copy(lighting.skyFillColor).lerp(lighting.sunColor, lighting.twilight * 0.08);
+    material.color.copy(frame.skyFillColor).lerp(frame.sunColor, frame.twilight * 0.08);
     this.lastAppliedMist = material.opacity;
   }
 
@@ -142,19 +137,15 @@ export class EnvironmentalDepthRig {
     this.camera.getWorldDirection(this.forward);
     const forwardY = this.forward.y;
     let focusDistance = THREE.MathUtils.clamp(22 + this.camera.position.y * 0.45, 24, 58);
-    // Prefer the camera ray's approximate ground intersection for pitched documentary shots.
     if (forwardY < -0.08 && this.camera.position.y > 0) {
       focusDistance = THREE.MathUtils.clamp(-this.camera.position.y / forwardY, 18, 72);
     }
     this.focus.copy(this.camera.position).addScaledVector(this.forward, focusDistance);
     this.focus.y = 0;
-    // Quantization stops tiny camera drift from causing visible shadow-map shimmer.
     const snap = 2;
     this.focus.x = Math.round(this.focus.x / snap) * snap;
     this.focus.z = Math.round(this.focus.z / snap) * snap;
 
-    // GodboxRenderer writes an origin-relative solar position each frame. Static preview tools do
-    // not, so detect whether our own adjusted position survived and reuse the cached solar offset.
     if (this.hasAdjustedSun && this.sun.position.distanceToSquared(this.lastAdjustedSunPosition) < 0.0001) {
       // keep cached celestialOffset
     } else {
