@@ -24,20 +24,31 @@ function isDisturbanceFall(lifecycle: ResolvedTreeLifecycle): boolean {
     && lifecycle.ageYears <= lifecycle.mortalityAge + 1e-6;
 }
 
+/** Structural state is season-independent and is safe to use in cached morphology. */
+export function resolveStructuralTreeCondition(
+  family: TreeFamily,
+  lifecycle: ResolvedTreeLifecycle,
+): TreeVisualCondition {
+  if (lifecycle.stage === 'fallen') return isDisturbanceFall(lifecycle) ? 'fallen-disturbance' : 'fallen-natural';
+  if (lifecycle.stage === 'dead-standing') return 'dead-standing';
+  if (lifecycle.stage === 'declining') return 'declining';
+  if (lifecycle.stage === 'old' || family === 'ancient') return 'veteran';
+  return 'healthy';
+}
+
 /**
- * Presentation condition is derived only from authoritative lifecycle, family and season. It never
- * mutates simulation state and remains stable across camera/LOD changes and replay.
+ * Full presentation condition adds seasonal interpretation without overriding mortality or decline.
+ * A healthy winter broadleaf is therefore never mistaken for a dead snag, while needle trees remain
+ * explicitly evergreen through winter.
  */
 export function resolveTreeVisualCondition(
   family: TreeFamily,
   lifecycle: ResolvedTreeLifecycle,
   month: number,
 ): TreeVisualCondition {
-  if (lifecycle.stage === 'fallen') return isDisturbanceFall(lifecycle) ? 'fallen-disturbance' : 'fallen-natural';
-  if (lifecycle.stage === 'dead-standing') return 'dead-standing';
-  if (lifecycle.stage === 'declining') return 'declining';
+  const structural = resolveStructuralTreeCondition(family, lifecycle);
+  if (structural !== 'healthy') return structural;
   if (treeSeason(month) === 'winter') return isEvergreenFamily(family) ? 'evergreen-winter' : 'winter-bare';
-  if (lifecycle.stage === 'old' || family === 'ancient') return 'veteran';
   return 'healthy';
 }
 
@@ -57,11 +68,25 @@ const DEAD_BREAK: Record<TreeFamily, BreakRule> = {
   ancient: { threshold: 0.56, intactFloor: 0.74 },
 };
 
+const UPROOTING_THRESHOLD: Record<TreeFamily, number> = {
+  cherry: 0.5,
+  broadleaf: 0.54,
+  conifer: 0.42,
+  dry: 0.64,
+  riverbank: 0.48,
+  alpine: 0.52,
+  ancient: 0.58,
+};
+
+/** Mirrors root-plate presentation so uprooted and snapped storm failures tell different stories. */
+export function treeLikelyUprooted(family: TreeFamily, uprooting: number): boolean {
+  return clamp01(uprooting) > UPROOTING_THRESHOLD[family];
+}
+
 /**
  * Fraction of original structural height retained after leader loss. A zero value means the tree
  * keeps its intact skeleton. Uprooted disturbance trees remain intact because the roots, not trunk,
- * failed. The renderer can later use the same value for true shader clipping; morphology already
- * uses it to distinguish snag/broken silhouettes without adding geometry or draw calls.
+ * failed. Morphology uses this to create distinct snag/broken silhouettes without extra draw calls.
  */
 export function treeBarkBreakFraction(
   family: TreeFamily,
@@ -112,7 +137,7 @@ export function treeConditionFoliageVitality(condition: TreeVisualCondition): nu
   }
 }
 
-/** Relative crown width response to condition; dead/fallen values affect branch silhouette only. */
+/** Relative crown-width response to condition; for dead/fallen trees this also shapes branch reach. */
 export function treeConditionCrownSpread(condition: TreeVisualCondition, family: TreeFamily): number {
   switch (condition) {
     case 'veteran': return family === 'ancient' ? 1.06 : 1.025;
