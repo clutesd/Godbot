@@ -111,12 +111,13 @@ export class PresentationDirector {
     this.seasonalHoldSecondsRemaining = Math.max(0, this.seasonalHoldSecondsRemaining - deltaSeconds);
     if (this.holdSecondsRemaining === 0 && urgency === 0) this.heldUrgency = 0;
 
-    // Deceleration should feel responsive; returning to fast history should feel deliberate.
+    // Season boundaries should visibly settle almost immediately; returning to fast history stays
+    // deliberate. A slow multi-second ease-in would waste most of the breathing window while the
+    // simulation was still running near its previous deep-time speed.
     const slowing = this.targetMonthsPerSecond < this.monthsPerSecond;
-    const timeConstant = Math.max(
-      0.18,
-      this.config.presentation.transitionSeconds * (slowing ? 0.34 : 1.35),
-    );
+    const seasonalSlowing = slowing && this.seasonalHoldSecondsRemaining > 0;
+    const transitionFactor = seasonalSlowing ? 0.16 : slowing ? 0.34 : 1.35;
+    const timeConstant = Math.max(0.18, this.config.presentation.transitionSeconds * transitionFactor);
     const transition = 1 - Math.exp(-deltaSeconds / timeConstant);
     this.monthsPerSecond += (this.targetMonthsPerSecond - this.monthsPerSecond) * transition;
 
