@@ -129,14 +129,14 @@ export interface ForestPlan {
 }
 
 const EMPTY_COUNTS = (): Record<TreeFamily, number> => ({
-  cherry: 0, broadleaf: 0, conifer: 0, dry: 0, riverbank: 0, alpine: 0, ancient: 0,
+  cherry: 0, broadleaf: 0, birch: 0, conifer: 0, dry: 0, riverbank: 0, alpine: 0, ancient: 0,
 });
 
 /** Unit-height trees are grown at scale 1; this is what makes them read as trees beside people. */
 const TREE_SCALE = 2.5;
 
 const LIFESPAN_YEARS: Record<TreeFamily, readonly [number, number]> = {
-  cherry: [65, 115], broadleaf: [110, 210], conifer: [130, 280], dry: [90, 175],
+  cherry: [65, 115], broadleaf: [110, 210], birch: [70, 150], conifer: [130, 280], dry: [90, 175],
   riverbank: [70, 135], alpine: [120, 240], ancient: [500, 900],
 };
 
@@ -176,14 +176,24 @@ function ecologyAt(
   else if (sample.flow > 0.34) family = 'riverbank';
   else if (sample.moisture < 0.4) family = 'dry';
   else {
-    // Blossom groves are deliberately scarce. In the wild they cluster where a culture would have
-    // planted them anyway: sheltered, watered, gentle ground. Near a town a second mask breaks the
-    // planting into orchard rows so the approach is lined rather than smothered.
     const grove = fbm(`${seed}:blossom-grove`, worldX * 0.028 - 63, worldZ * 0.028 + 29, 3);
     const orchard = cultivated > 0.5 && fbm(`${seed}:orchard`, worldX * 0.1, worldZ * 0.1, 3) > 0.63;
     if ((grove > 0.73 || orchard) && sample.moisture > 0.4 && sample.temperature > 0.4 && sample.slope < 0.36) family = 'cherry';
   }
   if (community && family !== 'cherry') family = community.family;
+
+  // Birch is a presentation-level pioneer/mixed-stand species rather than a new authoritative
+  // simulation community. It appears in cool, moist broadleaf/conifer woodland, especially younger
+  // or disturbed stands, as spatially coherent groves instead of replacing an entire biome.
+  const birchPatch = fbm(`${seed}:birch-grove`, worldX * 0.047 + 19, worldZ * 0.047 - 31, 4);
+  const youngStand = community ? smoothstep(130, 38, community.ageYears) : 0.45;
+  const disturbed = clamp01(community?.disturbance ?? 0);
+  const birchThreshold = 0.72 - youngStand * 0.09 - disturbed * 0.06;
+  const birchClimate = sample.temperature > 0.28 && sample.temperature < 0.58
+    && sample.moisture > 0.43 && sample.slope < 0.5
+    && sample.elevation < mountainLevel - 0.08 && sample.flow < 0.34;
+  if ((family === 'broadleaf' || family === 'conifer') && birchClimate && birchPatch > birchThreshold) family = 'birch';
+
   return { density, family };
 }
 
@@ -205,13 +215,11 @@ export function planForest(
   budget = Math.max(0, Math.floor(budget));
   const land = world.cells.filter((cell) => !cell.water && cell.wood > 0.18);
   if (land.length === 0) return { trees, byFamily };
-  // A budget exhausted in row order otherwise leaves the far side of a rich world bare.
   for (let index = land.length - 1; index > 0; index -= 1) {
     const other = random.int(0, index + 1);
     [land[index], land[other]] = [land[other]!, land[index]!];
   }
 
-  /** Ceremonial planting: a ring of managed ground around a settlement, not the settlement itself. */
   const cultivationAt = (worldX: number, worldZ: number): number => {
     let best = 0;
     for (const anchor of anchors) {
