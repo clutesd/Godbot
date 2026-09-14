@@ -61,32 +61,39 @@ describe('Cinematic presentation pacing', () => {
     expect(busy).toBeGreaterThanOrEqual(simulation.config.presentation.significantMonthsPerSecond);
   });
 
-  it('creates a seasonal breathing window and limits catch-up to one month per frame', () => {
+  it('pre-arms an unmistakable seasonal breathing window before catch-up can skip the boundary', () => {
     const simulation = new Simulation({ seed: 'cinematic-season-transition', startingPopulation: 180 });
     const director = new PresentationDirector(simulation.config);
     const quiet = { interest: 0.1, kind: 'landscape-pause' as const };
 
+    // Warm past the initial Late Winter -> Early Spring opening hold without advancing the fixture month.
     for (let second = 0; second < 30; second += 1) director.update(1, simulation.state, quiet);
     const ordinaryBudget = director.tickBudget(simulation.state);
     expect(ordinaryBudget).toBeGreaterThan(1);
 
-    // Month 1 is EARLY SPRING in the presentation calendar: the first seasonal transition.
-    simulation.state.month = 1;
+    // Month 3 is LATE SPRING. EARLY SUMMER is month 4, so the director must slow before the
+    // authoritative simulation can run a multi-month catch-up loop across that boundary.
+    simulation.state.month = 3;
+    const before = director.monthsPerSecond;
     director.update(0.25, simulation.state, quiet);
 
     expect(director.telemetry().seasonalTransition).toBe(true);
-    expect(director.telemetry().seasonalHoldSecondsRemaining).toBeGreaterThan(7);
+    expect(director.telemetry().seasonalHoldSecondsRemaining).toBeGreaterThan(9);
     expect(director.telemetry().tempo).toBe('linger');
     expect(director.tickBudget(simulation.state)).toBe(1);
+    expect(director.monthsPerSecond).toBeLessThan(before);
 
-    // Let the easing settle while the transition is still active.
-    for (let step = 0; step < 8; step += 1) director.update(0.5, simulation.state, quiet);
-    expect(director.monthsPerSecond).toBeLessThan(simulation.config.presentation.significantMonthsPerSecond);
+    // Within a few real seconds the requested pace should be close to the engine's 0.1 month/sec
+    // floor: visibly slower than the ordinary 2-second-ish month cadence.
+    for (let step = 0; step < 10; step += 1) director.update(0.5, simulation.state, quiet);
+    expect(director.monthsPerSecond).toBeLessThan(0.2);
 
-    // The breathing window deliberately outlives the transition month so rendering can catch up.
-    simulation.state.month = 2;
+    // Entering EARLY SUMMER uses the same transition key and must not reset/extend the hold.
+    const remaining = director.telemetry().seasonalHoldSecondsRemaining;
+    simulation.state.month = 4;
     director.update(0.5, simulation.state, quiet);
     expect(director.telemetry().seasonalTransition).toBe(true);
+    expect(director.telemetry().seasonalHoldSecondsRemaining).toBeLessThan(remaining);
     expect(director.tickBudget(simulation.state)).toBe(1);
 
     for (let second = 0; second < 10; second += 1) director.update(1, simulation.state, quiet);
