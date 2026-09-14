@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type * as THREE from 'three';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily } from '../src/render/vegetation/TreeLibrary';
 
-const DECIDUOUS: readonly TreeFamily[] = ['cherry', 'broadleaf', 'dry', 'riverbank', 'ancient'];
+const DECIDUOUS: readonly TreeFamily[] = ['cherry', 'broadleaf', 'birch', 'dry', 'riverbank', 'ancient'];
 
 function geometryEnvelope(geometry: THREE.BufferGeometry): {
   radius: number;
@@ -39,7 +39,6 @@ interface FoliageSiteMetric {
   aspect: number;
 }
 
-/** Every deciduous canopy site deliberately consumes 20 triangles, regardless of clump vs spray pair. */
 function foliageSiteMetrics(geometry: THREE.BufferGeometry): FoliageSiteMetric[] {
   const position = geometry.getAttribute('position');
   const indices = geometry.getIndex();
@@ -61,12 +60,23 @@ function foliageSiteMetrics(geometry: THREE.BufferGeometry): FoliageSiteMetric[]
       minZ = Math.min(minZ, position.getZ(vertex)); maxZ = Math.max(maxZ, position.getZ(vertex));
     }
     const extents = [maxX - minX, maxY - minY, maxZ - minZ].sort((a, b) => a - b);
-    metrics.push({
-      span: extents[2]!,
-      aspect: extents[2]! / Math.max(1e-6, extents[0]!),
-    });
+    metrics.push({ span: extents[2]!, aspect: extents[2]! / Math.max(1e-6, extents[0]!) });
   }
   return metrics;
+}
+
+function colourRange(geometry: THREE.BufferGeometry): { min: number; max: number; average: number } {
+  const colour = geometry.getAttribute('color');
+  let min = Infinity;
+  let max = -Infinity;
+  let total = 0;
+  for (let index = 0; index < colour.count; index += 1) {
+    const value = (colour.getX(index) + colour.getY(index) + colour.getZ(index)) / 3;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+    total += value;
+  }
+  return { min, max, average: total / Math.max(1, colour.count) };
 }
 
 describe('Tree library branch architecture', () => {
@@ -75,6 +85,7 @@ describe('Tree library branch architecture', () => {
     const allowedRadialOvershoot: Partial<Record<TreeFamily, number>> = {
       cherry: 1.12,
       broadleaf: 1.1,
+      birch: 1.12,
       dry: 1.2,
       riverbank: 1.14,
       ancient: 1.18,
@@ -124,6 +135,27 @@ describe('Tree library branch architecture', () => {
     }
   });
 
+  it('makes birch visibly pale, banded, and more columnar than ordinary broadleaf trees', () => {
+    const library = buildTreeLibrary('birch-identity', 6, TREE_LOD_NEAR);
+    const birches = library.get('birch') ?? [];
+    const broadleaf = library.get('broadleaf') ?? [];
+    expect(birches).toHaveLength(6);
+
+    const birchAspects = birches.map(tree => {
+      const envelope = geometryEnvelope(tree.foliage);
+      const bark = colourRange(tree.bark);
+      expect(bark.average).toBeGreaterThan(0.48);
+      expect(bark.max - bark.min).toBeGreaterThan(0.18);
+      return (envelope.maxY - envelope.minY) / Math.max(1e-6, Math.max(envelope.widthX, envelope.widthZ));
+    });
+    const broadleafAspects = broadleaf.map(tree => {
+      const envelope = geometryEnvelope(tree.foliage);
+      return (envelope.maxY - envelope.minY) / Math.max(1e-6, Math.max(envelope.widthX, envelope.widthZ));
+    });
+    const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+    expect(mean(birchAspects)).toBeGreaterThan(mean(broadleafAspects) * 1.04);
+  });
+
   it('keeps near and far tiers on the same deterministic tree silhouette contract', () => {
     const near = buildTreeLibrary('branch-lod-identity', 4, TREE_LOD_NEAR);
     const far = buildTreeLibrary('branch-lod-identity', 4, TREE_LOD_FAR);
@@ -144,8 +176,6 @@ describe('Tree library branch architecture', () => {
       for (const tree of variants) {
         const barkTriangles = (tree.bark.getIndex()?.count ?? 0) / 3;
         expect(barkTriangles).toBeGreaterThan(0);
-        // 44 segments * 5-sided tubes * 2 triangles per side is the absolute deciduous ceiling;
-        // evergreen geometry stays comfortably below the same guardrail.
         expect(barkTriangles).toBeLessThanOrEqual(TREE_LOD_NEAR.maxSegments * TREE_LOD_NEAR.sides * 2 + 10);
       }
     }
