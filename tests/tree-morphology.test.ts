@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ResolvedTreeLifecycle, TreePlacement } from '../src/render/vegetation/ForestPlanner';
+import { resolveTreeLifecycle, type ResolvedTreeLifecycle, type TreePlacement } from '../src/render/vegetation/ForestPlanner';
 import { resolveTreeMorphology, resolveTreePhenotype } from '../src/render/vegetation/TreeMorphology';
 
 const placement = (overrides: Partial<TreePlacement> = {}): TreePlacement => ({
@@ -26,6 +26,13 @@ const lifecycle = (overrides: Partial<ResolvedTreeLifecycle> = {}): ResolvedTree
   ...overrides,
 });
 
+const morphologyValues = (tree: ReturnType<typeof resolveTreeMorphology>): number[] => [
+  tree.trunkRadiusX, tree.trunkRadiusZ, tree.trunkHeight,
+  tree.crownWidthX, tree.crownWidthZ, tree.crownHeight,
+  tree.crownOffsetX, tree.crownOffsetZ, tree.crownLift,
+  tree.leanX, tree.leanZ, tree.foliageDensity,
+];
+
 describe('Tree morphology', () => {
   it('derives stable biological traits independently of yaw', () => {
     const tree = placement();
@@ -50,6 +57,8 @@ describe('Tree morphology', () => {
       expect(phenotype.pigment).toBeLessThanOrEqual(1);
       expect(phenotype.phenology).toBeGreaterThanOrEqual(0);
       expect(phenotype.phenology).toBeLessThanOrEqual(1);
+      expect(phenotype.uprooting).toBeGreaterThanOrEqual(0);
+      expect(phenotype.uprooting).toBeLessThanOrEqual(1);
     }
   });
 
@@ -80,5 +89,34 @@ describe('Tree morphology', () => {
     expect(Math.abs(old.crownOffsetZ)).toBeGreaterThanOrEqual(Math.abs(mature.crownOffsetZ) - 1e-9);
     expect(fallen.fallAngle).toBeGreaterThan(Math.PI * 0.4);
     expect(fallen.fallAngle).toBeLessThan(Math.PI * 0.5);
+  });
+
+  it('stays continuous across every living age-class boundary, including ancient veterans', () => {
+    const trees = [
+      placement({ family: 'cherry', lifespanYears: 70, establishedYear: 0 }),
+      placement({ family: 'broadleaf', lifespanYears: 160, establishedYear: 0 }),
+      placement({ id: 'ancient:continuity', family: 'ancient', lifespanYears: 700, establishedYear: 0 }),
+    ];
+    for (const tree of trees) {
+      const phenotype = resolveTreePhenotype('continuity', tree);
+      const veteranAge = Math.min(tree.id ? 55 : 90, tree.lifespanYears * 0.75);
+      const boundaries = [15, 35, veteranAge, tree.lifespanYears * 0.82]
+        .filter((value, index, values) => value > 0 && value < tree.lifespanYears && values.indexOf(value) === index);
+      for (const boundary of boundaries) {
+        const before = resolveTreeMorphology(phenotype, resolveTreeLifecycle(tree, boundary - 0.001));
+        const after = resolveTreeMorphology(phenotype, resolveTreeLifecycle(tree, boundary + 0.001));
+        const deltas = morphologyValues(before).map((value, index) => Math.abs(value - morphologyValues(after)[index]!));
+        expect(Math.max(...deltas)).toBeLessThan(0.002);
+      }
+    }
+  });
+
+  it('reuses an unchanged tree form instead of allocating it on every LOD refresh', () => {
+    const tree = placement({ establishedYear: 0 });
+    const phenotype = resolveTreePhenotype('cache', tree);
+    const state = resolveTreeLifecycle(tree, 40);
+    const first = resolveTreeMorphology(phenotype, state);
+    expect(resolveTreeMorphology(phenotype, { ...state })).toBe(first);
+    expect(resolveTreeMorphology(phenotype, resolveTreeLifecycle(tree, 41))).not.toBe(first);
   });
 });
