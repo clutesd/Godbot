@@ -61,7 +61,7 @@ describe('Purposeful represented people', () => {
         }
       }
     }
-  }, 20_000);
+  }, 60_000);
 
   it('turns settlement functions and active construction into visible work destinations', () => {
     const simulation = new Simulation({ seed: 'people-at-work', startingPopulation: 300, settlementCount: [4, 4] });

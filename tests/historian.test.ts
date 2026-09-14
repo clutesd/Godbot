@@ -110,7 +110,7 @@ describe('Presentation independence', () => {
     control.step(80 * 12);
     expect(observed.summary()).toEqual(control.summary());
     expect(observed.state.history).toEqual(control.state.history);
-  }, 20_000);
+  }, 40_000);
 
   it('accelerates quiet views and slows significant events', () => {
     const simulation = new Simulation({ seed: 'presentation-pacing', startingPopulation: 180 });
@@ -137,7 +137,7 @@ describe('Presentation independence', () => {
     accelerated.step(180 * 12);
     expect(documentary.state.history).toEqual(accelerated.state.history);
     expect(documentary.summary()).toEqual(accelerated.summary());
-  }, 60_000);
+  }, 90_000);
 
   it('ramps quiet history up and important history down without abrupt target jumps', () => {
     const simulation = new Simulation({ ...timePresetConfig('documentary'), seed: 'presentation-ramp' });

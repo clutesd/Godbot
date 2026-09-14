@@ -1,3 +1,4 @@
+import { eventsAfter, eventSequence, observeHistory } from '../sim/History';
 import type { GodboxConfig } from '../config';
 import { SeededRandom } from '../sim/prng';
 import { representedPopulation } from '../sim/advanced/AdvancedCivilizationSystem';
@@ -44,6 +45,8 @@ export interface ArchivedPerson {
   prestige: number;
   reasons: string[];
   aliveAtLastRecord: boolean;
+  expertise?: Person['expertise'];
+  career?: Person['career'];
 }
 
 export interface RunArchiveRecord {
@@ -156,6 +159,8 @@ export function createRunIdentity(config: GodboxConfig, state: SimulationState, 
 }
 
 export class RunRecordBuilder {
+  private processedSequence = 0;
+  private representativeIds: ReadonlySet<string> = new Set();
   private readonly events = new Map<string, HistoricalEvent>();
   private readonly people = new Map<string, ArchivedPerson>();
   private readonly demographicMilestones: DemographicMilestone[];
@@ -165,6 +170,10 @@ export class RunRecordBuilder {
   private readonly priorPredictions: HistorianPrediction[];
 
   constructor(readonly identity: RunIdentity, private readonly config: GodboxConfig, initialState: SimulationState, prior?: RunArchiveRecord) {
+    observeHistory(initialState, event => {
+      if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
+      if (event.type === 'death') this.captureRecordedDeaths([event], this.representativeIds);
+    });
     const population = representedPopulation(initialState);
     for (const event of prior?.events ?? []) this.events.set(event.id, structuredClone(event));
     for (const person of prior?.significantPeople ?? []) this.people.set(person.id, structuredClone(person));
@@ -181,7 +190,10 @@ export class RunRecordBuilder {
     predictions: readonly HistorianPrediction[] = [],
     completion?: { status: 'completed' | 'failed'; classification?: SimulationState['advanced']['outcome']['classification']; reason?: string },
   ): RunArchiveRecord {
-    for (const event of state.history) if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
+    this.representativeIds = representativeIds;
+    const newEvents = eventsAfter(state.history, this.processedSequence);
+    if (newEvents.length) this.processedSequence = eventSequence(newEvents[newEvents.length - 1]!);
+    for (const event of newEvents) if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
     const population = representedPopulation(state);
     if (population >= Math.max(this.lastPeakMilestone + 50, this.lastPeakMilestone * 1.25)) {
       this.demographicMilestones.push({ month: state.month, population, kind: 'new-peak' });
@@ -190,7 +202,7 @@ export class RunRecordBuilder {
     const initialPopulation = this.identity.initialConditions.population;
     if (population <= initialPopulation / 2 && !this.demographicMilestones.some((milestone) => milestone.kind === 'half-population')) this.demographicMilestones.push({ month: state.month, population, kind: 'half-population' });
     if (population === 0 && !this.demographicMilestones.some((milestone) => milestone.kind === 'extinction')) this.demographicMilestones.push({ month: state.month, population, kind: 'extinction' });
-    this.captureRecordedDeaths(state, representativeIds);
+    this.captureRecordedDeaths(newEvents, representativeIds);
     this.capturePeople(state, representativeIds);
     const status = completion?.status ?? (population === 0 ? 'completed' : 'ongoing');
     const events = [...this.events.values()].sort((a, b) => a.month - b.month || a.id.localeCompare(b.id));
@@ -248,9 +260,9 @@ export class RunRecordBuilder {
     }
   }
 
-  private captureRecordedDeaths(state: SimulationState, representativeIds: ReadonlySet<string>): void {
+  private captureRecordedDeaths(events: readonly HistoricalEvent[], representativeIds: ReadonlySet<string>): void {
     const historicallySignificantIds = new Set([...this.events.values()].filter((event) => event.significance >= 0.7).flatMap((event) => event.actors));
-    for (const event of state.history.filter((candidate) => candidate.type === 'death' && typeof candidate.context.name === 'string')) {
+    for (const event of events.filter((candidate) => candidate.type === 'death' && typeof candidate.context.name === 'string')) {
       const id = event.actors[0];
       if (!id) continue;
       const age = Number(event.context.age ?? 0);
@@ -262,15 +274,16 @@ export class RunRecordBuilder {
         ...(age >= 72 ? ['long-life'] : []),
         ...(prestige >= 0.62 ? ['high-prestige'] : []),
         ...(occupation === 'keeper' ? ['knowledge-keeper'] : []),
+        ...(Number(event.context.competence ?? 0) >= 0.7 ? ['practical-expert'] : []),
       ];
       if (reasons.length === 0) continue;
       const existing = this.people.get(id);
-      this.people.set(id, { id, name: String(event.context.name), cultureId: String(event.context.cultureId ?? existing?.cultureId ?? ''), homeId: String(event.context.homeId ?? event.locationId ?? existing?.homeId ?? ''), occupation, bornMonth: event.month - age * 12, lastKnownMonth: event.month, lastKnownAgeYears: age, prestige, reasons: [...new Set([...(existing?.reasons ?? []), ...reasons])], aliveAtLastRecord: false });
+      this.people.set(id, { id, name: String(event.context.name), cultureId: String(event.context.cultureId ?? existing?.cultureId ?? ''), homeId: String(event.context.homeId ?? event.locationId ?? existing?.homeId ?? ''), occupation, bornMonth: Number(event.context.bornMonth ?? event.month - age * 12), lastKnownMonth: event.month, lastKnownAgeYears: age, prestige, reasons: [...new Set([...(existing?.reasons ?? []), ...reasons])], aliveAtLastRecord: false, expertise: event.context.expertiseState ? JSON.parse(String(event.context.expertiseState)) as Person['expertise'] : existing?.expertise, career: event.context.careerState ? JSON.parse(String(event.context.careerState)) as Person['career'] : existing?.career });
     }
   }
 
   private personRecord(person: Person, month: number, reasons: string[]): ArchivedPerson {
-    return { id: person.id, name: person.name, cultureId: person.cultureId, homeId: person.homeId, occupation: person.occupation, bornMonth: person.bornMonth, lastKnownMonth: month, lastKnownAgeYears: Math.floor(person.ageMonths / 12), prestige: person.prestige, reasons: [...new Set(reasons)], aliveAtLastRecord: person.alive };
+    return { id: person.id, name: person.name, cultureId: person.cultureId, homeId: person.homeId, occupation: person.occupation, bornMonth: person.bornMonth, lastKnownMonth: month, lastKnownAgeYears: Math.floor(person.ageMonths / 12), prestige: person.prestige, reasons: [...new Set(reasons)], aliveAtLastRecord: person.alive, expertise: structuredClone(person.expertise), career: structuredClone(person.career) };
   }
 }
 

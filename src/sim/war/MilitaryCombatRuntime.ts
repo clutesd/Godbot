@@ -1,3 +1,4 @@
+import { eventsAfter } from '../History';
 import { Simulation } from '../Simulation';
 import type { HistoricalEvent, Settlement, SimulationState, War } from '../types';
 import { deriveMilitaryProfile, militaryEventContext, militaryProfileForWar, type MilitaryCapabilityProfile } from './MilitaryCapability';
@@ -22,7 +23,7 @@ interface PreparedWar {
   rawStrengthA: number;
   rawStrengthB: number;
   battleCount: number;
-  historyLength: number;
+  historySequence: number;
 }
 
 let installed = false;
@@ -31,18 +32,10 @@ function profileFor(war: War, settlement: Settlement, side: 'attacker' | 'defend
   return militaryProfileForWar(war, side) ?? deriveMilitaryProfile(settlement);
 }
 
-function representedScale(state: SimulationState, settlement: Settlement): number {
-  if (state.advanced.scale !== 'modern-statistical') return 1;
-  const city = state.advanced.cities.find(candidate => candidate.settlementId === settlement.id);
-  const represented = Math.max(1, city?.population ?? 1);
-  const named = state.people.filter(person => person.alive && person.homeId === settlement.id).length;
-  return named / represented;
-}
-
-function consumeMateriel(state: SimulationState, settlement: Settlement, profile: MilitaryCapabilityProfile, strength: number, phase: War['phase']): void {
+function consumeMateriel(_state: SimulationState, settlement: Settlement, profile: MilitaryCapabilityProfile, strength: number, phase: War['phase']): void {
   const costs = militarySupplyCosts(profile);
   const phaseRate = phase === 'battle' ? 0.014 : phase === 'marching' ? 0.009 : phase === 'mobilizing' ? 0.005 : 0.003;
-  const demand = strength * representedScale(state, settlement) * phaseRate;
+  const demand = strength * phaseRate;
   settlement.resources.goods = Math.max(0, settlement.resources.goods - demand * costs.goods);
   settlement.resources.minerals = Math.max(0, settlement.resources.minerals - demand * costs.minerals);
   settlement.resources.wealth = Math.max(0, settlement.resources.wealth - demand * costs.wealth);
@@ -127,7 +120,7 @@ export function installMilitaryCombatRuntime(): void {
         rawStrengthA,
         rawStrengthB,
         battleCount: war.campaign.battleCount,
-        historyLength: this.state.history.length,
+        historySequence: this.state.eventSequence ?? 0,
       });
     }
 
@@ -140,7 +133,7 @@ export function installMilitaryCombatRuntime(): void {
       item.war.strengthA = battleOccurred && item.attacker.alive ? this.militaryStrength(item.attacker) : item.rawStrengthA;
       item.war.strengthB = battleOccurred && item.defender.alive ? this.militaryStrength(item.defender) : item.rawStrengthB;
 
-      for (const event of this.state.history.slice(item.historyLength)) {
+      for (const event of eventsAfter(this.state.history, item.historySequence)) {
         if (!event.actors.includes(item.war.id)) continue;
         augmentWarEvent(event, item);
       }

@@ -1,3 +1,4 @@
+import type { WorkforceProfile } from './people/HumanCapital';
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState, TraversalPath } from './transport/types';
@@ -416,6 +417,11 @@ export interface NotableFigure {
 }
 
 export interface Person {
+  /** Bounded acquired skill; occupation labels never confer expertise. */
+  expertise?: Array<{ domain: KnowledgeDomain; competence: number; lastPractisedMonth: number; teacherId?: string }>;
+  career?: { startedMonth: number; lastReconsideredMonth: number; reason: string; inactiveMonths: number };
+  displacedSinceMonth?: number;
+  diedMonth?: number;
   id: string;
   name: string;
   sex: 'female' | 'male';
@@ -465,6 +471,7 @@ export interface Household {
 export type SocialRelationshipKind = 'family' | 'colleague' | 'friend' | 'rival' | 'mentor' | 'superior' | 'political-ally' | 'intellectual-collaborator' | 'neighbor';
 
 export interface SocialRelationship {
+  teaching?: { mentorId: string; learnerId: string; domain: KnowledgeDomain; progress: number; lastTaughtMonth: number };
   id: string;
   a: string;
   b: string;
@@ -826,6 +833,8 @@ export interface StatisticalCohorts {
 }
 
 export interface CityAggregate {
+  /** Frozen at abstraction, subsequently independent of documentary sample composition. */
+  workforce?: WorkforceProfile;
   settlementId: string;
   population: number;
   health: number;
@@ -1025,6 +1034,7 @@ export type HistoricalEventType =
   | 'outcome-classified';
 
 export interface HistoricalEvent {
+  sequence?: number;
   id: string;
   month: number;
   type: HistoricalEventType;
@@ -1042,6 +1052,8 @@ export interface HistoricalEvent {
 }
 
 export interface SimulationStats {
+  documentaryDeaths?: number;
+  documentaryBirths?: number;
   births: number;
   deaths: number;
   migrations: number;
@@ -1072,6 +1084,7 @@ export interface SimulationStats {
 }
 
 export interface SimulationState {
+  eventSequence?: number;
   engineVersion: string;
   seed: string;
   month: number;

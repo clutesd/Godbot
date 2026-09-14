@@ -191,10 +191,9 @@ export function createDockStructure(options: DockStructureOptions): THREE.Group 
   }
 
   let headWidth = deckWidth;
-  let headDepth = 0;
   if (rank >= 2) {
     headWidth = deckWidth * (rank >= 4 ? 2.45 : 2.05);
-    headDepth = rank >= 4 ? 0.7 : 0.55;
+    const headDepth = rank >= 4 ? 0.7 : 0.55;
     const head = new THREE.Mesh(new THREE.BoxGeometry(headWidth, deckThickness, headDepth), rank >= 4 ? materials.metal : materials.timber);
     head.name = 'harbour-working-head';
     head.position.set(deckEnd.x, deckY, deckEnd.z);

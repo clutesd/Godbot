@@ -1,3 +1,5 @@
+import { infrastructureLabourBudget } from '../people/HumanCapital';
+import { settlementRepresentedPopulation } from '../Population';
 import { createSettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { WalkabilityLayer } from '../people/WalkabilityLayer';
@@ -176,7 +178,7 @@ export class TransportationSystem {
       return trip;
     }
     if (blockaded || !route.active || !a.alive || !b.alive || this.state.month < transport.nextDispatchMonth || !transport.path || !this.network.pathValid(transport.path)) return undefined;
-    const population = (id: string): number => Math.max(1, this.state.people.filter(p => p.alive && p.homeId === id).length);
+    const population = (id: string): number => Math.max(1, settlementRepresentedPopulation(this.state, id));
     const aPopulation = population(a.id);
     const bPopulation = population(b.id);
 
@@ -324,7 +326,8 @@ export class TransportationSystem {
     if (project.mode === 'rail'
       && Math.min(capabilityPractice(a, 'rail-transport', 'transformed'), capabilityPractice(b, 'rail-transport', 'transformed')) <= 0.34) return;
     if (project.mode === 'water' && (!this.canShip(a) || !this.canShip(b))) return;
-    let work = 0.22 + Math.min(a.prosperity, b.prosperity) * 0.28;
+    const aLabour = infrastructureLabourBudget(this.state, a), bLabour = infrastructureLabourBudget(this.state, b);
+    let work = Math.min(0.22 + Math.min(a.prosperity, b.prosperity) * 0.28, aLabour.remaining + bLabour.remaining);
     let cursor = project.from;
     for (const id of project.segmentIds) {
       const segment = network.segments[id]!;
@@ -359,6 +362,8 @@ export class TransportationSystem {
         a.resources.wood -= amount * 0.3;
         a.resources.minerals -= amount * legacyMinerals;
       }
+      const aWork = Math.min(aLabour.remaining, amount);
+      aLabour.remaining -= aWork; bLabour.remaining -= amount - aWork;
       segment.work += amount;
       work -= amount;
       if (segment.status === 'planned') { segment.status = 'under-construction'; network.revision++; }

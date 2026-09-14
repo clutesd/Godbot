@@ -1,3 +1,5 @@
+import { resourceLabourBudget, settlementLabour } from '../people/HumanCapital';
+import { useLabour } from './Processing';
 import { practical } from '../knowledge/KnowledgeSystem';
 import type { Person, Settlement, SimulationState, WorldCell } from '../types';
 import { cellAt } from '../world';
@@ -141,8 +143,8 @@ function reconcilePositiveBalance(settlement: Settlement, key: 'wood' | 'mineral
   settlement.resources[key] = Math.max(0, settlement.resources[key] - shortfall);
 }
 
-function requestedSupplementalRenewables(residents: readonly Person[]): Record<SupplementalRenewable, number> {
-  const count = (occupation: Person['occupation']): number => residents.filter((person) => person.alive && person.occupation === occupation).length;
+function requestedSupplementalRenewables(workers: Partial<Record<Person['occupation'], number>>): Record<SupplementalRenewable, number> {
+  const count = (occupation: Person['occupation']): number => workers[occupation] ?? 0;
   const foragers = count('forager');
   const keepers = count('keeper');
   const builders = count('builder');
@@ -214,12 +216,18 @@ export function advanceSettlementResourceExtraction(
 
   for (const cell of cells) advanceRenewablesToMonth(cell, state.month);
 
-  const harvestedWood = harvestRenewableAcross(cells, 'timber', requestedWood);
-  const mineralExtraction = extractMinerals(settlement, cells, requestedMinerals);
-  const supplementalRequests = requestedSupplementalRenewables(localResidents);
+  const budget = resourceLabourBudget(state, settlement, localResidents);
+  const timberCapacity = (budget.forager ?? 0) + (budget.builder ?? 0);
+  const harvestedWood = harvestRenewableAcross(cells, 'timber', Math.min(requestedWood, timberCapacity));
+  useLabour(budget, ['forager', 'builder'], harvestedWood);
+  const mineralCapacity = (budget.artisan ?? 0) + (budget.builder ?? 0);
+  const mineralExtraction = extractMinerals(settlement, cells, Math.min(requestedMinerals, mineralCapacity));
+  useLabour(budget, ['artisan', 'builder'], mineralExtraction.total);
+  const supplementalRequests = requestedSupplementalRenewables(settlementLabour(state, settlement, localResidents).effective);
   const renewables: Partial<Record<SupplementalRenewable, number>> = {};
   for (const kind of SUPPLEMENTAL_RENEWABLES) {
-    const harvested = harvestRenewableAcross(cells, kind, supplementalRequests[kind]);
+    const harvested = harvestRenewableAcross(cells, kind, Math.min(supplementalRequests[kind], (budget.forager ?? 0) + (budget.keeper ?? 0)));
+    useLabour(budget, ['forager', 'keeper'], harvested);
     if (harvested > 0) renewables[kind] = harvested;
   }
 

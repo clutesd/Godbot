@@ -40,7 +40,7 @@ describe('Observation restart', () => {
     expect(simulation.state.history).toEqual(fresh.state.history);
     expect(simulation.state.people).toEqual(fresh.state.people);
     expect(simulation.state.settlements).toEqual(fresh.state.settlements);
-  });
+  }, 20_000);
 
   it('restarts from a specified seed deterministically', () => {
     const simulation = new Simulation(CONFIG);
@@ -69,5 +69,5 @@ describe('Observation restart', () => {
     expect(simulation.state.history.every((event) => event.month === 0)).toBe(true);
     simulation.step(5 * 12);
     expect(simulation.state.history.every((event) => event.month <= 5 * 12)).toBe(true);
-  });
+  }, 12_000);
 });

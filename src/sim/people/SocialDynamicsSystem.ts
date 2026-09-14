@@ -71,7 +71,7 @@ export function socialInfluenceFor(personId: string, relationships: readonly Soc
         break;
       case 'mentor':
         support += quality * 0.82;
-        learning += quality;
+        if (relationship.teaching?.learnerId === personId) learning += quality * Math.min(1, relationship.teaching.progress * 5);
         mentorTies += 1;
         positiveTies += 1;
         break;
@@ -129,11 +129,14 @@ export function socialInfluenceFor(personId: string, relationships: readonly Soc
  * bounded and deterministic, but now exert a deliberately small prestige influence so social life
  * can matter to later leadership and historical selection without overpowering material conditions.
  */
+const updatedMonth = new WeakMap<SimulationState, number>();
 export function advanceSocialDynamics(state: SimulationState): void {
+  if (updatedMonth.get(state) === state.month) return;
   // Social structure evolves on human timescales, not every walking tick. Annual maintenance keeps deep-time
   // runs cheap while month 1 still establishes the starting households and work circles immediately.
   if (state.month > 1 && state.month % SOCIAL_UPDATE_MONTHS !== 0) return;
 
+  updatedMonth.set(state, state.month);
   const living = state.people.filter((person) => person.alive);
   const livingById = new Map(living.map((person) => [person.id, person]));
   const relationships = (state.socialRelationships ??= [])
@@ -454,8 +457,10 @@ function assignPresentationSignals(people: readonly Person[], relationships: rea
 }
 
 function applyBoundedSocialEffects(people: readonly Person[], relationships: readonly SocialRelationship[]): void {
+  const adjacency = new Map<string, SocialRelationship[]>();
+  for (const r of relationships) for (const id of [r.a, r.b]) { const edges = adjacency.get(id) ?? []; edges.push(r); adjacency.set(id, edges); }
   for (const person of people) {
-    const influence = socialInfluenceFor(person.id, relationships);
+    const influence = socialInfluenceFor(person.id, adjacency.get(person.id) ?? []);
     if (influence.centrality <= 0) continue;
     const networkTarget = clamp(
       0.13

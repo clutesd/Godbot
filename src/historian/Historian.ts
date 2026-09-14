@@ -251,7 +251,13 @@ export class Historian {
       const isTraveler = person.activity === 'migrate' || person.activity === 'travel' || person.activity === 'transport';
       const kind: ObservationKind = isTraveler ? 'traveler-follow' : 'worker-follow';
       const work = person.activity === 'socialize' ? 'spending time with others' : person.activity === 'rest' ? 'resting' : person.activity;
-      const statement = this.statement({ month: state.month, text: `${person.name}, age ${age}, is ${work}${home ? ` near ${home.name}` : ''}.`, epistemicStatus: 'recorded-fact', sourceEntityIds: [person.id, ...(home ? [home.id] : [])], claims: { entityIds: [person.id, ...(home ? [home.id] : [])] } });
+      const expert = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence)[0];
+      const careerYears = person.career ? Math.floor((state.month - person.career.startedMonth) / 12) : 0;
+      const capability = expert ? ` ${expert.competence >= 0.7 ? 'Highly experienced' : expert.competence >= 0.35 ? 'Practised' : 'Still learning'} in ${expert.domain}.` : '';
+      const continuity = careerYears >= 2 ? ` A ${person.occupation} for ${careerYears} years.` : '';
+      const teacher = expert?.teacherId ? state.people.find(p => p.id === expert.teacherId)?.name : undefined;
+      const lineage = expert?.teacherId ? ` Trained in ${expert.domain} by ${teacher ?? expert.teacherId}.` : '';
+      const statement = this.statement({ month: state.month, text: `${person.name}, age ${age}, is ${work}${home ? ` near ${home.name}` : ''}.${capability}${continuity}${lineage}`, epistemicStatus: 'recorded-fact', sourceEntityIds: [person.id, ...(home ? [home.id] : [])], claims: { entityIds: [person.id, ...(home ? [home.id] : [])] } });
       const unusual = person.occupation === 'keeper' || person.occupation === 'carrier' ? 0.08 : 0;
       const ordinary = person.prestige < 0.42 ? 0.07 : 0;
       result.push(this.candidate(`person:${person.id}`, person.id, kind, person.position, person.name, statement, 0.44 + unusual + ordinary + person.prestige * 0.08 - (this.shownSubjects.get(person.id) ?? 0) * 0.065, 0.3, isTraveler ? 'ambient-wilderness' : 'settlement'));

@@ -67,6 +67,8 @@ describe('settlement resource extraction', () => {
     settlement.resources.wood += 12;
     settlement.resources.minerals += 8;
 
+    // This is a stock-conservation fixture: provide sufficient available labour for the requested harvest.
+    sim.state.people.filter(p => p.homeId === settlement.id).forEach((p, i) => { p.occupation = i < 32 ? 'forager' : 'artisan'; p.health = 1; });
     const result = advanceSettlementResourceExtraction(sim.state, settlement);
 
     expect(result.authoritative).toBe(true);

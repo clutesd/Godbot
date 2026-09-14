@@ -157,7 +157,7 @@ export function humanStoryCueFor(person: Person): HumanStoryCue {
   if (memory.adversity > 0.5) return 'survivor';
   if (memory.displacement > 0.5) return 'migrant';
   if (memory.legacy > 0.48) return 'legacy';
-  if (memory.achievement > 0.5) return 'accomplished';
+  if (memory.achievement > 0.5 || person.expertise?.some(e => e.competence >= 0.7)) return 'accomplished';
   return 'ordinary';
 }
 

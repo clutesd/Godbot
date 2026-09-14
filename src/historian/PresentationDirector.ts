@@ -200,7 +200,7 @@ export class PresentationDirector {
       if (event.significance >= 0.72) recentWeight += 0.22 * (1 - age / Math.max(1, this.config.presentation.eventMemoryMonths + 1));
     }
     return clamp(
-      Math.max(0, observation.interest - 0.58) * 0.9
+      (CITY_KINDS.has(observation.kind) ? 0 : Math.max(0, observation.interest - 0.58) * 0.9)
       + Math.min(0.45, activeWars * 0.18)
       + Math.min(0.55, recentWeight),
       0,

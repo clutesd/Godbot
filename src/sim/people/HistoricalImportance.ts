@@ -1,4 +1,5 @@
-import type { HistoricalIdentity, NotableFigure, Person, SimulationState } from '../types';
+import { eventsAfter, eventSequence } from '../History';
+import type { HistoricalEventType, HistoricalIdentity, NotableFigure, Person, SimulationState, SocialRelationship } from '../types';
 import { advancePersonalMemory, memoriesFor, memoryInfluenceFor } from './PersonalMemorySystem';
 import { advanceSocialDynamics, socialInfluenceFor } from './SocialDynamicsSystem';
 
@@ -19,12 +20,11 @@ const MAX_CITED_EVENTS = 6;
 const MAX_RETIRED_FIGURES = 256;
 
 /** Events that make the people named in them candidates rather than bystanders. */
-const CHRONICLE_WEIGHTS: Record<string, number> = {
+const CHRONICLE_WEIGHTS: Partial<Record<HistoricalEventType, number>> = {
   discovery: 0.5,
   'leadership-succession': 0.34,
-  'institution-founded': 0.2,
-  'polity-formed': 0.26,
-  'polity-transition': 0.18,
+  'institution-formed': 0.2,
+  'political-transition': 0.18,
   battle: 0.16,
   'war-declared': 0.14,
   'settlement-founded': 0.3,
@@ -43,11 +43,15 @@ export class HistoricalImportanceSystem {
   private readonly chronicles = new Map<string, Chronicle>();
   private readonly retired = new Map<string, NotableFigure>();
   private processedEvents = 0;
+  private relationshipSource?: SocialRelationship[];
+  private adjacency = new Map<string, SocialRelationship[]>();
 
   reset(): void {
     this.chronicles.clear();
     this.retired.clear();
     this.processedEvents = 0;
+    this.relationshipSource = undefined;
+    this.adjacency.clear();
   }
 
   /**
@@ -58,9 +62,8 @@ export class HistoricalImportanceSystem {
   ingest(state: SimulationState): void {
     advancePersonalMemory(state);
     advanceSocialDynamics(state);
-    for (let index = this.processedEvents; index < state.history.length; index += 1) {
-      const event = state.history[index];
-      if (!event) continue;
+    for (const event of eventsAfter(state.history, this.processedEvents)) {
+      this.processedEvents = Math.max(this.processedEvents, eventSequence(event));
       const weight = CHRONICLE_WEIGHTS[event.type];
       if (weight === undefined) continue;
       for (const actor of event.actors) {
@@ -76,7 +79,7 @@ export class HistoricalImportanceSystem {
         else chronicle.reasons.add('chronicled');
       }
     }
-    this.processedEvents = state.history.length;
+
   }
 
   /** Records a contribution the chronicle cannot express through actor lists alone. */
@@ -131,7 +134,17 @@ export class HistoricalImportanceSystem {
       score += standing.institutionalPosition > 0.7 ? 0.08 : 0;
     }
 
-    const social = socialInfluenceFor(person.id, state.socialRelationships ?? []);
+    if (this.relationshipSource !== state.socialRelationships) {
+      this.relationshipSource = state.socialRelationships;
+      this.adjacency.clear();
+      for (const r of state.socialRelationships ?? []) for (const id of [r.a, r.b]) { const edges = this.adjacency.get(id) ?? []; edges.push(r); this.adjacency.set(id, edges); }
+    }
+    const social = socialInfluenceFor(person.id, this.adjacency.get(person.id) ?? []);
+    const expert = Math.max(0, ...(person.expertise ?? []).map(e => e.competence));
+    if (expert >= 0.7) { reasons.add('practical-expert'); score += Math.min(0.16, expert * 0.16); }
+    if ((person.expertise ?? []).some(e => e.teacherId)) reasons.add('trained-successor');
+    const teaching = (this.adjacency.get(person.id) ?? []).filter(r => r.teaching?.mentorId === person.id && r.teaching.progress >= 0.1).length;
+    if (teaching) { reasons.add('practical-teacher'); score += Math.min(0.08, teaching * 0.02); }
     if (social.positiveTies >= 4 && social.support > 0.38) {
       reasons.add('community-network');
       score += Math.min(0.06, 0.025 + social.support * 0.04 + social.centrality * 0.02);

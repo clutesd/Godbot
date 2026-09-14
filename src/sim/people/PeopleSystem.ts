@@ -111,7 +111,9 @@ export class PeopleSystem {
     const previousRole = person.role;
     const role = this.roleFor(person, settlement, state);
     person.role = role;
-    person.workplaceId = structureDestination(settlement, WORK_DESTINATION[role])?.id ?? `${settlement.id}:${WORK_DESTINATION[role]}`;
+    const workplace = person.workplaceId;
+    const supportedWorkplace = workplace && (settlement.structurePlots ?? []).some(plot => plot.id === workplace && (!plot.development || plot.development.status === 'active'));
+    if (role !== previousRole || !supportedWorkplace) person.workplaceId = structureDestination(settlement, WORK_DESTINATION[role])?.id ?? `${settlement.id}:${WORK_DESTINATION[role]}`;
     const householdVariation = stableUnit(`${this.seed}:${person.householdId}:wealth`) - 0.5;
     const roleStatus = statusForRole(role);
     const householdWealth = clamp(settlement.prosperity * 0.68 + householdVariation * 0.34 + roleStatus * 0.16);

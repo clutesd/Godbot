@@ -1,3 +1,4 @@
+import { settlementLabour } from '../people/HumanCapital';
 import type { Culture, Institution, InstitutionKind, Person, ResourceStock, Settlement, SimulationState, StructurePlot, TradeRoute } from '../types';
 import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
 import { materialAmount } from '../resources/MaterialEconomy';
@@ -53,11 +54,12 @@ export function developmentContext(state: SimulationState, settlement: Settlemen
   const culture = [...state.cultures].sort((a, b) => (settlement.cultureShares[b.id] ?? 0) - (settlement.cultureShares[a.id] ?? 0) || a.id.localeCompare(b.id))[0]!;
   const cell = state.world.cells[settlement.cellIndex]!;
   const city = state.advanced.scale === 'modern-statistical' ? state.advanced.cities.find(c => c.settlementId === settlement.id) : undefined;
-  const count = (occupation: Person['occupation']) => residents.filter(p => p.occupation === occupation).length;
+  const labour = settlementLabour(state, settlement, residents);
+  const count = (occupation: Person['occupation']) => labour.effective[occupation] ?? 0;
   const polity = state.polities.find(p => p.id === settlement.polityId);
   const waterState = settlement.development?.water;
   return { settlement, culture, institutions: state.institutions.filter(i => settlement.institutionIds.includes(i.id) && i.support >= 0.2),
-    population: city?.population ?? residents.length, farmers: count('farmer'), artisans: count('artisan'), keepers: count('keeper'), builders: count('builder'),
+    population: labour.population, farmers: count('farmer'), artisans: count('artisan'), keepers: count('keeper'), builders: count('builder'),
     health: city?.health ?? residents.reduce((n, p) => n + p.health, 0) / Math.max(1, residents.length),
     routes: state.tradeRoutes.filter(r => (r.a === settlement.id || r.b === settlement.id) && connected(state, r)).length,
     capitalReach: polity?.capitalId === settlement.id ? polity.settlementIds.length - 1 : 0,

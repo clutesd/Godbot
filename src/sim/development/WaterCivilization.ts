@@ -1,3 +1,4 @@
+import { settlementRepresentedPopulation } from '../Population';
 import type { Person, Settlement, SimulationState } from '../types';
 import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
 import { nearestIndex } from '../terrain/TerrainField';
@@ -111,14 +112,15 @@ export function advanceSettlementWater(
   settlement.development.water = water;
 
   // Separate productive output from household consumption so irrigation only changes production.
-  const baselineConsumption = residents.length * (0.31 + settlement.urbanization * 0.018);
+  const population = settlementRepresentedPopulation(state, settlement.id, residents);
+  const baselineConsumption = population * (0.31 + settlement.urbanization * 0.018);
   const estimatedProduction = Math.max(0, settlement.monthlyBalance.food + baselineConsumption);
-  const waterYieldFactor = Math.max(1, Math.min(1.24,
+  const waterYieldFactor = Math.max(0.6, Math.min(1.24,
     0.78 + reliability * 0.15 + irrigation * 0.34 - droughtStress * 0.42 - floodContamination * 0.08));
   const foodDelta = estimatedProduction * (waterYieldFactor - 1);
   settlement.monthlyBalance.food += foodDelta;
-  settlement.resources.food = Math.max(0, Math.min(foodStorageLimit(settlement, residents.length), settlement.resources.food + foodDelta));
-  const monthsOfFood = settlement.resources.food / Math.max(1, residents.length * 0.31);
+  settlement.resources.food = Math.max(0, Math.min(foodStorageLimit(settlement, population), settlement.resources.food + foodDelta));
+  const monthsOfFood = settlement.resources.food / Math.max(1, population * 0.31);
   settlement.foodSecurity = clamp01(monthsOfFood / 5 * 0.7 + (settlement.monthlyBalance.food >= 0 ? 0.3 : 0));
 
   settlement.climateStress = clamp01(settlement.climateStress * 0.9 + droughtStress * 0.2 + floodContamination * 0.06);

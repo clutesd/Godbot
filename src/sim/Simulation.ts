@@ -1,3 +1,6 @@
+import { emitEvent } from './History';
+import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
+import { killPeople, observeDeaths } from './people/PersonLifecycle';
 import { configWith, type GodboxConfig, type GodboxConfigInput } from '../config';
 import { SeededRandom } from './prng';
 import { KnowledgeSystem, type KnowledgeEventDraft } from './knowledge/KnowledgeSystem';
@@ -175,7 +178,6 @@ export class Simulation {
   private readonly importanceSystem = new HistoricalImportanceSystem();
   private nextPersonId = 1;
   private nextSettlementId = 1;
-  private nextEventId = 1;
   private nextInstitutionId = 1;
   private nextRouteId = 1;
   private nextWarId = 1;
@@ -218,7 +220,6 @@ export class Simulation {
     this.resourceSystem = new ResourceSystem(this.random.fork('resource-system'));
     this.nextPersonId = 1;
     this.nextSettlementId = 1;
-    this.nextEventId = 1;
     this.nextInstitutionId = 1;
     this.nextRouteId = 1;
     this.nextWarId = 1;
@@ -248,6 +249,19 @@ export class Simulation {
       stats: { births: 0, deaths: 0, migrations: 0, trades: 0, knowledgeExchanges: 0, discoveries: 0, knowledgeLost: 0, rediscoveries: 0, knowledgeAdoptions: 0, technologyTransformations: 0, industrializations: 0, wars: 0, battles: 0, peakPopulation: 0, settlementsFounded: 0, settlementsAbandoned: 0, atomicThresholds: 0, nuclearWeaponsStates: 0, nuclearUses: 0, nuclearWars: 0, pandemics: 0, firstOrbits: 0, offworldSettlements: 0, interplanetaryTransitions: 0, postBiologicalTransitions: 0, civilizationCollapses: 0, existentialRiskEvents: 0 },
       advanced: createAdvancedCivilizationState(),
     };
+    observeDeaths(this.state, people => {
+      const ids = new Set(people.map(p => p.id));
+      for (const person of people) {
+        this.importanceSystem.evaluate(person, this.state, this.state.month);
+        this.importanceSystem.retire(person, this.state.month);
+        this.personById.delete(person.id);
+      }
+      for (const homeId of new Set(people.map(p => p.homeId))) {
+        const local = this.peopleBySettlement.get(homeId);
+        if (local) local.splice(0, local.length, ...local.filter(p => !ids.has(p.id)));
+      }
+      this.state.notableFigures = this.importanceSystem.roster(this.state.people);
+    });
     this.peopleSystem = new PeopleSystem(world, this.config.seed);
     this.transportationSystem = new TransportationSystem(this.state);
     this.initialize();
@@ -294,7 +308,7 @@ export class Simulation {
   }
 
   get population(): number {
-    return this.state.people.length;
+    return this.state.people.reduce((n, p) => n + Number(p.alive), 0);
   }
 
   get year(): number {
@@ -319,6 +333,7 @@ export class Simulation {
       }
     }
     this.rebuildLookupIndexes();
+    beginLabourMonth(this.state, this.peopleBySettlement);
     this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
     this.runEconomy();
     if (this.state.month % 12 === 0) {
@@ -330,6 +345,7 @@ export class Simulation {
     this.transportationSystem.advanceMonth();
     this.runTrade();
     if (this.state.month % 12 === 0) this.formPartnerships();
+    advanceHumanCapital(this.state);
     this.runPeople();
     this.runWars();
     if (this.state.month % 3 === 0) this.runMigration();
@@ -356,6 +372,9 @@ export class Simulation {
     }
     this.state.stats.peakPopulation = Math.max(this.state.stats.peakPopulation, this.population);
     for (const settlement of this.state.settlements) reconcileBulkStocks(settlement);
+    this.importanceSystem.ingest(this.state);
+    this.state.notableFigures = this.importanceSystem.roster(this.state.people);
+    invalidateLabour(this.state);
     if (this.state.history.length > this.config.simulation.historyLimit) this.trimHistory();
   }
 
@@ -402,7 +421,7 @@ export class Simulation {
       this.widespreadAdoptions.add(id);
       const origin = settlements[0];
       if (!origin) continue;
-      const population = settlements.reduce((sum, settlement) => sum + this.peopleAt(settlement.id).length, 0);
+      const population = settlements.reduce((sum, settlement) => sum + settlementRepresentedPopulation(this.state, settlement.id, this.peopleAt(settlement.id)), 0);
       this.addEvent({
         type: 'technology-widespread', location: origin.position, locationId: origin.id,
         actors: settlements.map((settlement) => settlement.id), causes: [id, 'persistent-trade', 'local-adoption', 'institutional-capacity'],
@@ -598,6 +617,7 @@ export class Simulation {
       position,
       target: { ...position },
       occupation: this.occupationFor(ageMonths, settlement),
+      expertise: [], career: { startedMonth: this.state.month, lastReconsideredMonth: this.state.month, reason: 'initial', inactiveMonths: 0 },
       activity: 'socialize',
       health: clamp(this.random.gaussian(0.83, 0.1), 0.35, 1),
       energy: clamp(this.random.gaussian(0.76, 0.13)),
@@ -632,11 +652,13 @@ export class Simulation {
       const people = this.peopleAt(settlement.id);
       const cell = this.state.world.cells[settlement.cellIndex];
       if (!cell) continue;
-      const count = (occupation: Occupation): number => people.filter((person) => person.occupation === occupation).length;
+      const labour = settlementLabour(this.state, settlement, people);
+      const population = labour.population;
+      const count = (occupation: Occupation): number => labour.economy[occupation] ?? 0;
       const farmers = count('farmer');
-      const foragers = count('forager') * 0.5;
+      const foragers = count('forager');
       const builders = count('builder');
-      const repaired = repairWeatherDamage(settlement, builders * 0.65, this.state.month);
+      const repaired = repairWeatherDamage(settlement, builders, this.state.month);
       const damagedPlots = (settlement.structurePlots ?? []).filter((plot) => plot.condition < 1 && (!plot.development || plot.development.status === 'active'));
       if (settlement.weatherRecoverySince !== undefined && damagedPlots.length === 0) {
         this.addEvent({ type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
@@ -674,7 +696,7 @@ export class Simulation {
           clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
       const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
       const irrigation = 1 + waterEconomy(cell, settlement).irrigation * 0.12;
-      balance.food = (farmers * (0.54 + cell.fertility * 0.7) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.18 + cell.fertility * 0.25)) * safetyFactor * productivity.food * exposedWork - people.length * (0.31 + settlement.urbanization * 0.018);
+      balance.food = (farmers * (0.86 + cell.fertility * 1.12) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.29 + cell.fertility * 0.4)) * safetyFactor * productivity.food * exposedWork - population * (0.31 + settlement.urbanization * 0.018);
       // The settlement must request actual raw-material extraction before it can consume finished stocks.
       // Legacy `resources.wood/minerals` still model broad stockpiles; the positive monthlyBalance values
       // are the physical-demand signal that activates world-resource extraction and typed material accounting.
@@ -684,21 +706,21 @@ export class Simulation {
       const mineralUse = Math.min(settlement.resources.minerals, artisans * 0.03 + settlement.buildings * 0.012 + settlement.infrastructure.workshops * 0.12);
       balance.wood = woodDemand - woodUse;
       balance.minerals = mineralDemand - mineralUse;
-      balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods - people.length * (0.016 + settlement.urbanization * 0.006);
+      balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods - population * (0.016 + settlement.urbanization * 0.006);
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
       for (const key of ['food', 'wood', 'minerals', 'goods', 'wealth'] as const) {
         settlement.resources[key] = Math.max(0, settlement.resources[key] + balance[key]);
       }
       balance.wood += materialEconomy(settlement).delivered.timber ?? 0;
       balance.minerals += materialEconomy(settlement).delivered.stone ?? 0;
-      const foodStorage = Math.max(180, people.length * 6 + settlement.buildings * 24);
+      const foodStorage = Math.max(180, population * 6 + settlement.buildings * 24);
       settlement.resources.food = Math.min(settlement.resources.food, foodStorage);
       settlement.monthlyBalance = balance;
-      const monthsOfFood = settlement.resources.food / Math.max(1, people.length * 0.31);
+      const monthsOfFood = settlement.resources.food / Math.max(1, population * 0.31);
       settlement.foodSecurity = clamp(monthsOfFood / 5 * 0.7 + (balance.food >= 0 ? 0.3 : 0));
-      settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, people.length * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, people.length * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
+      settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, population * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, population * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
       settlement.prosperity *= 1 - Math.min(0.3, materialEconomy(settlement).shortageMonths * 0.001);
-      const builderCapacity = builders > 0 ? clamp(builders * 0.65 / Math.max(3, people.length * 0.055), 0.2, 1.35) : 0;
+      const builderCapacity = builders > 0 ? clamp(builders / Math.max(3, population * 0.055), 0.2, 1.35) : 0;
       const constructionRate = !cell.water && repaired === 0 && damagedPlots.length === 0
         ? builderCapacity * (0.45 + settlement.prosperity * 0.55) / this.config.historicalPace.smallConstructionMonths : 0;
       for (const event of advanceSettlementDevelopment(this.state, settlement, people, constructionRate)) {
@@ -715,7 +737,7 @@ export class Simulation {
         this.addEvent({
           type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
           causes: ['restored-food-stores', 'collective-adaptation'], context: { crisisMonths: settlement.crisisMonths, food: settlement.resources.food },
-          outcome: 'Rationing ended and households resumed ordinary work.', affectedPopulation: people.length, magnitude: clamp(settlement.crisisMonths / 18),
+          outcome: 'Rationing ended and households resumed ordinary work.', affectedPopulation: population, magnitude: clamp(settlement.crisisMonths / 18),
           significance: 0.5, tags: ['recovery', 'food'], summary: `${settlement.name} recovers from a long shortage.`,
         });
         const culture = this.dominantCulture(settlement);
@@ -726,7 +748,7 @@ export class Simulation {
         this.addEvent({
           type: 'harvest-crisis', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
           causes: ['food-deficit', cell.moisture < 0.35 ? 'dry-climate' : 'population-pressure', ...(weather && weather.snowpack > 0.5 ? ['deep-snow'] : []), ...(weather && weather.cropDamage > 0.05 ? ['storm-crop-damage'] : [])], context: { food: settlement.resources.food, balance: balance.food, snowpack: weather?.snowpack ?? 0, cropDamage: weather?.cropDamage ?? 0 },
-          outcome: 'Households rationed food and considered leaving.', affectedPopulation: people.length, magnitude: clamp(1 - settlement.foodSecurity), significance: 0.64,
+          outcome: 'Households rationed food and considered leaving.', affectedPopulation: population, magnitude: clamp(1 - settlement.foodSecurity), significance: 0.64,
           tags: ['scarcity', 'migration-pressure'], summary: `Food stores run dangerously low in ${settlement.name}.`,
         });
       }
@@ -735,15 +757,29 @@ export class Simulation {
 
   private runPeople(): void {
     const newborns: Person[] = [];
+    const deaths: Array<{ person: Person; cause: string }> = [];
     this.importanceSystem.ingest(this.state);
     const popLimitFactor = clamp(1 - this.population / this.config.simulation.populationSoftCap, 0.04, 1);
     for (const person of this.state.people) {
-      const settlement = this.settlement(person.homeId);
-      if (!settlement?.alive) continue;
+      if (!person.alive) continue;
+      let settlement = this.settlement(person.homeId);
       person.ageMonths += 1;
+      if (!settlement?.alive) {
+        person.displacedSinceMonth ??= this.state.month;
+        if (this.state.month % 3 === 0) this.seekRefuge(person);
+        settlement = this.settlement(person.homeId);
+        if (!settlement?.alive) {
+          person.health = clamp(person.health - 0.012);
+          const age = person.ageMonths / 12;
+          const annual = age > 90 ? 0.42 : age > 76 ? 0.16 : age > 63 ? 0.052 : 0.014;
+          if (person.health <= 0 || this.random.chance((annual + Math.max(0, 0.5 - person.health) * 0.24) / 12)) deaths.push({ person, cause: 'displacement' });
+          continue;
+        }
+      }
       const ageYears = person.ageMonths / 12;
       if (person.ageMonths % 12 === 0) {
-        person.occupation = this.occupationFor(person.ageMonths, settlement);
+        reconsiderCareer(person, settlement, this.state.month, () => this.occupationFor(person.ageMonths, settlement!));
+        // The career persists while its era-specific role and supported workplace can evolve.
         this.peopleSystem.refreshIdentity(person, settlement, this.state);
         this.importanceSystem.evaluate(person, this.state, this.state.month);
       }
@@ -759,11 +795,11 @@ export class Simulation {
       const medicalProtection = this.knowledgeSystem.healthProtection(settlement);
       const pollutionHazard = settlement.pollution * 0.009;
       if (this.random.chance((annualMortality * (1 - medicalProtection * 0.42) + healthHazard * (1 - medicalProtection * 0.28) + scarcityHazard + pollutionHazard) / 12)) {
-        this.killPerson(person, scarcityHazard > healthHazard && scarcityHazard > annualMortality ? 'scarcity' : ageYears > 68 ? 'age' : 'illness');
+        deaths.push({ person, cause: scarcityHazard > healthHazard && scarcityHazard > annualMortality ? 'scarcity' : ageYears > 68 ? 'age' : 'illness' });
         continue;
       }
       if (person.sex === 'female' && ageYears >= 18 && ageYears <= 41 && person.partnerId && settlement.foodSecurity > 0.28) {
-        const localPopulation = this.peopleAt(settlement.id).length;
+        const localPopulation = settlementRepresentedPopulation(this.state, settlement.id, this.peopleAt(settlement.id));
         const cell = this.state.world.cells[settlement.cellIndex];
         const carryingCapacity = 52 + (cell?.habitability ?? 0.5) * 175 + settlement.buildings * 4;
         const pressureFactor = clamp(1.25 - localPopulation / carryingCapacity, 0.05, 1);
@@ -778,7 +814,8 @@ export class Simulation {
             person.children.push(child.id);
             if (partner) partner.children.push(child.id);
             newborns.push(child);
-            this.state.stats.births += 1;
+            if (this.state.advanced.scale === 'modern-statistical') this.state.stats.documentaryBirths = (this.state.stats.documentaryBirths ?? 0) + 1;
+            else this.state.stats.births += 1;
             this.addEvent({
               type: 'birth', location: settlement.position, locationId: settlement.id, actors: [child.id, ...child.parents], causes: ['family-continuity'],
               context: { culture: culture.id }, outcome: `${child.name} joined the household.`, affectedPopulation: 1, magnitude: 0.03, significance: 0.04,
@@ -788,6 +825,7 @@ export class Simulation {
         }
       }
     }
+    for (const cause of ['scarcity', 'age', 'illness', 'displacement']) killPeople(this.state, deaths.filter(d => d.cause === cause).map(d => d.person), cause);
     this.state.people.push(...newborns);
     for (const child of newborns) this.indexPerson(child);
     if (this.state.month % 12 === 0) this.state.notableFigures = this.importanceSystem.roster(this.state.people);
@@ -822,23 +860,25 @@ export class Simulation {
     person.energy = clamp(person.energy - (person.activity === 'rest' ? -0.02 : person.navigation?.traveling ? 0.055 : 0.035));
   }
 
-  private killPerson(person: Person, cause: string): void {
-    person.alive = false;
-    this.importanceSystem.retire(person, this.state.month);
-    this.personById.delete(person.id);
-    const localPeople = this.peopleBySettlement.get(person.homeId);
-    const localIndex = localPeople?.indexOf(person) ?? -1;
-    if (localPeople && localIndex >= 0) localPeople.splice(localIndex, 1);
-    this.state.stats.deaths += 1;
-    const partner = person.partnerId ? this.person(person.partnerId) : undefined;
-    if (partner) partner.partnerId = undefined;
-    const settlement = this.settlement(person.homeId);
-    this.addEvent({
-      type: 'death', location: settlement?.position, locationId: settlement?.id, actors: [person.id], causes: [cause],
-      context: { name: person.name, age: Math.floor(person.ageMonths / 12), occupation: person.occupation, cultureId: person.cultureId, homeId: person.homeId, prestige: person.prestige }, outcome: `${person.name}'s life ended.`, affectedPopulation: 1,
-      magnitude: person.children.length > 3 ? 0.09 : 0.03, significance: person.children.length > 3 ? 0.1 : 0.025,
-      tags: ['life', cause], summary: `${person.name} dies at ${Math.floor(person.ageMonths / 12)} in ${settlement?.name ?? 'the wilderness'}.`,
-    });
+  private seekRefuge(person: Person): void {
+    const source = this.settlement(person.homeId);
+    const targets = this.livingSettlements().sort((a, b) => distance(a.position, source?.position ?? person.position) - distance(b.position, source?.position ?? person.position));
+    for (const target of targets) {
+      if (!this.peopleSystem.beginMigration(person, target, this.state, source ? this.route(source.id, target.id) : undefined)) continue;
+      const old = this.peopleBySettlement.get(person.homeId);
+      const index = old?.indexOf(person) ?? -1;
+      if (old && index >= 0) old.splice(index, 1);
+      person.homeId = target.id;
+      person.displacedSinceMonth = undefined;
+      const residents = this.peopleBySettlement.get(target.id) ?? [];
+      residents.push(person); this.peopleBySettlement.set(target.id, residents);
+      this.state.stats.migrations++;
+      this.addEvent({ type: 'major-migration', location: target.position, locationId: target.id, actors: [person.id],
+        causes: ['settlement-abandonment'], context: { source: source?.id ?? '', destination: target.id, expertise: (person.expertise ?? []).map(e => e.domain).join(',') },
+        outcome: 'A displaced survivor found refuge.', affectedPopulation: this.state.advanced.scale === 'modern-statistical' ? 0 : 1,
+        significance: 0.35, summary: `${person.name} seeks refuge in ${target.name}.` });
+      return;
+    }
   }
 
   private runMigration(): void {
@@ -899,7 +939,8 @@ export class Simulation {
       }
       this.applyKnowledgeEvents(this.knowledgeSystem.diffuseMigration(this.state, source, target, moved.length));
       this.state.stats.migrations += moved.length;
-      if (moved.length >= 3) {
+      const experts = moved.filter(p => p.expertise?.some(e => e.competence >= 0.7));
+      if (moved.length >= 3 || experts.length > 0) {
         const causes = [
           ...(source.foodSecurity < 0.4 ? ['food-scarcity'] : []),
           ...(source.conflictPressure > 0.28 ? ['conflict'] : []),
@@ -911,7 +952,7 @@ export class Simulation {
         this.addEvent({
           type: 'major-migration', location: source.position, locationId: source.id, actors: [source.id, target.id, ...moved.map((person) => person.id)],
           causes: causes.length > 0 ? causes : ['specialized-work'],
-          context: { from: source.name, to: target.name, distance: distance(source.position, target.position), climateStress: source.climateStress, conflictPressure: source.conflictPressure }, outcome: `${moved.length} people resettled in ${target.name}.`,
+          context: { from: source.name, to: target.name, expertiseTransferred: experts.map(p => `${p.id}:${p.expertise!.filter(e => e.competence >= 0.7).map(e => e.domain).join(',')}`).join(';'), distance: distance(source.position, target.position), climateStress: source.climateStress, conflictPressure: source.conflictPressure }, outcome: `${moved.length} people resettled in ${target.name}.`,
           affectedPopulation: moved.length, magnitude: clamp(moved.length / 12), significance: clamp(0.35 + moved.length / 25), tags: ['migration', 'culture-transfer'],
           summary: `${moved.length} people leave ${source.name} for ${target.name}.`,
         });
@@ -1023,7 +1064,7 @@ export class Simulation {
       if (!relation.allied && relation.trust > 0.72 && relation.tradeDependency > 0.2 && relation.hostility < 0.25 && this.random.chance(0.06)) {
         relation.allied = true;
         relation.allianceObligation = 0.42;
-        this.addEvent({ type: 'alliance-formed', location: a.position, actors: [a.id, b.id], causes: ['mutual-trust', 'trade-dependency'], context: { trust: relation.trust }, outcome: 'The communities pledged mutual aid.', affectedPopulation: this.peopleAt(a.id).length + this.peopleAt(b.id).length, magnitude: 0.64, significance: 0.72, tags: ['diplomacy', 'alliance'], summary: `${a.name} and ${b.name} form an alliance.` });
+        this.addEvent({ type: 'alliance-formed', location: a.position, actors: [a.id, b.id], causes: ['mutual-trust', 'trade-dependency'], context: { trust: relation.trust }, outcome: 'The communities pledged mutual aid.', affectedPopulation: settlementRepresentedPopulation(this.state, a.id, this.peopleAt(a.id)) + settlementRepresentedPopulation(this.state, b.id, this.peopleAt(b.id)), magnitude: 0.64, significance: 0.72, tags: ['diplomacy', 'alliance'], summary: `${a.name} and ${b.name} form an alliance.` });
       } else if (relation.allied && (relation.hostility > 0.58 || relation.trust < 0.3)) {
         relation.allied = false;
         relation.allianceObligation = 0;
@@ -1059,7 +1100,7 @@ export class Simulation {
       type: 'first-contact', location: { x: (a.position.x + b.position.x) / 2, z: (a.position.z + b.position.z) / 2 }, actors: [a.id, b.id, cultureA?.id ?? '', cultureB?.id ?? ''].filter(Boolean),
       causes: ['travel', 'expanding-horizons'], context: { distance: distance(a.position, b.position), openness },
       outcome: relation.trust > relation.hostility ? 'The encounter ended in cautious exchange.' : 'The encounter ended in mutual suspicion.',
-      affectedPopulation: this.peopleAt(a.id).length + this.peopleAt(b.id).length, magnitude: 0.9, significance: 0.94,
+      affectedPopulation: settlementRepresentedPopulation(this.state, a.id, this.peopleAt(a.id)) + settlementRepresentedPopulation(this.state, b.id, this.peopleAt(b.id)), magnitude: 0.9, significance: 0.94,
       tags: ['contact', relation.trust > relation.hostility ? 'exchange' : 'tension'], summary: `${a.name} and ${b.name} meet for the first time.`,
     });
   }
@@ -1079,18 +1120,18 @@ export class Simulation {
     this.addEvent({
       type: 'trade-route-established', location: { x: (a.position.x + b.position.x) / 2, z: (a.position.z + b.position.z) / 2 }, actors: [a.id, b.id],
       causes: ['complementary-surplus', 'mutual-trust'], context: { distance: distance(a.position, b.position), mode: route.mode }, outcome: 'The communities commission a surveyed trade corridor; exchange awaits completed infrastructure.',
-      affectedPopulation: this.peopleAt(a.id).length + this.peopleAt(b.id).length, magnitude: 0.58, significance: 0.62, tags: ['trade', 'route', route.mode], summary: `A trade corridor is commissioned between ${a.name} and ${b.name}.`,
+      affectedPopulation: settlementRepresentedPopulation(this.state, a.id, this.peopleAt(a.id)) + settlementRepresentedPopulation(this.state, b.id, this.peopleAt(b.id)), magnitude: 0.58, significance: 0.62, tags: ['trade', 'route', route.mode], summary: `A trade corridor is commissioned between ${a.name} and ${b.name}.`,
     });
   }
 
   private runInstitutions(): void {
     for (const settlement of this.livingSettlements()) {
-      const population = this.peopleAt(settlement.id).length;
+      const population = settlementRepresentedPopulation(this.state, settlement.id, this.peopleAt(settlement.id));
       if (population < 32) continue;
       const culture = this.dominantCulture(settlement);
       if (!culture) continue;
       const present = new Set(settlement.institutionIds.map((id) => this.institution(id)?.kind));
-      const artisanShare = this.peopleAt(settlement.id).filter((person) => person.occupation === 'artisan').length / population;
+      const artisanShare = (settlementLabour(this.state, settlement, this.peopleAt(settlement.id)).occupations.artisan ?? 0) / Math.max(1, population);
       const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
       const possibilities: Array<{ kind: InstitutionKind; pressure: number; cause: string }> = [
         { kind: 'council', pressure: culture.dimensions.cooperation * 0.55 + population / 220 + settlement.prosperity * 0.18, cause: 'need-for-coordination' },
@@ -1121,7 +1162,7 @@ export class Simulation {
       name: `${settlement.name} ${INSTITUTION_NAMES[kind]}`,
       kind, settlementId: settlement.id, cultureId: culture.id, foundedMonth: this.state.month,
       support: 0.42 + this.random.range(0, 0.2), prestige: 0.35, resources: 4, reach: 0.2,
-      members: Math.max(3, Math.round(this.peopleAt(settlement.id).length * 0.05)),
+      members: Math.max(3, Math.round(settlementRepresentedPopulation(this.state, settlement.id, this.peopleAt(settlement.id)) * 0.05)),
       interests: [...INSTITUTION_INTERESTS[kind]],
     };
     this.state.institutions.push(institution);
@@ -1132,7 +1173,7 @@ export class Simulation {
     if (key) settlement.politicalPower[key] = clamp(settlement.politicalPower[key] + 0.11);
     this.addEvent({
       type: 'institution-formed', location: settlement.position, locationId: settlement.id, actors: [institution.id, settlement.id, culture.id], causes: [cause],
-      context: { kind }, outcome: `${institution.name} gained recognized members and resources.`, affectedPopulation: this.peopleAt(settlement.id).length,
+      context: { kind }, outcome: `${institution.name} gained recognized members and resources.`, affectedPopulation: settlementRepresentedPopulation(this.state, settlement.id, this.peopleAt(settlement.id)),
       magnitude: 0.52, significance: 0.67, tags: ['institution', kind], summary: `${institution.name} forms in ${settlement.name}.`,
     });
   }
@@ -1142,13 +1183,13 @@ export class Simulation {
       const power = settlement.politicalPower;
       const culture = this.dominantCulture(settlement);
       const localPeople = this.peopleAt(settlement.id);
-      const prestigeLeader = [...localPeople].sort((a, b) => this.leadershipScore(b, settlement) - this.leadershipScore(a, settlement))[0];
+      const prestigeLeader = this.state.advanced.scale === 'modern-statistical' ? this.person(this.polity(settlement.polityId)?.leadingPersonId ?? '') : [...localPeople].sort((a, b) => this.leadershipScore(b, settlement) - this.leadershipScore(a, settlement))[0];
       power.personalPrestige = clamp(prestigeLeader?.prestige ?? power.personalPrestige);
       power.kinship = clamp(power.kinship * 0.98 + 0.008);
       power.council = clamp(power.council + (culture?.dimensions.cooperation ?? 0.5) * 0.008);
       power.merchant = clamp(power.merchant + this.routesAt(settlement.id).length * 0.009);
       power.military = clamp(power.military + this.hostilityAround(settlement.id) * 0.012);
-      power.wealth = clamp(power.wealth * 0.92 + Math.min(1, settlement.resources.wealth / Math.max(20, localPeople.length)) * 0.08);
+      power.wealth = clamp(power.wealth * 0.92 + Math.min(1, settlement.resources.wealth / Math.max(20, settlementRepresentedPopulation(this.state, settlement.id, localPeople))) * 0.08);
     }
     // A polity is assessed once per year. Confederations previously churned because each
     // member settlement could independently replace the shared arrangement in one pass.
@@ -1322,8 +1363,8 @@ export class Simulation {
       && (war.active || (war.resolvedMonth !== undefined && this.state.month - war.resolvedMonth < TRUCE_MONTHS)))) return;
     const cultureA = this.dominantCulture(a);
     const cultureB = this.dominantCulture(b);
-    const ambitionA = mean(this.peopleAt(a.id).map((person) => person.traits.ambition));
-    const ambitionB = mean(this.peopleAt(b.id).map((person) => person.traits.ambition));
+    const ambitionA = this.state.advanced.scale === 'modern-statistical' ? cultureA?.dimensions.hierarchy ?? 0.5 : mean(this.peopleAt(a.id).map((person) => person.traits.ambition));
+    const ambitionB = this.state.advanced.scale === 'modern-statistical' ? cultureB?.dimensions.hierarchy ?? 0.5 : mean(this.peopleAt(b.id).map((person) => person.traits.ambition));
     const attacker = ambitionA + (cultureA?.dimensions.militarism ?? 0.5) >= ambitionB + (cultureB?.dimensions.militarism ?? 0.5) ? a : b;
     const defender = attacker === a ? b : a;
     const strategicDeposit = this.state.world.resourceDeposits.find(d => d.controlledBy === defender.id && !d.depleted
@@ -1356,7 +1397,7 @@ export class Simulation {
     relation.hostility = clamp(relation.hostility + 0.22);
     relation.grievances = clamp(relation.grievances + 0.18);
     const supporters = this.allianceSupportFor(defender, attacker);
-    this.addEvent({ type: 'war-declared', location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(leaderA ? [leaderA.id] : []), ...(leaderB ? [leaderB.id] : []), ...supporters], causes: [cause, ...(supporters.length > 0 ? ['alliance-commitments'] : [])], context: { attackerStrength: war.strengthA, defenderStrength: war.strengthB, moraleA: war.moraleA, moraleB: war.moraleB, organizationA: war.organizationA, organizationB: war.organizationB, technologyA: war.technologyA, technologyB: war.technologyB, marchMonths: war.campaign.marchMonths, routeAvailable: war.campaign.route.length > 1, phase: war.phase }, outcome: `${attacker.name} mobilized against ${defender.name}.`, affectedPopulation: settlementRepresentedPopulation(this.state, attacker.id) + settlementRepresentedPopulation(this.state, defender.id), magnitude: 0.8, significance: 0.88, tags: ['war', cause, 'mobilization'], summary: `${attacker.name} goes to war with ${defender.name} over ${cause.replaceAll('-', ' ')}.` });
+    this.addEvent({ type: 'war-declared', locationId: defender.id, location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(leaderA ? [leaderA.id] : []), ...(leaderB ? [leaderB.id] : []), ...supporters], causes: [cause, ...(supporters.length > 0 ? ['alliance-commitments'] : [])], context: { attackerStrength: war.strengthA, defenderStrength: war.strengthB, moraleA: war.moraleA, moraleB: war.moraleB, organizationA: war.organizationA, organizationB: war.organizationB, technologyA: war.technologyA, technologyB: war.technologyB, marchMonths: war.campaign.marchMonths, routeAvailable: war.campaign.route.length > 1, phase: war.phase }, outcome: `${attacker.name} mobilized against ${defender.name}.`, affectedPopulation: settlementRepresentedPopulation(this.state, attacker.id) + settlementRepresentedPopulation(this.state, defender.id), magnitude: 0.8, significance: 0.88, tags: ['war', cause, 'mobilization'], summary: `${attacker.name} goes to war with ${defender.name} over ${cause.replaceAll('-', ' ')}.` });
   }
 
   private runWars(): void {
@@ -1434,7 +1475,7 @@ export class Simulation {
         this.state.stats.battles += 1;
         campaign.battleCount += 1;
         campaign.lastBattleMonth = this.state.month;
-        this.addEvent({ type: 'battle', location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
+        this.addEvent({ type: 'battle', locationId: defender.id, location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
       }
       if (Math.min(supplyA, supplyB) < 0.25) this.campaignDispatch(war, attacker, defender, 'supply-crisis', `${supplyA <= supplyB ? attacker.name : defender.name}'s provisions are running dangerously low.`, ['supply-pressure']);
       const advantage = war.progress > 0.22 ? 1 : war.progress < -0.22 ? -1 : 0;
@@ -1451,7 +1492,7 @@ export class Simulation {
   private campaignDispatch(war: War, attacker: Settlement, defender: Settlement, dispatch: string, summary: string, causes: string[]): void {
     if (war.campaign.dispatches.includes(dispatch)) return;
     war.campaign.dispatches.push(dispatch);
-    this.addEvent({ type: 'war-campaign', location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id], causes,
+    this.addEvent({ type: 'war-campaign', locationId: defender.id, location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id], causes,
       context: { dispatch, phase: war.phase, months: this.state.month - war.startMonth, supplyA: war.campaign.supplyA, supplyB: war.campaign.supplyB, progress: war.progress },
       outcome: summary, affectedPopulation: settlementRepresentedPopulation(this.state, attacker.id) + settlementRepresentedPopulation(this.state, defender.id),
       magnitude: 0.55, significance: dispatch === 'reversal' ? 0.8 : 0.73, tags: ['war', 'campaign', dispatch], summary });
@@ -1507,7 +1548,7 @@ export class Simulation {
       attacker.conflictPressure = clamp(attacker.conflictPressure + 0.28);
       defender.conflictPressure = clamp(defender.conflictPressure + 0.28);
     }
-    this.addEvent({ type: 'war-ended', location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: reason === 'impassable' ? ['terrain-barrier'] : reason === 'settlement-lost' ? ['settlement-loss'] : ['attrition', 'supply-pressure', war.moraleA < 0.2 || war.moraleB < 0.2 ? 'morale-collapse' : 'negotiation'], context: { months: this.state.month - war.startMonth, casualties: war.casualtiesA + war.casualtiesB, battles: war.campaign.battleCount, phase: war.phase, progress: war.progress, reason, truceUntil: this.state.month + TRUCE_MONTHS }, outcome, affectedPopulation: war.casualtiesA + war.casualtiesB, magnitude: 0.74, significance: 0.84, tags: ['war', 'peace', war.phase], summary: `The war between ${attacker.name} and ${defender.name} ends. ${outcome}` });
+    this.addEvent({ type: 'war-ended', locationId: defender.id, location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: reason === 'impassable' ? ['terrain-barrier'] : reason === 'settlement-lost' ? ['settlement-loss'] : ['attrition', 'supply-pressure', war.moraleA < 0.2 || war.moraleB < 0.2 ? 'morale-collapse' : 'negotiation'], context: { months: this.state.month - war.startMonth, casualties: war.casualtiesA + war.casualtiesB, battles: war.campaign.battleCount, phase: war.phase, progress: war.progress, reason, truceUntil: this.state.month + TRUCE_MONTHS }, outcome, affectedPopulation: war.casualtiesA + war.casualtiesB, magnitude: 0.74, significance: 0.84, tags: ['war', 'peace', war.phase], summary: `The war between ${attacker.name} and ${defender.name} ends. ${outcome}` });
   }
 
   private killCombatants(settlementId: string, requested: number): number {
@@ -1523,10 +1564,12 @@ export class Simulation {
     }
     const candidates = this.peopleAt(settlementId).filter((person) => person.alive && person.ageMonths >= 16 * 12 && person.ageMonths <= 57 * 12);
     let killed = 0;
+    const victims: Person[] = [];
     for (let index = 0; index < requested && candidates.length > 0; index += 1) {
       const person = candidates.splice(this.random.int(0, candidates.length), 1)[0];
-      if (person) { this.killPerson(person, 'war'); killed += 1; }
+      if (person) { victims.push(person); killed += 1; }
     }
+    killPeople(this.state, victims, 'war');
     return killed;
   }
 
@@ -1552,25 +1595,27 @@ export class Simulation {
         this.state.stats.settlementsAbandoned += 1;
         const target = this.livingSettlements().filter((other) => other.id !== settlement.id).sort((a, b) => distance(a.position, settlement.position) - distance(b.position, settlement.position))[0];
         const evacuationRoute = target ? this.route(settlement.id, target.id) : undefined;
+        for (const person of people) person.displacedSinceMonth ??= this.state.month;
         if (target) for (const person of [...people]) {
           if (!this.peopleSystem.beginMigration(person, target, this.state, evacuationRoute)) continue;
           const sourceIndex = people.indexOf(person);
           if (sourceIndex >= 0) people.splice(sourceIndex, 1);
           person.homeId = target.id;
+          person.displacedSinceMonth = undefined;
           const targetPeople = this.peopleBySettlement.get(target.id) ?? [];
           targetPeople.push(person);
           this.peopleBySettlement.set(target.id, targetPeople);
         }
         const exhaustedDistricts = this.state.world.resourceDeposits.filter(d => !d.renewable && d.depleted && d.discoveredBy[settlement.id] !== undefined
           && (materialEconomy(settlement).experience[d.resourceId] ?? 0) > 0).length;
-        this.addEvent({ type: 'settlement-abandoned', location: settlement.position, locationId: settlement.id, actors: [settlement.id], causes: ['population-decline', ...(exhaustedDistricts ? ['local-resource-exhaustion'] : [])], context: { survivors: survivorCount, exhaustedDistricts }, outcome: 'The remaining households departed.', affectedPopulation: survivorCount, magnitude: 0.66, significance: 0.72, tags: ['collapse', 'migration'], summary: `${settlement.name} is abandoned${exhaustedDistricts ? ' after local extraction districts were exhausted' : ''}.` });
+        this.addEvent({ type: 'settlement-abandoned', location: settlement.position, locationId: settlement.id, actors: [settlement.id], causes: ['population-decline', ...(exhaustedDistricts ? ['local-resource-exhaustion'] : [])], context: { survivors: survivorCount, exhaustedDistricts }, outcome: 'The settlement ceased operating; surviving households departed where passage was possible.', affectedPopulation: survivorCount, magnitude: 0.66, significance: 0.72, tags: ['collapse', 'migration'], summary: `${settlement.name} is abandoned${exhaustedDistricts ? ' after local extraction districts were exhausted' : ''}.` });
         continue;
       }
       const modern = this.state.advanced.scale === 'modern-statistical';
       const represented = representedPopulation(this.state);
       const settlementTarget = modern ? Math.min(12, Math.max(3, Math.round(2 + Math.log10(Math.max(10, represented))))) : 16;
       const growthReady = modern
-        ? localPopulation >= 20_000 && people.length >= 18 && settlement.industry.active
+        ? localPopulation >= 20_000 && settlement.industry.active
         : people.length >= 115;
       if (this.livingSettlements().length >= settlementTarget || !growthReady || settlement.foodSecurity < 0.52 || !this.random.chance(modern ? 0.025 : 0.08)) continue;
       const candidates = this.state.world.cells
@@ -1592,6 +1637,15 @@ export class Simulation {
         targetPeople.push(pioneer);
         this.peopleBySettlement.set(founded.id, targetPeople);
         settledPioneers.push(pioneer);
+      }
+      if (modern) {
+        const sourceCity = this.state.advanced.cities.find(c => c.settlementId === settlement.id);
+        if (sourceCity) {
+          // A city-founding decision transfers a demographic share once; named movers carry no citizen weight.
+          const population = sourceCity.population * 0.07;
+          sourceCity.population -= population;
+          this.state.advanced.cities.push({ ...structuredClone(sourceCity), settlementId: founded.id, population });
+        }
       }
       this.applyKnowledgeEvents(this.knowledgeSystem.diffuseMigration(this.state, settlement, founded, settledPioneers.length));
       // The people who actually reached the new ground are its founders, in the order they left.
@@ -1636,6 +1690,7 @@ export class Simulation {
   }
 
   private recomputeCultureShares(): void {
+    if (this.state.advanced.scale === 'modern-statistical') return;
     for (const settlement of this.state.settlements) {
       const people = this.peopleAt(settlement.id);
       const counts: Record<string, number> = {};
@@ -1646,17 +1701,14 @@ export class Simulation {
   }
 
   private addEvent(input: EventInput): void {
-    const event: HistoricalEvent = {
-      id: `event-${this.nextEventId++}`,
-      month: this.state.month,
+    emitEvent(this.state, {
       type: input.type,
       ...(input.location ? { location: { ...input.location } } : {}),
       ...(input.locationId ? { locationId: input.locationId } : {}),
       actors: input.actors ?? [], causes: input.causes ?? [], context: input.context ?? {}, outcome: input.outcome,
       affectedPopulation: input.affectedPopulation ?? 0, magnitude: input.magnitude ?? 0.2, significance: input.significance ?? 0.2,
       tags: input.tags ?? [], summary: input.summary,
-    };
-    this.state.history.push(event);
+    });
   }
 
   private applyKnowledgeEvents(events: readonly KnowledgeEventDraft[]): void {
@@ -1770,10 +1822,7 @@ export class Simulation {
   }
 
   private provisionArmy(settlement: Settlement, strength: number, rate: number): void {
-    // Settlement stocks remain in the economy's documentary units after the population transition.
-    const scale = this.state.advanced.scale === 'modern-statistical'
-      ? this.peopleAt(settlement.id).length / Math.max(1, settlementRepresentedPopulation(this.state, settlement.id)) : 1;
-    settlement.resources.food = Math.max(0, settlement.resources.food - strength * scale * rate);
+    settlement.resources.food = Math.max(0, settlement.resources.food - strength * rate);
   }
 
   private hostilityAround(settlementId: string): number {

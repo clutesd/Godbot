@@ -1,3 +1,4 @@
+import { eventsAfter, eventSequence } from '../History';
 import type { HistoricalEvent, Person, SimulationState, SocialRelationship } from '../types';
 
 export type PersonalMemoryKind =
@@ -39,8 +40,8 @@ export interface MemoryPerson extends Person {
 }
 
 interface MemoryCursor {
-  index: number;
-  lastEventId?: string;
+  sequence: number;
+  teachingMonth?: number;
 }
 
 const MAX_MEMORIES = 6;
@@ -54,25 +55,25 @@ const WAR_EVENT_KINDS = new Set<HistoricalEvent['type']>(['war-declared', 'war-c
 /**
  * Converts already-recorded simulation truth into a tiny personal memory layer.
  *
- * History is consumed incrementally. Events created after this month's people pass are processed on
- * the next pass, which is exactly what death needs: the relationship edge to the deceased still exists
- * until memory runs, then SocialDynamics can prune it. A cursor check self-recovers if history trimming
- * shifts the array. Memories themselves are capped and idempotent, so deep-time runs stay bounded.
+ * Monotonic sequences survive arbitrary retained-history trimming. The lifecycle flushes memories
+ * before deleting death relationships, and the simulation ingests again before retention runs.
+ * Memories themselves remain capped and idempotent.
  */
 export function advancePersonalMemory(state: SimulationState): void {
+  const cursor: MemoryCursor = cursors.get(state) ?? { sequence: 0 };
+  const newEvents = eventsAfter(state.history, cursor.sequence);
+  const checkTeaching = cursor.teachingMonth !== state.month && (state.socialRelationships ?? []).some(r => r.teaching && r.teaching.progress >= 0.1);
+  if (!newEvents.length && !checkTeaching) return;
   const people = state.people as MemoryPerson[];
-  if (people.length === 0) return;
   const livingById = new Map(people.filter((person) => person.alive).map((person) => [person.id, person]));
-  const cursor = cursors.get(state) ?? { index: 0 };
-  if (cursor.index > 0 && state.history[cursor.index - 1]?.id !== cursor.lastEventId) {
-    const recovered = cursor.lastEventId ? state.history.findIndex((event) => event.id === cursor.lastEventId) : -1;
-    cursor.index = recovered >= 0 ? recovered + 1 : 0;
+  const adjacency = new Map<string, SocialRelationship[]>();
+  for (const r of state.socialRelationships ?? []) for (const id of [r.a, r.b]) {
+    const edges = adjacency.get(id) ?? []; edges.push(r); adjacency.set(id, edges);
   }
-  const newEvents = state.history.slice(cursor.index);
 
   for (const event of newEvents) {
     if (event.type === 'death') {
-      rememberDeath(event, livingById, state.socialRelationships ?? []);
+      rememberDeath(event, livingById, adjacency.get(event.actors[0] ?? '') ?? []);
       continue;
     }
     if (event.type === 'major-migration') {
@@ -105,25 +106,22 @@ export function advancePersonalMemory(state: SimulationState): void {
     if (LOCAL_EVENT_KINDS.has(event.type)) rememberLocalWitnesses(event, people, 'catastrophe', -1, event.type);
   }
 
-  if (state.history.length > 0) {
-    cursor.index = state.history.length;
-    cursor.lastEventId = state.history[state.history.length - 1]?.id;
-    cursors.set(state, cursor);
-  }
+  if (newEvents.length) cursor.sequence = eventSequence(newEvents[newEvents.length - 1]!);
+  cursors.set(state, cursor);
 
-  // Existing mentor relationships are meaningful even before a headline event occurs. Once the tie
-  // is strong enough, record it as a durable lineage memory; this survives the mentor's later death.
+  // Only completed, consequential learning supports a teaching lineage.
+  if (!checkTeaching) return;
+  cursor.teachingMonth = state.month;
   for (const relationship of state.socialRelationships ?? []) {
-    if (relationship.kind !== 'mentor' || relationship.strength < 0.3) continue;
-    const a = livingById.get(relationship.a);
-    const b = livingById.get(relationship.b);
-    if (!a || !b) continue;
-    const younger = a.ageMonths <= b.ageMonths ? a : b;
-    const older = younger === a ? b : a;
+    const teaching = relationship.teaching;
+    if (!teaching || teaching.progress < 0.1) continue;
+    const younger = livingById.get(teaching.learnerId);
+    const older = livingById.get(teaching.mentorId);
+    if (!younger || !older) continue;
     addMemory(younger, {
       id: `memory:mentor:${younger.id}:${older.id}`,
-      kind: 'mentorship', month: relationship.formedMonth, subjectId: older.id, settlementId: younger.homeId,
-      emotionalWeight: clamp(0.42 + relationship.strength * 0.38), valence: 1, reason: 'mentor-lineage',
+      kind: 'mentorship', month: teaching.lastTaughtMonth, subjectId: older.id, settlementId: younger.homeId,
+      emotionalWeight: clamp(0.42 + relationship.strength * 0.38), valence: 1, reason: `mentor-lineage:${teaching.domain}`,
     });
   }
 }
@@ -172,6 +170,12 @@ export function socialWithdrawalFor(person: Person): number {
 function rememberDeath(event: HistoricalEvent, livingById: ReadonlyMap<string, MemoryPerson>, relationships: readonly SocialRelationship[]): void {
   const deceasedId = event.actors.find((actor) => actor.startsWith('person-'));
   if (!deceasedId) return;
+  for (const id of String(event.context.familyIds ?? '').split(',')) {
+    const survivor = livingById.get(id);
+    if (survivor) addMemory(survivor, { id: `memory:${event.id}:${id}:loss`, kind: 'loss', month: event.month,
+      eventId: event.id, subjectId: deceasedId, settlementId: event.locationId,
+      emotionalWeight: 0.85, valence: -1, reason: 'family-loss' });
+  }
   for (const relationship of relationships) {
     if (relationship.a !== deceasedId && relationship.b !== deceasedId) continue;
     const survivorId = relationship.a === deceasedId ? relationship.b : relationship.a;
@@ -215,7 +219,8 @@ function rememberLocalWitnesses(
   reason: string,
 ): void {
   if (!event.locationId || event.significance < 0.48) return;
-  const local = people.filter((person) => person.alive && person.homeId === event.locationId)
+  const local = people.filter((person) => person.alive && person.bornMonth <= event.month && person.homeId === event.locationId
+      && (event.type !== 'battle' || !event.location || Math.hypot(person.position.x - event.location.x, person.position.z - event.location.z) <= 8))
     .sort((a, b) => witnessPriority(b) - witnessPriority(a) || a.id.localeCompare(b.id))
     .slice(0, 12);
   for (const person of local) {

@@ -49,7 +49,13 @@ describe('Population and resources', () => {
     expect(simulation.state.stats.migrations).toBeGreaterThan(0);
     expect(simulation.state.stats.trades).toBe(0);
     expect(simulation.state.tradeRoutes).toHaveLength(0);
-    expect(Object.values(simulation.state.transportation.segments).some(segment => segment.status === 'complete')).toBe(true);
+    // MovementRoadAuthority now owns early circulation: repeated walking creates tracks,
+    // while engineered transport segments require later infrastructure and connected freight.
+    expect(simulation.state.world.cells.some(cell => !cell.water && (cell.modifications?.track?.intensity ?? 0) > 0.1)).toBe(true);
+    expect(simulation.state.world.cells.some(cell => {
+      const path = cell.modifications?.footpath;
+      return path && path.lastMonth > path.firstMonth && path.ownerId !== undefined;
+    })).toBe(true);
     expect(simulation.state.settlements.some((settlement) => Object.keys(settlement.cultureShares).length > 1)).toBe(true);
   }, 30_000);
 });

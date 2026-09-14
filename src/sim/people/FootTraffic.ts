@@ -129,6 +129,7 @@ export function installFootTrafficTracking(): void {
     if (distance < 0.025 || distance > state.world.cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
     if (!this.walkability.isWalkable(from) || !this.walkability.isWalkable(person.position)) return;
 
+    if (state.advanced?.scale === 'modern-statistical') return;
     recordFootTrafficSegment(state.world, from, person.position, state.month, settlement.id, trafficWeight(person) * TRAFFIC_SAMPLE_PERIOD);
   };
 }

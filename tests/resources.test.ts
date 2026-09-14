@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { societyFixture, learn, residents } from './fixtures/settlementDevelopment';
 import { SeededRandom } from '../src/sim/prng';
 import { generateResourceDeposits } from '../src/sim/resources/WorldResourceSystem';
+import { materialEconomy } from '../src/sim/resources/Inventory';
 import { ResourceSystem } from '../src/sim/resources/ResourceSystem';
 import { RESOURCE_BY_ID } from '../src/sim/resources/catalog';
 import type { ResourceDeposit, Settlement, SimulationState } from '../src/sim/types';
@@ -122,6 +123,8 @@ describe('ResourceSystem recipe crafting', () => {
     s!.localMaterials['copper-ore'] = 30;
     s!.localMaterials['tin-ore'] = 30;
     s!.localMaterials['timber'] = 60;
+    // Saturate durable tool demand so this fixture measures crafted bronze remaining in stock.
+    materialEconomy(s!).tools = residents(state, s!).length;
     return { state, s: s! };
   }
 

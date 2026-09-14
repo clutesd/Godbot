@@ -160,7 +160,7 @@ describe('SocialDynamicsSystem', () => {
 
   it('summarises support, learning, politics, and tension as bounded influence signals', () => {
     const relationships: SocialRelationship[] = [
-      relationship({ kind: 'mentor' }),
+      relationship({ kind: 'mentor', teaching: { mentorId: 'person-2', learnerId: 'person-1', domain: 'materials', progress: 0.4, lastTaughtMonth: 12 } }),
       relationship({ id: 'social-person-1-person-3', b: 'person-3', kind: 'political-ally', trust: 0.75, strength: 0.72 }),
       relationship({ id: 'social-person-1-person-4', b: 'person-4', kind: 'rival', trust: 0.2, strength: 0.7 }),
     ];
@@ -199,6 +199,7 @@ describe('SocialDynamicsSystem', () => {
       a: focal.id,
       b: other.id,
       kind: index === 0 ? 'political-ally' : index === 1 ? 'mentor' : 'friend',
+      ...(index === 1 ? { teaching: { mentorId: other.id, learnerId: focal.id, domain: 'materials' as const, progress: 0.4, lastTaughtMonth: 1 } } : {}),
       trust: 0.9,
       strength: 0.9,
     }));

@@ -1,3 +1,4 @@
+import { WORK_DOMAIN } from '../../src/sim/people/HumanCapital';
 import { Simulation } from '../../src/sim/Simulation';
 import { advanceSettlementDevelopment, initializeSettlementDevelopment } from '../../src/sim/development/SettlementDevelopmentSystem';
 import type { CultureDimensions, InstitutionKind, Settlement, SimulationState } from '../../src/sim/types';
@@ -35,7 +36,7 @@ export function societyFixture() {
     s.politicalPower.kinship = 0.1; s.politicalPower.institutional = 0.7;
     s.knowledge.records = {}; s.knowledge.literacy = 0;
     learn(s, 'stone-composites', 'leverage', 'pottery-firing', 'fire-control');
-    residents(state, s).forEach((p, index) => { p.occupation = index < 6 ? 'builder' : index < 14 ? 'artisan' : index < 20 ? 'keeper' : 'forager'; p.health = 1; });
+    residents(state, s).forEach((p, index) => { p.occupation = index < 6 ? 'builder' : index < 14 ? 'artisan' : index < 20 ? 'keeper' : 'forager'; p.health = 1; p.ageMonths = Math.max(216, p.ageMonths); const domain = WORK_DOMAIN[p.occupation]; p.expertise = domain ? [{ domain, competence: 0.75, lastPractisedMonth: state.month }] : []; });
   });
   syncStructurePlots(state);
   state.settlements.forEach(s => initializeSettlementDevelopment(state, s));

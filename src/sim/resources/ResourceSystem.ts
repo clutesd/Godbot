@@ -1,3 +1,4 @@
+import { resourceLabourBudget } from '../people/HumanCapital';
 import type { SeededRandom } from '../prng';
 import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
 import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
@@ -50,9 +51,7 @@ export class ResourceSystem {
       reconcileBulkStocks(s);
       const economy = materialEconomy(s);
       const people = peopleByHome.get(s.id) ?? [];
-      const budget: LabourBudget = {};
-      const shares: LabourBudget = { forager: 0.5, builder: 0.35, artisan: 0.6, keeper: 0.5, elder: 0.25, carrier: 0.5 };
-      for (const p of people) budget[p.occupation] = (budget[p.occupation] ?? 0) + (shares[p.occupation] ?? 0) * clamp(p.health);
+      const budget: LabourBudget = resourceLabourBudget(state, s, people);
       economy.demand = { timber: Math.max(12, s.buildings * 3), stone: Math.max(6, s.buildings) };
       economy.energyDemand = 0; economy.energySupplied = 0; economy.labourUsed = 0;
       economy.delivered = {};

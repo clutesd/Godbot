@@ -1,3 +1,7 @@
+import { killPeople } from '../people/PersonLifecycle';
+import { workforceProfile } from '../people/HumanCapital';
+import { representedPopulation, settlementRepresentedPopulation } from '../Population';
+export { representedPopulation, settlementRepresentedPopulation } from '../Population';
 import type { GodboxConfig } from '../../config';
 import type { SeededRandom } from '../prng';
 import type {
@@ -59,15 +63,6 @@ export function createAdvancedCivilizationState(explicitPopulation = 0): Advance
   };
 }
 
-export function representedPopulation(state: SimulationState): number {
-  return Math.max(0, Math.round(state.advanced?.representedPopulation ?? state.people.filter((person) => person.alive).length));
-}
-
-export function settlementRepresentedPopulation(state: SimulationState, settlementId: string): number {
-  const city = state.advanced?.cities.find((candidate) => candidate.settlementId === settlementId);
-  return city ? Math.max(0, Math.round(city.population)) : state.people.filter((person) => person.alive && person.homeId === settlementId).length;
-}
-
 export class AdvancedCivilizationSystem {
   constructor(private readonly config: GodboxConfig, private readonly random: SeededRandom) {}
 
@@ -75,7 +70,7 @@ export class AdvancedCivilizationSystem {
     const population = state.people.filter((person) => person.alive).length;
     state.advanced.representedPopulation = population;
     state.advanced.peakRepresentedPopulation = population;
-    this.syncCities(state);
+    this.syncCities(state, true);
     this.syncStates(state);
   }
 
@@ -84,10 +79,11 @@ export class AdvancedCivilizationSystem {
     const advanced = state.advanced;
     const explicitPopulation = state.people.filter((person) => person.alive).length;
     const industrial = state.settlements.some((settlement) => settlement.alive && settlement.industry.active);
-    if (!industrial && advanced.scale === 'individual') advanced.representedPopulation = explicitPopulation;
+    if (advanced.scale !== 'modern-statistical') advanced.representedPopulation = explicitPopulation;
     if (industrial && advanced.scale === 'individual') advanced.scale = 'urban-industrial';
     const modernFoundation = Math.max(this.knowledge(state, 'electric-grid'), this.knowledge(state, 'mass-communication'), this.knowledge(state, 'computation'), this.knowledge(state, 'modern-medicine'));
     if (industrial && advanced.scale !== 'modern-statistical' && modernFoundation >= 0.24) {
+      this.syncCities(state, true);
       advanced.scale = 'modern-statistical';
       advanced.transitionMonth = state.month;
       advanced.representedPopulation = Math.max(explicitPopulation, advanced.representedPopulation);
@@ -136,9 +132,12 @@ export class AdvancedCivilizationSystem {
     const foodSecurity = mean(state.settlements.filter((settlement) => settlement.alive).map((settlement) => settlement.foodSecurity));
     const health = advanced.sectors.health;
     const pressure = mean([advanced.environment.climateStress, advanced.environment.ecologicalPressure, advanced.environment.resourcePressure]);
-    const livingRepresentatives = state.people.filter((person) => person.alive).length;
-    const representativeBase = Math.max(96, livingRepresentatives);
-    const carryingCapacity = Math.min(this.config.advanced.statisticalPopulationCap, Math.max(25_000, representativeBase * (2_000 + advanced.sectors.industry * 90_000 + advanced.sectors.energy * 50_000)));
+    const landCapacity = state.settlements.filter(s => s.alive).reduce((sum, s) => {
+      const cell = state.world.cells[s.cellIndex];
+      return sum + (cell?.habitability ?? 0.5) * 50_000 + s.buildings * 2_000;
+    }, 0);
+    const carryingCapacity = Math.min(this.config.advanced.statisticalPopulationCap,
+      Math.max(25_000, landCapacity * (1 + advanced.sectors.industry * 18 + advanced.sectors.energy * 10)));
     const annualGrowth = clamp(0.002 + foodSecurity * 0.012 + health * 0.01 - pressure * 0.018 - advanced.governance.fragmentation * 0.006, -0.035, 0.024);
     const logistic = Math.max(-1, 1 - advanced.representedPopulation / carryingCapacity);
     advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 + annualGrowth * logistic / 12));
@@ -149,20 +148,25 @@ export class AdvancedCivilizationSystem {
     advanced.cohorts.workingAge = Math.max(0, 1 - advanced.cohorts.children - advanced.cohorts.elders);
   }
 
-  private syncCities(state: SimulationState): void {
+  private syncCities(state: SimulationState, captureWorkforce = false): void {
     const living = state.settlements.filter((settlement) => settlement.alive);
-    const explicitTotal = state.people.filter((person) => person.alive).length;
-    const priorTotal = state.advanced.cities.reduce((sum, city) => sum + city.population, 0);
+    const residents = new Map<string, SimulationState['people']>();
+    for (const p of state.people) if (p.alive) { const group = residents.get(p.homeId) ?? []; group.push(p); residents.set(p.homeId, group); }
+    const livingIds = new Set(living.map(s => s.id));
+    const priorTotal = state.advanced.cities.filter(c => livingIds.has(c.settlementId)).reduce((sum, city) => sum + city.population, 0);
     const previous = new Map(state.advanced.cities.map((city) => [city.settlementId, city]));
     state.advanced.cities = living.map((settlement) => {
-      const local = state.people.filter((person) => person.alive && person.homeId === settlement.id).length;
+      const people = residents.get(settlement.id) ?? [];
+      const local = people.length;
       const old = previous.get(settlement.id);
-      const share = explicitTotal > 0 ? local / explicitTotal : old && priorTotal > 0 ? old.population / priorTotal : 1 / Math.max(1, living.length);
+      const share = old && priorTotal > 0 ? old.population / priorTotal : 0;
+      const health = clamp(0.35 + this.knowledgeAt(settlement, 'modern-medicine') * 0.42 + settlement.foodSecurity * 0.18 - settlement.pollution * 0.2);
       const targetPopulation = state.advanced.scale === 'modern-statistical' ? state.advanced.representedPopulation * share : local;
       return {
         settlementId: settlement.id,
-        population: old ? old.population + (targetPopulation - old.population) * 0.18 : targetPopulation,
-        health: clamp(0.35 + this.knowledgeAt(settlement, 'modern-medicine') * 0.42 + settlement.foodSecurity * 0.18 - settlement.pollution * 0.2),
+        population: targetPopulation,
+        workforce: captureWorkforce ? workforceProfile(people, state.month, health) : old?.workforce,
+        health,
         education: clamp(settlement.knowledge.literacy * 0.75 + this.knowledgeAt(settlement, 'mass-communication') * 0.25),
         productivity: clamp(settlement.industry.intensity * 0.48 + this.knowledgeAt(settlement, 'automation') * 0.32 + settlement.prosperity * 0.2),
         infrastructureReliability: clamp(mean(Object.values(settlement.infrastructure)) * 0.72 + state.advanced.governance.institutionalCapacity * 0.28),
@@ -171,7 +175,7 @@ export class AdvancedCivilizationSystem {
       };
     });
     const assigned = state.advanced.cities.reduce((sum, city) => sum + city.population, 0);
-    if (assigned > 0) for (const city of state.advanced.cities) city.population *= state.advanced.representedPopulation / assigned;
+    if (state.advanced.scale === 'modern-statistical' && assigned > 0) for (const city of state.advanced.cities) city.population *= state.advanced.representedPopulation / assigned;
   }
 
   private syncStates(state: SimulationState): void {
@@ -622,17 +626,24 @@ export class AdvancedCivilizationSystem {
 
   private applyShock(state: SimulationState, populationLossFraction: number, infrastructureDamage: number): number {
     const advanced = state.advanced;
-    const populationBefore = advanced.representedPopulation;
+    const populationBefore = representedPopulation(state);
     const protection = advanced.space.selfSustainingBodies >= 2 ? 0.42 : advanced.space.offworldSettlements > 0 ? 0.1 : 0;
     const loss = clamp(populationLossFraction * (1 - protection), 0, advanced.space.selfSustainingBodies >= 2 ? 0.65 : 0.96);
-    advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 - loss));
+    if (advanced.scale === 'modern-statistical') {
+      advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 - loss));
+      for (const city of advanced.cities) city.population *= 1 - loss;
+      state.stats.deaths += Math.round(populationBefore - advanced.representedPopulation);
+    }
     const living = state.people.filter((person) => person.alive);
     const minimumRepresentatives = advanced.representedPopulation >= 1_000 ? Math.min(24, living.length) : 0;
-    const killCount = Math.min(living.length - minimumRepresentatives, Math.floor(living.length * loss * 0.62));
+    const killCount = Math.min(living.length - minimumRepresentatives, Math.floor(living.length * loss * (advanced.scale === 'modern-statistical' ? 0.62 : 1)));
+    const victims: SimulationState['people'] = [];
     for (let index = 0; index < killCount; index += 1) {
       const selected = living.splice(this.random.int(0, living.length), 1)[0];
-      if (selected) { selected.alive = false; state.stats.deaths += 1; }
+      if (selected) victims.push(selected);
     }
+    killPeople(state, victims, 'civilization-shock');
+    if (advanced.scale !== 'modern-statistical') advanced.representedPopulation = state.people.filter(p => p.alive).length;
     for (const settlement of state.settlements.filter((candidate) => candidate.alive)) {
       settlement.prosperity = clamp(settlement.prosperity - infrastructureDamage * 0.28);
       settlement.foodSecurity = clamp(settlement.foodSecurity - infrastructureDamage * 0.18);

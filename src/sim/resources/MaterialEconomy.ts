@@ -1,3 +1,5 @@
+import { resourceLabourBudget } from '../people/HumanCapital';
+import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
 import type { Person, Settlement, SimulationState } from '../types';
 
@@ -182,17 +184,6 @@ function recipeEnabled(settlement: Settlement, recipeDefinition: MaterialRecipe)
     capabilityPractice(settlement, requirement.id, requirement.stage) >= requirement.minPractice);
 }
 
-function processingCapacity(settlement: Settlement, residents: readonly Person[]): number {
-  const artisans = residents.filter((person) => person.alive && person.occupation === 'artisan').length;
-  const builders = residents.filter((person) => person.alive && person.occupation === 'builder').length;
-  return Math.max(0,
-    artisans * 0.62
-    + builders * 0.08
-    + settlement.infrastructure.workshops * 5
-    + settlement.infrastructure.factories * 12
-    + settlement.industry.intensity * 8);
-}
-
 function maxBatchesFromInputs(stock: MaterialStock, recipeDefinition: MaterialRecipe): number {
   let possible = Number.POSITIVE_INFINITY;
   let primaryKind: MaterialKind | undefined;
@@ -255,7 +246,9 @@ export function advanceMaterialProcessing(
     return { processed: false, capacity: 0, usedCapacity: 0, recipes: {} };
   }
   inventory.lastProcessedMonth = state.month;
-  const capacity = processingCapacity(settlement, residents);
+  const budget = resourceLabourBudget(state, settlement, residents);
+  const mechanization = 1 + settlement.infrastructure.workshops + settlement.infrastructure.factories * 2 + settlement.industry.intensity;
+  const capacity = ((budget.artisan ?? 0) + (budget.builder ?? 0)) * mechanization;
   let remainingCapacity = capacity;
   const ran: Partial<Record<string, number>> = {};
 
@@ -270,6 +263,7 @@ export function advanceMaterialProcessing(
     ran[recipeDefinition.id] = batches;
   }
 
+  useLabour(budget, ['artisan', 'builder'], (capacity - remainingCapacity) / mechanization);
   return {
     processed: Object.keys(ran).length > 0,
     capacity: round(capacity),

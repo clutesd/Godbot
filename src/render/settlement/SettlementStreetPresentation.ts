@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GodboxRenderer } from '../GodboxRenderer';
 import { eraRank } from '../assets/BuildingGrammar';
 import type { Era, MaterialPalette } from '../materials/MaterialPalette';
-import { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
+import type { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
 import { createSettlementLayoutPlan, type SettlementLayoutPlan, type StreetSegment } from '../placement/SettlementLayoutPlan';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import type { Settlement, SimulationState, Vec2 } from '../../sim/types';
@@ -156,6 +156,7 @@ function enhancedAddGroundCraft(
   palette: MaterialPalette,
   _random: unknown,
 ): void {
+  void _random;
   const self = this as unknown as RendererInternals;
   const settlement = settlementForGroup(self, group);
   if (!settlement) return;

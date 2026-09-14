@@ -108,7 +108,7 @@ describe('PersonalMemorySystem', () => {
     const student = person('person-1', { ageMonths: 24 * 12 });
     const mentor = person('person-2', { ageMonths: 52 * 12 });
     const simulation = state([student, mentor], {
-      socialRelationships: [relation({ id: 'social-person-1-person-2', a: student.id, b: mentor.id, kind: 'mentor', strength: 0.75, trust: 0.8 })],
+      socialRelationships: [relation({ id: 'social-person-1-person-2', a: student.id, b: mentor.id, kind: 'mentor', strength: 0.75, trust: 0.8, teaching: { mentorId: mentor.id, learnerId: student.id, domain: 'materials', progress: 0.2, lastTaughtMonth: 12 } })],
     });
 
     advancePersonalMemory(simulation);

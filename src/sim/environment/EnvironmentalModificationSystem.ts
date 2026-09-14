@@ -1,3 +1,4 @@
+import { settlementLabour } from '../people/HumanCapital';
 import { cellAt } from '../world';
 import { clamp01 } from '../terrain/noise';
 import type { ResourceDeposit, SimulationState, Vec2, WorldCell, WorldState } from '../types';
@@ -83,7 +84,7 @@ export function advanceEnvironment(state: SimulationState): void {
     const home = state.world.cells[s.cellIndex];
     if (!home || home.water) continue;
     if (!s.alive) { modifyLand(home, 'ruin', Math.min(1, s.buildings / 12), state.month); continue; }
-    const farming = state.people.filter(p => p.alive && p.homeId === s.id && p.occupation === 'farmer').length;
+    const farming = settlementLabour(state, s).economy.farmer ?? 0;
     if (farming > 0 || s.specialization === 'agriculture') {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
         const x = home.x + dx, z = home.z + dz;
