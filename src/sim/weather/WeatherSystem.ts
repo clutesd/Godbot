@@ -65,6 +65,23 @@ export class WeatherSystem {
     return this.seasonalCosine;
   }
 
+  /**
+   * environmentRevision is a topology/traversal revision, not a weather clock. Hash only the
+   * authoritative fine wet/dry footprint so ordinary monthly weather does not invalidate route,
+   * walkability and water-geometry caches. Flooding/recession still advances the revision.
+   */
+  private hydrologyTopologySignature(): number {
+    const field = this.world.terrain;
+    let hash = 2166136261;
+    for (let index = 0; index < field.height.length; index += 1) {
+      const wet = field.height[index]! < this.world.seaLevel || field.river[index] === 1
+        || field.lake[index] === 1 || field.waterLevel[index]! >= 0;
+      hash ^= Number(wet);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
   createFront(position: Vec2, kind: WeatherKind, intensity = 0.5, radius = 12, velocity = 1, lifespan = 3): WeatherFront {
     const direction = this.random.range(-0.65, 0.65);
     const front: WeatherFront = {
@@ -116,8 +133,11 @@ export class WeatherSystem {
       const cell = cellAt(this.world, x, z);
       if (cell && this.temperatureAt(cell) > FREEZING) this.state.lightning.push({ id: `lightning:${front.id}:${this.state.month}`, month: this.state.month, x, z, intensity: front.intensity });
     }
+    const topologyBefore = this.hydrologyTopologySignature();
     this.hydrology.advance(this.state.cells);
-    this.world.environmentRevision = (this.world.environmentRevision ?? 0) + 1;
+    if (this.hydrologyTopologySignature() !== topologyBefore) {
+      this.world.environmentRevision = (this.world.environmentRevision ?? 0) + 1;
+    }
   }
 
   private advanceTornadoes(): void {

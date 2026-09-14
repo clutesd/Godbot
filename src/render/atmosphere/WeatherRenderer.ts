@@ -20,7 +20,7 @@ export class WeatherRenderer {
   private readonly time = { value: 0 };
   private readonly windTexture: { value: THREE.DataTexture };
   private readonly precipitation: PrecipitationRenderer;
-  private revision = -1;
+  private revision = '';
   private readonly bound = new WeakSet<THREE.Material>();
   private readonly funnels: THREE.Mesh[] = [];
   private readonly funnelStarts = new Map<string, number>();
@@ -128,7 +128,7 @@ export class WeatherRenderer {
     this.waterTexture.needsUpdate = true;
     this.snowSettled = false;
     this.texture.needsUpdate = true;
-    this.revision = this.world.environmentRevision ?? 0;
+    this.revision = `${weather.month}:${this.world.environmentRevision ?? 0}`;
   }
 
   update(delta: number, elapsed: number, camera: THREE.Camera): void {
@@ -171,8 +171,8 @@ export class WeatherRenderer {
       }
       dustPositions.needsUpdate = true;
     });
-    const changed = this.revision !== (this.world.environmentRevision ?? 0);
-    if (changed) this.syncTexture();
+    const revision = `${this.world.weather?.month ?? 0}:${this.world.environmentRevision ?? 0}`;
+    if (revision !== this.revision) this.syncTexture();
     let snowChanged = false;
     const blend = 1 - Math.exp(-Math.min(1, delta) * 1.5);
     let settling = false;
