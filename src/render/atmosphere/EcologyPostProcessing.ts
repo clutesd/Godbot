@@ -1,27 +1,45 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { EnvironmentalLightingRig } from './EnvironmentalLighting';
+import { EnvironmentalDepthRig } from './EnvironmentalDepth';
 
-/** HDR luminance selection: ordinary diffuse surfaces stay below the bloom threshold.
+/** HDR luminance selection plus restrained high-quality grounding.
  * The DOM/UI never enters this chain. No duplicate scene or per-object material swapping. */
 export class EcologyPostProcessing {
   private readonly composer?: EffectComposer;
+  private readonly ssao?: SSAOPass;
   private readonly bloom?: UnrealBloomPass;
   private readonly output?: OutputPass;
   private readonly environmentalLighting: EnvironmentalLightingRig;
+  private readonly environmentalDepth: EnvironmentalDepthRig;
 
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
-    private readonly camera: THREE.Camera, private readonly quality: 0 | 1 | 2) {
-    // The lighting rig runs even when bloom is disabled. Lighting is part of scene presentation,
-    // not a post-processing quality tier, and must therefore be identical across render presets.
+    private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
+    // Lighting and depth run even when bloom is disabled. They are scene presentation, not optional
+    // post effects, and must therefore remain coherent across render quality presets.
     this.environmentalLighting = new EnvironmentalLightingRig(renderer, scene);
+    this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
     if (quality === 0) return;
+
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 2 });
     this.composer = new EffectComposer(renderer, target);
     this.composer.addPass(new RenderPass(scene, camera));
+
+    // Contact AO is intentionally reserved for the highest visual tier. At documentary distance a
+    // small amount of AO makes trees, structures, rocks and people sit on the terrain without the
+    // heavy grey creases that would fight GODBOX's stylised materials.
+    if (quality === 2) {
+      this.ssao = new SSAOPass(scene, camera, 1, 1, 16);
+      this.ssao.kernelRadius = 4.5;
+      this.ssao.minDistance = 0.0015;
+      this.ssao.maxDistance = 0.075;
+      this.composer.addPass(this.ssao);
+    }
+
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.24, 0.45, 1.15);
     this.composer.addPass(this.bloom);
     this.output = new OutputPass();
@@ -30,6 +48,10 @@ export class EcologyPostProcessing {
 
   resize(width: number, height: number): void {
     this.composer?.setSize(width, height);
+    if (this.ssao) {
+      const aoScale = this.renderer.getPixelRatio() * 0.65;
+      this.ssao.setSize(Math.max(2, Math.round(width * aoScale)), Math.max(2, Math.round(height * aoScale)));
+    }
     const scale = this.renderer.getPixelRatio() * (this.quality === 1 ? 0.5 : 1);
     // UnrealBloom's first mip halves this again: quarter- or half-resolution bloom.
     this.bloom?.setSize(Math.max(2, Math.round(width * scale)), Math.max(2, Math.round(height * scale)));
@@ -37,6 +59,8 @@ export class EcologyPostProcessing {
 
   render(night: number): void {
     const lighting = this.environmentalLighting.update(night);
+    if (lighting) this.environmentalDepth.update(lighting);
+
     if (!this.composer) {
       this.renderer.render(this.scene, this.camera);
       return;
@@ -52,6 +76,7 @@ export class EcologyPostProcessing {
   }
 
   dispose(): void {
+    this.ssao?.dispose();
     this.bloom?.dispose();
     this.output?.dispose();
     this.composer?.dispose();
