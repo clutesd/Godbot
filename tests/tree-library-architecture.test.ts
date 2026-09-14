@@ -20,6 +20,31 @@ function geometryEnvelope(geometry: THREE.BufferGeometry): { radius: number; min
   return { radius, minY, maxY };
 }
 
+/** Deciduous foliage is a concatenation of detail-0 icosahedra: 20 triangles per canopy cluster. */
+function foliageClusterSpans(geometry: THREE.BufferGeometry): number[] {
+  const position = geometry.getAttribute('position');
+  const triangleCount = (geometry.getIndex()?.count ?? position.count) / 3;
+  const clusterCount = Math.round(triangleCount / 20);
+  if (clusterCount <= 0 || triangleCount !== clusterCount * 20) return [];
+  const verticesPerCluster = position.count / clusterCount;
+  if (!Number.isInteger(verticesPerCluster)) return [];
+  const spans: number[] = [];
+  for (let cluster = 0; cluster < clusterCount; cluster += 1) {
+    const start = cluster * verticesPerCluster;
+    const end = start + verticesPerCluster;
+    let minX = Infinity; let maxX = -Infinity;
+    let minY = Infinity; let maxY = -Infinity;
+    let minZ = Infinity; let maxZ = -Infinity;
+    for (let index = start; index < end; index += 1) {
+      minX = Math.min(minX, position.getX(index)); maxX = Math.max(maxX, position.getX(index));
+      minY = Math.min(minY, position.getY(index)); maxY = Math.max(maxY, position.getY(index));
+      minZ = Math.min(minZ, position.getZ(index)); maxZ = Math.max(maxZ, position.getZ(index));
+    }
+    spans.push(Math.max(maxX - minX, maxY - minY, maxZ - minZ));
+  }
+  return spans;
+}
+
 describe('Tree library branch architecture', () => {
   it('keeps deciduous woody skeletons contained by the crown instead of producing antenna limbs', () => {
     const library = buildTreeLibrary('branch-containment', 6, TREE_LOD_NEAR);
@@ -38,6 +63,23 @@ describe('Tree library branch architecture', () => {
         expect(foliage.radius).toBeGreaterThan(0.1);
         expect(bark.radius).toBeLessThanOrEqual(foliage.radius * (allowedRadialOvershoot[family] ?? 1.2));
         expect(bark.maxY).toBeLessThanOrEqual(foliage.maxY + tree.height * 0.12);
+      }
+    }
+  });
+
+  it('builds deciduous crowns from multiple foliage scales instead of equal green boulders', () => {
+    const library = buildTreeLibrary('canopy-massing', 6, TREE_LOD_NEAR);
+    for (const family of DECIDUOUS) {
+      for (const tree of library.get(family) ?? []) {
+        const spans = foliageClusterSpans(tree.foliage).sort((a, b) => a - b);
+        expect(spans.length).toBeGreaterThanOrEqual(6);
+        const smallest = spans[0]!;
+        const largest = spans.at(-1)!;
+        expect(largest / Math.max(1e-6, smallest)).toBeGreaterThan(1.55);
+        expect(largest).toBeLessThan(tree.height * 0.65);
+        const smallClusters = spans.filter(span => span <= largest * 0.66).length;
+        expect(smallClusters).toBeGreaterThanOrEqual(Math.floor(spans.length * 0.3));
+        expect((tree.foliage.getIndex()?.count ?? 0) / 3).toBeLessThanOrEqual(TREE_LOD_NEAR.maxClumps * 20);
       }
     }
   });
