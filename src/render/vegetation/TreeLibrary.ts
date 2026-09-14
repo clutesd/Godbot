@@ -86,7 +86,31 @@ interface CrownRhythmProfile {
   notchWidth: number;
 }
 
+interface CanopyDepthProfile {
+  interior: number;
+  edge: number;
+  underside: number;
+  upper: number;
+  directional: number;
+}
+
+/**
+ * Geometry vertex colours are neutral multipliers beneath the seasonal per-instance tint. These
+ * family profiles create readable interior shadow, brighter crown edges and subtle top-light without
+ * adding lights, materials, draw calls or triangles.
+ */
+const CANOPY_DEPTH: Record<TreeFamily, CanopyDepthProfile> = {
+  cherry: { interior: 0.62, edge: 1.03, underside: 0.86, upper: 1.06, directional: 0.045 },
+  broadleaf: { interior: 0.58, edge: 1.01, underside: 0.84, upper: 1.06, directional: 0.05 },
+  conifer: { interior: 0.55, edge: 0.98, underside: 0.82, upper: 1.04, directional: 0.035 },
+  dry: { interior: 0.66, edge: 1.05, underside: 0.88, upper: 1.07, directional: 0.055 },
+  riverbank: { interior: 0.58, edge: 1.02, underside: 0.84, upper: 1.06, directional: 0.05 },
+  alpine: { interior: 0.57, edge: 0.99, underside: 0.83, upper: 1.04, directional: 0.04 },
+  ancient: { interior: 0.53, edge: 0.99, underside: 0.81, upper: 1.05, directional: 0.055 },
+};
+
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const lerp = (from: number, to: number, amount: number): number => from + (to - from) * amount;
 const smoothstep = (edge0: number, edge1: number, value: number): number => {
   const t = clamp01((value - edge0) / Math.max(1e-6, edge1 - edge0));
   return t * t * (3 - 2 * t);
@@ -193,9 +217,46 @@ function applyCrownRhythm(tree: TreeVariant, profile: CrownRhythmProfile): void 
   tree.height = tree.height * profile.height + Math.abs(profile.topVariation) * tree.height;
 }
 
+function applyCanopyDepth(tree: TreeVariant, family: TreeFamily, seed: string, variant: number): void {
+  const position = tree.foliage.getAttribute('position');
+  const normal = tree.foliage.getAttribute('normal');
+  const colour = tree.foliage.getAttribute('color');
+  if (position.count === 0 || normal.count !== position.count || colour.count !== position.count) return;
+
+  const profile = CANOPY_DEPTH[family];
+  const bounds = foliageBounds(tree.foliage);
+  const verticalSpan = Math.max(1e-4, bounds.maxY - bounds.minY);
+  const baseRadius = Math.max(1e-4, bounds.radius);
+  const lightPhase = new SeededRandom(`${seed}:canopy-depth:${family}:${variant}`).range(0, Math.PI * 2);
+
+  for (let index = 0; index < position.count; index += 1) {
+    const x = position.getX(index);
+    const y = position.getY(index);
+    const z = position.getZ(index);
+    const normalizedY = clamp01((y - bounds.minY) / verticalSpan);
+    const radial = clamp01(Math.hypot(x, z) / baseRadius);
+    const angle = Math.atan2(z, x);
+    const original = (colour.getX(index) + colour.getY(index) + colour.getZ(index)) / 3;
+
+    // The base generator already tags core/middle/edge sites with brightness. Expand that compressed
+    // range so the crown has a real interior rather than every cluster sitting near the same value.
+    const sitePosition = smoothstep(0.74, 1.06, original);
+    const siteDepth = lerp(profile.interior, profile.edge, sitePosition);
+    const normalUp = clamp01(normal.getY(index) * 0.5 + 0.5);
+    const face = lerp(profile.underside, profile.upper, normalUp);
+    const perimeter = lerp(0.94, 1.05, smoothstep(0.22, 0.94, radial));
+    const crownTop = lerp(0.95, 1.035, smoothstep(0.08, 0.95, normalizedY));
+    const directional = 1 + Math.cos(angle - lightPhase) * profile.directional * smoothstep(0.35, 1, radial);
+    const value = Math.max(0.46, Math.min(1.08, siteDepth * face * perimeter * crownTop * directional));
+    colour.setXYZ(index, value, value, value);
+  }
+  colour.needsUpdate = true;
+}
+
 /**
- * Build the existing deterministic tree library, then add whole-crown rhythm without changing the
- * branch, leaf-site or triangle budgets. Near and far tiers use the same profile for every variant.
+ * Build the existing deterministic tree library, then add whole-crown rhythm and neutral depth
+ * grading without changing the branch, leaf-site or triangle budgets. Near and far tiers use the
+ * same seeded presentation profile for every variant.
  */
 export function buildTreeLibrary(seed: string, variantsPerFamily: number, lod: TreeLod): Map<TreeFamily, TreeVariant[]> {
   const library = buildBaseTreeLibrary(seed, variantsPerFamily, lod);
@@ -204,6 +265,7 @@ export function buildTreeLibrary(seed: string, variantsPerFamily: number, lod: T
       const tree = variants[variant];
       if (!tree) continue;
       applyCrownRhythm(tree, rhythmProfile(seed, family, variant));
+      applyCanopyDepth(tree, family, seed, variant);
     }
   }
   return library;

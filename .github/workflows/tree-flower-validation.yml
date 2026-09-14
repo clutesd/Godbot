@@ -11,6 +11,7 @@ on:
       - 'tests/tree-morphology.test.ts'
       - 'tests/tree-morphology-render.test.ts'
       - 'tests/tree-library-architecture.test.ts'
+      - 'tests/tree-colour-depth.test.ts'
       - 'tests/flower-field.test.ts'
       - 'tests/understory-field.test.ts'
       - 'tests/ambient-birds.test.ts'
@@ -45,8 +46,9 @@ jobs:
           tests/tree-morphology.test.ts
           tests/tree-morphology-render.test.ts
           tests/tree-library-architecture.test.ts
+          tests/tree-colour-depth.test.ts
           tests/flower-field.test.ts
           tests/understory-field.test.ts
           tests/ambient-birds.test.ts
-      - run: npx vitest run tests/forest-lifecycle.test.ts tests/vegetation-render.test.ts tests/tree-morphology.test.ts tests/tree-morphology-render.test.ts tests/tree-library-architecture.test.ts tests/flower-field.test.ts tests/understory-field.test.ts tests/ambient-birds.test.ts
+      - run: npx vitest run tests/forest-lifecycle.test.ts tests/vegetation-render.test.ts tests/tree-morphology.test.ts tests/tree-morphology-render.test.ts tests/tree-library-architecture.test.ts tests/tree-colour-depth.test.ts tests/flower-field.test.ts tests/understory-field.test.ts tests/ambient-birds.test.ts
       - run: npm run build
