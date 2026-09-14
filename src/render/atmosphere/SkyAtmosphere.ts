@@ -43,6 +43,9 @@ export class SkyAtmosphere {
     this.clouds = buildClouds(world, random);
     if (this.clouds) this.group.add(this.clouds);
     this.lowMistField = new LowMistField(world, surface, seed);
+    // Post-processing discovers the field from the atmosphere object so standalone preview scenes
+    // that do not construct SkyAtmosphere can still fall back to a zero-density mist texture.
+    this.group.userData['lowMistField'] = this.lowMistField;
   }
 
   /** Broad art-direction palette; directional scattering is applied from EnvironmentFrameState. */
