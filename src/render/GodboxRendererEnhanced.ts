@@ -32,6 +32,20 @@ interface RoutePlacementReportLike {
   gradeViolations: number;
 }
 
+interface SettlementVisualLike {
+  group: THREE.Group;
+  buildingCount: number;
+  institutionCount: number;
+  routeCount: number;
+  politySize: number;
+  developmentSignature: string;
+  constructionSignature: string;
+  powerLevel: number;
+  bannerSignature: string;
+  lights: unknown[];
+  smokeSources: unknown[];
+}
+
 interface RendererInternals {
   state: SimulationState;
   terrainQueries: TerrainQueries;
@@ -43,7 +57,35 @@ interface RendererInternals {
   scene: THREE.Scene;
   elevationAt: (x: number, z: number) => number;
   clearGroup: (group: THREE.Group) => void;
+  settlementVisuals: Map<string, SettlementVisualLike>;
+  lastSettlementSignature: string;
+  visualStateResolver: {
+    trackEntity: (
+      entityId: string,
+      entityType: 'settlement',
+      snapshot: { infrastructure: Settlement['infrastructure']; buildings: number; alive: boolean },
+      month: number,
+    ) => { kind: string; associatedData?: unknown } | undefined;
+  };
+  transitionTimeline: {
+    createBuildingUpgrade: (entityId: string, from: number, to: number, data?: unknown) => unknown;
+  };
+  bannerSignatureForSettlement: (settlement: Settlement) => string;
+  constructionSignature: (settlementId: string) => string;
+  createSettlementVisual: (settlement: Settlement) => SettlementVisualLike;
+  disposeGroup: (group: THREE.Group) => void;
+  refreshSmokeSources: () => void;
+  eraForSettlement: (settlement: Settlement) => Era;
 }
+
+interface SettlementRenderBudgetState {
+  observedSignature: string;
+  heavySignatureById: Map<string, string>;
+  pending: string[];
+  pendingIds: Set<string>;
+}
+
+const settlementRenderBudgets = new WeakMap<GodboxRenderer, SettlementRenderBudgetState>();
 
 let transportDebugEnabled = false;
 
@@ -367,8 +409,185 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
   self.weatherRenderer.bindScene(self.scene);
 }
 
+function settlementBudgetState(renderer: GodboxRenderer): SettlementRenderBudgetState {
+  let budget = settlementRenderBudgets.get(renderer);
+  if (!budget) {
+    budget = { observedSignature: '', heavySignatureById: new Map(), pending: [], pendingIds: new Set() };
+    settlementRenderBudgets.set(renderer, budget);
+  }
+  return budget;
+}
+
+function bucket(value: number, steps = 5): number {
+  return Math.floor(Math.max(0, value) * steps);
+}
+
+/**
+ * Signature of state that genuinely changes settlement geometry. Routine plot condition drift is
+ * deliberately absent: it was never consumed by the renderer, yet previously rebuilt whole towns.
+ * Construction progress is reduced to presentation stages instead of rebuilding every small tick.
+ */
+function heavySettlementSignature(
+  self: RendererInternals,
+  settlement: Settlement,
+  routeCount: number,
+  politySize: number,
+  bannerSignature: string,
+): string {
+  const infrastructure = settlement.infrastructure;
+  const completedStops = Object.values(self.state.transportation.stops)
+    .filter(stop => stop.settlementId === settlement.id && stop.status === 'complete')
+    .map(stop => stop.id)
+    .sort()
+    .join(',');
+  const progress = Math.max(0, Math.min(1, settlement.constructionProgress));
+  const constructionPresentationStage = progress <= 0 ? 0 : 1 + Math.floor(Math.min(0.999999, progress) * 3);
+  return [
+    settlement.id,
+    settlement.alive ? settlement.buildings : 0,
+    settlement.institutionIds.length,
+    routeCount,
+    politySize,
+    bannerSignature,
+    settlement.development?.revision ?? 0,
+    self.eraForSettlement(settlement),
+    bucket(infrastructure.roads),
+    bucket(infrastructure.ports),
+    bucket(infrastructure.bridges),
+    bucket(infrastructure.workshops),
+    bucket(infrastructure.archives),
+    bucket(infrastructure.rail),
+    bucket(infrastructure.power),
+    bucket(infrastructure.factories),
+    bucket(settlement.industry.intensity),
+    bucket(settlement.urbanization),
+    constructionPresentationStage,
+    Number(progress > 0.55),
+    bucket(self.state.advanced.atomic.applications.energy),
+    bucket(self.state.advanced.machine.capability),
+    bucket(self.state.advanced.space.orbitalInfrastructure),
+    completedStops,
+    settlement.structurePlots?.length ?? 0,
+    self.constructionSignature(settlement.id),
+  ].join(':');
+}
+
+function enqueueSettlement(budget: SettlementRenderBudgetState, settlementId: string): void {
+  if (budget.pendingIds.has(settlementId)) return;
+  budget.pendingIds.add(settlementId);
+  budget.pending.push(settlementId);
+}
+
+/**
+ * Replaces the all-at-once settlement rebuild with a small presentation work queue. Simulation
+ * state still changes immediately; only expensive Three.js reconstruction is spread across frames.
+ */
+function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
+  const self = this as unknown as RendererInternals;
+  const budget = settlementBudgetState(this);
+  if (force) {
+    budget.pending.length = 0;
+    budget.pendingIds.clear();
+    budget.heavySignatureById.clear();
+  }
+
+  const signatureById = new Map<string, string>();
+  const bannerById = new Map<string, string>();
+  const metadataById = new Map<string, { routeCount: number; politySize: number }>();
+  for (const settlement of self.state.settlements) {
+    const routeCount = self.state.tradeRoutes.filter(route => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
+    const politySize = self.state.polities.find(polity => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
+    const bannerSignature = self.bannerSignatureForSettlement(settlement);
+    bannerById.set(settlement.id, bannerSignature);
+    metadataById.set(settlement.id, { routeCount, politySize });
+    signatureById.set(settlement.id, heavySettlementSignature(self, settlement, routeCount, politySize, bannerSignature));
+    const existing = self.settlementVisuals.get(settlement.id);
+    if (existing) existing.powerLevel = settlement.infrastructure.power;
+  }
+
+  const globalSignature = self.state.settlements.map(settlement => signatureById.get(settlement.id) ?? settlement.id).join('|');
+  const stateChanged = force || globalSignature !== budget.observedSignature;
+  if (stateChanged) {
+    budget.observedSignature = globalSignature;
+    self.lastSettlementSignature = globalSignature;
+    for (const settlement of self.state.settlements) {
+      const existing = self.settlementVisuals.get(settlement.id);
+      if (!settlement.alive && !settlement.development) {
+        if (existing) existing.group.visible = false;
+        budget.heavySignatureById.set(settlement.id, signatureById.get(settlement.id) ?? '');
+        continue;
+      }
+      if (existing) existing.group.visible = true;
+      const event = self.visualStateResolver.trackEntity(
+        settlement.id,
+        'settlement',
+        { infrastructure: settlement.infrastructure, buildings: settlement.buildings, alive: settlement.alive },
+        self.state.month,
+      );
+      if (event?.kind === 'infrastructure-added') {
+        self.transitionTimeline.createBuildingUpgrade(settlement.id, 0, 1, event.associatedData);
+      }
+      const nextSignature = signatureById.get(settlement.id) ?? '';
+      if (!existing || budget.heavySignatureById.get(settlement.id) !== nextSignature) enqueueSettlement(budget, settlement.id);
+    }
+  }
+
+  const rebuildLimit = force ? Number.POSITIVE_INFINITY : 1;
+  let rebuilt = 0;
+  let presentationChanged = stateChanged;
+  const reboundGroups: THREE.Group[] = [];
+  while (budget.pending.length > 0 && rebuilt < rebuildLimit) {
+    const settlementId = budget.pending.shift()!;
+    budget.pendingIds.delete(settlementId);
+    const settlement = self.state.settlements.find(candidate => candidate.id === settlementId);
+    if (!settlement) continue;
+    const existing = self.settlementVisuals.get(settlement.id);
+    if (!settlement.alive && !settlement.development) {
+      if (existing) existing.group.visible = false;
+      continue;
+    }
+    const metadata = metadataById.get(settlement.id) ?? {
+      routeCount: self.state.tradeRoutes.filter(route => route.active && (route.a === settlement.id || route.b === settlement.id)).length,
+      politySize: self.state.polities.find(polity => polity.id === settlement.polityId)?.settlementIds.length ?? 1,
+    };
+    const bannerSignature = bannerById.get(settlement.id) ?? self.bannerSignatureForSettlement(settlement);
+    const currentSignature = heavySettlementSignature(self, settlement, metadata.routeCount, metadata.politySize, bannerSignature);
+    if (!force && existing && budget.heavySignatureById.get(settlement.id) === currentSignature) continue;
+
+    if (existing) {
+      self.scene.remove(existing.group);
+      self.disposeGroup(existing.group);
+    }
+    const visual = self.createSettlementVisual(settlement);
+    visual.group.visible = true;
+    self.settlementVisuals.set(settlement.id, visual);
+    self.scene.add(visual.group);
+    reboundGroups.push(visual.group);
+    rebuilt += 1;
+    presentationChanged = true;
+
+    const freshRouteCount = self.state.tradeRoutes.filter(route => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
+    const freshPolitySize = self.state.polities.find(polity => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
+    const freshBanner = self.bannerSignatureForSettlement(settlement);
+    budget.heavySignatureById.set(settlement.id, heavySettlementSignature(self, settlement, freshRouteCount, freshPolitySize, freshBanner));
+  }
+
+  if (presentationChanged) self.refreshSmokeSources();
+  // Newly created settlement groups are the only objects requiring weather material binding here;
+  // traversing the entire scene after every town rebuild was another avoidable structural spike.
+  const bindWeather = self.weatherRenderer.bindScene.bind(self.weatherRenderer) as unknown as (object: THREE.Object3D) => void;
+  for (const group of reboundGroups) bindWeather(group);
+
+  self.scene.userData['settlementRenderBudget'] = {
+    pending: budget.pending.length,
+    rebuilt,
+    month: self.state.month,
+  };
+}
+
 const rendererPrototype = GodboxRenderer.prototype as unknown as Record<string, unknown>;
 rendererPrototype['addRoutePortals'] = enhancedAddRoutePortals;
 rendererPrototype['syncRoutes'] = enhancedSyncRoutes;
+rendererPrototype['syncSettlements'] = enhancedSyncSettlements;
 
 export type { TransportDebugRecord };
