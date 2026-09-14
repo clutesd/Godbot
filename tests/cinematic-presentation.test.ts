@@ -60,4 +60,37 @@ describe('Cinematic presentation pacing', () => {
     expect(busy).toBeLessThan(calm);
     expect(busy).toBeGreaterThanOrEqual(simulation.config.presentation.significantMonthsPerSecond);
   });
+
+  it('creates a seasonal breathing window and limits catch-up to one month per frame', () => {
+    const simulation = new Simulation({ seed: 'cinematic-season-transition', startingPopulation: 180 });
+    const director = new PresentationDirector(simulation.config);
+    const quiet = { interest: 0.1, kind: 'landscape-pause' as const };
+
+    for (let second = 0; second < 30; second += 1) director.update(1, simulation.state, quiet);
+    const ordinaryBudget = director.tickBudget(simulation.state);
+    expect(ordinaryBudget).toBeGreaterThan(1);
+
+    // Month 1 is EARLY SPRING in the presentation calendar: the first seasonal transition.
+    simulation.state.month = 1;
+    director.update(0.25, simulation.state, quiet);
+
+    expect(director.telemetry().seasonalTransition).toBe(true);
+    expect(director.telemetry().seasonalHoldSecondsRemaining).toBeGreaterThan(7);
+    expect(director.telemetry().tempo).toBe('linger');
+    expect(director.tickBudget(simulation.state)).toBe(1);
+
+    // Let the easing settle while the transition is still active.
+    for (let step = 0; step < 8; step += 1) director.update(0.5, simulation.state, quiet);
+    expect(director.monthsPerSecond).toBeLessThan(simulation.config.presentation.significantMonthsPerSecond);
+
+    // The breathing window deliberately outlives the transition month so rendering can catch up.
+    simulation.state.month = 2;
+    director.update(0.5, simulation.state, quiet);
+    expect(director.telemetry().seasonalTransition).toBe(true);
+    expect(director.tickBudget(simulation.state)).toBe(1);
+
+    for (let second = 0; second < 10; second += 1) director.update(1, simulation.state, quiet);
+    expect(director.telemetry().seasonalTransition).toBe(false);
+    expect(director.tickBudget(simulation.state)).toBeGreaterThan(1);
+  });
 });
