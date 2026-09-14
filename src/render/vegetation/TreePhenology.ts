@@ -43,7 +43,7 @@ const AUTUMN_RUST = new THREE.Color('#b65c39');
 const VIOLET_LEAF = new THREE.Color('#756a84');
 const PALE_SAGE = new THREE.Color('#a8ac76');
 
-/** Local climate and the shared calendar govern both leaves and the short cherry bloom. */
+/** Local climate and the shared calendar govern leaves, birch shedding and the short cherry bloom. */
 export function resolveTreePhenology(month: number, cell: Pick<WorldCell, 'temperature' | 'moisture'>,
   weather: Pick<WeatherCellState, 'temperature'>, family: TreeFamily, variation = 0.5): TreePhenology {
   const foliage = seasonalFoliage(month, cell, weather, family === 'conifer' || family === 'alpine', variation);
@@ -51,7 +51,17 @@ export function resolveTreePhenology(month: number, cell: Pick<WorldCell, 'tempe
   const blossom = family === 'cherry'
     ? smoothstep(1.1, 2, phase) * smoothstep(3.9, 2.6, phase) * smoothstep(0.2, 0.42, weather.temperature)
     : 0;
-  return { ...foliage, canopy: Math.max(foliage.canopy, blossom * 0.95), blossom };
+
+  // Birch reveals its defining pale stems before the rest of the deciduous forest is fully bare.
+  // A short late-autumn shedding window thins the crown and feeds the existing leaf particles;
+  // winter still resolves through the shared seasonal model rather than a special hard switch.
+  const birchShedding = family === 'birch'
+    ? smoothstep(7.15, 9.15, phase) * (1 - smoothstep(9.75, 10.75, phase))
+    : 0;
+  const canopy = foliage.canopy * (1 - birchShedding * 0.3);
+  const leafFall = Math.max(foliage.leafFall, birchShedding * 0.88);
+
+  return { ...foliage, canopy: Math.max(canopy, blossom * 0.95), leafFall, blossom };
 }
 
 /**
