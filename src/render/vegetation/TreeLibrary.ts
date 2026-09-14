@@ -62,8 +62,8 @@ class MeshAccumulator {
   }
 
   /**
-   * An irregular foliage clump. Crown massing supplies the scale hierarchy; this method adds local
-   * anisotropy so even neighboring clusters do not read as copies of the same green polyhedron.
+   * A compact crown mass. These are now reserved mostly for the deep canopy core; outer foliage
+   * uses smaller elongated sprays so a close tree stops reading as a pile of green boulders.
    */
   clump(centre: THREE.Vector3, radius: number, squash: number, random: SeededRandom, colour: THREE.Color): void {
     const source = new THREE.IcosahedronGeometry(radius, 0);
@@ -83,7 +83,7 @@ class MeshAccumulator {
       const key = `${px.toFixed(4)},${py.toFixed(4)},${pz.toFixed(4)}`;
       let jitter = jitterByCorner.get(key);
       if (jitter === undefined) {
-        jitter = 1 + random.range(-0.26, 0.26);
+        jitter = 1 + random.range(-0.22, 0.22);
         jitterByCorner.set(key, jitter);
       }
       const localX = px * jitter * stretchX;
@@ -101,6 +101,45 @@ class MeshAccumulator {
       for (let cursor = 0; cursor < position.count; cursor += 1) this.indices.push(base + cursor);
     }
     source.dispose();
+  }
+
+  /**
+   * Ten-triangle elongated leaf bundle. Two of these replace one outer icosahedral clump, keeping
+   * the old 20-triangle/site ceiling while giving the near canopy a finer, leafy silhouette.
+   */
+  spray(centre: THREE.Vector3, radius: number, squash: number, random: SeededRandom, colour: THREE.Color): void {
+    const azimuth = random.range(0, Math.PI * 2);
+    const axis = new THREE.Vector3(Math.cos(azimuth), random.range(-0.22, 0.3), Math.sin(azimuth)).normalize();
+    const reference = Math.abs(axis.y) > 0.88 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(axis, reference).normalize();
+    const up = new THREE.Vector3().crossVectors(right, axis).normalize();
+    const lengthFront = radius * random.range(1.02, 1.28);
+    const lengthBack = radius * random.range(0.7, 0.94);
+    const width = radius * random.range(0.38, 0.54);
+    const vertical = width * Math.max(0.45, Math.min(1.3, squash)) * random.range(0.82, 1.08);
+    const front = centre.clone().addScaledVector(axis, lengthFront);
+    const back = centre.clone().addScaledVector(axis, -lengthBack);
+    const ring: THREE.Vector3[] = [];
+    const twist = random.range(0, Math.PI * 2);
+    for (let index = 0; index < 5; index += 1) {
+      const angle = twist + index / 5 * Math.PI * 2;
+      ring.push(centre.clone()
+        .addScaledVector(right, Math.cos(angle) * width)
+        .addScaledVector(up, Math.sin(angle) * vertical)
+        .addScaledVector(axis, random.range(-0.08, 0.08) * radius));
+    }
+    const base = this.positions.length / 3;
+    const logical = [front, back, ...ring];
+    for (const vertex of logical) {
+      const normal = vertex.clone().sub(centre).normalize();
+      this.push(vertex.x, vertex.y, vertex.z, normal, colour);
+    }
+    for (let index = 0; index < 5; index += 1) {
+      const current = base + 2 + index;
+      const next = base + 2 + ((index + 1) % 5);
+      this.indices.push(base, current, next);
+      this.indices.push(base + 1, next, current);
+    }
   }
 
   build(): THREE.BufferGeometry {
@@ -211,6 +250,9 @@ interface CanopyGrammar {
   coreDrift: number;
   middleDrift: number;
   edgeDrift: number;
+  coreSpacing: number;
+  middleSpacing: number;
+  edgeSpacing: number;
   verticalScatter: number;
   edgeDrop: number;
   /** Angular width of a persistent opening through the crown. */
@@ -219,35 +261,39 @@ interface CanopyGrammar {
 }
 
 /**
- * Species-specific crown grammar. Scale is relative to each family's existing foliage reference
- * radius: the old single-size boulders become a few structural masses, many medium clusters and
- * small perimeter clusters. Gaps are stable per generated variant, so the crown has readable voids.
+ * Fine-grained crown grammar. Only a few compact core masses remain; most of the canopy budget is
+ * pushed into smaller, spaced middle/edge sites that become paired leaf sprays at near LOD.
  */
 const CANOPY: Record<'cherry' | 'broadleaf' | 'dry' | 'riverbank' | 'ancient', CanopyGrammar> = {
   cherry: {
-    coreShare: 0.22, edgeShare: 0.4, coreScale: [0.68, 0.88], middleScale: [0.46, 0.66], edgeScale: [0.28, 0.46],
-    coreAnchor: 0.72, middleAnchor: 0.94, edgeAnchor: 1.06, coreDrift: 0.22, middleDrift: 0.42, edgeDrift: 0.62,
-    verticalScatter: 0.42, edgeDrop: 0.02, gapWidth: 0.42, gapCount: 1,
+    coreShare: 0.14, edgeShare: 0.54, coreScale: [0.5, 0.66], middleScale: [0.33, 0.47], edgeScale: [0.17, 0.3],
+    coreAnchor: 0.72, middleAnchor: 0.96, edgeAnchor: 1.08, coreDrift: 0.2, middleDrift: 0.44, edgeDrift: 0.68,
+    coreSpacing: 0.36, middleSpacing: 0.46, edgeSpacing: 0.43,
+    verticalScatter: 0.46, edgeDrop: 0.025, gapWidth: 0.38, gapCount: 2,
   },
   broadleaf: {
-    coreShare: 0.28, edgeShare: 0.34, coreScale: [0.72, 0.94], middleScale: [0.5, 0.7], edgeScale: [0.3, 0.48],
-    coreAnchor: 0.68, middleAnchor: 0.92, edgeAnchor: 1.03, coreDrift: 0.18, middleDrift: 0.34, edgeDrift: 0.5,
-    verticalScatter: 0.4, edgeDrop: 0.01, gapWidth: 0.3, gapCount: 1,
+    coreShare: 0.16, edgeShare: 0.5, coreScale: [0.54, 0.7], middleScale: [0.34, 0.5], edgeScale: [0.18, 0.32],
+    coreAnchor: 0.7, middleAnchor: 0.94, edgeAnchor: 1.06, coreDrift: 0.16, middleDrift: 0.36, edgeDrift: 0.54,
+    coreSpacing: 0.38, middleSpacing: 0.48, edgeSpacing: 0.45,
+    verticalScatter: 0.42, edgeDrop: 0.015, gapWidth: 0.34, gapCount: 2,
   },
   dry: {
-    coreShare: 0.16, edgeShare: 0.48, coreScale: [0.64, 0.84], middleScale: [0.44, 0.62], edgeScale: [0.26, 0.42],
-    coreAnchor: 0.74, middleAnchor: 0.98, edgeAnchor: 1.08, coreDrift: 0.24, middleDrift: 0.5, edgeDrift: 0.76,
-    verticalScatter: 0.24, edgeDrop: 0, gapWidth: 0.5, gapCount: 2,
+    coreShare: 0.1, edgeShare: 0.58, coreScale: [0.46, 0.6], middleScale: [0.3, 0.42], edgeScale: [0.15, 0.28],
+    coreAnchor: 0.74, middleAnchor: 1, edgeAnchor: 1.1, coreDrift: 0.22, middleDrift: 0.52, edgeDrift: 0.82,
+    coreSpacing: 0.32, middleSpacing: 0.44, edgeSpacing: 0.42,
+    verticalScatter: 0.26, edgeDrop: 0, gapWidth: 0.52, gapCount: 2,
   },
   riverbank: {
-    coreShare: 0.18, edgeShare: 0.44, coreScale: [0.64, 0.82], middleScale: [0.42, 0.58], edgeScale: [0.24, 0.4],
-    coreAnchor: 0.74, middleAnchor: 0.96, edgeAnchor: 1.05, coreDrift: 0.18, middleDrift: 0.34, edgeDrift: 0.48,
-    verticalScatter: 0.62, edgeDrop: 0.08, gapWidth: 0.36, gapCount: 1,
+    coreShare: 0.12, edgeShare: 0.56, coreScale: [0.46, 0.6], middleScale: [0.28, 0.42], edgeScale: [0.14, 0.26],
+    coreAnchor: 0.74, middleAnchor: 0.98, edgeAnchor: 1.08, coreDrift: 0.16, middleDrift: 0.36, edgeDrift: 0.54,
+    coreSpacing: 0.34, middleSpacing: 0.44, edgeSpacing: 0.4,
+    verticalScatter: 0.66, edgeDrop: 0.09, gapWidth: 0.4, gapCount: 2,
   },
   ancient: {
-    coreShare: 0.2, edgeShare: 0.44, coreScale: [0.7, 0.9], middleScale: [0.46, 0.66], edgeScale: [0.27, 0.46],
-    coreAnchor: 0.68, middleAnchor: 0.94, edgeAnchor: 1.08, coreDrift: 0.2, middleDrift: 0.42, edgeDrift: 0.68,
-    verticalScatter: 0.5, edgeDrop: 0.03, gapWidth: 0.52, gapCount: 2,
+    coreShare: 0.12, edgeShare: 0.56, coreScale: [0.5, 0.68], middleScale: [0.32, 0.48], edgeScale: [0.16, 0.3],
+    coreAnchor: 0.7, middleAnchor: 0.96, edgeAnchor: 1.1, coreDrift: 0.18, middleDrift: 0.44, edgeDrift: 0.74,
+    coreSpacing: 0.32, middleSpacing: 0.44, edgeSpacing: 0.42,
+    verticalScatter: 0.54, edgeDrop: 0.035, gapWidth: 0.54, gapCount: 2,
   },
 };
 
@@ -291,6 +337,12 @@ function tierDrift(grammar: CanopyGrammar, tier: CanopyTier): number {
   return grammar.edgeDrift;
 }
 
+function tierSpacing(grammar: CanopyGrammar, tier: CanopyTier): number {
+  if (tier === 'core') return grammar.coreSpacing;
+  if (tier === 'middle') return grammar.middleSpacing;
+  return grammar.edgeSpacing;
+}
+
 function createCanopySites(tips: readonly BranchState[], species: Species, grammar: CanopyGrammar,
   height: number, total: number, random: SeededRandom): CanopySite[] {
   if (tips.length === 0 || total <= 0) return [];
@@ -303,7 +355,7 @@ function createCanopySites(tips: readonly BranchState[], species: Species, gramm
 
   const buildTier = (tier: CanopyTier, target: number): void => {
     let accepted = 0;
-    const maxAttempts = Math.max(target * 6, 8);
+    const maxAttempts = Math.max(target * 12, 12);
     for (let attempt = 0; attempt < maxAttempts && accepted < target; attempt += 1) {
       const siteRandom = random.fork(`canopy:${tier}:${attempt}`);
       const tip = tips[siteRandom.int(0, tips.length)];
@@ -312,7 +364,7 @@ function createCanopySites(tips: readonly BranchState[], species: Species, gramm
       const centre = tip.origin.clone();
       centre.x *= anchor;
       centre.z *= anchor;
-      centre.addScaledVector(tip.direction, referenceRadius * siteRandom.range(0.04, tier === 'edge' ? 0.28 : 0.2));
+      centre.addScaledVector(tip.direction, referenceRadius * siteRandom.range(0.03, tier === 'edge' ? 0.3 : 0.18));
       const drift = referenceRadius * species.crownSpread * tierDrift(grammar, tier);
       centre.x += siteRandom.range(-drift, drift);
       centre.z += siteRandom.range(-drift, drift);
@@ -320,23 +372,30 @@ function createCanopySites(tips: readonly BranchState[], species: Species, gramm
         + species.crownLift * height;
       if (tier === 'edge') centre.y -= grammar.edgeDrop * height * siteRandom.range(0.7, 1.15);
 
-      if (tier !== 'core' && Math.hypot(centre.x, centre.z) > referenceRadius * 0.35) {
+      if (tier !== 'core' && Math.hypot(centre.x, centre.z) > referenceRadius * 0.3) {
         const angle = Math.atan2(centre.z, centre.x);
-        const gapScale = tier === 'edge' ? 1 : 0.68;
+        const gapScale = tier === 'edge' ? 1 : 0.72;
         const inGap = gapAngles.some(gap => angularDistance(angle, gap) < grammar.gapWidth * gapScale);
         if (inGap) continue;
       }
 
       const scale = tierScale(grammar, tier);
       const size = referenceRadius * siteRandom.range(scale[0], scale[1]);
-      const tierSquash = tier === 'core' ? 1 : tier === 'middle' ? 0.9 : 0.76;
+      const spacing = tierSpacing(grammar, tier);
+      const tooClose = sites.some(existing => {
+        const sharedSpacing = Math.min(spacing, tierSpacing(grammar, existing.tier));
+        return centre.distanceTo(existing.centre) < (size + existing.size) * sharedSpacing;
+      });
+      if (tooClose) continue;
+
+      const tierSquash = tier === 'core' ? 1 : tier === 'middle' ? 0.86 : 0.7;
       const shade = tier === 'core'
-        ? siteRandom.range(0.68, 0.82)
-        : tier === 'middle' ? siteRandom.range(0.78, 0.94) : siteRandom.range(0.9, 1.04);
+        ? siteRandom.range(0.76, 0.88)
+        : tier === 'middle' ? siteRandom.range(0.84, 0.98) : siteRandom.range(0.93, 1.06);
       sites.push({
         centre,
         size,
-        squash: species.clumpSquash * tierSquash * siteRandom.range(0.9, 1.1),
+        squash: species.clumpSquash * tierSquash * siteRandom.range(0.9, 1.08),
         shade,
         tier,
         seed: `canopy:${tier}:${attempt}`,
@@ -373,8 +432,8 @@ function selectCanopySites(sites: readonly CanopySite[], visibleCount: number): 
     else if (tier === 'middle') middle.push(index);
     else edge.push(index);
   }
-  const coreQuota = Math.min(core.length, Math.max(1, Math.round(visibleCount * 0.2)));
-  const edgeQuota = Math.min(edge.length, Math.max(1, Math.round(visibleCount * 0.4)));
+  const coreQuota = Math.min(core.length, Math.max(1, Math.round(visibleCount * 0.18)));
+  const edgeQuota = Math.min(edge.length, Math.max(1, Math.round(visibleCount * 0.5)));
   evenlySelect(core, coreQuota, selected);
   evenlySelect(edge, edgeQuota, selected);
   evenlySelect(middle, visibleCount - selected.size, selected);
@@ -521,18 +580,31 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
   const sites = createCanopySites(tips, species, grammar, height, requestedClumps, random);
   const visibleClumps = Math.min(sites.length, lod.maxClumps);
   const selected = selectCanopySites(sites, visibleClumps);
+  const nearDetail = lod.maxClumps >= TREE_LOD_NEAR.maxClumps;
   let radius = Math.max(0.1, architectureRadius);
   let crown = Math.max(height, architectureTop);
   for (let index = 0; index < sites.length; index += 1) {
     const site = sites[index]!;
     if (selected.has(index)) {
       foliageColour.setScalar(site.shade);
-      foliage.clump(site.centre, site.size * lod.clusterScale, site.squash,
-        random.fork(site.seed), foliageColour);
+      if (nearDetail && site.tier !== 'core') {
+        const pairRandom = random.fork(`${site.seed}:pair`);
+        const angle = pairRandom.range(0, Math.PI * 2);
+        const offset = new THREE.Vector3(Math.cos(angle), pairRandom.range(-0.22, 0.22), Math.sin(angle))
+          .normalize().multiplyScalar(site.size * 0.24);
+        foliage.spray(site.centre.clone().add(offset), site.size * 0.72 * lod.clusterScale,
+          site.squash, random.fork(`${site.seed}:spray:a`), foliageColour);
+        foliage.spray(site.centre.clone().addScaledVector(offset, -0.7), site.size * 0.56 * lod.clusterScale,
+          site.squash * 0.9, random.fork(`${site.seed}:spray:b`), foliageColour);
+      } else {
+        const massScale = site.tier === 'core' ? 1 : 0.86;
+        foliage.clump(site.centre, site.size * massScale * lod.clusterScale, site.squash,
+          random.fork(site.seed), foliageColour);
+      }
     }
-    // Account for local anisotropy conservatively; metadata must remain LOD-identical.
-    radius = Math.max(radius, Math.hypot(site.centre.x, site.centre.z) + site.size * 1.48);
-    crown = Math.max(crown, site.centre.y + site.size * site.squash * 1.48);
+    // Conservative envelope: paired sprays remain inside ~1.4 site radii including their offset.
+    radius = Math.max(radius, Math.hypot(site.centre.x, site.centre.z) + site.size * 1.45);
+    crown = Math.max(crown, site.centre.y + site.size * Math.max(0.65, site.squash) * 1.45);
   }
 
   return { family, bark: bark.build(), foliage: foliage.build(), height: crown, radius };
@@ -559,7 +631,7 @@ function growEvergreen(family: 'conifer' | 'alpine', random: SeededRandom, lod: 
     foliage.tube(base, tip, radius, 0.002, lod.sides + 2, color);
     const branchCount = 3;
     const twist = random.range(0, Math.PI * 2);
-    for (let branch = 0; branch < branchCount; branch++) {
+    for (let branch = 0; branch < branchCount; branch += 1) {
       const angle = twist + branch / branchCount * Math.PI * 2;
       const end = new THREE.Vector3(base.x + Math.cos(angle) * radius * 0.86, base.y - height * 0.035,
         base.z + Math.sin(angle) * radius * 0.86);
