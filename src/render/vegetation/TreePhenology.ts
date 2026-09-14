@@ -17,7 +17,7 @@ const SUMMER: Record<TreeFamily, THREE.Color> = {
 const PIGMENT_ACCENT: Record<TreeFamily, THREE.Color> = {
   cherry: new THREE.Color('#78924f'),
   broadleaf: new THREE.Color('#557d43'),
-  birch: new THREE.Color('#87a95d'),
+  birch: new THREE.Color('#96b96a'),
   conifer: new THREE.Color('#3c6650'),
   dry: new THREE.Color('#91905a'),
   riverbank: new THREE.Color('#5d8d63'),
@@ -27,7 +27,7 @@ const PIGMENT_ACCENT: Record<TreeFamily, THREE.Color> = {
 const WET_ACCENT: Record<TreeFamily, THREE.Color> = {
   cherry: new THREE.Color('#587c54'),
   broadleaf: new THREE.Color('#426f4a'),
-  birch: new THREE.Color('#668e55'),
+  birch: new THREE.Color('#6f985f'),
   conifer: new THREE.Color('#31594c'),
   dry: new THREE.Color('#76815a'),
   riverbank: new THREE.Color('#4d8263'),
@@ -35,9 +35,10 @@ const WET_ACCENT: Record<TreeFamily, THREE.Color> = {
   ancient: new THREE.Color('#385f43'),
 };
 const SPRING = new THREE.Color('#91aa5b');
+const BIRCH_SPRING = new THREE.Color('#a7c56d');
 const BLOSSOM = new THREE.Color('#efb6c9');
 const AUTUMN_GOLD = new THREE.Color('#c6a04f');
-const BIRCH_AUTUMN_GOLD = new THREE.Color('#d6bb4f');
+const BIRCH_AUTUMN_GOLD = new THREE.Color('#e0c657');
 const AUTUMN_RUST = new THREE.Color('#b65c39');
 const VIOLET_LEAF = new THREE.Color('#756a84');
 const PALE_SAGE = new THREE.Color('#a8ac76');
@@ -55,10 +56,12 @@ export function resolveTreePhenology(month: number, cell: Pick<WorldCell, 'tempe
 
 /**
  * Absolute leaf colours with family-specific pigment and moisture response. Birch stays a brighter,
- * fresher green through summer and turns predominantly gold rather than sharing the rust-heavy path.
+ * translucent-looking yellow-green through the growing season and turns predominantly clear gold.
  */
 export function treeFoliageColour(family: TreeFamily, phase: TreePhenology, variation: number, target: THREE.Color, moisture = 0.5): THREE.Color {
-  target.copy(SUMMER[family]).lerp(SPRING, phase.growth * 0.3);
+  target.copy(SUMMER[family]);
+  if (family === 'birch') target.lerp(BIRCH_SPRING, phase.growth * 0.38);
+  else target.lerp(SPRING, phase.growth * 0.3);
 
   const individuality = 0.07 + Math.abs(variation - 0.5) * 0.24;
   target.lerp(PIGMENT_ACCENT[family], individuality);
@@ -74,7 +77,7 @@ export function treeFoliageColour(family: TreeFamily, phase: TreePhenology, vari
   if (phase.autumn > 0) {
     if (family === 'birch') {
       target.lerp(BIRCH_AUTUMN_GOLD, phase.autumn);
-      target.lerp(AUTUMN_RUST, phase.autumn * variation * 0.16);
+      target.lerp(AUTUMN_RUST, phase.autumn * variation * 0.12);
     } else {
       target.lerp(AUTUMN_GOLD, phase.autumn);
       target.lerp(AUTUMN_RUST, phase.autumn * variation * 0.8);
