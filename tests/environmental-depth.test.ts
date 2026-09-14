@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveEnvironmentalDepth } from '../src/render/atmosphere/EnvironmentalDepth';
 
 describe('environmental depth presentation', () => {
-  it('keeps clear daylight subtle while retaining distance haze', () => {
+  it('keeps clear daylight genuinely light while retaining a small near-air floor', () => {
     const state = resolveEnvironmentalDepth({
       daylight: 1,
       twilight: 0,
@@ -10,17 +10,29 @@ describe('environmental depth presentation', () => {
       baseFogDensity: 0.0072,
       cameraHeight: 28,
     });
-    expect(state.fogDensity).toBeGreaterThan(0.0065);
-    expect(state.fogDensity).toBeLessThan(0.008);
-    expect(state.fogSkyBlend).toBeLessThan(0.25);
+    expect(state.fogDensity).toBeGreaterThan(0.001);
+    expect(state.fogDensity).toBeLessThan(0.0018);
+    expect(state.fogSkyBlend).toBeLessThan(0.22);
+  });
+
+  it('does not make an elevated documentary camera globally foggier in clear weather', () => {
+    const low = resolveEnvironmentalDepth({ daylight: 1, twilight: 0, atmosphericObscuration: 0, baseFogDensity: 0.0072, cameraHeight: 8 });
+    const high = resolveEnvironmentalDepth({ daylight: 1, twilight: 0, atmosphericObscuration: 0, baseFogDensity: 0.0072, cameraHeight: 120 });
+    expect(high.fogDensity).toBeCloseTo(low.fogDensity, 8);
   });
 
   it('deepens atmosphere and valley mist under severe obscuration without exploding density', () => {
     const clear = resolveEnvironmentalDepth({ daylight: 1, twilight: 0, atmosphericObscuration: 0, baseFogDensity: 0.0072, cameraHeight: 25 });
     const storm = resolveEnvironmentalDepth({ daylight: 0.45, twilight: 0.2, atmosphericObscuration: 1, baseFogDensity: 0.04, cameraHeight: 25 });
-    expect(storm.fogDensity).toBeGreaterThan(clear.fogDensity);
-    expect(storm.fogDensity).toBeLessThanOrEqual(0.075);
+    expect(storm.fogDensity).toBeGreaterThan(clear.fogDensity * 10);
+    expect(storm.fogDensity).toBeLessThanOrEqual(0.055);
     expect(storm.valleyMistMultiplier).toBeGreaterThan(clear.valleyMistMultiplier);
+  });
+
+  it('keeps ordinary valley mist restrained until the spatial mist-field pass', () => {
+    const clear = resolveEnvironmentalDepth({ daylight: 1, twilight: 0, atmosphericObscuration: 0, baseFogDensity: 0.0072, cameraHeight: 25 });
+    expect(clear.valleyMistMultiplier).toBeGreaterThanOrEqual(0.45);
+    expect(clear.valleyMistMultiplier).toBeLessThanOrEqual(0.55);
   });
 
   it('tightens shadow coverage materially below the old fixed 75-unit half span', () => {

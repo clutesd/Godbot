@@ -20,10 +20,16 @@ export interface EnvironmentalDepthState {
   shadowNormalBias: number;
 }
 
+/** Legacy authored clear-weather fog density. Values above this are meaningful weather/event fog. */
+const AUTHORED_CLEAR_FOG = 0.0072;
+
 /**
  * Resolve world depth from the same final EnvironmentFrameState that owns the lights/exposure.
- * Clear scenes remain crisp; weather and catastrophe can deepen aerial perspective without a
- * second subsystem inventing its own interpretation of the frame.
+ *
+ * FogExp2 is deliberately only a light near-air safety layer now. Medium/far atmospheric depth is
+ * owned by the height-aware aerial-perspective pass, so an elevated documentary camera no longer
+ * fills the entire scene with grey simply because it is high above the terrain. Severe authored
+ * weather remains capable of producing genuinely poor visibility through the excess-fog path.
  */
 export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): EnvironmentalDepthState {
   const daylight = THREE.MathUtils.clamp(input.daylight, 0, 1);
@@ -32,15 +38,32 @@ export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): Envir
   const baseFog = Math.max(0, input.baseFogDensity);
   const cameraHeight = Math.max(0, input.cameraHeight);
 
-  const clearAirFloor = 0.00035 + Math.min(0.00055, cameraHeight * 0.000006);
-  const fogDensity = Math.min(0.075,
-    baseFog * (0.9 + obscuration * 0.13 + (1 - daylight) * 0.045) + clearAirFloor,
-  );
-  const fogSkyBlend = THREE.MathUtils.clamp(0.16 + obscuration * 0.22 + twilight * 0.08, 0.12, 0.46);
+  // The old clear-weather value (0.0072) erased roughly forty percent of contrast by ~100 world
+  // units before the aerial-perspective pass even ran. Retain only a very light clear-air floor.
+  // Crucially, this term no longer increases with camera height: altitude should expose clearer air,
+  // not make an overhead documentary shot milkier.
+  const authoredClearComponent = Math.min(baseFog, AUTHORED_CLEAR_FOG);
+  const clearAirDensity = 0.00045
+    + authoredClearComponent * 0.12
+    + (1 - daylight) * 0.00012;
+
+  // Anything above the ordinary authored baseline is real weather/event obscuration. Preserve a
+  // steep response here so blizzards, smoke and catastrophe can still collapse visibility without
+  // forcing every normal morning to look like the camera is inside a cloud.
+  const excessFog = Math.max(0, baseFog - AUTHORED_CLEAR_FOG);
+  const severeWeatherDensity = excessFog * (0.72 + obscuration * 0.12);
+  const obscurationFloor = obscuration * 0.0014;
+  const fogDensity = Math.min(0.055, clearAirDensity + severeWeatherDensity + obscurationFloor);
+
+  const fogSkyBlend = THREE.MathUtils.clamp(0.13 + obscuration * 0.24 + twilight * 0.07, 0.1, 0.44);
+
+  // The current mesh mist remains only an interim low-level accent until the spatial mist-field pass.
+  // Keep normal seasons lighter so the fixed sheet does not compete with height-aware aerial depth;
+  // true severe obscuration may still strengthen it.
   const valleyMistMultiplier = THREE.MathUtils.clamp(
-    0.72 + twilight * 0.22 + obscuration * 0.28 + (1 - daylight) * 0.08,
-    0.68,
-    1.22,
+    0.5 + twilight * 0.18 + obscuration * 0.35 + (1 - daylight) * 0.08,
+    0.45,
+    1.15,
   );
 
   const shadowHalfSpan = THREE.MathUtils.clamp(38 + cameraHeight * 0.26, 42, 64);
@@ -126,7 +149,7 @@ export class EnvironmentalDepthRig {
     if (!Number.isNaN(this.lastAppliedMist) && Math.abs(material.opacity - this.lastAppliedMist) > 0.002) {
       this.seasonalMistBase = material.opacity;
     }
-    material.opacity = THREE.MathUtils.clamp(this.seasonalMistBase * state.valleyMistMultiplier, 0.08, 0.74);
+    material.opacity = THREE.MathUtils.clamp(this.seasonalMistBase * state.valleyMistMultiplier, 0.06, 0.68);
     material.color.copy(frame.skyFillColor).lerp(frame.sunColor, frame.twilight * 0.08);
     this.lastAppliedMist = material.opacity;
   }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { integratedHeightDensity } from '../src/render/atmosphere/AerialPerspective';
 import { resolveAtmosphericScattering } from '../src/render/atmosphere/AtmosphericScattering';
 import { resolveEnvironmentFrame } from '../src/render/atmosphere/EnvironmentFrameState';
 
@@ -35,18 +36,29 @@ describe('directional atmospheric scattering', () => {
     expect(clear.mieG).toBeLessThanOrEqual(0.815);
   });
 
-  it('adds meaningful aerial perspective beyond the immediate settlement without washing the foreground', () => {
+  it('adds meaningful aerial perspective beyond a larger crisp foreground envelope', () => {
     const clear = resolveAtmosphericScattering(frame(0.55, 0));
 
     expect(clear.aerialDensity).toBeGreaterThan(0.004);
     expect(clear.aerialDensity).toBeLessThan(0.008);
     expect(clear.aerialStrength).toBeGreaterThan(0.45);
     expect(clear.aerialStrength).toBeLessThanOrEqual(0.62);
-    expect(clear.aerialStartDistance).toBeGreaterThanOrEqual(12);
-    expect(clear.aerialStartDistance).toBeLessThan(20);
+    expect(clear.aerialStartDistance).toBeGreaterThanOrEqual(20);
+    expect(clear.aerialStartDistance).toBeLessThanOrEqual(24);
   });
 
-  it('suppresses direct solar structure while deepening aerial atmosphere under dense weather', () => {
+  it('integrates height so elevated cameras traverse much less dense air than low cameras', () => {
+    const lowCameraToValley = integratedHeightDensity(15, 0);
+    const highCameraToValley = integratedHeightDensity(80, 0);
+    const highCameraToRidge = integratedHeightDensity(80, 50);
+
+    expect(lowCameraToValley).toBeGreaterThan(0.65);
+    expect(highCameraToValley).toBeLessThan(0.35);
+    expect(highCameraToValley).toBeLessThan(lowCameraToValley * 0.5);
+    expect(highCameraToRidge).toBeLessThan(highCameraToValley * 0.35);
+  });
+
+  it('suppresses direct solar structure while deepening and advancing atmosphere under dense weather', () => {
     const clear = resolveAtmosphericScattering(frame(0.45, 0, 0.0072));
     const storm = resolveAtmosphericScattering(frame(0.45, 0, 0.05));
 
@@ -54,6 +66,7 @@ describe('directional atmospheric scattering', () => {
     expect(storm.sunDiskStrength).toBeLessThan(clear.sunDiskStrength);
     expect(storm.mieStrength).toBeLessThan(clear.mieStrength);
     expect(storm.aerialDensity).toBeGreaterThan(clear.aerialDensity);
+    expect(storm.aerialStartDistance).toBeLessThan(clear.aerialStartDistance);
     expect(storm.aerialForwardScatter).toBeLessThan(clear.aerialForwardScatter);
   });
 
@@ -66,7 +79,8 @@ describe('directional atmospheric scattering', () => {
     expect(night.rayleighStrength).toBeLessThan(0.12);
     expect(night.aerialStrength).toBeGreaterThanOrEqual(0.16);
     expect(night.aerialStrength).toBeLessThan(0.3);
-    expect(night.aerialStartDistance).toBeGreaterThan(17);
+    expect(night.aerialStartDistance).toBeGreaterThanOrEqual(26);
+    expect(night.aerialStartDistance).toBeLessThanOrEqual(28);
   });
 
   it('normalizes the authoritative sun direction in the final environment frame', () => {
