@@ -57,9 +57,9 @@ export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): Envir
 
   const fogSkyBlend = THREE.MathUtils.clamp(0.13 + obscuration * 0.24 + twilight * 0.07, 0.1, 0.44);
 
-  // The current mesh mist remains only an interim low-level accent until the spatial mist-field pass.
-  // Keep normal seasons lighter so the fixed sheet does not compete with height-aware aerial depth;
-  // true severe obscuration may still strengthen it.
+  // Seasonal/time-of-day modulation for the spatial low-mist field. It is intentionally restrained
+  // in clear daylight and stronger around twilight/night or genuine atmospheric obscuration. The
+  // mist field itself decides *where* moisture exists; this scalar only decides how visible it is.
   const valleyMistMultiplier = THREE.MathUtils.clamp(
     0.5 + twilight * 0.18 + obscuration * 0.35 + (1 - daylight) * 0.08,
     0.45,
@@ -86,30 +86,20 @@ export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): Envir
  */
 export class EnvironmentalDepthRig {
   private readonly sun?: THREE.DirectionalLight;
-  private readonly mist?: THREE.Mesh;
   private readonly forward = new THREE.Vector3();
   private readonly focus = new THREE.Vector3();
   private readonly celestialOffset = new THREE.Vector3();
   private readonly lastAdjustedSunPosition = new THREE.Vector3();
   private hasAdjustedSun = false;
-  private seasonalMistBase = 0.5;
-  private lastAppliedMist = Number.NaN;
 
   constructor(private readonly scene: THREE.Scene, private readonly camera: THREE.Camera) {
     const shadowLights: THREE.DirectionalLight[] = [];
-    let mist: THREE.Mesh | undefined;
     scene.traverse((object) => {
       if (object instanceof THREE.DirectionalLight && object.castShadow) shadowLights.push(object);
-      if (!mist && object instanceof THREE.Mesh && object.name === 'valley-mist') mist = object;
     });
     shadowLights.sort((a, b) => b.intensity - a.intensity);
     this.sun = shadowLights[0];
-    this.mist = mist;
     if (this.sun && !this.sun.target.parent) this.scene.add(this.sun.target);
-    if (this.mist?.material instanceof THREE.MeshBasicMaterial) {
-      this.seasonalMistBase = this.mist.material.opacity;
-      this.lastAppliedMist = this.mist.material.opacity;
-    }
   }
 
   update(frame: EnvironmentFrameState): EnvironmentalDepthState {
@@ -129,7 +119,6 @@ export class EnvironmentalDepthRig {
       fog.color.copy(frame.sourceFogColor).lerp(frame.skyFillColor, state.fogSkyBlend);
     }
 
-    this.updateValleyMist(state, frame);
     this.updateShadowFocus(state);
 
     this.scene.userData['environmentDepth'] = {
@@ -141,17 +130,6 @@ export class EnvironmentalDepthRig {
       atmosphericObscuration: frame.atmosphericObscuration,
     };
     return state;
-  }
-
-  private updateValleyMist(state: EnvironmentalDepthState, frame: EnvironmentFrameState): void {
-    if (!this.mist || !(this.mist.material instanceof THREE.MeshBasicMaterial)) return;
-    const material = this.mist.material;
-    if (!Number.isNaN(this.lastAppliedMist) && Math.abs(material.opacity - this.lastAppliedMist) > 0.002) {
-      this.seasonalMistBase = material.opacity;
-    }
-    material.opacity = THREE.MathUtils.clamp(this.seasonalMistBase * state.valleyMistMultiplier, 0.06, 0.68);
-    material.color.copy(frame.skyFillColor).lerp(frame.sunColor, frame.twilight * 0.08);
-    this.lastAppliedMist = material.opacity;
   }
 
   private updateShadowFocus(state: EnvironmentalDepthState): void {
