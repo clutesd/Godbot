@@ -8,6 +8,15 @@ import { LOW_MIST_MAX_HEIGHT, LOW_MIST_MIN_HEIGHT, type LowMistField } from './L
 /** World-space height falloff used by the aerial-density integral. */
 export const AERIAL_HEIGHT_FALLOFF = 0.045;
 
+const EMPTY_LOW_MIST_TEXTURE = new THREE.DataTexture(
+  new Uint8Array([0, 0, 0, 255]),
+  1,
+  1,
+  THREE.RGBAFormat,
+  THREE.UnsignedByteType,
+);
+EMPTY_LOW_MIST_TEXTURE.needsUpdate = true;
+
 /**
  * CPU mirror of the shader's four-point height-density integration, used for deterministic tests.
  * The result is the average relative air density encountered along a camera-to-surface ray.
@@ -36,12 +45,12 @@ export function updateAerialPerspectivePass(
   frame: EnvironmentFrameState,
   scattering: AtmosphericScatteringState,
   depthState: EnvironmentalDepthState,
-  lowMistField: LowMistField,
+  lowMistField: LowMistField | undefined,
   camera: THREE.PerspectiveCamera,
   depthTexture: THREE.DepthTexture | null,
 ): void {
   const uniforms = pass.uniforms;
-  const mist = lowMistField.sample();
+  const mist = lowMistField?.sample();
   uniforms['tDepth']!.value = depthTexture;
   uniforms['uProjectionInverse']!.value.copy(camera.projectionMatrixInverse);
   uniforms['uCameraWorld']!.value.copy(camera.matrixWorld);
@@ -57,14 +66,20 @@ export function updateAerialPerspectivePass(
   uniforms['uNightBlend']!.value = scattering.nightBlend;
   uniforms['uObscuration']!.value = scattering.obscuration;
   uniforms['uHeightFalloff']!.value = AERIAL_HEIGHT_FALLOFF;
-  uniforms['uLowMistMap']!.value = mist.texture;
-  uniforms['uLowMistBounds']!.value.set(mist.originX, mist.originZ, mist.span, 1 / Math.max(0.001, mist.span));
-  uniforms['uLowMistHeightRange']!.value.set(mist.minAnchorY, mist.maxAnchorY);
-  uniforms['uLowMistStrength']!.value = THREE.MathUtils.clamp(
-    mist.seasonalStrength * depthState.valleyMistMultiplier,
-    0,
-    1.1,
-  );
+  uniforms['uLowMistMap']!.value = mist?.texture ?? EMPTY_LOW_MIST_TEXTURE;
+  if (mist) {
+    uniforms['uLowMistBounds']!.value.set(mist.originX, mist.originZ, mist.span, 1 / Math.max(0.001, mist.span));
+    uniforms['uLowMistHeightRange']!.value.set(mist.minAnchorY, mist.maxAnchorY);
+    uniforms['uLowMistStrength']!.value = THREE.MathUtils.clamp(
+      mist.seasonalStrength * depthState.valleyMistMultiplier,
+      0,
+      1.1,
+    );
+  } else {
+    uniforms['uLowMistBounds']!.value.set(-1, -1, 2, 0.5);
+    uniforms['uLowMistHeightRange']!.value.set(0, 1);
+    uniforms['uLowMistStrength']!.value = 0;
+  }
   const farBlendStart = Math.max(scattering.aerialStartDistance * 4.5, camera.far * 0.16);
   const farBlendEnd = Math.max(farBlendStart + 120, camera.far * 0.5);
   uniforms['uFarBlendStart']!.value = farBlendStart;
@@ -99,9 +114,9 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     uHeightFalloff: { value: AERIAL_HEIGHT_FALLOFF },
     uFarBlendStart: { value: 144 },
     uFarBlendEnd: { value: 450 },
-    uLowMistMap: { value: null },
-    uLowMistBounds: { value: new THREE.Vector4(-100, -100, 200, 0.005) },
-    uLowMistHeightRange: { value: new THREE.Vector2(0, 40) },
+    uLowMistMap: { value: EMPTY_LOW_MIST_TEXTURE },
+    uLowMistBounds: { value: new THREE.Vector4(-1, -1, 2, 0.5) },
+    uLowMistHeightRange: { value: new THREE.Vector2(0, 1) },
     uLowMistStrength: { value: 0 },
   },
   vertexShader: `
