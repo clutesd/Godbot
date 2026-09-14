@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import type { EnvironmentFrameState } from './EnvironmentFrameState';
 import type { AtmosphericScatteringState } from './AtmosphericScattering';
+import type { EnvironmentalDepthState } from './EnvironmentalDepth';
+import { LOW_MIST_MAX_HEIGHT, LOW_MIST_MIN_HEIGHT, type LowMistField } from './LowMistField';
 
 /** World-space height falloff used by the aerial-density integral. */
 export const AERIAL_HEIGHT_FALLOFF = 0.045;
@@ -25,19 +27,21 @@ export function integratedHeightDensity(
 /**
  * Parameters consumed by the screen-space aerial perspective pass.
  *
- * The sky shader makes the atmosphere visible when the camera sees the horizon. GODBOX spends a
- * large amount of time looking down into settlements, however, so the same scattering has to exist
- * between the camera and terrain as well. This pass preserves nearby contrast, then progressively
- * compresses extreme-distance land/water into the same illuminated air as the sky horizon.
+ * Clear air and spatial low mist now share this one depth-aware integration point: the broad
+ * atmosphere handles distance/height extinction, while the low-mist texture says where moisture
+ * actually pools near terrain and water. This avoids reintroducing a second screen-wide fog layer.
  */
 export function updateAerialPerspectivePass(
   pass: ShaderPass,
   frame: EnvironmentFrameState,
   scattering: AtmosphericScatteringState,
+  depthState: EnvironmentalDepthState,
+  lowMistField: LowMistField,
   camera: THREE.PerspectiveCamera,
   depthTexture: THREE.DepthTexture | null,
 ): void {
   const uniforms = pass.uniforms;
+  const mist = lowMistField.sample();
   uniforms['tDepth']!.value = depthTexture;
   uniforms['uProjectionInverse']!.value.copy(camera.projectionMatrixInverse);
   uniforms['uCameraWorld']!.value.copy(camera.matrixWorld);
@@ -53,6 +57,14 @@ export function updateAerialPerspectivePass(
   uniforms['uNightBlend']!.value = scattering.nightBlend;
   uniforms['uObscuration']!.value = scattering.obscuration;
   uniforms['uHeightFalloff']!.value = AERIAL_HEIGHT_FALLOFF;
+  uniforms['uLowMistMap']!.value = mist.texture;
+  uniforms['uLowMistBounds']!.value.set(mist.originX, mist.originZ, mist.span, 1 / Math.max(0.001, mist.span));
+  uniforms['uLowMistHeightRange']!.value.set(mist.minAnchorY, mist.maxAnchorY);
+  uniforms['uLowMistStrength']!.value = THREE.MathUtils.clamp(
+    mist.seasonalStrength * depthState.valleyMistMultiplier,
+    0,
+    1.1,
+  );
   const farBlendStart = Math.max(scattering.aerialStartDistance * 4.5, camera.far * 0.16);
   const farBlendEnd = Math.max(farBlendStart + 120, camera.far * 0.5);
   uniforms['uFarBlendStart']!.value = farBlendStart;
@@ -62,12 +74,10 @@ export function updateAerialPerspectivePass(
 /**
  * Depth-aware aerial perspective. It runs in linear HDR space before bloom/grade/output.
  *
- * We reconstruct the world ray and hit position from the scene depth buffer, integrate a cheap
- * exponential height-density model along that ray, then apply Beer-Lambert style extinction and
- * directional in-scatter. A high camera therefore spends most of its path in clear thin air before
- * entering denser valley air near the surface, instead of treating the entire ray as ground fog.
- * At extreme distance, a second gentle horizon-compression term still blends terrain and ocean
- * toward sky-fill colour so sparse remote geometry can imply a much larger world.
+ * The broad atmosphere uses an exponential height-density integral. A second, deliberately shallow
+ * world-space field is sampled along the same camera ray for terrain/water mist. That means a high
+ * camera can remain in clear air while looking through a ribbon of moisture sitting over a river,
+ * inside a basin or among the lower forest canopy. No translucent world sheet is involved.
  */
 export const AERIAL_PERSPECTIVE_SHADER = {
   uniforms: {
@@ -89,6 +99,10 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     uHeightFalloff: { value: AERIAL_HEIGHT_FALLOFF },
     uFarBlendStart: { value: 144 },
     uFarBlendEnd: { value: 450 },
+    uLowMistMap: { value: null },
+    uLowMistBounds: { value: new THREE.Vector4(-100, -100, 200, 0.005) },
+    uLowMistHeightRange: { value: new THREE.Vector2(0, 40) },
+    uLowMistStrength: { value: 0 },
   },
   vertexShader: `
     varying vec2 vUv;
@@ -100,6 +114,7 @@ export const AERIAL_PERSPECTIVE_SHADER = {
   fragmentShader: `
     uniform sampler2D tDiffuse;
     uniform sampler2D tDepth;
+    uniform sampler2D uLowMistMap;
     uniform mat4 uProjectionInverse;
     uniform mat4 uCameraWorld;
     uniform float uCameraHeight;
@@ -116,6 +131,9 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     uniform float uHeightFalloff;
     uniform float uFarBlendStart;
     uniform float uFarBlendEnd;
+    uniform vec4 uLowMistBounds;
+    uniform vec2 uLowMistHeightRange;
+    uniform float uLowMistStrength;
     varying vec2 vUv;
 
     float densityAtHeight(float worldY) {
@@ -123,14 +141,36 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     }
 
     float integratedRayDensity(float cameraY, float surfaceY) {
-      // Four midpoint samples are stable, branch-free and cheap enough for a full-screen pass. They
-      // approximate the optical-depth integral much better than classifying the whole ray by the
-      // destination pixel's height, especially in GODBOX's high oblique documentary shots.
       float d0 = densityAtHeight(mix(cameraY, surfaceY, 0.125));
       float d1 = densityAtHeight(mix(cameraY, surfaceY, 0.375));
       float d2 = densityAtHeight(mix(cameraY, surfaceY, 0.625));
       float d3 = densityAtHeight(mix(cameraY, surfaceY, 0.875));
       return (d0 + d1 + d2 + d3) * 0.25;
+    }
+
+    float lowMistDensityAt(vec3 worldPoint) {
+      vec2 uv = (worldPoint.xz - uLowMistBounds.xy) * uLowMistBounds.w;
+      if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+      vec4 field = texture2D(uLowMistMap, uv);
+      float anchorY = mix(uLowMistHeightRange.x, uLowMistHeightRange.y, field.g);
+      float layerHeight = mix(${LOW_MIST_MIN_HEIGHT.toFixed(2)}, ${LOW_MIST_MAX_HEIGHT.toFixed(2)}, field.b);
+      float relativeY = worldPoint.y - anchorY;
+      float aboveSurface = smoothstep(-0.55, 0.18, relativeY);
+      float belowCeiling = 1.0 - smoothstep(layerHeight * 0.42, layerHeight, relativeY);
+      return field.r * aboveSurface * belowCeiling;
+    }
+
+    float integratedLowMist(vec3 cameraWorld, vec3 surfaceWorld) {
+      // Weighted stratification keeps the integration cheap while still resolving a shallow bank
+      // near the surface on very high documentary shots. Weights approximate the represented ray
+      // intervals so the near-surface sample does not make tall camera rays artificially opaque.
+      float d0 = lowMistDensityAt(mix(cameraWorld, surfaceWorld, 0.10));
+      float d1 = lowMistDensityAt(mix(cameraWorld, surfaceWorld, 0.30));
+      float d2 = lowMistDensityAt(mix(cameraWorld, surfaceWorld, 0.50));
+      float d3 = lowMistDensityAt(mix(cameraWorld, surfaceWorld, 0.70));
+      float d4 = lowMistDensityAt(mix(cameraWorld, surfaceWorld, 0.86));
+      float d5 = lowMistDensityAt(mix(cameraWorld, surfaceWorld, 0.96));
+      return d0 * 0.20 + d1 * 0.20 + d2 * 0.20 + d3 * 0.20 + d4 * 0.12 + d5 * 0.08;
     }
 
     void main() {
@@ -147,6 +187,7 @@ export const AERIAL_PERSPECTIVE_SHADER = {
       viewPosition /= max(viewPosition.w, 0.00001);
       float distanceToSurface = length(viewPosition.xyz);
       vec3 worldPosition = (uCameraWorld * vec4(viewPosition.xyz, 1.0)).xyz;
+      vec3 cameraWorld = uCameraWorld[3].xyz;
       vec3 worldDirection = normalize((uCameraWorld * vec4(normalize(viewPosition.xyz), 0.0)).xyz);
 
       float pathLength = max(0.0, distanceToSurface - uStartDistance);
@@ -174,8 +215,17 @@ export const AERIAL_PERSPECTIVE_SHADER = {
       neutralAir = mix(neutralAir, uSkyFill, farBlend * (0.12 + grazingView * 0.12));
       neutralAir = mix(neutralAir, uSkyFill * 0.72, uNightBlend * 0.62);
       vec3 airColor = mix(neutralAir, uSunColor, clamp(forward, 0.0, 0.32));
-
       vec3 color = mix(source.rgb, airColor, amount);
+
+      // Mist is a separate shallow optical-depth term, but it shares the same air palette and ray.
+      // It can therefore sit over water or thread through trees without bleaching clear mountaintops.
+      float lowMist = integratedLowMist(cameraWorld, worldPosition);
+      float mistOpticalDepth = distanceToSurface * 0.022 * lowMist * uLowMistStrength;
+      float mistAmount = clamp(1.0 - exp(-mistOpticalDepth), 0.0, 0.28 + uObscuration * 0.04);
+      vec3 mistColor = mix(uFogColor, uSkyFill, 0.58);
+      mistColor = mix(mistColor, uSunColor, clamp(forward * 0.12, 0.0, 0.06));
+      color = mix(color, mistColor, mistAmount);
+
       gl_FragColor = vec4(max(color, vec3(0.0)), source.a);
     }
   `,
