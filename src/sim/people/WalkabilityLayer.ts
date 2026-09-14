@@ -29,7 +29,10 @@ export class WalkabilityLayer {
   private readonly componentQueue: Int32Array;
   private nextComponent = 1;
   private gridRevision = 0;
-  private observedTraversalRevision = '';
+  private observedEnvironmentRevision = -1;
+  private observedWeatherMonth = -1;
+  private coarseRevisionScans = 0;
+  private fineRevisionScans = 0;
   private blockedCells?: Uint8Array;
   private blockedSamples?: Uint8Array;
 
@@ -329,39 +332,63 @@ export class WalkabilityLayer {
     return this.components[endIndex] === component;
   }
 
-  /** Weather is checked monthly, but expensive connectivity caches are invalidated only if a barrier changed. */
+  /**
+   * Weather can change coarse pedestrian barriers monthly, while fine wet/dry topology changes
+   * only when environmentRevision advances. Keep those scans independent so an ordinary weather
+   * month never walks the high-resolution terrain field just to preserve route caches.
+   */
   private syncTraversalRevision(): void {
-    const revision = `${this.world.environmentRevision ?? 0}:${this.world.weather?.month ?? 0}`;
-    if (revision === this.observedTraversalRevision) return;
-    this.observedTraversalRevision = revision;
+    const environmentRevision = this.world.environmentRevision ?? 0;
+    const weatherMonth = this.world.weather?.month ?? 0;
+    const firstScan = !this.blockedCells || !this.blockedSamples;
+    const weatherChanged = firstScan || weatherMonth !== this.observedWeatherMonth;
+    const environmentChanged = firstScan || environmentRevision !== this.observedEnvironmentRevision;
+    if (!weatherChanged && !environmentChanged) return;
+
     const field = this.world.terrain;
-    let changed = !this.blockedCells;
+    let changed = firstScan;
     this.blockedCells ??= new Uint8Array(this.world.cells.length);
     this.blockedSamples ??= new Uint8Array(field.height.length);
-    for (let i = 0; i < this.world.cells.length; i++) {
-      const cell = this.world.cells[i]!;
-      const blocked = Number(!this.isWalkableCell(cell));
-      if (this.blockedCells[i] !== blocked) {
-        changed = true;
-        this.blockedCells[i] = blocked;
-        this.invalidateGround(cell.worldX, cell.worldZ, this.world.cellSize / 2);
+
+    if (weatherChanged) {
+      this.coarseRevisionScans += 1;
+      for (let i = 0; i < this.world.cells.length; i++) {
+        const cell = this.world.cells[i]!;
+        const blocked = Number(!this.isWalkableCell(cell));
+        if (this.blockedCells[i] !== blocked) {
+          changed = true;
+          this.blockedCells[i] = blocked;
+          this.invalidateGround(cell.worldX, cell.worldZ, this.world.cellSize / 2);
+        }
       }
+      this.observedWeatherMonth = weatherMonth;
     }
-    for (let i = 0; i < field.height.length; i++) {
-      const blocked = Number(field.waterLevel[i]! >= 0 || field.river[i] || field.lake[i] || field.height[i]! < this.world.seaLevel);
-      if (this.blockedSamples[i] !== blocked) {
-        changed = true;
-        this.blockedSamples[i] = blocked;
-        this.invalidateGround(field.originX + i % field.resolution * field.step,
-          field.originZ + Math.floor(i / field.resolution) * field.step, field.step / 2);
+
+    if (environmentChanged) {
+      this.fineRevisionScans += 1;
+      for (let i = 0; i < field.height.length; i++) {
+        const blocked = Number(field.waterLevel[i]! >= 0 || field.river[i] || field.lake[i] || field.height[i]! < this.world.seaLevel);
+        if (this.blockedSamples[i] !== blocked) {
+          changed = true;
+          this.blockedSamples[i] = blocked;
+          this.invalidateGround(field.originX + i % field.resolution * field.step,
+            field.originZ + Math.floor(i / field.resolution) * field.step, field.step / 2);
+        }
       }
+      this.observedEnvironmentRevision = environmentRevision;
     }
+
     if (changed) {
       this.gridRevision++;
       this.gridEdges.clear();
       this.components.fill(0);
       this.nextComponent = 1;
     }
+  }
+
+  /** Diagnostic counters used by regression tests and performance inspection. */
+  revisionScanCounts(): { coarse: number; fine: number } {
+    return { coarse: this.coarseRevisionScans, fine: this.fineRevisionScans };
   }
 
   private reconstruct(cameFrom: Map<number, number>, points: Map<number, GridPoint>, currentKey: number): Vec2[] {
