@@ -52,9 +52,9 @@ export function resolveAtmosphericScattering(frame: EnvironmentFrameState): Atmo
     sunDiskStrength: daylight * sunAboveHorizon * (1 - obscuration * 0.78),
     sunHaloStrength: (0.045 + lowSun * 0.22 + twilight * 0.07) * sunAboveHorizon * (1 - obscuration * 0.62),
 
-    // Aerial perspective starts beyond the immediate settlement and remains bounded. The density
-    // is deliberately stronger than the first sky-only pass because the supplied camera shots are
-    // mostly oblique/top-down and otherwise barely see the atmosphere at all.
+    // Aerial perspective now integrates density through height in screen space. Keep enough optical
+    // density for distant geography, but protect a larger clear-air bubble around the documentary
+    // camera. Dense weather is allowed to pull the onset back toward the viewer.
     aerialDensity: THREE.MathUtils.clamp(
       0.0038 + daylight * 0.0015 + lowSun * 0.001 + obscuration * 0.0045,
       0.0032,
@@ -65,7 +65,7 @@ export function resolveAtmosphericScattering(frame: EnvironmentFrameState): Atmo
       0.16,
       0.62,
     ),
-    aerialStartDistance: 13 + nightBlend * 5 + obscuration * 2,
+    aerialStartDistance: THREE.MathUtils.clamp(22 + nightBlend * 6 - obscuration * 8, 13, 28),
     aerialForwardScatter: THREE.MathUtils.clamp(
       (0.07 + lowSun * 0.24 + twilight * 0.08) * (1 - obscuration * 0.55),
       0.035,
