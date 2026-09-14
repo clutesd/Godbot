@@ -1,14 +1,22 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { resolveEnvironmentalLighting } from '../src/render/atmosphere/EnvironmentalLighting';
+import { resolveEnvironmentFrame } from '../src/render/atmosphere/EnvironmentFrameState';
 import { resolveCinematicLightPolish } from '../src/render/atmosphere/CinematicLightPolish';
 
-const lighting = (sunElevation: number, night: number, fogDensity = 0.0072) =>
-  resolveEnvironmentalLighting({ sunElevation, night, fogDensity });
+const frame = (sunElevation: number, night: number, fogDensity = 0.0072, sourceExposure = 1.12) =>
+  resolveEnvironmentFrame({
+    sunElevation,
+    night,
+    fogDensity,
+    sourceExposure,
+    sourceFogColor: new THREE.Color('#93a5a4'),
+    sourceBackground: new THREE.Color('#899b91'),
+  });
 
 describe('cinematic light polish', () => {
   it('lifts and cools long shadows more than neutral midday without washing the scene out', () => {
-    const midday = resolveCinematicLightPolish(lighting(0.82, 0));
-    const golden = resolveCinematicLightPolish(lighting(0.08, 0.18));
+    const midday = resolveCinematicLightPolish(frame(0.82, 0));
+    const golden = resolveCinematicLightPolish(frame(0.08, 0.18));
 
     expect(golden.shadowLift).toBeGreaterThan(midday.shadowLift);
     expect(golden.coolShadow).toBeGreaterThan(midday.coolShadow);
@@ -17,8 +25,8 @@ describe('cinematic light polish', () => {
   });
 
   it('keeps daylight bloom selective while allowing emissive night detail to breathe', () => {
-    const day = resolveCinematicLightPolish(lighting(0.82, 0));
-    const night = resolveCinematicLightPolish(lighting(-0.65, 1));
+    const day = resolveCinematicLightPolish(frame(0.82, 0));
+    const night = resolveCinematicLightPolish(frame(-0.65, 1));
 
     expect(day.bloomThreshold).toBeGreaterThan(night.bloomThreshold);
     expect(day.bloomStrength).toBeLessThan(night.bloomStrength);
@@ -28,9 +36,9 @@ describe('cinematic light polish', () => {
 
   it('keeps AO at contact scale instead of broad terrain-darkening scale', () => {
     for (const state of [
-      resolveCinematicLightPolish(lighting(0.82, 0)),
-      resolveCinematicLightPolish(lighting(0.08, 0.18)),
-      resolveCinematicLightPolish(lighting(-0.65, 1)),
+      resolveCinematicLightPolish(frame(0.82, 0)),
+      resolveCinematicLightPolish(frame(0.08, 0.18)),
+      resolveCinematicLightPolish(frame(-0.65, 1)),
     ]) {
       expect(state.aoKernelRadius).toBeGreaterThanOrEqual(1.6);
       expect(state.aoKernelRadius).toBeLessThanOrEqual(2.3);
@@ -39,8 +47,8 @@ describe('cinematic light polish', () => {
   });
 
   it('responds to severe atmosphere with quieter colour and rougher water instead of more contrast', () => {
-    const clear = resolveCinematicLightPolish(lighting(0.55, 0, 0.0072));
-    const storm = resolveCinematicLightPolish(lighting(0.55, 0, 0.05));
+    const clear = resolveCinematicLightPolish(frame(0.55, 0, 0.0072));
+    const storm = resolveCinematicLightPolish(frame(0.55, 0, 0.05));
 
     expect(storm.saturation).toBeLessThan(clear.saturation);
     expect(storm.waterRoughnessBias).toBeGreaterThan(clear.waterRoughnessBias);
@@ -49,10 +57,10 @@ describe('cinematic light polish', () => {
 
   it('keeps every final-grade control inside restrained production bounds', () => {
     for (const input of [
-      lighting(0.9, 0, 0.004),
-      lighting(0.05, 0.35, 0.012),
-      lighting(-0.7, 1, 0.008),
-      lighting(0.4, 0.05, 0.06),
+      frame(0.9, 0, 0.004),
+      frame(0.05, 0.35, 0.012),
+      frame(-0.7, 1, 0.008),
+      frame(0.4, 0.05, 0.06),
     ]) {
       const state = resolveCinematicLightPolish(input);
       expect(state.shadowLift).toBeGreaterThanOrEqual(0.01);
