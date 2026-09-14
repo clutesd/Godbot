@@ -30,7 +30,8 @@ describe('Tree morphology', () => {
   it('derives stable biological traits independently of yaw', () => {
     const tree = placement();
     const first = resolveTreePhenotype('morphology', tree);
-    const rotated = resolveTreePhenotype('morphology', { ...tree, rotation: Math.PI });
+    const rotatedTree = { ...tree, rotation: Math.PI };
+    const rotated = resolveTreePhenotype('morphology', rotatedTree);
     expect(rotated).toEqual(first);
     expect(resolveTreePhenotype('morphology', placement({ worldX: 4.35 }))).not.toEqual(first);
   });
