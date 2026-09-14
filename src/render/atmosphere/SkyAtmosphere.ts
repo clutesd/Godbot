@@ -66,7 +66,8 @@ export class SkyAtmosphere {
     if (material instanceof THREE.PointsMaterial) material.color.copy(colour);
   }
 
-  update(deltaSeconds: number, _elapsedSeconds: number): void {
+  update(deltaSeconds: number, elapsedSeconds: number): void {
+    void elapsedSeconds;
     if (this.clouds) this.clouds.rotation.y += deltaSeconds * 0.0042;
     this.lowMistField.update();
   }
