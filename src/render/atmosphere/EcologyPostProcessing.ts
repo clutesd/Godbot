@@ -5,6 +5,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { AERIAL_PERSPECTIVE_SHADER, updateAerialPerspectivePass } from './AerialPerspective';
 import { DirectionalAtmosphereRig } from './AtmosphericScattering';
 import { EnvironmentFrameRig } from './EnvironmentFrameState';
 import { EnvironmentalDepthRig } from './EnvironmentalDepth';
@@ -17,13 +18,14 @@ import {
 /**
  * Final GODBOX image pipeline.
  *
- * Every renderer-side environmental consumer now receives one EnvironmentFrameState. Legacy
- * day/night, weather and catastrophe presentation may author source signals earlier in the frame,
- * but this pipeline is the single final authority for lights, exposure, directional sky scattering,
- * depth and material polish.
+ * Every renderer-side environmental consumer receives one EnvironmentFrameState. Layer-one
+ * atmospheric scattering now has two coordinated pieces: the directional sky dome and a
+ * depth-aware aerial perspective pass over actual terrain. That distinction matters for GODBOX's
+ * frequent oblique/top-down documentary shots, where little sky may be visible at all.
  */
 export class EcologyPostProcessing {
   private readonly composer?: EffectComposer;
+  private readonly aerialPerspective?: ShaderPass;
   private readonly ssao?: SSAOPass;
   private readonly bloom?: UnrealBloomPass;
   private readonly grade?: ShaderPass;
@@ -42,8 +44,19 @@ export class EcologyPostProcessing {
     if (quality === 0) return;
 
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 2 });
+    // The first atmospheric pass only affected the sky dome, which made it nearly invisible in the
+    // supplied top-down mobile shots. Retain scene depth so air can exist between camera and world.
+    target.depthBuffer = true;
+    target.depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
+    target.depthTexture.format = THREE.DepthFormat;
+
     this.composer = new EffectComposer(renderer, target);
     this.composer.addPass(new RenderPass(scene, camera));
+
+    // This must immediately follow RenderPass because that target owns the authoritative scene
+    // depth for the frame. Later full-screen passes only need the already-scattered colour.
+    this.aerialPerspective = new ShaderPass(AERIAL_PERSPECTIVE_SHADER);
+    this.composer.addPass(this.aerialPerspective);
 
     if (quality === 2) {
       this.ssao = new SSAOPass(scene, camera, 1, 1, 16);
@@ -76,10 +89,22 @@ export class EcologyPostProcessing {
   render(night: number): void {
     const frame = this.environmentFrame.update(night);
     if (frame) {
-      this.directionalAtmosphere.update(frame);
+      const scattering = this.directionalAtmosphere.update(frame);
       this.environmentalDepth.update(frame);
       const polish = resolveCinematicLightPolish(frame);
       this.materialPolish.update(frame, polish);
+
+      if (this.aerialPerspective && this.composer && scattering) {
+        // RenderPass writes into the composer's current read buffer. Bind that exact depth texture
+        // before the pass chain executes; EffectComposer may swap buffers between frames.
+        updateAerialPerspectivePass(
+          this.aerialPerspective,
+          frame,
+          scattering,
+          this.camera,
+          this.composer.readBuffer.depthTexture,
+        );
+      }
 
       if (this.ssao) {
         this.ssao.kernelRadius = polish.aoKernelRadius;
@@ -109,6 +134,7 @@ export class EcologyPostProcessing {
   }
 
   dispose(): void {
+    this.aerialPerspective?.dispose();
     this.ssao?.dispose();
     this.bloom?.dispose();
     this.grade?.dispose();
