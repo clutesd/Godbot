@@ -2,9 +2,18 @@ import { stableHash } from '../../sim/prng';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
 import type { ResolvedTreeLifecycle, TreePlacement } from './ForestPlanner';
 import type { TreeFamily } from './TreeLibrary';
+import {
+  resolveStructuralTreeCondition,
+  treeBarkBreakFraction,
+  treeBarkHeightScale,
+  treeConditionCrownSpread,
+  treeConditionFoliageVitality,
+  treeLikelyUprooted,
+} from './TreeCondition';
 
 /** Stable per-tree visual biology. These traits never consume simulation PRNG or depend on camera state. */
 export interface TreePhenotype {
+  family: TreeFamily;
   stature: number;
   girth: number;
   crownWidth: number;
@@ -86,6 +95,7 @@ export function resolveTreePhenotype(seed: string, tree: Pick<TreePlacement,
   const leanAngle = trait(seed, tree, 'lean-angle') * Math.PI * 2;
   const leanMagnitude = family.lean * (0.2 + trait(seed, tree, 'lean-magnitude') * 0.8);
   return {
+    family: tree.family,
     stature: lerp(family.stature[0], family.stature[1], stature),
     girth: lerp(family.girth[0], family.girth[1], girth),
     crownWidth: lerp(family.crownWidth[0], family.crownWidth[1], width),
@@ -205,8 +215,8 @@ const MORPHOLOGY_CACHE = new WeakMap<TreePhenotype, MorphologyCacheEntry>();
 
 /**
  * Age changes proportions, not only scale: juveniles are slender/narrow; veterans thicken, spread
- * and become asymmetrical; declining crowns contract before death. Shared geometry remains instanced.
- * Results are cached because a tree's form changes yearly, not at the structural LOD refresh rate.
+ * and become asymmetrical; declining crowns contract before death. Condition then adds deterministic
+ * leader loss and storm-vs-natural damage without changing the shared instanced geometry budget.
  */
 export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: ResolvedTreeLifecycle): TreeMorphology {
   const cached = MORPHOLOGY_CACHE.get(phenotype);
@@ -218,21 +228,27 @@ export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: Resol
     && cached.veteranAge === lifecycle.veteranAge) return cached.value;
 
   const stage = stageProfile(lifecycle);
+  const condition = resolveStructuralTreeCondition(phenotype.family, lifecycle);
+  const uprooted = condition === 'fallen-disturbance' && treeLikelyUprooted(phenotype.family, phenotype.uprooting);
+  const breakFraction = treeBarkBreakFraction(phenotype.family, condition, phenotype.breakage, uprooted);
+  const structuralHeight = treeBarkHeightScale(condition) * (breakFraction > 0 ? breakFraction : 1);
+  const crownSpread = treeConditionCrownSpread(condition, phenotype.family);
+  const barkSpread = 1 + (crownSpread - 1) * 0.45;
   const ellipse = phenotype.crownEllipticity;
   const asymmetry = stage.asymmetry;
   const value: TreeMorphology = {
-    trunkRadiusX: stage.trunkRadius * phenotype.girth * (1 + ellipse * 0.18),
-    trunkRadiusZ: stage.trunkRadius * phenotype.girth * (1 - ellipse * 0.18),
-    trunkHeight: stage.trunkHeight * phenotype.stature,
-    crownWidthX: stage.crownWidth * phenotype.crownWidth * (1 + ellipse),
-    crownWidthZ: stage.crownWidth * phenotype.crownWidth * (1 - ellipse),
-    crownHeight: stage.crownHeight * phenotype.crownDepth * phenotype.stature,
-    crownOffsetX: phenotype.crownOffsetX * asymmetry,
-    crownOffsetZ: phenotype.crownOffsetZ * asymmetry,
+    trunkRadiusX: stage.trunkRadius * phenotype.girth * (1 + ellipse * 0.18) * barkSpread,
+    trunkRadiusZ: stage.trunkRadius * phenotype.girth * (1 - ellipse * 0.18) * barkSpread,
+    trunkHeight: stage.trunkHeight * phenotype.stature * structuralHeight,
+    crownWidthX: stage.crownWidth * phenotype.crownWidth * (1 + ellipse) * crownSpread,
+    crownWidthZ: stage.crownWidth * phenotype.crownWidth * (1 - ellipse) * crownSpread,
+    crownHeight: stage.crownHeight * phenotype.crownDepth * phenotype.stature * structuralHeight,
+    crownOffsetX: phenotype.crownOffsetX * asymmetry * crownSpread,
+    crownOffsetZ: phenotype.crownOffsetZ * asymmetry * crownSpread,
     crownLift: stage.crownLift,
     leanX: phenotype.leanX * stage.lean,
     leanZ: phenotype.leanZ * stage.lean,
-    foliageDensity: clamp01(stage.foliage * phenotype.fullness),
+    foliageDensity: clamp01(stage.foliage * phenotype.fullness * treeConditionFoliageVitality(condition)),
     fallAngle: Math.PI * (0.44 + phenotype.fallBias * 0.035),
   };
   MORPHOLOGY_CACHE.set(phenotype, {
