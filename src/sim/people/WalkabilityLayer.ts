@@ -29,7 +29,7 @@ export class WalkabilityLayer {
   private readonly componentQueue: Int32Array;
   private nextComponent = 1;
   private gridRevision = 0;
-  private observedEnvironmentRevision = -1;
+  private observedTraversalRevision = '';
   private blockedCells?: Uint8Array;
   private blockedSamples?: Uint8Array;
 
@@ -329,11 +329,11 @@ export class WalkabilityLayer {
     return this.components[endIndex] === component;
   }
 
-  /** Weather time alone does not change connectivity. Reuse failed surveys until a barrier changes. */
+  /** Weather is checked monthly, but expensive connectivity caches are invalidated only if a barrier changed. */
   private syncTraversalRevision(): void {
-    const revision = this.world.environmentRevision ?? 0;
-    if (revision === this.observedEnvironmentRevision) return;
-    this.observedEnvironmentRevision = revision;
+    const revision = `${this.world.environmentRevision ?? 0}:${this.world.weather?.month ?? 0}`;
+    if (revision === this.observedTraversalRevision) return;
+    this.observedTraversalRevision = revision;
     const field = this.world.terrain;
     let changed = !this.blockedCells;
     this.blockedCells ??= new Uint8Array(this.world.cells.length);
