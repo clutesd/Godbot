@@ -16,8 +16,8 @@ export interface LowMistFieldSample {
 }
 
 const CHANNELS = 4;
-const MIN_LAYER_HEIGHT = 2.8;
-const MAX_LAYER_HEIGHT = 7.6;
+export const LOW_MIST_MIN_HEIGHT = 2.8;
+export const LOW_MIST_MAX_HEIGHT = 7.6;
 
 const LANDFORM_MIST: Readonly<Record<WorldCell['landform'], number>> = {
   ocean: 0.28,
@@ -77,21 +77,21 @@ export function lowMistLayerHeightForCell(cell: WorldCell): number {
   const basinSignal = Math.max(LANDFORM_MIST[cell.landform], cell.biome === 'wetland' ? 0.9 : 0);
   const opennessPenalty = clamp01(cell.slope) * 0.32 + (cell.landform === 'ridge' || cell.landform === 'peak' ? 0.22 : 0);
   const amount = clamp01(Math.max(waterSignal, basinSignal) - opennessPenalty);
-  return THREE.MathUtils.lerp(MIN_LAYER_HEIGHT, MAX_LAYER_HEIGHT, amount);
+  return THREE.MathUtils.lerp(LOW_MIST_MIN_HEIGHT, LOW_MIST_MAX_HEIGHT, amount);
 }
 
-/** Decode helper for tests/diagnostics. */
-export function decodeLowMistAnchor(high: number, low: number, minY: number, maxY: number): number {
-  const normalized = ((high & 255) * 256 + (low & 255)) / 65535;
-  return THREE.MathUtils.lerp(minY, maxY, normalized);
+/** Decode helper for tests/diagnostics. One-channel encoding stays interpolation-safe on the GPU. */
+export function decodeLowMistAnchor(encoded: number, minY: number, maxY: number): number {
+  return THREE.MathUtils.lerp(minY, maxY, (encoded & 255) / 255);
 }
 
 /**
  * Low-resolution world-space mist field.
  *
  * R = spatial source strength
- * G/B = 16-bit encoded terrain/water anchor height
- * A = local layer-height fraction
+ * G = normalized terrain/water anchor height
+ * B = local layer-height fraction
+ * A = reserved (opaque for interpolation stability)
  *
  * The texture is intentionally tiny (one texel per simulation cell) and linearly filtered. The
  * expensive-looking result comes from integrating this field in the existing aerial-perspective
@@ -203,13 +203,13 @@ export class LowMistField {
 
     const heightRange = Math.max(0.001, this.maxAnchorY - this.minAnchorY);
     for (let index = 0; index < count; index += 1) {
-      const encodedAnchor = Math.round(clamp01((anchor[index]! - this.minAnchorY) / heightRange) * 65535);
-      const layerFraction = clamp01((height[index]! - MIN_LAYER_HEIGHT) / (MAX_LAYER_HEIGHT - MIN_LAYER_HEIGHT));
+      const encodedAnchor = Math.round(clamp01((anchor[index]! - this.minAnchorY) / heightRange) * 255);
+      const layerFraction = clamp01((height[index]! - LOW_MIST_MIN_HEIGHT) / (LOW_MIST_MAX_HEIGHT - LOW_MIST_MIN_HEIGHT));
       const offset = index * CHANNELS;
       this.pixels[offset] = Math.round(smoothed[index]! * 255);
-      this.pixels[offset + 1] = (encodedAnchor >> 8) & 255;
-      this.pixels[offset + 2] = encodedAnchor & 255;
-      this.pixels[offset + 3] = Math.round(layerFraction * 255);
+      this.pixels[offset + 1] = encodedAnchor;
+      this.pixels[offset + 2] = Math.round(layerFraction * 255);
+      this.pixels[offset + 3] = 255;
     }
 
     this.texture.needsUpdate = true;
