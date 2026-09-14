@@ -128,7 +128,7 @@ export class WeatherRenderer {
     this.waterTexture.needsUpdate = true;
     this.snowSettled = false;
     this.texture.needsUpdate = true;
-    this.revision = this.world.environmentRevision ?? 0;
+    this.revision = weather.month;
   }
 
   update(delta: number, elapsed: number, camera: THREE.Camera): void {
@@ -171,7 +171,7 @@ export class WeatherRenderer {
       }
       dustPositions.needsUpdate = true;
     });
-    const changed = this.revision !== (this.world.environmentRevision ?? 0);
+    const changed = this.revision !== (this.world.weather?.month ?? 0);
     if (changed) this.syncTexture();
     let snowChanged = false;
     const blend = 1 - Math.exp(-Math.min(1, delta) * 1.5);
