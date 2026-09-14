@@ -5,7 +5,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { EnvironmentalLightingRig } from './EnvironmentalLighting';
+import { EnvironmentFrameRig } from './EnvironmentFrameState';
 import { EnvironmentalDepthRig } from './EnvironmentalDepth';
 import {
   CINEMATIC_LIGHT_GRADE_SHADER,
@@ -16,10 +16,9 @@ import {
 /**
  * Final GODBOX image pipeline.
  *
- * Lighting and atmospheric depth remain renderer state and run at every quality tier. Higher tiers
- * additionally receive contact-sized AO, restrained emissive bloom and a tiny HDR-space grade that
- * protects shadow information without replacing ACES or turning the world into a colour filter.
- * The DOM/UI never enters this chain.
+ * Every renderer-side environmental consumer now receives one EnvironmentFrameState. Legacy
+ * day/night, weather and catastrophe presentation may author source signals earlier in the frame,
+ * but this pipeline is the single final authority for lights, exposure, depth and material polish.
  */
 export class EcologyPostProcessing {
   private readonly composer?: EffectComposer;
@@ -27,15 +26,13 @@ export class EcologyPostProcessing {
   private readonly bloom?: UnrealBloomPass;
   private readonly grade?: ShaderPass;
   private readonly output?: OutputPass;
-  private readonly environmentalLighting: EnvironmentalLightingRig;
+  private readonly environmentFrame: EnvironmentFrameRig;
   private readonly environmentalDepth: EnvironmentalDepthRig;
   private readonly materialPolish: CinematicMaterialPolish;
 
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
     private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
-    // These three rigs are scene presentation, not optional effects. Even the lowest render preset
-    // therefore keeps the same sun/sky/material art direction; only SSAO/bloom/grade are omitted.
-    this.environmentalLighting = new EnvironmentalLightingRig(renderer, scene);
+    this.environmentFrame = new EnvironmentFrameRig(renderer, scene);
     this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
     this.materialPolish = new CinematicMaterialPolish(scene);
     if (quality === 0) return;
@@ -46,8 +43,6 @@ export class EcologyPostProcessing {
 
     if (quality === 2) {
       this.ssao = new SSAOPass(scene, camera, 1, 1, 16);
-      // Initial values are immediately replaced from the cinematic resolver on the first frame.
-      // Keeping them contact-sized here also makes static preview tools sane before render().
       this.ssao.kernelRadius = 2.1;
       this.ssao.minDistance = 0.0012;
       this.ssao.maxDistance = 0.04;
@@ -75,15 +70,13 @@ export class EcologyPostProcessing {
   }
 
   render(night: number): void {
-    const lighting = this.environmentalLighting.update(night);
-    if (lighting) {
-      this.environmentalDepth.update(lighting);
-      const polish = resolveCinematicLightPolish(lighting);
-      this.materialPolish.update(lighting, polish);
+    const frame = this.environmentFrame.update(night);
+    if (frame) {
+      this.environmentalDepth.update(frame);
+      const polish = resolveCinematicLightPolish(frame);
+      this.materialPolish.update(frame, polish);
 
       if (this.ssao) {
-        // AO now stays at the scale of contact shadows. The first Step-2 screenshots showed broad
-        // kernels reading as black painted patches on steep terrain, particularly at golden hour.
         this.ssao.kernelRadius = polish.aoKernelRadius;
         this.ssao.minDistance = 0.001;
         this.ssao.maxDistance = polish.aoMaxDistance;
