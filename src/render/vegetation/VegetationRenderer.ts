@@ -235,7 +235,6 @@ export class VegetationRenderer {
 
   setSeason(season: number): void {
     this.targetSeason = ((season % 12) + 12) % 12;
-    // Resume and accelerated time jumps must show the actual season immediately.
     if (this.lastCalendarMonth === undefined || Math.abs(season - this.lastCalendarMonth) > 3) this.season = this.targetSeason;
     this.lastCalendarMonth = season;
   }
@@ -289,7 +288,6 @@ export class VegetationRenderer {
       const placement = this.placements[index];
       if (!placement) continue;
       if (this.isCleared(placement)) {
-        // Keep the seedbed young while occupied, including land released by a shrinking town.
         if (!placement.id && !placement.managedBy) {
           placement.establishedYear = this.ecologyYear;
           this.lifecycle[index] = resolveTreeLifecycle(placement, this.ecologyYear);
@@ -311,7 +309,6 @@ export class VegetationRenderer {
       const target = distance < NEAR_RANGE && nearBucket && nearBucket.count < nearBucket.capacity ? nearBucket : this.farBuckets.get(key);
       if (!target || target.count >= target.capacity) continue;
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
-      // Logging and regrowth use the same stand stock as extraction; hidden slots restart young.
       if (cell && (cell.lastLoggingMonth !== undefined || cell.modifications) && !placement.id && !placement.managedBy) {
         const standing = clamp01(cell.wood / Math.max(0.01, cell.forestCapacity ?? cell.wood));
         const rank = stableHash(`${this.seed}:logging-tree`, Math.round(placement.worldX * 100), Math.round(placement.worldZ * 100));
@@ -398,8 +395,6 @@ export class VegetationRenderer {
     const living = new Map(settlements.filter((settlement) => settlement.alive).map((settlement) => [settlement.id, settlement]));
     const currentYear = Math.floor((this.world.weather?.month ?? this.ecologyYear * 12) / 12);
 
-    // Managed trees are presentation state for living settlements, not an ever-growing historical
-    // registry. Abandoned ground is handed back to the bounded recovery/succession system below.
     for (let index = this.placements.length - 1; index >= 0; index -= 1) {
       const placement = this.placements[index];
       if (!placement?.managedBy || living.has(placement.managedBy)) continue;
@@ -595,6 +590,7 @@ export class VegetationRenderer {
     const threshold: Record<TreeFamily, number> = {
       cherry: 0.5,
       broadleaf: 0.54,
+      birch: 0.48,
       conifer: 0.42,
       dry: 0.64,
       riverbank: 0.48,
@@ -621,10 +617,6 @@ export class VegetationRenderer {
     this.rootPlateCount += 1;
   }
 
-  /**
-   * Seasonal color is absolute; geometry contributes only subtle crown shading. Pigment and
-   * phenology are independent stable traits rather than accidental functions of tree rotation.
-   */
   private foliageTint(placement: TreePlacement, lifecycle: ResolvedTreeLifecycle, phenotype: TreePhenotype): THREE.Color {
     const cell = cellAt(this.world, placement.worldX, placement.worldZ);
     const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
@@ -646,10 +638,8 @@ export class VegetationRenderer {
   private isCleared(placement: TreePlacement): boolean {
     if (this.occupiedGround.some(plot => Math.hypot(placement.worldX - plot.x, placement.worldZ - plot.z) < plot.radius)) return true;
     for (const zone of this.disturbance) {
-      // Managed settlement trees are intentional plantings, so the settlement grows around them.
       if (placement.managedBy === zone.id) continue;
       const distance = Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z);
-      // Ancient trees survive the clearing; a city grows around them rather than through them.
       if (distance < zone.radius && !(placement.family === 'ancient' && distance > zone.radius * 0.45)) return true;
     }
     return false;
