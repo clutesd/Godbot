@@ -20,6 +20,13 @@ const STAGE_RANK: Record<MovementPathStage, number> = {
   'cart-road': 4,
   'engineered-road': 5,
 };
+const SCAR_KIND_RANK = { farmland: 1, logging: 2, quarry: 3, mine: 4, industry: 5, ruin: 6 } as const;
+const HASH_OFFSET = 2166136261;
+const HASH_PRIME = 16777619;
+
+function mixHash(hash: number, value: number): number {
+  return Math.imul(hash ^ (value | 0), HASH_PRIME) >>> 0;
+}
 
 /** Small ground-level work piles plus persistent movement-shaped paths. */
 export class ResourceSiteRenderer {
@@ -30,7 +37,13 @@ export class ResourceSiteRenderer {
   private readonly scars: THREE.InstancedMesh;
   private readonly trails = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#796b4f', transparent: true, opacity: 0.42 }));
   private readonly footpaths: THREE.Mesh;
-  private revision = '';
+  private readonly normal = new THREE.Vector3();
+  private readonly circleNormal = new THREE.Vector3(0, 0, 1);
+  private readonly abandonedColour = new THREE.Color('#68734e');
+  private pileRevision = -1;
+  private scarRevision = -1;
+  private trailRevision = -1;
+  private pathRevision = -1;
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface) {
     this.group.name = 'Resource extraction sites';
@@ -40,6 +53,7 @@ export class ResourceSiteRenderer {
     this.group.add(this.piles);
     this.scars = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 9), new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.65, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }), Math.max(1, world.cells.length));
     this.scars.count = 0; this.scars.frustumCulled = false;
+    this.trails.name = 'Resource access trails';
     this.footpaths = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshStandardMaterial({
@@ -62,9 +76,104 @@ export class ResourceSiteRenderer {
   }
 
   update(): void {
-    const revision = `${this.world.weather?.month ?? 0}:${this.world.resourceDeposits.filter(d => d.establishedMonth !== undefined).length}`;
-    if (revision === this.revision) return;
-    this.revision = revision;
+    // Presentation work is invalidated by the visual facts it consumes, not by the calendar. This
+    // method is still cheap to call monthly, but ordinary month rollover no longer allocates and
+    // uploads replacement geometry for every extraction/path layer.
+    const pileRevision = this.resourcePileRevision();
+    if (pileRevision !== this.pileRevision) {
+      this.pileRevision = pileRevision;
+      this.rebuildResourcePiles();
+    }
+
+    const scarRevision = this.landScarRevision();
+    if (scarRevision !== this.scarRevision) {
+      this.scarRevision = scarRevision;
+      this.rebuildLandScars();
+    }
+
+    const trailRevision = this.accessTrailRevision();
+    if (trailRevision !== this.trailRevision) {
+      this.trailRevision = trailRevision;
+      this.rebuildAccessTrails();
+    }
+
+    const pathRevision = this.movementPathVisualRevision();
+    if (pathRevision !== this.pathRevision) {
+      this.pathRevision = pathRevision;
+      this.rebuildMovementPaths();
+    }
+  }
+
+  private resourcePileRevision(): number {
+    let hash = mixHash(HASH_OFFSET, this.world.environmentRevision ?? 0);
+    hash = mixHash(hash, this.world.resourceDeposits.length);
+    for (let index = 0; index < this.world.resourceDeposits.length; index += 1) {
+      const deposit = this.world.resourceDeposits[index]!;
+      if (deposit.establishedMonth === undefined) continue;
+      hash = mixHash(hash, index + 1);
+      hash = mixHash(hash, deposit.abandonedMonth === undefined ? 0 : 1);
+      hash = mixHash(hash, deposit.depleted ? 1 : 0);
+    }
+    return hash;
+  }
+
+  private landScarRevision(): number {
+    let hash = mixHash(HASH_OFFSET, this.world.environmentRevision ?? 0);
+    for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
+      const cell = this.world.cells[cellIndex]!;
+      if (!cell.modifications) continue;
+      const use = cell.modifications;
+      const kind = use.quarry ? 'quarry' : use.mine ? 'mine' : use.industry ? 'industry' : use.ruin ? 'ruin' : use.farmland ? 'farmland' : use.logging ? 'logging' : undefined;
+      if (!kind) continue;
+      const mark = use[kind]!;
+      if (mark.intensity < 0.01) continue;
+      hash = mixHash(hash, cellIndex + 1);
+      hash = mixHash(hash, SCAR_KIND_RANK[kind]);
+      // 1/128 intensity steps are finer than the visible radius/colour difference at normal camera
+      // distances, while avoiding a rebuild for microscopic recovery/extraction deltas.
+      hash = mixHash(hash, Math.round(mark.intensity * 128));
+      hash = mixHash(hash, mark.abandonedMonth === undefined ? 0 : 1);
+    }
+    return hash;
+  }
+
+  private accessTrailRevision(): number {
+    let hash = mixHash(HASH_OFFSET, this.world.resourceDeposits.length);
+    for (let depositIndex = 0; depositIndex < this.world.resourceDeposits.length; depositIndex += 1) {
+      const deposit = this.world.resourceDeposits[depositIndex]!;
+      if (deposit.establishedMonth === undefined || (deposit.extracted ?? 0) < 8) continue;
+      hash = mixHash(hash, depositIndex + 1);
+      const trails = deposit.accessTrails ?? [];
+      hash = mixHash(hash, trails.length);
+      for (const path of trails) {
+        hash = mixHash(hash, path.length);
+        for (const point of path) {
+          hash = mixHash(hash, Math.round(point.x * 64));
+          hash = mixHash(hash, Math.round(point.z * 64));
+        }
+      }
+    }
+    return hash;
+  }
+
+  private movementPathVisualRevision(): number {
+    let hash = mixHash(HASH_OFFSET, this.world.environmentRevision ?? 0);
+    for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
+      const cell = this.world.cells[cellIndex]!;
+      const stage = movementPathStage(cell);
+      if (stage === 'none' || cell.water) continue;
+      const strength = movementPathStrength(cell);
+      hash = mixHash(hash, cellIndex + 1);
+      hash = mixHash(hash, STAGE_RANK[stage]);
+      // Path wear accumulates in tiny per-person increments. Rebuild only when that wear produces a
+      // visible width/ranking change; stage promotions remain immediate because stage is hashed too.
+      hash = mixHash(hash, Math.round(strength * 32));
+      hash = mixHash(hash, Math.round(this.pathHalfWidth(stage, strength) * 200));
+    }
+    return hash;
+  }
+
+  private rebuildResourcePiles(): void {
     let index = 0;
     for (const d of this.world.resourceDeposits) {
       if (d.establishedMonth === undefined) continue;
@@ -82,7 +191,9 @@ export class ResourceSiteRenderer {
     }
     this.piles.count = index; this.piles.instanceMatrix.needsUpdate = true;
     if (this.piles.instanceColor) this.piles.instanceColor.needsUpdate = true;
+  }
 
+  private rebuildLandScars(): void {
     let scarIndex = 0;
     for (const cell of this.world.cells) {
       if (cell.water || !cell.modifications) continue;
@@ -93,19 +204,25 @@ export class ResourceSiteRenderer {
       if (mark.intensity < 0.01) continue;
       const radius = this.world.cellSize * Math.min(0.38, 0.12 + mark.intensity * 0.28);
       this.marker.position.set(cell.worldX, this.surface.heightAt(cell.worldX, cell.worldZ) + 0.035, cell.worldZ);
-      const normal = new THREE.Vector3(this.surface.heightAt(cell.worldX - 0.2, cell.worldZ) - this.surface.heightAt(cell.worldX + 0.2, cell.worldZ), 0.4,
-        this.surface.heightAt(cell.worldX, cell.worldZ - 0.2) - this.surface.heightAt(cell.worldX, cell.worldZ + 0.2)).normalize();
-      this.marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      this.normal.set(
+        this.surface.heightAt(cell.worldX - 0.2, cell.worldZ) - this.surface.heightAt(cell.worldX + 0.2, cell.worldZ),
+        0.4,
+        this.surface.heightAt(cell.worldX, cell.worldZ - 0.2) - this.surface.heightAt(cell.worldX, cell.worldZ + 0.2),
+      ).normalize();
+      this.marker.quaternion.setFromUnitVectors(this.circleNormal, this.normal);
       this.marker.scale.set(radius, radius * 0.8, 1); this.marker.updateMatrix();
       this.scars.setMatrixAt(scarIndex, this.marker.matrix);
       this.colour.set(kind === 'farmland' ? '#817445' : kind === 'logging' ? '#87704e' : kind === 'quarry' ? '#a39980' : '#49433a');
-      if (mark.abandonedMonth !== undefined) this.colour.lerp(new THREE.Color('#68734e'), Math.min(0.65, 1 - mark.intensity));
+      if (mark.abandonedMonth !== undefined) this.colour.lerp(this.abandonedColour, Math.min(0.65, 1 - mark.intensity));
       this.scars.setColorAt(scarIndex++, this.colour);
     }
     this.marker.rotation.set(0, 0, 0);
+    this.marker.quaternion.identity();
     this.scars.count = scarIndex; this.scars.instanceMatrix.needsUpdate = true;
     if (this.scars.instanceColor) this.scars.instanceColor.needsUpdate = true;
+  }
 
+  private rebuildAccessTrails(): void {
     const vertices: number[] = [];
     for (const deposit of this.world.resourceDeposits) {
       if (deposit.establishedMonth === undefined || (deposit.extracted ?? 0) < 8) continue;
@@ -118,11 +235,8 @@ export class ResourceSiteRenderer {
         }
       }
     }
-    this.trails.geometry.dispose();
-    this.trails.geometry = new THREE.BufferGeometry();
     this.trails.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-
-    this.rebuildMovementPaths();
+    this.trails.geometry.computeBoundingSphere();
   }
 
   private rebuildMovementPaths(): void {
@@ -170,13 +284,13 @@ export class ResourceSiteRenderer {
       counts[STAGE_RANK[stageA] >= STAGE_RANK[stageB] ? stageA : stageB] += 1;
     }
 
-    const geometry = new THREE.BufferGeometry();
+    const geometry = this.footpaths.geometry;
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
     geometry.setIndex(indices);
+    geometry.deleteAttribute('normal');
     if (positions.length > 0) geometry.computeVertexNormals();
-    this.footpaths.geometry.dispose();
-    this.footpaths.geometry = geometry;
+    geometry.computeBoundingSphere();
     this.footpaths.userData['pathStageCounts'] = counts;
   }
 
