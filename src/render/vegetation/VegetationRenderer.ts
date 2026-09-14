@@ -3,7 +3,7 @@ import { SeededRandom, stableHash } from '../../sim/prng';
 import { tornadoExposure } from '../../sim/weather/Tornado';
 import { cellAt } from '../../sim/world';
 import type { Settlement, TornadoState, WorldState } from '../../sim/types';
-import { clamp01 } from '../../sim/terrain/noise';
+import { clamp01, smoothstep } from '../../sim/terrain/noise';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { AmbientBirds } from './AmbientBirds';
 import { planForest, resolveForestSuccession, resolveTreeLifecycle, type ResolvedTreeLifecycle, type TreePlacement } from './ForestPlanner';
@@ -338,7 +338,9 @@ export class VegetationRenderer {
       const phenotype = this.phenotypes[index] ?? resolveTreePhenotype(this.seed, placement);
       const morphology = resolveTreeMorphology(phenotype, lifecycle);
       this.write(target, placement, lifecycle, phenotype, morphology);
-      if (lifecycle.fallen && distance < NEAR_RANGE) this.writeRootPlate(placement, lifecycle, phenotype);
+      if (lifecycle.fallen && distance < NEAR_RANGE && this.shouldShowRootPlate(placement, phenotype)) {
+        this.writeRootPlate(placement, lifecycle, phenotype);
+      }
       if (distance < 24 && this.leafSites.length < 96 && lifecycle.foliageVisible && !windthrown && cell) {
         const phase = resolveTreePhenology(this.season, cell, weather ?? cell, placement.family, phenotype.phenology);
         if (phase.leafFall > 0.2 || phase.blossom > 0.3) {
@@ -585,6 +587,23 @@ export class VegetationRenderer {
     bucket.count += 1;
   }
 
+  private shouldShowRootPlate(placement: TreePlacement, phenotype: TreePhenotype): boolean {
+    const disturbedYear = placement.disturbedYear;
+    if (disturbedYear === undefined) return false;
+    const displayYear = (this.world.weather?.month ?? this.ecologyYear * 12) / 12;
+    if (!placement.id && (displayYear < disturbedYear || displayYear >= disturbedYear + 3)) return false;
+    const threshold: Record<TreeFamily, number> = {
+      cherry: 0.5,
+      broadleaf: 0.54,
+      conifer: 0.42,
+      dry: 0.64,
+      riverbank: 0.48,
+      alpine: 0.52,
+      ancient: 0.58,
+    };
+    return phenotype.uprooting > threshold[placement.family];
+  }
+
   private writeRootPlate(placement: TreePlacement, lifecycle: ResolvedTreeLifecycle, phenotype: TreePhenotype): void {
     if (this.rootPlateCount >= this.rootPlates.instanceMatrix.count) return;
     this.position.set(placement.worldX, placement.y + lifecycle.scale * 0.22, placement.worldZ);
@@ -612,13 +631,13 @@ export class VegetationRenderer {
     const climate = cell ?? { temperature: 0.46, moisture: 0.5 };
     const phase = resolveTreePhenology(this.season, climate, weather ?? climate, placement.family, phenotype.phenology);
     treeFoliageColour(placement.family, phase, phenotype.pigment, this.tint, climate.moisture);
-    const maturity = lifecycle.stage === 'sapling' ? 0.84
-      : lifecycle.stage === 'young' ? 0.91
-        : lifecycle.stage === 'old' ? 1.06
-          : lifecycle.stage === 'declining' ? 0.9
-            : lifecycle.stage === 'dead-standing' || lifecycle.stage === 'fallen' ? 0.76
-              : 1;
-    this.tint.multiplyScalar(maturity);
+    const development = lifecycle.ageYears !== undefined && lifecycle.mortalityAge !== undefined
+      ? clamp01(lifecycle.ageYears / Math.max(1, lifecycle.mortalityAge))
+      : lifecycle.maturity;
+    const establishment = smoothstep(0, 0.3, development);
+    const senescence = smoothstep(0.76, 1, development);
+    const vitality = lifecycle.foliageVisible ? (0.84 + establishment * 0.18) * (1 - senescence * 0.12) : 0.76;
+    this.tint.multiplyScalar(vitality);
     const shade = 0.92 + clamp01(placement.scale - 0.6) * 0.16;
     this.tint.multiplyScalar(shade);
     return this.tint;
