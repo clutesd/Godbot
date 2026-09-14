@@ -4,11 +4,21 @@ import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily } from '
 
 const DECIDUOUS: readonly TreeFamily[] = ['cherry', 'broadleaf', 'dry', 'riverbank', 'ancient'];
 
-function geometryEnvelope(geometry: THREE.BufferGeometry): { radius: number; minY: number; maxY: number } {
+function geometryEnvelope(geometry: THREE.BufferGeometry): {
+  radius: number;
+  minY: number;
+  maxY: number;
+  widthX: number;
+  widthZ: number;
+} {
   const position = geometry.getAttribute('position');
   let radius = 0;
   let minY = Infinity;
   let maxY = -Infinity;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
   for (let index = 0; index < position.count; index += 1) {
     const x = position.getX(index);
     const y = position.getY(index);
@@ -16,8 +26,12 @@ function geometryEnvelope(geometry: THREE.BufferGeometry): { radius: number; min
     radius = Math.max(radius, Math.hypot(x, z));
     minY = Math.min(minY, y);
     maxY = Math.max(maxY, y);
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
   }
-  return { radius, minY, maxY };
+  return { radius, minY, maxY, widthX: maxX - minX, widthZ: maxZ - minZ };
 }
 
 interface FoliageSiteMetric {
@@ -93,6 +107,20 @@ describe('Tree library branch architecture', () => {
         expect(elongatedSites).toBeGreaterThanOrEqual(Math.floor(metrics.length * 0.25));
         expect((tree.foliage.getIndex()?.count ?? 0) / 3).toBeLessThanOrEqual(TREE_LOD_NEAR.maxClumps * 20);
       }
+    }
+  });
+
+  it('gives seeded variants meaningfully different whole-crown silhouettes', () => {
+    const library = buildTreeLibrary('crown-rhythm-diversity', 6, TREE_LOD_NEAR);
+    for (const family of DECIDUOUS) {
+      const envelopes = (library.get(family) ?? []).map(tree => geometryEnvelope(tree.foliage));
+      expect(envelopes.length).toBeGreaterThanOrEqual(4);
+      const widths = envelopes.map(envelope => Math.max(envelope.widthX, envelope.widthZ));
+      const heights = envelopes.map(envelope => envelope.maxY - envelope.minY);
+      const aspect = envelopes.map(envelope => envelope.widthX / Math.max(1e-6, envelope.widthZ));
+      expect(Math.max(...widths) / Math.max(1e-6, Math.min(...widths))).toBeGreaterThan(1.08);
+      expect(Math.max(...heights) / Math.max(1e-6, Math.min(...heights))).toBeGreaterThan(1.05);
+      expect(Math.max(...aspect) - Math.min(...aspect)).toBeGreaterThan(0.08);
     }
   });
 
