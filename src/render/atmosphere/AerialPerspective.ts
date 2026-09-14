@@ -3,6 +3,25 @@ import type { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import type { EnvironmentFrameState } from './EnvironmentFrameState';
 import type { AtmosphericScatteringState } from './AtmosphericScattering';
 
+/** World-space height falloff used by the aerial-density integral. */
+export const AERIAL_HEIGHT_FALLOFF = 0.045;
+
+/**
+ * CPU mirror of the shader's four-point height-density integration, used for deterministic tests.
+ * The result is the average relative air density encountered along a camera-to-surface ray.
+ */
+export function integratedHeightDensity(
+  cameraHeight: number,
+  surfaceHeight: number,
+  falloff = AERIAL_HEIGHT_FALLOFF,
+): number {
+  const densityAt = (height: number): number => Math.exp(-Math.max(0, height) * Math.max(0, falloff));
+  const samples = [0.125, 0.375, 0.625, 0.875] as const;
+  let total = 0;
+  for (const t of samples) total += densityAt(THREE.MathUtils.lerp(cameraHeight, surfaceHeight, t));
+  return total / samples.length;
+}
+
 /**
  * Parameters consumed by the screen-space aerial perspective pass.
  *
@@ -22,6 +41,7 @@ export function updateAerialPerspectivePass(
   uniforms['tDepth']!.value = depthTexture;
   uniforms['uProjectionInverse']!.value.copy(camera.projectionMatrixInverse);
   uniforms['uCameraWorld']!.value.copy(camera.matrixWorld);
+  uniforms['uCameraHeight']!.value = camera.position.y;
   uniforms['uSunDirection']!.value.copy(frame.sunDirection);
   uniforms['uSkyFill']!.value.copy(frame.skyFillColor);
   uniforms['uFogColor']!.value.copy(frame.sourceFogColor);
@@ -32,6 +52,7 @@ export function updateAerialPerspectivePass(
   uniforms['uForwardScatter']!.value = scattering.aerialForwardScatter;
   uniforms['uNightBlend']!.value = scattering.nightBlend;
   uniforms['uObscuration']!.value = scattering.obscuration;
+  uniforms['uHeightFalloff']!.value = AERIAL_HEIGHT_FALLOFF;
   const farBlendStart = Math.max(scattering.aerialStartDistance * 4.5, camera.far * 0.16);
   const farBlendEnd = Math.max(farBlendStart + 120, camera.far * 0.5);
   uniforms['uFarBlendStart']!.value = farBlendStart;
@@ -41,10 +62,12 @@ export function updateAerialPerspectivePass(
 /**
  * Depth-aware aerial perspective. It runs in linear HDR space before bloom/grade/output.
  *
- * We reconstruct the world ray and hit position from the scene depth buffer, apply Beer-Lambert
- * style distance extinction, then add directional in-scatter. At extreme distance, a second gentle
- * horizon-compression term blends terrain and ocean toward sky-fill colour, which is what allows
- * sparse remote geometry to imply a much larger world without exposing its actual finite extent.
+ * We reconstruct the world ray and hit position from the scene depth buffer, integrate a cheap
+ * exponential height-density model along that ray, then apply Beer-Lambert style extinction and
+ * directional in-scatter. A high camera therefore spends most of its path in clear thin air before
+ * entering denser valley air near the surface, instead of treating the entire ray as ground fog.
+ * At extreme distance, a second gentle horizon-compression term still blends terrain and ocean
+ * toward sky-fill colour so sparse remote geometry can imply a much larger world.
  */
 export const AERIAL_PERSPECTIVE_SHADER = {
   uniforms: {
@@ -52,16 +75,18 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     tDepth: { value: null },
     uProjectionInverse: { value: new THREE.Matrix4() },
     uCameraWorld: { value: new THREE.Matrix4() },
+    uCameraHeight: { value: 40 },
     uSunDirection: { value: new THREE.Vector3(0.4, 0.8, 0.3).normalize() },
     uSkyFill: { value: new THREE.Color('#9dbdd3') },
     uFogColor: { value: new THREE.Color('#93a5a4') },
     uSunColor: { value: new THREE.Color('#fff2dc') },
     uDensity: { value: 0.0048 },
     uStrength: { value: 0.48 },
-    uStartDistance: { value: 15 },
+    uStartDistance: { value: 22 },
     uForwardScatter: { value: 0.16 },
     uNightBlend: { value: 0 },
     uObscuration: { value: 0 },
+    uHeightFalloff: { value: AERIAL_HEIGHT_FALLOFF },
     uFarBlendStart: { value: 144 },
     uFarBlendEnd: { value: 450 },
   },
@@ -77,6 +102,7 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     uniform sampler2D tDepth;
     uniform mat4 uProjectionInverse;
     uniform mat4 uCameraWorld;
+    uniform float uCameraHeight;
     uniform vec3 uSunDirection;
     uniform vec3 uSkyFill;
     uniform vec3 uFogColor;
@@ -87,9 +113,25 @@ export const AERIAL_PERSPECTIVE_SHADER = {
     uniform float uForwardScatter;
     uniform float uNightBlend;
     uniform float uObscuration;
+    uniform float uHeightFalloff;
     uniform float uFarBlendStart;
     uniform float uFarBlendEnd;
     varying vec2 vUv;
+
+    float densityAtHeight(float worldY) {
+      return exp(-max(worldY, 0.0) * uHeightFalloff);
+    }
+
+    float integratedRayDensity(float cameraY, float surfaceY) {
+      // Four midpoint samples are stable, branch-free and cheap enough for a full-screen pass. They
+      // approximate the optical-depth integral much better than classifying the whole ray by the
+      // destination pixel's height, especially in GODBOX's high oblique documentary shots.
+      float d0 = densityAtHeight(mix(cameraY, surfaceY, 0.125));
+      float d1 = densityAtHeight(mix(cameraY, surfaceY, 0.375));
+      float d2 = densityAtHeight(mix(cameraY, surfaceY, 0.625));
+      float d3 = densityAtHeight(mix(cameraY, surfaceY, 0.875));
+      return (d0 + d1 + d2 + d3) * 0.25;
+    }
 
     void main() {
       vec4 source = texture2D(tDiffuse, vUv);
@@ -108,25 +150,30 @@ export const AERIAL_PERSPECTIVE_SHADER = {
       vec3 worldDirection = normalize((uCameraWorld * vec4(normalize(viewPosition.xyz), 0.0)).xyz);
 
       float pathLength = max(0.0, distanceToSurface - uStartDistance);
-      float extinction = 1.0 - exp(-pathLength * uDensity);
-      float lowAir = 1.0 - smoothstep(10.0, 52.0, worldPosition.y);
+      float heightDensity = integratedRayDensity(uCameraHeight, worldPosition.y);
+      float surfaceDensity = densityAtHeight(worldPosition.y);
+
+      // Clear air follows the height integral. Severe weather deliberately lifts some extinction
+      // above the valley layer so blizzards/smoke can still obscure an elevated camera.
+      float effectiveDensity = heightDensity + (1.0 - heightDensity) * uObscuration * 0.58;
+      float extinction = 1.0 - exp(-pathLength * uDensity * effectiveDensity);
       float grazingView = pow(1.0 - abs(worldDirection.y), 1.35);
-      float amount = extinction * uStrength * (0.72 + lowAir * 0.24 + grazingView * 0.15);
-      amount *= 1.0 + uObscuration * 0.24;
+      float amount = extinction * uStrength * (0.78 + heightDensity * 0.14 + grazingView * 0.08);
+      amount *= 1.0 + uObscuration * 0.2;
 
       float farBlend = smoothstep(uFarBlendStart, uFarBlendEnd, distanceToSurface);
-      float horizonPath = farBlend * (0.5 + grazingView * 0.5) * (0.76 + lowAir * 0.24);
-      amount += horizonPath * (0.16 + uObscuration * 0.07);
-      amount = clamp(amount, 0.0, 0.52 + uObscuration * 0.12);
+      float horizonPath = farBlend * (0.5 + grazingView * 0.5) * (0.58 + effectiveDensity * 0.42);
+      amount += horizonPath * (0.13 + uObscuration * 0.08);
+      amount = clamp(amount, 0.0, 0.48 + uObscuration * 0.16);
 
       float mu = max(dot(worldDirection, normalize(uSunDirection)), 0.0);
-      float forward = pow(mu, 9.0) * uForwardScatter * (0.55 + lowAir * 0.45);
+      float forward = pow(mu, 9.0) * uForwardScatter * (0.42 + surfaceDensity * 0.3 + heightDensity * 0.28);
       forward *= 1.0 - uObscuration * 0.58;
 
-      vec3 neutralAir = mix(uFogColor, uSkyFill, 0.68);
+      vec3 neutralAir = mix(uFogColor, uSkyFill, 0.7);
       neutralAir = mix(neutralAir, uSkyFill, farBlend * (0.12 + grazingView * 0.12));
       neutralAir = mix(neutralAir, uSkyFill * 0.72, uNightBlend * 0.62);
-      vec3 airColor = mix(neutralAir, uSunColor, clamp(forward, 0.0, 0.34));
+      vec3 airColor = mix(neutralAir, uSunColor, clamp(forward, 0.0, 0.32));
 
       vec3 color = mix(source.rgb, airColor, amount);
       gl_FragColor = vec4(max(color, vec3(0.0)), source.a);
