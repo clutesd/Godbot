@@ -1,0 +1,32 @@
+name: World edge validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/render/terrain/TerrainSurface.ts'
+      - 'src/render/terrain/WorldEdgeTransition.ts'
+      - 'tests/world-edge-transition.test.ts'
+      - '.github/workflows/world-edge-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/render/terrain/TerrainSurface.ts'
+      - 'src/render/terrain/WorldEdgeTransition.ts'
+      - 'tests/world-edge-transition.test.ts'
+      - '.github/workflows/world-edge-validation.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx eslint src/render/terrain/TerrainSurface.ts src/render/terrain/WorldEdgeTransition.ts tests/world-edge-transition.test.ts
+      - run: npx vitest run tests/world-edge-transition.test.ts tests/terrain.test.ts
+      - run: npm run build
