@@ -16,6 +16,26 @@ export interface DistantLandformMetadata {
   maxRelief: number;
 }
 
+export interface HorizonRidgeMetadata {
+  presentationOnly: true;
+  authoritative: false;
+  layer: number;
+  radius: number;
+  arcLength: number;
+  samples: number;
+  maxRelief: number;
+}
+
+export interface HorizonBackdropMetadata {
+  presentationOnly: true;
+  authoritative: false;
+  partialArcCoverage: true;
+  layerCount: number;
+  totalVertices: number;
+  nearestRadius: number;
+  farthestRadius: number;
+}
+
 export interface DistantWorldMetadata {
   presentationOnly: true;
   authoritative: false;
@@ -25,6 +45,8 @@ export interface DistantWorldMetadata {
   nearestCenterDistance: number;
   farthestCenterDistance: number;
   canonicalSpan: number;
+  horizonLayerCount: number;
+  horizonVertices: number;
 }
 
 interface LandformSpec {
@@ -35,6 +57,14 @@ interface LandformSpec {
   depth: number;
   maxRelief: number;
   grid: number;
+}
+
+interface HorizonRidgeSpec {
+  angle: number;
+  radius: number;
+  arcLength: number;
+  maxRelief: number;
+  samples: number;
 }
 
 const PALETTE = {
@@ -48,14 +78,19 @@ const PALETTE = {
   haze: new THREE.Color('#788b8b'),
 };
 
+const HORIZON_NEAR = new THREE.Color('#62777a');
+const HORIZON_MID = new THREE.Color('#718487');
+const HORIZON_FAR = new THREE.Color('#819194');
+const HORIZON_BASE = new THREE.Color('#65777a');
 const lerp = (a: number, b: number, amount: number): number => a + (b - a) * amount;
 
 /**
  * Cheap presentation geography beyond the finite simulation.
  *
  * Layer 1 hides the canonical square edge. Layer 2 supplies sparse, asymmetric landmasses farther
- * out: foothills, islands and mountain chains that sit inside the existing atmosphere/ocean. None
- * of this geometry is queried by simulation, placement, hydrology, ecology or pathfinding.
+ * out: foothills, islands and mountain chains that sit inside the existing atmosphere/ocean. The
+ * horizon backdrop adds a few even cheaper partial ridgelines behind those masses so wide shots
+ * read as nested geography rather than isolated meshes. None of this geometry is authoritative.
  */
 export function buildDistantWorld(world: WorldState, surface: TerrainSurface): THREE.Group {
   const group = new THREE.Group();
@@ -79,6 +114,10 @@ export function buildDistantWorld(world: WorldState, surface: TerrainSurface): T
     group.add(mesh);
   }
 
+  const horizon = buildHorizonBackdrop(surface, signature, centerX, centerZ, span);
+  const horizonMetadata = horizon.userData['horizonBackdrop'] as HorizonBackdropMetadata;
+  group.add(horizon);
+
   group.userData['distantWorld'] = {
     presentationOnly: true,
     authoritative: false,
@@ -88,6 +127,8 @@ export function buildDistantWorld(world: WorldState, surface: TerrainSurface): T
     nearestCenterDistance,
     farthestCenterDistance,
     canonicalSpan: span,
+    horizonLayerCount: horizonMetadata.layerCount,
+    horizonVertices: horizonMetadata.totalVertices,
   } satisfies DistantWorldMetadata;
   return group;
 }
@@ -238,6 +279,157 @@ function buildLandform(
     depth: spec.depth,
     maxRelief: spec.maxRelief,
   } satisfies DistantLandformMetadata;
+  return mesh;
+}
+
+function buildHorizonBackdrop(
+  surface: TerrainSurface,
+  signature: string,
+  centerX: number,
+  centerZ: number,
+  span: number,
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'horizon-backdrop';
+  const specs = buildHorizonRidgeSpecs(signature, span);
+  let totalVertices = 0;
+  let nearestRadius = Number.POSITIVE_INFINITY;
+  let farthestRadius = 0;
+
+  for (let layer = 0; layer < specs.length; layer += 1) {
+    const spec = specs[layer]!;
+    group.add(buildHorizonRidge(surface, signature, spec, layer, centerX, centerZ, span));
+    totalVertices += spec.samples * 2;
+    nearestRadius = Math.min(nearestRadius, spec.radius);
+    farthestRadius = Math.max(farthestRadius, spec.radius);
+  }
+
+  group.userData['horizonBackdrop'] = {
+    presentationOnly: true,
+    authoritative: false,
+    partialArcCoverage: true,
+    layerCount: specs.length,
+    totalVertices,
+    nearestRadius,
+    farthestRadius,
+  } satisfies HorizonBackdropMetadata;
+  return group;
+}
+
+function buildHorizonRidgeSpecs(signature: string, span: number): HorizonRidgeSpec[] {
+  const baseAngles = [0.46, 3.48, 5.18];
+  const baseRadius = [2.34, 2.5, 2.68];
+  const baseArc = [1.5, 1.18, 0.98];
+  const baseRelief = [18, 13, 9];
+  const samples = [72, 64, 56];
+  return baseAngles.map((angle, layer) => ({
+    angle: angle + (stableHash(`${signature}:horizon-angle`, layer, 0) - 0.5) * 0.24,
+    radius: span * (baseRadius[layer]! + stableHash(`${signature}:horizon-radius`, layer, 0) * 0.08),
+    arcLength: baseArc[layer]! + (stableHash(`${signature}:horizon-arc`, layer, 0) - 0.5) * 0.18,
+    maxRelief: baseRelief[layer]! + stableHash(`${signature}:horizon-relief`, layer, 0) * 5,
+    samples: samples[layer]!,
+  }));
+}
+
+function buildHorizonRidge(
+  surface: TerrainSurface,
+  signature: string,
+  spec: HorizonRidgeSpec,
+  layer: number,
+  centerX: number,
+  centerZ: number,
+  span: number,
+): THREE.Mesh {
+  const positions = new Float32Array(spec.samples * 2 * 3);
+  const colors = new Float32Array(spec.samples * 2 * 3);
+  const indices = new Uint32Array((spec.samples - 1) * 6);
+  const ridgeSeeds = octaveSeeds(signature, `horizon-${layer}-ridge`, 4);
+  const macroSeeds = octaveSeeds(signature, `horizon-${layer}-macro`, 3);
+  const topColour = new THREE.Color();
+  const layerColour = layer === 0 ? HORIZON_NEAR : layer === 1 ? HORIZON_MID : HORIZON_FAR;
+
+  for (let sample = 0; sample < spec.samples; sample += 1) {
+    const t = sample / (spec.samples - 1);
+    const angle = spec.angle + (t - 0.5) * spec.arcLength;
+    const macro = fbmSeeded(macroSeeds, t * 3.8 + layer * 1.7, layer * 2.9 + 4.1);
+    const radius = spec.radius + (macro - 0.5) * span * 0.075;
+    const worldX = centerX + Math.cos(angle) * radius;
+    const worldZ = centerZ + Math.sin(angle) * radius;
+    const ridge = ridgedSeeded(ridgeSeeds, worldX * 0.008 + 2.3, worldZ * 0.008 - 7.2);
+    const arcEnvelope = Math.pow(Math.max(0, Math.sin(Math.PI * t)), 0.72);
+    const broad = 0.68 + macro * 0.42;
+    const relief = spec.maxRelief * (0.28 + Math.pow(ridge, 1.55) * 0.92) * broad;
+    // Arc endpoints submerge, so each partial skyline dies naturally into ocean/air rather than
+    // exposing a vertical curtain at either end.
+    const topY = surface.seaLevelY - 1.1 + arcEnvelope * (2.25 + relief);
+    const bottomY = surface.seaLevelY - 5.2 - macro * 0.9;
+    const topIndex = sample * 2;
+    const bottomIndex = topIndex + 1;
+    let offset = topIndex * 3;
+    positions[offset] = worldX;
+    positions[offset + 1] = topY;
+    positions[offset + 2] = worldZ;
+    offset = bottomIndex * 3;
+    positions[offset] = worldX;
+    positions[offset + 1] = bottomY;
+    positions[offset + 2] = worldZ;
+
+    const peak = clamp01((topY - surface.seaLevelY) / Math.max(8, spec.maxRelief));
+    topColour.copy(layerColour).lerp(HORIZON_FAR, peak * 0.08 + layer * 0.05);
+    offset = topIndex * 3;
+    colors[offset] = topColour.r;
+    colors[offset + 1] = topColour.g;
+    colors[offset + 2] = topColour.b;
+    offset = bottomIndex * 3;
+    colors[offset] = HORIZON_BASE.r;
+    colors[offset + 1] = HORIZON_BASE.g;
+    colors[offset + 2] = HORIZON_BASE.b;
+  }
+
+  let cursor = 0;
+  for (let sample = 0; sample < spec.samples - 1; sample += 1) {
+    const a = sample * 2;
+    const b = a + 1;
+    const c = a + 2;
+    const d = a + 3;
+    indices[cursor] = a;
+    indices[cursor + 1] = b;
+    indices[cursor + 2] = c;
+    indices[cursor + 3] = c;
+    indices[cursor + 4] = b;
+    indices[cursor + 5] = d;
+    cursor += 6;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+
+  // Scene FogExp2 is tuned for the simulated world and would erase these extreme-distance strips
+  // almost completely. They are pre-hazed and still pass through the depth-aware aerial perspective,
+  // which gives weather/day-night extinction without losing the skyline in clear conditions.
+  const material = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    fog: false,
+  });
+  material.toneMapped = true;
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = `horizon-ridge-${layer}`;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.userData['horizonRidge'] = {
+    presentationOnly: true,
+    authoritative: false,
+    layer,
+    radius: spec.radius,
+    arcLength: spec.arcLength,
+    samples: spec.samples,
+    maxRelief: spec.maxRelief,
+  } satisfies HorizonRidgeMetadata;
   return mesh;
 }
 
