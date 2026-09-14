@@ -19,6 +19,8 @@ export interface TreePhenotype {
   phenology: number;
   stiffness: number;
   fallBias: number;
+  /** Stable presentation tendency for storm-felled trees to uproot rather than snap. */
+  uprooting: number;
 }
 
 /** Per-instance proportions applied to the shared seeded skeleton. */
@@ -96,10 +98,11 @@ export function resolveTreePhenotype(seed: string, tree: Pick<TreePlacement,
     phenology: trait(seed, tree, 'phenology'),
     stiffness: 0.72 + trait(seed, tree, 'stiffness') * 0.56,
     fallBias: trait(seed, tree, 'fall-bias') * 2 - 1,
+    uprooting: trait(seed, tree, 'uprooting'),
   };
 }
 
-interface StageProfile {
+interface FormProfile {
   trunkRadius: number;
   trunkHeight: number;
   crownWidth: number;
@@ -109,65 +112,110 @@ interface StageProfile {
   foliage: number;
 }
 
-function stageProfile(lifecycle: ResolvedTreeLifecycle): StageProfile {
-  const maturity = clamp01(lifecycle.maturity ?? 0.5);
+const SEEDLING: FormProfile = {
+  trunkRadius: 0.5, trunkHeight: 1.08, crownWidth: 0.48, crownHeight: 0.72,
+  crownLift: 0.08, asymmetry: 0.42, foliage: 0.78,
+};
+const YOUNG: FormProfile = {
+  trunkRadius: 0.68, trunkHeight: 1.03, crownWidth: 0.7, crownHeight: 0.86,
+  crownLift: 0.05, asymmetry: 0.5, foliage: 0.9,
+};
+const MATURE: FormProfile = {
+  trunkRadius: 0.95, trunkHeight: 1, crownWidth: 0.98, crownHeight: 1,
+  crownLift: 0.015, asymmetry: 0.75, foliage: 1,
+};
+const VETERAN: FormProfile = {
+  trunkRadius: 1.08, trunkHeight: 0.98, crownWidth: 1.08, crownHeight: 0.96,
+  crownLift: -0.01, asymmetry: 1.05, foliage: 0.97,
+};
+const OLD: FormProfile = {
+  trunkRadius: 1.2, trunkHeight: 0.94, crownWidth: 1.16, crownHeight: 0.88,
+  crownLift: -0.02, asymmetry: 1.35, foliage: 0.9,
+};
+const SENESCENT: FormProfile = {
+  trunkRadius: 1.26, trunkHeight: 0.88, crownWidth: 0.98, crownHeight: 0.74,
+  crownLift: -0.025, asymmetry: 1.6, foliage: 0.5,
+};
+
+function blendProfile(from: FormProfile, to: FormProfile, amount: number): FormProfile {
+  return {
+    trunkRadius: lerp(from.trunkRadius, to.trunkRadius, amount),
+    trunkHeight: lerp(from.trunkHeight, to.trunkHeight, amount),
+    crownWidth: lerp(from.crownWidth, to.crownWidth, amount),
+    crownHeight: lerp(from.crownHeight, to.crownHeight, amount),
+    crownLift: lerp(from.crownLift, to.crownLift, amount),
+    asymmetry: lerp(from.asymmetry, to.asymmetry, amount),
+    foliage: lerp(from.foliage, to.foliage, amount),
+  };
+}
+
+function fallbackProfile(lifecycle: ResolvedTreeLifecycle): FormProfile {
   switch (lifecycle.stage) {
-    case 'sapling': {
-      const progress = smoothstep(0, 0.14, maturity);
-      return {
-        trunkRadius: lerp(0.5, 0.68, progress), trunkHeight: lerp(1.08, 1.03, progress),
-        crownWidth: lerp(0.48, 0.7, progress), crownHeight: lerp(0.72, 0.86, progress),
-        crownLift: lerp(0.08, 0.05, progress), asymmetry: 0.42, foliage: lerp(0.78, 0.9, progress),
-      };
-    }
-    case 'young': {
-      const progress = smoothstep(0.1, 0.36, maturity);
-      return {
-        trunkRadius: lerp(0.68, 0.9, progress), trunkHeight: 1.03,
-        crownWidth: lerp(0.72, 0.94, progress), crownHeight: lerp(0.88, 0.98, progress),
-        crownLift: 0.035, asymmetry: lerp(0.5, 0.72, progress), foliage: lerp(0.9, 1, progress),
-      };
-    }
-    case 'mature': {
-      const progress = smoothstep(0.28, 0.72, maturity);
-      return {
-        trunkRadius: lerp(0.92, 1.05, progress), trunkHeight: 1,
-        crownWidth: lerp(0.96, 1.06, progress), crownHeight: lerp(1, 0.98, progress),
-        crownLift: 0.015, asymmetry: lerp(0.75, 0.95, progress), foliage: 1,
-      };
-    }
-    case 'old': {
-      const progress = smoothstep(0.62, 0.9, Math.max(0.68, maturity));
-      return {
-        trunkRadius: lerp(1.08, 1.22, progress), trunkHeight: lerp(1, 0.95, progress),
-        crownWidth: lerp(1.08, 1.16, progress), crownHeight: lerp(0.96, 0.88, progress),
-        crownLift: -0.015, asymmetry: lerp(1.05, 1.35, progress), foliage: lerp(0.98, 0.9, progress),
-      };
-    }
-    case 'declining': {
-      const progress = smoothstep(0.82, 1, maturity);
-      return {
-        trunkRadius: lerp(1.18, 1.26, progress), trunkHeight: lerp(0.95, 0.88, progress),
-        crownWidth: lerp(1.1, 0.98, progress), crownHeight: lerp(0.86, 0.74, progress),
-        crownLift: -0.025, asymmetry: lerp(1.3, 1.6, progress), foliage: lerp(0.78, 0.5, progress),
-      };
-    }
-    case 'dead-standing':
-      return { trunkRadius: 1.24, trunkHeight: 0.82, crownWidth: 0.9, crownHeight: 0.72, crownLift: -0.04, asymmetry: 1.5, foliage: 0 };
-    case 'fallen':
-      return { trunkRadius: 1.16, trunkHeight: 0.96, crownWidth: 0.92, crownHeight: 0.8, crownLift: 0, asymmetry: 1.4, foliage: 0 };
+    case 'sapling': return blendProfile(SEEDLING, YOUNG, smoothstep(0, 0.14, lifecycle.maturity));
+    case 'young': return blendProfile(YOUNG, MATURE, smoothstep(0.1, 0.36, lifecycle.maturity));
+    case 'mature': return blendProfile(MATURE, VETERAN, smoothstep(0.28, 0.72, lifecycle.maturity));
+    case 'old': return blendProfile(VETERAN, OLD, smoothstep(0.62, 0.9, Math.max(0.68, lifecycle.maturity)));
+    case 'declining': return blendProfile(OLD, SENESCENT, smoothstep(0.82, 1, lifecycle.maturity));
+    case 'dead-standing': return { ...SENESCENT, foliage: 0 };
+    case 'fallen': return { ...SENESCENT, trunkRadius: 1.16, trunkHeight: 0.96, crownWidth: 0.92, crownHeight: 0.8, foliage: 0 };
   }
 }
 
 /**
+ * Use actual biological age when available so age-class labels never create a visible transform pop.
+ * The named stages remain semantic; the silhouette follows one continuous growth/senescence curve.
+ */
+function stageProfile(lifecycle: ResolvedTreeLifecycle): FormProfile {
+  if (lifecycle.stage === 'dead-standing') return { ...SENESCENT, foliage: 0 };
+  if (lifecycle.stage === 'fallen') {
+    return { ...SENESCENT, trunkRadius: 1.16, trunkHeight: 0.96, crownWidth: 0.92, crownHeight: 0.8, foliage: 0 };
+  }
+  const age = lifecycle.ageYears;
+  const mortality = lifecycle.mortalityAge;
+  const veteranAge = lifecycle.veteranAge;
+  if (age === undefined || mortality === undefined || veteranAge === undefined) return fallbackProfile(lifecycle);
+
+  const youngAge = Math.min(15, mortality * 0.25);
+  const matureAge = Math.max(youngAge + 0.001, Math.min(35, mortality * 0.5));
+  const veteran = Math.max(matureAge + 0.001, veteranAge);
+  const declineAge = Math.max(veteran + 0.001, mortality * 0.82);
+
+  if (age <= youngAge) return blendProfile(SEEDLING, YOUNG, smoothstep(0, youngAge, age));
+  if (age <= matureAge) return blendProfile(YOUNG, MATURE, smoothstep(youngAge, matureAge, age));
+  if (age <= veteran) return blendProfile(MATURE, VETERAN, smoothstep(matureAge, veteran, age));
+  if (age <= declineAge) return blendProfile(VETERAN, OLD, smoothstep(veteran, declineAge, age));
+  return blendProfile(OLD, SENESCENT, smoothstep(declineAge, mortality, age));
+}
+
+interface MorphologyCacheEntry {
+  stage: ResolvedTreeLifecycle['stage'];
+  maturity: number;
+  ageYears: number | undefined;
+  mortalityAge: number | undefined;
+  veteranAge: number | undefined;
+  value: TreeMorphology;
+}
+
+const MORPHOLOGY_CACHE = new WeakMap<TreePhenotype, MorphologyCacheEntry>();
+
+/**
  * Age changes proportions, not only scale: juveniles are slender/narrow; veterans thicken, spread
  * and become asymmetrical; declining crowns contract before death. Shared geometry remains instanced.
+ * Results are cached because a tree's form changes yearly, not at the structural LOD refresh rate.
  */
 export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: ResolvedTreeLifecycle): TreeMorphology {
+  const cached = MORPHOLOGY_CACHE.get(phenotype);
+  if (cached
+    && cached.stage === lifecycle.stage
+    && cached.maturity === lifecycle.maturity
+    && cached.ageYears === lifecycle.ageYears
+    && cached.mortalityAge === lifecycle.mortalityAge
+    && cached.veteranAge === lifecycle.veteranAge) return cached.value;
+
   const stage = stageProfile(lifecycle);
   const ellipse = phenotype.crownEllipticity;
   const asymmetry = stage.asymmetry;
-  return {
+  const value: TreeMorphology = {
     trunkRadiusX: stage.trunkRadius * phenotype.girth * (1 + ellipse * 0.18),
     trunkRadiusZ: stage.trunkRadius * phenotype.girth * (1 - ellipse * 0.18),
     trunkHeight: stage.trunkHeight * phenotype.stature,
@@ -182,4 +230,13 @@ export function resolveTreeMorphology(phenotype: TreePhenotype, lifecycle: Resol
     foliageDensity: clamp01(stage.foliage * phenotype.fullness),
     fallAngle: Math.PI * (0.44 + phenotype.fallBias * 0.035),
   };
+  MORPHOLOGY_CACHE.set(phenotype, {
+    stage: lifecycle.stage,
+    maturity: lifecycle.maturity,
+    ageYears: lifecycle.ageYears,
+    mortalityAge: lifecycle.mortalityAge,
+    veteranAge: lifecycle.veteranAge,
+    value,
+  });
+  return value;
 }
