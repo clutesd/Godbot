@@ -20,29 +20,39 @@ function geometryEnvelope(geometry: THREE.BufferGeometry): { radius: number; min
   return { radius, minY, maxY };
 }
 
-/** Deciduous foliage is a concatenation of detail-0 icosahedra: 20 triangles per canopy cluster. */
-function foliageClusterSpans(geometry: THREE.BufferGeometry): number[] {
+interface FoliageSiteMetric {
+  span: number;
+  aspect: number;
+}
+
+/** Every deciduous canopy site deliberately consumes 20 triangles, regardless of clump vs spray pair. */
+function foliageSiteMetrics(geometry: THREE.BufferGeometry): FoliageSiteMetric[] {
   const position = geometry.getAttribute('position');
-  const triangleCount = (geometry.getIndex()?.count ?? position.count) / 3;
-  const clusterCount = Math.round(triangleCount / 20);
-  if (clusterCount <= 0 || triangleCount !== clusterCount * 20) return [];
-  const verticesPerCluster = position.count / clusterCount;
-  if (!Number.isInteger(verticesPerCluster)) return [];
-  const spans: number[] = [];
-  for (let cluster = 0; cluster < clusterCount; cluster += 1) {
-    const start = cluster * verticesPerCluster;
-    const end = start + verticesPerCluster;
+  const indices = geometry.getIndex();
+  if (!indices) return [];
+  const triangleCount = indices.count / 3;
+  const siteCount = Math.round(triangleCount / 20);
+  if (siteCount <= 0 || triangleCount !== siteCount * 20) return [];
+  const metrics: FoliageSiteMetric[] = [];
+  for (let site = 0; site < siteCount; site += 1) {
+    const start = site * 20 * 3;
+    const end = start + 20 * 3;
     let minX = Infinity; let maxX = -Infinity;
     let minY = Infinity; let maxY = -Infinity;
     let minZ = Infinity; let maxZ = -Infinity;
-    for (let index = start; index < end; index += 1) {
-      minX = Math.min(minX, position.getX(index)); maxX = Math.max(maxX, position.getX(index));
-      minY = Math.min(minY, position.getY(index)); maxY = Math.max(maxY, position.getY(index));
-      minZ = Math.min(minZ, position.getZ(index)); maxZ = Math.max(maxZ, position.getZ(index));
+    for (let cursor = start; cursor < end; cursor += 1) {
+      const vertex = indices.getX(cursor);
+      minX = Math.min(minX, position.getX(vertex)); maxX = Math.max(maxX, position.getX(vertex));
+      minY = Math.min(minY, position.getY(vertex)); maxY = Math.max(maxY, position.getY(vertex));
+      minZ = Math.min(minZ, position.getZ(vertex)); maxZ = Math.max(maxZ, position.getZ(vertex));
     }
-    spans.push(Math.max(maxX - minX, maxY - minY, maxZ - minZ));
+    const extents = [maxX - minX, maxY - minY, maxZ - minZ].sort((a, b) => a - b);
+    metrics.push({
+      span: extents[2]!,
+      aspect: extents[2]! / Math.max(1e-6, extents[0]!),
+    });
   }
-  return spans;
+  return metrics;
 }
 
 describe('Tree library branch architecture', () => {
@@ -67,18 +77,20 @@ describe('Tree library branch architecture', () => {
     }
   });
 
-  it('builds deciduous crowns from multiple foliage scales instead of equal green boulders', () => {
+  it('builds fine-grained deciduous crowns instead of screen-sized equal foliage boulders', () => {
     const library = buildTreeLibrary('canopy-massing', 6, TREE_LOD_NEAR);
     for (const family of DECIDUOUS) {
       for (const tree of library.get(family) ?? []) {
-        const spans = foliageClusterSpans(tree.foliage).sort((a, b) => a - b);
-        expect(spans.length).toBeGreaterThanOrEqual(6);
-        const smallest = spans[0]!;
-        const largest = spans.at(-1)!;
-        expect(largest / Math.max(1e-6, smallest)).toBeGreaterThan(1.55);
-        expect(largest).toBeLessThan(tree.height * 0.65);
-        const smallClusters = spans.filter(span => span <= largest * 0.66).length;
-        expect(smallClusters).toBeGreaterThanOrEqual(Math.floor(spans.length * 0.3));
+        const metrics = foliageSiteMetrics(tree.foliage).sort((a, b) => a.span - b.span);
+        expect(metrics.length).toBeGreaterThanOrEqual(6);
+        const smallest = metrics[0]!.span;
+        const largest = metrics.at(-1)!.span;
+        expect(largest / Math.max(1e-6, smallest)).toBeGreaterThan(1.65);
+        expect(largest).toBeLessThan(tree.height * 0.5);
+        const smallSites = metrics.filter(metric => metric.span <= largest * 0.64).length;
+        expect(smallSites).toBeGreaterThanOrEqual(Math.floor(metrics.length * 0.38));
+        const elongatedSites = metrics.filter(metric => metric.aspect >= 1.28).length;
+        expect(elongatedSites).toBeGreaterThanOrEqual(Math.floor(metrics.length * 0.25));
         expect((tree.foliage.getIndex()?.count ?? 0) / 3).toBeLessThanOrEqual(TREE_LOD_NEAR.maxClumps * 20);
       }
     }
