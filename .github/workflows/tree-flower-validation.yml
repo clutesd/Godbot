@@ -7,6 +7,8 @@ on:
       - 'src/render/terrain/TerrainDecor.ts'
       - 'src/main.ts'
       - 'tests/forest-lifecycle.test.ts'
+      - 'tests/vegetation-render.test.ts'
+      - 'tests/tree-morphology.test.ts'
       - 'tests/flower-field.test.ts'
       - 'tests/understory-field.test.ts'
       - 'tests/ambient-birds.test.ts'
@@ -32,11 +34,14 @@ jobs:
           src/render/vegetation/AmbientBirds.ts
           src/render/vegetation/FlowerField.ts
           src/render/vegetation/ForestPlanner.ts
+          src/render/vegetation/TreeMorphology.ts
           src/render/vegetation/UnderstoryField.ts
           src/render/vegetation/VegetationRenderer.ts
           tests/forest-lifecycle.test.ts
+          tests/vegetation-render.test.ts
+          tests/tree-morphology.test.ts
           tests/flower-field.test.ts
           tests/understory-field.test.ts
           tests/ambient-birds.test.ts
-      - run: npx vitest run tests/forest-lifecycle.test.ts tests/flower-field.test.ts tests/understory-field.test.ts tests/ambient-birds.test.ts
+      - run: npx vitest run tests/forest-lifecycle.test.ts tests/vegetation-render.test.ts tests/tree-morphology.test.ts tests/flower-field.test.ts tests/understory-field.test.ts tests/ambient-birds.test.ts
       - run: npm run build
