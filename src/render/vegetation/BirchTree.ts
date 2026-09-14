@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { SeededRandom } from '../../sim/prng';
-import type { TreeVariant as BaseTreeVariant } from './TreeLibraryBase';
+import { TREE_LOD_FAR, type TreeVariant as BaseTreeVariant } from './TreeLibraryBase';
 
 /** Paper-birch inspired summer foliage; seasonal tinting is applied later per instance. */
-export const BIRCH_FOLIAGE_COLOUR = '#73934f';
+export const BIRCH_FOLIAGE_COLOUR = '#82a65b';
 
 export interface BirchVariantGeometry {
   bark: THREE.BufferGeometry;
@@ -34,11 +34,12 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
 function profile(seed: string, variant: number): BirchProfile {
   const random = new SeededRandom(`${seed}:birch-presentation:${variant}`);
   return {
-    trunkWidth: random.range(0.72, 0.84),
-    height: random.range(1.08, 1.17),
-    crownWidth: random.range(0.78, 0.91),
-    crownHeight: random.range(1.02, 1.11),
-    crownLift: random.range(0.015, 0.045),
+    // Birch should stay elegant, but the previous 0.72 lower bound became sub-pixel too quickly.
+    trunkWidth: random.range(0.8, 0.92),
+    height: random.range(1.12, 1.21),
+    crownWidth: random.range(0.75, 0.88),
+    crownHeight: random.range(1.05, 1.14),
+    crownLift: random.range(0.05, 0.085),
     phase: random.range(0, Math.PI * 2),
     bandPhase: random.range(0, Math.PI * 2),
   };
@@ -61,22 +62,33 @@ function bounds(geometry: THREE.BufferGeometry): { minY: number; maxY: number; r
 }
 
 /**
+ * The far tree skeleton deliberately keeps a slightly stronger bole. This is perceptual LOD rather
+ * than a different species shape: thin bright trunks otherwise disappear before the crown does.
+ */
+function isFarSkeleton(source: BaseTreeVariant): boolean {
+  const indexCount = source.bark.getIndex()?.count ?? 0;
+  const farCeiling = TREE_LOD_FAR.maxSegments * TREE_LOD_FAR.sides * 6 + 24;
+  return indexCount <= farCeiling;
+}
+
+/**
  * Turn a separately cloned broadleaf skeleton into a recognisable birch without adding triangles.
- * The polished deciduous branch/canopy generator remains the source of truth; this adapter makes the
- * tree taller/slender, opens the crown, and authors pale bark with restrained dark lenticel bands.
+ * The polished deciduous branch/canopy generator remains the source of truth; this adapter gives
+ * birch a tall pale bole, fine silver scaffold, open lower crown and distance-safe bark identity.
  */
 export function createBirchVariant(source: BaseTreeVariant, seed: string, variant: number): BirchVariantGeometry {
   const birch = profile(seed, variant);
+  const farSkeleton = isFarSkeleton(source);
   const bark = source.bark.clone();
   const foliage = source.foliage.clone();
 
   const barkPosition = bark.getAttribute('position');
   const barkColour = bark.getAttribute('color');
   const barkBounds = bounds(bark);
-  const ivory = new THREE.Color('#e4dfd2');
-  const silver = new THREE.Color('#cbc6b8');
-  const twig = new THREE.Color('#746d62');
-  const charcoal = new THREE.Color('#3d3934');
+  const ivory = new THREE.Color('#eee9dc');
+  const silver = new THREE.Color('#d4cfc3');
+  const twig = new THREE.Color('#7d766b');
+  const charcoal = new THREE.Color('#45413c');
   const working = new THREE.Color();
 
   for (let index = 0; index < barkPosition.count; index += 1) {
@@ -86,22 +98,31 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     const normalizedY = clamp01((y - barkBounds.minY) / Math.max(1e-4, barkBounds.maxY - barkBounds.minY));
     const radial = clamp01(Math.hypot(x, z) / barkBounds.radius);
 
-    // Birch reads as a tall, comparatively slender tree. Higher branches stay a little less
-    // compressed than the lower bole so the crown still connects naturally to the skeleton.
+    // Preserve an unmistakable lower bole, then let the upper scaffold become progressively finer.
+    // Far LOD gets only a small lower-trunk compensation; crown dimensions and metadata stay exact.
+    const lowerBole = 1 - smoothstep(0.42, 0.82, normalizedY);
     const branchRelease = 1 + smoothstep(0.34, 0.96, normalizedY) * 0.08;
-    x *= birch.trunkWidth * branchRelease;
-    z *= birch.trunkWidth * branchRelease;
+    const bolePresence = 1 + lowerBole * 0.055 + (farSkeleton ? lowerBole * 0.085 : 0);
+    x *= birch.trunkWidth * branchRelease * bolePresence;
+    z *= birch.trunkWidth * branchRelease * bolePresence;
     y *= birch.height;
     barkPosition.setXYZ(index, x, y, z);
 
-    // Keep even the fine scaffold visibly silver-grey at forest distance. Upper twigs darken enough
-    // to separate against the crown, while the pale bole remains the dominant read of the whole tree.
+    // The whole scaffold stays silver-grey enough to read in forest shade. Two bark frequencies do
+    // different jobs: fine lenticels reward close views while sparse broader scars survive distance.
     const branchiness = smoothstep(0.2, 0.78, radial) * smoothstep(0.18, 0.92, normalizedY);
-    working.copy(ivory).lerp(silver, normalizedY * 0.14 + branchiness * 0.3).lerp(twig, branchiness * 0.48);
+    working.copy(ivory).lerp(silver, normalizedY * 0.12 + branchiness * 0.26).lerp(twig, branchiness * 0.42);
     const angle = Math.atan2(z, x);
-    const bandWave = 0.5 + 0.5 * Math.sin(normalizedY * 72 + angle * 1.4 + birch.bandPhase);
-    const band = Math.pow(bandWave, 11) * (1 - smoothstep(0.28, 0.56, radial)) * (0.07 + normalizedY * 0.1);
-    working.lerp(charcoal, band);
+    const fineWave = 0.5 + 0.5 * Math.sin(normalizedY * 70 + angle * 1.35 + birch.bandPhase);
+    const fineBand = Math.pow(fineWave, 12) * (1 - smoothstep(0.28, 0.58, radial)) * (0.06 + normalizedY * 0.08);
+    const broadWave = 0.5 + 0.5 * Math.sin(normalizedY * 18 + angle * 0.72 + birch.bandPhase * 0.67);
+    const broadBand = Math.pow(broadWave, 18) * (1 - smoothstep(0.2, 0.5, radial))
+      * smoothstep(0.08, 0.82, normalizedY) * 0.16;
+    working.lerp(charcoal, clamp01(fineBand + broadBand));
+
+    // A restrained baked curvature cue keeps pale bark dimensional in flat or heavily overcast light.
+    const roundness = 0.965 + (0.5 + 0.5 * Math.cos(angle + birch.phase)) * 0.07;
+    working.multiplyScalar(roundness);
     barkColour.setXYZ(index, working.r, working.g, working.b);
   }
   barkPosition.needsUpdate = true;
@@ -118,14 +139,20 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     let y = foliagePosition.getY(index);
     let z = foliagePosition.getZ(index);
     const normalizedY = clamp01((y - foliageBounds.minY) / span);
-    const crownProfile = 0.78 + Math.sin(normalizedY * Math.PI) * 0.22;
-    const width = birch.crownWidth * crownProfile;
+
+    // A birch crown is light and vertically layered rather than a dense broadleaf ball. The lower
+    // foliage is eased outward and upward so flashes of white trunk remain visible through the crown.
+    const crownProfile = 0.72 + Math.sin(normalizedY * Math.PI) * 0.28;
+    const lowerOpening = 1 - smoothstep(0.08, 0.52, normalizedY);
+    const width = birch.crownWidth * crownProfile * (1 + lowerOpening * 0.11);
     x *= width;
     z *= width;
     y = foliageBounds.minY + (y - foliageBounds.minY) * birch.crownHeight + source.height * birch.crownLift;
-    const sway = Math.sin(normalizedY * 5.2 + birch.phase) * source.height * 0.014 * smoothstep(0.25, 1, normalizedY);
+
+    // Small coherent bends keep silhouettes alive without making the tree look wind-blown at rest.
+    const sway = Math.sin(normalizedY * 5.2 + birch.phase) * source.height * 0.017 * smoothstep(0.22, 1, normalizedY);
     x += sway;
-    z += Math.cos(normalizedY * 4.6 + birch.phase) * sway * 0.55;
+    z += Math.cos(normalizedY * 4.6 + birch.phase) * sway * 0.58;
     foliagePosition.setXYZ(index, x, y, z);
   }
   foliagePosition.needsUpdate = true;
@@ -133,6 +160,8 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
   foliage.computeBoundingBox();
   foliage.computeBoundingSphere();
 
+  // Metadata intentionally ignores far-only bole compensation so near/far culling and identity stay
+  // deterministic. Perceptual LOD affects only a few pixels of trunk thickness at distance.
   return {
     bark,
     foliage,

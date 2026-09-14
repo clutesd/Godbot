@@ -6,6 +6,37 @@ import { planForest } from '../src/render/vegetation/ForestPlanner';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR } from '../src/render/vegetation/TreeLibrary';
 import { resolveTreePhenology, treeFoliageColour } from '../src/render/vegetation/TreePhenology';
 
+function lowerBoleRadius(geometry: THREE.BufferGeometry): number {
+  const position = geometry.getAttribute('position');
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let index = 0; index < position.count; index += 1) {
+    minY = Math.min(minY, position.getY(index));
+    maxY = Math.max(maxY, position.getY(index));
+  }
+  const cutoff = minY + (maxY - minY) * 0.42;
+  let radius = 0;
+  for (let index = 0; index < position.count; index += 1) {
+    if (position.getY(index) > cutoff) continue;
+    radius = Math.max(radius, Math.hypot(position.getX(index), position.getZ(index)));
+  }
+  return radius;
+}
+
+function barkValues(geometry: THREE.BufferGeometry): { average: number; min: number; max: number } {
+  const colour = geometry.getAttribute('color');
+  let total = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (let index = 0; index < colour.count; index += 1) {
+    const value = (colour.getX(index) + colour.getY(index) + colour.getZ(index)) / 3;
+    total += value;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  return { average: total / Math.max(1, colour.count), min, max };
+}
+
 describe('Birch tree family', () => {
   it('appears as a bounded mixed-stand component in generated worlds', () => {
     const seeds = ['witness-the-saffron-river', 'river', 'archipelago', 'birch-boreal-mix', 'northern-lake'];
@@ -42,6 +73,23 @@ describe('Birch tree family', () => {
     }
   });
 
+  it('preserves a bright readable bole when switching to the far tier', () => {
+    const near = buildTreeLibrary('birch-visibility', 5, TREE_LOD_NEAR).get('birch') ?? [];
+    const far = buildTreeLibrary('birch-visibility', 5, TREE_LOD_FAR).get('birch') ?? [];
+    expect(near).toHaveLength(5);
+    expect(far).toHaveLength(5);
+    for (let index = 0; index < near.length; index += 1) {
+      const nearRadius = lowerBoleRadius(near[index]!.bark);
+      const farRadius = lowerBoleRadius(far[index]!.bark);
+      expect(farRadius).toBeGreaterThan(nearRadius * 1.02);
+      expect(farRadius).toBeLessThan(nearRadius * 1.2);
+
+      const values = barkValues(far[index]!.bark);
+      expect(values.average).toBeGreaterThan(0.56);
+      expect(values.max - values.min).toBeGreaterThan(0.2);
+    }
+  });
+
   it('is deciduous, fresh green in summer, and strongly golden in autumn', () => {
     const cell = { temperature: 0.46, moisture: 0.62 };
     expect(resolveTreePhenology(11, cell, { temperature: 0.2 }, 'birch').canopy).toBe(0);
@@ -50,8 +98,8 @@ describe('Birch tree family', () => {
     const autumnPhase = resolveTreePhenology(9, cell, { temperature: 0.48 }, 'birch', 0.5);
     const summer = treeFoliageColour('birch', summerPhase, 0.5, new THREE.Color(), cell.moisture);
     const autumn = treeFoliageColour('birch', autumnPhase, 0.5, new THREE.Color(), cell.moisture);
-    expect(summer.g).toBeGreaterThan(summer.r);
-    expect(autumn.r + autumn.g).toBeGreaterThan(autumn.b * 2.6);
-    expect(autumn.r).toBeGreaterThan(autumn.b * 1.5);
+    expect(summer.g).toBeGreaterThan(summer.r * 1.08);
+    expect(autumn.r + autumn.g).toBeGreaterThan(autumn.b * 2.8);
+    expect(autumn.r).toBeGreaterThan(autumn.b * 1.65);
   });
 });
