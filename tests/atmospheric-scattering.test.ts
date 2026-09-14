@@ -15,13 +15,15 @@ const frame = (sunElevation: number, night: number, fogDensity = 0.0072, sourceE
   });
 
 describe('directional atmospheric scattering', () => {
-  it('gives low sun materially stronger forward scattering than midday', () => {
+  it('gives low sun materially stronger forward scattering and warm horizon than midday', () => {
     const golden = resolveAtmosphericScattering(frame(0.08, 0.12));
     const midday = resolveAtmosphericScattering(frame(0.82, 0));
 
     expect(golden.mieStrength).toBeGreaterThan(midday.mieStrength);
     expect(golden.sunHaloStrength).toBeGreaterThan(midday.sunHaloStrength);
     expect(golden.horizonStrength).toBeGreaterThan(midday.horizonStrength);
+    expect(golden.warmHorizonStrength).toBeGreaterThan(midday.warmHorizonStrength);
+    expect(golden.aerialForwardScatter).toBeGreaterThan(midday.aerialForwardScatter);
   });
 
   it('keeps a visible but restrained solar disc in clear daylight', () => {
@@ -29,26 +31,42 @@ describe('directional atmospheric scattering', () => {
 
     expect(clear.sunDiskStrength).toBeGreaterThan(0.8);
     expect(clear.sunDiskStrength).toBeLessThanOrEqual(1);
-    expect(clear.mieG).toBeGreaterThanOrEqual(0.7);
-    expect(clear.mieG).toBeLessThanOrEqual(0.84);
+    expect(clear.mieG).toBeGreaterThanOrEqual(0.71);
+    expect(clear.mieG).toBeLessThanOrEqual(0.815);
   });
 
-  it('suppresses the solar disc and forward scattering under dense weather', () => {
+  it('adds meaningful aerial perspective beyond the immediate settlement without washing the foreground', () => {
+    const clear = resolveAtmosphericScattering(frame(0.55, 0));
+
+    expect(clear.aerialDensity).toBeGreaterThan(0.004);
+    expect(clear.aerialDensity).toBeLessThan(0.008);
+    expect(clear.aerialStrength).toBeGreaterThan(0.45);
+    expect(clear.aerialStrength).toBeLessThanOrEqual(0.62);
+    expect(clear.aerialStartDistance).toBeGreaterThanOrEqual(12);
+    expect(clear.aerialStartDistance).toBeLessThan(20);
+  });
+
+  it('suppresses direct solar structure while deepening aerial atmosphere under dense weather', () => {
     const clear = resolveAtmosphericScattering(frame(0.45, 0, 0.0072));
     const storm = resolveAtmosphericScattering(frame(0.45, 0, 0.05));
 
     expect(storm.obscuration).toBeGreaterThan(0.9);
     expect(storm.sunDiskStrength).toBeLessThan(clear.sunDiskStrength);
     expect(storm.mieStrength).toBeLessThan(clear.mieStrength);
+    expect(storm.aerialDensity).toBeGreaterThan(clear.aerialDensity);
+    expect(storm.aerialForwardScatter).toBeLessThan(clear.aerialForwardScatter);
   });
 
-  it('removes direct solar presentation at night while preserving a bounded atmosphere', () => {
+  it('removes direct solar presentation at night while preserving bounded cool aerial depth', () => {
     const night = resolveAtmosphericScattering(frame(-0.65, 1));
 
     expect(night.sunDiskStrength).toBe(0);
     expect(night.nightBlend).toBeGreaterThan(0.95);
-    expect(night.rayleighStrength).toBeGreaterThanOrEqual(0.18);
-    expect(night.rayleighStrength).toBeLessThanOrEqual(0.72);
+    expect(night.rayleighStrength).toBeGreaterThanOrEqual(0.045);
+    expect(night.rayleighStrength).toBeLessThan(0.12);
+    expect(night.aerialStrength).toBeGreaterThanOrEqual(0.16);
+    expect(night.aerialStrength).toBeLessThan(0.3);
+    expect(night.aerialStartDistance).toBeGreaterThan(17);
   });
 
   it('normalizes the authoritative sun direction in the final environment frame', () => {
