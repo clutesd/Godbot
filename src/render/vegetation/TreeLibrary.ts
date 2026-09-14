@@ -62,15 +62,19 @@ class MeshAccumulator {
   }
 
   /**
-   * An irregular foliage clump. Crowns are assembled from many of these rather than one sphere,
-   * which is what breaks the sphere-on-a-stick silhouette. Jitter is keyed by vertex position so
-   * shared corners move together and the shell stays closed.
+   * An irregular foliage clump. Crown massing supplies the scale hierarchy; this method adds local
+   * anisotropy so even neighboring clusters do not read as copies of the same green polyhedron.
    */
   clump(centre: THREE.Vector3, radius: number, squash: number, random: SeededRandom, colour: THREE.Color): void {
     const source = new THREE.IcosahedronGeometry(radius, 0);
     const position = source.getAttribute('position');
     const jitterByCorner = new Map<string, number>();
     const normal = new THREE.Vector3();
+    const stretchX = random.range(0.84, 1.18);
+    const stretchZ = random.range(0.84, 1.18);
+    const rotation = random.range(0, Math.PI * 2);
+    const cosRotation = Math.cos(rotation);
+    const sinRotation = Math.sin(rotation);
     const base = this.positions.length / 3;
     for (let index = 0; index < position.count; index += 1) {
       const px = position.getX(index);
@@ -79,12 +83,14 @@ class MeshAccumulator {
       const key = `${px.toFixed(4)},${py.toFixed(4)},${pz.toFixed(4)}`;
       let jitter = jitterByCorner.get(key);
       if (jitter === undefined) {
-        jitter = 1 + random.range(-0.3, 0.3);
+        jitter = 1 + random.range(-0.26, 0.26);
         jitterByCorner.set(key, jitter);
       }
-      const x = px * jitter;
+      const localX = px * jitter * stretchX;
+      const localZ = pz * jitter * stretchZ;
+      const x = localX * cosRotation - localZ * sinRotation;
+      const z = localX * sinRotation + localZ * cosRotation;
       const y = py * jitter * squash;
-      const z = pz * jitter;
       normal.set(x, y, z).normalize();
       this.push(centre.x + x, centre.y + y, centre.z + z, normal, colour);
     }
@@ -190,6 +196,194 @@ const SPECIES: Record<TreeFamily, Species> = {
   },
 };
 
+type CanopyTier = 'core' | 'middle' | 'edge';
+type ScaleRange = readonly [number, number];
+
+interface CanopyGrammar {
+  coreShare: number;
+  edgeShare: number;
+  coreScale: ScaleRange;
+  middleScale: ScaleRange;
+  edgeScale: ScaleRange;
+  coreAnchor: number;
+  middleAnchor: number;
+  edgeAnchor: number;
+  coreDrift: number;
+  middleDrift: number;
+  edgeDrift: number;
+  verticalScatter: number;
+  edgeDrop: number;
+  /** Angular width of a persistent opening through the crown. */
+  gapWidth: number;
+  gapCount: number;
+}
+
+/**
+ * Species-specific crown grammar. Scale is relative to each family's existing foliage reference
+ * radius: the old single-size boulders become a few structural masses, many medium clusters and
+ * small perimeter clusters. Gaps are stable per generated variant, so the crown has readable voids.
+ */
+const CANOPY: Record<'cherry' | 'broadleaf' | 'dry' | 'riverbank' | 'ancient', CanopyGrammar> = {
+  cherry: {
+    coreShare: 0.22, edgeShare: 0.4, coreScale: [0.68, 0.88], middleScale: [0.46, 0.66], edgeScale: [0.28, 0.46],
+    coreAnchor: 0.72, middleAnchor: 0.94, edgeAnchor: 1.06, coreDrift: 0.22, middleDrift: 0.42, edgeDrift: 0.62,
+    verticalScatter: 0.42, edgeDrop: 0.02, gapWidth: 0.42, gapCount: 1,
+  },
+  broadleaf: {
+    coreShare: 0.28, edgeShare: 0.34, coreScale: [0.72, 0.94], middleScale: [0.5, 0.7], edgeScale: [0.3, 0.48],
+    coreAnchor: 0.68, middleAnchor: 0.92, edgeAnchor: 1.03, coreDrift: 0.18, middleDrift: 0.34, edgeDrift: 0.5,
+    verticalScatter: 0.4, edgeDrop: 0.01, gapWidth: 0.3, gapCount: 1,
+  },
+  dry: {
+    coreShare: 0.16, edgeShare: 0.48, coreScale: [0.64, 0.84], middleScale: [0.44, 0.62], edgeScale: [0.26, 0.42],
+    coreAnchor: 0.74, middleAnchor: 0.98, edgeAnchor: 1.08, coreDrift: 0.24, middleDrift: 0.5, edgeDrift: 0.76,
+    verticalScatter: 0.24, edgeDrop: 0, gapWidth: 0.5, gapCount: 2,
+  },
+  riverbank: {
+    coreShare: 0.18, edgeShare: 0.44, coreScale: [0.64, 0.82], middleScale: [0.42, 0.58], edgeScale: [0.24, 0.4],
+    coreAnchor: 0.74, middleAnchor: 0.96, edgeAnchor: 1.05, coreDrift: 0.18, middleDrift: 0.34, edgeDrift: 0.48,
+    verticalScatter: 0.62, edgeDrop: 0.08, gapWidth: 0.36, gapCount: 1,
+  },
+  ancient: {
+    coreShare: 0.2, edgeShare: 0.44, coreScale: [0.7, 0.9], middleScale: [0.46, 0.66], edgeScale: [0.27, 0.46],
+    coreAnchor: 0.68, middleAnchor: 0.94, edgeAnchor: 1.08, coreDrift: 0.2, middleDrift: 0.42, edgeDrift: 0.68,
+    verticalScatter: 0.5, edgeDrop: 0.03, gapWidth: 0.52, gapCount: 2,
+  },
+};
+
+interface CanopySite {
+  centre: THREE.Vector3;
+  size: number;
+  squash: number;
+  shade: number;
+  tier: CanopyTier;
+  seed: string;
+}
+
+function angularDistance(a: number, b: number): number {
+  const difference = Math.abs(a - b) % (Math.PI * 2);
+  return Math.min(difference, Math.PI * 2 - difference);
+}
+
+function canopyTierTargets(total: number, grammar: CanopyGrammar): Record<CanopyTier, number> {
+  if (total <= 0) return { core: 0, middle: 0, edge: 0 };
+  if (total === 1) return { core: 1, middle: 0, edge: 0 };
+  const core = Math.max(1, Math.floor(total * grammar.coreShare));
+  const edge = Math.max(1, Math.floor(total * grammar.edgeShare));
+  return { core, middle: Math.max(0, total - core - edge), edge };
+}
+
+function tierScale(grammar: CanopyGrammar, tier: CanopyTier): ScaleRange {
+  if (tier === 'core') return grammar.coreScale;
+  if (tier === 'middle') return grammar.middleScale;
+  return grammar.edgeScale;
+}
+
+function tierAnchor(grammar: CanopyGrammar, tier: CanopyTier): number {
+  if (tier === 'core') return grammar.coreAnchor;
+  if (tier === 'middle') return grammar.middleAnchor;
+  return grammar.edgeAnchor;
+}
+
+function tierDrift(grammar: CanopyGrammar, tier: CanopyTier): number {
+  if (tier === 'core') return grammar.coreDrift;
+  if (tier === 'middle') return grammar.middleDrift;
+  return grammar.edgeDrift;
+}
+
+function createCanopySites(tips: readonly BranchState[], species: Species, grammar: CanopyGrammar,
+  height: number, total: number, random: SeededRandom): CanopySite[] {
+  if (tips.length === 0 || total <= 0) return [];
+  const referenceRadius = species.clumpRadius * height;
+  const targets = canopyTierTargets(total, grammar);
+  const gapRandom = random.fork('canopy-gaps');
+  const gapAngles = Array.from({ length: grammar.gapCount }, (_, index) =>
+    (gapRandom.range(0, Math.PI * 2) + index * Math.PI * 2 / Math.max(1, grammar.gapCount)) % (Math.PI * 2));
+  const sites: CanopySite[] = [];
+
+  const buildTier = (tier: CanopyTier, target: number): void => {
+    let accepted = 0;
+    const maxAttempts = Math.max(target * 6, 8);
+    for (let attempt = 0; attempt < maxAttempts && accepted < target; attempt += 1) {
+      const siteRandom = random.fork(`canopy:${tier}:${attempt}`);
+      const tip = tips[siteRandom.int(0, tips.length)];
+      if (!tip) continue;
+      const anchor = tierAnchor(grammar, tier);
+      const centre = tip.origin.clone();
+      centre.x *= anchor;
+      centre.z *= anchor;
+      centre.addScaledVector(tip.direction, referenceRadius * siteRandom.range(0.04, tier === 'edge' ? 0.28 : 0.2));
+      const drift = referenceRadius * species.crownSpread * tierDrift(grammar, tier);
+      centre.x += siteRandom.range(-drift, drift);
+      centre.z += siteRandom.range(-drift, drift);
+      centre.y += siteRandom.range(-referenceRadius * grammar.verticalScatter, referenceRadius * grammar.verticalScatter)
+        + species.crownLift * height;
+      if (tier === 'edge') centre.y -= grammar.edgeDrop * height * siteRandom.range(0.7, 1.15);
+
+      if (tier !== 'core' && Math.hypot(centre.x, centre.z) > referenceRadius * 0.35) {
+        const angle = Math.atan2(centre.z, centre.x);
+        const gapScale = tier === 'edge' ? 1 : 0.68;
+        const inGap = gapAngles.some(gap => angularDistance(angle, gap) < grammar.gapWidth * gapScale);
+        if (inGap) continue;
+      }
+
+      const scale = tierScale(grammar, tier);
+      const size = referenceRadius * siteRandom.range(scale[0], scale[1]);
+      const tierSquash = tier === 'core' ? 1 : tier === 'middle' ? 0.9 : 0.76;
+      const shade = tier === 'core'
+        ? siteRandom.range(0.68, 0.82)
+        : tier === 'middle' ? siteRandom.range(0.78, 0.94) : siteRandom.range(0.9, 1.04);
+      sites.push({
+        centre,
+        size,
+        squash: species.clumpSquash * tierSquash * siteRandom.range(0.9, 1.1),
+        shade,
+        tier,
+        seed: `canopy:${tier}:${attempt}`,
+      });
+      accepted += 1;
+    }
+  };
+
+  buildTier('core', targets.core);
+  buildTier('middle', targets.middle);
+  buildTier('edge', targets.edge);
+  return sites;
+}
+
+function evenlySelect(indices: readonly number[], count: number, selected: Set<number>): void {
+  if (count <= 0 || indices.length === 0) return;
+  const picks = Math.min(count, indices.length);
+  for (let index = 0; index < picks; index += 1) {
+    const position = Math.min(indices.length - 1, Math.floor((index + 0.5) * indices.length / picks));
+    selected.add(indices[position]!);
+  }
+}
+
+/** Preserve a little crown core and plenty of silhouette at far LOD instead of arbitrary clumps. */
+function selectCanopySites(sites: readonly CanopySite[], visibleCount: number): Set<number> {
+  if (visibleCount >= sites.length) return new Set(sites.map((_, index) => index));
+  const selected = new Set<number>();
+  const core: number[] = [];
+  const middle: number[] = [];
+  const edge: number[] = [];
+  for (let index = 0; index < sites.length; index += 1) {
+    const tier = sites[index]!.tier;
+    if (tier === 'core') core.push(index);
+    else if (tier === 'middle') middle.push(index);
+    else edge.push(index);
+  }
+  const coreQuota = Math.min(core.length, Math.max(1, Math.round(visibleCount * 0.2)));
+  const edgeQuota = Math.min(edge.length, Math.max(1, Math.round(visibleCount * 0.4)));
+  evenlySelect(core, coreQuota, selected);
+  evenlySelect(edge, edgeQuota, selected);
+  evenlySelect(middle, visibleCount - selected.size, selected);
+  if (selected.size < visibleCount) {
+    for (let index = 0; index < sites.length && selected.size < visibleCount; index += 1) selected.add(index);
+  }
+  return selected;
+}
+
 function constrainBranchLength(origin: THREE.Vector3, direction: THREE.Vector3, desired: number,
   maxReach: number, maxHeight: number): number {
   let length = desired;
@@ -240,6 +434,7 @@ function childDirection(branch: BranchState, species: Species, index: number, fo
 function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeVariant {
   if (family === 'conifer' || family === 'alpine') return growEvergreen(family, random, lod);
   const species = SPECIES[family];
+  const grammar = CANOPY[family];
   const bark = new MeshAccumulator();
   const foliage = new MeshAccumulator();
   const barkColour = new THREE.Color(species.bark);
@@ -322,28 +517,22 @@ function growTree(family: TreeFamily, random: SeededRandom, lod: TreeLod): TreeV
     }
   }
 
-  const clumpRadius = species.clumpRadius * height;
-  const clumpCount = Math.min(TREE_LOD_NEAR.maxClumps, tips.length * species.clumpsPerTip);
-  const visibleClumps = Math.min(clumpCount, lod.maxClumps);
-  const selected = new Set(Array.from({ length: visibleClumps }, (_, index) =>
-    Math.floor(index * clumpCount / Math.max(1, visibleClumps))));
+  const requestedClumps = Math.min(TREE_LOD_NEAR.maxClumps, tips.length * species.clumpsPerTip);
+  const sites = createCanopySites(tips, species, grammar, height, requestedClumps, random);
+  const visibleClumps = Math.min(sites.length, lod.maxClumps);
+  const selected = selectCanopySites(sites, visibleClumps);
   let radius = Math.max(0.1, architectureRadius);
   let crown = Math.max(height, architectureTop);
-  for (let index = 0; index < clumpCount; index += 1) {
-    const tip = tips[Math.floor(index * tips.length / Math.max(1, clumpCount))];
-    if (!tip) continue;
-    const centre = new THREE.Vector3().copy(tip.origin).addScaledVector(tip.direction, clumpRadius * random.range(0.12, 0.72));
-    const drift = clumpRadius * species.crownSpread;
-    centre.x += random.range(-drift, drift);
-    centre.z += random.range(-drift, drift);
-    centre.y += random.range(-clumpRadius * 0.45, clumpRadius * 0.62) + species.crownLift * height;
-    const size = clumpRadius * random.range(0.72, 1.22);
+  for (let index = 0; index < sites.length; index += 1) {
+    const site = sites[index]!;
     if (selected.has(index)) {
-      foliageColour.setScalar(random.fork(`shade:${index}`).range(0.78, 1));
-      foliage.clump(centre, size * lod.clusterScale, species.clumpSquash, random.fork(`clump:${index}`), foliageColour);
+      foliageColour.setScalar(site.shade);
+      foliage.clump(site.centre, site.size * lod.clusterScale, site.squash,
+        random.fork(site.seed), foliageColour);
     }
-    radius = Math.max(radius, Math.hypot(centre.x, centre.z) + size * 1.3);
-    crown = Math.max(crown, centre.y + size * species.clumpSquash * 1.3);
+    // Account for local anisotropy conservatively; metadata must remain LOD-identical.
+    radius = Math.max(radius, Math.hypot(site.centre.x, site.centre.z) + site.size * 1.48);
+    crown = Math.max(crown, site.centre.y + site.size * site.squash * 1.48);
   }
 
   return { family, bark: bark.build(), foliage: foliage.build(), height: crown, radius };
