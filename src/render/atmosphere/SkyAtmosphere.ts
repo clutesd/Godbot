@@ -3,39 +3,39 @@ import { SeededRandom } from '../../sim/prng';
 import { clamp01, fbm, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
 import { elevationToY, type TerrainSurface } from '../terrain/TerrainSurface';
+import { createAtmosphericSkyMaterial, setAtmosphericSkyPalette, type AtmosphericSkyMaterial } from './AtmosphericScattering';
 import { softPointTexture } from './sprites';
 
 /**
  * Sky, cloud and valley mist. Wide shots need something behind the mountains and something
  * between them; without the layers a stylised world reads flat no matter how good the terrain is.
+ *
+ * The sky dome now uses a lightweight directional-scattering shader. Legacy day/night code still
+ * supplies the broad zenith/horizon palette, while the authoritative environment frame adds sun
+ * direction, Rayleigh/Mie response and horizon extinction later in the render pipeline.
  */
 export class SkyAtmosphere {
   readonly group = new THREE.Group();
   private readonly sky: THREE.Mesh;
-  private readonly skyColors: THREE.BufferAttribute;
-  private readonly skyHeights: Float32Array;
+  private readonly skyMaterial: AtmosphericSkyMaterial;
   private readonly clouds: THREE.Points | undefined;
   private readonly mist: THREE.Mesh | undefined;
   private readonly zenith = new THREE.Color();
   private readonly horizon = new THREE.Color();
-  private readonly blend = new THREE.Color();
 
   constructor(world: WorldState, surface: TerrainSurface, seed: string) {
     this.group.name = 'atmosphere';
     // Larger than the ocean sheet, so the water never pokes out past the horizon.
     const radius = Math.max(world.size * world.cellSize * 6, 760);
-    const geometry = new THREE.SphereGeometry(radius, 32, 20);
-    const position = geometry.getAttribute('position');
-    const colors = new Float32Array(position.count * 3);
-    this.skyHeights = new Float32Array(position.count);
-    for (let index = 0; index < position.count; index += 1) {
-      this.skyHeights[index] = clamp01((position.getY(index) / radius) * 0.5 + 0.5);
-    }
-    this.skyColors = new THREE.BufferAttribute(colors, 3);
-    geometry.setAttribute('color', this.skyColors);
-    this.sky = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+    const geometry = new THREE.SphereGeometry(radius, 40, 24);
+    this.skyMaterial = createAtmosphericSkyMaterial(
+      new THREE.Color('#7fa5c4'),
+      new THREE.Color('#c9d4d2'),
+    );
+    this.sky = new THREE.Mesh(geometry, this.skyMaterial);
     this.sky.name = 'sky';
     this.sky.renderOrder = -1;
+    this.sky.frustumCulled = false;
     this.group.add(this.sky);
     this.setPalette(new THREE.Color('#7fa5c4'), new THREE.Color('#c9d4d2'));
 
@@ -46,19 +46,11 @@ export class SkyAtmosphere {
     if (this.mist) this.group.add(this.mist);
   }
 
-  /** Recoloured every frame by the day/night cycle, so the horizon warms and cools with the sun. */
+  /** Broad art-direction palette; directional scattering is applied from EnvironmentFrameState. */
   setPalette(zenith: THREE.Color, horizon: THREE.Color): void {
     this.zenith.copy(zenith);
     this.horizon.copy(horizon);
-    const colors = this.skyColors.array as Float32Array;
-    for (let index = 0; index < this.skyHeights.length; index += 1) {
-      const height = this.skyHeights[index] ?? 0;
-      this.blend.copy(this.horizon).lerp(this.zenith, smoothstep(0.46, 0.94, height));
-      colors[index * 3] = this.blend.r;
-      colors[index * 3 + 1] = this.blend.g;
-      colors[index * 3 + 2] = this.blend.b;
-    }
-    this.skyColors.needsUpdate = true;
+    setAtmosphericSkyPalette(this.skyMaterial, this.zenith, this.horizon);
   }
 
   setMistStrength(strength: number): void {
@@ -79,7 +71,9 @@ export class SkyAtmosphere {
   }
 
   followCamera(camera: THREE.Camera): void {
-    this.sky.position.set(camera.position.x, 0, camera.position.z);
+    // Keep the horizon effectively infinite while preserving world-up for scattering.
+    this.sky.position.copy(camera.position);
+    this.clouds?.position.set(camera.position.x, 0, camera.position.z);
   }
 }
 
@@ -106,6 +100,7 @@ function buildClouds(world: WorldState, random: SeededRandom): THREE.Points | un
       opacity: 0.3,
       depthWrite: false,
       sizeAttenuation: true,
+      toneMapped: true,
     }),
   );
   clouds.name = 'cloud-layer';
