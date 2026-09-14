@@ -34,12 +34,12 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
 function profile(seed: string, variant: number): BirchProfile {
   const random = new SeededRandom(`${seed}:birch-presentation:${variant}`);
   return {
-    // Birch should stay elegant, but the previous 0.72 lower bound became sub-pixel too quickly.
-    trunkWidth: random.range(0.8, 0.92),
-    height: random.range(1.12, 1.21),
-    crownWidth: random.range(0.75, 0.88),
-    crownHeight: random.range(1.05, 1.14),
-    crownLift: random.range(0.05, 0.085),
+    // Preserve a graceful tree, but keep the bole above the sub-pixel danger zone at documentary range.
+    trunkWidth: random.range(0.84, 0.96),
+    height: random.range(1.15, 1.24),
+    crownWidth: random.range(0.7, 0.84),
+    crownHeight: random.range(1.06, 1.15),
+    crownLift: random.range(0.1, 0.15),
     phase: random.range(0, Math.PI * 2),
     bandPhase: random.range(0, Math.PI * 2),
   };
@@ -85,9 +85,9 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
   const barkPosition = bark.getAttribute('position');
   const barkColour = bark.getAttribute('color');
   const barkBounds = bounds(bark);
-  const ivory = new THREE.Color('#eee9dc');
-  const silver = new THREE.Color('#d4cfc3');
-  const twig = new THREE.Color('#7d766b');
+  const ivory = new THREE.Color('#f5f1e8');
+  const silver = new THREE.Color('#ded8cc');
+  const twig = new THREE.Color('#847b6e');
   const charcoal = new THREE.Color('#45413c');
   const working = new THREE.Color();
 
@@ -98,31 +98,34 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     const normalizedY = clamp01((y - barkBounds.minY) / Math.max(1e-4, barkBounds.maxY - barkBounds.minY));
     const radial = clamp01(Math.hypot(x, z) / barkBounds.radius);
 
-    // Preserve an unmistakable lower bole, then let the upper scaffold become progressively finer.
-    // Far LOD gets only a small lower-trunk compensation; crown dimensions and metadata stay exact.
-    const lowerBole = 1 - smoothstep(0.42, 0.82, normalizedY);
-    const branchRelease = 1 + smoothstep(0.34, 0.96, normalizedY) * 0.08;
-    const bolePresence = 1 + lowerBole * 0.055 + (farSkeleton ? lowerBole * 0.085 : 0);
+    // Hold a readable lower/central bole for longer, then release naturally into the fine scaffold.
+    // Far LOD receives stronger perceptual compensation only on the bole, never on crown metadata.
+    const lowerBole = 1 - smoothstep(0.46, 0.84, normalizedY);
+    const branchRelease = 1 + smoothstep(0.36, 0.96, normalizedY) * 0.07;
+    const bolePresence = 1 + lowerBole * 0.08 + (farSkeleton ? lowerBole * 0.14 : 0);
     x *= birch.trunkWidth * branchRelease * bolePresence;
     z *= birch.trunkWidth * branchRelease * bolePresence;
     y *= birch.height;
     barkPosition.setXYZ(index, x, y, z);
 
-    // The whole scaffold stays silver-grey enough to read in forest shade. Two bark frequencies do
-    // different jobs: fine lenticels reward close views while sparse broader scars survive distance.
-    const branchiness = smoothstep(0.2, 0.78, radial) * smoothstep(0.18, 0.92, normalizedY);
-    working.copy(ivory).lerp(silver, normalizedY * 0.12 + branchiness * 0.26).lerp(twig, branchiness * 0.42);
+    // Keep the dominant bole almost paper-white while the upper scaffold transitions through silver
+    // into warm grey. Fine and broad markings operate at different viewing distances.
+    const branchiness = smoothstep(0.2, 0.78, radial) * smoothstep(0.2, 0.94, normalizedY);
+    working.copy(ivory).lerp(silver, normalizedY * 0.1 + branchiness * 0.24).lerp(twig, branchiness * 0.38);
     const angle = Math.atan2(z, x);
     const fineWave = 0.5 + 0.5 * Math.sin(normalizedY * 70 + angle * 1.35 + birch.bandPhase);
-    const fineBand = Math.pow(fineWave, 12) * (1 - smoothstep(0.28, 0.58, radial)) * (0.06 + normalizedY * 0.08);
+    const fineBand = Math.pow(fineWave, 12) * (1 - smoothstep(0.28, 0.58, radial)) * (0.055 + normalizedY * 0.075);
     const broadWave = 0.5 + 0.5 * Math.sin(normalizedY * 18 + angle * 0.72 + birch.bandPhase * 0.67);
     const broadBand = Math.pow(broadWave, 18) * (1 - smoothstep(0.2, 0.5, radial))
-      * smoothstep(0.08, 0.82, normalizedY) * 0.16;
+      * smoothstep(0.08, 0.82, normalizedY) * 0.15;
     working.lerp(charcoal, clamp01(fineBand + broadBand));
 
-    // A restrained baked curvature cue keeps pale bark dimensional in flat or heavily overcast light.
+    // Pale bark loses form quickly in flat light, so retain a restrained curvature cue. The bole gets
+    // a small HDR-safe albedo lift rather than emissive/glowing material; real lighting still shades it.
     const roundness = 0.965 + (0.5 + 0.5 * Math.cos(angle + birch.phase)) * 0.07;
-    working.multiplyScalar(roundness);
+    const boleSignal = (1 - smoothstep(0.5, 0.86, normalizedY)) * (1 - smoothstep(0.16, 0.46, radial));
+    const distanceLift = farSkeleton ? 0.1 : 0.045;
+    working.multiplyScalar(roundness * (1 + boleSignal * (0.1 + distanceLift)));
     barkColour.setXYZ(index, working.r, working.g, working.b);
   }
   barkPosition.needsUpdate = true;
@@ -140,17 +143,18 @@ export function createBirchVariant(source: BaseTreeVariant, seed: string, varian
     let z = foliagePosition.getZ(index);
     const normalizedY = clamp01((y - foliageBounds.minY) / span);
 
-    // A birch crown is light and vertically layered rather than a dense broadleaf ball. The lower
-    // foliage is eased outward and upward so flashes of white trunk remain visible through the crown.
-    const crownProfile = 0.72 + Math.sin(normalizedY * Math.PI) * 0.28;
-    const lowerOpening = 1 - smoothstep(0.08, 0.52, normalizedY);
-    const width = birch.crownWidth * crownProfile * (1 + lowerOpening * 0.11);
+    // Birch crowns should frame their pale stems, not bury them. Lower foliage is pushed outward and
+    // slightly upward, producing windows through which the bole remains visible in a mixed stand.
+    const crownProfile = 0.68 + Math.sin(normalizedY * Math.PI) * 0.32;
+    const lowerOpening = 1 - smoothstep(0.12, 0.58, normalizedY);
+    const width = birch.crownWidth * crownProfile * (1 + lowerOpening * 0.18);
     x *= width;
     z *= width;
-    y = foliageBounds.minY + (y - foliageBounds.minY) * birch.crownHeight + source.height * birch.crownLift;
+    y = foliageBounds.minY + (y - foliageBounds.minY) * birch.crownHeight
+      + source.height * (birch.crownLift + lowerOpening * 0.025);
 
-    // Small coherent bends keep silhouettes alive without making the tree look wind-blown at rest.
-    const sway = Math.sin(normalizedY * 5.2 + birch.phase) * source.height * 0.017 * smoothstep(0.22, 1, normalizedY);
+    // Small coherent bends keep silhouettes alive without making the tree look permanently wind-blown.
+    const sway = Math.sin(normalizedY * 5.2 + birch.phase) * source.height * 0.018 * smoothstep(0.22, 1, normalizedY);
     x += sway;
     z += Math.cos(normalizedY * 4.6 + birch.phase) * sway * 0.58;
     foliagePosition.setXYZ(index, x, y, z);
