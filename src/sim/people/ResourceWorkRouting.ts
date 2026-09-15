@@ -50,6 +50,11 @@ export function resourceWorkVisualKind(assignment: Pick<ResourceWorkAssignment, 
   return 'generic';
 }
 
+/**
+ * The `resource-work:` prefix remains the Step-1B routing contract. The following visual-kind and
+ * resource segments are presentation metadata only; the terminal segment is still the authoritative
+ * Step-1A site id and stale-route checks compare the complete id deterministically.
+ */
 export function resourceWorkDestinationId(assignment: ResourceWorkAssignment): string {
   return `${RESOURCE_DESTINATION_PREFIX}${resourceWorkVisualKind(assignment)}:${assignment.resourceId}:${assignment.siteId}`;
 }
@@ -58,7 +63,7 @@ export function isResourceWorkDestinationId(destinationId: string | undefined): 
   return Boolean(destinationId?.startsWith(RESOURCE_DESTINATION_PREFIX));
 }
 
-/** Presentation can select a work loop without re-reading simulation state or parsing prose. */
+/** Presentation can select a work loop without re-reading or mutating simulation resource state. */
 export function resourceWorkVisualKindFromDestinationId(destinationId: string | undefined): ResourceWorkVisualKind | undefined {
   if (!isResourceWorkDestinationId(destinationId)) return undefined;
   const kind = destinationId!.slice(RESOURCE_DESTINATION_PREFIX.length).split(':', 1)[0];
@@ -206,19 +211,28 @@ function representativeTarget(assignment: ResourceWorkAssignment): number {
   return Math.min(MAX_WORKERS_PER_SITE, Math.max(1, Math.ceil(Math.sqrt(assignment.labourUsed))));
 }
 
-/** Prefer visually legible workers inside the same economically valid occupation pool. */
+/**
+ * Prefer legible roles inside the same economically valid occupation pool, while also favouring the
+ * same low stable hash the renderer uses for ordinary population sampling. This does not guarantee a
+ * render slot (historical/notable lives still win), but it makes documentary workers far less likely
+ * to be selected by the simulation and then disappear from the visible population cap.
+ */
 function workerRank(seed: string, month: number, assignment: ResourceWorkAssignment, person: Person): number {
-  const base = stableUnit(`${seed}:${month}:${assignment.siteId}:${person.id}:resource-worker`);
+  const documentaryDraw = stableUnit(`${seed}:${month}:${assignment.siteId}:${person.id}:resource-worker`);
+  const visibleDraw = stableUnit(`${seed}:${person.id}:visible`);
   const role = person.role ?? '';
   const kind = resourceWorkVisualKind(assignment);
-  const visualBias = kind === 'timber'
-    ? ['builder', 'laborer'].includes(role) ? -0.24 : role === 'gatherer' ? -0.1 : 0
+  const roleBias = kind === 'timber'
+    ? ['builder', 'laborer'].includes(role) ? -0.22 : role === 'gatherer' ? -0.08 : 0
     : kind === 'mineral'
-      ? ['miner', 'craft-worker', 'builder', 'laborer'].includes(role) ? -0.24 : 0
+      ? ['miner', 'craft-worker', 'builder', 'laborer'].includes(role) ? -0.22 : 0
       : kind === 'plant'
-        ? ['gatherer', 'healer'].includes(role) ? -0.24 : role === 'hunter' ? -0.08 : 0
+        ? ['gatherer', 'healer'].includes(role) ? -0.22 : role === 'hunter' ? -0.06 : 0
         : 0;
-  return base + visualBias;
+  const occupationBias = kind === 'timber' && person.occupation === 'builder' ? -0.12
+    : kind === 'mineral' && (person.occupation === 'builder' || person.occupation === 'artisan') ? -0.12
+      : 0;
+  return documentaryDraw * 0.38 + visibleDraw * 0.62 + roleBias + occupationBias;
 }
 
 function stableUnit(value: string): number {
