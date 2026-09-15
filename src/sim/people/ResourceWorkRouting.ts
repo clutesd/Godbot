@@ -3,6 +3,7 @@ import {
   resourceWorkAssignments,
   type ResourceWorkAssignment,
 } from '../resources/ResourceWorkAssignments';
+import { RESOURCE_BY_ID } from '../resources/catalog';
 import { WalkabilityLayer } from './WalkabilityLayer';
 
 const MAX_WORKERS_PER_SITE = 4;
@@ -10,6 +11,8 @@ const MAX_WORKERS_PER_SETTLEMENT = 12;
 const RESOURCE_DESTINATION_PREFIX = 'resource-work:';
 const RESOURCE_ROUTE_TOLERANCE = 0.12;
 const COMMITTED_ROLES = new Set(['soldier', 'guard']);
+
+export type ResourceWorkVisualKind = 'timber' | 'mineral' | 'plant' | 'generic';
 
 interface RoutingSnapshot {
   month: number;
@@ -37,12 +40,29 @@ export function resourceWorkAssignmentForPerson(
   return routingSnapshot(state, seed).byPerson.get(person.id);
 }
 
+export function resourceWorkVisualKind(assignment: Pick<ResourceWorkAssignment, 'resourceId'>): ResourceWorkVisualKind {
+  const definition = RESOURCE_BY_ID.get(assignment.resourceId);
+  if (definition?.category === 'timber' || assignment.resourceId === 'timber') return 'timber';
+  if (definition?.category === 'plant' || assignment.resourceId === 'medicinal-flora' || assignment.resourceId === 'plant-fiber') return 'plant';
+  if (definition?.category === 'mineral'
+    || assignment.resourceId.includes('ore')
+    || ['stone', 'clay', 'coal'].includes(assignment.resourceId)) return 'mineral';
+  return 'generic';
+}
+
 export function resourceWorkDestinationId(assignment: ResourceWorkAssignment): string {
-  return `${RESOURCE_DESTINATION_PREFIX}${assignment.siteId}`;
+  return `${RESOURCE_DESTINATION_PREFIX}${resourceWorkVisualKind(assignment)}:${assignment.resourceId}:${assignment.siteId}`;
 }
 
 export function isResourceWorkDestinationId(destinationId: string | undefined): boolean {
   return Boolean(destinationId?.startsWith(RESOURCE_DESTINATION_PREFIX));
+}
+
+/** Presentation can select a work loop without re-reading simulation state or parsing prose. */
+export function resourceWorkVisualKindFromDestinationId(destinationId: string | undefined): ResourceWorkVisualKind | undefined {
+  if (!isResourceWorkDestinationId(destinationId)) return undefined;
+  const kind = destinationId!.slice(RESOURCE_DESTINATION_PREFIX.length).split(':', 1)[0];
+  return kind === 'timber' || kind === 'mineral' || kind === 'plant' || kind === 'generic' ? kind : undefined;
 }
 
 /**
@@ -50,10 +70,7 @@ export function isResourceWorkDestinationId(destinationId: string | undefined): 
  * workers at the site. The destination id and point remain the actual resource site.
  */
 export function resourceWorkDestinationKind(assignment: ResourceWorkAssignment): DestinationKind {
-  const resource = assignment.resourceId;
-  return resource.includes('ore') || resource === 'stone' || resource === 'clay' || resource === 'coal'
-    ? 'industrial-site'
-    : 'field';
+  return resourceWorkVisualKind(assignment) === 'mineral' ? 'industrial-site' : 'field';
 }
 
 /**
@@ -119,7 +136,7 @@ function allocateRepresentatives(
         cursor: 0,
         people: residents
           .filter((person) => eligibleRepresentative(person, assignment))
-          .sort((a, b) => workerRank(seed, state.month, assignment.siteId, a.id) - workerRank(seed, state.month, assignment.siteId, b.id)
+          .sort((a, b) => workerRank(seed, state.month, assignment, a) - workerRank(seed, state.month, assignment, b)
             || a.id.localeCompare(b.id)),
       });
     }
@@ -189,8 +206,19 @@ function representativeTarget(assignment: ResourceWorkAssignment): number {
   return Math.min(MAX_WORKERS_PER_SITE, Math.max(1, Math.ceil(Math.sqrt(assignment.labourUsed))));
 }
 
-function workerRank(seed: string, month: number, siteId: string, personId: string): number {
-  return stableUnit(`${seed}:${month}:${siteId}:${personId}:resource-worker`);
+/** Prefer visually legible workers inside the same economically valid occupation pool. */
+function workerRank(seed: string, month: number, assignment: ResourceWorkAssignment, person: Person): number {
+  const base = stableUnit(`${seed}:${month}:${assignment.siteId}:${person.id}:resource-worker`);
+  const role = person.role ?? '';
+  const kind = resourceWorkVisualKind(assignment);
+  const visualBias = kind === 'timber'
+    ? ['builder', 'laborer'].includes(role) ? -0.24 : role === 'gatherer' ? -0.1 : 0
+    : kind === 'mineral'
+      ? ['miner', 'craft-worker', 'builder', 'laborer'].includes(role) ? -0.24 : 0
+      : kind === 'plant'
+        ? ['gatherer', 'healer'].includes(role) ? -0.24 : role === 'hunter' ? -0.08 : 0
+        : 0;
+  return base + visualBias;
 }
 
 function stableUnit(value: string): number {
