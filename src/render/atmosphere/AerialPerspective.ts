@@ -13,6 +13,13 @@ import {
 
 /** World-space height falloff used by the aerial-density integral. */
 export const AERIAL_HEIGHT_FALLOFF = 0.045;
+/**
+ * Local extinction coefficient for legitimate low mist. This is intentionally much stronger than
+ * the broad clear-air coefficient because the spatial field is shallow and highly selective.
+ */
+export const LOW_MIST_OPTICAL_DENSITY = 0.085;
+/** Maximum clear-weather contribution from the local mist layer. */
+export const LOW_MIST_MAX_OPACITY = 0.34;
 
 const EMPTY_LOW_MIST_TEXTURE = new THREE.DataTexture(
   new Uint8Array([0, 0, 0, 255]),
@@ -45,6 +52,21 @@ export function integratedHeightDensity(
   let total = 0;
   for (const t of samples) total += densityAt(THREE.MathUtils.lerp(cameraHeight, surfaceHeight, t));
   return total / samples.length;
+}
+
+/** CPU mirror of the final low-mist extinction equation for perceptual regression tests. */
+export function resolveLowMistOpacity(
+  distanceToSurface: number,
+  integratedMist: number,
+  strength: number,
+  obscuration = 0,
+): number {
+  const opticalDepth = Math.max(0, distanceToSurface)
+    * LOW_MIST_OPTICAL_DENSITY
+    * THREE.MathUtils.clamp(integratedMist, 0, 1.5)
+    * THREE.MathUtils.clamp(strength, 0, 1.05);
+  const ceiling = LOW_MIST_MAX_OPACITY + THREE.MathUtils.clamp(obscuration, 0, 1) * 0.04;
+  return THREE.MathUtils.clamp(1 - Math.exp(-opticalDepth), 0, ceiling);
 }
 
 /**
@@ -306,8 +328,11 @@ export const AERIAL_PERSPECTIVE_SHADER = {
       vec3 color = mix(source.rgb, airColor, amount);
 
       float lowMist = integratedLowMist(cameraWorld, worldPosition);
-      float mistOpticalDepth = distanceToSurface * 0.021 * lowMist * uLowMistStrength;
-      float mistAmount = clamp(1.0 - exp(-mistOpticalDepth), 0.0, 0.27 + uObscuration * 0.04);
+      // Local mist must remain visible after the shallow-ray and seasonal attenuation stages. The
+      // geography mask is already highly selective, so stronger extinction here does not restore a
+      // screen-wide grey veil.
+      float mistOpticalDepth = distanceToSurface * ${LOW_MIST_OPTICAL_DENSITY.toFixed(3)} * lowMist * uLowMistStrength;
+      float mistAmount = clamp(1.0 - exp(-mistOpticalDepth), 0.0, ${LOW_MIST_MAX_OPACITY.toFixed(2)} + uObscuration * 0.04);
       float mistSunScatter = pow(mu, 5.0) * uMistSunGlow;
       float mistMoonScatter = uMistMoonGlow * (0.45 + grazingView * 0.35);
       vec3 mistColor = mix(uFogColor, uSkyFill, 0.6);
