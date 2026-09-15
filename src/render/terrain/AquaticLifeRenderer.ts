@@ -393,7 +393,11 @@ export function planKoiSchools(
   const humanCandidates = candidates.filter(candidate => candidate.humanProximity > 0.08).sort((a, b) => b.score - a.score);
   selectCandidates(humanCandidates, selected, Math.min(maxSchools, humanLimit), field);
 
-  const remaining = candidates.filter(candidate => !selected.includes(candidate)).sort((a, b) => b.score - a.score);
+  // Once the human-adjacent quota is filled, do not immediately repopulate the same waterfront
+  // with more centres. Additional shoals must come from genuinely different water.
+  const remaining = candidates
+    .filter(candidate => candidate.humanProximity <= 0.08 && !selected.includes(candidate))
+    .sort((a, b) => b.score - a.score);
   if (selected.length < maxSchools) selectCandidates(remaining, selected, maxSchools, field);
 
   return selected.map((candidate, index) => {
