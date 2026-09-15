@@ -3,6 +3,8 @@ import type * as THREE from 'three';
 import { configWith } from '../src/config';
 import { ResourceSiteRenderer } from '../src/render/resources/ResourceSiteRenderer';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
+import { Simulation } from '../src/sim/Simulation';
+import { recordResourceWorkAssignment, resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
 import { WeatherSystem } from '../src/sim/weather/WeatherSystem';
 import { generateWorld } from '../src/sim/world';
 
@@ -71,5 +73,39 @@ describe('ResourceSiteRenderer invalidation', () => {
     deposit!.accessTrails![0]![1]!.x += 0.5;
     renderer.update();
     expect(trails.geometry.getAttribute('position')).not.toBe(initialPosition);
+  });
+
+  it('renders current authoritative work as recognizable site grammar and clears it next month', () => {
+    const sim = new Simulation({ seed: 'resource-active-work-visual', startingPopulation: 120, settlementCount: [2, 2] });
+    const settlement = sim.state.settlements[0];
+    expect(settlement).toBeDefined();
+    const cell = sim.state.world.cells[settlement!.cellIndex];
+    expect(cell).toBeDefined();
+
+    recordResourceWorkAssignment(sim.state, {
+      month: sim.state.month,
+      source: 'world-resource',
+      settlementId: settlement!.id,
+      siteId: `cell:${settlement!.cellIndex}:timber`,
+      cellIndex: settlement!.cellIndex,
+      resourceId: 'timber',
+      worldPosition: { x: cell!.worldX, z: cell!.worldZ },
+      gatherOccupations: ['forager', 'builder'],
+      amountExtracted: 9,
+      labourUsed: 3,
+    });
+
+    const renderer = new ResourceSiteRenderer(sim.state.world, new TerrainSurface(sim.state.world));
+    renderer.update();
+    const active = renderer.group.getObjectByName('Active resource work sites') as THREE.Group;
+    expect(active).toBeDefined();
+    expect(active.children).toHaveLength(1);
+    expect(active.children[0]?.name).toContain('timber');
+    expect(active.children[0]?.children.length).toBeGreaterThanOrEqual(4);
+
+    sim.state.month += 1;
+    expect(resourceWorkAssignments(sim.state)).toEqual([]);
+    renderer.update();
+    expect(active.children).toHaveLength(0);
   });
 });
