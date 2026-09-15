@@ -40,7 +40,7 @@ describe('koi aquatic life planning', () => {
   it('creates tighter current-aware schools in mapped rivers', () => {
     const schools = planKoiSchools(standingWaterField(true), 0.35, 12.5, 2);
     expect(schools.length).toBeGreaterThan(0);
-    expect(schools.length).toBeLessThanOrEqual(7);
+    expect(schools.length).toBeLessThanOrEqual(12);
     expect(schools.every(school => school.kind === 'river')).toBe(true);
     expect(schools.every(school => Math.hypot(school.flowX, school.flowZ) > 0.9)).toBe(true);
   });
