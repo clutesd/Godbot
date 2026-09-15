@@ -21,6 +21,8 @@ import {
   resourceWorkDestinationId,
   resourceWorkDestinationKind,
   resourceWorkPreferredWaypoints,
+  resourceWorkVisualKind,
+  resourceWorkVisualKindFromDestinationId,
 } from './ResourceWorkRouting';
 import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../terrain/SurfaceGeometry';
 
@@ -184,6 +186,11 @@ export class PeopleSystem {
     const expectedResourceDestinationId = resourceSchedule && isResourceWorkDestinationId(resourceSchedule.destinationId)
       ? resourceSchedule.destinationId
       : undefined;
+    if (person.appearance) {
+      person.appearance.carriedItem = resourceWork && expectedResourceDestinationId
+        ? resourceWorkTool(resourceWork)
+        : carriedItemForRole(person.role ?? 'gatherer');
+    }
     const navigation = person.navigation;
     if (navigation && isResourceWorkDestinationId(navigation.destinationId)
       && navigation.destinationId !== expectedResourceDestinationId) {
@@ -344,9 +351,6 @@ export class PeopleSystem {
     const workwear = ['farmer', 'fisher', 'laborer', 'builder', 'craft-worker', 'miner', 'dock-worker', 'transporter', 'logistics-worker'].includes(role);
     const garment: PersonAppearance['garment'] = ceremonial ? 'ceremonial' : uniform ? 'uniform' : technical ? 'technical' : wealth > 0.7 ? 'layered' : workwear ? 'workwear' : 'simple';
     const headwear: PersonAppearance['headwear'] = uniform ? 'helmet' : technical ? 'cap' : role === 'farmer' || role === 'fisher' ? 'brim' : ceremonial ? 'wrap' : variation > 0.72 ? 'wrap' : 'none';
-    const itemByRole: Partial<Record<PersonRole, PersonAppearance['carriedItem']>> = {
-      farmer: 'hoe', fisher: 'basket', gatherer: 'basket', hunter: 'bag', laborer: 'hammer', builder: 'hammer', 'craft-worker': 'toolkit', trader: 'bag', merchant: 'ledger', administrator: 'ledger', scholar: 'ledger', researcher: 'toolkit', engineer: 'toolkit', machinist: 'toolkit', transporter: 'bag', 'dock-worker': 'bag', 'factory-worker': 'toolkit', 'logistics-worker': 'bag', priest: 'staff', 'ritual-specialist': 'staff', guard: 'staff', soldier: 'staff',
-    };
     return {
       // Deterministic adult variation only: ~0.85-1.15 of the canonical world humanoid height.
       heightScale: 0.85 + variation * 0.3,
@@ -354,7 +358,7 @@ export class PeopleSystem {
       posture: person.ageMonths > 60 * 12 ? 0.1 + variation * 0.14 : (variation - 0.5) * 0.08,
       garment,
       headwear,
-      carriedItem: itemByRole[role] ?? 'none',
+      carriedItem: carriedItemForRole(role),
       textilePattern: statePatternFallback(person),
       materialQuality: clamp(wealth * 0.72 + variation * 0.2),
     };
@@ -392,12 +396,16 @@ export class PeopleSystem {
   private resourceWorkSchedule(assignment: ResourceWorkAssignment, phase: 'commute' | 'work'): ScheduledDestination {
     const kind = resourceWorkDestinationKind(assignment);
     const resource = assignment.resourceId.replaceAll('-', ' ');
+    const visualKind = resourceWorkVisualKind(assignment);
+    const verb = visualKind === 'timber' ? 'felling and trimming'
+      : visualKind === 'mineral' ? 'quarrying and sorting'
+        : visualKind === 'plant' ? 'gathering and bundling' : 'gathering';
     return {
       kind,
       phase,
-      activity: phase === 'work' ? 'gather' : 'travel',
+      activity: phase === 'work' ? resourceWorkActivity(assignment) : 'travel',
       reason: phase === 'work'
-        ? `gathering ${resource} at an active resource site`
+        ? `${verb} ${resource} at an active resource site`
         : `taking the surveyed route to an active ${resource} site`,
       destinationId: resourceWorkDestinationId(assignment),
       point: { x: assignment.worldPosition.x, z: assignment.worldPosition.z },
@@ -514,8 +522,9 @@ export class PeopleSystem {
       navigation.crossingMode = 'walk';
       return;
     }
-    if (isResourceWorkDestinationId(navigation.destinationId)) {
-      person.activity = 'gather';
+    const resourceKind = resourceWorkVisualKindFromDestinationId(navigation.destinationId);
+    if (resourceKind) {
+      person.activity = resourceActivityForVisualKind(resourceKind);
       return;
     }
     person.activity = activityAtDestination(person.role ?? 'gatherer', navigation.destinationKind);
@@ -621,6 +630,35 @@ function activityAtDestination(role: PersonRole, destination: DestinationKind): 
   if (destination === 'plaza') return 'socialize';
   if (destination === 'shrine') return 'worship';
   return activityForRole(role, destination);
+}
+
+function carriedItemForRole(role: PersonRole): PersonAppearance['carriedItem'] {
+  const itemByRole: Partial<Record<PersonRole, PersonAppearance['carriedItem']>> = {
+    farmer: 'hoe', fisher: 'basket', gatherer: 'basket', hunter: 'bag', laborer: 'hammer', builder: 'hammer',
+    'craft-worker': 'toolkit', trader: 'bag', merchant: 'ledger', administrator: 'ledger', scholar: 'ledger',
+    researcher: 'toolkit', engineer: 'toolkit', machinist: 'toolkit', transporter: 'bag', 'dock-worker': 'bag',
+    'factory-worker': 'toolkit', 'logistics-worker': 'bag', priest: 'staff', 'ritual-specialist': 'staff', guard: 'staff', soldier: 'staff',
+    miner: 'hammer',
+  };
+  return itemByRole[role] ?? 'none';
+}
+
+function resourceWorkTool(assignment: ResourceWorkAssignment): PersonAppearance['carriedItem'] {
+  const kind = resourceWorkVisualKind(assignment);
+  if (kind === 'timber') return 'hoe';
+  if (kind === 'mineral') return 'hammer';
+  if (kind === 'plant') return 'basket';
+  return 'bag';
+}
+
+function resourceWorkActivity(assignment: ResourceWorkAssignment): Activity {
+  return resourceActivityForVisualKind(resourceWorkVisualKind(assignment));
+}
+
+function resourceActivityForVisualKind(kind: ReturnType<typeof resourceWorkVisualKind>): Activity {
+  if (kind === 'timber') return 'construct';
+  if (kind === 'mineral') return 'craft';
+  return 'gather';
 }
 
 function isKnowledgeRole(role: PersonRole): boolean {
