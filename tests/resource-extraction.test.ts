@@ -6,7 +6,7 @@ import {
   settlementResourceCatchment,
 } from '../src/sim/resources/SettlementResourceExtraction';
 import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
-import { isResourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
+import { isResourceWorkDestinationId, resourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
 import type { DepositResourceKind } from '../src/sim/resources/WorldResources';
 
 const depositKinds: readonly DepositResourceKind[] = [
@@ -175,7 +175,7 @@ describe('settlement resource extraction', () => {
     const assignments = resourceWorkAssignments(sim.state);
     expect(assignments.length).toBeGreaterThan(0);
     expect(routed.length).toBeGreaterThan(0);
-    const assignmentByDestination = new Map(assignments.map((assignment) => [`resource-work:${assignment.siteId}`, assignment]));
+    const assignmentByDestination = new Map(assignments.map((assignment) => [resourceWorkDestinationId(assignment), assignment]));
     const perSite = new Map<string, number>();
     const perSettlement = new Map<string, number>();
 
@@ -185,7 +185,7 @@ describe('settlement resource extraction', () => {
       expect(assignment).toBeDefined();
       expect(worker.homeId).toBe(assignment!.settlementId);
       expect(assignment!.gatherOccupations).toContain(worker.occupation);
-      expect(['travel', 'gather']).toContain(worker.activity);
+      expect(['travel', 'gather', 'construct', 'craft']).toContain(worker.activity);
       expect(navigation.waypoints.length).toBeGreaterThan(0);
       const endpoint = navigation.waypoints[navigation.waypoints.length - 1]!;
       expect(Math.hypot(endpoint.x - assignment!.worldPosition.x, endpoint.z - assignment!.worldPosition.z))
