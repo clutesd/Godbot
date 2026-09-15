@@ -9,6 +9,7 @@ const MAX_WORKERS_PER_SITE = 4;
 const MAX_WORKERS_PER_SETTLEMENT = 12;
 const RESOURCE_DESTINATION_PREFIX = 'resource-work:';
 const RESOURCE_ROUTE_TOLERANCE = 0.12;
+const COMMITTED_ROLES = new Set(['soldier', 'guard']);
 
 interface RoutingSnapshot {
   month: number;
@@ -122,6 +123,8 @@ function allocateRepresentatives(
             && assignment.gatherOccupations.includes(person.occupation)
             && person.displacedSinceMonth === undefined
             && person.activity !== 'migrate'
+            && person.navigation?.schedulePhase !== 'emergency'
+            && !COMMITTED_ROLES.has(person.role ?? '')
             && person.health > 0.2)
           .sort((a, b) => workerRank(seed, state.month, assignment.siteId, a.id) - workerRank(seed, state.month, assignment.siteId, b.id)
             || a.id.localeCompare(b.id));
