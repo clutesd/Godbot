@@ -3,6 +3,8 @@ import { SeededRandom, stableHash } from '../../sim/prng';
 import { tornadoExposure } from '../../sim/weather/Tornado';
 import { cellAt } from '../../sim/world';
 import type { Settlement, TornadoState, WorldState } from '../../sim/types';
+import type { ResourceWorkAssignment } from '../../sim/resources/ResourceWorkAssignments';
+import type { ResourceWorkTreeTarget } from '../resources/ResourceWorkScene';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { AmbientBirds } from './AmbientBirds';
@@ -72,6 +74,10 @@ const ROOT_PLATE_CAPACITY = 512;
 export class VegetationRenderer {
   readonly group = new THREE.Group();
   private readonly placements: TreePlacement[];
+  private readonly workTreesByCell = new Map<number, number[]>();
+  private readonly workTreeBuckets: Array<Bucket | undefined> = [];
+  private readonly workTreeSlots: number[] = [];
+  private readonly impactedTrees: number[] = [];
   private readonly phenotypes: TreePhenotype[];
   private readonly nearBuckets = new Map<string, Bucket>();
   private readonly farBuckets = new Map<string, Bucket>();
@@ -143,6 +149,14 @@ export class VegetationRenderer {
 
     const plan = planForest(world, surface, seed, budget, VARIANTS_PER_FAMILY, anchors);
     this.placements = plan.trees;
+    this.placements.forEach((tree, index) => {
+      const cell = cellAt(world, tree.worldX, tree.worldZ);
+      if (!cell) return;
+      const key = cell.z * world.size + cell.x;
+      const bucket = this.workTreesByCell.get(key) ?? [];
+      bucket.push(index);
+      this.workTreesByCell.set(key, bucket);
+    });
     this.phenotypes = this.placements.map((placement) => resolveTreePhenotype(seed, placement));
     this.byFamily = plan.byFamily;
     this.lifecycle = this.placements.map((placement) => resolveTreeLifecycle(placement, this.ecologyYear));
@@ -280,6 +294,8 @@ export class VegetationRenderer {
         }
       }
     }
+    this.workTreeBuckets.fill(undefined);
+    this.impactedTrees.length = 0;
     for (const bucket of this.nearBuckets.values()) bucket.count = 0;
     for (const bucket of this.farBuckets.values()) bucket.count = 0;
     this.rootPlateCount = 0;
@@ -337,6 +353,8 @@ export class VegetationRenderer {
       if (placement.disturbedYear !== undefined) lifecycle = resolveTreeLifecycle(placement, (this.world.weather?.month ?? this.ecologyYear * 12) / 12);
       const phenotype = this.phenotypes[index] ?? resolveTreePhenotype(this.seed, placement);
       const morphology = resolveTreeMorphology(phenotype, lifecycle);
+      this.workTreeBuckets[index] = target;
+      this.workTreeSlots[index] = target.count;
       this.write(target, placement, lifecycle, phenotype, morphology);
       if (lifecycle.fallen && distance < NEAR_RANGE && this.shouldShowRootPlate(placement, phenotype)) {
         this.writeRootPlate(placement, lifecycle, phenotype);
@@ -368,6 +386,53 @@ export class VegetationRenderer {
     const winter = this.targetSeason < 1 || this.targetSeason >= 10;
     this.flowers.update(camera, winter ? this.targetSeason : this.season, [...this.disturbance, ...this.occupiedGround]);
     this.luminousFlora?.updateLod(camera, this.world.weather?.month ?? this.ecologyYear * 12 + this.targetSeason, [...this.disturbance, ...this.occupiedGround]);
+  }
+
+  /** Read existing tree placements only; harvesting animations can never remove a tree. */
+  resourceWorkTree(assignment: ResourceWorkAssignment): ResourceWorkTreeTarget | undefined {
+    const cell = cellAt(this.world, assignment.worldPosition.x, assignment.worldPosition.z);
+    if (!cell) return undefined;
+    const standing = clamp01(cell.wood / Math.max(0.01, cell.forestCapacity ?? cell.wood));
+    let best: TreePlacement | undefined;
+    let distance = 1.2;
+    let radius = 0;
+    let renderId = -1;
+    for (const index of this.workTreesByCell.get(cell.z * this.world.size + cell.x) ?? []) {
+      const tree = this.placements[index]!;
+      if (tree.id || tree.managedBy || this.isCleared(tree) || this.lifecycleDuringRecovery(tree) === null) continue;
+      const lifecycle = this.lifecycleDuringRecovery(tree) ?? resolveTreeLifecycle(tree, this.ecologyYear);
+      if (lifecycle.fallen || !lifecycle.foliageVisible) continue;
+      if ((cell.lastLoggingMonth !== undefined || cell.modifications)
+        && stableHash(`${this.seed}:logging-tree`, Math.round(tree.worldX * 100), Math.round(tree.worldZ * 100)) > standing) continue;
+      const candidateDistance = Math.hypot(tree.worldX - assignment.worldPosition.x, tree.worldZ - assignment.worldPosition.z);
+      if (candidateDistance >= distance) continue;
+      const morphology = resolveTreeMorphology(this.phenotypes[index]!, lifecycle);
+      const height = this.nearBuckets.get(bucketKey(tree.family, tree.variant))?.crownHeight ?? 1;
+      radius = height * 0.044 * (tree.family === 'ancient' ? 1.9 : 1) * lifecycle.scale
+        * (morphology.trunkRadiusX + morphology.trunkRadiusZ) * 0.5;
+      best = tree; distance = candidateDistance; renderId = index;
+    }
+    return best ? { x: best.worldX, z: best.worldZ, radius, renderId } : undefined;
+  }
+
+  /** Touch only the bounded set of trees struck last frame. No tree or site scans. */
+  beginResourceImpacts(): void {
+    for (const index of this.impactedTrees) {
+      const bucket = this.workTreeBuckets[index], slot = this.workTreeSlots[index];
+      if (!bucket || slot === undefined) continue;
+      bucket.barkState.setW(slot, 0); bucket.canopyState.setW(slot, 0);
+      bucket.barkState.needsUpdate = true; bucket.canopyState.needsUpdate = true;
+    }
+    this.impactedTrees.length = 0;
+  }
+
+  resourceImpact(renderId: number, strength: number): void {
+    const bucket = this.workTreeBuckets[renderId], slot = this.workTreeSlots[renderId];
+    if (!bucket || slot === undefined || strength <= 0 || this.impactedTrees.length >= 256) return;
+    if (bucket.barkState.getW(slot) === 0) this.impactedTrees.push(renderId);
+    const amount = Math.max(bucket.barkState.getW(slot), Math.min(1, strength));
+    bucket.barkState.setW(slot, amount); bucket.canopyState.setW(slot, amount);
+    bucket.barkState.needsUpdate = true; bucket.canopyState.needsUpdate = true;
   }
 
   setViewport(height: number, pixelRatio: number): void { this.luminousFlora?.setViewport(height, pixelRatio); }

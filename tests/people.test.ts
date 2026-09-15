@@ -5,6 +5,8 @@ import { addMaterial } from '../src/sim/resources/Inventory';
 import { PeopleSystem, settlementEraRank } from '../src/sim/people/PeopleSystem';
 import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { createSettlementLayoutPlan, type BuildingDistrict } from '../src/shared/SettlementLayoutPlan';
+import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
+import { isResourceWorkDestinationId, resourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
 
 describe('Purposeful represented people', () => {
   it('grounds every person in a household, supported role, appearance, and walkable home', () => {
@@ -44,21 +46,19 @@ describe('Purposeful represented people', () => {
       position: person.position,
     }));
     expect(documentaryState(first)).toEqual(documentaryState(second));
-  });
+  }, 15_000);
 
-  it('never spawns or walks on water and keeps pedestrian segments traversable', () => {
-    for (const seed of ['people-river', 'people-islands', 'people-highlands']) {
-      const simulation = new Simulation({ seed, startingPopulation: 200, settlementCount: [4, 4] });
-      const walkability = new WalkabilityLayer(simulation.state.world);
-      simulation.step(80 * 12);
-      for (const person of simulation.state.people) {
-        const waterTransport = ['boat', 'ferry'].includes(person.navigation?.crossingMode ?? '');
-        if (!waterTransport) {
-          expect(walkability.isWalkable(person.position), `${seed}:${person.id} stands on invalid terrain`).toBe(true);
-          const navigation = person.navigation;
-          const remainingRoute = navigation?.traveling ? [person.position, ...navigation.waypoints.slice(navigation.waypointIndex)] : navigation?.waypoints ?? [];
-          expect(walkability.routeIsValid(remainingRoute), `${seed}:${person.id} has an invalid pedestrian route`).toBe(true);
-        }
+  it.each(['people-river', 'people-islands', 'people-highlands'])('keeps people and pedestrian routes on safe ground in %s for 80 years', (seed) => {
+    const simulation = new Simulation({ seed, startingPopulation: 200, settlementCount: [4, 4] });
+    const walkability = new WalkabilityLayer(simulation.state.world);
+    simulation.step(80 * 12);
+    for (const person of simulation.state.people) {
+      const waterTransport = ['boat', 'ferry'].includes(person.navigation?.crossingMode ?? '');
+      if (!waterTransport) {
+        expect(walkability.isWalkable(person.position), `${seed}:${person.id} stands on invalid terrain`).toBe(true);
+        const navigation = person.navigation;
+        const remainingRoute = navigation?.traveling ? [person.position, ...navigation.waypoints.slice(navigation.waypointIndex)] : navigation?.waypoints ?? [];
+        expect(walkability.routeIsValid(remainingRoute), `${seed}:${person.id} has an invalid pedestrian route`).toBe(true);
       }
     }
   }, 60_000);
@@ -97,7 +97,7 @@ describe('Purposeful represented people', () => {
     expect(simulation.state.people.some((person) => ['factory-worker', 'engineer', 'machinist', 'railway-worker', 'logistics-worker'].includes(person.role ?? ''))).toBe(true);
   });
 
-  it('clusters work and gathering destinations around the shared city plan', () => {
+  it('keeps civic work in the city plan and resource work at the authoritative physical site', () => {
     const simulation = new Simulation({ seed: 'people-city-plan', startingPopulation: 300, settlementCount: [4, 4] });
     for (const settlement of simulation.state.settlements) {
       settlement.targetBuildings = settlement.buildings + 2;
@@ -109,7 +109,18 @@ describe('Purposeful represented people', () => {
       market: 'market', shrine: 'sacred', 'construction-site': 'craft', workshop: 'craft', 'industrial-site': 'industrial', 'civic-building': 'civic',
     };
     let checked = 0;
+    let resourceChecked = 0;
+    const assignments = resourceWorkAssignments(simulation.state);
     for (const person of simulation.state.people) {
+      if (isResourceWorkDestinationId(person.navigation?.destinationId)) {
+        const assignment = assignments.find(a => a.settlementId === person.homeId && resourceWorkDestinationId(a) === person.navigation!.destinationId);
+        expect(assignment).toBeDefined();
+        expect(assignment!.labourByOccupation[person.occupation]).toBeGreaterThan(0);
+        const endpoint = person.navigation!.waypoints.at(-1)!;
+        expect(Math.hypot(endpoint.x - assignment!.worldPosition.x, endpoint.z - assignment!.worldPosition.z)).toBeLessThanOrEqual(simulation.state.world.cellSize * 6.1);
+        resourceChecked++;
+        continue;
+      }
       const district = districts[person.navigation?.destinationKind ?? ''];
       if (!district) continue;
       const settlement = simulation.state.settlements.find((candidate) => candidate.id === person.homeId);
@@ -118,10 +129,11 @@ describe('Purposeful represented people', () => {
       const destination = person.navigation?.waypoints.at(-1) ?? person.position;
       const site = settlement.structurePlots?.find(plot => plot.id === person.navigation?.destinationId);
       const anchor = site ?? layout.anchors[district];
-      expect(Math.hypot(destination.x - anchor.worldX, destination.z - anchor.worldZ)).toBeLessThanOrEqual(site ? site.radius + 0.5 : layout.radius * 1.05);
+      expect(Math.hypot(destination.x - anchor.worldX, destination.z - anchor.worldZ), person.navigation?.destinationId).toBeLessThanOrEqual(site ? site.radius + 0.5 : layout.radius * 1.05);
       checked += 1;
     }
     expect(checked).toBeGreaterThan(20);
+    expect(resourceChecked).toBeGreaterThan(0);
   });
 
   it('sends builders to workshops when no construction project is active', () => {

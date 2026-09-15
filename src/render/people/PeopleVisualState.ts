@@ -38,6 +38,8 @@ export interface PersonVisualTarget {
   waypointIndex?: number;
   /** Facing to adopt while standing still, e.g. turning toward a shrine or a conversation. */
   restFacing?: number;
+  /** Resource workers slow through the last part of an approach before orienting to contact. */
+  arrivalEase?: boolean;
 }
 
 export interface PersonVisualGround {
@@ -68,6 +70,7 @@ export interface PersonVisualState {
   /** Visual world units per second. Drives walk/run selection, not simulation speed. */
   speed: number;
   traveling: boolean;
+  arrivalEase: boolean;
   /** True on the frame the character was repositioned instead of interpolated. */
   snapped: boolean;
   /** Route-aware journey polyline, origin first and destination last. */
@@ -119,6 +122,7 @@ export class PeopleVisualStateStore {
     const state = existing ?? this.spawn(personId, target.destination, ground);
     if (!existing) this.states.set(personId, state);
     state.lastFrame = this.frame;
+    state.arrivalEase = target.arrivalEase ?? false;
     state.snapped = !existing;
     state.sinceRetarget += Math.max(0, deltaSeconds);
 
@@ -149,6 +153,7 @@ export class PeopleVisualStateStore {
       facing: 0,
       speed: 0,
       traveling: false,
+      arrivalEase: false,
       snapped: true,
       path: [{ x: at.x, z: at.z }],
       lastGroundX: at.x,
@@ -218,7 +223,7 @@ export class PeopleVisualStateStore {
     const previousZ = state.z;
     if (state.progress < 1 && deltaSeconds > 0) {
       state.progress = Math.min(1, state.progress + deltaSeconds / Math.max(0.0001, state.duration));
-      const point = samplePolyline(state.path, state.progress);
+      const point = samplePolyline(state.path, state.arrivalEase ? easedArrivalProgress(state.progress) : state.progress);
       state.x = point.x;
       state.z = point.z;
     }
@@ -244,6 +249,14 @@ export class PeopleVisualStateStore {
     // Keep easing after the journey ends, so a character never freezes mid-turn.
     state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * Math.max(0, deltaSeconds));
   }
+}
+
+/** Integrates constant walking speed into a smooth deceleration over the final 30% of time. */
+export function easedArrivalProgress(progress: number): number {
+  const t = Math.max(0, Math.min(1, progress));
+  if (t <= 0.7) return t / 0.85;
+  const tail = (t - 0.7) / 0.3;
+  return (0.7 + 0.3 * (tail - tail * tail * 0.5)) / 0.85;
 }
 
 /**

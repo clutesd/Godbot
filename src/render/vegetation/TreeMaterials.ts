@@ -25,6 +25,9 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         #include <begin_vertex>
         treeLocal = position; treeCondition = treeState;
         ${bark ? '' : 'transformed += (canopyAnchor - position) * (1.0 - treeState.x);'}
+        // The root stays anchored. Real worker contact gives this existing tree a tiny deflection;
+        // w is transient presentation feedback, cleared each frame, never a damage counter.
+        transformed.x += treeState.w * max(0.0, transformed.y) * 0.004;
       `);
       shader.fragmentShader = `uniform float treeHeight; ${declarations}\n${shader.fragmentShader}`;
       shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
@@ -59,7 +62,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         `);
       }
     };
-    target.customProgramCacheKey = () => `tree-v1:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
+    target.customProgramCacheKey = () => `tree-v2:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
   }
   mesh.customDepthMaterial = depth;
   mesh.customDistanceMaterial = distance;
