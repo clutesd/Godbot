@@ -6,6 +6,7 @@ import {
   settlementResourceCatchment,
 } from '../src/sim/resources/SettlementResourceExtraction';
 import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
+import { isResourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
 import type { DepositResourceKind } from '../src/sim/resources/WorldResources';
 
 const depositKinds: readonly DepositResourceKind[] = [
@@ -161,5 +162,39 @@ describe('settlement resource extraction', () => {
 
     expect(once).toBeGreaterThan(cell.naturalResources.renewables.timber.capacity * 0.5);
     expect(twice).toBe(once);
+  });
+
+  it('routes a bounded cast of real eligible residents to the exact resource work sites', () => {
+    const sim = simulation('resource-worker-routing');
+    let routed = sim.state.people.filter((person) => isResourceWorkDestinationId(person.navigation?.destinationId));
+    for (let month = 0; month < 8 && routed.length === 0; month += 1) {
+      sim.step(1);
+      routed = sim.state.people.filter((person) => person.alive && isResourceWorkDestinationId(person.navigation?.destinationId));
+    }
+
+    const assignments = resourceWorkAssignments(sim.state);
+    expect(assignments.length).toBeGreaterThan(0);
+    expect(routed.length).toBeGreaterThan(0);
+    const assignmentByDestination = new Map(assignments.map((assignment) => [`resource-work:${assignment.siteId}`, assignment]));
+    const perSite = new Map<string, number>();
+    const perSettlement = new Map<string, number>();
+
+    for (const worker of routed) {
+      const navigation = worker.navigation!;
+      const assignment = assignmentByDestination.get(navigation.destinationId);
+      expect(assignment).toBeDefined();
+      expect(worker.homeId).toBe(assignment!.settlementId);
+      expect(assignment!.gatherOccupations).toContain(worker.occupation);
+      expect(['travel', 'gather']).toContain(worker.activity);
+      expect(navigation.waypoints.length).toBeGreaterThan(0);
+      const endpoint = navigation.waypoints[navigation.waypoints.length - 1]!;
+      expect(Math.hypot(endpoint.x - assignment!.worldPosition.x, endpoint.z - assignment!.worldPosition.z))
+        .toBeLessThanOrEqual(sim.state.world.cellSize * 6.1);
+      perSite.set(assignment!.siteId, (perSite.get(assignment!.siteId) ?? 0) + 1);
+      perSettlement.set(assignment!.settlementId, (perSettlement.get(assignment!.settlementId) ?? 0) + 1);
+    }
+
+    expect([...perSite.values()].every((count) => count <= 4)).toBe(true);
+    expect([...perSettlement.values()].every((count) => count <= 12)).toBe(true);
   });
 });
