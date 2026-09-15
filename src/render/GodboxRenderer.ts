@@ -9,6 +9,7 @@ import { CameraDirector, type CurrentObservation } from './CameraDirector';
 import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
+import { roleVisualColor } from './people/RoleVisualProfile';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
@@ -147,13 +148,6 @@ const SETTLEMENT_LIGHT_BUDGET = 18;
 const HUMAN_WORLD_SCALE = 0.28;
 /** Canonical adult humanoid height in world units (feet to crown) at `heightScale === 1`. */
 export const CANONICAL_ADULT_HEIGHT = HUMAN_WORLD_SCALE * 0.96;
-const PERSON_ROLE_CUES = {
-  earth: new THREE.Color('#667a42'), water: new THREE.Color('#3f6e78'), labor: new THREE.Color('#9a6b36'),
-  trade: new THREE.Color('#b58137'), guard: new THREE.Color('#4e5866'), ritual: new THREE.Color('#a45d85'),
-  civic: new THREE.Color('#5b4d78'), knowledge: new THREE.Color('#58779b'), industry: new THREE.Color('#596369'),
-  ordinary: new THREE.Color('#84614f'),
-} as const;
-
 export const visiblePersonBudgetForDensity = (density: number): number => Math.max(48, Math.round(384 * density));
 /** Notable and historical lives are the only characters allowed extra geometry. */
 export const NOTABLE_VISUAL_BUDGET = 32;
@@ -469,9 +463,9 @@ export class GodboxRenderer {
       const facing = visual.facing;
       this.setInstanceTransform(this.people, index, display.x, footY + 0.44 * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
       const culture = this.cultureById.get(person.cultureId);
-      this.personColor.set(culture?.style.primary ?? '#d96c86');
-      this.personColor.lerp(this.roleCue(person.role), 0.42);
-      this.personColor.offsetHSL(0, 0, ((person.appearance?.materialQuality ?? 0.5) - 0.5) * 0.13);
+      this.personColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
+        materialQuality: person.appearance?.materialQuality ?? 0.5,
+      }));
       if (tier !== 'population') this.personColor.offsetHSL(0, 0.16, tier === 'historical' ? 0.1 : 0.05);
       this.people.setColorAt(index, this.personColor);
       this.setInstanceTransform(this.peopleHeads, index, display.x, footY + 0.84 * heightScale + poseLift, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
@@ -498,7 +492,10 @@ export class GodboxRenderer {
       const hatWidth = headwear === 'brim' ? 1.35 : headwear === 'helmet' ? 0.82 : 0.95;
       const hatHeight = headwear === 'cap' ? 0.52 : headwear === 'brim' ? 0.32 : 0.86;
       this.setInstanceTransform(this.peopleHeadwear, index, display.x, footY + 0.99 * heightScale + poseLift, display.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, 0, facing, 0);
-      this.personDetailColor.set(culture?.style.secondary ?? '#313550').lerp(this.roleCue(person.role), headwear === 'helmet' ? 0.2 : 0.42);
+      this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.secondary ?? '#313550', {
+        roleWeight: headwear === 'helmet' ? 0.48 : 0.58,
+        materialQuality: person.appearance?.materialQuality ?? 0.5,
+      }));
       if (tier === 'historical') this.personDetailColor.offsetHSL(0, 0.2, 0.12);
       this.peopleHeadwear.setColorAt(index, this.personDetailColor);
 
@@ -672,19 +669,6 @@ export class GodboxRenderer {
       }
     }
     return origin;
-  }
-
-  private roleCue(role: PersonRole | undefined): THREE.Color {
-    if (role === 'farmer' || role === 'gatherer' || role === 'hunter') return PERSON_ROLE_CUES.earth;
-    if (role === 'fisher' || role === 'sailor' || role === 'dock-worker') return PERSON_ROLE_CUES.water;
-    if (role === 'builder' || role === 'laborer' || role === 'miner') return PERSON_ROLE_CUES.labor;
-    if (role === 'trader' || role === 'merchant' || role === 'transporter') return PERSON_ROLE_CUES.trade;
-    if (role === 'guard' || role === 'soldier') return PERSON_ROLE_CUES.guard;
-    if (role === 'priest' || role === 'ritual-specialist') return PERSON_ROLE_CUES.ritual;
-    if (role === 'administrator' || role === 'manager') return PERSON_ROLE_CUES.civic;
-    if (role && ['scholar', 'scientist', 'researcher', 'medical-worker', 'healer'].includes(role)) return PERSON_ROLE_CUES.knowledge;
-    if (role && ['factory-worker', 'engineer', 'machinist', 'railway-worker', 'energy-technician', 'logistics-worker', 'machine-systems-specialist', 'space-worker'].includes(role)) return PERSON_ROLE_CUES.industry;
-    return PERSON_ROLE_CUES.ordinary;
   }
 
   private setLimbInstance(index: number, x: number, y: number, z: number, scale: number, heightScale: number, facing: number, side: number, height: number, swing: number, mesh: THREE.InstancedMesh, poseLift: number): void {
