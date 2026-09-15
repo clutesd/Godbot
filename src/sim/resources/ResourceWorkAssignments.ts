@@ -59,10 +59,16 @@ function copyPoint(point: Readonly<Vec2>): Readonly<Vec2> {
 }
 
 /**
- * Starts a new presentation ledger even in a month with zero extraction. This is what prevents
- * renderers that only know the world object from displaying last month's workers/sites forever.
+ * Starts the current month's presentation ledger even in a month with zero extraction. Repeating
+ * the call in the same month is intentionally a no-op so a second resource pass cannot erase work
+ * already recorded by another authority.
  */
 export function beginResourceWorkMonth(state: SimulationState): void {
+  const current = snapshots.get(state);
+  if (current?.month === state.month) {
+    snapshotsByWorld.set(state.world, current);
+    return;
+  }
   const next = freshSnapshot(state.month);
   snapshots.set(state, next);
   snapshotsByWorld.set(state.world, next);
