@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { resourceWorkPreferredWaypoints } from '../src/sim/people/ResourceWorkRouting';
+import {
+  resourceWorkDestinationId,
+  resourceWorkPreferredWaypoints,
+  resourceWorkVisualKind,
+  resourceWorkVisualKindFromDestinationId,
+} from '../src/sim/people/ResourceWorkRouting';
 import type { ResourceWorkAssignment } from '../src/sim/resources/ResourceWorkAssignments';
 
 function assignment(overrides: Partial<ResourceWorkAssignment> = {}): ResourceWorkAssignment {
@@ -11,6 +16,7 @@ function assignment(overrides: Partial<ResourceWorkAssignment> = {}): ResourceWo
     resourceId: 'timber',
     worldPosition: { x: 12, z: 8 },
     gatherOccupations: ['forager'],
+    labourByOccupation: { forager: 2 },
     amountExtracted: 4,
     labourUsed: 2,
     ...overrides,
@@ -36,5 +42,18 @@ describe('resource worker pedestrian routing', () => {
       { x: 0, z: 0 },
       { x: 3, z: 1 },
     ]);
+  });
+
+  it('encodes a stable visual work kind in the resource destination identity', () => {
+    const timber = assignment({ resourceId: 'timber', siteId: 'forest-1' });
+    const stone = assignment({ resourceId: 'stone', siteId: 'quarry-1' });
+    const herbs = assignment({ resourceId: 'medicinal-flora', siteId: 'meadow-1' });
+
+    expect(resourceWorkVisualKind(timber)).toBe('timber');
+    expect(resourceWorkVisualKind(stone)).toBe('mineral');
+    expect(resourceWorkVisualKind(herbs)).toBe('plant');
+    expect(resourceWorkVisualKindFromDestinationId(resourceWorkDestinationId(timber))).toBe('timber');
+    expect(resourceWorkVisualKindFromDestinationId(resourceWorkDestinationId(stone))).toBe('mineral');
+    expect(resourceWorkVisualKindFromDestinationId(resourceWorkDestinationId(herbs))).toBe('plant');
   });
 });

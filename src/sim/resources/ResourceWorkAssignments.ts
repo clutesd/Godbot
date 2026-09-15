@@ -1,4 +1,4 @@
-import type { Occupation, SimulationState, Vec2 } from '../types';
+import type { Occupation, SimulationState, Vec2, WorldState } from '../types';
 
 export type ResourceWorkSource = 'world-resource' | 'deposit-system';
 
@@ -16,7 +16,10 @@ export interface ResourceWorkAssignment {
   readonly cellIndex?: number;
   readonly resourceId: string;
   readonly worldPosition: Readonly<Vec2>;
+  /** Occupations physically allowed to perform this extraction. */
   readonly gatherOccupations: readonly Occupation[];
+  /** Exact labour actually consumed from each occupation bucket for this site this month. */
+  readonly labourByOccupation: Readonly<Partial<Record<Occupation, number>>>;
   readonly amountExtracted: number;
   readonly labourUsed: number;
   readonly accessPath?: ReadonlyArray<Readonly<Vec2>>;
@@ -31,16 +34,26 @@ interface MonthlyWorkSnapshot {
 }
 
 const snapshots = new WeakMap<SimulationState, MonthlyWorkSnapshot>();
+/** Presentation renderers own the WorldState already; mirror the same transient snapshot by world. */
+const snapshotsByWorld = new WeakMap<WorldState, MonthlyWorkSnapshot>();
 
 function authorityKey(settlementId: string, resourceId: string): string {
   return `${settlementId}\u0000${resourceId}`;
 }
 
+function freshSnapshot(month: number): MonthlyWorkSnapshot {
+  return { month, assignments: [], worldAuthority: new Set() };
+}
+
 function snapshot(state: SimulationState): MonthlyWorkSnapshot {
   const current = snapshots.get(state);
-  if (current?.month === state.month) return current;
-  const next: MonthlyWorkSnapshot = { month: state.month, assignments: [], worldAuthority: new Set() };
+  if (current?.month === state.month) {
+    snapshotsByWorld.set(state.world, current);
+    return current;
+  }
+  const next = freshSnapshot(state.month);
   snapshots.set(state, next);
+  snapshotsByWorld.set(state.world, next);
   return next;
 }
 
@@ -48,9 +61,27 @@ function copyPoint(point: Readonly<Vec2>): Readonly<Vec2> {
   return Object.freeze({ x: point.x, z: point.z });
 }
 
+/**
+ * Starts the current month's presentation ledger even in a month with zero extraction. Repeating
+ * the call in the same month is intentionally a no-op so a second resource pass cannot erase work
+ * already recorded by another authority.
+ */
+export function beginResourceWorkMonth(state: SimulationState): void {
+  const current = snapshots.get(state);
+  if (current?.month === state.month) {
+    snapshotsByWorld.set(state.world, current);
+    return;
+  }
+  const next = freshSnapshot(state.month);
+  snapshots.set(state, next);
+  snapshotsByWorld.set(state.world, next);
+}
+
 /** Records one real extraction site. This never mutates simulation resource quantities. */
 export function recordResourceWorkAssignment(state: SimulationState, assignment: ResourceWorkAssignment): void {
   if (assignment.month !== state.month || assignment.amountExtracted <= 0 || assignment.labourUsed <= 0) return;
+  const contributed = Object.values(assignment.labourByOccupation).reduce((sum, amount) => sum + (amount ?? 0), 0);
+  if (contributed <= 0) return;
   const current = snapshot(state);
   const key = authorityKey(assignment.settlementId, assignment.resourceId);
 
@@ -68,6 +99,7 @@ export function recordResourceWorkAssignment(state: SimulationState, assignment:
     ...assignment,
     worldPosition: copyPoint(assignment.worldPosition),
     gatherOccupations: Object.freeze([...assignment.gatherOccupations]),
+    labourByOccupation: Object.freeze({ ...assignment.labourByOccupation }),
     accessPath: assignment.accessPath ? Object.freeze(assignment.accessPath.map(copyPoint)) : undefined,
     accessPaths: assignment.accessPaths
       ? Object.freeze(assignment.accessPaths.map((leg) => Object.freeze(leg.map(copyPoint))))
@@ -78,4 +110,9 @@ export function recordResourceWorkAssignment(state: SimulationState, assignment:
 /** Current-month work only. Advancing `state.month` automatically exposes a fresh empty snapshot. */
 export function resourceWorkAssignments(state: SimulationState): readonly ResourceWorkAssignment[] {
   return snapshot(state).assignments;
+}
+
+/** Read-only renderer bridge for systems that deliberately own only the WorldState. */
+export function resourceWorkAssignmentsForWorld(world: WorldState): readonly ResourceWorkAssignment[] {
+  return snapshotsByWorld.get(world)?.assignments ?? [];
 }

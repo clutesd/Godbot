@@ -3,6 +3,8 @@ import type * as THREE from 'three';
 import { configWith } from '../src/config';
 import { ResourceSiteRenderer } from '../src/render/resources/ResourceSiteRenderer';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
+import { Simulation } from '../src/sim/Simulation';
+import { recordResourceWorkAssignment, resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
 import { WeatherSystem } from '../src/sim/weather/WeatherSystem';
 import { generateWorld } from '../src/sim/world';
 
@@ -71,5 +73,49 @@ describe('ResourceSiteRenderer invalidation', () => {
     deposit!.accessTrails![0]![1]!.x += 0.5;
     renderer.update();
     expect(trails.geometry.getAttribute('position')).not.toBe(initialPosition);
+  });
+
+  it('renders current authoritative work as bounded instanced site grammar and clears it next month', () => {
+    const sim = new Simulation({ seed: 'resource-active-work-visual', startingPopulation: 120, settlementCount: [2, 2] });
+    const settlement = sim.state.settlements[0];
+    expect(settlement).toBeDefined();
+    const cell = sim.state.world.cells[settlement!.cellIndex];
+    expect(cell).toBeDefined();
+
+    recordResourceWorkAssignment(sim.state, {
+      month: sim.state.month,
+      source: 'world-resource',
+      settlementId: settlement!.id,
+      siteId: `cell:${settlement!.cellIndex}:timber`,
+      cellIndex: settlement!.cellIndex,
+      resourceId: 'timber',
+      worldPosition: { x: cell!.worldX, z: cell!.worldZ },
+      gatherOccupations: ['forager', 'builder'],
+      labourByOccupation: { forager: 2, builder: 1 },
+      amountExtracted: 9,
+      labourUsed: 3,
+    });
+
+    const renderer = new ResourceSiteRenderer(sim.state.world, new TerrainSurface(sim.state.world));
+    renderer.update();
+    const active = renderer.group.getObjectByName('Active resource work sites') as THREE.Group;
+    const logs = renderer.group.getObjectByName('Active resource logs') as THREE.InstancedMesh;
+    const stumps = renderer.group.getObjectByName('Active resource stumps') as THREE.InstancedMesh;
+    const heads = renderer.group.getObjectByName('Active resource tool heads') as THREE.InstancedMesh;
+    expect(active).toBeDefined();
+    expect(active.userData['activeSiteCount']).toBe(1);
+    expect(active.userData['drawPoolCount']).toBe(8);
+    expect(active.userData['instanceCount']).toBeGreaterThanOrEqual(5);
+    expect(logs.count).toBeGreaterThanOrEqual(3);
+    expect(stumps.count).toBe(1);
+    expect(heads.count).toBe(1);
+
+    sim.state.month += 1;
+    expect(resourceWorkAssignments(sim.state)).toEqual([]);
+    renderer.update();
+    expect(active.userData['activeSiteCount']).toBe(0);
+    expect(logs.count).toBe(0);
+    expect(stumps.count).toBe(0);
+    expect(heads.count).toBe(0);
   });
 });

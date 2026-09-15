@@ -1,5 +1,5 @@
 import { resourceLabourBudget, settlementLabour } from '../people/HumanCapital';
-import { useLabour } from './Processing';
+import { useLabourDetailed, type LabourUse } from './Processing';
 import { practical } from '../knowledge/KnowledgeSystem';
 import type { Person, Settlement, SimulationState, WorldCell } from '../types';
 import { cellAt } from '../world';
@@ -154,18 +154,27 @@ function extractMinerals(
   return { total, deposits: extracted, sites };
 }
 
+function scaleLabour(use: LabourUse, share: number): LabourUse {
+  const byOccupation: LabourUse['byOccupation'] = {};
+  for (const [occupation, amount] of Object.entries(use.byOccupation) as Array<[Person['occupation'], number | undefined]>) {
+    if (amount && amount > 0) byOccupation[occupation] = amount * share;
+  }
+  return { total: use.total * share, byOccupation };
+}
+
 function recordWorldWorkSites(
   state: SimulationState,
   settlement: Settlement,
   resourceId: RawMaterialKind,
   sites: readonly ExtractionSite[],
   gatherOccupations: readonly Person['occupation'][],
-  labourUsed: number,
+  labourUse: LabourUse,
 ): void {
   const total = sites.reduce((sum, site) => sum + site.amount, 0);
-  if (total <= 0 || labourUsed <= 0) return;
+  if (total <= 0 || labourUse.total <= 0) return;
   for (const site of sites) {
     const cellIndex = site.cell.z * state.world.size + site.cell.x;
+    const siteLabour = scaleLabour(labourUse, site.amount / total);
     recordResourceWorkAssignment(state, {
       month: state.month,
       source: 'world-resource',
@@ -175,8 +184,9 @@ function recordWorldWorkSites(
       resourceId,
       worldPosition: { x: site.cell.worldX, z: site.cell.worldZ },
       gatherOccupations,
+      labourByOccupation: siteLabour.byOccupation,
       amountExtracted: site.amount,
-      labourUsed: labourUsed * site.amount / total,
+      labourUsed: siteLabour.total,
     });
   }
 }
@@ -266,14 +276,14 @@ export function advanceSettlementResourceExtraction(
   const timberCapacity = (budget.forager ?? 0) + (budget.builder ?? 0);
   const timberHarvest = harvestRenewableAcross(cells, 'timber', Math.min(requestedWood, timberCapacity));
   const harvestedWood = timberHarvest.total;
-  const timberLabourUsed = useLabour(budget, ['forager', 'builder'], harvestedWood);
-  recordWorldWorkSites(state, settlement, 'timber', timberHarvest.sites, ['forager', 'builder'], timberLabourUsed);
+  const timberLabour = useLabourDetailed(budget, ['forager', 'builder'], harvestedWood);
+  recordWorldWorkSites(state, settlement, 'timber', timberHarvest.sites, ['forager', 'builder'], timberLabour);
 
   const mineralCapacity = (budget.artisan ?? 0) + (budget.builder ?? 0);
   const mineralExtraction = extractMinerals(settlement, cells, Math.min(requestedMinerals, mineralCapacity));
-  const mineralLabourUsed = useLabour(budget, ['artisan', 'builder'], mineralExtraction.total);
+  const mineralLabour = useLabourDetailed(budget, ['artisan', 'builder'], mineralExtraction.total);
   const mineralTotal = mineralExtraction.sites.reduce((sum, site) => sum + site.amount, 0);
-  if (mineralTotal > 0 && mineralLabourUsed > 0) {
+  if (mineralTotal > 0 && mineralLabour.total > 0) {
     for (const site of mineralExtraction.sites) {
       recordWorldWorkSites(
         state,
@@ -281,7 +291,7 @@ export function advanceSettlementResourceExtraction(
         site.kind,
         [site],
         ['artisan', 'builder'],
-        mineralLabourUsed * site.amount / mineralTotal,
+        scaleLabour(mineralLabour, site.amount / mineralTotal),
       );
     }
   }
@@ -291,8 +301,8 @@ export function advanceSettlementResourceExtraction(
   for (const kind of SUPPLEMENTAL_RENEWABLES) {
     const harvest = harvestRenewableAcross(cells, kind, Math.min(supplementalRequests[kind], (budget.forager ?? 0) + (budget.keeper ?? 0)));
     const harvested = harvest.total;
-    const supplementalLabourUsed = useLabour(budget, ['forager', 'keeper'], harvested);
-    recordWorldWorkSites(state, settlement, kind, harvest.sites, ['forager', 'keeper'], supplementalLabourUsed);
+    const supplementalLabour = useLabourDetailed(budget, ['forager', 'keeper'], harvested);
+    recordWorldWorkSites(state, settlement, kind, harvest.sites, ['forager', 'keeper'], supplementalLabour);
     if (harvested > 0) renewables[kind] = harvested;
   }
 

@@ -348,7 +348,6 @@ export class PeopleSystem {
       farmer: 'hoe', fisher: 'basket', gatherer: 'basket', hunter: 'bag', laborer: 'hammer', builder: 'hammer', 'craft-worker': 'toolkit', trader: 'bag', merchant: 'ledger', administrator: 'ledger', scholar: 'ledger', researcher: 'toolkit', engineer: 'toolkit', machinist: 'toolkit', transporter: 'bag', 'dock-worker': 'bag', 'factory-worker': 'toolkit', 'logistics-worker': 'bag', priest: 'staff', 'ritual-specialist': 'staff', guard: 'staff', soldier: 'staff',
     };
     return {
-      // Deterministic adult variation only: ~0.85-1.15 of the canonical world humanoid height.
       heightScale: 0.85 + variation * 0.3,
       buildScale: 0.86 + buildVariation * 0.27,
       posture: person.ageMonths > 60 * 12 ? 0.1 + variation * 0.14 : (variation - 0.5) * 0.08,
@@ -542,7 +541,6 @@ export class PeopleSystem {
       ? { x: settlement.position.x + Math.cos(angle) * layout.radius * 0.78, z: settlement.position.z + Math.sin(angle) * layout.radius * 0.78 }
       : { x: anchor.worldX, z: anchor.worldZ };
     let destination = this.walkability.nearestWalkable({ x: center.x + Math.cos(angle) * radius, z: center.z + Math.sin(angle) * radius }, identity);
-    // Homes and workplaces can remain unsafe after the surrounding ground dries.
     for (let pass = 0; pass < 4; pass++) {
       const closed = (settlement.structurePlots ?? []).find(plot => (plot.accessRestricted || plot.condition < 0.65)
         && Math.hypot(destination.x - plot.worldX, destination.z - plot.worldZ) < plot.radius + 0.3);

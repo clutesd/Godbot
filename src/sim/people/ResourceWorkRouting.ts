@@ -1,9 +1,15 @@
-import type { DestinationKind, Person, SimulationState, Vec2 } from '../types';
+import type { DestinationKind, Occupation, Person, SimulationState, Vec2 } from '../types';
 import {
   resourceWorkAssignments,
   type ResourceWorkAssignment,
 } from '../resources/ResourceWorkAssignments';
+import {
+  resourceWorkVisualKind,
+  type ResourceWorkVisualKind,
+} from '../resources/ResourceWorkPresentation';
 import { WalkabilityLayer } from './WalkabilityLayer';
+
+export { resourceWorkVisualKind } from '../resources/ResourceWorkPresentation';
 
 const MAX_WORKERS_PER_SITE = 4;
 const MAX_WORKERS_PER_SETTLEMENT = 12;
@@ -37,12 +43,24 @@ export function resourceWorkAssignmentForPerson(
   return routingSnapshot(state, seed).byPerson.get(person.id);
 }
 
+/**
+ * The `resource-work:` prefix remains the Step-1B routing contract. The following visual-kind and
+ * resource segments are presentation metadata only; the terminal segment is still the authoritative
+ * Step-1A site id and stale-route checks compare the complete id deterministically.
+ */
 export function resourceWorkDestinationId(assignment: ResourceWorkAssignment): string {
-  return `${RESOURCE_DESTINATION_PREFIX}${assignment.siteId}`;
+  return `${RESOURCE_DESTINATION_PREFIX}${resourceWorkVisualKind(assignment)}:${assignment.resourceId}:${assignment.siteId}`;
 }
 
 export function isResourceWorkDestinationId(destinationId: string | undefined): boolean {
   return Boolean(destinationId?.startsWith(RESOURCE_DESTINATION_PREFIX));
+}
+
+/** Presentation can select a work loop without re-reading or mutating simulation resource state. */
+export function resourceWorkVisualKindFromDestinationId(destinationId: string | undefined): ResourceWorkVisualKind | undefined {
+  if (!isResourceWorkDestinationId(destinationId)) return undefined;
+  const kind = destinationId!.slice(RESOURCE_DESTINATION_PREFIX.length).split(':', 1)[0];
+  return kind === 'timber' || kind === 'mineral' || kind === 'plant' || kind === 'generic' ? kind : undefined;
 }
 
 /**
@@ -50,10 +68,7 @@ export function isResourceWorkDestinationId(destinationId: string | undefined): 
  * workers at the site. The destination id and point remain the actual resource site.
  */
 export function resourceWorkDestinationKind(assignment: ResourceWorkAssignment): DestinationKind {
-  const resource = assignment.resourceId;
-  return resource.includes('ore') || resource === 'stone' || resource === 'clay' || resource === 'coal'
-    ? 'industrial-site'
-    : 'field';
+  return resourceWorkVisualKind(assignment) === 'mineral' ? 'industrial-site' : 'field';
 }
 
 /**
@@ -77,10 +92,18 @@ export function resourceWorkPreferredWaypoints(assignment: ResourceWorkAssignmen
   return points;
 }
 
+function labourSignature(assignment: ResourceWorkAssignment): string {
+  return (Object.entries(assignment.labourByOccupation) as Array<[Occupation, number | undefined]>)
+    .filter(([, amount]) => (amount ?? 0) > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([occupation, amount]) => `${occupation}:${amount!.toFixed(4)}`)
+    .join(',');
+}
+
 function routingSnapshot(state: SimulationState, seed: string): RoutingSnapshot {
   const assignments = resourceWorkAssignments(state);
   const signature = assignments
-    .map((assignment) => `${assignment.settlementId}:${assignment.siteId}:${assignment.resourceId}:${assignment.amountExtracted.toFixed(4)}:${assignment.labourUsed.toFixed(4)}`)
+    .map((assignment) => `${assignment.settlementId}:${assignment.siteId}:${assignment.resourceId}:${assignment.amountExtracted.toFixed(4)}:${assignment.labourUsed.toFixed(4)}:${labourSignature(assignment)}`)
     .join('|');
   const cached = routingSnapshots.get(state);
   if (cached?.month === state.month && cached.seed === seed && cached.signature === signature) return cached;
@@ -119,7 +142,7 @@ function allocateRepresentatives(
         cursor: 0,
         people: residents
           .filter((person) => eligibleRepresentative(person, assignment))
-          .sort((a, b) => workerRank(seed, state.month, assignment.siteId, a.id) - workerRank(seed, state.month, assignment.siteId, b.id)
+          .sort((a, b) => workerRank(seed, state.month, assignment, a) - workerRank(seed, state.month, assignment, b)
             || a.id.localeCompare(b.id)),
       });
     }
@@ -150,6 +173,7 @@ function allocateRepresentatives(
 
 function eligibleRepresentative(person: Person, assignment: ResourceWorkAssignment): boolean {
   return assignment.gatherOccupations.includes(person.occupation)
+    && (assignment.labourByOccupation[person.occupation] ?? 0) > 0
     && person.displacedSinceMonth === undefined
     && person.activity !== 'migrate'
     && person.navigation?.schedulePhase !== 'emergency'
@@ -189,8 +213,28 @@ function representativeTarget(assignment: ResourceWorkAssignment): number {
   return Math.min(MAX_WORKERS_PER_SITE, Math.max(1, Math.ceil(Math.sqrt(assignment.labourUsed))));
 }
 
-function workerRank(seed: string, month: number, siteId: string, personId: string): number {
-  return stableUnit(`${seed}:${month}:${siteId}:${personId}:resource-worker`);
+/**
+ * Prefer legible roles inside the same economically valid occupation pool, while also favouring the
+ * same low stable hash the renderer uses for ordinary population sampling. This does not guarantee a
+ * render slot (historical/notable lives still win), but it makes documentary workers far less likely
+ * to be selected by the simulation and then disappear from the visible population cap.
+ */
+function workerRank(seed: string, month: number, assignment: ResourceWorkAssignment, person: Person): number {
+  const documentaryDraw = stableUnit(`${seed}:${month}:${assignment.siteId}:${person.id}:resource-worker`);
+  const visibleDraw = stableUnit(`${seed}:${person.id}:visible`);
+  const role = person.role ?? '';
+  const kind = resourceWorkVisualKind(assignment);
+  const roleBias = kind === 'timber'
+    ? ['builder', 'laborer'].includes(role) ? -0.22 : role === 'gatherer' ? -0.08 : 0
+    : kind === 'mineral'
+      ? ['miner', 'craft-worker', 'builder', 'laborer'].includes(role) ? -0.22 : 0
+      : kind === 'plant'
+        ? ['gatherer', 'healer'].includes(role) ? -0.22 : role === 'hunter' ? -0.06 : 0
+        : 0;
+  const occupationBias = kind === 'timber' && person.occupation === 'builder' ? -0.12
+    : kind === 'mineral' && (person.occupation === 'builder' || person.occupation === 'artisan') ? -0.12
+      : 0;
+  return documentaryDraw * 0.38 + visibleDraw * 0.62 + roleBias + occupationBias;
 }
 
 function stableUnit(value: string): number {
