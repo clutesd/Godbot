@@ -28,8 +28,11 @@ export class WaterEcology {
 
   bind(mesh: THREE.Mesh | undefined, ocean: boolean): void {
     if (!mesh) return;
-    if (!ocean && !this.aquatic && this.complexity > 0) {
-      this.aquatic = new AquaticLifeRenderer(this.world, this.ecology, this.complexity);
+    if (!ocean && this.complexity > 0) {
+      this.aquatic ??= new AquaticLifeRenderer(this.world, this.ecology, this.complexity);
+      // `WaterSystem.syncHydrology()` replaces the inland mesh. Re-adding the existing aquatic
+      // group here moves it from the retired mesh to the new authoritative surface instead of
+      // silently leaving every fish attached to an object that has been removed from the scene.
       mesh.add(this.aquatic.group);
     }
     const material = mesh.material as THREE.MeshPhysicalMaterial;
