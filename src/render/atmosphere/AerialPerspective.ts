@@ -70,6 +70,23 @@ export function resolveLowMistOpacity(
 }
 
 /**
+ * Resolve the frame-level strength of a bank that already exists in the spatial field.
+ * Season is deliberately absent: season controls occurrence/coverage in LowMistField, while an
+ * existing bank is only modulated by atmospheric depth, time-of-day burn-off and wind dispersal.
+ */
+export function resolveLowMistFrameStrength(
+  valleyMistMultiplier: number,
+  diurnal: number,
+  windRetention: number,
+): number {
+  return THREE.MathUtils.clamp(
+    Math.max(0, valleyMistMultiplier) * Math.max(0, diurnal) * Math.max(0, windRetention),
+    0,
+    1.05,
+  );
+}
+
+/**
  * Clear air and living low mist share one depth-aware integration point. Geography says where mist
  * may exist; time of day, wind, terrain flow and light determine how those banks behave this frame.
  */
@@ -119,10 +136,10 @@ export function updateAerialPerspectivePass(
   if (mist) {
     uniforms['uLowMistBounds']!.value.set(mist.originX, mist.originZ, mist.span, 1 / Math.max(0.001, mist.span));
     uniforms['uLowMistHeightRange']!.value.set(mist.minAnchorY, mist.maxAnchorY);
-    uniforms['uLowMistStrength']!.value = THREE.MathUtils.clamp(
-      mist.seasonalStrength * depthState.valleyMistMultiplier * diurnal * windRetention,
-      0,
-      1.05,
+    uniforms['uLowMistStrength']!.value = resolveLowMistFrameStrength(
+      depthState.valleyMistMultiplier,
+      diurnal,
+      windRetention,
     );
     uniforms['uMistDrift']!.value.set(mist.driftX, mist.driftZ);
     uniforms['uMistTime']!.value = mist.motionTime;
@@ -328,9 +345,9 @@ export const AERIAL_PERSPECTIVE_SHADER = {
       vec3 color = mix(source.rgb, airColor, amount);
 
       float lowMist = integratedLowMist(cameraWorld, worldPosition);
-      // Local mist must remain visible after the shallow-ray and seasonal attenuation stages. The
-      // geography mask is already highly selective, so stronger extinction here does not restore a
-      // screen-wide grey veil.
+      // Local mist must remain visible after the shallow-ray, diurnal and wind attenuation stages.
+      // Seasonal occurrence was already resolved into the source texture, so an existing bank is
+      // never dimmed simply because it formed in summer rather than autumn.
       float mistOpticalDepth = distanceToSurface * ${LOW_MIST_OPTICAL_DENSITY.toFixed(3)} * lowMist * uLowMistStrength;
       float mistAmount = clamp(1.0 - exp(-mistOpticalDepth), 0.0, ${LOW_MIST_MAX_OPACITY.toFixed(2)} + uObscuration * 0.04);
       float mistSunScatter = pow(mu, 5.0) * uMistSunGlow;
