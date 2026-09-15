@@ -6,6 +6,7 @@ import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
 import { CameraDirector, type CurrentObservation } from './CameraDirector';
+import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
@@ -157,6 +158,8 @@ export const visiblePersonBudgetForDensity = (density: number): number => Math.m
 export const NOTABLE_VISUAL_BUDGET = 32;
 
 export class GodboxRenderer {
+  private readonly foundingPods: FoundingPodRenderer;
+  private arrivalLightingSeconds = 0;
   readonly observation: CurrentObservation;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -281,6 +284,8 @@ export class GodboxRenderer {
     this.scene.background = new THREE.Color('#899b91');
     this.scene.fog = new THREE.FogExp2('#93a5a4', 0.0072);
     this.cameraDirector = new CameraDirector(this.camera, config, historian);
+    this.foundingPods = new FoundingPodRenderer(state);
+    this.scene.add(this.foundingPods.root);
     this.observation = this.cameraDirector.observation;
 
     this.terrainSurface = new TerrainSurface(state.world);
@@ -368,8 +373,14 @@ export class GodboxRenderer {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
+    for (const culture of this.state.cultures) if (!this.cultureById.has(culture.id)) {
+      this.cultureById.set(culture.id, culture);
+      this.accentByCulture.set(culture.id, new THREE.Color(culture.style.accent));
+    }
     this.transitionTimeline.updateTime(deltaSeconds);
-    this.updateDayNight(elapsedSeconds);
+    // Hold a readable daylight composition during the opening, then resume from that phase.
+    if (this.state.arrival) this.arrivalLightingSeconds += deltaSeconds * (this.state.arrival.phase === 'HISTORY_RUNNING' ? 1 : 0.035);
+    this.updateDayNight(this.state.arrival ? this.arrivalLightingSeconds : elapsedSeconds);
     this.updateSettlementBanners(elapsedSeconds);
     this.updateAdvancedAtmosphere(elapsedSeconds);
     this.updateSeasonalPresentation();
@@ -392,11 +403,12 @@ export class GodboxRenderer {
     if (this.vegetationLodAccumulator >= VEGETATION_LOD_INTERVAL_SECONDS) {
       this.vegetationLodAccumulator = 0;
       this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
-      this.vegetation.setDisturbance(this.state.settlements);
+      this.vegetation.setDisturbance(this.state.settlements, this.state.arrival?.pods.filter(p => p.landed).map(p => ({ ...p.position, radius: 1.8 })));
       this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
       this.vegetation.updateLod(this.camera.position);
     }
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    this.foundingPods.update(this.camera);
     this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
     const blizzard = this.weatherRenderer.report.blizzard;
@@ -678,6 +690,7 @@ export class GodboxRenderer {
    * finally guaranteed to stand on renderable ground.
    */
   private personDisplayTarget(person: Person, group: SocialGroup | undefined): { x: number; z: number; restFacing?: number } {
+    if (person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING') return { ...person.position, restFacing: Math.PI };
     let position: Vec2 = { ...person.position };
     let restFacing: number | undefined;
     const settlement = this.state.settlements.find((candidate) => candidate.id === person.homeId);
@@ -834,11 +847,12 @@ export class GodboxRenderer {
     const activeSite = hasActiveConstruction ? settlement.development ? reservedPlacements.find(p => p.key === settlement.development?.project?.plotId) : reservedPlacements[shownBuildings] : undefined;
     if (activeSite) group.add(this.createActiveConstructionSite(activeSite, palette, settlementY, settlement.constructionProgress));
     if (!settlement.development && eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);
-    this.addGroundCraft(group, era, palette, visualRandom);
+    const bareFounderCamp = Boolean(settlement.foundingPodId && settlement.buildings === 0);
+    if (!bareFounderCamp) this.addGroundCraft(group, era, palette, visualRandom);
     this.addRoutePortals(group, settlement, layout, era, palette);
     const axisAngle = this.random.fork(`${settlement.id}:axis`).float() * Math.PI * 2;
     if (!settlement.development && eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
-    if (settlement.alive) this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
+    if (settlement.alive && !bareFounderCamp) this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
     const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
@@ -852,7 +866,7 @@ export class GodboxRenderer {
       this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
     }
     if (settlement.alive) this.addHearthSmoke(placements, era, smokeSources);
-    const lights = settlement.alive ? this.addSettlementLighting(group, era, palette, visualRandom) : [];
+    const lights = settlement.alive && !bareFounderCamp ? this.addSettlementLighting(group, era, palette, visualRandom) : [];
     group.userData['settlementId'] = settlement.id;
     group.traverse((object) => { if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true; });
     return { group, buildingCount: settlement.buildings, institutionCount: settlement.institutionIds.length, routeCount, politySize, bannerSignature: `${bannerIdentity.id}:${bannerLegacy.id}`, developmentSignature: this.developmentSignature(settlement), constructionSignature: this.constructionSignature(settlement.id), powerLevel: settlement.infrastructure.power, lights, smokeSources };
@@ -2917,6 +2931,7 @@ export class GodboxRenderer {
   }
 
   dispose(): void {
+    this.foundingPods.dispose();
     this.postProcessing.dispose();
     this.ecology.dispose();
     this.waterSystem.dispose();

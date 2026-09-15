@@ -1,4 +1,5 @@
 import type { WorkforceProfile } from './people/HumanCapital';
+import type { FoundingArrivalState } from './founding/FoundingArrival';
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState, TraversalPath } from './transport/types';
@@ -417,6 +418,7 @@ export interface NotableFigure {
 }
 
 export interface Person {
+  foundingOrigin?: { podId: string; groupId: string; position: Vec2; emergedSeconds: number };
   /** Bounded acquired skill; occupation labels never confer expertise. */
   expertise?: Array<{ domain: KnowledgeDomain; competence: number; lastPractisedMonth: number; teacherId?: string }>;
   career?: { startedMonth: number; lastReconsideredMonth: number; reason: string; inactiveMonths: number };
@@ -586,6 +588,7 @@ export interface IndustrialState {
 }
 
 export interface Settlement {
+  foundingPodId?: string;
   id: string;
   development?: SettlementDevelopment;
   structurePlots?: StructurePlot[];
@@ -967,6 +970,7 @@ export interface AdvancedCivilizationState {
 }
 
 export type HistoricalEventType =
+  | 'ARRIVAL_DAY'
   | 'world-awakening'
   | 'birth'
   | 'death'
@@ -1084,6 +1088,7 @@ export interface SimulationStats {
 }
 
 export interface SimulationState {
+  arrival?: FoundingArrivalState;
   eventSequence?: number;
   engineVersion: string;
   seed: string;

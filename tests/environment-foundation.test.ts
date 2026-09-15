@@ -212,7 +212,8 @@ describe('Extraction and inherited landscapes', () => {
     const saved = structuredClone(sim.state.world);
     const json = JSON.parse(JSON.stringify(saved));
     expect(json.cells).toEqual(saved.cells); expect(json.resourceDeposits).toEqual(saved.resourceDeposits);
-    sim.restart(); sim.step(24); expect(sim.state.world).toEqual(saved);
+    // Established experiments replay through explicit creation. Restart now begins pristine arrival.
+    const replay = new Simulation(config); replay.step(24); expect(replay.state.world).toEqual(saved);
     expect(configurationFingerprint(configWith(config))).not.toBe(configurationFingerprint(configWith({ ...config, engineVersion: 'godbox-sim-0.11.0' })));
   });
 });

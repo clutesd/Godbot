@@ -223,14 +223,15 @@ export class VegetationRenderer {
    * Cities eat the woodland around them. When a city dies, its disturbed footprint restarts as a
    * new stand and visibly progresses through regrowth, young woodland and mature forest.
    */
-  setDisturbance(settlements: readonly Settlement[]): void {
+  setDisturbance(settlements: readonly Settlement[], artifacts: readonly { x: number; z: number; radius: number }[] = []): void {
     this.occupiedGround = settlements.flatMap(settlement => (settlement.structurePlots ?? []).map(plot =>
       ({ x: plot.worldX, z: plot.worldZ, radius: plot.radius + 0.35 })));
+    this.occupiedGround.push(...artifacts);
     this.syncManagedPlantings(settlements);
     const currentYear = Math.floor((this.world.weather?.month ?? this.ecologyYear * 12) / 12);
     const previous = new Map(this.disturbance.map((zone) => [zone.id, zone]));
     const next = settlements
-      .filter((settlement) => settlement.alive)
+      .filter((settlement) => settlement.alive && (!settlement.foundingPodId || settlement.buildings > 0))
       .map((settlement) => ({
         id: settlement.id,
         x: settlement.position.x,

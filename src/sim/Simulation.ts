@@ -1,4 +1,5 @@
 import { emitEvent } from './History';
+import { assertPristine, createFoundingArrival, FoundingArrivalDirector, type FoundingPod } from './founding/FoundingArrival';
 import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
 import { killPeople, observeDeaths } from './people/PersonLifecycle';
 import { configWith, type GodboxConfig, type GodboxConfigInput } from '../config';
@@ -167,6 +168,7 @@ export interface SimulationSummary {
 }
 
 export class Simulation {
+  private readonly arrivalDirector = new FoundingArrivalDirector();
   config: GodboxConfig;
   /** Authoritative state. Rebuilt in place by restart(); re-read it after a restart. */
   state!: SimulationState;
@@ -205,7 +207,7 @@ export class Simulation {
    * archivists) must re-read `simulation.state`.
    */
   restart(seed?: string): void {
-    this.config = configWith(seed === undefined ? this.baseOverrides : { ...this.baseOverrides, seed });
+    this.config = configWith({ ...this.baseOverrides, seed: seed ?? this.config.seed, startMode: 'arrival' });
     this.initializeRun();
   }
 
@@ -264,8 +266,82 @@ export class Simulation {
     });
     this.peopleSystem = new PeopleSystem(world, this.config.seed);
     this.transportationSystem = new TransportationSystem(this.state);
-    this.initialize();
-    this.advancedSystem.initialize(this.state);
+    if (this.config.startMode === 'arrival') {
+      assertPristine(this.state);
+      this.state.arrival = createFoundingArrival(world, this.config.seed);
+    } else {
+      this.initialize();
+      this.advancedSystem.initialize(this.state);
+    }
+  }
+
+  get historyRunning(): boolean { return !this.state.arrival || this.state.arrival.phase === 'HISTORY_RUNNING'; }
+
+  /** Camera time cannot advance months; even direct step() calls respect this gate. */
+  advanceArrival(seconds: number): void {
+    const arrival = this.state.arrival;
+    if (!arrival) return;
+    this.arrivalDirector.advance(arrival, seconds, pod => {
+      const culture = this.createCulture(arrival.pods.indexOf(pod));
+      culture.style.primary = pod.color;
+      this.state.cultures.push(culture);
+      const camp = this.createSettlement(this.state.world.cells[pod.cellIndex]!, culture, 0, false, true);
+      camp.foundingPodId = pod.id;
+      camp.name = `${pod.name} Landing`;
+      pod.settlementId = camp.id;
+      camp.resources.food = pod.supplies.food;
+      camp.resources.goods = pod.supplies.goods;
+      // Packing spars and mineral ballast are finite physical stocks, spent by normal construction.
+      addMaterial(camp, 'timber', pod.supplies.timber);
+      addMaterial(camp, 'stone', pod.supplies.stone);
+      for (const domain of pod.domains) camp.knowledge.experimentation[domain] += 0.09;
+      for (const id of pod.knowledge) {
+        if (!KNOWLEDGE_BY_ID.has(id)) throw new Error(`Unknown founding knowledge: ${id}`);
+        camp.knowledge.records[id] = { id, theory: 0.58, practice: 0.02, discoveredMonth: 0, lastUsedMonth: 0,
+          originSettlementId: camp.id, lineageId: `${pod.id}:${id}`, parentLineages: [], source: 'inheritance', dormant: false };
+      }
+      initializeSettlementDevelopment(this.state, camp, []);
+    }, (pod, count) => this.emergeFounders(pod, count), () => {
+      this.initializeRelations();
+      this.rebuildLookupIndexes();
+      this.recomputeCultureShares();
+      this.state.stats.peakPopulation = this.population;
+      for (const person of this.state.people) if (person.foundingOrigin) person.position = { ...person.target };
+      this.advancedSystem.initialize(this.state);
+      this.addEvent({ type: 'ARRIVAL_DAY', actors: arrival.pods.flatMap(p => [p.id, p.groupId]),
+        causes: ['founding-arrival'], context: { year: 0, month: 0, day: 0, population: this.population,
+          manifest: JSON.stringify(arrival.pods.map(p => ({ podId: p.id, groupId: p.groupId, color: p.color,
+            position: p.position, population: p.personIds.length, personIds: p.personIds, domains: p.domains, knowledge: p.knowledge }))) },
+        outcome: 'The founders began their own history.', affectedPopulation: this.population, magnitude: 1, significance: 1,
+        tags: ['origin', 'permanent-anchor'], summary: 'Five vessels descended into an untouched world, carrying the first human lives of the new age.' });
+    });
+    // Real Person positions move from the hatch to their gathering place before monthly AI starts.
+    if (!this.historyRunning) for (const person of this.state.people) {
+      const origin = person.foundingOrigin;
+      if (!origin) continue;
+      const f = clamp((arrival.elapsedSeconds - origin.emergedSeconds) / 1.2);
+      person.position = { x: origin.position.x + (person.target.x - origin.position.x) * f,
+        z: origin.position.z - 1.15 + (person.target.z - origin.position.z + 1.15) * f };
+    }
+  }
+
+  private emergeFounders(pod: FoundingPod, count: number): void {
+    const camp = this.state.settlements.find(s => s.id === pod.settlementId)!;
+    const culture = this.state.cultures.find(c => camp.cultureShares[c.id])!;
+    while (pod.personIds.length < count) {
+      const i = pod.personIds.length;
+      const person = this.createPerson(camp, culture, this.random.int(18 * 12, 51 * 12), `${pod.groupId}:household:${Math.floor(i / 4)}`);
+      const angle = -Math.PI / 2 + (i % 7 - 3) * 0.22;
+      const position = { x: pod.position.x + Math.cos(angle) * (1.7 + Math.floor(i / 7) * 0.45), z: pod.position.z + Math.sin(angle) * (1.7 + Math.floor(i / 7) * 0.45) };
+      person.position = position;
+      person.target = { ...position };
+      person.activity = 'socialize';
+      person.foundingOrigin = { podId: pod.id, groupId: pod.groupId, position: { ...pod.position }, emergedSeconds: this.state.arrival!.elapsedSeconds };
+      person.expertise = pod.domains.map(domain => ({ domain, competence: this.random.range(0.15, 0.5), lastPractisedMonth: 0 }));
+      if (person.navigation) { person.navigation.destinationKind = 'plaza'; person.navigation.reason = 'emerging from the founding vessel'; person.navigation.waypoints = []; }
+      this.state.people.push(person);
+      pod.personIds.push(person.id);
+    }
   }
 
   private initialize(): void {
@@ -316,6 +392,7 @@ export class Simulation {
   }
 
   step(months = 1): void {
+    if (!this.historyRunning) return;
     const count = Math.max(0, Math.floor(months));
     for (let index = 0; index < count; index += 1) this.stepMonth();
   }
@@ -395,7 +472,9 @@ export class Simulation {
       }
       kept.push(event);
     }
-    this.state.history = kept.length > limit ? kept.slice(kept.length - limit) : kept;
+    const anchors = kept.filter(e => e.type === 'ARRIVAL_DAY');
+    const ordinary = kept.filter(e => e.type !== 'ARRIVAL_DAY');
+    this.state.history = [...anchors, ...ordinary.slice(-Math.max(1, limit - anchors.length))];
   }
 
   /**
@@ -455,7 +534,7 @@ export class Simulation {
     };
   }
 
-  private createSettlement(cell: WorldCell, culture: Culture, foundedMonth: number, record = true): Settlement {
+  private createSettlement(cell: WorldCell, culture: Culture, foundedMonth: number, record = true, founder = false): Settlement {
     const id = `settlement-${this.nextSettlementId++}`;
     const name = this.generatePlaceName(culture);
     const polityId = `polity-${this.nextPolityId++}`;
@@ -468,17 +547,17 @@ export class Simulation {
       cultureShares: { [culture.id]: 1 },
       resources: { food: 210, wood: 0, minerals: 0, goods: 22, wealth: 14 },
       monthlyBalance: emptyStock(),
-      buildings: 4,
-      targetBuildings: 4,
+      buildings: founder ? 0 : 4,
+      targetBuildings: founder ? 0 : 4,
       constructionProgress: 0,
       specialization: cell.fertility > 0.66 ? 'agriculture' : cell.wood > 0.65 ? 'forestry' : cell.minerals > 0.63 ? 'mining' : 'craft',
       foodSecurity: 0.8,
       prosperity: 0.45,
       knowledge: this.knowledgeSystem.createPortfolio(id, culture, cell, foundedMonth),
-      infrastructure: this.knowledgeSystem.createInfrastructure(cell),
+      infrastructure: founder ? { roads: 0, ports: 0, bridges: 0, workshops: 0, archives: 0, rail: 0, power: 0, factories: 0 } : this.knowledgeSystem.createInfrastructure(cell),
       industry: this.knowledgeSystem.createIndustry(),
       pollution: 0,
-      urbanization: 0.08,
+      urbanization: founder ? 0 : 0.08,
       climateStress: 0,
       conflictPressure: 0,
       crisisMonths: 0,
@@ -490,7 +569,8 @@ export class Simulation {
       ...createMaterialState(),
     };
     // Founding groups bring a finite starting kit; later colonies receive supplies from their parent.
-    if (foundedMonth === 0) { addMaterial(settlement, 'timber', 8); addMaterial(settlement, 'stone', 3); }
+    if (founder) settlement.resources = { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 };
+    if (foundedMonth === 0 && !founder) { addMaterial(settlement, 'timber', 8); addMaterial(settlement, 'stone', 3); }
     this.state.settlements.push(settlement);
     this.state.polities.push({
       id: polityId,

@@ -93,7 +93,7 @@ export function createSettlementLayoutPlan(input: SettlementLayoutInput): Settle
   })) as Record<BuildingDistrict, LayoutAnchor>;
 
   const portals = createRoutePortals(settlement, settlements, activeRoutes, baseRadius, input.transportation);
-  const streets = createStreetSegments(anchors, portals, baseRadius, eraRank, settlement.position);
+  const streets = settlement.foundingPodId && settlement.buildings === 0 ? [] : createStreetSegments(anchors, portals, baseRadius, eraRank, settlement.position);
   return { radius: baseRadius, anchors, portals, streets };
 }
 

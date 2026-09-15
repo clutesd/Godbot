@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { arrivalCameraPose } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
@@ -89,6 +90,30 @@ export class CameraDirector {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
+    if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') {
+      const pose = arrivalCameraPose(state.arrival);
+      if (state.arrival.elapsedSeconds < 0.2) {
+        this.camera.position.copy(pose.position);
+        this.lookTarget.copy(pose.target);
+      } else {
+        this.camera.position.lerp(pose.position, 1 - Math.exp(-deltaSeconds * 1.1));
+        this.lookTarget.lerp(pose.target, 1 - Math.exp(-deltaSeconds * 1.3));
+      }
+      // Keep the lens above mature tree crowns, and the sightline above intervening ridges.
+      this.camera.position.y = Math.max(this.camera.position.y, elevationAt(this.camera.position.x, this.camera.position.z) + 8);
+      for (let i = 1; i < 12; i++) {
+        const f = i / 12;
+        const x = THREE.MathUtils.lerp(this.camera.position.x, this.lookTarget.x, f);
+        const z = THREE.MathUtils.lerp(this.camera.position.z, this.lookTarget.z, f);
+        const y = THREE.MathUtils.lerp(this.camera.position.y, this.lookTarget.y, f);
+        const clearance = elevationAt(x, z) + 1.4 - y;
+        if (clearance > 0) this.camera.position.y += clearance / (1 - f);
+      }
+      this.camera.lookAt(this.lookTarget);
+      this.observation.label = 'Before history';
+      this.observation.detail = 'Year 0 · Month 0 · Day 0';
+      return;
+    }
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
     const mayInterrupt = this.shotAge >= Math.max(6, this.config.camera.transitionSeconds * 1.1);

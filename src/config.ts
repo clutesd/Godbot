@@ -1,4 +1,6 @@
 export interface GodboxConfig {
+  /** Established starts remain available for matched historical experiments. The app uses arrival. */
+  readonly startMode: 'arrival' | 'established';
   readonly engineVersion: string;
   readonly seed: string;
   readonly startingPopulation: number;
@@ -111,6 +113,7 @@ export type GodboxConfigInput = Omit<Partial<GodboxConfig>, 'simulation' | 'worl
 };
 
 export const DEFAULT_CONFIG: GodboxConfig = {
+  startMode: 'established',
   engineVersion: 'godbox-sim-0.13.0',
   seed: 'witness-the-saffron-river',
   startingPopulation: 360,
