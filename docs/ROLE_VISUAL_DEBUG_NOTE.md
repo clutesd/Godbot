@@ -1,1 +1,0 @@
-The people renderer now relies on InstancedMesh instance colours only. Avoid enabling material.vertexColors on people meshes unless the underlying geometry is also given a real color BufferAttribute.
