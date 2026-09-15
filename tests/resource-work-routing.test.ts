@@ -16,6 +16,7 @@ function assignment(overrides: Partial<ResourceWorkAssignment> = {}): ResourceWo
     resourceId: 'timber',
     worldPosition: { x: 12, z: 8 },
     gatherOccupations: ['forager'],
+    labourByOccupation: { forager: 2 },
     amountExtracted: 4,
     labourUsed: 2,
     ...overrides,
