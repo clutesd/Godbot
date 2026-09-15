@@ -10,6 +10,7 @@ import {
   decodeLowMistAnchor,
   lowMistDiurnalStrength,
   lowMistLayerHeightForCell,
+  lowMistOccurrenceForSource,
   lowMistSourceForCell,
   lowMistWindRetention,
 } from '../src/render/atmosphere/LowMistField';
@@ -17,6 +18,7 @@ import {
   AERIAL_PERSPECTIVE_SHADER,
   LOW_MIST_MAX_OPACITY,
   LOW_MIST_OPTICAL_DENSITY,
+  resolveLowMistFrameStrength,
   resolveLowMistOpacity,
 } from '../src/render/atmosphere/AerialPerspective';
 
@@ -85,6 +87,21 @@ describe('spatial low mist field', () => {
     expect(wet).toBeLessThan(1);
   });
 
+  it('uses season to change bank occurrence rather than dimming a bank that already exists', () => {
+    const source = 0.9;
+    const sharedRoll = 0.65;
+    const summerBank = lowMistOccurrenceForSource(source, 0.3, sharedRoll);
+    const autumnBank = lowMistOccurrenceForSource(source, 0.62, sharedRoll);
+
+    expect(summerBank).toBeGreaterThan(0.9);
+    expect(autumnBank).toBeCloseTo(summerBank, 8);
+
+    const marginalRoll = 0.78;
+    expect(lowMistOccurrenceForSource(source, 0.3, marginalRoll)).toBe(0);
+    expect(lowMistOccurrenceForSource(source, 0.62, marginalRoll)).toBeGreaterThan(0.9);
+    expect(lowMistOccurrenceForSource(0, 1, 0)).toBe(0);
+  });
+
   it('peaks around dawn and burns back under a high clear sun', () => {
     const predawn = lowMistDiurnalStrength(-0.04, 0.08, 0);
     const dawn = lowMistDiurnalStrength(0.06, 0.42, 0);
@@ -97,6 +114,15 @@ describe('spatial low mist field', () => {
     expect(clearNoon).toBeLessThan(0.4);
   });
 
+  it('keeps an existing bank materially present even at the clear-noon burn-off floor', () => {
+    const clearNoon = lowMistDiurnalStrength(0.82, 1, 0);
+    const strength = resolveLowMistFrameStrength(1.8, clearNoon, 1);
+
+    // The old path multiplied this by summer's 0.30 again, reducing it to roughly 0.12.
+    expect(strength).toBeGreaterThan(0.35);
+    expect(strength).toBeLessThan(0.5);
+  });
+
   it('disperses shallow mist under strong wind while retaining calm banks', () => {
     const calm = lowMistWindRetention(0.12);
     const gale = lowMistWindRetention(0.95);
@@ -105,7 +131,7 @@ describe('spatial low mist field', () => {
   });
 
   it('keeps a representative high-camera mist bank visibly above a perceptual floor', () => {
-    // Representative of the supplied documentary screenshots after seasonal/diurnal attenuation:
+    // Representative of the supplied documentary screenshots after diurnal/wind attenuation:
     // only a small fraction of the camera ray intersects the shallow bank, but legitimate mist must
     // still alter the image enough to be seen without restoring screen-wide fog.
     const documentary = resolveLowMistOpacity(120, 0.08, 0.12, 0);
@@ -123,6 +149,7 @@ describe('spatial low mist field', () => {
     const world = generateWorld(configWith({ seed: 'low-mist-field-contract', world: { size: 18 } }));
     const surface = new TerrainSurface(world);
     const field = new LowMistField(world, surface, 'low-mist-field-contract');
+    field.setSeasonalFrequency(0.62);
     const densities: number[] = [];
     const spillStrengths: number[] = [];
 
@@ -156,9 +183,23 @@ describe('spatial low mist field', () => {
     expect(field.texture.image.height).toBe(world.size);
     expect(field.flowTexture.image.width).toBe(world.size);
     expect(field.minAnchorY).toBeLessThan(field.maxAnchorY);
+    expect(field.sample().seasonalFrequency).toBeCloseTo(0.62, 6);
+    field.dispose();
+  });
 
-    field.setSeasonalStrength(0.62);
-    expect(field.sample().seasonalStrength).toBeCloseTo(0.62, 6);
+  it('increases coherent bank coverage with seasonal frequency without changing bank opacity semantics', () => {
+    const world = generateWorld(configWith({ seed: 'low-mist-frequency-contract', world: { size: 24 } }));
+    const surface = new TerrainSurface(world);
+    const field = new LowMistField(world, surface, 'low-mist-frequency-contract');
+
+    field.setSeasonalFrequency(0.3);
+    const summerActive = Array.from(field.pixels).filter((value, index) => index % 4 === 0 && value > 8).length;
+    field.setSeasonalFrequency(0.62);
+    const autumnActive = Array.from(field.pixels).filter((value, index) => index % 4 === 0 && value > 8).length;
+
+    expect(summerActive).toBeGreaterThan(0);
+    expect(autumnActive).toBeGreaterThanOrEqual(summerActive);
+    expect(field.sample().seasonalFrequency).toBeCloseTo(0.62, 6);
     field.dispose();
   });
 

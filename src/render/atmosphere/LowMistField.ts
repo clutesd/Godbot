@@ -13,7 +13,8 @@ export interface LowMistFieldSample {
   span: number;
   minAnchorY: number;
   maxAnchorY: number;
-  seasonalStrength: number;
+  /** Seasonal occurrence bias used to decide which coherent banks form, not their opacity. */
+  seasonalFrequency: number;
   driftX: number;
   driftZ: number;
   motionTime: number;
@@ -21,6 +22,7 @@ export interface LowMistFieldSample {
 }
 
 const CHANNELS = 4;
+const OCCURRENCE_BANK_SIZE = 4;
 export const LOW_MIST_MIN_HEIGHT = 2.8;
 export const LOW_MIST_MAX_HEIGHT = 7.6;
 
@@ -86,6 +88,27 @@ export function lowMistLayerHeightForCell(cell: WorldCell): number {
 }
 
 /**
+ * Resolve whether a coherent mist bank exists in an otherwise suitable source region.
+ *
+ * Season controls occurrence/coverage only. Once a bank exists its local density is governed by
+ * geography and weather, not multiplied down by the seasonal probability. Strong hydrologic
+ * sources remain reasonably likely even in summer, while autumn makes marginal banks more common.
+ */
+export function lowMistOccurrenceForSource(
+  sourceStrength: number,
+  seasonalFrequency: number,
+  occurrenceRoll: number,
+): number {
+  const source = clamp01(sourceStrength);
+  if (source <= 0.015) return 0;
+  const frequency = clamp01(seasonalFrequency);
+  const sourceBias = smoothstep(0.12, 0.82, source);
+  const chance = THREE.MathUtils.clamp(0.18 + frequency * 0.38 + sourceBias * 0.42, 0.08, 0.96);
+  if (clamp01(occurrenceRoll) >= chance) return 0;
+  return THREE.MathUtils.lerp(0.88, 1, source);
+}
+
+/**
  * Low mist is most persistent overnight and around dawn, then burns back hard under a high clear
  * sun. Dense cloud/weather reduces solar burn-off instead of making every wet day uniformly foggy.
  */
@@ -120,7 +143,7 @@ export function decodeLowMistAnchor(encoded: number, minY: number, maxY: number)
  * Low-resolution world-space mist field.
  *
  * Density texture:
- * R = spatial source strength
+ * R = spatial source strength after coherent seasonal occurrence gating
  * G = normalized terrain/water anchor height
  * B = local layer-height fraction
  * A = reserved (opaque for interpolation stability)
@@ -144,7 +167,7 @@ export class LowMistField {
   readonly flowPixels: Uint8Array;
   minAnchorY = 0;
   maxAnchorY = 1;
-  seasonalStrength = 0.3;
+  seasonalFrequency = 0.3;
 
   private revision = '';
   private driftX = 0;
@@ -170,8 +193,17 @@ export class LowMistField {
     this.rebuild();
   }
 
+  /** Preferred semantic API: season changes how frequently banks form, not bank opacity. */
+  setSeasonalFrequency(frequency: number): void {
+    const next = THREE.MathUtils.clamp(frequency, 0, 1);
+    if (Math.abs(next - this.seasonalFrequency) < 0.0001) return;
+    this.seasonalFrequency = next;
+    this.rebuild();
+  }
+
+  /** Compatibility alias for the existing renderer call site. */
   setSeasonalStrength(strength: number): void {
-    this.seasonalStrength = THREE.MathUtils.clamp(strength, 0, 1);
+    this.setSeasonalFrequency(strength);
   }
 
   /**
@@ -180,7 +212,7 @@ export class LowMistField {
    * the mist across the world in one frame.
    */
   update(deltaSeconds = 0, elapsedSeconds = 0): void {
-    const revision = `${this.world.weather?.month ?? -1}:${this.world.environmentRevision ?? 0}`;
+    const revision = this.revisionKey();
     if (revision !== this.revision) this.rebuild();
 
     const weather = this.world.weather;
@@ -211,7 +243,7 @@ export class LowMistField {
       span: this.span,
       minAnchorY: this.minAnchorY,
       maxAnchorY: this.maxAnchorY,
-      seasonalStrength: this.seasonalStrength,
+      seasonalFrequency: this.seasonalFrequency,
       driftX: this.driftX,
       driftZ: this.driftZ,
       motionTime: this.motionTime,
@@ -224,6 +256,10 @@ export class LowMistField {
     this.flowTexture.dispose();
   }
 
+  private revisionKey(): string {
+    return `${this.world.weather?.month ?? -1}:${this.world.environmentRevision ?? 0}:${this.seasonalFrequency.toFixed(3)}`;
+  }
+
   private rebuild(): void {
     const count = this.world.size * this.world.size;
     const raw = new Float32Array(count);
@@ -232,6 +268,7 @@ export class LowMistField {
     let minAnchor = Number.POSITIVE_INFINITY;
     let maxAnchor = Number.NEGATIVE_INFINITY;
     const flowStep = Math.max(this.world.cellSize, this.world.terrain.step * 2);
+    const occurrenceEpoch = this.world.weather?.month ?? 0;
 
     for (let index = 0; index < count; index += 1) {
       const cell = this.world.cells[index];
@@ -245,8 +282,13 @@ export class LowMistField {
       minAnchor = Math.min(minAnchor, anchorY);
       maxAnchor = Math.max(maxAnchor, anchorY);
 
+      const source = lowMistSourceForCell(cell, weather);
+      const bankX = Math.floor(cell.x / OCCURRENCE_BANK_SIZE);
+      const bankZ = Math.floor(cell.z / OCCURRENCE_BANK_SIZE);
+      const occurrenceRoll = stableHash(`${this.seed}:low-mist-occurrence:${occurrenceEpoch}`, bankX, bankZ);
+      const occurrence = lowMistOccurrenceForSource(source, this.seasonalFrequency, occurrenceRoll);
       const patch = 0.76 + stableHash(`${this.seed}:low-mist`, cell.x, cell.z) * 0.42;
-      raw[index] = clamp01(lowMistSourceForCell(cell, weather) * patch);
+      raw[index] = clamp01(source * occurrence * patch);
       height[index] = lowMistLayerHeightForCell(cell);
 
       // Downhill flow is presentation-only terrain information. It gives moving bank structure a
@@ -313,6 +355,6 @@ export class LowMistField {
 
     this.texture.needsUpdate = true;
     this.flowTexture.needsUpdate = true;
-    this.revision = `${this.world.weather?.month ?? -1}:${this.world.environmentRevision ?? 0}`;
+    this.revision = this.revisionKey();
   }
 }
