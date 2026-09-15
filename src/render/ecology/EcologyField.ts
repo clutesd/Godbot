@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { stableHash } from '../../sim/prng';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
-import type { Biome, Settlement, WeatherCellState, WorldCell, WorldState } from '../../sim/types';
+import type { Biome, Settlement, Vec2, WeatherCellState, WorldCell, WorldState } from '../../sim/types';
 
 /** Renderer-only budgets. Zero disables a layer without changing world generation/history. */
 export interface EcologyQuality {
@@ -60,6 +60,7 @@ export class EcologyField {
   readonly time = { value: 0 };
   readonly wind = { value: new THREE.Vector2() };
   readonly seedPhase: number;
+  settlementPositions: Vec2[] = [];
   private readonly data: Uint8Array;
   private readonly refuges: Float32Array;
   private readonly strains: Float32Array;
@@ -83,6 +84,8 @@ export class EcologyField {
   }
 
   sync(settlements: readonly Settlement[], month: number, pressure = 0): void {
+    this.settlementPositions = settlements.filter(settlement => settlement.alive)
+      .map(settlement => ({ x: settlement.position.x, z: settlement.position.z }));
     const fires = settlements.flatMap(s => (s.structurePlots ?? []).filter(p => p.fire || (p.scorch ?? 0) > 0.05));
     for (let i = 0; i < this.world.cells.length; i++) {
       const cell = this.world.cells[i]!;
