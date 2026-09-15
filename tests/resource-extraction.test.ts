@@ -5,6 +5,7 @@ import {
   advanceSettlementResourceExtraction,
   settlementResourceCatchment,
 } from '../src/sim/resources/SettlementResourceExtraction';
+import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
 import type { DepositResourceKind } from '../src/sim/resources/WorldResources';
 
 const depositKinds: readonly DepositResourceKind[] = [
@@ -81,6 +82,20 @@ describe('settlement resource extraction', () => {
     expect(settlement.resources.wood).toBeCloseTo(beforeWood + 12);
     expect(settlement.resources.minerals).toBeCloseTo(beforeMinerals + 8);
     expect(home.naturalResources.lastRegeneratedMonth).toBe(1);
+
+    const assignments = resourceWorkAssignments(sim.state).filter((assignment) => assignment.settlementId === settlement.id);
+    const timberWork = assignments.filter((assignment) => assignment.resourceId === 'timber');
+    const stoneWork = assignments.filter((assignment) => assignment.resourceId === 'stone');
+    expect(timberWork.reduce((sum, assignment) => sum + assignment.amountExtracted, 0)).toBeCloseTo(12);
+    expect(stoneWork.reduce((sum, assignment) => sum + assignment.amountExtracted, 0)).toBeCloseTo(8);
+    expect([...timberWork, ...stoneWork].every((assignment) => assignment.source === 'world-resource')).toBe(true);
+    expect(timberWork[0]?.worldPosition).toEqual({ x: home.worldX, z: home.worldZ });
+    expect(stoneWork[0]?.worldPosition).toEqual({ x: home.worldX, z: home.worldZ });
+    expect(timberWork.reduce((sum, assignment) => sum + assignment.labourUsed, 0)).toBeGreaterThan(0);
+    expect(stoneWork.reduce((sum, assignment) => sum + assignment.labourUsed, 0)).toBeGreaterThan(0);
+
+    sim.state.month = 2;
+    expect(resourceWorkAssignments(sim.state)).toEqual([]);
   });
 
   it('caps legacy production when the local physical resource catchment is exhausted', () => {
