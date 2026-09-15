@@ -22,6 +22,15 @@ export interface EnvironmentalDepthState {
 
 /** Legacy authored clear-weather fog density. Values above this are meaningful weather/event fog. */
 const AUTHORED_CLEAR_FOG = 0.0072;
+/**
+ * Perceptual visibility correction for the spatial mist field.
+ *
+ * The low-mist source texture is already highly selective and the shader samples only a shallow
+ * near-surface layer. The original depth multiplier was tuned as though it were the final opacity,
+ * so several additional attenuation stages made valid mist almost disappear in documentary shots.
+ * Keep geography/season/time-of-day authoritative and amplify only the resulting local mist signal.
+ */
+export const LOW_MIST_VISIBILITY_GAIN = 3.6;
 
 /**
  * Resolve world depth from the same final EnvironmentFrameState that owns the lights/exposure.
@@ -57,13 +66,15 @@ export function resolveEnvironmentalDepth(input: EnvironmentalDepthInput): Envir
 
   const fogSkyBlend = THREE.MathUtils.clamp(0.13 + obscuration * 0.24 + twilight * 0.07, 0.1, 0.44);
 
-  // Seasonal/time-of-day modulation for the spatial low-mist field. It is intentionally restrained
-  // in clear daylight and stronger around twilight/night or genuine atmospheric obscuration. The
-  // mist field itself decides *where* moisture exists; this scalar only decides how visible it is.
+  // Geography still decides *where* mist exists, and the LowMistField/AerialPerspective pipeline
+  // still decides season, time-of-day, wind and local density. This scalar is now explicitly a
+  // perceptual visibility correction: it compensates for shallow-layer/ray attenuation without
+  // increasing screen-wide FogExp2 or allowing mist onto dry ridges.
+  const authoredMistVisibility = 0.5 + twilight * 0.18 + obscuration * 0.35 + (1 - daylight) * 0.08;
   const valleyMistMultiplier = THREE.MathUtils.clamp(
-    0.5 + twilight * 0.18 + obscuration * 0.35 + (1 - daylight) * 0.08,
-    0.45,
-    1.15,
+    authoredMistVisibility * LOW_MIST_VISIBILITY_GAIN,
+    1.55,
+    3.9,
   );
 
   const shadowHalfSpan = THREE.MathUtils.clamp(38 + cameraHeight * 0.26, 42, 64);
