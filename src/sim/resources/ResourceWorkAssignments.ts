@@ -16,7 +16,10 @@ export interface ResourceWorkAssignment {
   readonly cellIndex?: number;
   readonly resourceId: string;
   readonly worldPosition: Readonly<Vec2>;
+  /** Occupations physically allowed to perform this extraction. */
   readonly gatherOccupations: readonly Occupation[];
+  /** Exact labour actually consumed from each occupation bucket for this site this month. */
+  readonly labourByOccupation: Readonly<Partial<Record<Occupation, number>>>;
   readonly amountExtracted: number;
   readonly labourUsed: number;
   readonly accessPath?: ReadonlyArray<Readonly<Vec2>>;
@@ -77,6 +80,8 @@ export function beginResourceWorkMonth(state: SimulationState): void {
 /** Records one real extraction site. This never mutates simulation resource quantities. */
 export function recordResourceWorkAssignment(state: SimulationState, assignment: ResourceWorkAssignment): void {
   if (assignment.month !== state.month || assignment.amountExtracted <= 0 || assignment.labourUsed <= 0) return;
+  const contributed = Object.values(assignment.labourByOccupation).reduce((sum, amount) => sum + (amount ?? 0), 0);
+  if (contributed <= 0) return;
   const current = snapshot(state);
   const key = authorityKey(assignment.settlementId, assignment.resourceId);
 
@@ -94,6 +99,7 @@ export function recordResourceWorkAssignment(state: SimulationState, assignment:
     ...assignment,
     worldPosition: copyPoint(assignment.worldPosition),
     gatherOccupations: Object.freeze([...assignment.gatherOccupations]),
+    labourByOccupation: Object.freeze({ ...assignment.labourByOccupation }),
     accessPath: assignment.accessPath ? Object.freeze(assignment.accessPath.map(copyPoint)) : undefined,
     accessPaths: assignment.accessPaths
       ? Object.freeze(assignment.accessPaths.map((leg) => Object.freeze(leg.map(copyPoint))))
