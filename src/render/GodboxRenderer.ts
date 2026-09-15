@@ -313,7 +313,7 @@ export class GodboxRenderer {
 
     const visiblePersonBudget = visiblePersonBudgetForDensity(this.config.render.visualDensity);
     const peopleGeometry = new THREE.CapsuleGeometry(0.12, 0.34, 2, 5);
-    const peopleMaterial = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, vertexColors: true });
+    const peopleMaterial = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
     this.people = new THREE.InstancedMesh(peopleGeometry, peopleMaterial, visiblePersonBudget);
     this.people.castShadow = true;
     this.people.frustumCulled = false;
@@ -327,10 +327,10 @@ export class GodboxRenderer {
     this.peopleHeads = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.12, 1), peopleMaterial, visiblePersonBudget);
     this.peopleArms = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 5).translate(0, -0.17, 0), peopleMaterial, visiblePersonBudget * 2);
     this.peopleLegs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.032, 0.04, 0.36, 5).translate(0, -0.18, 0), peopleMaterial, visiblePersonBudget * 2);
-    this.peopleTools = new THREE.InstancedMesh(new THREE.BoxGeometry(0.05, 0.36, 0.05), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05, vertexColors: true }), visiblePersonBudget);
-    this.peopleHeadwear = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.14, 0.12, 7), new THREE.MeshStandardMaterial({ roughness: 0.86, vertexColors: true }), visiblePersonBudget);
-    this.peopleCargo = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), new THREE.MeshStandardMaterial({ roughness: 0.95, vertexColors: true }), visiblePersonBudget);
-    this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.2, 0.46, 7, 1, true).translate(0, -0.23, 0), new THREE.MeshStandardMaterial({ roughness: 0.88, vertexColors: true, side: THREE.DoubleSide }), NOTABLE_VISUAL_BUDGET);
+    this.peopleTools = new THREE.InstancedMesh(new THREE.BoxGeometry(0.05, 0.36, 0.05), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05 }), visiblePersonBudget);
+    this.peopleHeadwear = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.14, 0.12, 7), new THREE.MeshStandardMaterial({ roughness: 0.86 }), visiblePersonBudget);
+    this.peopleCargo = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), new THREE.MeshStandardMaterial({ roughness: 0.95 }), visiblePersonBudget);
+    this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.2, 0.46, 7, 1, true).translate(0, -0.23, 0), new THREE.MeshStandardMaterial({ roughness: 0.88, side: THREE.DoubleSide }), NOTABLE_VISUAL_BUDGET);
     this.peopleMantles.castShadow = true;
     this.peopleMantles.frustumCulled = false;
     this.peopleMantles.count = 0;
