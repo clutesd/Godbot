@@ -6,15 +6,27 @@ import { addMaterial, materialEconomy, storageRoom, takeMaterial } from './Inven
 import type { ResourceEventDraft } from './ResourceSystem';
 
 export type LabourBudget = Partial<Record<Occupation, number>>;
+export interface LabourUse {
+  total: number;
+  byOccupation: Partial<Record<Occupation, number>>;
+}
+
+/** Spends labour in the declared priority order and preserves the exact contributing buckets. */
+export function useLabourDetailed(budget: LabourBudget, occupations: readonly Occupation[], requested: number): LabourUse {
+  let total = 0;
+  const byOccupation: Partial<Record<Occupation, number>> = {};
+  for (const occupation of occupations) {
+    const spend = Math.min(budget[occupation] ?? 0, requested - total);
+    if (spend <= 0) continue;
+    budget[occupation] = (budget[occupation] ?? 0) - spend;
+    byOccupation[occupation] = spend;
+    total += spend;
+  }
+  return { total, byOccupation };
+}
 
 export function useLabour(budget: LabourBudget, occupations: readonly Occupation[], requested: number): number {
-  let used = 0;
-  for (const occupation of occupations) {
-    const spend = Math.min(budget[occupation] ?? 0, requested - used);
-    budget[occupation] = (budget[occupation] ?? 0) - spend;
-    used += spend;
-  }
-  return used;
+  return useLabourDetailed(budget, occupations, requested).total;
 }
 
 export function recipeRequirementsMet(s: Settlement, recipe: RecipeDefinition, state?: SimulationState): boolean {

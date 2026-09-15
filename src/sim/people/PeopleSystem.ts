@@ -13,7 +13,15 @@ import type {
   Vec2,
   WorldState,
 } from '../types';
+import type { ResourceWorkAssignment } from '../resources/ResourceWorkAssignments';
 import { WalkabilityLayer, type CrossingMode } from './WalkabilityLayer';
+import {
+  isResourceWorkDestinationId,
+  resourceWorkAssignmentForPerson,
+  resourceWorkDestinationId,
+  resourceWorkDestinationKind,
+  resourceWorkPreferredWaypoints,
+} from './ResourceWorkRouting';
 import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../terrain/SurfaceGeometry';
 
 interface ScheduledDestination {
@@ -21,6 +29,9 @@ interface ScheduledDestination {
   phase: SchedulePhase;
   activity: Activity;
   reason: string;
+  destinationId?: string;
+  point?: Vec2;
+  preferredWaypoints?: Vec2[];
 }
 
 const WORK_DESTINATION: Record<PersonRole, DestinationKind> = {
@@ -168,7 +179,25 @@ export class PeopleSystem {
       return;
     }
 
+    const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
+    const resourceSchedule = resourceWork ? this.scheduleFor(person, settlement, state) : undefined;
+    const expectedResourceDestinationId = resourceSchedule && isResourceWorkDestinationId(resourceSchedule.destinationId)
+      ? resourceSchedule.destinationId
+      : undefined;
     const navigation = person.navigation;
+    if (navigation && isResourceWorkDestinationId(navigation.destinationId)
+      && navigation.destinationId !== expectedResourceDestinationId) {
+      // Extraction sites are monthly facts. Never finish a commute toward a site that is no longer
+      // worked, no longer belongs to this representative, or has moved under a new authority.
+      navigation.traveling = false;
+      navigation.destinationId = `${person.id}:resource-work-replan`;
+    } else if (navigation && expectedResourceDestinationId
+      && navigation.destinationId !== expectedResourceDestinationId
+      && navigation.schedulePhase !== 'emergency') {
+      // Current real extraction pre-empts an ordinary documentary commute during work hours.
+      navigation.traveling = false;
+      navigation.destinationId = `${person.id}:resource-work-replan`;
+    }
     if (navigation?.destinationKind === 'construction-site' && settlement.constructionProgress <= 0) {
       // A completed/cancelled project stops attracting workers immediately.
       navigation.traveling = false;
@@ -180,8 +209,16 @@ export class PeopleSystem {
       return;
     }
 
-    const schedule = this.scheduleFor(person, settlement, state);
-    const destinationId = this.destinationId(person, settlement, schedule.kind);
+    const schedule = resourceSchedule ?? this.scheduleFor(person, settlement, state);
+    const destinationId = schedule.destinationId ?? this.destinationId(person, settlement, schedule.kind);
+    if (navigation && navigation.destinationId === destinationId && isResourceWorkDestinationId(destinationId)) {
+      // Changing from the commute phase to the work phase at the same physical site must not rebuild
+      // the access route and send an arrived worker back toward town.
+      navigation.schedulePhase = schedule.phase;
+      navigation.reason = schedule.reason;
+      person.activity = schedule.activity;
+      return;
+    }
     if (navigation && navigation.destinationId === destinationId && navigation.schedulePhase === schedule.phase) {
       person.activity = schedule.activity;
       if (schedule.activity === 'rest') person.energy = clamp(person.energy + 0.2);
@@ -311,7 +348,6 @@ export class PeopleSystem {
       farmer: 'hoe', fisher: 'basket', gatherer: 'basket', hunter: 'bag', laborer: 'hammer', builder: 'hammer', 'craft-worker': 'toolkit', trader: 'bag', merchant: 'ledger', administrator: 'ledger', scholar: 'ledger', researcher: 'toolkit', engineer: 'toolkit', machinist: 'toolkit', transporter: 'bag', 'dock-worker': 'bag', 'factory-worker': 'toolkit', 'logistics-worker': 'bag', priest: 'staff', 'ritual-specialist': 'staff', guard: 'staff', soldier: 'staff',
     };
     return {
-      // Deterministic adult variation only: ~0.85-1.15 of the canonical world humanoid height.
       heightScale: 0.85 + variation * 0.3,
       buildScale: 0.86 + buildVariation * 0.27,
       posture: person.ageMonths > 60 * 12 ? 0.1 + variation * 0.14 : (variation - 0.5) * 0.08,
@@ -325,16 +361,19 @@ export class PeopleSystem {
 
   private scheduleFor(person: Person, settlement: Settlement, state: SimulationState): ScheduledDestination {
     const role = person.role ?? 'gatherer';
+    const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
     const shiftedHour = (state.month * 3 + Math.floor(stableUnit(`${person.id}:schedule`) * 3)) % 24;
     const winter = state.month % 12 <= 1 || state.month % 12 >= 10;
     if (person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
       return { kind: 'home', phase: 'home', activity: 'rest', reason: 'resting at home with their household' };
     }
     if (shiftedHour < 8) {
+      if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'commute');
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'commute', activity: 'travel', reason: `taking the morning route to ${humanDestination(kind)}` };
     }
     if (shiftedHour < 16) {
+      if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'work');
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'work', activity: activityForRole(role, kind), reason: `working at ${humanDestination(kind)}` };
     }
@@ -349,6 +388,22 @@ export class PeopleSystem {
     return { kind: 'home', phase: 'home', activity: 'rest', reason: 'returning home for the evening' };
   }
 
+  private resourceWorkSchedule(assignment: ResourceWorkAssignment, phase: 'commute' | 'work'): ScheduledDestination {
+    const kind = resourceWorkDestinationKind(assignment);
+    const resource = assignment.resourceId.replaceAll('-', ' ');
+    return {
+      kind,
+      phase,
+      activity: phase === 'work' ? 'gather' : 'travel',
+      reason: phase === 'work'
+        ? `gathering ${resource} at an active resource site`
+        : `taking the surveyed route to an active ${resource} site`,
+      destinationId: resourceWorkDestinationId(assignment),
+      point: { x: assignment.worldPosition.x, z: assignment.worldPosition.z },
+      preferredWaypoints: resourceWorkPreferredWaypoints(assignment),
+    };
+  }
+
   private workDestination(role: PersonRole, settlement: Settlement): DestinationKind {
     if ((role === 'builder' || role === 'laborer') && settlement.constructionProgress > 0) return 'construction-site';
     if (role === 'laborer') return settlement.specialization === 'agriculture' ? 'field' : 'workshop';
@@ -357,8 +412,10 @@ export class PeopleSystem {
   }
 
   private assignDestination(person: Person, settlement: Settlement, state: SimulationState, schedule: ScheduledDestination, mode: CrossingMode): void {
-    const destination = this.destinationPoint(person, settlement, state, schedule.kind);
-    const preferred = this.preferredRoadWaypoints(person, settlement, state, schedule.kind);
+    const destination = schedule.point
+      ? this.walkability.nearestWalkable(schedule.point, `${person.id}:${schedule.destinationId ?? 'resource-work'}`)
+      : this.destinationPoint(person, settlement, state, schedule.kind);
+    const preferred = schedule.preferredWaypoints ?? this.preferredRoadWaypoints(person, settlement, state, schedule.kind);
     const waypoints = this.walkability.route(person.position, destination, preferred, mode);
     if (waypoints.length === 0) {
       const safe = this.walkability.nearestWalkable(person.position, `${person.id}:stranded`);
@@ -375,7 +432,7 @@ export class PeopleSystem {
     person.activity = 'travel';
     person.navigation = {
       destinationKind: schedule.kind,
-      destinationId: this.destinationId(person, settlement, schedule.kind),
+      destinationId: schedule.destinationId ?? this.destinationId(person, settlement, schedule.kind),
       reason: schedule.reason,
       waypoints,
       waypointIndex: 0,
@@ -456,6 +513,10 @@ export class PeopleSystem {
       navigation.crossingMode = 'walk';
       return;
     }
+    if (isResourceWorkDestinationId(navigation.destinationId)) {
+      person.activity = 'gather';
+      return;
+    }
     person.activity = activityAtDestination(person.role ?? 'gatherer', navigation.destinationKind);
   }
 
@@ -480,7 +541,6 @@ export class PeopleSystem {
       ? { x: settlement.position.x + Math.cos(angle) * layout.radius * 0.78, z: settlement.position.z + Math.sin(angle) * layout.radius * 0.78 }
       : { x: anchor.worldX, z: anchor.worldZ };
     let destination = this.walkability.nearestWalkable({ x: center.x + Math.cos(angle) * radius, z: center.z + Math.sin(angle) * radius }, identity);
-    // Homes and workplaces can remain unsafe after the surrounding ground dries.
     for (let pass = 0; pass < 4; pass++) {
       const closed = (settlement.structurePlots ?? []).find(plot => (plot.accessRestricted || plot.condition < 0.65)
         && Math.hypot(destination.x - plot.worldX, destination.z - plot.worldZ) < plot.radius + 0.3);

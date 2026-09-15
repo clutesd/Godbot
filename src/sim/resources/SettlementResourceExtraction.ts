@@ -9,6 +9,7 @@ import {
   recordMaterialExtraction,
   type RawMaterialKind,
 } from './MaterialEconomy';
+import { recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import {
   extractDeposit,
   harvestRenewable,
@@ -31,6 +32,15 @@ export interface SettlementExtractionResult {
   extractedMinerals: number;
   deposits: Partial<Record<DepositResourceKind, number>>;
   renewables: Partial<Record<SupplementalRenewable, number>>;
+}
+
+interface ExtractionSite {
+  cell: WorldCell;
+  amount: number;
+}
+
+interface DepositExtractionSite extends ExtractionSite {
+  kind: DepositResourceKind;
 }
 
 const distanceScore = (cell: WorldCell, home: WorldCell): number =>
@@ -82,8 +92,12 @@ function eligibleDeposits(settlement: Settlement): DepositResourceKind[] {
   return kinds;
 }
 
-function harvestRenewableAcross(cells: readonly WorldCell[], kind: RenewableResourceKind, requested: number): number {
-  if (requested <= 0) return 0;
+function harvestRenewableAcross(
+  cells: readonly WorldCell[],
+  kind: RenewableResourceKind,
+  requested: number,
+): { total: number; sites: ExtractionSite[] } {
+  if (requested <= 0) return { total: 0, sites: [] };
   const ranked = cells
     .map((cell, distance) => {
       const resource = cell.naturalResources?.renewables[kind];
@@ -92,23 +106,27 @@ function harvestRenewableAcross(cells: readonly WorldCell[], kind: RenewableReso
     })
     .sort((a, b) => b.score - a.score);
   let remaining = requested;
-  let harvested = 0;
+  let total = 0;
+  const sites: ExtractionSite[] = [];
   for (const candidate of ranked) {
     if (remaining <= 1e-9) break;
     const amount = harvestRenewable(candidate.cell, kind, remaining);
-    harvested += amount;
+    if (amount <= 0) continue;
+    total += amount;
     remaining -= amount;
+    sites.push({ cell: candidate.cell, amount });
   }
-  return harvested;
+  return { total, sites };
 }
 
 function extractMinerals(
   settlement: Settlement,
   cells: readonly WorldCell[],
   requested: number,
-): { total: number; deposits: Partial<Record<DepositResourceKind, number>> } {
+): { total: number; deposits: Partial<Record<DepositResourceKind, number>>; sites: DepositExtractionSite[] } {
   const extracted: Partial<Record<DepositResourceKind, number>> = {};
-  if (requested <= 0) return { total: 0, deposits: extracted };
+  const sites: DepositExtractionSite[] = [];
+  if (requested <= 0) return { total: 0, deposits: extracted, sites };
   const kinds = eligibleDeposits(settlement);
   const candidates: Array<{ cell: WorldCell; kind: DepositResourceKind; score: number }> = [];
   for (let distance = 0; distance < cells.length; distance += 1) {
@@ -129,10 +147,38 @@ function extractMinerals(
     const amount = extractDeposit(candidate.cell, candidate.kind, remaining);
     if (amount <= 0) continue;
     extracted[candidate.kind] = (extracted[candidate.kind] ?? 0) + amount;
+    sites.push({ cell: candidate.cell, kind: candidate.kind, amount });
     total += amount;
     remaining -= amount;
   }
-  return { total, deposits: extracted };
+  return { total, deposits: extracted, sites };
+}
+
+function recordWorldWorkSites(
+  state: SimulationState,
+  settlement: Settlement,
+  resourceId: RawMaterialKind,
+  sites: readonly ExtractionSite[],
+  gatherOccupations: readonly Person['occupation'][],
+  labourUsed: number,
+): void {
+  const total = sites.reduce((sum, site) => sum + site.amount, 0);
+  if (total <= 0 || labourUsed <= 0) return;
+  for (const site of sites) {
+    const cellIndex = site.cell.z * state.world.size + site.cell.x;
+    recordResourceWorkAssignment(state, {
+      month: state.month,
+      source: 'world-resource',
+      settlementId: settlement.id,
+      siteId: `cell:${cellIndex}:${resourceId}`,
+      cellIndex,
+      resourceId,
+      worldPosition: { x: site.cell.worldX, z: site.cell.worldZ },
+      gatherOccupations,
+      amountExtracted: site.amount,
+      labourUsed: labourUsed * site.amount / total,
+    });
+  }
 }
 
 function reconcilePositiveBalance(settlement: Settlement, key: 'wood' | 'minerals', actual: number): void {
@@ -218,16 +264,35 @@ export function advanceSettlementResourceExtraction(
 
   const budget = resourceLabourBudget(state, settlement, localResidents);
   const timberCapacity = (budget.forager ?? 0) + (budget.builder ?? 0);
-  const harvestedWood = harvestRenewableAcross(cells, 'timber', Math.min(requestedWood, timberCapacity));
-  useLabour(budget, ['forager', 'builder'], harvestedWood);
+  const timberHarvest = harvestRenewableAcross(cells, 'timber', Math.min(requestedWood, timberCapacity));
+  const harvestedWood = timberHarvest.total;
+  const timberLabourUsed = useLabour(budget, ['forager', 'builder'], harvestedWood);
+  recordWorldWorkSites(state, settlement, 'timber', timberHarvest.sites, ['forager', 'builder'], timberLabourUsed);
+
   const mineralCapacity = (budget.artisan ?? 0) + (budget.builder ?? 0);
   const mineralExtraction = extractMinerals(settlement, cells, Math.min(requestedMinerals, mineralCapacity));
-  useLabour(budget, ['artisan', 'builder'], mineralExtraction.total);
+  const mineralLabourUsed = useLabour(budget, ['artisan', 'builder'], mineralExtraction.total);
+  const mineralTotal = mineralExtraction.sites.reduce((sum, site) => sum + site.amount, 0);
+  if (mineralTotal > 0 && mineralLabourUsed > 0) {
+    for (const site of mineralExtraction.sites) {
+      recordWorldWorkSites(
+        state,
+        settlement,
+        site.kind,
+        [site],
+        ['artisan', 'builder'],
+        mineralLabourUsed * site.amount / mineralTotal,
+      );
+    }
+  }
+
   const supplementalRequests = requestedSupplementalRenewables(settlementLabour(state, settlement, localResidents).effective);
   const renewables: Partial<Record<SupplementalRenewable, number>> = {};
   for (const kind of SUPPLEMENTAL_RENEWABLES) {
-    const harvested = harvestRenewableAcross(cells, kind, Math.min(supplementalRequests[kind], (budget.forager ?? 0) + (budget.keeper ?? 0)));
-    useLabour(budget, ['forager', 'keeper'], harvested);
+    const harvest = harvestRenewableAcross(cells, kind, Math.min(supplementalRequests[kind], (budget.forager ?? 0) + (budget.keeper ?? 0)));
+    const harvested = harvest.total;
+    const supplementalLabourUsed = useLabour(budget, ['forager', 'keeper'], harvested);
+    recordWorldWorkSites(state, settlement, kind, harvest.sites, ['forager', 'keeper'], supplementalLabourUsed);
     if (harvested > 0) renewables[kind] = harvested;
   }
 

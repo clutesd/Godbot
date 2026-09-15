@@ -9,6 +9,7 @@ import { processRecipes, useLabour, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
+import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, modifyLand, wearExtractionPath } from '../environment/EnvironmentalModificationSystem';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
@@ -39,6 +40,9 @@ export class ResourceSystem {
   constructor(private readonly random: SeededRandom) {}
   advanceMonth(state: SimulationState): ResourceEventDraft[] {
     if (this.world !== state.world) { this.world = state.world; this.access = new ExtractionAccessibility(state); }
+    // Clear last month's documentary work before either extraction authority records this month.
+    // This also guarantees a renderer cannot keep showing workers at a site when extraction drops to zero.
+    beginResourceWorkMonth(state);
     const events: ResourceEventDraft[] = [];
     advanceEnvironment(state);
     advanceDeposits(state.world, state.month);
@@ -146,7 +150,8 @@ export class ResourceSystem {
       const deepCapacity = fuel ? (s.localMaterials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
       const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.localMaterials[definition.id] ?? 0) - incoming);
       if (amount <= 0.00001) continue;
-      economy.labourUsed += useLabour(budget, definition.gatherOccupations, amount / rate);
+      const labourUsed = useLabour(budget, definition.gatherOccupations, amount / rate);
+      economy.labourUsed += labourUsed;
       if (fuel && amount > surfaceRemaining) {
         const spent = takeMaterial(s, fuel.material, (amount - surfaceRemaining) * fuel.perUnit);
         economy.energyDemand += spent; economy.energySupplied += spent;
@@ -182,6 +187,21 @@ export class ResourceSystem {
       }
       economy.inTransit.push({ depositId: deposit.id, resourceId: definition.id, quantity: amount, quality: deposit.quality, path,
         accessPaths: access.accessPaths, networkPath: access.networkPath, remainingMonths: access.months });
+      recordResourceWorkAssignment(state, {
+        month: state.month,
+        source: 'deposit-system',
+        settlementId: s.id,
+        siteId: deposit.id,
+        depositId: deposit.id,
+        cellIndex: deposit.cellIndex,
+        resourceId: definition.id,
+        worldPosition: { x: deposit.worldX, z: deposit.worldZ },
+        gatherOccupations: definition.gatherOccupations,
+        amountExtracted: amount,
+        labourUsed,
+        accessPath: path,
+        accessPaths: access.accessPaths,
+      });
       economy.experience[definition.id] = (economy.experience[definition.id] ?? 0) + amount;
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += amount * 0.006;
       if (!s.workedDeposits.includes(deposit.id)) {

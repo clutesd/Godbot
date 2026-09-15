@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
+import { resourceWorkAssignmentsForWorld, type ResourceWorkAssignment } from '../../sim/resources/ResourceWorkAssignments';
+import { resourceWorkVisualKind } from '../../sim/resources/ResourceWorkPresentation';
 import { movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
 const PATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
@@ -23,12 +25,32 @@ const STAGE_RANK: Record<MovementPathStage, number> = {
 const SCAR_KIND_RANK = { farmland: 1, logging: 2, quarry: 3, mine: 4, industry: 5, ruin: 6 } as const;
 const HASH_OFFSET = 2166136261;
 const HASH_PRIME = 16777619;
+/** Active work is documentary detail, not a second simulation population. */
+const MAX_ACTIVE_WORK_SITES = 64;
+const MAX_SITE_DETAIL = MAX_ACTIVE_WORK_SITES * 5;
+
+interface ActiveCounts {
+  logs: number;
+  stumps: number;
+  rocks: number;
+  baskets: number;
+  bundles: number;
+  handles: number;
+  heads: number;
+  racks: number;
+}
 
 function mixHash(hash: number, value: number): number {
   return Math.imul(hash ^ (value | 0), HASH_PRIME) >>> 0;
 }
 
-/** Small ground-level work piles plus persistent movement-shaped paths. */
+function stringHash(value: string): number {
+  let hash = HASH_OFFSET;
+  for (let index = 0; index < value.length; index += 1) hash = mixHash(hash, value.charCodeAt(index));
+  return hash >>> 0;
+}
+
+/** Resource history plus current extraction work, rendered without becoming simulation authority. */
 export class ResourceSiteRenderer {
   readonly group = new THREE.Group();
   private readonly piles: THREE.InstancedMesh;
@@ -37,6 +59,15 @@ export class ResourceSiteRenderer {
   private readonly scars: THREE.InstancedMesh;
   private readonly trails = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#796b4f', transparent: true, opacity: 0.42 }));
   private readonly footpaths: THREE.Mesh;
+  private readonly activeWork = new THREE.Group();
+  private readonly activeLogs: THREE.InstancedMesh;
+  private readonly activeStumps: THREE.InstancedMesh;
+  private readonly activeRocks: THREE.InstancedMesh;
+  private readonly activeBaskets: THREE.InstancedMesh;
+  private readonly activeBundles: THREE.InstancedMesh;
+  private readonly activeHandles: THREE.InstancedMesh;
+  private readonly activeHeads: THREE.InstancedMesh;
+  private readonly activeRacks: THREE.InstancedMesh;
   private readonly normal = new THREE.Vector3();
   private readonly circleNormal = new THREE.Vector3(0, 0, 1);
   private readonly abandonedColour = new THREE.Color('#68734e');
@@ -44,6 +75,7 @@ export class ResourceSiteRenderer {
   private scarRevision = -1;
   private trailRevision = -1;
   private pathRevision = -1;
+  private activeWorkRevision = -1;
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface) {
     this.group.name = 'Resource extraction sites';
@@ -51,6 +83,68 @@ export class ResourceSiteRenderer {
     this.piles.count = 0; this.piles.castShadow = true; this.piles.receiveShadow = true;
     this.piles.frustumCulled = false;
     this.group.add(this.piles);
+
+    this.activeWork.name = 'Active resource work sites';
+    this.activeLogs = this.activeMesh(
+      'Active resource logs',
+      new THREE.CylinderGeometry(0.11, 0.13, 0.9, 7),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.94 }),
+      MAX_ACTIVE_WORK_SITES * 4,
+    );
+    this.activeStumps = this.activeMesh(
+      'Active resource stumps',
+      new THREE.CylinderGeometry(0.18, 0.22, 0.28, 8),
+      new THREE.MeshStandardMaterial({ color: '#a77b4d', roughness: 0.92 }),
+      MAX_ACTIVE_WORK_SITES,
+    );
+    this.activeRocks = this.activeMesh(
+      'Active resource rock and ore',
+      new THREE.DodecahedronGeometry(0.22, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.94, metalness: 0.06 }),
+      MAX_SITE_DETAIL,
+    );
+    this.activeBaskets = this.activeMesh(
+      'Active resource baskets',
+      new THREE.CylinderGeometry(0.18, 0.13, 0.2, 8),
+      new THREE.MeshStandardMaterial({ color: '#94704a', roughness: 1 }),
+      MAX_ACTIVE_WORK_SITES,
+    );
+    this.activeBundles = this.activeMesh(
+      'Active resource plant bundles',
+      new THREE.ConeGeometry(0.11, 0.34, 6),
+      new THREE.MeshStandardMaterial({ color: '#627a45', roughness: 0.96 }),
+      MAX_SITE_DETAIL,
+    );
+    this.activeHandles = this.activeMesh(
+      'Active resource tool and rack handles',
+      new THREE.BoxGeometry(0.035, 0.62, 0.035),
+      new THREE.MeshStandardMaterial({ color: '#65503a', roughness: 0.9 }),
+      MAX_ACTIVE_WORK_SITES * 2,
+    );
+    this.activeHeads = this.activeMesh(
+      'Active resource tool heads',
+      new THREE.BoxGeometry(0.2, 0.065, 0.09),
+      new THREE.MeshStandardMaterial({ color: '#696c69', roughness: 0.72, metalness: 0.28 }),
+      MAX_ACTIVE_WORK_SITES,
+    );
+    this.activeRacks = this.activeMesh(
+      'Active resource drying racks',
+      new THREE.BoxGeometry(0.58, 0.045, 0.045),
+      new THREE.MeshStandardMaterial({ color: '#76502f', roughness: 0.94 }),
+      MAX_ACTIVE_WORK_SITES,
+    );
+    this.activeWork.add(
+      this.activeLogs,
+      this.activeStumps,
+      this.activeRocks,
+      this.activeBaskets,
+      this.activeBundles,
+      this.activeHandles,
+      this.activeHeads,
+      this.activeRacks,
+    );
+    this.group.add(this.activeWork);
+
     this.scars = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 9), new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.65, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }), Math.max(1, world.cells.length));
     this.scars.count = 0; this.scars.frustumCulled = false;
     this.trails.name = 'Resource access trails';
@@ -79,6 +173,12 @@ export class ResourceSiteRenderer {
     // Presentation work is invalidated by the visual facts it consumes, not by the calendar. This
     // method is still cheap to call monthly, but ordinary month rollover no longer allocates and
     // uploads replacement geometry for every extraction/path layer.
+    const activeWorkRevision = this.activeResourceWorkRevision();
+    if (activeWorkRevision !== this.activeWorkRevision) {
+      this.activeWorkRevision = activeWorkRevision;
+      this.rebuildActiveResourceWork();
+    }
+
     const pileRevision = this.resourcePileRevision();
     if (pileRevision !== this.pileRevision) {
       this.pileRevision = pileRevision;
@@ -104,9 +204,45 @@ export class ResourceSiteRenderer {
     }
   }
 
+  private activeMesh(name: string, geometry: THREE.BufferGeometry, material: THREE.Material, capacity: number): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    mesh.name = name;
+    mesh.count = 0;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    return mesh;
+  }
+
+  private activeAssignments(): ResourceWorkAssignment[] {
+    return [...resourceWorkAssignmentsForWorld(this.world)]
+      .filter((assignment) => assignment.amountExtracted > 0 && assignment.labourUsed > 0)
+      .sort((a, b) => b.labourUsed - a.labourUsed || b.amountExtracted - a.amountExtracted || a.siteId.localeCompare(b.siteId))
+      .slice(0, MAX_ACTIVE_WORK_SITES);
+  }
+
+  private activeResourceWorkRevision(): number {
+    let hash = HASH_OFFSET;
+    const assignments = this.activeAssignments();
+    hash = mixHash(hash, assignments.length);
+    for (const assignment of assignments) {
+      hash = mixHash(hash, stringHash(assignment.siteId));
+      hash = mixHash(hash, stringHash(assignment.resourceId));
+      // Month is intentionally not part of the visual revision. If the same work continues next
+      // month at the same intensity, keep the existing geometry instead of rebuilding it.
+      hash = mixHash(hash, Math.round(assignment.amountExtracted * 64));
+      hash = mixHash(hash, Math.round(assignment.labourUsed * 64));
+      hash = mixHash(hash, Math.round(assignment.worldPosition.x * 64));
+      hash = mixHash(hash, Math.round(assignment.worldPosition.z * 64));
+    }
+    return hash;
+  }
+
   private resourcePileRevision(): number {
     let hash = mixHash(HASH_OFFSET, this.world.environmentRevision ?? 0);
     hash = mixHash(hash, this.world.resourceDeposits.length);
+    const activeDeposits = new Set(this.activeAssignments().flatMap((assignment) => assignment.depositId ? [assignment.depositId] : []));
+    for (const id of activeDeposits) hash = mixHash(hash, stringHash(id));
     for (let index = 0; index < this.world.resourceDeposits.length; index += 1) {
       const deposit = this.world.resourceDeposits[index]!;
       if (deposit.establishedMonth === undefined) continue;
@@ -173,16 +309,175 @@ export class ResourceSiteRenderer {
     return hash;
   }
 
+  private rebuildActiveResourceWork(): void {
+    const counts: ActiveCounts = { logs: 0, stumps: 0, rocks: 0, baskets: 0, bundles: 0, handles: 0, heads: 0, racks: 0 };
+    const assignments = this.activeAssignments();
+    let renderedSites = 0;
+    for (const assignment of assignments) {
+      const cell = assignment.cellIndex === undefined ? undefined : this.world.cells[assignment.cellIndex];
+      if (cell?.water) continue;
+      const angle = (stringHash(assignment.siteId) / 0xffffffff) * Math.PI * 2;
+      const count = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(assignment.amountExtracted))));
+      const kind = resourceWorkVisualKind(assignment);
+      if (kind === 'timber') this.emitTimberWork(assignment, angle, count, counts);
+      else if (kind === 'mineral') this.emitMineralWork(assignment, angle, count, counts);
+      else if (kind === 'plant') this.emitPlantWork(assignment, angle, count, counts);
+      else this.emitGenericWork(assignment, angle, count, counts);
+      renderedSites += 1;
+    }
+    this.finishActiveMesh(this.activeLogs, counts.logs);
+    this.finishActiveMesh(this.activeStumps, counts.stumps);
+    this.finishActiveMesh(this.activeRocks, counts.rocks);
+    this.finishActiveMesh(this.activeBaskets, counts.baskets);
+    this.finishActiveMesh(this.activeBundles, counts.bundles);
+    this.finishActiveMesh(this.activeHandles, counts.handles);
+    this.finishActiveMesh(this.activeHeads, counts.heads);
+    this.finishActiveMesh(this.activeRacks, counts.racks);
+    this.activeWork.visible = renderedSites > 0;
+    this.activeWork.userData['activeSiteCount'] = renderedSites;
+    this.activeWork.userData['instanceCount'] = Object.values(counts).reduce((sum, value) => sum + value, 0);
+    this.activeWork.userData['drawPoolCount'] = 8;
+  }
+
+  private emitTimberWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
+    this.emitInstance(this.activeStumps, counts.stumps++, assignment, angle, -0.34, 0.08, 0.14, 1, 1, 1, 0, 0, 0);
+    for (let index = 0; index < count; index += 1) {
+      const colour = index === 0 ? '#a77b4d' : '#76502f';
+      this.emitInstance(
+        this.activeLogs, counts.logs++, assignment, angle,
+        0.18 + index * 0.08, (index % 2 ? 1 : -1) * (0.18 + index * 0.025),
+        0.12 + Math.floor(index / 2) * 0.16,
+        1, 0.8 + index * 0.08, 1,
+        0, index * 0.14, Math.PI / 2,
+        colour,
+      );
+    }
+    this.emitTool(assignment, angle, -0.08, -0.34, 0.34, -0.52, true, counts);
+  }
+
+  private emitMineralWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
+    const colour = this.mineralColour(assignment.resourceId);
+    for (let index = 0; index < count + 1; index += 1) {
+      const scale = 0.8 + (index % 3) * 0.14;
+      this.emitInstance(
+        this.activeRocks, counts.rocks++, assignment, angle,
+        -0.28 + index * 0.17, (index % 2 ? 1 : -1) * 0.18,
+        0.12 + (index % 2) * 0.05,
+        scale, scale, scale,
+        index * 0.3, index * 0.6, index * 0.12,
+        colour,
+      );
+    }
+    this.emitInstance(this.activeBaskets, counts.baskets++, assignment, angle, 0.36, 0.3, 0.11, 1.15, 0.8, 1.15, 0, 0, 0);
+    this.emitTool(assignment, angle, 0.05, -0.34, 0.34, -0.32, false, counts);
+  }
+
+  private emitPlantWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
+    this.emitInstance(this.activeBaskets, counts.baskets++, assignment, angle, 0.28, 0.18, 0.1, 1, 1, 1, 0, 0, 0);
+    for (let index = 0; index < count + 1; index += 1) {
+      this.emitInstance(
+        this.activeBundles, counts.bundles++, assignment, angle,
+        -0.28 + index * 0.16, (index % 2 ? 1 : -1) * 0.16, 0.16,
+        1, 1, 1, 0, 0, (index % 2 ? 1 : -1) * 0.18,
+      );
+    }
+    this.emitInstance(this.activeHandles, counts.handles++, assignment, angle, -0.35, -0.28, 0.22, 1, 0.72, 1, 0, 0, 0);
+    this.emitInstance(this.activeHandles, counts.handles++, assignment, angle, 0.35, -0.28, 0.22, 1, 0.72, 1, 0, 0, 0);
+    this.emitInstance(this.activeRacks, counts.racks++, assignment, angle, 0, -0.28, 0.42, 1, 1, 1, 0, 0, 0);
+  }
+
+  private emitGenericWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
+    for (let index = 0; index < count; index += 1) {
+      this.emitInstance(
+        this.activeRocks, counts.rocks++, assignment, angle,
+        (index - count / 2) * 0.16, (index % 2 ? 1 : -1) * 0.14, 0.11,
+        1, 1, 1, 0, index * 0.35, 0,
+        '#8b857b',
+      );
+    }
+  }
+
+  private emitTool(
+    assignment: ResourceWorkAssignment,
+    angle: number,
+    localX: number,
+    localZ: number,
+    localY: number,
+    tilt: number,
+    broadHead: boolean,
+    counts: ActiveCounts,
+  ): void {
+    this.emitInstance(this.activeHandles, counts.handles++, assignment, angle, localX, localZ, localY, 1, 1, 1, 0, 0, tilt);
+    const headX = localX - Math.sin(tilt) * 0.28;
+    const headY = localY + Math.cos(tilt) * 0.28;
+    this.emitInstance(
+      this.activeHeads, counts.heads++, assignment, angle,
+      headX, localZ, headY,
+      broadHead ? 1.25 : 1, 1, broadHead ? 0.7 : 1,
+      0, 0, tilt,
+    );
+  }
+
+  private emitInstance(
+    mesh: THREE.InstancedMesh,
+    index: number,
+    assignment: ResourceWorkAssignment,
+    siteAngle: number,
+    localX: number,
+    localZ: number,
+    lift: number,
+    scaleX: number,
+    scaleY: number,
+    scaleZ: number,
+    rotationX: number,
+    rotationY: number,
+    rotationZ: number,
+    colour?: string,
+  ): void {
+    if (index >= mesh.instanceMatrix.count) return;
+    const cos = Math.cos(siteAngle);
+    const sin = Math.sin(siteAngle);
+    const worldX = assignment.worldPosition.x + localX * cos - localZ * sin;
+    const worldZ = assignment.worldPosition.z + localX * sin + localZ * cos;
+    this.marker.position.set(worldX, this.surface.heightAt(worldX, worldZ) + lift, worldZ);
+    this.marker.rotation.set(rotationX, siteAngle + rotationY, rotationZ);
+    this.marker.scale.set(scaleX, scaleY, scaleZ);
+    this.marker.updateMatrix();
+    mesh.setMatrixAt(index, this.marker.matrix);
+    if (colour) {
+      this.colour.set(colour);
+      mesh.setColorAt(index, this.colour);
+    }
+  }
+
+  private finishActiveMesh(mesh: THREE.InstancedMesh, count: number): void {
+    mesh.count = Math.min(count, mesh.instanceMatrix.count);
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  private mineralColour(resourceId: string): string {
+    if (resourceId === 'stone') return '#8b857b';
+    if (resourceId === 'copper-ore') return '#8e6f58';
+    if (resourceId === 'iron-ore') return '#655e58';
+    if (resourceId === 'coal') return '#383633';
+    if (resourceId === 'clay') return '#9a7258';
+    if (resourceId === 'uranium-ore') return '#6f7860';
+    return '#6f665d';
+  }
+
   private rebuildResourcePiles(): void {
+    const activeDeposits = new Set(this.activeAssignments().flatMap((assignment) => assignment.depositId ? [assignment.depositId] : []));
     let index = 0;
     for (const d of this.world.resourceDeposits) {
-      if (d.establishedMonth === undefined) continue;
+      if (d.establishedMonth === undefined || activeDeposits.has(d.id)) continue;
       const cell = this.world.cells[d.cellIndex];
       if (!cell || cell.water || cell.slope > 0.54) continue;
       const category = RESOURCE_BY_ID.get(d.resourceId)?.category;
       const abandoned = d.abandonedMonth !== undefined || d.depleted;
       const height = abandoned ? 0.12 : category === 'timber' ? 0.3 : 0.5;
       this.marker.position.set(d.worldX, this.surface.heightAt(d.worldX, d.worldZ) + height * 0.4, d.worldZ);
+      this.marker.rotation.set(0, 0, 0);
       this.marker.scale.set(category === 'timber' ? 1.5 : 0.9, height, 0.8);
       this.marker.updateMatrix();
       this.piles.setMatrixAt(index, this.marker.matrix);
