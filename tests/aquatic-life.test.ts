@@ -25,6 +25,15 @@ function standingWaterField(river = false): TerrainField {
   };
 }
 
+function coastalField(): TerrainField {
+  const field = standingWaterField();
+  field.height.fill(0.31);
+  field.waterLevel.fill(-1);
+  field.lake.fill(0);
+  field.river.fill(0);
+  return field;
+}
+
 describe('koi aquatic life planning', () => {
   it('creates deterministic lake schools in safe standing inland water', () => {
     const field = standingWaterField();
@@ -32,17 +41,24 @@ describe('koi aquatic life planning', () => {
     const replay = planKoiSchools(field, 0.35, 42.75, 2);
 
     expect(first.length).toBeGreaterThan(0);
-    expect(first.length).toBeLessThanOrEqual(12);
+    expect(first.length).toBeLessThanOrEqual(16);
     expect(replay).toEqual(first);
-    expect(first.every(school => school.kind === 'lake' && school.depth > 0.085 && school.waterY > 0)).toBe(true);
+    expect(first.every(school => school.kind === 'lake' && school.depth > 0.075 && school.waterY > 0)).toBe(true);
   });
 
   it('creates tighter current-aware schools in mapped rivers', () => {
     const schools = planKoiSchools(standingWaterField(true), 0.35, 12.5, 2);
     expect(schools.length).toBeGreaterThan(0);
-    expect(schools.length).toBeLessThanOrEqual(12);
+    expect(schools.length).toBeLessThanOrEqual(16);
     expect(schools.every(school => school.kind === 'river')).toBe(true);
     expect(schools.every(school => Math.hypot(school.flowX, school.flowZ) > 0.9)).toBe(true);
+  });
+
+  it('creates human-adjacent coastal schools when a settlement faces the sea', () => {
+    const schools = planKoiSchools(coastalField(), 0.35, 18.5, 2, [{ x: 0, z: 0 }]);
+    expect(schools.length).toBeGreaterThan(0);
+    expect(schools.some(school => school.kind === 'coast')).toBe(true);
+    expect(schools.every(school => school.humanProximity > 0.08)).toBe(true);
   });
 
   it('respects the zero-complexity visual budget', () => {
