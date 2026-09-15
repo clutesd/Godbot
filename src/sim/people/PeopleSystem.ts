@@ -211,6 +211,14 @@ export class PeopleSystem {
 
     const schedule = resourceSchedule ?? this.scheduleFor(person, settlement, state);
     const destinationId = schedule.destinationId ?? this.destinationId(person, settlement, schedule.kind);
+    if (navigation && navigation.destinationId === destinationId && isResourceWorkDestinationId(destinationId)) {
+      // Changing from the commute phase to the work phase at the same physical site must not rebuild
+      // the access route and send an arrived worker back toward town.
+      navigation.schedulePhase = schedule.phase;
+      navigation.reason = schedule.reason;
+      person.activity = schedule.activity;
+      return;
+    }
     if (navigation && navigation.destinationId === destinationId && navigation.schedulePhase === schedule.phase) {
       person.activity = schedule.activity;
       if (schedule.activity === 'rest') person.energy = clamp(person.energy + 0.2);
