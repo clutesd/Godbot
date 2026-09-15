@@ -18,6 +18,11 @@ interface RoutingSnapshot {
   byPerson: Map<string, ResourceWorkAssignment>;
 }
 
+interface SiteCandidateQueue {
+  people: Person[];
+  cursor: number;
+}
+
 const routingSnapshots = new WeakMap<SimulationState, RoutingSnapshot>();
 
 /**
@@ -108,6 +113,16 @@ function allocateRepresentatives(
     const targets = new Map(rankedAssignments.map((assignment) => [assignment.siteId, representativeTarget(assignment)]));
     const assignedAtSite = new Map<string, number>();
     const claimed = new Set<string>();
+    const queues = new Map<string, SiteCandidateQueue>();
+    for (const assignment of rankedAssignments) {
+      queues.set(assignment.siteId, {
+        cursor: 0,
+        people: residents
+          .filter((person) => eligibleRepresentative(person, assignment))
+          .sort((a, b) => workerRank(seed, state.month, assignment.siteId, a.id) - workerRank(seed, state.month, assignment.siteId, b.id)
+            || a.id.localeCompare(b.id)),
+      });
+    }
     let remaining = MAX_WORKERS_PER_SETTLEMENT;
 
     // Round-robin passes ensure small but real sites get a worker before a large site fills its cap.
@@ -118,17 +133,8 @@ function allocateRepresentatives(
         const target = targets.get(assignment.siteId) ?? 0;
         const siteCount = assignedAtSite.get(assignment.siteId) ?? 0;
         if (siteCount >= target || siteCount > pass) continue;
-        const candidates = residents
-          .filter((person) => !claimed.has(person.id)
-            && assignment.gatherOccupations.includes(person.occupation)
-            && person.displacedSinceMonth === undefined
-            && person.activity !== 'migrate'
-            && person.navigation?.schedulePhase !== 'emergency'
-            && !COMMITTED_ROLES.has(person.role ?? '')
-            && person.health > 0.2)
-          .sort((a, b) => workerRank(seed, state.month, assignment.siteId, a.id) - workerRank(seed, state.month, assignment.siteId, b.id)
-            || a.id.localeCompare(b.id));
-        const candidate = candidates.find((person) => canReachResourceSite(walking, person, assignment));
+        const queue = queues.get(assignment.siteId);
+        const candidate = queue ? nextReachableCandidate(queue, claimed, walking, assignment) : undefined;
         if (!candidate) continue;
         result.set(candidate.id, assignment);
         claimed.add(candidate.id);
@@ -140,6 +146,29 @@ function allocateRepresentatives(
     }
   }
   return result;
+}
+
+function eligibleRepresentative(person: Person, assignment: ResourceWorkAssignment): boolean {
+  return assignment.gatherOccupations.includes(person.occupation)
+    && person.displacedSinceMonth === undefined
+    && person.activity !== 'migrate'
+    && person.navigation?.schedulePhase !== 'emergency'
+    && !COMMITTED_ROLES.has(person.role ?? '')
+    && person.health > 0.2;
+}
+
+function nextReachableCandidate(
+  queue: SiteCandidateQueue,
+  claimed: ReadonlySet<string>,
+  walking: WalkabilityLayer,
+  assignment: ResourceWorkAssignment,
+): Person | undefined {
+  while (queue.cursor < queue.people.length) {
+    const person = queue.people[queue.cursor++];
+    if (!person || claimed.has(person.id)) continue;
+    if (canReachResourceSite(walking, person, assignment)) return person;
+  }
+  return undefined;
 }
 
 function canReachResourceSite(
