@@ -1,4 +1,4 @@
-import type { DestinationKind, Person, SimulationState, Vec2 } from '../types';
+import type { DestinationKind, Occupation, Person, SimulationState, Vec2 } from '../types';
 import {
   resourceWorkAssignments,
   type ResourceWorkAssignment,
@@ -92,10 +92,18 @@ export function resourceWorkPreferredWaypoints(assignment: ResourceWorkAssignmen
   return points;
 }
 
+function labourSignature(assignment: ResourceWorkAssignment): string {
+  return (Object.entries(assignment.labourByOccupation) as Array<[Occupation, number | undefined]>)
+    .filter(([, amount]) => (amount ?? 0) > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([occupation, amount]) => `${occupation}:${amount!.toFixed(4)}`)
+    .join(',');
+}
+
 function routingSnapshot(state: SimulationState, seed: string): RoutingSnapshot {
   const assignments = resourceWorkAssignments(state);
   const signature = assignments
-    .map((assignment) => `${assignment.settlementId}:${assignment.siteId}:${assignment.resourceId}:${assignment.amountExtracted.toFixed(4)}:${assignment.labourUsed.toFixed(4)}`)
+    .map((assignment) => `${assignment.settlementId}:${assignment.siteId}:${assignment.resourceId}:${assignment.amountExtracted.toFixed(4)}:${assignment.labourUsed.toFixed(4)}:${labourSignature(assignment)}`)
     .join('|');
   const cached = routingSnapshots.get(state);
   if (cached?.month === state.month && cached.seed === seed && cached.signature === signature) return cached;
@@ -165,6 +173,7 @@ function allocateRepresentatives(
 
 function eligibleRepresentative(person: Person, assignment: ResourceWorkAssignment): boolean {
   return assignment.gatherOccupations.includes(person.occupation)
+    && (assignment.labourByOccupation[person.occupation] ?? 0) > 0
     && person.displacedSinceMonth === undefined
     && person.activity !== 'migrate'
     && person.navigation?.schedulePhase !== 'emergency'
