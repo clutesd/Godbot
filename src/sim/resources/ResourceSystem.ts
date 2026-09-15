@@ -1,7 +1,7 @@
 import { resourceLabourBudget } from '../people/HumanCapital';
 import type { SeededRandom } from '../prng';
 import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
-import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
+import type { LocalMaterialInventory, Occupation, ResourceDeposit, Settlement, SimulationState, Vec2 } from '../types';
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
 import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom, takeMaterial } from './Inventory';
@@ -13,6 +13,25 @@ import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, m
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 export type ResourceEventDraft = KnowledgeEventDraft;
+
+/**
+ * Read-only presentation contract for extraction that actually occurred this month.
+ * It is deliberately transient: simulation state remains authoritative, while people/renderers
+ * can later consume this snapshot without inventing work from role labels or decorative sites.
+ */
+export interface ResourceWorkAssignment {
+  readonly month: number;
+  readonly settlementId: string;
+  readonly depositId: string;
+  readonly resourceId: string;
+  readonly worldPosition: Readonly<Vec2>;
+  readonly gatherOccupations: readonly Occupation[];
+  readonly amountExtracted: number;
+  readonly labourUsed: number;
+  readonly accessPath: ReadonlyArray<Readonly<Vec2>>;
+  readonly accessPaths: ReadonlyArray<ReadonlyArray<Readonly<Vec2>>>;
+}
+
 export function createMaterialState(): { localMaterials: LocalMaterialInventory; discoveredDeposits: string[]; workedDeposits: string[]; knownRecipes: string[] } {
   return { localMaterials: {}, discoveredDeposits: [], workedDeposits: [], knownRecipes: [] };
 }
@@ -36,9 +55,17 @@ export function extractableQuantity(s: Settlement, deposit: ResourceDeposit): nu
 export class ResourceSystem {
   private access?: ExtractionAccessibility;
   private world?: SimulationState['world'];
+  private workAssignments: ResourceWorkAssignment[] = [];
   constructor(private readonly random: SeededRandom) {}
+
+  /** Current-month extraction only; cleared before every monthly resource pass. */
+  getWorkAssignments(): readonly ResourceWorkAssignment[] {
+    return this.workAssignments;
+  }
+
   advanceMonth(state: SimulationState): ResourceEventDraft[] {
     if (this.world !== state.world) { this.world = state.world; this.access = new ExtractionAccessibility(state); }
+    this.workAssignments = [];
     const events: ResourceEventDraft[] = [];
     advanceEnvironment(state);
     advanceDeposits(state.world, state.month);
@@ -146,7 +173,8 @@ export class ResourceSystem {
       const deepCapacity = fuel ? (s.localMaterials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
       const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.localMaterials[definition.id] ?? 0) - incoming);
       if (amount <= 0.00001) continue;
-      economy.labourUsed += useLabour(budget, definition.gatherOccupations, amount / rate);
+      const labourUsed = useLabour(budget, definition.gatherOccupations, amount / rate);
+      economy.labourUsed += labourUsed;
       if (fuel && amount > surfaceRemaining) {
         const spent = takeMaterial(s, fuel.material, (amount - surfaceRemaining) * fuel.perUnit);
         economy.energyDemand += spent; economy.energySupplied += spent;
@@ -182,6 +210,18 @@ export class ResourceSystem {
       }
       economy.inTransit.push({ depositId: deposit.id, resourceId: definition.id, quantity: amount, quality: deposit.quality, path,
         accessPaths: access.accessPaths, networkPath: access.networkPath, remainingMonths: access.months });
+      this.workAssignments.push({
+        month: state.month,
+        settlementId: s.id,
+        depositId: deposit.id,
+        resourceId: definition.id,
+        worldPosition: { x: deposit.worldX, z: deposit.worldZ },
+        gatherOccupations: [...definition.gatherOccupations],
+        amountExtracted: amount,
+        labourUsed,
+        accessPath: path.map(point => ({ ...point })),
+        accessPaths: access.accessPaths.map(leg => leg.map(point => ({ ...point }))),
+      });
       economy.experience[definition.id] = (economy.experience[definition.id] ?? 0) + amount;
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += amount * 0.006;
       if (!s.workedDeposits.includes(deposit.id)) {
