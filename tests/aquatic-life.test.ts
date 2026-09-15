@@ -34,8 +34,16 @@ function coastalField(): TerrainField {
   return field;
 }
 
+function routeSpan(route: readonly { x: number; z: number }[]): number {
+  let span = 0;
+  for (const a of route) {
+    for (const b of route) span = Math.max(span, Math.hypot(a.x - b.x, a.z - b.z));
+  }
+  return span;
+}
+
 describe('koi aquatic life planning', () => {
-  it('creates deterministic lake schools in safe standing inland water', () => {
+  it('creates deterministic lake schools with traversing swim routes', () => {
     const field = standingWaterField();
     const first = planKoiSchools(field, 0.35, 42.75, 2);
     const replay = planKoiSchools(field, 0.35, 42.75, 2);
@@ -44,21 +52,28 @@ describe('koi aquatic life planning', () => {
     expect(first.length).toBeLessThanOrEqual(16);
     expect(replay).toEqual(first);
     expect(first.every(school => school.kind === 'lake' && school.depth > 0.075 && school.waterY > 0)).toBe(true);
+    expect(first.every(school => school.route.length >= 2)).toBe(true);
+    expect(first.some(school => routeSpan(school.route) > field.step * 2)).toBe(true);
   });
 
-  it('creates tighter current-aware schools in mapped rivers', () => {
-    const schools = planKoiSchools(standingWaterField(true), 0.35, 12.5, 2);
+  it('creates current-aware river routes that travel along the channel', () => {
+    const field = standingWaterField(true);
+    const schools = planKoiSchools(field, 0.35, 12.5, 2);
     expect(schools.length).toBeGreaterThan(0);
     expect(schools.length).toBeLessThanOrEqual(16);
     expect(schools.every(school => school.kind === 'river')).toBe(true);
     expect(schools.every(school => Math.hypot(school.flowX, school.flowZ) > 0.9)).toBe(true);
+    expect(schools.every(school => school.route.length >= 3)).toBe(true);
+    expect(schools.every(school => routeSpan(school.route) >= field.step * 2)).toBe(true);
   });
 
-  it('creates human-adjacent coastal schools when a settlement faces the sea', () => {
-    const schools = planKoiSchools(coastalField(), 0.35, 18.5, 2, [{ x: 0, z: 0 }]);
+  it('creates human-adjacent coastal schools with open-water routes', () => {
+    const field = coastalField();
+    const schools = planKoiSchools(field, 0.35, 18.5, 2, [{ x: 0, z: 0 }]);
     expect(schools.length).toBeGreaterThan(0);
     expect(schools.some(school => school.kind === 'coast')).toBe(true);
     expect(schools.every(school => school.humanProximity > 0.08)).toBe(true);
+    expect(schools.some(school => school.route.length >= 3 && routeSpan(school.route) > field.step * 2)).toBe(true);
   });
 
   it('respects the zero-complexity visual budget', () => {
