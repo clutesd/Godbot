@@ -1,0 +1,34 @@
+name: Apply role visibility Step 1b
+
+on:
+  push:
+    branches:
+      - fix/role-visibility-step1b
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/role-visibility-step1b
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/apply-role-visibility-step1b.mjs
+      - run: npx vitest run tests/role-visual-profile.test.ts tests/role-garment-presentation.test.ts
+      - run: npm run build
+      - name: Commit validated renderer wiring and remove one-shot patch machinery
+        run: |
+          git config user.name "godbox-role-visibility-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/render/GodboxRenderer.ts src/render/people/RoleVisualProfile.ts src/render/people/RoleGarmentPresentation.ts tests/role-visual-profile.test.ts tests/role-garment-presentation.test.ts
+          git rm scripts/apply-role-visibility-step1b.mjs .github/workflows/role-visibility-step1b-apply.yml
+          git commit -m "Make occupational colours survive world lighting"
+          git push origin HEAD:fix/role-visibility-step1b
