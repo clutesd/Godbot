@@ -54,23 +54,42 @@ interface KoiVisual {
   patch: THREE.Color;
 }
 
+// Weighted by repetition: warm gold/yellow dominates freshwater, red is the principal accent,
+// and saturated blue remains a rarer magical flash rather than turning every shoal into confetti.
 const KOI_PATTERNS: ReadonlyArray<readonly [string, string]> = [
-  ['#fff3dc', '#f06b2b'],
-  ['#f07a2c', '#fff0d7'],
-  ['#fff7eb', '#cf4036'],
-  ['#e6a746', '#fff0cb'],
-  ['#3c3430', '#f0792b'],
-  ['#f3e2bd', '#3c3632'],
-  ['#f5efe3', '#b93232'],
-  ['#fff2d8', '#e2ad43'],
+  ['#f6c846', '#fff0b8'],
+  ['#ffd95b', '#d98324'],
+  ['#e8ac32', '#fff4c9'],
+  ['#f4be3f', '#c94c2f'],
+  ['#ffd65a', '#fff3d6'],
+  ['#e4a72e', '#7b3f22'],
+  ['#f2ca55', '#d54a35'],
+  ['#fff3dc', '#d94235'],
+  ['#e64a3b', '#fff0dc'],
+  ['#c93435', '#f7d867'],
+  ['#f7eee1', '#b92f35'],
+  ['#ef7a2e', '#ffd059'],
+  ['#f09a31', '#fff0c9'],
+  ['#4f83d1', '#dceeff'],
+  ['#2f69b1', '#f0cf58'],
+  ['#244f91', '#f5eee0'],
 ];
 
+// Coastal fish lean cooler while retaining enough gold/red to visually connect them to the
+// freshwater palette. Blues are brighter than before, but remain natural cobalt/slate tones.
 const COAST_PATTERNS: ReadonlyArray<readonly [string, string]> = [
-  ['#d8eef0', '#5c8790'],
-  ['#f2d685', '#d77839'],
-  ['#d5e8df', '#6a9ea5'],
-  ['#f5efe0', '#c85e3a'],
-  ['#c7dce2', '#8799aa'],
+  ['#4f86c8', '#d8edf4'],
+  ['#2f67ad', '#c5e2ed'],
+  ['#315b93', '#f0d56a'],
+  ['#6b9dcc', '#e7f1ef'],
+  ['#274d7d', '#d9e6ec'],
+  ['#e7ba45', '#fff0b6'],
+  ['#f2cc57', '#b96a2f'],
+  ['#dca638', '#f7e8c0'],
+  ['#f0d265', '#315f98'],
+  ['#d94b3f', '#f5eadc'],
+  ['#f3eee3', '#bd393a'],
+  ['#233f65', '#d5c15d'],
 ];
 
 const MAX_SCHOOLS_HIGH = 7;
@@ -525,7 +544,7 @@ export class AquaticLifeRenderer {
           phase: hashUnit(`${identity}:phase`) * Math.PI * 2,
           size: 0.86 + hashUnit(`${identity}:size`) * 0.5,
           patchOffset: (hashUnit(`${identity}:patch-offset`) - 0.5) * 0.042,
-          patchVisible: hashUnit(`${identity}:patch-visible`) > 0.1,
+          patchVisible: hashUnit(`${identity}:patch-visible`) > 0.06,
           body: new THREE.Color(pattern[0]),
           patch: new THREE.Color(pattern[1]),
         });
@@ -541,13 +560,13 @@ export class AquaticLifeRenderer {
       .rotateX(Math.PI / 2)
       .translate(0, 0, -0.132);
     const bodyMaterial = new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.88, depthWrite: false, toneMapped: false,
-    });
-    const patchMaterial = new THREE.MeshBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false, toneMapped: false,
     });
+    const patchMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.96, depthWrite: false, toneMapped: false,
+    });
     const tailMaterial = new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
+      vertexColors: true, transparent: true, opacity: 0.84, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
     });
 
     this.body = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, capacity);
