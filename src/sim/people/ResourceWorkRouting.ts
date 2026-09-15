@@ -3,16 +3,19 @@ import {
   resourceWorkAssignments,
   type ResourceWorkAssignment,
 } from '../resources/ResourceWorkAssignments';
-import { RESOURCE_BY_ID } from '../resources/catalog';
+import {
+  resourceWorkVisualKind,
+  type ResourceWorkVisualKind,
+} from '../resources/ResourceWorkPresentation';
 import { WalkabilityLayer } from './WalkabilityLayer';
+
+export { resourceWorkVisualKind } from '../resources/ResourceWorkPresentation';
 
 const MAX_WORKERS_PER_SITE = 4;
 const MAX_WORKERS_PER_SETTLEMENT = 12;
 const RESOURCE_DESTINATION_PREFIX = 'resource-work:';
 const RESOURCE_ROUTE_TOLERANCE = 0.12;
 const COMMITTED_ROLES = new Set(['soldier', 'guard']);
-
-export type ResourceWorkVisualKind = 'timber' | 'mineral' | 'plant' | 'generic';
 
 interface RoutingSnapshot {
   month: number;
@@ -38,16 +41,6 @@ export function resourceWorkAssignmentForPerson(
   seed: string,
 ): ResourceWorkAssignment | undefined {
   return routingSnapshot(state, seed).byPerson.get(person.id);
-}
-
-export function resourceWorkVisualKind(assignment: Pick<ResourceWorkAssignment, 'resourceId'>): ResourceWorkVisualKind {
-  const definition = RESOURCE_BY_ID.get(assignment.resourceId);
-  if (definition?.category === 'timber' || assignment.resourceId === 'timber') return 'timber';
-  if (definition?.category === 'plant' || assignment.resourceId === 'medicinal-flora' || assignment.resourceId === 'plant-fiber') return 'plant';
-  if (definition?.category === 'mineral'
-    || assignment.resourceId.includes('ore')
-    || ['stone', 'clay', 'coal'].includes(assignment.resourceId)) return 'mineral';
-  return 'generic';
 }
 
 /**
