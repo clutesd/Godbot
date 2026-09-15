@@ -1,5 +1,6 @@
 import type { DestinationKind, Person, Vec2 } from '../../sim/types';
 import { memoryInfluenceFor, socialWithdrawalFor } from '../../sim/people/PersonalMemorySystem';
+import { resourceWorkVisualKindFromDestinationId } from '../../sim/people/ResourceWorkRouting';
 import type { AnimationState } from '../animation/AnimationController';
 import { RUN_SPEED_THRESHOLD, WALK_SPEED_THRESHOLD } from './PeopleVisualState';
 
@@ -163,10 +164,18 @@ export function humanStoryCueFor(person: Person): HumanStoryCue {
 
 /**
  * Visual travel wins over the logical activity: a character that is plainly moving must not play a
- * stationary work loop. Carrying and alert states survive because they read while walking.
+ * stationary work loop. Once a resource worker is stationary, the documentary destination may
+ * specialize the pose without changing the simulation-level `gather` activity established in 1B.
  */
 export function travelAnimationFor(speed: number, person: Person): AnimationState | undefined {
-  if (speed < WALK_SPEED_THRESHOLD) return undefined;
+  if (speed < WALK_SPEED_THRESHOLD) {
+    if (person.activity !== 'gather' || person.navigation?.traveling) return undefined;
+    const resourceKind = resourceWorkVisualKindFromDestinationId(person.navigation?.destinationId);
+    if (resourceKind === 'timber') return 'build';
+    if (resourceKind === 'mineral') return 'work';
+    if (resourceKind === 'plant' || resourceKind === 'generic') return 'gather';
+    return undefined;
+  }
   if (person.activity === 'flee' || speed >= RUN_SPEED_THRESHOLD) return 'run';
   if (person.activity === 'transport' || person.appearance?.carriedItem === 'basket' || person.appearance?.carriedItem === 'bag') return 'carry';
   return 'walk';
