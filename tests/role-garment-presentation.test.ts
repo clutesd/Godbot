@@ -32,7 +32,7 @@ describe('role garment presentation', () => {
     expect(day).toBeGreaterThan(0.75);
   });
 
-  it('updates one shared material instead of changing every person's instance colour each frame', () => {
+  it("updates one shared material instead of changing every person's instance colour each frame", () => {
     const material = createRoleGarmentMaterial();
     updateRoleGarmentMaterial(material, 0);
     expect(material.color.r).toBeCloseTo(ROLE_GARMENT_NIGHT_BRIGHTNESS, 6);
