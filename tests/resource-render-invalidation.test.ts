@@ -75,7 +75,7 @@ describe('ResourceSiteRenderer invalidation', () => {
     expect(trails.geometry.getAttribute('position')).not.toBe(initialPosition);
   });
 
-  it('renders current authoritative work as recognizable site grammar and clears it next month', () => {
+  it('renders current authoritative work as bounded instanced site grammar and clears it next month', () => {
     const sim = new Simulation({ seed: 'resource-active-work-visual', startingPopulation: 120, settlementCount: [2, 2] });
     const settlement = sim.state.settlements[0];
     expect(settlement).toBeDefined();
@@ -98,14 +98,23 @@ describe('ResourceSiteRenderer invalidation', () => {
     const renderer = new ResourceSiteRenderer(sim.state.world, new TerrainSurface(sim.state.world));
     renderer.update();
     const active = renderer.group.getObjectByName('Active resource work sites') as THREE.Group;
+    const logs = renderer.group.getObjectByName('Active resource logs') as THREE.InstancedMesh;
+    const stumps = renderer.group.getObjectByName('Active resource stumps') as THREE.InstancedMesh;
+    const heads = renderer.group.getObjectByName('Active resource tool heads') as THREE.InstancedMesh;
     expect(active).toBeDefined();
-    expect(active.children).toHaveLength(1);
-    expect(active.children[0]?.name).toContain('timber');
-    expect(active.children[0]?.children.length).toBeGreaterThanOrEqual(4);
+    expect(active.userData['activeSiteCount']).toBe(1);
+    expect(active.userData['drawPoolCount']).toBe(8);
+    expect(active.userData['instanceCount']).toBeGreaterThanOrEqual(5);
+    expect(logs.count).toBeGreaterThanOrEqual(3);
+    expect(stumps.count).toBe(1);
+    expect(heads.count).toBe(1);
 
     sim.state.month += 1;
     expect(resourceWorkAssignments(sim.state)).toEqual([]);
     renderer.update();
-    expect(active.children).toHaveLength(0);
+    expect(active.userData['activeSiteCount']).toBe(0);
+    expect(logs.count).toBe(0);
+    expect(stumps.count).toBe(0);
+    expect(heads.count).toBe(0);
   });
 });
