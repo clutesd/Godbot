@@ -5,7 +5,7 @@ import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationSta
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
 import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom, takeMaterial } from './Inventory';
-import { processRecipes, useLabour, type LabourBudget } from './Processing';
+import { processRecipes, useLabour, useLabourDetailed, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
@@ -150,8 +150,8 @@ export class ResourceSystem {
       const deepCapacity = fuel ? (s.localMaterials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
       const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.localMaterials[definition.id] ?? 0) - incoming);
       if (amount <= 0.00001) continue;
-      const labourUsed = useLabour(budget, definition.gatherOccupations, amount / rate);
-      economy.labourUsed += labourUsed;
+      const labourUse = useLabourDetailed(budget, definition.gatherOccupations, amount / rate);
+      economy.labourUsed += labourUse.total;
       if (fuel && amount > surfaceRemaining) {
         const spent = takeMaterial(s, fuel.material, (amount - surfaceRemaining) * fuel.perUnit);
         economy.energyDemand += spent; economy.energySupplied += spent;
@@ -197,8 +197,9 @@ export class ResourceSystem {
         resourceId: definition.id,
         worldPosition: { x: deposit.worldX, z: deposit.worldZ },
         gatherOccupations: definition.gatherOccupations,
+        labourByOccupation: labourUse.byOccupation,
         amountExtracted: amount,
-        labourUsed,
+        labourUsed: labourUse.total,
         accessPath: path,
         accessPaths: access.accessPaths,
       });
