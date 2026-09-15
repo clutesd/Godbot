@@ -2,12 +2,14 @@ import * as THREE from 'three';
 import type { WorldState } from '../../sim/types';
 import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import { ECOLOGY_GLSL, ecologyUniforms, type EcologyField } from '../ecology/EcologyField';
+import { AquaticLifeRenderer } from './AquaticLifeRenderer';
 
 /** Shader extension on the existing physical water materials; hydrology still owns the mesh.
  * One shared terrain texture gives the ocean the same shoreline as the authoritative heightfield. */
 export class WaterEcology {
   private readonly terrain: THREE.DataTexture;
   private readonly bounds: THREE.Vector4;
+  private aquatic?: AquaticLifeRenderer;
   constructor(private readonly world: WorldState, private readonly ecology: EcologyField, private readonly complexity: 0 | 1 | 2) {
     const field = world.terrain;
     const heights = Float32Array.from(field.height, h => elevationToY(h, world.seaLevel));
@@ -26,6 +28,10 @@ export class WaterEcology {
 
   bind(mesh: THREE.Mesh | undefined, ocean: boolean): void {
     if (!mesh) return;
+    if (!ocean && !this.aquatic && this.complexity > 0) {
+      this.aquatic = new AquaticLifeRenderer(this.world, this.ecology, this.complexity);
+      mesh.add(this.aquatic.group);
+    }
     const material = mesh.material as THREE.MeshPhysicalMaterial;
     const original = material.onBeforeCompile;
     const originalKey = material.customProgramCacheKey();
@@ -96,7 +102,10 @@ export class WaterEcology {
     material.customProgramCacheKey = () => `${originalKey}-ecology-v1-${this.complexity}`;
     material.needsUpdate = true;
   }
-  dispose(): void { this.terrain.dispose(); }
+  dispose(): void {
+    this.aquatic?.dispose();
+    this.terrain.dispose();
+  }
 }
 
 const WATER_LIFE_GLSL = `
