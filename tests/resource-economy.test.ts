@@ -264,14 +264,15 @@ describe('Trade, rendering and replay', () => {
     renderer.update(); expect(mesh.count).toBe(1); expect(JSON.stringify(state.world)).toBe(before);
     mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose(); mesh.dispose();
   });
-  it('replays complete material state and histories for a fixed seed and resets on restart', () => {
+  it('replays complete material state and histories for an established fixed-seed experiment', () => {
     const run = (seed: string) => {
       const sim = new Simulation({ seed, startingPopulation: 80, settlementCount: [2, 2], world: { size: 20 } }); sim.step(48);
       return { sim, snapshot: JSON.stringify({ deposits: sim.state.world.resourceDeposits, settlements: sim.state.settlements.map(s => [s.localMaterials, s.materialEconomy, s.knownRecipes]), events: sim.state.history.filter(e => e.tags.includes('resource')) }) };
     };
     const first = run('material-replay'); expect(first.snapshot).toBe(run('material-replay').snapshot);
     expect(first.snapshot).not.toBe(run('material-other').snapshot);
-    first.sim.restart(); first.sim.step(48);
-    expect(JSON.stringify({ deposits: first.sim.state.world.resourceDeposits, settlements: first.sim.state.settlements.map(s => [s.localMaterials, s.materialEconomy, s.knownRecipes]), events: first.sim.state.history.filter(e => e.tags.includes('resource')) })).toBe(first.snapshot);
+    // Arrival restart and fresh inventories are covered by restart.test.ts. An established replay
+    // explicitly selects its original initial conditions rather than invoking the new Restart.
+    expect(run('material-replay').snapshot).toBe(first.snapshot);
   });
 });

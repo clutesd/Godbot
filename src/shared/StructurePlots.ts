@@ -26,6 +26,7 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
       const searchRadius = (0.5 + Math.sqrt(attempt + 1) * 0.8) * dispersal;
       const worldX = anchor.worldX + Math.cos(angle) * searchRadius;
       const worldZ = anchor.worldZ + Math.sin(angle) * searchRadius;
+      if (state.arrival?.pods.some(p => Math.hypot(worldX - p.position.x, worldZ - p.position.z) < radius + 1.5)) continue;
       const cell = cellAt(state.world, worldX, worldZ);
       if (!cell || waterAt(state.world, { x: worldX, z: worldZ }, cell) || cell.slope > 0.42 || cell.biome === 'mountain') continue;
       if (allPlots.some(plot => Math.hypot(plot.worldX - worldX, plot.worldZ - worldZ) < plot.radius + radius + 0.25)) continue;

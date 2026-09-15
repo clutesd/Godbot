@@ -20,6 +20,8 @@ import type { SimulationState } from './sim/types';
 import type { GodboxRenderer, PlacementSmokeReport } from './render/GodboxRenderer';
 import { setTransportDebugMode, transportDebugReport, type TransportDebugRecord } from './render/GodboxRendererEnhanced';
 import { WarChronicle } from './render/war/WarChronicle';
+import { arrivalCaption } from './render/founding/ArrivalPresentation';
+import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
 
 declare global {
   interface Window {
@@ -28,6 +30,7 @@ declare global {
     __godboxDebugAdvance?: (months: number) => { month: number; year: number; placement: PlacementSmokeReport };
     __godboxPacing?: () => PresentationTelemetry;
     __godboxRestart?: (seed?: string) => Promise<void>;
+    __godboxArrival?: { state: SimulationState; advance: (seconds: number) => void; pause: (paused: boolean) => void };
     __godboxTransportDebug?: (enabled?: boolean) => boolean;
     __godboxTransportReport?: () => TransportDebugRecord[];
   }
@@ -73,6 +76,7 @@ app.innerHTML = `
       <p class="evidence" id="evidence">RECORDED FACT</p>
     </section>
     <footer class="runline">
+      <button class="audio-toggle" id="restart" type="button">RESTART</button>
       <span id="observation">OBSERVATION 01</span>
       <span class="pulse" id="run-status"><i></i> AUTONOMOUS</span>
       <span id="seed">SEED &middot; -</span>
@@ -83,6 +87,7 @@ app.innerHTML = `
       <span class="command-prompt" aria-hidden="true">/</span>
       <input id="command-input" type="text" autocomplete="off" spellcheck="false" aria-label="Observer command" />
     </form>
+    <section class="arrival-caption" id="arrival-caption" aria-live="polite"></section>
     <div class="opening" id="opening">
       <div class="opening-mark"></div>
       <h2 id="opening-title">GODBOX</h2>
@@ -107,6 +112,8 @@ const runStatusElement = requiredElement<HTMLElement>('#run-status');
 const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
 const transportDebugLegendElement = requiredElement<HTMLElement>('#transport-debug-legend');
 const openingElement = requiredElement<HTMLElement>('#opening');
+const arrivalCaptionElement = requiredElement<HTMLElement>('#arrival-caption');
+const worldElement = requiredElement<HTMLElement>('.world');
 const openingTitleElement = requiredElement<HTMLElement>('#opening-title');
 const openingObservationElement = requiredElement<HTMLElement>('#opening-observation');
 const worldNameElement = requiredElement<HTMLElement>('#world-name');
@@ -192,6 +199,7 @@ let activeSeed = '';
 let rafId = 0;
 let openingTimeout = 0;
 let restartInProgress = false;
+requiredElement<HTMLButtonElement>('#restart').addEventListener('click', () => { void restartObservation(generateSeed()); });
 
 function generateSeed(): string {
   const values = new Uint32Array(2);
@@ -281,8 +289,10 @@ if (import.meta.env.DEV) {
 }
 
 async function beginObservation(seedOverride?: string): Promise<void> {
-  const baseConfig = configWith(GODBOX_CONFIG);
-  const archiveStore = new HistorianArchiveStore();
+  const preview = import.meta.env.DEV && new URLSearchParams(location.search).has('arrival-preview');
+  if (preview && seedOverride === undefined) seedOverride = 'arrival-day-preview';
+  const baseConfig = configWith({ ...GODBOX_CONFIG, startMode: 'arrival' });
+  const archiveStore = new HistorianArchiveStore(preview ? null : globalThis.indexedDB);
   const previousRuns = await archiveStore.list();
   const resumable = seedOverride === undefined && baseConfig.experiment.resumeOngoing
     ? matchingOngoingRun(previousRuns, experimentFingerprint(baseConfig), baseConfig.seed)
@@ -301,7 +311,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     identity = resumable.identity;
   } else {
     const observationNumber = await archiveStore.nextObservationNumber();
-    simulation = new Simulation({ ...GODBOX_CONFIG, seed: seedOverride ?? seedForObservation(baseConfig.seed, observationNumber) });
+    simulation = new Simulation({ ...GODBOX_CONFIG, startMode: 'arrival', seed: seedOverride ?? seedForObservation(baseConfig.seed, observationNumber) });
     identity = createRunIdentity(simulation.config, simulation.state, observationNumber, new Date().toISOString(), baseConfig.seed);
   }
   activeSeed = simulation.config.seed;
@@ -316,9 +326,13 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   openingObservationElement.textContent = observationLabel;
   worldNameElement.textContent = `WORLD: ${identity.worldName.replace(/^The /, '')}`;
   openingSeedElement.textContent = `SEED: ${simulation.config.seed}`;
-  if (resumable) await replayToMonth(simulation, resumable.lastRecordedMonth);
+  if (resumable) {
+    simulation.advanceArrival(resumable.foundingArrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
+    await replayToMonth(simulation, resumable.lastRecordedMonth);
+  }
 
-  const historian = new Historian(simulation.config, { observationNumber: identity.observationNumber, crossRunContext: computeCrossRunContext(previousRuns) });
+  const historian = new Historian(simulation.config, { observationNumber: identity.observationNumber,
+    crossRunContext: computeCrossRunContext(simulation.state.arrival ? [] : previousRuns) });
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
@@ -354,6 +368,12 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let lastObservationRevision = -1;
   let lastArchivedMonth = simulation.state.month;
   let runEnded = false;
+  let disposed = false;
+  let arrivalPaused = preview;
+  let intermissionTimeout = 0;
+  let arrivalWasRunning = simulation.historyRunning;
+  if (import.meta.env.DEV) window.__godboxArrival = { state: simulation.state,
+    advance: seconds => simulation.advanceArrival(seconds), pause: paused => { arrivalPaused = paused; } };
   let saveQueue = Promise.resolve();
 
   const persist = (completion?: Parameters<RunRecordBuilder['update']>[4]): Promise<void> => {
@@ -382,7 +402,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     openingElement.classList.add('ending');
     openingElement.classList.remove('departed');
     if (simulation.config.experiment.autoNextRun) {
-      window.setTimeout(() => window.location.reload(), simulation.config.experiment.intermissionSeconds * 1000);
+      intermissionTimeout = window.setTimeout(() => window.location.reload(), simulation.config.experiment.intermissionSeconds * 1000);
     }
   };
 
@@ -392,9 +412,18 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const deltaSeconds = Math.min(0.1, Math.max(0, (now - lastTime) / 1000));
     lastTime = now;
     elapsedSeconds += deltaSeconds;
+    const wasArriving = !simulation.historyRunning;
+    if (!arrivalPaused) simulation.advanceArrival(deltaSeconds);
+    const arriving = !simulation.historyRunning;
+    worldElement.classList.toggle('witnessing-arrival', arriving);
+    const caption = arrivalCaption(simulation.state.arrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
+    if (arrivalCaptionElement.textContent !== caption.text) arrivalCaptionElement.textContent = caption.text;
+    arrivalCaptionElement.style.opacity = String(caption.opacity);
+    arrivalCaptionElement.classList.toggle('arrival-title', caption.text === 'ARRIVAL DAY');
+    if (!arrivalWasRunning && simulation.historyRunning) { arrivalWasRunning = true; void persist(); }
     const monthsPerSecond = presentation.update(deltaSeconds, simulation.state, view.observation);
     const tickDuration = 1 / Math.max(0.1, monthsPerSecond);
-    if (simulation.config.autoRun && !runEnded) {
+    if (simulation.config.autoRun && !runEnded && !wasArriving && !arrivalPaused) {
       accumulator += deltaSeconds;
       let ticks = 0;
       // Adaptive tick budget: quiet deep time runs wide steps; wars, migrations, and
@@ -409,7 +438,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     view.update(deltaSeconds, elapsedSeconds);
     warChronicle.update(simulation.state, view.observation.statement?.claims.warId);
     audio.update(deltaSeconds);
-    if (view.observation.revision !== lastObservationRevision) {
+    if ((!arriving || (simulation.state.arrival?.elapsedSeconds ?? 0) >= 12) && view.observation.revision !== lastObservationRevision) {
       lastObservationRevision = view.observation.revision;
       audio.transitionTo(view.observation.audioCategory, view.observation.statement?.voiceAssetId, audioEra(simulation.state));
       evidenceElement.textContent = view.observation.statement?.epistemicStatus.replaceAll('-', ' ').toUpperCase() ?? 'RECORDED FACT';
@@ -418,15 +447,16 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const observedPopulation = representedPopulation(simulation.state);
     displayPopulation += (observedPopulation - displayPopulation) * Math.min(1, deltaSeconds * 4);
     const month = simulation.state.month % 12;
-    const day = Math.min(30, Math.floor(accumulator / tickDuration * 30) + 1);
+    const day = arriving || simulation.state.month === 0 && accumulator === 0 ? 0 : Math.min(30, Math.floor(accumulator / tickDuration * 30) + 1);
     dateElement.textContent = `YEAR ${simulation.year.toLocaleString()} · ${inferredEra(simulation.state)} · ${monthNames[month] ?? 'SPRING'} · DAY ${day}`;
+    if (arriving) dateElement.textContent = 'YEAR 0 · MONTH 0 · DAY 0';
     populationElement.textContent = Math.round(displayPopulation).toLocaleString();
     placeElement.textContent = view.observation.label;
     activityElement.textContent = view.observation.detail;
     if (simulation.state.month - lastArchivedMonth >= 120) void persist();
     const extinct = observedPopulation === 0 || simulation.state.advanced.outcome.classification === 'EXTINCT';
     const atHorizon = simulation.state.month >= simulation.config.experiment.runYears * 12;
-    if (!runEnded && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
+    if (!runEnded && !arriving && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
     rafId = window.requestAnimationFrame(frame);
   };
 
@@ -440,21 +470,27 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     }
   };
   const conclude = async (reason: string): Promise<void> => {
-    if (runEnded) return;
+    if (disposed) return;
+    disposed = true;
+    const previouslyEnded = runEnded;
     runEnded = true;
     window.cancelAnimationFrame(rafId);
+    window.clearTimeout(intermissionTimeout);
     document.removeEventListener('visibilitychange', persistWhenHidden);
     window.removeEventListener('beforeunload', persistBeforeUnload);
-    await persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
     audio.stop();
     if (activeAudio === audio) activeAudio = undefined;
     view.dispose();
+    try {
+      if (!previouslyEnded) await persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
+    } finally { archiveStore.close(); }
   };
   activeRun = { conclude };
   document.addEventListener('visibilitychange', persistWhenHidden);
   window.addEventListener('beforeunload', persistBeforeUnload);
   rafId = window.requestAnimationFrame(frame);
-  openingTimeout = window.setTimeout(() => openingElement.classList.add('departed'), resumable ? 1000 : 2800);
+  if (simulation.state.arrival) openingElement.classList.add('departed');
+  else openingTimeout = window.setTimeout(() => openingElement.classList.add('departed'), resumable ? 1000 : 2800);
 }
 
 void beginObservation().catch((error: unknown) => {

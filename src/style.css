@@ -116,6 +116,14 @@ body { min-width: 320px; }
   transition: opacity 2.2s ease, visibility 2.2s;
 }
 .opening.departed { opacity: 0; visibility: hidden; }
+.arrival-caption { position: absolute; z-index: 9; left: 15%; right: 15%; bottom: 15%; text-align: center; pointer-events: none; opacity: 0; color: #eee9de; font: 400 clamp(16px, 1.6vw, 24px)/1.7 Georgia, serif; text-shadow: 0 2px 16px #101815; }
+.arrival-caption.arrival-title { font-size: clamp(24px, 3vw, 42px); letter-spacing: .32em; text-indent: .32em; }
+.witnessing-arrival::before, .witnessing-arrival::after { content: ''; position: absolute; z-index: 6; left: 0; right: 0; height: 6%; background: #080c0c; pointer-events: none; }
+.witnessing-arrival::before { top: 0; }
+.witnessing-arrival::after { bottom: 0; }
+.witnessing-arrival .identity, .witnessing-arrival .population, .witnessing-arrival .chronicle .rule, .witnessing-arrival .place, .witnessing-arrival .activity, .witnessing-arrival .evidence { opacity: 0; }
+.witnessing-arrival .chronicle { bottom: 8%; }
+.witnessing-arrival .runline { z-index: 8; }
 .opening.ending { background: rgba(17, 21, 41, .96); }
 .opening h2 { margin: 8px 0 4px; color: #f7ead9; font: 500 clamp(30px, 4vw, 48px)/1 Georgia, "Times New Roman", serif; letter-spacing: .28em; text-indent: .28em; }
 .opening p { margin: 0 0 10px; color: rgba(255, 239, 219, .72); font: 400 13px Georgia, "Times New Roman", serif; letter-spacing: .2em; }

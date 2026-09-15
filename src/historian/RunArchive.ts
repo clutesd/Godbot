@@ -50,6 +50,7 @@ export interface ArchivedPerson {
 }
 
 export interface RunArchiveRecord {
+  foundingArrival?: SimulationState['arrival'];
   schemaVersion: number;
   identity: RunIdentity;
   status: 'ongoing' | 'completed' | 'failed';
@@ -98,6 +99,7 @@ export interface RunArchiveRecord {
 }
 
 const IMPORTANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
+  'ARRIVAL_DAY',
   'resource-deposit-discovered', 'resource-site-established', 'resource-site-abandoned', 'resource-depleted', 'recipe-learned', 'resource-trade',
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'trade-route-established',
   'discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization',
@@ -113,7 +115,8 @@ const CONFLICT_TYPES = new Set<HistoricalEvent['type']>(['war-declared', 'war-ca
 export function configurationFingerprint(config: GodboxConfig): string {
   // Keep the pre-ecology identity shape. New purely visual controls must neither orphan existing
   // observations nor split one deterministic history into separate experiments.
-  const stable = stableStringify({ ...config, render: {
+  const { startMode, ...legacy } = config;
+  const stable = stableStringify({ ...legacy, ...(startMode === 'arrival' ? { startMode } : {}), render: {
     maxPixelRatio: config.render.maxPixelRatio,
     visualDensity: config.render.visualDensity,
     structuralUpdatesPerSecond: config.render.structuralUpdatesPerSecond,
@@ -195,28 +198,30 @@ export class RunRecordBuilder {
     if (newEvents.length) this.processedSequence = eventSequence(newEvents[newEvents.length - 1]!);
     for (const event of newEvents) if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
     const population = representedPopulation(state);
+    const beforeHistory = Boolean(state.arrival && state.arrival.phase !== 'HISTORY_RUNNING');
     if (population >= Math.max(this.lastPeakMilestone + 50, this.lastPeakMilestone * 1.25)) {
       this.demographicMilestones.push({ month: state.month, population, kind: 'new-peak' });
       this.lastPeakMilestone = population;
     }
     const initialPopulation = this.identity.initialConditions.population;
-    if (population <= initialPopulation / 2 && !this.demographicMilestones.some((milestone) => milestone.kind === 'half-population')) this.demographicMilestones.push({ month: state.month, population, kind: 'half-population' });
-    if (population === 0 && !this.demographicMilestones.some((milestone) => milestone.kind === 'extinction')) this.demographicMilestones.push({ month: state.month, population, kind: 'extinction' });
+    if (!beforeHistory && initialPopulation > 0 && population <= initialPopulation / 2 && !this.demographicMilestones.some((milestone) => milestone.kind === 'half-population')) this.demographicMilestones.push({ month: state.month, population, kind: 'half-population' });
+    if (!beforeHistory && population === 0 && !this.demographicMilestones.some((milestone) => milestone.kind === 'extinction')) this.demographicMilestones.push({ month: state.month, population, kind: 'extinction' });
     this.captureRecordedDeaths(newEvents, representativeIds);
     this.capturePeople(state, representativeIds);
-    const status = completion?.status ?? (population === 0 ? 'completed' : 'ongoing');
+    const status = completion?.status ?? (population === 0 && !beforeHistory ? 'completed' : 'ongoing');
     const events = [...this.events.values()].sort((a, b) => a.month - b.month || a.id.localeCompare(b.id));
     const institutions = state.institutions.filter((institution) => institution.prestige >= 0.48 || events.some((event) => event.actors.includes(institution.id)));
     const industrialCenters = state.settlements.filter((settlement) => settlement.industry.active).length;
-    const classification = completion?.classification ?? (population === 0 ? 'EXTINCT' : state.advanced.outcome.classification);
+    const classification = completion?.classification ?? (population === 0 && !beforeHistory ? 'EXTINCT' : state.advanced.outcome.classification);
     const atomicThresholdMonth = state.advanced.atomic.thresholdMonth;
     const survivalYearsAfterAtomic = atomicThresholdMonth === undefined ? null : Math.max(0, (state.month - atomicThresholdMonth) / 12);
     const collapseWithinThreeCenturies = atomicThresholdMonth === undefined ? false : events.some((event) => event.type === 'civilization-collapse' && event.month >= atomicThresholdMonth && event.month <= atomicThresholdMonth + 300 * 12);
-    const summary = completion?.reason ?? (population === 0
+    const summary = completion?.reason ?? (beforeHistory ? `${this.identity.worldName} awaits Arrival Day.` : population === 0
       ? `${this.identity.worldName} ended with no surviving population after ${Math.floor(state.month / 12)} years.`
       : `${this.identity.worldName} has ${population} people in ${state.settlements.filter((settlement) => settlement.alive).length} settlements after ${Math.floor(state.month / 12)} years.`);
     return {
       schemaVersion: HISTORIAN_ARCHIVE_SCHEMA_VERSION,
+      foundingArrival: state.arrival ? structuredClone(state.arrival) : undefined,
       identity: structuredClone(this.identity),
       status,
       lastRecordedMonth: state.month,
@@ -293,7 +298,7 @@ export class HistorianArchiveStore {
   private readonly memory = new Map<string, RunArchiveRecord>();
   private memoryObservationNumber = 0;
 
-  constructor(private readonly factory: IDBFactory | undefined = globalThis.indexedDB) {}
+  constructor(private readonly factory: IDBFactory | null | undefined = globalThis.indexedDB) {}
 
   get persistent(): boolean { return Boolean(this.database); }
 
@@ -415,6 +420,7 @@ export function migrateArchiveRecord(raw: unknown): RunArchiveRecord {
     lastRecordedMonth: source.lastRecordedMonth ?? 0,
     ...(source.endedMonth === undefined ? {} : { endedMonth: source.endedMonth }),
     configuration,
+    foundingArrival: source.foundingArrival,
     majorEntities: source.majorEntities ?? { settlements: [], cultures: [], polities: [], institutions: [] },
     events: source.events ?? [],
     demographicMilestones: source.demographicMilestones ?? [],
