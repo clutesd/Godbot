@@ -91,6 +91,7 @@ describe('ResourceSiteRenderer invalidation', () => {
       resourceId: 'timber',
       worldPosition: { x: cell!.worldX, z: cell!.worldZ },
       gatherOccupations: ['forager', 'builder'],
+      labourByOccupation: { forager: 2, builder: 1 },
       amountExtracted: 9,
       labourUsed: 3,
     });
