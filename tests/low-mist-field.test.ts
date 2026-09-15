@@ -13,7 +13,12 @@ import {
   lowMistSourceForCell,
   lowMistWindRetention,
 } from '../src/render/atmosphere/LowMistField';
-import { AERIAL_PERSPECTIVE_SHADER } from '../src/render/atmosphere/AerialPerspective';
+import {
+  AERIAL_PERSPECTIVE_SHADER,
+  LOW_MIST_MAX_OPACITY,
+  LOW_MIST_OPTICAL_DENSITY,
+  resolveLowMistOpacity,
+} from '../src/render/atmosphere/AerialPerspective';
 
 const cell = (overrides: Partial<WorldCell> = {}): WorldCell => ({
   x: 0,
@@ -99,6 +104,21 @@ describe('spatial low mist field', () => {
     expect(gale).toBeLessThan(0.65);
   });
 
+  it('keeps a representative high-camera mist bank visibly above a perceptual floor', () => {
+    // Representative of the supplied documentary screenshots after seasonal/diurnal attenuation:
+    // only a small fraction of the camera ray intersects the shallow bank, but legitimate mist must
+    // still alter the image enough to be seen without restoring screen-wide fog.
+    const documentary = resolveLowMistOpacity(120, 0.08, 0.12, 0);
+    const strongBank = resolveLowMistOpacity(120, 0.18, 0.6, 0);
+
+    expect(LOW_MIST_OPTICAL_DENSITY).toBeGreaterThanOrEqual(0.08);
+    expect(documentary).toBeGreaterThan(0.085);
+    expect(documentary).toBeLessThan(0.16);
+    expect(strongBank).toBeGreaterThanOrEqual(0.3);
+    expect(strongBank).toBeLessThanOrEqual(LOW_MIST_MAX_OPACITY);
+    expect(resolveLowMistOpacity(120, 0, 1, 0)).toBe(0);
+  });
+
   it('builds a bounded selective field with interpolation-safe height and flow channels', () => {
     const world = generateWorld(configWith({ seed: 'low-mist-field-contract', world: { size: 18 } }));
     const surface = new TerrainSurface(world);
@@ -168,5 +188,6 @@ describe('spatial low mist field', () => {
     expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uMistLayerScale');
     expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uMistSunGlow');
     expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uMistMoonGlow');
+    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain(LOW_MIST_OPTICAL_DENSITY.toFixed(3));
   });
 });
