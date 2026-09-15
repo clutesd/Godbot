@@ -9,7 +9,7 @@ import { processRecipes, useLabour, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
-import { recordResourceWorkAssignment } from './ResourceWorkAssignments';
+import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, modifyLand, wearExtractionPath } from '../environment/EnvironmentalModificationSystem';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
@@ -40,6 +40,9 @@ export class ResourceSystem {
   constructor(private readonly random: SeededRandom) {}
   advanceMonth(state: SimulationState): ResourceEventDraft[] {
     if (this.world !== state.world) { this.world = state.world; this.access = new ExtractionAccessibility(state); }
+    // Clear last month's documentary work before either extraction authority records this month.
+    // This also guarantees a renderer cannot keep showing workers at a site when extraction drops to zero.
+    beginResourceWorkMonth(state);
     const events: ResourceEventDraft[] = [];
     advanceEnvironment(state);
     advanceDeposits(state.world, state.month);
