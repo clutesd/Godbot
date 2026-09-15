@@ -34,6 +34,9 @@ import { WeatherRenderer } from './atmosphere/WeatherRenderer';
 import { WarRenderer } from './war/WarRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
 import { ResourceSiteRenderer } from './resources/ResourceSiteRenderer';
+import { ResourceWorkScene, resourceWorkerCanPresent } from './resources/ResourceWorkScene';
+import { ResourceWorkerRenderer } from './resources/ResourceWorkerRenderer';
+import { resourceWorkAlternateAnchor } from './animation/ResourceWorkMotion';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -220,6 +223,10 @@ export class GodboxRenderer {
   private readonly terrainDecor: TerrainDecor;
   private readonly vegetation: VegetationRenderer;
   private readonly resourceSites: ResourceSiteRenderer;
+  private readonly resourceWork: ResourceWorkScene;
+  private readonly resourceWorkers = new ResourceWorkerRenderer();
+  private resourceWorkersMonth = -1;
+  private resourceWorkersRevision = -1;
   private readonly skyAtmosphere: SkyAtmosphere;
   private readonly ecology: EcologyField;
   private readonly postProcessing: EcologyPostProcessing;
@@ -300,7 +307,12 @@ export class GodboxRenderer {
     this.scene.add(this.weatherRenderer.group);
     this.terrainDecor = new TerrainDecor(state.world, this.terrainSurface, config.seed, config.render.visualDensity);
     this.scene.add(this.terrainDecor.group);
-    this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface);
+    this.resourceWork = new ResourceWorkScene(state.world, config.seed,
+      (x, z) => this.personStandable(x, z),
+      (assignment) => this.vegetation.resourceWorkTree(assignment),
+      (id) => { const settlement = state.settlements.find(s => s.id === id); return Boolean(settlement && eraRank(this.eraForSettlement(settlement)) >= 2); });
+    this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface, this.resourceWork);
+    this.scene.add(this.resourceWorkers.group);
     this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
@@ -434,6 +446,13 @@ export class GodboxRenderer {
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
     this.refreshVisiblePeople();
+    if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
+      this.resourceWorkersMonth = this.state.month;
+      this.resourceWorkersRevision = this.resourceWork.revision;
+      this.resourceWork.bindWorkers(this.visiblePeople);
+    }
+    this.resourceWorkers.beginFrame();
+    this.vegetation.beginResourceImpacts();
     this.peopleVisuals.beginFrame();
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
@@ -449,18 +468,27 @@ export class GodboxRenderer {
       const person = this.visiblePeople[index];
       if (!person) continue;
       const group = this.socialGroups.get(groupKeyFor(person) ?? '');
-      const aim = this.personDisplayTarget(person, group);
+      const binding = this.resourceWork.workers.get(person.id);
+      const worker = binding && resourceWorkerCanPresent(person, binding.site.assignment) ? binding : undefined;
+      const aim = worker ? resourceWorkAlternateAnchor(worker.site.profile, worker.variation, elapsedSeconds)
+        ? worker.station.alternate : worker.station.anchor : this.personDisplayTarget(person, group);
       const visual = this.peopleVisuals.resolve(person.id, {
         destination: aim,
+        arrivalEase: Boolean(worker),
         ...(person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
-        ...(aim.restFacing === undefined ? {} : { restFacing: aim.restFacing }),
+        restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
+          : ('restFacing' in aim ? aim.restFacing as number : undefined),
       }, deltaSeconds, this.personGround);
       const display = visual;
       const tier = visualTierFor(person);
       const detailed = tier !== 'population' || Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
       this.animationController.getOrCreateCharacterState(person.id, person.occupation);
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity, travelAnimationFor(visual.speed, person));
-      const pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
+      let pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
+      const oriented = worker && Math.cos(visual.facing - worker.station.facing) > 0.94;
+      const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
+      if (worker) this.resourceWorkers.sample(worker, elapsedSeconds, deltaSeconds, Boolean(working && oriented));
+      if (working) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
       const ageScale = person.ageMonths < 14 * 12 ? 0.64 + person.ageMonths / (14 * 12) * 0.08 : person.ageMonths > 68 * 12 ? 0.88 : 1;
       const heightScale = HUMAN_WORLD_SCALE * ageScale * (person.appearance?.heightScale ?? 1);
       const buildScale = person.appearance?.buildScale ?? 1;
@@ -468,12 +496,12 @@ export class GodboxRenderer {
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
       const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0.035 : person.activity === 'rest' ? 0.006 : 0.014;
       const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
-      const footY = visual.footY + bob;
+      const footY = visual.footY + (working ? 0 : bob);
       // Crouching and stooping lower the upper body only; the legs keep their hip pivot so the
       // feet stay on the ground instead of sinking with the pose.
-      const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * 0.35 * heightScale;
+      const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (working ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
-      this.setInstanceTransform(this.people, index, display.x, footY + 0.44 * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, working ? pose?.spineRotation ?? 0 : 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
         materialQuality: person.appearance?.materialQuality ?? 0.5,
@@ -484,7 +512,7 @@ export class GodboxRenderer {
       // documentary distance. It is geometry, not a billboard/icon, and follows the body pose.
       this.setInstanceTransform(
         this.peopleRoleGarments, index, display.x, footY + 0.53 * heightScale + poseLift, display.z,
-        heightScale * buildScale, heightScale, heightScale * buildScale, 0,
+        heightScale * buildScale, heightScale, heightScale * buildScale, working ? pose?.spineRotation ?? 0 : 0,
         facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0,
       );
       this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
@@ -495,7 +523,7 @@ export class GodboxRenderer {
       this.setInstanceTransform(this.peopleHeads, index, display.x, footY + 0.84 * heightScale + poseLift, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
       this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, 0.32);
       this.peopleHeads.setColorAt(index, this.personDetailColor);
-      const limbScale = detailed ? heightScale : 0.001;
+      const limbScale = detailed && !working ? heightScale : 0.001;
       this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.15 * buildScale * heightScale, 0.62, pose?.leftShoulderRotation ?? 0.1, this.peopleArms, poseLift);
       this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.15 * buildScale * heightScale, 0.62, pose?.rightShoulderRotation ?? -0.1, this.peopleArms, poseLift);
       this.peopleArms.setColorAt(index * 2, this.personColor);
@@ -506,7 +534,7 @@ export class GodboxRenderer {
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
-      const toolScale = detailed && longTool ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
+      const toolScale = detailed && longTool && !working ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
       this.setInstanceTransform(this.peopleTools, index, display.x + Math.sin(facing) * 0.17, footY + 0.55 * heightScale + poseLift, display.z + Math.cos(facing) * 0.17, toolScale, toolScale, toolScale, Math.PI / 7, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
@@ -524,10 +552,14 @@ export class GodboxRenderer {
       this.peopleHeadwear.setColorAt(index, this.personDetailColor);
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
-      const cargoScale = detailed && cargoVisible ? heightScale : 0.001;
+      const cargoScale = detailed && cargoVisible && !working ? heightScale : 0.001;
       this.setInstanceTransform(this.peopleCargo, index, display.x + Math.cos(facing) * 0.2, footY + 0.47 * heightScale + poseLift, display.z - Math.sin(facing) * 0.2, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
       this.personDetailColor.set(carried === 'ledger' ? (culture?.style.accent ?? '#d9a748') : '#8b6840');
       this.peopleCargo.setColorAt(index, this.personDetailColor);
+      if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor);
+      if (working && worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
+        this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
+      }
 
       if (tier !== 'population' && mantles < this.peopleMantles.instanceMatrix.count) {
         // Notable lives read at documentary distance through one extra silhouette element only.
@@ -539,6 +571,7 @@ export class GodboxRenderer {
       }
     }
     this.peopleMantles.count = mantles;
+    this.resourceWorkers.endFrame();
     this.peopleVisuals.prune((personId) => this.animationController.release(personId));
     this.people.instanceMatrix.needsUpdate = true;
     this.peopleRoleGarments.instanceMatrix.needsUpdate = true;
@@ -611,6 +644,8 @@ export class GodboxRenderer {
     this.visiblePeople = alive
       // Notable and historical lives always hold a slot so a documentary subject cannot vanish.
       .sort((a, b) => tierRank(b) - tierRank(a)
+        || Number(this.resourceWork.sites.has(`${b.homeId}\u0000${b.navigation?.destinationId ?? ''}`))
+          - Number(this.resourceWork.sites.has(`${a.homeId}\u0000${a.navigation?.destinationId ?? ''}`))
         || stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
       .slice(0, capacity);
     this.socialGroups = buildSocialGroups(this.visiblePeople);

@@ -7,6 +7,7 @@
 
 import type { Activity, Occupation } from '../../sim/types';
 import { SeededRandom } from '../../sim/prng';
+import type { ResourceWorkMotion } from './ResourceWorkMotion';
 
 export type AnimationState = 
   | 'idle'
@@ -82,6 +83,18 @@ export class AnimationController {
   /** Reused so per-frame pose interpolation for hundreds of characters allocates nothing. */
   private readonly poseBuffer: AnimationPose = emptyPose();
   private readonly blendBuffer: AnimationPose = emptyPose();
+  private readonly resourceBuffer: AnimationPose = emptyPose();
+
+  /** Resource articulation is layered onto presentation, never mapped back into Activity. */
+  resourcePose(base: AnimationPose | null, motion: ResourceWorkMotion, blend: number): AnimationPose {
+    const out = this.resourceBuffer;
+    if (base) copyPose(base, out);
+    out.pelvisRotation = motion.twist * blend;
+    out.spineRotation = motion.lean * blend;
+    out.positionOffset.y = -motion.crouch * blend;
+    out.headRotation = motion.basket * 0.3 * blend;
+    return out;
+  }
 
   constructor(seed: string = 'animations') {
     this.random = new SeededRandom(seed);
