@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { resolveEnvironmentalDepth } from '../src/render/atmosphere/EnvironmentalDepth';
+import {
+  LOW_MIST_VISIBILITY_GAIN,
+  resolveEnvironmentalDepth,
+} from '../src/render/atmosphere/EnvironmentalDepth';
 
 describe('environmental depth presentation', () => {
   it('keeps clear daylight genuinely light while retaining a small near-air floor', () => {
@@ -21,7 +24,7 @@ describe('environmental depth presentation', () => {
     expect(high.fogDensity).toBeCloseTo(low.fogDensity, 8);
   });
 
-  it('deepens atmosphere and valley mist under severe obscuration without exploding density', () => {
+  it('deepens atmosphere and local mist under severe obscuration without exploding density', () => {
     const clear = resolveEnvironmentalDepth({ daylight: 1, twilight: 0, atmosphericObscuration: 0, baseFogDensity: 0.0072, cameraHeight: 25 });
     const storm = resolveEnvironmentalDepth({ daylight: 0.45, twilight: 0.2, atmosphericObscuration: 1, baseFogDensity: 0.04, cameraHeight: 25 });
     expect(storm.fogDensity).toBeGreaterThan(clear.fogDensity * 10);
@@ -29,10 +32,12 @@ describe('environmental depth presentation', () => {
     expect(storm.valleyMistMultiplier).toBeGreaterThan(clear.valleyMistMultiplier);
   });
 
-  it('keeps ordinary valley mist restrained until the spatial mist-field pass', () => {
+  it('makes legitimate spatial mist materially visible without restoring global fog', () => {
     const clear = resolveEnvironmentalDepth({ daylight: 1, twilight: 0, atmosphericObscuration: 0, baseFogDensity: 0.0072, cameraHeight: 25 });
-    expect(clear.valleyMistMultiplier).toBeGreaterThanOrEqual(0.45);
-    expect(clear.valleyMistMultiplier).toBeLessThanOrEqual(0.55);
+    expect(LOW_MIST_VISIBILITY_GAIN).toBeGreaterThanOrEqual(3.5);
+    expect(clear.valleyMistMultiplier).toBeGreaterThanOrEqual(1.7);
+    expect(clear.valleyMistMultiplier).toBeLessThanOrEqual(1.9);
+    expect(clear.fogDensity).toBeLessThan(0.0018);
   });
 
   it('tightens shadow coverage materially below the old fixed 75-unit half span', () => {
