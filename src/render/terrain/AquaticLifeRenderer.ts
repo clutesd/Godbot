@@ -6,12 +6,18 @@ import type { EcologyField } from '../ecology/EcologyField';
 
 export type KoiWaterKind = 'lake' | 'river' | 'coast';
 
+export interface KoiRoutePoint {
+  x: number;
+  z: number;
+  waterY: number;
+}
+
 export interface KoiSchoolPlan {
   centerX: number;
   centerZ: number;
   waterY: number;
   depth: number;
-  orbitRadius: number;
+  swimWidth: number;
   count: number;
   phase: number;
   speed: number;
@@ -20,6 +26,7 @@ export interface KoiSchoolPlan {
   flowX: number;
   flowZ: number;
   humanProximity: number;
+  route: KoiRoutePoint[];
 }
 
 interface SchoolCandidate {
@@ -37,7 +44,8 @@ interface SchoolCandidate {
 
 interface KoiVisual {
   school: KoiSchoolPlan;
-  angleOffset: number;
+  pathOffset: number;
+  lateralOffset: number;
   radiusFactor: number;
   phase: number;
   size: number;
@@ -110,6 +118,11 @@ function oceanAt(field: TerrainField, seaLevel: number, x: number, z: number): b
   return (field.height[index] ?? seaLevel) < seaLevel && !field.river[index] && !field.lake[index];
 }
 
+function riverAt(field: TerrainField, x: number, z: number): boolean {
+  const index = nearestIndex(field, x, z);
+  return Boolean(field.river[index]) && (field.waterLevel[index] ?? -1) >= 0;
+}
+
 function safeLakeRadius(field: TerrainField, x: number, z: number): number {
   const radii = [field.step * 3.1, field.step * 2.4, field.step * 1.75, field.step * 1.15];
   for (const radius of radii) {
@@ -173,6 +186,149 @@ function selectCandidates(
     selected.push(candidate);
     if (selected.length >= limit) return;
   }
+}
+
+function pointForIndex(field: TerrainField, seaLevel: number, index: number, kind: KoiWaterKind): KoiRoutePoint {
+  const x = field.originX + index % field.resolution * field.step;
+  const z = field.originZ + Math.floor(index / field.resolution) * field.step;
+  const waterY = kind === 'coast'
+    ? elevationToY(seaLevel, seaLevel) - 0.014
+    : elevationToY(field.waterLevel[index] ?? seaLevel, seaLevel);
+  return { x, z, waterY };
+}
+
+function routePointAt(field: TerrainField, seaLevel: number, kind: KoiWaterKind, x: number, z: number): KoiRoutePoint {
+  const index = nearestIndex(field, x, z);
+  const point = pointForIndex(field, seaLevel, index, kind);
+  return { x, z, waterY: point.waterY };
+}
+
+function waterKindAt(field: TerrainField, seaLevel: number, kind: KoiWaterKind, x: number, z: number): boolean {
+  if (kind === 'river') return riverAt(field, x, z);
+  if (kind === 'lake') return lakeAt(field, x, z);
+  return oceanAt(field, seaLevel, x, z);
+}
+
+function upstreamNeighbour(field: TerrainField, current: number): number {
+  const cx = current % field.resolution;
+  const cz = Math.floor(current / field.resolution);
+  let best = -1;
+  let bestAccumulation = -1;
+  for (let dz = -1; dz <= 1; dz += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dz === 0) continue;
+      const x = cx + dx;
+      const z = cz + dz;
+      if (x < 0 || z < 0 || x >= field.resolution || z >= field.resolution) continue;
+      const index = z * field.resolution + x;
+      if (!field.river[index] || (field.waterLevel[index] ?? -1) < 0) continue;
+      if ((field.drainage?.downstream[index] ?? -1) !== current) continue;
+      const accumulation = field.drainage?.accumulation[index] ?? 0;
+      if (accumulation > bestAccumulation) {
+        best = index;
+        bestAccumulation = accumulation;
+      }
+    }
+  }
+  return best;
+}
+
+function riverRoute(field: TerrainField, seaLevel: number, candidate: SchoolCandidate): KoiRoutePoint[] {
+  const start = nearestIndex(field, candidate.x, candidate.z);
+  const upstream: number[] = [];
+  const downstream: number[] = [start];
+  const visited = new Set<number>([start]);
+
+  let current = start;
+  for (let step = 0; step < 5; step += 1) {
+    const previous = upstreamNeighbour(field, current);
+    if (previous < 0 || visited.has(previous)) break;
+    upstream.push(previous);
+    visited.add(previous);
+    current = previous;
+  }
+
+  current = start;
+  for (let step = 0; step < 10; step += 1) {
+    const next = field.drainage?.downstream[current] ?? -1;
+    if (next < 0 || next === current || visited.has(next) || !field.river[next] || (field.waterLevel[next] ?? -1) < 0) break;
+    downstream.push(next);
+    visited.add(next);
+    current = next;
+  }
+
+  const indices = [...upstream.reverse(), ...downstream];
+  if (indices.length >= 3) return indices.map(index => pointForIndex(field, seaLevel, index, 'river'));
+
+  const fallback: KoiRoutePoint[] = [];
+  const span = field.step * 1.7;
+  for (const sign of [-1, 0, 1]) {
+    const x = candidate.x + candidate.flowX * span * sign;
+    const z = candidate.z + candidate.flowZ * span * sign;
+    if (waterKindAt(field, seaLevel, 'river', x, z)) fallback.push(routePointAt(field, seaLevel, 'river', x, z));
+  }
+  return fallback.length >= 2 ? fallback : [routePointAt(field, seaLevel, 'river', candidate.x, candidate.z)];
+}
+
+function openWaterRoute(
+  field: TerrainField,
+  seaLevel: number,
+  candidate: SchoolCandidate,
+  identity: string,
+): KoiRoutePoint[] {
+  const points: KoiRoutePoint[] = [routePointAt(field, seaLevel, candidate.kind, candidate.x, candidate.z)];
+  let x = candidate.x;
+  let z = candidate.z;
+  let heading = hashUnit(`${identity}:heading`) * Math.PI * 2;
+  const stepLength = field.step * (candidate.kind === 'coast' ? 2.05 : 1.55);
+  const targetPoints = candidate.kind === 'coast' ? 12 : 10;
+  const turns = [0, 0.34, -0.34, 0.68, -0.68, 1.02, -1.02, 1.38, -1.38];
+
+  for (let routeIndex = 1; routeIndex < targetPoints; routeIndex += 1) {
+    let chosen: { x: number; z: number; heading: number } | undefined;
+    for (let attempt = 0; attempt < turns.length; attempt += 1) {
+      const jitter = (hashUnit(`${identity}:turn:${routeIndex}:${attempt}`) - 0.5) * 0.22;
+      const angle = heading + turns[attempt]! + jitter;
+      const nx = x + Math.cos(angle) * stepLength;
+      const nz = z + Math.sin(angle) * stepLength;
+      if (!waterKindAt(field, seaLevel, candidate.kind, nx, nz)) continue;
+      const clearance = candidate.kind === 'coast'
+        ? safeCoastRadius(field, seaLevel, nx, nz)
+        : safeLakeRadius(field, nx, nz);
+      if (clearance < field.step * 0.8) continue;
+      if (points.some(point => Math.hypot(point.x - nx, point.z - nz) < stepLength * 0.52)) continue;
+      chosen = { x: nx, z: nz, heading: angle };
+      break;
+    }
+    if (!chosen) break;
+    x = chosen.x;
+    z = chosen.z;
+    heading = chosen.heading;
+    points.push(routePointAt(field, seaLevel, candidate.kind, x, z));
+  }
+
+  if (points.length >= 3) return points;
+
+  const fallbackHeading = hashUnit(`${identity}:fallback-heading`) * Math.PI * 2;
+  const fallbackSpan = Math.max(field.step, candidate.safeRadius * 0.72);
+  const fallback: KoiRoutePoint[] = [];
+  for (const sign of [-1, 0, 1]) {
+    const fx = candidate.x + Math.cos(fallbackHeading) * fallbackSpan * sign;
+    const fz = candidate.z + Math.sin(fallbackHeading) * fallbackSpan * sign;
+    if (waterKindAt(field, seaLevel, candidate.kind, fx, fz)) fallback.push(routePointAt(field, seaLevel, candidate.kind, fx, fz));
+  }
+  return fallback.length >= 2 ? fallback : points;
+}
+
+function buildSwimRoute(
+  field: TerrainField,
+  seaLevel: number,
+  candidate: SchoolCandidate,
+  identity: string,
+): KoiRoutePoint[] {
+  return candidate.kind === 'river'
+    ? riverRoute(field, seaLevel, candidate)
+    : openWaterRoute(field, seaLevel, candidate, identity);
 }
 
 /**
@@ -247,30 +403,75 @@ export function planKoiSchools(
       ? candidate.kind === 'river' ? 6 : candidate.kind === 'coast' ? 8 : 9
       : candidate.kind === 'river' ? 4 : 6;
     const countRange = complexity === 2 ? 5 : 3;
+    const route = buildSwimRoute(field, seaLevel, candidate, identity);
     return {
       centerX: candidate.x,
       centerZ: candidate.z,
       waterY: candidate.waterY,
       depth: candidate.depth,
-      orbitRadius: candidate.safeRadius * (candidate.kind === 'river' ? 0.94 : 0.5 + hashUnit(`${identity}:radius`) * 0.16),
+      swimWidth: candidate.safeRadius * (candidate.kind === 'river' ? 0.2 : candidate.kind === 'coast' ? 0.2 : 0.18),
       count: countBase + Math.floor(hashUnit(`${identity}:count`) * countRange),
       phase: hashUnit(`${identity}:phase`) * Math.PI * 2,
       speed: candidate.kind === 'river'
-        ? 0.3 + hashUnit(`${identity}:speed`) * 0.24
-        : 0.13 + hashUnit(`${identity}:speed`) * 0.12,
+        ? 0.035 + hashUnit(`${identity}:speed`) * 0.018
+        : candidate.kind === 'coast'
+          ? 0.019 + hashUnit(`${identity}:speed`) * 0.012
+          : 0.016 + hashUnit(`${identity}:speed`) * 0.011,
       direction: hashUnit(`${identity}:direction`) < 0.5 ? -1 : 1,
       kind: candidate.kind,
       flowX: candidate.flowX,
       flowZ: candidate.flowZ,
       humanProximity: candidate.humanProximity,
+      route,
     };
   });
 }
 
+interface RouteSample {
+  x: number;
+  z: number;
+  waterY: number;
+  tangentX: number;
+  tangentZ: number;
+}
+
+function pingPong01(value: number): number {
+  const wrapped = ((value % 2) + 2) % 2;
+  return wrapped <= 1 ? wrapped : 2 - wrapped;
+}
+
+function pingPongDirection(value: number): 1 | -1 {
+  const wrapped = ((value % 2) + 2) % 2;
+  return wrapped <= 1 ? 1 : -1;
+}
+
+function sampleRoute(route: readonly KoiRoutePoint[], progress: number): RouteSample {
+  if (route.length === 0) return { x: 0, z: 0, waterY: 0, tangentX: 0, tangentZ: 1 };
+  if (route.length === 1) {
+    const point = route[0]!;
+    return { x: point.x, z: point.z, waterY: point.waterY, tangentX: 0, tangentZ: 1 };
+  }
+  const scaled = clamp01(progress) * (route.length - 1);
+  const index = Math.min(route.length - 2, Math.floor(scaled));
+  const t = scaled - index;
+  const a = route[index]!;
+  const b = route[index + 1]!;
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const length = Math.max(0.0001, Math.hypot(dx, dz));
+  return {
+    x: a.x + dx * t,
+    z: a.z + dz * t,
+    waterY: a.waterY + (b.waterY - a.waterY) * t,
+    tangentX: dx / length,
+    tangentZ: dz / length,
+  };
+}
+
 /**
- * Camera-readable aquatic life. Fish are a restrained near-surface optical layer above the opaque
- * water depth buffer, with one or two subtle ripple rings per school to make movement discoverable
- * from GODBOX's normal elevated camera without turning the water into an aquarium.
+ * Camera-readable aquatic life that actually travels through the water. Each school owns a long,
+ * water-valid route and loosely follows it back and forth; individual fish have small along-route
+ * and cross-route offsets, so the result reads as swimming rather than orbiting a fixed spawn point.
  */
 export class AquaticLifeRenderer {
   readonly group = new THREE.Group();
@@ -280,7 +481,6 @@ export class AquaticLifeRenderer {
   private readonly body: THREE.InstancedMesh;
   private readonly patches: THREE.InstancedMesh;
   private readonly tails: THREE.InstancedMesh;
-  private readonly ripples: THREE.InstancedMesh;
   private readonly fish: KoiVisual[] = [];
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
@@ -290,7 +490,6 @@ export class AquaticLifeRenderer {
   private readonly quaternion = new THREE.Quaternion();
   private readonly tailQuaternion = new THREE.Quaternion();
   private readonly wagQuaternion = new THREE.Quaternion();
-  private readonly flatQuaternion = new THREE.Quaternion();
   private readonly yAxis = new THREE.Vector3(0, 1, 0);
   private lastTime = Number.NaN;
 
@@ -314,7 +513,8 @@ export class AquaticLifeRenderer {
         const pattern = patterns[Math.floor(hashUnit(`${identity}:pattern`) * patterns.length)] ?? patterns[0]!;
         this.fish.push({
           school,
-          angleOffset: index / Math.max(1, count) * Math.PI * 2 + (hashUnit(`${identity}:angle`) - 0.5) * 0.82,
+          pathOffset: (index / Math.max(1, count - 1) - 0.5) * 0.14 + (hashUnit(`${identity}:path`) - 0.5) * 0.035,
+          lateralOffset: (hashUnit(`${identity}:lateral`) - 0.5) * 1.7,
           radiusFactor: 0.34 + hashUnit(`${identity}:radius`) * 0.66,
           phase: hashUnit(`${identity}:phase`) * Math.PI * 2,
           size: 0.9 + hashUnit(`${identity}:size`) * 0.58,
@@ -363,24 +563,7 @@ export class AquaticLifeRenderer {
     if (this.tails.instanceColor) this.tails.instanceColor.needsUpdate = true;
     if (this.patches.instanceColor) this.patches.instanceColor.needsUpdate = true;
 
-    const rippleCapacity = Math.max(1, this.schools.length * 2);
-    const rippleGeometry = new THREE.RingGeometry(0.76, 1, 20).rotateX(-Math.PI / 2);
-    const rippleMaterial = new THREE.MeshBasicMaterial({
-      color: '#d8f2ec',
-      transparent: true,
-      opacity: 0.17,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    });
-    this.ripples = new THREE.InstancedMesh(rippleGeometry, rippleMaterial, rippleCapacity);
-    this.ripples.count = this.schools.length * 2;
-    this.ripples.frustumCulled = false;
-    this.ripples.renderOrder = 4;
-    this.ripples.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.ripples.name = 'aquatic-school-ripples';
-
-    this.group.add(this.body, this.patches, this.tails, this.ripples);
+    this.group.add(this.body, this.patches, this.tails);
     this.body.onBeforeRender = () => this.update(this.ecology.time.value);
     this.update(0, true);
   }
@@ -401,35 +584,23 @@ export class AquaticLifeRenderer {
     for (let index = 0; index < this.fish.length; index += 1) {
       const fish = this.fish[index]!;
       const school = fish.school;
-      let x: number;
-      let z: number;
-      let yaw: number;
+      const phaseProgress = school.phase / (Math.PI * 2);
+      const wander = Math.sin(elapsedSeconds * 0.19 + fish.phase) * 0.012;
+      const rawProgress = elapsedSeconds * school.speed * school.direction + phaseProgress + fish.pathOffset + wander;
+      const routeProgress = pingPong01(rawProgress);
+      const routeDirection = pingPongDirection(rawProgress) * school.direction;
+      const sample = sampleRoute(school.route, routeProgress);
 
-      if (school.kind === 'river') {
-        const acrossX = -school.flowZ;
-        const acrossZ = school.flowX;
-        const travel = Math.sin(elapsedSeconds * school.speed + fish.phase + fish.angleOffset)
-          * school.orbitRadius * (0.72 + fish.radiusFactor * 0.28);
-        const lateral = Math.sin(elapsedSeconds * (school.speed * 0.66) + fish.phase * 1.7)
-          * school.orbitRadius * 0.26 * fish.radiusFactor;
-        x = school.centerX + school.flowX * travel + acrossX * lateral;
-        z = school.centerZ + school.flowZ * travel + acrossZ * lateral;
-        const facing = school.direction;
-        yaw = Math.atan2(school.flowX * facing, school.flowZ * facing)
-          + Math.sin(elapsedSeconds * 0.8 + fish.phase) * 0.11;
-      } else {
-        const breathe = 0.92 + Math.sin(elapsedSeconds * 0.53 + fish.phase) * 0.08;
-        const radius = school.orbitRadius * fish.radiusFactor * breathe;
-        const angle = school.phase + fish.angleOffset + elapsedSeconds * school.speed * school.direction
-          + Math.sin(elapsedSeconds * 0.31 + fish.phase) * 0.09;
-        x = school.centerX + Math.cos(angle) * radius;
-        z = school.centerZ + Math.sin(angle) * radius * (school.kind === 'coast' ? 0.82 : 0.72);
-        const dx = -Math.sin(angle) * school.direction;
-        const dz = Math.cos(angle) * (school.kind === 'coast' ? 0.82 : 0.72) * school.direction;
-        yaw = Math.atan2(dx, dz) + Math.sin(elapsedSeconds * 0.7 + fish.phase) * 0.06;
-      }
+      const lateralWander = Math.sin(elapsedSeconds * (0.36 + fish.radiusFactor * 0.11) + fish.phase) * 0.18;
+      const lateral = school.swimWidth * (fish.lateralOffset + lateralWander);
+      const acrossX = -sample.tangentZ;
+      const acrossZ = sample.tangentX;
+      const x = sample.x + acrossX * lateral;
+      const z = sample.z + acrossZ * lateral;
+      const y = sample.waterY + 0.015 + Math.sin(elapsedSeconds * 0.82 + fish.phase) * 0.003;
+      const yaw = Math.atan2(sample.tangentX * routeDirection, sample.tangentZ * routeDirection)
+        + Math.sin(elapsedSeconds * 0.7 + fish.phase) * 0.055;
 
-      const y = school.waterY + 0.015 + Math.sin(elapsedSeconds * 0.82 + fish.phase) * 0.003;
       this.position.set(x, y, z);
       this.quaternion.setFromAxisAngle(this.yAxis, yaw);
 
@@ -457,28 +628,15 @@ export class AquaticLifeRenderer {
       this.patches.setMatrixAt(index, this.matrix);
     }
 
-    for (let schoolIndex = 0; schoolIndex < this.schools.length; schoolIndex += 1) {
-      const school = this.schools[schoolIndex]!;
-      for (let ring = 0; ring < 2; ring += 1) {
-        const pulse = (elapsedSeconds * (0.12 + ring * 0.025) + school.phase / (Math.PI * 2) + ring * 0.5) % 1;
-        const size = (0.09 + pulse * 0.22) * (school.kind === 'coast' ? 1.22 : 1);
-        this.position.set(school.centerX, school.waterY + 0.018, school.centerZ);
-        this.scale.set(size, 1, size);
-        this.matrix.compose(this.position, this.flatQuaternion, this.scale);
-        this.ripples.setMatrixAt(schoolIndex * 2 + ring, this.matrix);
-      }
-    }
-
     this.body.instanceMatrix.needsUpdate = true;
     this.tails.instanceMatrix.needsUpdate = true;
     this.patches.instanceMatrix.needsUpdate = true;
-    this.ripples.instanceMatrix.needsUpdate = true;
   }
 
   dispose(): void {
     this.body.onBeforeRender = () => undefined;
     this.group.removeFromParent();
-    for (const mesh of [this.body, this.patches, this.tails, this.ripples]) {
+    for (const mesh of [this.body, this.patches, this.tails]) {
       mesh.geometry.dispose();
       (mesh.material as THREE.Material).dispose();
     }
