@@ -5,6 +5,10 @@ import * as THREE from 'three';
  * physically lit humanoid only a handful of pixels tall can lose almost all chroma in shade even
  * when its source colour is correct. The shell uses an unlit material, but its global brightness is
  * driven by daylight so it reads as dyed cloth rather than a UI marker or night-time glow.
+ *
+ * Important: colours are supplied by InstancedMesh.setColorAt(). `vertexColors` must remain false
+ * unless this geometry gains a real `color` BufferAttribute. Enabling both paths multiplies the
+ * vertex and instance colours and can collapse a missing/default vertex colour to black.
  */
 export const ROLE_GARMENT_DAY_BRIGHTNESS = 0.82;
 export const ROLE_GARMENT_NIGHT_BRIGHTNESS = 0.075;
@@ -21,12 +25,13 @@ export function roleGarmentBrightnessForDaylight(daylight: number): number {
 export function createRoleGarmentMaterial(): THREE.MeshBasicMaterial {
   const material = new THREE.MeshBasicMaterial({
     color: new THREE.Color().setScalar(ROLE_GARMENT_DAY_BRIGHTNESS),
-    vertexColors: true,
+    vertexColors: false,
     toneMapped: true,
     fog: true,
   });
   material.name = 'godbox-role-garment';
   material.userData['roleReadable'] = true;
+  material.userData['instanceColorOnly'] = true;
   return material;
 }
 
