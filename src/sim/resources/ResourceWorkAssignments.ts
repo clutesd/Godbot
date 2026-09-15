@@ -1,4 +1,4 @@
-import type { Occupation, SimulationState, Vec2 } from '../types';
+import type { Occupation, SimulationState, Vec2, WorldState } from '../types';
 
 export type ResourceWorkSource = 'world-resource' | 'deposit-system';
 
@@ -31,21 +31,41 @@ interface MonthlyWorkSnapshot {
 }
 
 const snapshots = new WeakMap<SimulationState, MonthlyWorkSnapshot>();
+/** Presentation renderers own the WorldState already; mirror the same transient snapshot by world. */
+const snapshotsByWorld = new WeakMap<WorldState, MonthlyWorkSnapshot>();
 
 function authorityKey(settlementId: string, resourceId: string): string {
   return `${settlementId}\u0000${resourceId}`;
 }
 
+function freshSnapshot(month: number): MonthlyWorkSnapshot {
+  return { month, assignments: [], worldAuthority: new Set() };
+}
+
 function snapshot(state: SimulationState): MonthlyWorkSnapshot {
   const current = snapshots.get(state);
-  if (current?.month === state.month) return current;
-  const next: MonthlyWorkSnapshot = { month: state.month, assignments: [], worldAuthority: new Set() };
+  if (current?.month === state.month) {
+    snapshotsByWorld.set(state.world, current);
+    return current;
+  }
+  const next = freshSnapshot(state.month);
   snapshots.set(state, next);
+  snapshotsByWorld.set(state.world, next);
   return next;
 }
 
 function copyPoint(point: Readonly<Vec2>): Readonly<Vec2> {
   return Object.freeze({ x: point.x, z: point.z });
+}
+
+/**
+ * Starts a new presentation ledger even in a month with zero extraction. This is what prevents
+ * renderers that only know the world object from displaying last month's workers/sites forever.
+ */
+export function beginResourceWorkMonth(state: SimulationState): void {
+  const next = freshSnapshot(state.month);
+  snapshots.set(state, next);
+  snapshotsByWorld.set(state.world, next);
 }
 
 /** Records one real extraction site. This never mutates simulation resource quantities. */
@@ -78,4 +98,9 @@ export function recordResourceWorkAssignment(state: SimulationState, assignment:
 /** Current-month work only. Advancing `state.month` automatically exposes a fresh empty snapshot. */
 export function resourceWorkAssignments(state: SimulationState): readonly ResourceWorkAssignment[] {
   return snapshot(state).assignments;
+}
+
+/** Read-only renderer bridge for systems that deliberately own only the WorldState. */
+export function resourceWorkAssignmentsForWorld(world: WorldState): readonly ResourceWorkAssignment[] {
+  return snapshotsByWorld.get(world)?.assignments ?? [];
 }
