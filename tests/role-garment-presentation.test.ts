@@ -9,14 +9,17 @@ import {
 } from '../src/render/people/RoleGarmentPresentation';
 
 describe('role garment presentation', () => {
-  it('uses an unlit, tone-mapped, fog-aware material so role colour survives character shading', () => {
+  it('uses an unlit, tone-mapped, fog-aware material with instance colour only', () => {
     const material = createRoleGarmentMaterial();
     expect(material).toBeInstanceOf(THREE.MeshBasicMaterial);
-    expect(material.vertexColors).toBe(true);
+    // InstancedMesh.setColorAt() owns the per-person tint. This geometry has no vertex-color
+    // attribute, so vertexColors must stay disabled or the shader can multiply the tint by black.
+    expect(material.vertexColors).toBe(false);
     expect(material.toneMapped).toBe(true);
     expect(material.fog).toBe(true);
     expect(material.transparent).toBe(false);
     expect(material.userData['roleReadable']).toBe(true);
+    expect(material.userData['instanceColorOnly']).toBe(true);
   });
 
   it('stays vivid in daylight without becoming a night-time UI glow', () => {
