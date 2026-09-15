@@ -24,7 +24,8 @@ const STAGE_RANK: Record<MovementPathStage, number> = {
 const SCAR_KIND_RANK = { farmland: 1, logging: 2, quarry: 3, mine: 4, industry: 5, ruin: 6 } as const;
 const HASH_OFFSET = 2166136261;
 const HASH_PRIME = 16777619;
-const MAX_ACTIVE_WORK_SITES = 96;
+/** Active work is documentary detail, not a second simulation population. Keep it tightly bounded. */
+const MAX_ACTIVE_WORK_SITES = 64;
 
 type WorkKind = 'timber' | 'mineral' | 'plant' | 'generic';
 
@@ -63,6 +64,11 @@ export class ResourceSiteRenderer {
   private readonly cutWoodMaterial = new THREE.MeshStandardMaterial({ color: '#a77b4d', roughness: 0.92 });
   private readonly stoneMaterial = new THREE.MeshStandardMaterial({ color: '#8b857b', roughness: 0.98 });
   private readonly oreMaterial = new THREE.MeshStandardMaterial({ color: '#6f665d', roughness: 0.9, metalness: 0.08 });
+  private readonly copperOreMaterial = new THREE.MeshStandardMaterial({ color: '#8e6f58', roughness: 0.9, metalness: 0.08 });
+  private readonly ironOreMaterial = new THREE.MeshStandardMaterial({ color: '#655e58', roughness: 0.9, metalness: 0.08 });
+  private readonly coalMaterial = new THREE.MeshStandardMaterial({ color: '#383633', roughness: 0.95, metalness: 0.03 });
+  private readonly clayMaterial = new THREE.MeshStandardMaterial({ color: '#9a7258', roughness: 0.98 });
+  private readonly uraniumMaterial = new THREE.MeshStandardMaterial({ color: '#6f7860', roughness: 0.9, metalness: 0.06 });
   private readonly plantMaterial = new THREE.MeshStandardMaterial({ color: '#627a45', roughness: 0.96 });
   private readonly basketMaterial = new THREE.MeshStandardMaterial({ color: '#94704a', roughness: 1 });
   private readonly toolMaterial = new THREE.MeshStandardMaterial({ color: '#65503a', roughness: 0.9 });
@@ -154,7 +160,8 @@ export class ResourceSiteRenderer {
     for (const assignment of assignments) {
       hash = mixHash(hash, stringHash(assignment.siteId));
       hash = mixHash(hash, stringHash(assignment.resourceId));
-      hash = mixHash(hash, assignment.month);
+      // Month is intentionally not part of the visual revision. If the same work continues next
+      // month at the same intensity, keep the existing geometry instead of rebuilding it.
       hash = mixHash(hash, Math.round(assignment.amountExtracted * 64));
       hash = mixHash(hash, Math.round(assignment.labourUsed * 64));
       hash = mixHash(hash, Math.round(assignment.worldPosition.x * 64));
@@ -280,12 +287,7 @@ export class ResourceSiteRenderer {
   }
 
   private addMineralWork(site: THREE.Group, count: number, resourceId: string): void {
-    const material = resourceId === 'stone' ? this.stoneMaterial : this.oreMaterial.clone();
-    if (resourceId === 'copper-ore') material.color.set('#8e6f58');
-    else if (resourceId === 'iron-ore') material.color.set('#655e58');
-    else if (resourceId === 'coal') material.color.set('#383633');
-    else if (resourceId === 'clay') material.color.set('#9a7258');
-    else if (resourceId === 'uranium-ore') material.color.set('#6f7860');
+    const material = this.mineralMaterial(resourceId);
     for (let index = 0; index < count + 1; index += 1) {
       const rock = new THREE.Mesh(this.rockGeometry, material);
       rock.scale.setScalar(0.8 + (index % 3) * 0.14);
@@ -300,6 +302,16 @@ export class ResourceSiteRenderer {
     bin.castShadow = true;
     site.add(bin);
     this.addTool(site, { x: 0.05, y: 0.34, z: -0.34 }, -0.32, false);
+  }
+
+  private mineralMaterial(resourceId: string): THREE.MeshStandardMaterial {
+    if (resourceId === 'stone') return this.stoneMaterial;
+    if (resourceId === 'copper-ore') return this.copperOreMaterial;
+    if (resourceId === 'iron-ore') return this.ironOreMaterial;
+    if (resourceId === 'coal') return this.coalMaterial;
+    if (resourceId === 'clay') return this.clayMaterial;
+    if (resourceId === 'uranium-ore') return this.uraniumMaterial;
+    return this.oreMaterial;
   }
 
   private addPlantWork(site: THREE.Group, count: number): void {
