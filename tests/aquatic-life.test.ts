@@ -43,36 +43,40 @@ function routeSpan(route: readonly { x: number; z: number }[]): number {
 }
 
 describe('koi aquatic life planning', () => {
-  it('creates deterministic lake schools with traversing swim routes', () => {
+  it('creates sparse deterministic lake shoals with long traversing routes', () => {
     const field = standingWaterField();
     const first = planKoiSchools(field, 0.35, 42.75, 2);
     const replay = planKoiSchools(field, 0.35, 42.75, 2);
 
     expect(first.length).toBeGreaterThan(0);
-    expect(first.length).toBeLessThanOrEqual(16);
+    expect(first.length).toBeLessThanOrEqual(7);
     expect(replay).toEqual(first);
     expect(first.every(school => school.kind === 'lake' && school.depth > 0.075 && school.waterY > 0)).toBe(true);
+    expect(first.every(school => school.count >= 4 && school.count <= 7)).toBe(true);
     expect(first.every(school => school.route.length >= 2)).toBe(true);
-    expect(first.some(school => routeSpan(school.route) > field.step * 2)).toBe(true);
+    expect(first.some(school => routeSpan(school.route) > field.step * 3)).toBe(true);
   });
 
   it('creates current-aware river routes that travel along the channel', () => {
     const field = standingWaterField(true);
     const schools = planKoiSchools(field, 0.35, 12.5, 2);
     expect(schools.length).toBeGreaterThan(0);
-    expect(schools.length).toBeLessThanOrEqual(16);
+    expect(schools.length).toBeLessThanOrEqual(7);
     expect(schools.every(school => school.kind === 'river')).toBe(true);
+    expect(schools.every(school => school.count >= 3 && school.count <= 6)).toBe(true);
     expect(schools.every(school => Math.hypot(school.flowX, school.flowZ) > 0.9)).toBe(true);
     expect(schools.every(school => school.route.length >= 3)).toBe(true);
     expect(schools.every(school => routeSpan(school.route) >= field.step * 2)).toBe(true);
   });
 
-  it('creates human-adjacent coastal schools with open-water routes', () => {
+  it('limits human-adjacent coastal shoals instead of filling the waterfront with clusters', () => {
     const field = coastalField();
     const schools = planKoiSchools(field, 0.35, 18.5, 2, [{ x: 0, z: 0 }]);
     expect(schools.length).toBeGreaterThan(0);
+    expect(schools.length).toBeLessThanOrEqual(4);
     expect(schools.some(school => school.kind === 'coast')).toBe(true);
     expect(schools.every(school => school.humanProximity > 0.08)).toBe(true);
+    expect(schools.every(school => school.count >= 4 && school.count <= 7)).toBe(true);
     expect(schools.some(school => school.route.length >= 3 && routeSpan(school.route) > field.step * 2)).toBe(true);
   });
 
