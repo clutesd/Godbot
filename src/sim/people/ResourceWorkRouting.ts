@@ -3,10 +3,12 @@ import {
   resourceWorkAssignments,
   type ResourceWorkAssignment,
 } from '../resources/ResourceWorkAssignments';
+import { WalkabilityLayer } from './WalkabilityLayer';
 
 const MAX_WORKERS_PER_SITE = 4;
 const MAX_WORKERS_PER_SETTLEMENT = 12;
 const RESOURCE_DESTINATION_PREFIX = 'resource-work:';
+const RESOURCE_ROUTE_TOLERANCE = 0.12;
 
 interface RoutingSnapshot {
   month: number;
@@ -48,9 +50,18 @@ export function resourceWorkDestinationKind(assignment: ResourceWorkAssignment):
     : 'field';
 }
 
-/** Existing surveyed extraction paths are preferred; cell-authority sites fall back to A*. */
+/**
+ * Only a single contiguous pedestrian access leg is safe to reuse as a preferred commute. A
+ * multimodal extraction route exposes separate walking prefix/suffix legs around rail/water; never
+ * flatten those disconnected legs into a fake pedestrian path. In that case ordinary terrain-safe
+ * routing decides whether a representative can actually reach the work site on foot.
+ */
 export function resourceWorkPreferredWaypoints(assignment: ResourceWorkAssignment): Vec2[] {
-  const source = assignment.accessPath ?? assignment.accessPaths?.flat() ?? [];
+  const source = assignment.accessPaths?.length === 1
+    ? assignment.accessPaths[0]!
+    : assignment.accessPaths && assignment.accessPaths.length > 1
+      ? []
+      : assignment.accessPath ?? [];
   const points: Vec2[] = [];
   for (const point of source) {
     const previous = points[points.length - 1];
@@ -88,6 +99,7 @@ function allocateRepresentatives(
     bySettlement.set(assignment.settlementId, local);
   }
 
+  const walking = new WalkabilityLayer(state.world);
   for (const [settlementId, localAssignments] of bySettlement) {
     const residents = state.people.filter((person) => person.alive && person.homeId === settlementId);
     const rankedAssignments = [...localAssignments].sort((a, b) =>
@@ -105,10 +117,15 @@ function allocateRepresentatives(
         const target = targets.get(assignment.siteId) ?? 0;
         const siteCount = assignedAtSite.get(assignment.siteId) ?? 0;
         if (siteCount >= target || siteCount > pass) continue;
-        const candidate = residents
-          .filter((person) => !claimed.has(person.id) && assignment.gatherOccupations.includes(person.occupation))
+        const candidates = residents
+          .filter((person) => !claimed.has(person.id)
+            && assignment.gatherOccupations.includes(person.occupation)
+            && person.displacedSinceMonth === undefined
+            && person.activity !== 'migrate'
+            && person.health > 0.2)
           .sort((a, b) => workerRank(seed, state.month, assignment.siteId, a.id) - workerRank(seed, state.month, assignment.siteId, b.id)
-            || a.id.localeCompare(b.id))[0];
+            || a.id.localeCompare(b.id));
+        const candidate = candidates.find((person) => canReachResourceSite(walking, person, assignment));
         if (!candidate) continue;
         result.set(candidate.id, assignment);
         claimed.add(candidate.id);
@@ -120,6 +137,20 @@ function allocateRepresentatives(
     }
   }
   return result;
+}
+
+function canReachResourceSite(
+  walking: WalkabilityLayer,
+  person: Person,
+  assignment: ResourceWorkAssignment,
+): boolean {
+  const destination = walking.nearestWalkable(
+    assignment.worldPosition,
+    `${person.id}:${resourceWorkDestinationId(assignment)}`,
+  );
+  const route = walking.route(person.position, destination, resourceWorkPreferredWaypoints(assignment), 'walk');
+  const end = route.at(-1);
+  return Boolean(end && Math.hypot(end.x - destination.x, end.z - destination.z) <= RESOURCE_ROUTE_TOLERANCE);
 }
 
 function representativeTarget(assignment: ResourceWorkAssignment): number {
