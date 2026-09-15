@@ -7,12 +7,17 @@ import type { TerrainSurface } from '../terrain/TerrainSurface';
 /** GPU-facing description of the low-mist density field. */
 export interface LowMistFieldSample {
   texture: THREE.DataTexture;
+  flowTexture: THREE.DataTexture;
   originX: number;
   originZ: number;
   span: number;
   minAnchorY: number;
   maxAnchorY: number;
   seasonalStrength: number;
+  driftX: number;
+  driftZ: number;
+  motionTime: number;
+  windStrength: number;
 }
 
 const CHANNELS = 4;
@@ -80,6 +85,32 @@ export function lowMistLayerHeightForCell(cell: WorldCell): number {
   return THREE.MathUtils.lerp(LOW_MIST_MIN_HEIGHT, LOW_MIST_MAX_HEIGHT, amount);
 }
 
+/**
+ * Low mist is most persistent overnight and around dawn, then burns back hard under a high clear
+ * sun. Dense cloud/weather reduces solar burn-off instead of making every wet day uniformly foggy.
+ */
+export function lowMistDiurnalStrength(solarElevation: number, daylight: number, obscuration: number): number {
+  const day = clamp01(daylight);
+  const cloud = clamp01(obscuration);
+  const dawnRise = smoothstep(-0.12, 0.04, solarElevation);
+  const dawnFall = 1 - smoothstep(0.16, 0.42, solarElevation);
+  const dawnPulse = dawnRise * dawnFall;
+  const highSun = smoothstep(0.16, 0.68, Math.max(0, solarElevation));
+  const burnOff = highSun * day * (1 - cloud * 0.68);
+  const nightPersistence = (1 - day) * 0.46;
+  return THREE.MathUtils.clamp(
+    0.34 + nightPersistence + dawnPulse * 0.34 - burnOff * 0.32 + cloud * 0.1,
+    0.22,
+    1.05,
+  );
+}
+
+/** Strong wind tears shallow fog apart even though the remaining banks move faster. */
+export function lowMistWindRetention(wind: number): number {
+  const dispersal = smoothstep(0.34, 0.92, clamp01(wind));
+  return THREE.MathUtils.lerp(1, 0.56, dispersal);
+}
+
 /** Decode helper for tests/diagnostics. One-channel encoding stays interpolation-safe on the GPU. */
 export function decodeLowMistAnchor(encoded: number, minY: number, maxY: number): number {
   return THREE.MathUtils.lerp(minY, maxY, (encoded & 255) / 255);
@@ -88,38 +119,54 @@ export function decodeLowMistAnchor(encoded: number, minY: number, maxY: number)
 /**
  * Low-resolution world-space mist field.
  *
+ * Density texture:
  * R = spatial source strength
  * G = normalized terrain/water anchor height
  * B = local layer-height fraction
  * A = reserved (opaque for interpolation stability)
  *
- * The texture is intentionally tiny (one texel per simulation cell) and linearly filtered. The
- * expensive-looking result comes from integrating this field in the existing aerial-perspective
- * pass, not from adding particle volumes or a second full-screen fog renderer.
+ * Flow texture:
+ * R/G = interpolatable downhill X/Z direction encoded from -1..1 to 0..1
+ * B = local slope/spill strength
+ * A = opaque
+ *
+ * The textures are intentionally tiny (one texel per simulation cell). Geography stays fixed while
+ * the presentation layer animates bank structure through wind and the downhill vector; the mist is
+ * never allowed to become a free-scrolling screen texture detached from valleys and water.
  */
 export class LowMistField {
   readonly texture: THREE.DataTexture;
+  readonly flowTexture: THREE.DataTexture;
   readonly originX: number;
   readonly originZ: number;
   readonly span: number;
   readonly pixels: Uint8Array;
+  readonly flowPixels: Uint8Array;
   minAnchorY = 0;
   maxAnchorY = 1;
   seasonalStrength = 0.3;
 
   private revision = '';
+  private driftX = 0;
+  private driftZ = 0;
+  private motionTime = 0;
+  private windStrength = 0.12;
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, private readonly seed: string) {
     this.originX = -world.size * world.cellSize * 0.5;
     this.originZ = -world.size * world.cellSize * 0.5;
     this.span = world.size * world.cellSize;
     this.pixels = new Uint8Array(world.size * world.size * CHANNELS);
+    this.flowPixels = new Uint8Array(world.size * world.size * CHANNELS);
     this.texture = new THREE.DataTexture(this.pixels, world.size, world.size, THREE.RGBAFormat, THREE.UnsignedByteType);
-    this.texture.magFilter = THREE.LinearFilter;
-    this.texture.minFilter = THREE.LinearFilter;
-    this.texture.wrapS = THREE.ClampToEdgeWrapping;
-    this.texture.wrapT = THREE.ClampToEdgeWrapping;
-    this.texture.generateMipmaps = false;
+    this.flowTexture = new THREE.DataTexture(this.flowPixels, world.size, world.size, THREE.RGBAFormat, THREE.UnsignedByteType);
+    for (const texture of [this.texture, this.flowTexture]) {
+      texture.magFilter = THREE.LinearFilter;
+      texture.minFilter = THREE.LinearFilter;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.generateMipmaps = false;
+    }
     this.rebuild();
   }
 
@@ -127,26 +174,54 @@ export class LowMistField {
     this.seasonalStrength = THREE.MathUtils.clamp(strength, 0, 1);
   }
 
-  /** Rebuild only when simulation weather/hydrology revision changes. */
-  update(): void {
+  /**
+   * Update structural weather only when its revision changes, but animate the banks every frame.
+   * Presentation drift is deliberately slow and bounded so resuming a background tab cannot throw
+   * the mist across the world in one frame.
+   */
+  update(deltaSeconds = 0, elapsedSeconds = 0): void {
     const revision = `${this.world.weather?.month ?? -1}:${this.world.environmentRevision ?? 0}`;
     if (revision !== this.revision) this.rebuild();
+
+    const weather = this.world.weather;
+    this.windStrength = clamp01(weather?.wind ?? 0.12);
+    const windX = weather?.windX ?? 1;
+    const windZ = weather?.windZ ?? 0;
+    const windLength = Math.max(0.0001, Math.hypot(windX, windZ));
+    const dt = THREE.MathUtils.clamp(Number.isFinite(deltaSeconds) ? deltaSeconds : 0, 0, 0.25);
+    const driftSpeed = 0.018 + this.windStrength * 0.14;
+    this.driftX += windX / windLength * driftSpeed * dt;
+    this.driftZ += windZ / windLength * driftSpeed * dt;
+
+    // Keep the values numerically small over multi-day browser sessions; the bank pattern is
+    // periodic, so wrapping by world span is visually continuous.
+    if (this.span > 0) {
+      this.driftX = ((this.driftX % this.span) + this.span) % this.span;
+      this.driftZ = ((this.driftZ % this.span) + this.span) % this.span;
+    }
+    this.motionTime = Number.isFinite(elapsedSeconds) ? elapsedSeconds % 4096 : this.motionTime + dt;
   }
 
   sample(): LowMistFieldSample {
     return {
       texture: this.texture,
+      flowTexture: this.flowTexture,
       originX: this.originX,
       originZ: this.originZ,
       span: this.span,
       minAnchorY: this.minAnchorY,
       maxAnchorY: this.maxAnchorY,
       seasonalStrength: this.seasonalStrength,
+      driftX: this.driftX,
+      driftZ: this.driftZ,
+      motionTime: this.motionTime,
+      windStrength: this.windStrength,
     };
   }
 
   dispose(): void {
     this.texture.dispose();
+    this.flowTexture.dispose();
   }
 
   private rebuild(): void {
@@ -156,6 +231,7 @@ export class LowMistField {
     const height = new Float32Array(count);
     let minAnchor = Number.POSITIVE_INFINITY;
     let maxAnchor = Number.NEGATIVE_INFINITY;
+    const flowStep = Math.max(this.world.cellSize, this.world.terrain.step * 2);
 
     for (let index = 0; index < count; index += 1) {
       const cell = this.world.cells[index];
@@ -172,6 +248,29 @@ export class LowMistField {
       const patch = 0.76 + stableHash(`${this.seed}:low-mist`, cell.x, cell.z) * 0.42;
       raw[index] = clamp01(lowMistSourceForCell(cell, weather) * patch);
       height[index] = lowMistLayerHeightForCell(cell);
+
+      // Downhill flow is presentation-only terrain information. It gives moving bank structure a
+      // gravity bias on slopes without altering hydrology or moving the authoritative source field.
+      const east = this.surface.heightAt(cell.worldX + flowStep, cell.worldZ);
+      const west = this.surface.heightAt(cell.worldX - flowStep, cell.worldZ);
+      const south = this.surface.heightAt(cell.worldX, cell.worldZ + flowStep);
+      const north = this.surface.heightAt(cell.worldX, cell.worldZ - flowStep);
+      let downhillX = west - east;
+      let downhillZ = north - south;
+      const downhillLength = Math.hypot(downhillX, downhillZ);
+      if (downhillLength > 0.0001) {
+        downhillX /= downhillLength;
+        downhillZ /= downhillLength;
+      } else {
+        downhillX = 0;
+        downhillZ = 0;
+      }
+      const spill = clamp01(cell.slope * 1.18 + cell.relief * 0.12);
+      const flowOffset = index * CHANNELS;
+      this.flowPixels[flowOffset] = Math.round((downhillX * 0.5 + 0.5) * 255);
+      this.flowPixels[flowOffset + 1] = Math.round((downhillZ * 0.5 + 0.5) * 255);
+      this.flowPixels[flowOffset + 2] = Math.round(spill * 255);
+      this.flowPixels[flowOffset + 3] = 255;
     }
 
     this.minAnchorY = Number.isFinite(minAnchor) ? minAnchor : 0;
@@ -213,6 +312,7 @@ export class LowMistField {
     }
 
     this.texture.needsUpdate = true;
+    this.flowTexture.needsUpdate = true;
     this.revision = `${this.world.weather?.month ?? -1}:${this.world.environmentRevision ?? 0}`;
   }
 }

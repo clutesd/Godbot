@@ -9,10 +9,9 @@ import { softPointTexture } from './sprites';
 /**
  * Sky, cloud and low-mist atmosphere.
  *
- * The old valley-mist mesh was a single translucent sheet at one fixed world height. That made it
- * impossible for mist to live naturally inside valleys, along rivers or through treetops. Mist is
- * now represented by a lightweight terrain/water-aware density field consumed by the existing
- * depth-aware atmospheric pass. The sky dome remains a directional-scattering shader.
+ * The old valley-mist mesh was a single translucent sheet at one fixed world height. Mist is now a
+ * terrain/water-aware density field consumed by the depth-aware atmosphere, with its bank motion
+ * driven from real weather wind and elapsed presentation time instead of moving the source field.
  */
 export class SkyAtmosphere {
   readonly group = new THREE.Group();
@@ -67,9 +66,8 @@ export class SkyAtmosphere {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
-    void elapsedSeconds;
     if (this.clouds) this.clouds.rotation.y += deltaSeconds * 0.0042;
-    this.lowMistField.update();
+    this.lowMistField.update(deltaSeconds, elapsedSeconds);
   }
 
   followCamera(camera: THREE.Camera): void {

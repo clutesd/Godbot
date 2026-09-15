@@ -8,8 +8,10 @@ import {
   LOW_MIST_MIN_HEIGHT,
   LowMistField,
   decodeLowMistAnchor,
+  lowMistDiurnalStrength,
   lowMistLayerHeightForCell,
   lowMistSourceForCell,
+  lowMistWindRetention,
 } from '../src/render/atmosphere/LowMistField';
 import { AERIAL_PERSPECTIVE_SHADER } from '../src/render/atmosphere/AerialPerspective';
 
@@ -78,15 +80,36 @@ describe('spatial low mist field', () => {
     expect(wet).toBeLessThan(1);
   });
 
-  it('builds a bounded selective field with interpolation-safe height channels', () => {
+  it('peaks around dawn and burns back under a high clear sun', () => {
+    const predawn = lowMistDiurnalStrength(-0.04, 0.08, 0);
+    const dawn = lowMistDiurnalStrength(0.06, 0.42, 0);
+    const clearNoon = lowMistDiurnalStrength(0.82, 1, 0);
+    const cloudyNoon = lowMistDiurnalStrength(0.82, 1, 0.8);
+
+    expect(dawn).toBeGreaterThan(clearNoon * 2);
+    expect(predawn).toBeGreaterThan(clearNoon);
+    expect(cloudyNoon).toBeGreaterThan(clearNoon);
+    expect(clearNoon).toBeLessThan(0.4);
+  });
+
+  it('disperses shallow mist under strong wind while retaining calm banks', () => {
+    const calm = lowMistWindRetention(0.12);
+    const gale = lowMistWindRetention(0.95);
+    expect(calm).toBeGreaterThan(0.95);
+    expect(gale).toBeLessThan(0.65);
+  });
+
+  it('builds a bounded selective field with interpolation-safe height and flow channels', () => {
     const world = generateWorld(configWith({ seed: 'low-mist-field-contract', world: { size: 18 } }));
     const surface = new TerrainSurface(world);
     const field = new LowMistField(world, surface, 'low-mist-field-contract');
     const densities: number[] = [];
+    const spillStrengths: number[] = [];
 
     for (let index = 0; index < world.cells.length; index += 1) {
       const offset = index * 4;
       densities.push(field.pixels[offset] ?? 0);
+      spillStrengths.push(field.flowPixels[offset + 2] ?? 0);
       const anchor = decodeLowMistAnchor(
         field.pixels[offset + 1] ?? 0,
         field.minAnchorY,
@@ -97,14 +120,21 @@ describe('spatial low mist field', () => {
       expect(field.pixels[offset + 2]).toBeGreaterThanOrEqual(0);
       expect(field.pixels[offset + 2]).toBeLessThanOrEqual(255);
       expect(field.pixels[offset + 3]).toBe(255);
+      expect(field.flowPixels[offset]).toBeGreaterThanOrEqual(0);
+      expect(field.flowPixels[offset]).toBeLessThanOrEqual(255);
+      expect(field.flowPixels[offset + 1]).toBeGreaterThanOrEqual(0);
+      expect(field.flowPixels[offset + 1]).toBeLessThanOrEqual(255);
+      expect(field.flowPixels[offset + 3]).toBe(255);
     }
 
     const active = densities.filter((value) => value > 8).length;
     expect(Math.max(...densities)).toBeGreaterThan(80);
+    expect(Math.max(...spillStrengths)).toBeGreaterThan(20);
     expect(active).toBeGreaterThan(0);
     expect(active).toBeLessThan(world.cells.length * 0.9);
     expect(field.texture.image.width).toBe(world.size);
     expect(field.texture.image.height).toBe(world.size);
+    expect(field.flowTexture.image.width).toBe(world.size);
     expect(field.minAnchorY).toBeLessThan(field.maxAnchorY);
 
     field.setSeasonalStrength(0.62);
@@ -112,12 +142,31 @@ describe('spatial low mist field', () => {
     field.dispose();
   });
 
-  it('keeps mist shallow and integrated into the existing depth-aware pass', () => {
+  it('advects bank presentation with wind without moving the geographic source texture', () => {
+    const world = generateWorld(configWith({ seed: 'low-mist-motion-contract', world: { size: 12 } }));
+    const surface = new TerrainSurface(world);
+    const field = new LowMistField(world, surface, 'low-mist-motion-contract');
+    const textureBefore = Array.from(field.pixels);
+    const before = field.sample();
+
+    field.update(0.25, 10);
+    const after = field.sample();
+
+    expect(after.driftX).toBeGreaterThan(before.driftX);
+    expect(after.motionTime).toBeCloseTo(10, 6);
+    expect(Array.from(field.pixels)).toEqual(textureBefore);
+    field.dispose();
+  });
+
+  it('keeps mist shallow and integrates rolling banks, downhill flow and light response in one pass', () => {
     expect(LOW_MIST_MIN_HEIGHT).toBeGreaterThan(2);
     expect(LOW_MIST_MAX_HEIGHT).toBeLessThan(9);
     expect(LOW_MIST_MAX_HEIGHT).toBeGreaterThan(LOW_MIST_MIN_HEIGHT);
     expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('integratedLowMist');
-    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uLowMistMap');
-    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('lowMistDensityAt');
+    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uLowMistFlowMap');
+    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('mistBankPattern');
+    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uMistLayerScale');
+    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uMistSunGlow');
+    expect(AERIAL_PERSPECTIVE_SHADER.fragmentShader).toContain('uMistMoonGlow');
   });
 });
