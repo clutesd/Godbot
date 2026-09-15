@@ -32,21 +32,23 @@ interface RoleVisualProfile {
 }
 
 /**
- * Muted enough to belong in the world, separated enough to be learned at a glance.
- * None of these are UI/neon colours: they are clothing dyes and workwear families.
+ * These are world colours rather than UI colours, but they intentionally sit one value step above
+ * the surrounding terrain palette. Step 1 failed when role hues were technically different yet all
+ * landed in the same dark perceptual bucket after lighting. The stronger separation here gives the
+ * renderer enough chroma/value to survive normal atmospheric and tone-mapping losses.
  */
 export const ROLE_VISUAL_PROFILES: Readonly<Record<RoleVisualFamily, RoleVisualProfile>> = {
-  earth: { cue: '#789847', roleWeight: 0.72, minSaturation: 0.34, minLightness: 0.34, maxLightness: 0.62 },
-  water: { cue: '#43899d', roleWeight: 0.72, minSaturation: 0.34, minLightness: 0.35, maxLightness: 0.62 },
-  labor: { cue: '#ad6c32', roleWeight: 0.72, minSaturation: 0.36, minLightness: 0.35, maxLightness: 0.62 },
-  trade: { cue: '#bd8a32', roleWeight: 0.72, minSaturation: 0.38, minLightness: 0.37, maxLightness: 0.64 },
-  guard: { cue: '#737f92', roleWeight: 0.72, minSaturation: 0.25, minLightness: 0.38, maxLightness: 0.62 },
-  ritual: { cue: '#a35b88', roleWeight: 0.72, minSaturation: 0.34, minLightness: 0.38, maxLightness: 0.64 },
-  civic: { cue: '#735f94', roleWeight: 0.72, minSaturation: 0.3, minLightness: 0.37, maxLightness: 0.62 },
-  knowledge: { cue: '#4f7fae', roleWeight: 0.72, minSaturation: 0.32, minLightness: 0.38, maxLightness: 0.64 },
-  industry: { cue: '#657f85', roleWeight: 0.72, minSaturation: 0.24, minLightness: 0.37, maxLightness: 0.6 },
+  earth: { cue: '#86aa50', roleWeight: 0.8, minSaturation: 0.38, minLightness: 0.39, maxLightness: 0.66 },
+  water: { cue: '#4d98ad', roleWeight: 0.8, minSaturation: 0.38, minLightness: 0.4, maxLightness: 0.66 },
+  labor: { cue: '#bf7639', roleWeight: 0.8, minSaturation: 0.4, minLightness: 0.4, maxLightness: 0.66 },
+  trade: { cue: '#cb9738', roleWeight: 0.8, minSaturation: 0.42, minLightness: 0.42, maxLightness: 0.68 },
+  guard: { cue: '#7e8fa6', roleWeight: 0.8, minSaturation: 0.28, minLightness: 0.41, maxLightness: 0.66 },
+  ritual: { cue: '#b26493', roleWeight: 0.8, minSaturation: 0.38, minLightness: 0.41, maxLightness: 0.68 },
+  civic: { cue: '#7e68a5', roleWeight: 0.8, minSaturation: 0.34, minLightness: 0.41, maxLightness: 0.66 },
+  knowledge: { cue: '#5789bf', roleWeight: 0.8, minSaturation: 0.36, minLightness: 0.41, maxLightness: 0.68 },
+  industry: { cue: '#708b93', roleWeight: 0.8, minSaturation: 0.28, minLightness: 0.4, maxLightness: 0.65 },
   // Children/elders/legacy fixtures should still read primarily as members of their culture.
-  ordinary: { cue: '#8b6654', roleWeight: 0.5, minSaturation: 0.24, minLightness: 0.36, maxLightness: 0.64 },
+  ordinary: { cue: '#946c58', roleWeight: 0.56, minSaturation: 0.26, minLightness: 0.38, maxLightness: 0.66 },
 };
 
 export function roleVisualFamilyFor(role: PersonRole | undefined): RoleVisualFamily {
@@ -63,7 +65,7 @@ export function roleVisualFamilyFor(role: PersonRole | undefined): RoleVisualFam
 }
 
 export interface RoleVisualColorOptions {
-  /** Override for secondary details such as hats; torso clothing should use the profile default. */
+  /** Override for secondary details such as hats or the dedicated readable garment layer. */
   roleWeight?: number;
   /** 0..1 clothing/material quality. It may shade a role but never erase it. */
   materialQuality?: number;
@@ -73,8 +75,8 @@ export interface RoleVisualColorOptions {
  * Builds a role-readable clothing colour without inventing simulation state.
  *
  * Role is intentionally dominant for ordinary torso/limb clothing. Cultural colour remains
- * visible as a tint, while HSL floors keep dusk, dark cultural palettes and low material quality
- * from turning every represented person into the same black silhouette.
+ * visible as a tint. Value/chroma floors are intentionally conservative because the final renderer
+ * now owns a separate readable garment layer; this function should not need neon colours to work.
  */
 export function roleVisualColor(
   role: PersonRole | undefined,
@@ -89,8 +91,8 @@ export function roleVisualColor(
   const hsl = { h: 0, s: 0, l: 0 };
   color.getHSL(hsl);
 
-  // Wealth/material quality can move value a little, but never enough to destroy occupational ID.
-  const qualityShift = (materialQuality - 0.5) * 0.1;
+  // Wealth/material quality can add texture to the palette but must never push a job into darkness.
+  const qualityShift = (materialQuality - 0.5) * 0.06;
   color.setHSL(
     hsl.h,
     Math.max(profile.minSaturation, hsl.s),

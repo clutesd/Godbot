@@ -10,6 +10,7 @@ import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
 import { roleVisualColor } from './people/RoleVisualProfile';
+import { createRoleGarmentMaterial, updateRoleGarmentMaterial } from './people/RoleGarmentPresentation';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
@@ -171,6 +172,9 @@ export class GodboxRenderer {
   private readonly peopleHeadwear: THREE.InstancedMesh;
   private readonly peopleCargo: THREE.InstancedMesh;
   private readonly peopleMantles: THREE.InstancedMesh;
+  /** Unlit-but-daylight-gated upper-torso cloth that keeps role colour readable at tiny scale. */
+  private readonly peopleRoleGarments: THREE.InstancedMesh;
+  private readonly roleGarmentMaterial: THREE.MeshBasicMaterial;
   private readonly peopleVisuals = new PeopleVisualStateStore();
   private socialGroups = new Map<string, SocialGroup>();
   private readonly personGround: PersonVisualGround = {
@@ -313,6 +317,13 @@ export class GodboxRenderer {
     this.people = new THREE.InstancedMesh(peopleGeometry, peopleMaterial, visiblePersonBudget);
     this.people.castShadow = true;
     this.people.frustumCulled = false;
+    this.roleGarmentMaterial = createRoleGarmentMaterial();
+    this.peopleRoleGarments = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.132, 0.15, 0.29, 6),
+      this.roleGarmentMaterial,
+      visiblePersonBudget,
+    );
+    this.peopleRoleGarments.frustumCulled = false;
     this.peopleHeads = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.12, 1), peopleMaterial, visiblePersonBudget);
     this.peopleArms = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 5).translate(0, -0.17, 0), peopleMaterial, visiblePersonBudget * 2);
     this.peopleLegs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.032, 0.04, 0.36, 5).translate(0, -0.18, 0), peopleMaterial, visiblePersonBudget * 2);
@@ -336,7 +347,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.peopleCargo.frustumCulled = false;
-    this.scene.add(this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles);
+    this.scene.add(this.people, this.peopleRoleGarments, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -426,6 +437,7 @@ export class GodboxRenderer {
     this.peopleVisuals.beginFrame();
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
+    this.peopleRoleGarments.count = count;
     this.peopleHeads.count = count;
     this.peopleArms.count = count * 2;
     this.peopleLegs.count = count * 2;
@@ -468,6 +480,18 @@ export class GodboxRenderer {
       }));
       if (tier !== 'population') this.personColor.offsetHSL(0, 0.16, tier === 'historical' ? 0.1 : 0.05);
       this.people.setColorAt(index, this.personColor);
+      // A narrow upper-torso cloth shell carries the occupational family through shade and at
+      // documentary distance. It is geometry, not a billboard/icon, and follows the body pose.
+      this.setInstanceTransform(
+        this.peopleRoleGarments, index, display.x, footY + 0.53 * heightScale + poseLift, display.z,
+        heightScale * buildScale, heightScale, heightScale * buildScale, 0,
+        facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0,
+      );
+      this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
+        roleWeight: person.role === 'child' || person.role === 'elder' || !person.role ? 0.6 : 0.9,
+        materialQuality: 0.55,
+      }));
+      this.peopleRoleGarments.setColorAt(index, this.personDetailColor);
       this.setInstanceTransform(this.peopleHeads, index, display.x, footY + 0.84 * heightScale + poseLift, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
       this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, 0.32);
       this.peopleHeads.setColorAt(index, this.personDetailColor);
@@ -517,6 +541,7 @@ export class GodboxRenderer {
     this.peopleMantles.count = mantles;
     this.peopleVisuals.prune((personId) => this.animationController.release(personId));
     this.people.instanceMatrix.needsUpdate = true;
+    this.peopleRoleGarments.instanceMatrix.needsUpdate = true;
     this.peopleHeads.instanceMatrix.needsUpdate = true;
     this.peopleArms.instanceMatrix.needsUpdate = true;
     this.peopleLegs.instanceMatrix.needsUpdate = true;
@@ -525,6 +550,7 @@ export class GodboxRenderer {
     this.peopleCargo.instanceMatrix.needsUpdate = true;
     this.peopleMantles.instanceMatrix.needsUpdate = true;
     if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
+    if (this.peopleRoleGarments.instanceColor) this.peopleRoleGarments.instanceColor.needsUpdate = true;
     if (this.peopleHeads.instanceColor) this.peopleHeads.instanceColor.needsUpdate = true;
     if (this.peopleArms.instanceColor) this.peopleArms.instanceColor.needsUpdate = true;
     if (this.peopleLegs.instanceColor) this.peopleLegs.instanceColor.needsUpdate = true;
@@ -2668,6 +2694,7 @@ export class GodboxRenderer {
     const phase = (elapsedSeconds / 58 + 0.16) % 1;
     const daylight = THREE.MathUtils.smoothstep(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 0.12, 0.72);
     this.ecology.animate(elapsedSeconds, daylight);
+    updateRoleGarmentMaterial(this.roleGarmentMaterial, daylight);
     const angle = phase * Math.PI * 2;
     this.sun.position.set(Math.cos(angle) * 72, Math.sin(angle) * 64, 24);
     this.sun.intensity = 0.08 + daylight * 3.25;
