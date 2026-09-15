@@ -179,7 +179,7 @@ export class AquaticLifeRenderer {
     complexity: 0 | 1 | 2,
   ) {
     this.group.name = 'aquatic-life-koi';
-    this.schools = planKoiSchools(world.terrain, world.seaLevel, ecology.seedPhase, complexity);
+    this.schools = planKoiSchools(this.world.terrain, this.world.seaLevel, ecology.seedPhase, complexity);
     const fishBudget = complexity === 2 ? MAX_FISH_HIGH : complexity === 1 ? MAX_FISH_MEDIUM : 0;
     const seed = ecology.seedPhase.toFixed(5);
 
