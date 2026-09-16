@@ -17,12 +17,31 @@ import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
 import { advanceSettlementWater } from './WaterCivilization';
-import { SETTLEMENT_NEEDS, type DevelopmentResponse, type ServiceSupply, type SettlementNeed, type StructureDevelopment, type StructureForm, type StructureHistoryEntry, type StructureMaterial } from './types';
+import {
+  SETTLEMENT_NEEDS,
+  type DevelopmentBlockCode,
+  type DevelopmentBlocker,
+  type DevelopmentCandidateDecision,
+  type DevelopmentResponse,
+  type ServiceSupply,
+  type SettlementNeed,
+  type StructureDevelopment,
+  type StructureForm,
+  type StructureHistoryEntry,
+  type StructureMaterial,
+} from './types';
 
 const clamp = (n: number, max = 1): number => Math.max(0, Math.min(max, n));
 const stock = (): ResourceStock => ({ food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 });
 const STOCK_KEYS = ['food', 'wood', 'minerals', 'goods', 'wealth'] as const;
 const SHARED_NEEDS: SettlementNeed[] = ['trade', 'knowledge', 'healthcare', 'manufacturing'];
+const RESOURCE_BLOCK_CODE: Record<keyof ResourceStock, DevelopmentBlockCode> = {
+  food: 'insufficient-food',
+  wood: 'insufficient-wood',
+  minerals: 'insufficient-minerals',
+  goods: 'insufficient-goods',
+  wealth: 'insufficient-wealth',
+};
 
 function connected(state: SimulationState, route: TradeRoute): boolean {
   const path = route.transport?.path;
@@ -312,6 +331,38 @@ function scaleRequirements(requirements: FlexibleMaterialRequirement[], factor: 
   return requirements.map(requirement => ({ ...requirement, amount: requirement.amount * factor }));
 }
 
+function resourceBlockers(settlement: Settlement, response: DevelopmentResponse, fuelReserve: number): DevelopmentBlocker[] {
+  const blockers: DevelopmentBlocker[] = [];
+  for (const key of STOCK_KEYS) {
+    const required = response.cost[key] + (key === 'wood' ? fuelReserve : 0);
+    const available = settlement.resources[key];
+    if (available + 1e-9 >= required) continue;
+    const fuelOnly = key === 'wood' && fuelReserve > 0 && available + 1e-9 >= response.cost.wood;
+    blockers.push({ code: fuelOnly ? 'fuel-reserve' : RESOURCE_BLOCK_CODE[key], resource: key, available, required });
+  }
+  return blockers;
+}
+
+function structuralMaterialBlockers(settlement: Settlement, requirements: readonly FlexibleMaterialRequirement[]): DevelopmentBlocker[] {
+  if (!hasMaterialAuthority(settlement) || materialRequirementCoverage(settlement, requirements) >= 0.08) return [];
+  const blockers: DevelopmentBlocker[] = [];
+  for (const requirement of requirements) {
+    if (requirement.amount <= 1e-9) continue;
+    const available = requirement.options.reduce((sum, kind) => sum + materialAmount(settlement, kind), 0);
+    if (available / requirement.amount >= 0.08) continue;
+    blockers.push({ code: 'insufficient-structural-material', material: requirement.id, available, required: requirement.amount,
+      detail: requirement.options.join('|') });
+  }
+  return blockers;
+}
+
+function processedMaterialBlockers(settlement: Settlement, response: DevelopmentResponse): DevelopmentBlocker[] {
+  return Object.entries(response.materialCost ?? {})
+    .filter(([id, required]) => (settlement.localMaterials[id] ?? 0) + 1e-9 < required)
+    .map(([id, required]) => ({ code: 'insufficient-processed-material' as const, material: id,
+      available: settlement.localMaterials[id] ?? 0, required }));
+}
+
 /** One evaluation per year, one funded project at a time, no random draws. */
 export function advanceSettlementDevelopment(state: SimulationState, settlement: Settlement, residents: Person[], workRate: number): KnowledgeEventDraft[] {
   initializeSettlementDevelopment(state, settlement, residents);
@@ -384,12 +435,18 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     if (!dev.project && settlement.alive && state.month >= dev.nextAttemptMonth) {
       const needs = SETTLEMENT_NEEDS.filter(need => (dev.unmet[need] ?? 0) > 0.65)
         .sort((a, b) => (dev.unmet[b] ?? 0) * (b === 'housing' ? 1.2 : 1) - (dev.unmet[a] ?? 0) * (a === 'housing' ? 1.2 : 1));
+      const candidates: DevelopmentCandidateDecision[] = [];
       for (const need of needs) {
         const plots = (settlement.structurePlots ?? []).filter(p => !p.fire);
         const ancestor = plots.find(p => p.development?.status === 'active' && p.development.need === need && p.development.level < 3);
         const desiredLevel = ancestor ? ancestor.development!.level + 1 : 1;
+        const candidate: DevelopmentCandidateDecision = { need, desiredLevel, blockers: [] };
         let response = responseForNeed(c, need, desiredLevel);
-        if (!response) continue;
+        if (!response) {
+          candidate.blockers.push({ code: 'response-unavailable' });
+          candidates.push(candidate);
+          continue;
+        }
         let plot = ancestor && response.level > ancestor.development!.level ? ancestor : undefined;
         let action: StructureHistoryEntry['action'] = plot ? (response.form === plot.development!.form ? 'expanded' : 'upgraded') : 'founded';
         let materialScale = 1;
@@ -406,17 +463,42 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
           for (const key of STOCK_KEYS) cost[key] *= materialScale;
           response = { ...response, cost, materialCost: Object.fromEntries(Object.entries(response.materialCost ?? {}).map(([id, amount]) => [id, amount * materialScale])) };
         }
+        candidate.responseName = response.name;
+        candidate.responseLevel = response.level;
+        candidate.action = action;
+        if (plot) candidate.plotId = plot.id;
         const fuelReserve = response.need === 'energy' || response.level === 3 && ['food', 'manufacturing'].includes(response.need) ? 12 : 0;
-        if (!STOCK_KEYS.every(key => settlement.resources[key] >= response.cost[key] + (key === 'wood' ? fuelReserve : 0)) || c.builders === 0) continue;
+        candidate.blockers.push(...resourceBlockers(settlement, response, fuelReserve));
+        if (c.builders === 0) candidate.blockers.push({ code: 'no-builders', available: 0, required: 1 });
+        if (candidate.blockers.length > 0) {
+          candidates.push(candidate);
+          continue;
+        }
         const materialRequirements = scaleRequirements(structureMaterialRequirements(response), materialScale);
-        if (hasMaterialAuthority(settlement) && materialRequirementCoverage(settlement, materialRequirements) < 0.08) continue;
-        if (Object.entries(response.materialCost ?? {}).some(([id, n]) => (settlement.localMaterials[id] ?? 0) < n)) continue;
-        if (plot && !validPlot(state, plot)) continue;
+        candidate.blockers.push(...structuralMaterialBlockers(settlement, materialRequirements));
+        candidate.blockers.push(...processedMaterialBlockers(settlement, response));
+        if (candidate.blockers.length > 0) {
+          candidates.push(candidate);
+          continue;
+        }
+        if (plot && !validPlot(state, plot)) {
+          candidate.blockers.push({ code: 'invalid-existing-plot', detail: plot.id });
+          candidates.push(candidate);
+          continue;
+        }
         plot ??= reserveStructurePlot(state, settlement, districtForResponse(response));
-        if (!plot) continue;
+        if (!plot) {
+          candidate.blockers.push({ code: 'no-valid-plot' });
+          candidates.push(candidate);
+          continue;
+        }
+        candidate.plotId = plot.id;
+        candidates.push(candidate);
         dev.project = { plotId: plot.id, response, action, startedMonth: state.month, progress: 0, spent: stock(), materialRequirements, materialSpent: {} };
+        dev.lastAttempt = { month: state.month, outcome: 'started', selectedNeed: need, plotId: plot.id, candidates };
         dev.revision++; break;
       }
+      if (!dev.project) dev.lastAttempt = { month: state.month, outcome: needs.length > 0 ? 'blocked' : 'no-pressure', candidates };
       dev.nextAttemptMonth = state.month + 12;
     }
   }
