@@ -33,14 +33,21 @@ describe('Founding Chapter 1a', () => {
 
     for (const community of baseline?.communities ?? []) {
       const pod = simulation.state.arrival?.pods.find(candidate => candidate.id === community.podId);
+      const cell = pod ? simulation.state.world.cells[pod.cellIndex] : undefined;
       expect(pod).toBeDefined();
+      expect(cell).toBeDefined();
       expect(community.founderCount).toBe(pod?.population);
       expect(community.founderIds).toEqual(pod?.personIds);
       expect(community.domains).toEqual(pod?.domains);
       expect(community.knowledge).toEqual(pod?.knowledge);
       expect(community.supplies).toEqual(pod?.supplies);
+      expect(community.site.biome).toBe(cell?.biome);
+      expect(community.site.fertility).toBe(cell?.fertility);
+      expect(community.site.woodland).toBe(cell?.wood);
+      expect(community.site.waterAccess).toBe(cell?.soil?.waterAccess ?? 0);
       expect(Object.isFrozen(community)).toBe(true);
       expect(Object.isFrozen(community.supplies)).toBe(true);
+      expect(Object.isFrozen(community.site)).toBe(true);
     }
   });
 
@@ -63,6 +70,7 @@ describe('Founding Chapter 1a', () => {
     for (const community of baseline?.communities ?? []) {
       expect(grounded.some(scene => scene.subjectId === community.settlementId && scene.statement.text.includes(community.podName))).toBe(true);
       expect(grounded.some(scene => community.knowledge.every(knowledge => scene.statement.text.includes(knowledge.replaceAll('-', ' '))))).toBe(true);
+      expect(grounded.some(scene => scene.subjectId === community.settlementId && scene.statement.text.includes(community.site.biome.replaceAll('-', ' ')))).toBe(true);
     }
 
     expect(historian.statements).toHaveLength(sceneCount);
@@ -95,7 +103,9 @@ describe('Founding Chapter 1a', () => {
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
     const missing = baseline?.communities[0];
     if (!missing) throw new Error('Expected a founding community');
-    simulation.state.settlements.splice(simulation.state.settlements.findIndex(candidate => candidate.id === missing.settlementId), 1);
+    const index = simulation.state.settlements.findIndex(candidate => candidate.id === missing.settlementId);
+    if (index < 0) throw new Error('Expected the founding settlement in authoritative state');
+    simulation.state.settlements.splice(index, 1);
 
     const next = chooseFoundingChapterScene(historian, simulation.state);
     expect(next).toBeDefined();
