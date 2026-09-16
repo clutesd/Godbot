@@ -15,7 +15,6 @@ import { recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import {
   extractDeposit,
   harvestRenewable,
-  regenerateRenewables,
   type DepositResourceKind,
   type RenewableResourceKind,
 } from './WorldResources';
@@ -50,6 +49,8 @@ interface ExtractionSite {
 
 const distanceScore = (cell: WorldCell, home: WorldCell): number =>
   Math.hypot(cell.x - home.x, cell.z - home.z);
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const roundResource = (value: number): number => Math.round(Math.max(0, value) * 1000) / 1000;
 
 /**
  * The local economic catchment around a settlement. It is intentionally small: geography is
@@ -74,13 +75,28 @@ export function settlementResourceCatchment(state: SimulationState, settlement: 
   return cells.sort((a, b) => distanceScore(a, home) - distanceScore(b, home));
 }
 
-function advanceRenewablesToMonth(cell: WorldCell, month: number): void {
+/**
+ * Advances only the supplemental renewable stocks. The old timber stock is deliberately untouched;
+ * modern ResourceSystem/forest ecology own timber after Step 1C.
+ */
+function advanceSupplementalRenewablesToMonth(cell: WorldCell, month: number): void {
   const resources = cell.naturalResources;
   if (!resources) return;
   const previous = resources.lastRegeneratedMonth ?? 0;
   if (month <= previous) return;
-  regenerateRenewables(cell, (month - previous) / 12);
+  const years = (month - previous) / 12;
+  let changed = false;
+  for (const kind of SUPPLEMENTAL_RENEWABLES) {
+    const renewable = resources.renewables[kind];
+    if (renewable.capacity <= 0 || renewable.stock >= renewable.capacity) continue;
+    const stockShare = clamp01(renewable.stock / renewable.capacity);
+    const recovery = renewable.capacity * renewable.regenerationPerYear * years * (0.35 + stockShare * 0.65);
+    const next = roundResource(Math.min(renewable.capacity, renewable.stock + recovery));
+    changed ||= next !== renewable.stock;
+    renewable.stock = next;
+  }
   resources.lastRegeneratedMonth = month;
+  if (changed) resources.revision += 1;
 }
 
 function eligibleSupplementalDeposits(settlement: Settlement): SupplementalDeposit[] {
@@ -274,7 +290,7 @@ export function advanceSettlementResourceExtraction(
     return prior;
   }
 
-  for (const cell of cells) advanceRenewablesToMonth(cell, state.month);
+  for (const cell of cells) advanceSupplementalRenewablesToMonth(cell, state.month);
 
   const budget = resourceLabourBudget(state, settlement, localResidents);
   const renewables: Partial<Record<SupplementalRenewable, number>> = {};
