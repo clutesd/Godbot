@@ -139,11 +139,13 @@ describe('typed material logistics', () => {
 });
 
 describe('typed transport capital', () => {
-  it('stalls road construction without real aggregate, then resumes by consuming stone without double-charging generic minerals', () => {
+  it('stalls without canonical stone, then resumes by consuming it and synchronizing the bulk projection', () => {
     const f = fixture();
     const aInventory = ensureMaterialInventory(f.a);
     const bInventory = ensureMaterialInventory(f.b);
-    const genericMinerals = f.a.resources.minerals + f.b.resources.minerals;
+    aInventory.stock.stone = 0;
+    bInventory.stock.stone = 0;
+
     f.state.month = 1;
     f.system.advanceMonth();
     const segments = Object.values(f.state.transportation.segments);
@@ -158,6 +160,7 @@ describe('typed transport capital', () => {
     expect(segments.some((segment) => segment.work > 0)).toBe(true);
     expect(segments.some((segment) => (segment.materialSpent?.stone ?? 0) > 0)).toBe(true);
     expect(aInventory.stock.stone + bInventory.stock.stone).toBeLessThan(20);
-    expect(f.a.resources.minerals + f.b.resources.minerals).toBe(genericMinerals);
+    expect(f.a.resources.minerals).toBeCloseTo(aInventory.stock.stone);
+    expect(f.b.resources.minerals).toBeCloseTo(bInventory.stock.stone);
   });
 });
