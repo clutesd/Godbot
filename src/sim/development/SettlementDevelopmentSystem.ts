@@ -18,6 +18,7 @@ import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
 import { advanceSettlementWater } from './WaterCivilization';
+import { shelterCapacity, usableStructure } from './Shelter';
 import {
   SETTLEMENT_NEEDS,
   type DevelopmentBlockCode,
@@ -97,7 +98,7 @@ export function serviceSupply(settlement: Settlement): ServiceSupply {
   const supply: ServiceSupply = {};
   for (const plot of settlement.structurePlots ?? []) {
     const structure = plot.development;
-    if (!structure || structure.status !== 'active' || plot.accessRestricted) continue;
+    if (!structure || structure.status !== 'active' || !usableStructure(plot)) continue;
     for (const need of SETTLEMENT_NEEDS) supply[need] = (supply[need] ?? 0) + (structure.services[need] ?? 0) * plot.condition;
   }
   return supply;
@@ -111,7 +112,7 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
   const scale = Math.min(4, Math.sqrt(c.population / 65));
   const backing = (kind: InstitutionKind) => { const i = institution(c, kind); return i ? i.support * 1.5 + Math.min(1, i.members / 24) : 0; };
   const pressures: ServiceSupply = {
-    housing: c.population / 17 * (1 + (s.survival?.observations.cold?.perceived ?? 0) * 0.5),
+    housing: c.population / 17,
     food: c.farmers > 0 ? scale * (0.7 + (1 - s.foodSecurity) * 1.3 + (c.fertile ? 0.25 : 0) + (s.specialization === 'agriculture' ? 0.6 : 0)) : scale * 0.3,
     trade: c.routes > 0 ? scale * (0.5 + d.tradeOrientation + c.routes * 0.35) + backing('merchant-association') : 0,
     government: scale * (0.15 + d.hierarchy * 0.35) + backing('council') + c.capitalReach * 0.6,
@@ -370,6 +371,81 @@ function processedMaterialBlockers(settlement: Settlement, response: Development
       available: settlement.localMaterials[id] ?? 0, required }));
 }
 
+/** Uses the existing single project, placement, inventory and completion path. Called before labour freezes. */
+export function planEstablishment(state: SimulationState, settlement: Settlement, residents: Person[]): KnowledgeEventDraft[] {
+  const e = settlement.survival?.establishment;
+  if (!e || !settlement.alive) return [];
+  initializeSettlementDevelopment(state, settlement, residents);
+  const dev = settlement.development!;
+  const events: KnowledgeEventDraft[] = [];
+  // Temporary fabric deteriorates and is vulnerable to ordinary storms, even between major disasters.
+  const weather = state.weather.cells[settlement.cellIndex];
+  for (const p of settlement.structurePlots ?? []) if (p.development?.temporary && p.development.status === 'active') {
+    const storm = weather && ['windstorm', 'thunderstorm', 'hurricane'].includes(weather.kind) ? weather.intensity * 0.08 : 0;
+    p.condition = Math.max(0, p.condition - 0.003 - storm);
+    if (p.condition < 0.3) {
+      p.development.status = 'abandoned'; dev.revision++;
+      const record = entry(p.development, state.month, 'abandoned'); record.reasons = ['temporary-fabric-failure'];
+      remember(p.development, record); events.push(historyEvent(settlement, p, record));
+    }
+  }
+  const needsStore = e.foodUrgency > 0.4 && !(settlement.structurePlots ?? []).some(p => p.development?.form === 'store' && p.development.status === 'active');
+  if (!dev.project && (e.permanentCoverage < 0.95 || needsStore) && e.strength > 0.12 && e.feasibility > 0.04 && !['migrate', 'tolerate'].includes(e.choice)) {
+    const c = developmentContext(state, settlement, residents);
+    const response = responseForNeed(c, 'housing')!;
+    const wood = c.localWood + Math.min(1, (settlement.localMaterials.timber ?? 0) / 4);
+    const stone = c.localMinerals + Math.min(1, (settlement.localMaterials.stone ?? 0) / 4);
+    const secureFood = e.foodUrgency < 0.55;
+    const permanence = e.coverage >= 0.68 && secureFood;
+    const cache = e.coverage >= 0.85 && !secureFood && !(settlement.structurePlots ?? []).some(p => p.development?.form === 'store' && p.development.status === 'active');
+    // A hungry camp may still build, but cannot prioritize a long permanent bill over immediate protection.
+    const adaptation = cache ? 'cache' : permanence ? 'hut' : stone > wood * 1.4 ? 'earth-shelter' : 'lean-to';
+    Object.assign(response, {
+      adaptation, temporary: !permanence, material: adaptation === 'earth-shelter' ? 'earth' : 'timber',
+      name: cache ? 'covered food cache' : permanence ? 'simple permanent hut' : adaptation === 'earth-shelter' ? 'earth and stone shelter' : 'communal lean-to',
+      form: cache ? 'store' : 'dwelling', need: cache ? 'food' : 'housing', level: 1,
+      services: cache ? { food: 0.6 } : { housing: (permanence ? 12 : 8) / 17 },
+      insulation: permanence ? 0.82 : adaptation === 'earth-shelter' ? 0.65 : 0.5,
+      labor: cache ? 4 : permanence ? 18 : adaptation === 'earth-shelter' ? 5 : 3,
+      cost: stock(), materialCost: {}, capabilities: [],
+      reasons: [e.coverage < 0.68 ? 'physical-shelter-deficit' : cache ? 'food-storage-risk' : 'durable-protection',
+        ...(e.preparedness > 0.4 ? ['seasonal-preparation'] : []), ...(e.winterMemory > 0.2 ? ['experienced-cold-exposure'] : [])],
+    });
+    const requirements: FlexibleMaterialRequirement[] = [
+      { id: 'frame', amount: cache ? 0.8 : permanence ? 3.2 : adaptation === 'earth-shelter' ? 0.25 : 1.2, options: ['timber', 'lumber'], reason: 'frame-and-roof' },
+      { id: 'cover', amount: permanence ? 0.25 : 0.12, options: ['plant-fiber', 'textile'], reason: 'roof-and-binding' },
+      ...(permanence || adaptation === 'earth-shelter' ? [{ id: 'foundation', amount: permanence ? 0.6 : 1.8, options: ['stone'] as const, reason: 'foundation-and-walls' }] : []),
+    ];
+    // Reuse failed temporary sites, without taking functioning protection away during replacement.
+    const plot = (settlement.structurePlots ?? []).find(p => p.development?.temporary && p.development.status !== 'active' && validPlot(state, p))
+      ?? reserveStructurePlot(state, settlement, cache ? 'craft' : 'residential');
+    if (plot) {
+      if (plot.development) { plot.development = undefined; plot.condition = 1; plot.accessRestricted = false; }
+      dev.project = { plotId: plot.id, response, action: 'founded', startedMonth: state.month, progress: 0, spent: stock(),
+        materialRequirements: requirements, materialSpent: {}, labourSpent: 0 };
+      dev.revision++;
+      dev.lastAttempt = { month: state.month, outcome: 'started', selectedNeed: response.need, plotId: plot.id, candidates: [] };
+      events.push({ type: 'response-attempted', location: { x: plot.worldX, z: plot.worldZ }, locationId: settlement.id,
+        actors: [settlement.id, plot.id], causes: [...response.reasons, ...(e.deficitEvent ? [e.deficitEvent] : [])],
+        context: { project: plot.id, adaptation, coverage: e.coverage, foodUrgency: e.foodUrgency, preparedness: e.preparedness,
+          labourRequired: response.labor, materials: JSON.stringify(requirements) },
+        summary: `${settlement.name} begins a ${response.name}.`, outcome: 'A physical site is reserved; work and materials are still required.',
+        significance: 0.55, tags: ['survival', 'settlement-development'] });
+    } else dev.lastAttempt = { month: state.month, outcome: 'blocked', candidates: [{ need: response.need, desiredLevel: 1, blockers: [{ code: 'no-valid-plot' }] }] };
+  }
+  // Demand is a claim on existing inventory, not another inventory or a material grant.
+  e.materialDemand = { timber: e.fuelTarget };
+  const project = dev.project;
+  if (project) for (const requirement of project.materialRequirements ?? []) {
+    const preferred = requirement.options.find(id => (settlement.localMaterials[id] ?? 0) >= requirement.amount * (1 - project.progress)) ?? requirement.options[0]!;
+    e.materialDemand[preferred] = (e.materialDemand[preferred] ?? 0) + requirement.amount * (1 - project.progress);
+  }
+  const housing = shelterCapacity(settlement, state).capacity / 17;
+  dev.pressures.housing = residents.length / 17;
+  dev.unmet.housing = Math.max(0, residents.length / 17 - housing);
+  return events;
+}
+
 /** One evaluation per year, one funded project at a time, no random draws. */
 export function advanceSettlementDevelopment(state: SimulationState, settlement: Settlement, residents: Person[], workRate: number): KnowledgeEventDraft[] {
   initializeSettlementDevelopment(state, settlement, residents);
@@ -398,6 +474,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     const { pressures, informal } = evaluatePressures(c);
     dev.pressures = pressures; dev.informal = informal; dev.providers = {}; dev.evaluatedMonth = state.month;
     const supplied = serviceSupply(settlement);
+    supplied.housing = shelterCapacity(settlement, state).capacity / 17;
     // Read last completed annual demand to keep connected centers useful without duplicating every service.
     for (const need of SHARED_NEEDS) {
       let best = 0;
@@ -516,14 +593,26 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     const supported = responseForNeed(c, project.response.need, project.response.level);
     // Lost sponsors/capabilities pause work; after ten years the site can be reclaimed.
     const patronLost = project.response.institutionId && !c.institutions.some(i => i.id === project.response.institutionId);
-    const materialLost = project.response.material === 'metal' && practical(settlement, 'iron-working') < 0.45
+    const materialLost = !project.response.adaptation && (project.response.material === 'metal' && practical(settlement, 'iron-working') < 0.45
       || project.response.material === 'ceramic' && practical(settlement, 'pottery-firing') < 0.3
-      || project.response.material === 'masonry' && practical(settlement, 'leverage') < 0.25;
+      || project.response.material === 'masonry' && practical(settlement, 'leverage') < 0.25);
+    const weather = state.weather.cells[settlement.cellIndex];
+    const adaptationWork = (settlement.survival?.establishment?.constructionLabour ?? 0)
+      * Math.max(0, 1 - (weather?.snowpack ?? 0) * 0.55 - (weather?.blizzard ?? 0) * 0.3 - (weather?.floodDepth ?? 0));
+    const availableWork = project.response.adaptation ? adaptationWork : workRate;
+    project.blockedReasons = [
+      ...(!plot ? ['missing-plot'] : []), ...(plot?.fire ? ['fire'] : []),
+      ...((plot?.floodDepth ?? 0) > 0.06 ? ['flooded-site'] : []),
+      ...(availableWork <= 0 ? ['no-available-construction-work'] : []),
+      ...(project.materialRequirements ?? []).filter(r => r.options.every(id => (settlement.localMaterials[id] ?? 0) <= 0.000001)).map(r => `missing:${r.options.join('|')}`),
+      ...(patronLost ? ['patron-lost'] : []), ...(materialLost ? ['capability-lost'] : []),
+    ];
     if (!plot || plot.fire || !supported || supported.level < project.response.level || patronLost || materialLost || (plot.floodDepth ?? 0) > 0.06) {
       if (state.month - project.startedMonth > 120) abandonProject();
-    } else if (workRate > 0) {
+    } else if (availableWork > 0) {
       const physicalLimit = project.materialRequirements ? maxMaterialProgressIncrement(settlement, project.materialRequirements) : 1;
-      const progress = Math.max(0, Math.min(1 - project.progress, workRate / project.response.labor, physicalLimit,
+      const progress = Math.max(0, Math.min(1 - project.progress, availableWork / project.response.labor, physicalLimit,
+        project.response.adaptation ? 0.45 : 1,
         ...Object.entries(project.response.materialCost ?? {}).filter(([, n]) => n > 0).map(([id, n]) => (settlement.localMaterials[id] ?? 0) / n),
         ...STOCK_KEYS.filter(key => project.response.cost[key] > 0).map(key => settlement.resources[key] / project.response.cost[key])));
       if (project.progress + progress >= 1 - 1e-8 && !validPlot(state, plot)) return events;
@@ -536,7 +625,18 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         reconcileBulkStocks(settlement);
         for (const [id, n] of Object.entries(project.response.materialCost ?? {})) takeMaterial(settlement, id, n * progress);
       }
+      const beforeProgress = project.progress;
       project.progress = Math.min(1, project.progress + progress);
+      project.labourSpent = (project.labourSpent ?? 0) + progress * project.response.labor;
+      if (progress > 0) project.lastWorkMonth = state.month;
+      if (project.response.adaptation && (project.response.services.housing ?? 0) > 0 && beforeProgress < 0.75 && project.progress >= 0.75) {
+        events.push({ type: 'response-resolved', locationId: settlement.id, location: { x: plot.worldX, z: plot.worldZ },
+          actors: [settlement.id, plot.id], causes: project.response.reasons,
+          context: { project: plot.id, progress: project.progress, labourSpent: project.labourSpent,
+            materialsSpent: JSON.stringify(project.materialSpent), shelterCapacity: shelterCapacity(settlement, state).capacity },
+          summary: `${settlement.name}'s ${project.response.name} now provides usable protection.`,
+          outcome: 'Paid construction has reached the covered, usable stage.', significance: 0.62, tags: ['survival', 'shelter', 'construction'] });
+      }
       if (project.progress >= 1 - 1e-8) {
         const record = entry(project.response, state.month, project.action);
         const prior = plot.development;
@@ -545,12 +645,18 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         if (prior) remember(plot.development, record);
         plot.condition = 1; plot.accessRestricted = false;
         plot.char = 0;
-        events.push(historyEvent(settlement, plot, record)); dev.project = undefined; dev.revision++;
+        const event = historyEvent(settlement, plot, record);
+        event.context = { ...event.context, temporary: project.response.temporary ?? false, adaptation: project.response.adaptation ?? 'ordinary',
+          capacity: (project.response.services.housing ?? 0) * 17, labourSpent: project.labourSpent,
+          materialsSpent: JSON.stringify(project.materialSpent ?? {}) };
+        events.push(event); dev.project = undefined; dev.revision++;
       }
     }
   }
   settlement.buildings = (settlement.structurePlots ?? []).filter(p => p.development?.status === 'active').length;
   settlement.targetBuildings = settlement.buildings + (dev.project ? 1 : 0);
   settlement.constructionProgress = dev.project?.progress ?? 0;
+  dev.pressures.housing = settlementLabour(state, settlement, residents).population / 17;
+  dev.unmet.housing = Math.max(0, dev.pressures.housing - shelterCapacity(settlement, state).capacity / 17);
   return events;
 }

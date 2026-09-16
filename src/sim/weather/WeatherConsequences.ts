@@ -143,6 +143,7 @@ export function repairWeatherDamage(settlement: Settlement, builders: number, mo
   let budget = Math.min(0.12, builders * 0.015);
   let repaired = 0;
   for (const plot of settlement.structurePlots ?? []) {
+    if (plot.development?.temporary) continue; // Fragile camp fabric is replaced through establishment work.
     if (plot.development && plot.development.status !== 'active') continue;
     if (plot.fire || plot.condition >= 1 || plot.damagedMonth === month || (plot.floodDepth ?? 0) > 0.06) continue;
     const work = Math.min(budget, 1 - plot.condition, settlement.resources.wood / 8, settlement.resources.minerals / 1.5);

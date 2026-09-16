@@ -1,4 +1,4 @@
-import type { Vec2 } from '../types';
+import type { Occupation, Vec2 } from '../types';
 
 /** New pressure families can use the same observation contract without owning decisions. */
 export interface PressureObservation {
@@ -28,6 +28,17 @@ export interface ResponseExperience {
   eventId?: string;
 }
 export interface SurvivalState {
+  establishment?: {
+    month: number; strength: number; preparedness: number; coldRisk: number;
+    coverage: number; permanentCoverage: number; foodUrgency: number; shelterUrgency: number;
+    fuelTarget: number; feasibility: number; migration: number;
+    choice: 'shelter' | 'finish' | 'fuel' | 'food' | 'migrate' | 'tolerate';
+    materialDemand: Record<string, number>;
+    constructionLabour: number; gatheringLabour: number; heatingLabour: number;
+    constructionByOccupation: Partial<Record<Occupation, number>>;
+    heatingByOccupation: Partial<Record<Occupation, number>>;
+    winterMemory: number; lastWinterEvent?: number; deficitEvent?: string;
+  };
   observations: Partial<Record<'food' | 'cold', PressureObservation>>;
   food?: {
     month: number;

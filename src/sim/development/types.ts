@@ -86,6 +86,10 @@ export interface SettlementWaterState {
 }
 
 export interface DevelopmentResponse {
+  /** Small physical adaptations use worker-months, not the historical development index. */
+  adaptation?: 'lean-to' | 'earth-shelter' | 'hut' | 'cache';
+  temporary?: boolean;
+  insulation?: number;
   need: SettlementNeed;
   form: StructureForm;
   name: string;
@@ -128,6 +132,9 @@ export interface StructureDevelopment extends DevelopmentResponse {
 }
 
 export interface DevelopmentProject {
+  blockedReasons?: string[];
+  labourSpent?: number;
+  lastWorkMonth?: number;
   plotId: string;
   response: DevelopmentResponse;
   action: StructureHistoryEntry['action'];

@@ -1,4 +1,5 @@
 import { emitEvent } from '../History';
+import { shelterCapacity } from '../development/Shelter';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { SeededRandom } from '../prng';
 import { takeMaterial } from '../resources/Inventory';
@@ -137,16 +138,107 @@ export function allocateSurvivalLabour(s: Settlement, summary: LabourSummary): L
   if (!survival) return summary;
   summary.survivalReassigned = 0;
   const response = survival.response;
-  if (!response || summary.month > response.untilMonth || !['forage', 'cultivate'].includes(response.kind)) return summary;
-  if (response.kind === 'cultivate' && capabilityPractice(s, 'crop-selection', 'adopted') < 0.15) return summary;
+  if (!response || summary.month > response.untilMonth || !['forage', 'cultivate'].includes(response.kind)) return allocateEstablishmentLabour(s, summary);
+  if (response.kind === 'cultivate' && capabilityPractice(s, 'crop-selection', 'adopted') < 0.15) return allocateEstablishmentLabour(s, summary);
   const destination = response.kind === 'forage' ? 'forager' : 'farmer';
-  const share = 0.15 + (survival.observations.food?.urgency ?? 0) * 0.25;
+  const share = (0.15 + (survival.observations.food?.urgency ?? 0) * 0.25)
+    / (1 + (survival.establishment?.shelterUrgency ?? 0) * 0.5);
   for (const source of ['builder', 'artisan', 'carrier', 'keeper'] as const) {
     const spend = positive(summary.economy[source] ?? 0) * share;
     summary.economy[source] = positive(summary.economy[source] ?? 0) - spend;
     // Unfamiliar work is less effective, never a free efficiency multiplier.
     summary.economy[destination] = (summary.economy[destination] ?? 0) + spend * 0.7;
     summary.survivalReassigned += spend;
+  }
+  return allocateEstablishmentLabour(s, summary);
+}
+
+/** Monthly, local, and based on observed climate/season rather than future weather draws. */
+export function observeEstablishment(state: SimulationState, s: Settlement, population: number, workers: number): void {
+  const survival = survivalState(s), prior = survival.establishment;
+  const shelter = shelterCapacity(s, state, population);
+  const coverage = population > 0 ? unit(shelter.capacity / population) : 1;
+  const permanentCoverage = population > 0 ? unit(shelter.permanent / population) : 1;
+  const cell = state.world.cells[s.cellIndex]!;
+  const weather = state.weather.cells[s.cellIndex];
+  const season = state.month % 12;
+  const approach = [1, 0.8, 0.4, 0.1, 0, 0, 0.1, 0.25, 0.55, 0.85, 1, 1][season]!;
+  const coldRisk = unit((0.55 - cell.temperature) / 0.45);
+  const winterMemory = Math.max((prior?.winterMemory ?? 0) * 0.998, unit(survival.exposureDose / 4));
+  const preparedness = unit(approach * coldRisk + winterMemory * 0.25);
+  const reserves = s.resources.food / Math.max(1, foodNeed(s, population));
+  const foodUrgency = unit(Math.max(survival.observations.food?.intensity ?? 0, 1 - reserves / (3 + preparedness * 2)));
+  const shelterUrgency = unit((1 - coverage) * (0.65 + preparedness * 0.55)
+    + (1 - permanentCoverage) * 0.22 + survival.cold.exposure * 0.4 + winterMemory * 0.15);
+  const fuelTarget = population * (0.012 + preparedness * 0.05);
+  const feasibility = unit((cell.wood * 0.6 + cell.minerals * 0.25 + Math.min(1, (s.localMaterials.timber ?? 0) / 3) * 0.4)
+    * (1 - (weather?.snowpack ?? 0) * 0.5) / Math.max(1, cell.movementCost * 0.3));
+  // Age moderates effort; it never switches survival response off. Secure infrastructure ends establishment.
+  const age = Math.max(0, state.month - s.foundedMonth);
+  const strength = unit(Math.max(1 - coverage, (1 - permanentCoverage) * 0.65, foodUrgency * 0.4)
+    * (0.75 + 0.25 / (1 + age / 60)));
+  const project = s.development?.project;
+  const stalled = project ? unit((state.month - (project.lastWorkMonth ?? project.startedMonth) - 3) / 24) : 0;
+  const migration = unit((1 - feasibility) * (shelterUrgency + foodUrgency) * 0.5 + survival.exposureDose / 12 + stalled * shelterUrgency);
+  const choice = workers < 0.2 || feasibility < 0.06 ? migration > 0.45 ? 'migrate' : 'tolerate'
+    : foodUrgency > shelterUrgency + 0.2 ? 'food'
+      : s.development?.project ? 'finish' : shelterUrgency > 0.2 ? 'shelter'
+        : (s.localMaterials.timber ?? 0) < fuelTarget ? 'fuel' : 'tolerate';
+  survival.establishment = { month: state.month, strength, preparedness, coldRisk, coverage, permanentCoverage,
+    foodUrgency, shelterUrgency, fuelTarget, feasibility, migration, choice, materialDemand: {},
+    constructionLabour: 0, gatheringLabour: 0, heatingLabour: 0, constructionByOccupation: {}, heatingByOccupation: {}, winterMemory,
+    lastWinterEvent: prior?.lastWinterEvent, deficitEvent: prior?.deficitEvent };
+  const e = survival.establishment;
+  if (coverage < 0.8 && !e.deficitEvent) e.deficitEvent = record(state, s, 'pressure-detected',
+    `${s.name} has physical protection for ${shelter.capacity.toFixed(1)} of ${population} people.`,
+    { pressure: 'shelter', capacity: shelter.capacity, population, coverage, preparedness }, ['physical-shelter-deficit'], population).id;
+  if (preparedness >= 0.4 && (prior?.preparedness ?? 0) < 0.4 && coverage < 1) record(state, s, 'response-attempted',
+    `${s.name} begins seasonal preparation with ${(coverage * 100).toFixed(0)}% shelter coverage.`,
+    { preparedness, coverage, foodReserves: reserves, fuel: s.localMaterials.timber ?? 0, winterMemory },
+    ['seasonal-cold-risk', ...(e.deficitEvent ? [e.deficitEvent] : [])], population);
+  if (season === 10 && e.lastWinterEvent !== state.month) {
+    e.lastWinterEvent = state.month;
+    record(state, s, 'pressure-detected', `${s.name} enters the cold season with ${(coverage * 100).toFixed(0)}% shelter coverage.`,
+      { pressure: 'winter-preparation', coverage, capacity: shelter.capacity, population, foodReserves: reserves,
+        fuel: s.localMaterials.timber ?? 0, choice, winterMemory }, ['seasonal-observation'], population);
+  }
+}
+
+/** HumanCapital calls this once before freezing the common budget. No emergency workers are created. */
+function allocateEstablishmentLabour(s: Settlement, summary: LabourSummary): LabourSummary {
+  const e = s.survival?.establishment;
+  if (!e || e.month !== summary.month) return summary;
+  const project = s.development?.project;
+  const active = Boolean(project?.response.adaptation);
+  const missing = Object.entries(e.materialDemand).reduce((n, [id, amount]) => n + Math.max(0, amount - (s.localMaterials[id] ?? 0)), 0);
+  const gatheringShare = missing > 0.05 ? 0.55 : 0.15;
+  const urgency = Math.max(active ? e.shelterUrgency : 0, missing > 0 ? e.preparedness * 0.5 : 0);
+  const share = unit(urgency * 0.75 / (1 + e.foodUrgency * 1.5));
+  e.constructionLabour = 0; e.gatheringLabour = 0; e.heatingLabour = 0; e.constructionByOccupation = {}; e.heatingByOccupation = {};
+  for (const source of ['farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const) {
+    const available = positive(summary.economy[source] ?? 0);
+    // Food specialists retain more time when reserves are short. Occupations never change here.
+    const foodWorker = source === 'farmer' || source === 'forager';
+    const spend = available * (active && source === 'builder' ? 1 : share * (foodWorker ? 1 - e.foodUrgency * 0.8 : 1));
+    summary.economy[source] = available - spend;
+    const gather = spend * (active ? gatheringShare : 1);
+    summary.resources[source] = (summary.resources[source] ?? 0) + gather;
+    e.gatheringLabour += gather;
+    const build = spend - gather;
+    e.constructionLabour += build * (source === 'builder' ? 1 : 0.7);
+    e.constructionByOccupation[source] = build;
+    summary.establishmentReserved = (summary.establishmentReserved ?? 0) + build;
+  }
+  // Fire tending spends a small share of the same civilian time; fuel alone is not free heating labour.
+  if (capabilityPractice(s, 'fire-control', 'adopted') >= 0.15) {
+    let remaining = summary.population * e.coldRisk * 0.004;
+    for (const source of ['keeper', 'carrier', 'forager', 'farmer'] as const) {
+      const spend = Math.min(remaining, summary.economy[source] ?? 0);
+      summary.economy[source] = (summary.economy[source] ?? 0) - spend;
+      e.heatingLabour += spend; remaining -= spend;
+      e.heatingByOccupation[source] = spend;
+      summary.establishmentReserved = (summary.establishmentReserved ?? 0) + spend;
+    }
   }
   return summary;
 }
@@ -157,19 +249,22 @@ export function applyCold(state: SimulationState, s: Settlement, population: num
   if (survival.observations.cold?.observedMonth === state.month) return;
   const temperature = state.weather.cells[s.cellIndex]?.temperature ?? 0.5;
   const severity = unit((0.3 - temperature) / 0.3);
-  const housing = (s.structurePlots ?? []).reduce((n, p) => n + (p.development?.status === 'active' && !p.accessRestricted
-    ? positive(p.development.services.housing ?? 0) * unit(p.condition) * 17 : 0), 0);
-  const shelterCoverage = population > 0 ? unit(housing / population) : 1;
+  const shelter = shelterCapacity(s, state, population);
+  const shelterCoverage = population > 0 ? unit(shelter.capacity / population) : 1;
   const fuelNeed = severity * positive(population) * 0.006;
-  const fuelUsed = fuelNeed > 0 && capabilityPractice(s, 'fire-control', 'adopted') >= 0.15 ? takeMaterial(s, 'timber', fuelNeed) : 0;
+  const tending = survival.establishment ? unit(survival.establishment.heatingLabour / Math.max(0.001, population * severity * 0.004)) : 1;
+  const fuelUsed = fuelNeed > 0 && capabilityPractice(s, 'fire-control', 'adopted') >= 0.15 ? takeMaterial(s, 'timber', fuelNeed * tending) : 0;
   const warmth = fuelNeed > 0 ? unit(fuelUsed / fuelNeed) : 1;
-  const exposure = severity * (1 - shelterCoverage * 0.75) * (1 - warmth * 0.65);
+  const insulation = population > 0 ? unit(shelter.protection / population) : 1;
+  const exposure = severity * (1 - insulation) * (1 - warmth * 0.65);
   survival.cold = { severity, shelterCoverage, fuelNeed, fuelUsed, exposure };
   survival.observations.cold = observePressure(survival.observations.cold, { kind: 'cold', intensity: exposure,
     confidence: 0.95, affectedPopulation: population, location: s.position, observedMonth: state.month,
     causes: [...(severity > 0 ? ['cold-weather'] : []), ...(shelterCoverage < 1 ? ['shelter-shortage'] : []), ...(warmth < 1 ? ['fuel-shortage'] : [])],
     consequences: ['lost-work', 'exposure-illness'], responses: ['shelter', 'fuel', 'migration'],
-    evidence: { temperature, shelterCoverage, fuelNeed, fuelUsed } });
+    evidence: { temperature, shelterCoverage, capacity: shelter.capacity, exposed: Math.max(0, population - shelter.capacity),
+      fuelNeed, fuelUsed, constructionLabour: survival.establishment?.constructionLabour ?? 0,
+      gatheringLabour: survival.establishment?.gatheringLabour ?? 0 } });
   const cold = survival.observations.cold;
   if (cold.intensity >= 0.35 && (!cold.eventId || cold.duration === 1)) {
     cold.eventId = record(state, s, 'pressure-detected', `${s.name} faces cold exposure with insufficient shelter or heating.`,

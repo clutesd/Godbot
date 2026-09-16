@@ -1,5 +1,6 @@
 import { createSettlementLayoutPlan, type BuildingDistrict, type SettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
 import { structureDestination } from '../../shared/StructureDestinations';
+import { isEstablishmentBuilder, isEstablishmentFireTender, physicalRestSite } from './EstablishmentWork';
 import type {
   Activity,
   DestinationKind,
@@ -181,7 +182,7 @@ export class PeopleSystem {
     }
 
     const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
-    const resourceSchedule = resourceWork ? this.scheduleFor(person, settlement, state) : undefined;
+    const resourceSchedule = resourceWork || isEstablishmentBuilder(state, person) ? this.scheduleFor(person, settlement, state) : undefined;
     const expectedResourceDestinationId = resourceSchedule && isResourceWorkDestinationId(resourceSchedule.destinationId)
       ? resourceSchedule.destinationId
       : undefined;
@@ -203,6 +204,9 @@ export class PeopleSystem {
       // A completed/cancelled project stops attracting workers immediately.
       navigation.traveling = false;
       navigation.destinationId = `${person.id}:construction-complete-replan`;
+    }
+    if (resourceSchedule?.kind === 'construction-site' && navigation?.destinationKind !== 'construction-site') {
+      if (navigation) navigation.traveling = false;
     }
     if (navigation?.traveling) {
       const speed = navigation.crossingMode === 'rail' ? 3.2 : 2 + person.traits.conscientiousness * 0.5;
@@ -363,18 +367,24 @@ export class PeopleSystem {
   private scheduleFor(person: Person, settlement: Settlement, state: SimulationState): ScheduledDestination {
     const role = person.role ?? 'gatherer';
     const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
-    const shiftedHour = (state.month * 3 + Math.floor(stableUnit(`${person.id}:schedule`) * 3)) % 24;
+    const shiftedHour = (state.month * 3 + Math.floor(stableUnit(`${person.id}:schedule`) * (settlement.foundingPodId ? 24 : 3))) % 24;
+    const building = isEstablishmentBuilder(state, person);
     const winter = state.month % 12 <= 1 || state.month % 12 >= 10;
     if (person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
-      return { kind: 'home', phase: 'home', activity: 'rest', reason: 'resting at home with their household' };
+      return { kind: 'home', phase: 'home', activity: 'rest', reason: physicalRestSite(state, person) ? 'resting in available physical shelter' : 'resting at the household camp' };
     }
     if (shiftedHour < 8) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'commute');
+      if (building) return { kind: 'construction-site', phase: 'commute', activity: 'travel', reason: 'carrying supplies to the active shelter project' };
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'commute', activity: 'travel', reason: `taking the morning route to ${humanDestination(kind)}` };
     }
     if (shiftedHour < 16) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'work');
+      if (building) return { kind: 'construction-site', phase: 'work', activity: 'construct', reason: 'helping build physical protection for the settlement' };
+      if (isEstablishmentFireTender(state, person)) return { kind: 'plaza', phase: 'work', activity: 'craft',
+        destinationId: `${settlement.id}:survival-fire`, point: { x: settlement.position.x, z: settlement.position.z + 1.6 },
+        reason: 'tending the camp fire with this month\'s gathered fuel' };
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'work', activity: activityForRole(role, kind), reason: `working at ${humanDestination(kind)}` };
     }
@@ -522,6 +532,10 @@ export class PeopleSystem {
   }
 
   private destinationPoint(person: Person, settlement: Settlement, state: SimulationState, kind: DestinationKind): Vec2 {
+    if (kind === 'home') {
+      const shelter = physicalRestSite(state, person);
+      if (shelter) return this.walkability.nearestWalkable(shelter, `${person.id}:physical-shelter`);
+    }
     const site = structureDestination(settlement, kind);
     if (site) return this.walkability.nearestWalkable({ x: site.worldX, z: site.worldZ }, `${person.id}:${site.id}`);
     const layout = this.layout(settlement, state);

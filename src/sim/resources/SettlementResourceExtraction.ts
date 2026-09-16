@@ -212,7 +212,8 @@ function requestedSupplementalRenewables(
   const fiberTarget = 6 + builders * 0.12 + foragers * 0.06;
   return {
     'medicinal-flora': Math.min(foragers * 0.018 + keepers * 0.006, Math.max(0, medicinalTarget - materialAmount(settlement, 'medicinal-flora'))),
-    'plant-fiber': Math.min(foragers * 0.032 + builders * 0.01, Math.max(0, fiberTarget - materialAmount(settlement, 'plant-fiber'))),
+    'plant-fiber': Math.max(Math.min(foragers * 0.032 + builders * 0.01, Math.max(0, fiberTarget - materialAmount(settlement, 'plant-fiber'))),
+      Math.max(0, (settlement.survival?.establishment?.materialDemand['plant-fiber'] ?? 0) - materialAmount(settlement, 'plant-fiber'))),
   };
 }
 
@@ -298,13 +299,22 @@ export function advanceSettlementResourceExtraction(
     settlement,
     settlementLabour(state, settlement, localResidents).effective,
   );
-  for (const kind of SUPPLEMENTAL_RENEWABLES) {
-    const capacity = (budget.forager ?? 0) + (budget.keeper ?? 0);
+  for (const kind of [...SUPPLEMENTAL_RENEWABLES].sort((a, b) => (settlement.survival?.establishment?.materialDemand[b] ?? 0) - (settlement.survival?.establishment?.materialDemand[a] ?? 0))) {
+    const occupations: Person['occupation'][] = (settlement.survival?.establishment?.materialDemand[kind] ?? 0) > 0
+      ? ['forager', 'keeper', 'farmer', 'builder', 'artisan', 'carrier'] : ['forager', 'keeper'];
+    const efficiency = (o: Person['occupation']) => o === 'forager' || o === 'keeper' ? 1 : 0.7;
+    const capacity = occupations.reduce((n, o) => n + (budget[o] ?? 0) * efficiency(o), 0);
     const requested = Math.min(renewableRequests[kind], capacity, storageRoom(settlement));
     const harvest = harvestRenewableAcross(cells, kind, requested);
     const harvested = harvest.total;
-    const supplementalLabour = useLabourDetailed(budget, ['forager', 'keeper'], harvested);
-    recordWorldWorkSites(state, settlement, kind, harvest.sites, ['forager', 'keeper'], supplementalLabour);
+    const supplementalLabour: LabourUse = { total: 0, byOccupation: {} };
+    let remainingWork = harvested;
+    for (const occupation of occupations) {
+      const use = useLabourDetailed(budget, [occupation], remainingWork / efficiency(occupation));
+      supplementalLabour.total += use.total; supplementalLabour.byOccupation[occupation] = use.total;
+      remainingWork = Math.max(0, remainingWork - use.total * efficiency(occupation));
+    }
+    recordWorldWorkSites(state, settlement, kind, harvest.sites, occupations, supplementalLabour);
     const accepted = recordMaterialExtraction(settlement, kind, harvested, state.month);
     if (accepted > 0) renewables[kind] = accepted;
   }

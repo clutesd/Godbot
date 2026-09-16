@@ -1,5 +1,5 @@
 import { emitEvent } from './History';
-import { adaptFoodCareer, applyCold, beginFoodMonth, chooseFoodResponse, resolveSurvival, survivalHealthChange, survivalMortality } from './pressures/Survival';
+import { adaptFoodCareer, applyCold, beginFoodMonth, chooseFoodResponse, observeEstablishment, resolveSurvival, survivalHealthChange, survivalMortality } from './pressures/Survival';
 import { assertPristine, createFoundingArrival, FoundingArrivalDirector, type FoundingPod } from './founding/FoundingArrival';
 import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
 import { killPeople, observeDeaths } from './people/PersonLifecycle';
@@ -12,7 +12,7 @@ import { PeopleSystem } from './people/PeopleSystem';
 import { HistoricalImportanceSystem } from './people/HistoricalImportance';
 import { WeatherSystem } from './weather/WeatherSystem';
 import { syncStructurePlots } from '../shared/StructurePlots';
-import { advanceSettlementDevelopment, initializeSettlementDevelopment } from './development/SettlementDevelopmentSystem';
+import { advanceSettlementDevelopment, initializeSettlementDevelopment, planEstablishment } from './development/SettlementDevelopmentSystem';
 import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
 import { advanceStructureFires } from './fire/StructureFireSystem';
 import { TransportationSystem } from './transport/TransportationSystem';
@@ -425,7 +425,8 @@ export class Simulation {
       chooseFoodResponse(this.state, settlement, population, workers, this.dominantCulture(settlement));
       const specialist = adaptFoodCareer(this.state, settlement, residents);
       if (specialist) this.peopleSystem.refreshIdentity(specialist, settlement, this.state);
-      applyCold(this.state, settlement, population);
+      observeEstablishment(this.state, settlement, population, workers);
+      this.applyKnowledgeEvents(planEstablishment(this.state, settlement, residents));
     }
     beginLabourMonth(this.state, this.peopleBySettlement);
     this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
@@ -438,8 +439,10 @@ export class Simulation {
     this.knowledgeSystem.advanceMonth(this.state);
     this.transportationSystem.advanceMonth();
     this.runTrade();
-    for (const settlement of this.livingSettlements()) resolveSurvival(this.state, settlement,
-      survivalPopulation(settlement), this.dominantCulture(settlement));
+    for (const settlement of this.livingSettlements()) {
+      applyCold(this.state, settlement, survivalPopulation(settlement));
+      resolveSurvival(this.state, settlement, survivalPopulation(settlement), this.dominantCulture(settlement));
+    }
     if (this.state.month % 12 === 0) this.formPartnerships();
     advanceHumanCapital(this.state);
     this.runPeople();
@@ -822,8 +825,10 @@ export class Simulation {
       beginFoodMonth(settlement, population, production, this.state.month, extraProduction);
       settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, population * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, population * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
       settlement.prosperity *= 1 - Math.min(0.3, materialEconomy(settlement).shortageMonths * 0.001);
-      const builderCapacity = builders > 0 ? clamp(builders / Math.max(3, population * 0.055), 0.2, 1.35) : 0;
-      const constructionRate = !cell.water && repaired === 0 && damagedPlots.length === 0
+      // Repairs spend part of the builder allocation; an unrelated damaged shelter cannot veto all building.
+      const remainingBuilders = Math.max(0, builders - repaired / 0.015);
+      const builderCapacity = remainingBuilders > 0 ? clamp(remainingBuilders / Math.max(3, population * 0.055), 0, 1.35) : 0;
+      const constructionRate = !cell.water
         ? builderCapacity * (0.45 + settlement.prosperity * 0.55) / this.config.historicalPace.smallConstructionMonths : 0;
       for (const event of advanceSettlementDevelopment(this.state, settlement, people, constructionRate)) {
         this.addEvent(event);
@@ -1009,6 +1014,7 @@ export class Simulation {
         Math.max(0, sourcePeople.length / capacity - 0.62) * 1.25
         + Math.max(0, 0.5 - source.foodSecurity) * 1.5
         + source.climateStress * 0.24
+        + (source.survival?.establishment?.migration ?? 0) * 0.3
         + source.conflictPressure * 0.42
         + opportunity * 0.52
         + specializationPull

@@ -131,7 +131,7 @@ export function foundingYearOneSnapshot(state: SimulationState): FoundingYearOne
   const permanentStructuresFounded = state.settlements
     .filter(settlement => baseline.communities.some(community => community.settlementId === settlement.id))
     .flatMap(settlement => settlement.structurePlots ?? [])
-    .filter(plot => plot.foundedMonth > baseline.eventMonth && plot.foundedMonth <= yearEndMonth)
+    .filter(plot => plot.development && !plot.development.temporary && plot.development.origin.month > baseline.eventMonth && plot.development.origin.month <= yearEndMonth)
     .length;
   const firstContacts = events.filter(event => event.type === 'first-contact').length;
   const tradeRoutesEstablished = events.filter(event => event.type === 'trade-route-established').length;

@@ -32,6 +32,8 @@ export interface WorkforceProfile {
   experts: Partial<Record<KnowledgeDomain, number>>;
 }
 export interface LabourSummary {
+  /** Raw civilian time spent on adaptation construction and fire tending, after reassignment. */
+  establishmentReserved?: number;
   survivalReassigned?: number;
   month: number;
   population: number;

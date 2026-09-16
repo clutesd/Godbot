@@ -7,6 +7,7 @@ import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
 import { CameraDirector, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
+import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
@@ -822,7 +823,7 @@ export class GodboxRenderer {
     const shownBuildings = this.shownBuildingCount(settlement);
     const layout = this.layoutForSettlement(settlement, era);
     const bannerLegacy = this.bannerLegacyForSettlement(settlement, bannerIdentity, culture, era, layout);
-    const hasActiveConstruction = settlement.constructionProgress > 0 && (Boolean(settlement.development?.project) || settlement.buildings < settlement.targetBuildings);
+    const hasActiveConstruction = Boolean(settlement.development?.project) || settlement.constructionProgress > 0 && settlement.buildings < settlement.targetBuildings;
     const reservedPlacements = this.getSettlementBuildingPlacements(settlement, shownBuildings + (hasActiveConstruction ? 1 : 0), layout);
     const placements = settlement.development ? reservedPlacements.filter(p => settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shownBuildings) : reservedPlacements.slice(0, shownBuildings);
     for (const placement of placements) {
@@ -845,7 +846,21 @@ export class GodboxRenderer {
       group.add(structure);
     }
     const activeSite = hasActiveConstruction ? settlement.development ? reservedPlacements.find(p => p.key === settlement.development?.project?.plotId) : reservedPlacements[shownBuildings] : undefined;
-    if (activeSite) group.add(this.createActiveConstructionSite(activeSite, palette, settlementY, settlement.constructionProgress));
+    if (activeSite) {
+      const response = settlement.development?.project?.response;
+      if (response?.adaptation) {
+        const mesh = createSurvivalStructure(response, settlement.constructionProgress, activeSite.width, activeSite.depth, palette);
+        mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
+        mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
+        group.add(mesh);
+      } else group.add(this.createActiveConstructionSite(activeSite, palette, settlementY, settlement.constructionProgress));
+    }
+    if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
+      // This hearth exists only while the monthly survival ledger records paid fuel and tending.
+      const hearth = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.25, 6), palette.getSurfaceMaterial('glow'));
+      hearth.position.set(0, this.elevationAt(settlement.position.x, settlement.position.z + 1.6) - settlementY + 0.125, 1.6);
+      hearth.userData['survivalFire'] = true; group.add(hearth);
+    }
     if (!settlement.development && eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);
     const bareFounderCamp = Boolean(settlement.foundingPodId && settlement.buildings === 0);
     if (!bareFounderCamp) this.addGroundCraft(group, era, palette, visualRandom);
@@ -1184,6 +1199,12 @@ export class GodboxRenderer {
   }
 
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number): THREE.Object3D {
+    if (placement.development?.adaptation) {
+      const building = createSurvivalStructure(placement.development, 1, placement.width, placement.depth, this.getPalette(cultureStyle, era));
+      building.position.set(placement.localX, terrainY, placement.localZ); building.rotation.y = placement.rotationY;
+      building.userData['placementKey'] = placement.key;
+      return building;
+    }
     const stage = this.constructionStageFor(placement.key);
     // Geometry is shared per (culture, era, role, variation, stage) rather than per instance,
     // so a hundred houses cost a handful of buffers.

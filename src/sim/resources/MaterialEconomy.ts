@@ -299,7 +299,9 @@ export function advanceMaterialProcessing(
 
   for (const recipeDefinition of MATERIAL_RECIPES) {
     if (remainingCapacity <= EPSILON || !recipeEnabled(settlement, recipeDefinition)) continue;
-    const inputBatches = maxBatchesFromInputs(settlement, recipeDefinition);
+    const protectedLimit = Math.min(...Object.entries(recipeDefinition.inputs).map(([id, amount]) => Math.max(0,
+      (settlement.localMaterials[id] ?? 0) - (settlement.survival?.establishment?.materialDemand[id] ?? 0)) / amount!));
+    const inputBatches = Math.min(maxBatchesFromInputs(settlement, recipeDefinition), protectedLimit);
     const capacityBatches = remainingCapacity / recipeDefinition.work;
     const batches = round(Math.min(inputBatches, capacityBatches));
     if (batches <= EPSILON) continue;

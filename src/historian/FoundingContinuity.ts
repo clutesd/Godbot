@@ -1,4 +1,5 @@
 import { settlementRepresentedPopulation } from '../sim/Population';
+import { shelterCapacity } from '../sim/development/Shelter';
 import type { SimulationState } from '../sim/types';
 import {
   foundingChapterBaseline,
@@ -23,6 +24,8 @@ export interface FoundingCommunitySnapshot {
   readonly population: number;
   readonly founderSurvivors: number;
   readonly buildings: number;
+  readonly temporaryShelters: number;
+  readonly shelterCapacity: number;
   readonly constructionProgress: number;
   readonly food: number;
   readonly goods: number;
@@ -125,8 +128,10 @@ export function foundingCommunitySnapshot(
     alive: settlement.alive,
     population: settlementRepresentedPopulation(state, settlement.id),
     founderSurvivors,
-    buildings: settlement.buildings,
-    constructionProgress: clamp(settlement.constructionProgress),
+    buildings: (settlement.structurePlots ?? []).filter(p => p.development?.status === 'active' && !p.development.temporary).length,
+    temporaryShelters: (settlement.structurePlots ?? []).filter(p => p.development?.status === 'active' && p.development.temporary && (p.development.services.housing ?? 0) > 0).length,
+    shelterCapacity: shelterCapacity(settlement, state).capacity,
+    constructionProgress: settlement.development?.project?.response.temporary ? 0 : clamp(settlement.constructionProgress),
     food: settlement.resources.food,
     goods: settlement.resources.goods,
     timber: settlement.localMaterials['timber'] ?? 0,
@@ -183,6 +188,8 @@ function changeFacts(snapshot: FoundingCommunitySnapshot, community: FoundingCom
     stockFact('Timber', community.supplies.timber, snapshot.timber),
     stockFact('Stone', community.supplies.stone, snapshot.stone),
   ].filter((fact): fact is ChangeFact => Boolean(fact));
+  if (snapshot.temporaryShelters > 0) facts.push({ weight: 0.6,
+    text: `${snapshot.temporaryShelters} temporary shelters now stand, with physical protection for ${snapshot.shelterCapacity.toFixed(0)} people including the landing vessel` });
   stocks.sort((a, b) => b.weight - a.weight);
   if (stocks[0]) facts.push(stocks[0]);
 

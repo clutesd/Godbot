@@ -19,6 +19,14 @@ document.querySelector('#seek')!.addEventListener('click', () => { void seek(Num
 document.querySelector('#restart')!.addEventListener('click', () => { void seek(0); });
 document.querySelector('#play')!.addEventListener('click', () => { paused = !paused; child().__godboxArrival?.pause(paused); });
 document.querySelector('#step')!.addEventListener('click', () => { paused = true; child().__godboxArrival?.pause(true); child().__godboxArrival?.advance(0.25); });
+for (const [id, months] of [['month', 1], ['year', 12]] as const) document.querySelector(`#${id}`)!.addEventListener('click', () => {
+  const api = child().__godboxArrival;
+  if (!api) return;
+  paused = true; api.pause(true);
+  if (api.state.arrival?.phase !== 'HISTORY_RUNNING') api.advance(60);
+  child().__godboxDebugAdvance?.(months);
+  document.querySelector('#shelter')!.textContent = api.state.settlements.map(s => `${s.name}: ${Math.round((s.survival?.cold.shelterCoverage ?? 0) * 100)}% sheltered`).join(' / ');
+});
 function update(): void {
   const state = child().__godboxArrival?.state;
   if (state?.arrival) status.textContent = `${state.arrival.elapsedSeconds.toFixed(2)}s · ${state.arrival.phase} · ${state.people.length} people · ${state.settlements.reduce((n, s) => n + s.buildings, 0)} buildings · month ${state.month}${busy ? ' · rebuilding' : ''}`;

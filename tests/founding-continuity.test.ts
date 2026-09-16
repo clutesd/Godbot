@@ -92,13 +92,16 @@ describe('Founding Chapter 1b continuity', () => {
     const settlement = simulation.state.settlements.find(candidate => candidate.id === community.settlementId);
     if (!settlement) throw new Error('Expected founding settlement');
     simulation.step(3);
-    settlement.buildings = 8;
+    // A counter or reserved plot is not a standing permanent structure.
+    const shelter = settlement.structurePlots?.find(p => p.development?.status === 'active');
+    if (!shelter?.development) throw new Error('Expected a physically completed founding shelter');
+    shelter.development.temporary = false;
     settlement.resources.food = community.supplies.food * 0.55;
     settlement.localMaterials['timber'] = community.supplies.timber * 2;
 
     const scene = chooseFoundingContinuityScene(historian, simulation.state);
     expect(scene?.subjectId).toBe(community.settlementId);
-    expect(scene?.statement.text).toContain('permanent structures');
+    expect(scene?.statement.text).toContain('permanent structure');
     expect(scene?.statement.text).toMatch(/Food stores have fallen|Timber stores have risen/);
     expect(scene && historian.validateStatement(scene.statement, simulation.state)).toBe(true);
   });

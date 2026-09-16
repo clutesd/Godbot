@@ -35,6 +35,8 @@ export interface FoundingPod {
     parentRock: string;
   };
   condition: number;
+  /** Cramped emergency protection, never a home for the whole founding group. */
+  shelterCapacity?: number;
 }
 export interface FoundingArrivalState {
   phase: ArrivalPhase;
@@ -88,7 +90,7 @@ export function createFoundingArrival(world: WorldState, seed: string): Founding
       return { id: `${seed}:pod:${i + 1}`, groupId: `${seed}:founders:${i + 1}`, ...profile,
         domains: [...profile.domains], knowledge: [...profile.knowledge], position: site.point,
         groundY: surfaceHeightAt(world, site.point.x, site.point.z), cellIndex: site.cell.z * world.size + site.cell.x,
-        population: 22, personIds: [], landed: false, condition: 1,
+        population: 22, personIds: [], landed: false, condition: 1, shelterCapacity: 4,
         entrySeconds: 13 + [0, 1.8, 4.3, 5.5, 7.6][i]!, descentSeconds: 12 + [0, 1.2, -0.4, 0.7, 1.4][i]!,
         entryOffset: { x: -20 + i * 6, z: -25 - i * 2 }, supplies: { food: 100, goods: 6, timber: 8, stone: 3 },
         site: {

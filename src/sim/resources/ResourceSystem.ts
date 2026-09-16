@@ -57,15 +57,22 @@ export class ResourceSystem {
       const people = peopleByHome.get(s.id) ?? [];
       const budget: LabourBudget = resourceLabourBudget(state, s, people);
       economy.demand = { timber: Math.max(12, s.buildings * 3, (s.survival?.cold.fuelNeed ?? 0) * 4), stone: Math.max(6, s.buildings) };
+      for (const [id, amount] of Object.entries(s.survival?.establishment?.materialDemand ?? {})) economy.demand[id] = Math.max(economy.demand[id] ?? 0, amount * 2);
       economy.energyDemand = 0; economy.energySupplied = 0; economy.labourUsed = 0;
       economy.delivered = {};
       this.deliver(state, s, deposits);
+      // Leave the same ledger's binding/roofing time for the supplemental fiber authority below.
+      const fiberNeed = Math.max(0, (s.survival?.establishment?.materialDemand['plant-fiber'] ?? 0) - (s.localMaterials['plant-fiber'] ?? 0));
       const radius = (7 + s.infrastructure.roads * 10 + s.infrastructure.ports * 16 + s.infrastructure.rail * 20) * state.world.cellSize;
       const nearby = state.world.resourceDeposits.filter(d => Math.hypot(d.worldX - s.position.x, d.worldZ - s.position.z) <= radius);
       this.discover(state, s, nearby, budget, events);
+      const fiberTime = useLabourDetailed(budget, ['farmer', 'keeper', 'carrier', 'artisan', 'builder', 'forager'], Math.min(0.5, fiberNeed / 0.7));
+      const establishing = (s.survival?.establishment?.strength ?? 0) > 0.12;
+      if (establishing) this.gather(state, s, nearby, budget, events);
       events.push(...processRecipes(state, s, budget, this.random));
-      this.gather(state, s, nearby, budget, events);
+      if (!establishing) this.gather(state, s, nearby, budget, events);
       consumeMaterials(state, s, people, budget, events);
+      for (const [occupation, time] of Object.entries(fiberTime.byOccupation) as Array<[keyof LabourBudget, number]>) budget[occupation] = (budget[occupation] ?? 0) + time;
       publishBulkStocks(s);
     }
     for (const deposit of state.world.resourceDeposits) {
@@ -88,7 +95,9 @@ export class ResourceSystem {
       if (s.discoveredDeposits.includes(deposit.id) || deposit.depleted) continue;
       const distance = Math.hypot(deposit.worldX - s.position.x, deposit.worldZ - s.position.z) / state.world.cellSize;
       const readiness = discoveryReadiness(s, deposit);
-      if (readiness <= 0 || !this.random.chance(0.06 * readiness * Math.min(2, explorers / 3) / (1 + distance * 0.25)) || !this.access!.resolve(s, deposit)) continue;
+      // Surface materials in the camp's immediate catchment are visible without years of prospecting.
+      const visible = distance <= 2 && (deposit.exposure ?? 1) >= 0.5 && ['timber', 'stone'].includes(deposit.resourceId);
+      if (readiness <= 0 || !visible && !this.random.chance(0.06 * readiness * Math.min(2, explorers / 3) / (1 + distance * 0.25)) || !this.access!.resolve(s, deposit)) continue;
       discoverProvince(s, deposit, state.month);
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += 0.05;
@@ -139,7 +148,9 @@ export class ResourceSystem {
       if (!access || access.cost > 8) continue;
       const { path } = access;
       const transportCost = access.cost * (1 + (deposit.extractionDifficulty ?? 0));
-      const labour = definition.gatherOccupations.reduce((sum, o) => sum + (budget[o] ?? 0), 0);
+      const survivalWork = (s.survival?.establishment?.materialDemand[definition.id] ?? 0) > (s.localMaterials[definition.id] ?? 0);
+      const occupations = survivalWork ? [...new Set([...definition.gatherOccupations, 'farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const)] : definition.gatherOccupations;
+      const labour = occupations.reduce((sum, o) => sum + (budget[o] ?? 0) * (definition.gatherOccupations.includes(o) ? 1 : 0.7), 0);
       const tools = 1 + clamp(economy.tools / 12) * 0.7;
       const primitiveWood = definition.category === 'timber' && mastery(s, 'stone-composites').practice < 0.18 ? 0.25 : 1;
       const exposed = Math.max(0, 1 - (weather?.blizzard ?? 0) * 0.5 - (weather?.snowpack ?? 0) * 0.3);
@@ -150,7 +161,16 @@ export class ResourceSystem {
       const deepCapacity = fuel ? (s.localMaterials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
       const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.localMaterials[definition.id] ?? 0) - incoming);
       if (amount <= 0.00001) continue;
-      const labourUse = useLabourDetailed(budget, definition.gatherOccupations, amount / rate);
+      // Convert unfamiliar labour at reduced output while spending the full source time.
+      const labourUse = { total: 0, byOccupation: {} as LabourBudget };
+      let remainingWork = amount / rate;
+      for (const occupation of occupations) {
+        const efficiency = definition.gatherOccupations.includes(occupation) ? 1 : 0.7;
+        const use = useLabourDetailed(budget, [occupation], remainingWork / efficiency);
+        labourUse.total += use.total;
+        labourUse.byOccupation[occupation] = use.total;
+        remainingWork = Math.max(0, remainingWork - use.total * efficiency);
+      }
       economy.labourUsed += labourUse.total;
       if (fuel && amount > surfaceRemaining) {
         const spent = takeMaterial(s, fuel.material, (amount - surfaceRemaining) * fuel.perUnit);
@@ -196,7 +216,7 @@ export class ResourceSystem {
         cellIndex: deposit.cellIndex,
         resourceId: definition.id,
         worldPosition: { x: deposit.worldX, z: deposit.worldZ },
-        gatherOccupations: definition.gatherOccupations,
+        gatherOccupations: occupations,
         labourByOccupation: labourUse.byOccupation,
         amountExtracted: amount,
         labourUsed: labourUse.total,
