@@ -260,12 +260,14 @@ export function advanceSettlementResourceExtraction(
 
   const cells = settlementResourceCatchment(state, settlement);
   const authoritative = cells.some((cell) => cell.naturalResources !== undefined);
-  const inventory = ensureMaterialInventory(settlement);
   if (!authoritative) {
-    advanceMaterialProcessing(state, settlement, localResidents);
+    if (settlement.materials || Object.keys(settlement.localMaterials).length > 0) {
+      advanceMaterialProcessing(state, settlement, localResidents);
+    }
     return empty;
   }
 
+  const inventory = ensureMaterialInventory(settlement);
   const prior = extractionSnapshotFromFlow(settlement, state.month);
   if (prior) {
     advanceMaterialProcessing(state, settlement, localResidents);
