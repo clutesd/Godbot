@@ -1,7 +1,7 @@
 import type { GodboxConfigInput } from './src/config';
 import { installFoundingCast } from './src/historian/FoundingCast';
-import { installFoundingCharacterArcs } from './src/historian/FoundingCharacterArc';
-import { installFoundingCharacterMemory } from './src/historian/FoundingCharacterMemory';
+import { installFoundingCharacterArcs, restoreFoundingCharacterArcs } from './src/historian/FoundingCharacterArc';
+import { installFoundingCharacterMemory, registerFoundingCharacterRestoreObserver } from './src/historian/FoundingCharacterMemory';
 import { installFoundingChapter } from './src/historian/FoundingChapter';
 import { installFoundingContinuity } from './src/historian/FoundingContinuity';
 import { installFoundingYearOne } from './src/historian/FoundingYearOne';
@@ -24,6 +24,8 @@ installFoundingYearOne();
 installFoundingCast();
 // Human-scale memory observes the final chosen cast scene and survives archive/resume.
 installFoundingCharacterMemory();
+// The same archived statements rebuild 2c after 2b restores its own attention state.
+registerFoundingCharacterRestoreObserver(restoreFoundingCharacterArcs);
 // Life arcs sit outermost: they synthesize remembered changes and close watched lives without altering them.
 installFoundingCharacterArcs();
 
