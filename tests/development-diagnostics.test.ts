@@ -36,11 +36,12 @@ describe('Step 2A development decision diagnostics', () => {
   it('identifies canonical structural-material scarcity separately from generic budgets', () => {
     const { attempt } = attemptOnce(({ settlements: [s] }) => {
       s!.conflictPressure = 1;
-      // Use a physically possible Step-1C state: ample timber and a finished frame satisfy the
-      // bulk/component gates, while missing textile/plant-fiber blocks the timber structure fabric.
+      // Use a physically possible Step-1C state: ample timber, stone and a finished frame satisfy
+      // bulk/component gates, while missing textile/plant-fiber alone blocks timber structure fabric.
       s!.localMaterials = {};
       s!.knownRecipes = [...new Set([...s!.knownRecipes, 'timber-framing'])];
       addMaterial(s!, 'timber', 20);
+      addMaterial(s!, 'stone', 10);
       addMaterial(s!, 'timber-frame', 2);
     });
 
@@ -53,6 +54,7 @@ describe('Step 2A development decision diagnostics', () => {
     expect(fabric?.required).toBeGreaterThan(0);
     expect(fabric?.detail).toBe('textile|plant-fiber');
     expect(security?.blockers.some(blocker => blocker.code === 'insufficient-wood')).toBe(false);
+    expect(security?.blockers.some(blocker => blocker.code === 'insufficient-minerals')).toBe(false);
     expect(security?.blockers.some(blocker => blocker.code === 'insufficient-processed-material')).toBe(false);
   });
 
