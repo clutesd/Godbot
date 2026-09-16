@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chooseFoundingChapterScene,
   foundingChapterBaseline,
+  foundingChapterProgress,
   installFoundingChapterPacing,
 } from '../src/historian/FoundingChapter';
 import {
@@ -26,10 +27,13 @@ function completedArrival(seed: string): Simulation {
 function completeOrientation(simulation: Simulation, historian: Historian): void {
   const baseline = foundingChapterBaseline(simulation.state);
   if (!baseline) throw new Error('Expected founding baseline');
-  for (let index = 0; index < baseline.communities.length + 1; index += 1) {
+  let safety = baseline.communities.length + 2;
+  while (foundingChapterProgress(historian, simulation.state).phase !== 'complete' && safety > 0) {
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    safety -= 1;
   }
-  // The next lookup releases the Month-Zero presentation freeze.
+  expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
+  // The next lookup releases the Month-Zero presentation freeze after the final shot has finished.
   expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
 }
 
