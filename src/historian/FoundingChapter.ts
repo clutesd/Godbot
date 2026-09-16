@@ -3,6 +3,17 @@ import type { ObservationCandidate } from './types';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
 
+export interface FoundingSiteBaseline {
+  readonly biome: string;
+  readonly landform: string;
+  readonly elevation: number;
+  readonly fertility: number;
+  readonly woodland: number;
+  readonly waterAccess: number;
+  readonly habitability: number;
+  readonly parentRock: string;
+}
+
 export interface FoundingCommunityBaseline {
   readonly order: number;
   readonly podId: string;
@@ -16,6 +27,7 @@ export interface FoundingCommunityBaseline {
   readonly domains: readonly string[];
   readonly knowledge: readonly string[];
   readonly supplies: Readonly<{ food: number; goods: number; timber: number; stone: number }>;
+  readonly site: FoundingSiteBaseline;
 }
 
 export interface FoundingChapterBaseline {
@@ -107,7 +119,8 @@ export function foundingChapterBaseline(state: SimulationState): FoundingChapter
   const communities = arrival.pods.flatMap((pod, order): FoundingCommunityBaseline[] => {
     if (!pod.settlementId) return [];
     const settlement = state.settlements.find(candidate => candidate.id === pod.settlementId);
-    if (!settlement) return [];
+    const cell = state.world.cells[pod.cellIndex];
+    if (!settlement || !cell) return [];
     return [Object.freeze({
       order,
       podId: pod.id,
@@ -115,12 +128,22 @@ export function foundingChapterBaseline(state: SimulationState): FoundingChapter
       podName: pod.name,
       settlementId: settlement.id,
       settlementName: settlement.name,
-      position: Object.freeze({ x: settlement.position.x, z: settlement.position.z }),
+      position: Object.freeze({ x: pod.position.x, z: pod.position.z }),
       founderIds: Object.freeze([...pod.personIds]),
       founderCount: pod.population,
       domains: Object.freeze([...pod.domains]),
       knowledge: Object.freeze([...pod.knowledge]),
       supplies: Object.freeze({ ...pod.supplies }),
+      site: Object.freeze({
+        biome: cell.biome,
+        landform: cell.landform,
+        elevation: cell.elevation,
+        fertility: cell.fertility,
+        woodland: cell.wood,
+        waterAccess: cell.soil?.waterAccess ?? 0,
+        habitability: cell.habitability,
+        parentRock: cell.geology?.family ?? 'unknown',
+      }),
     })];
   });
   const foundingPopulation = arrival.pods.reduce((sum, pod) => sum + pod.population, 0);
@@ -155,7 +178,7 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   const statement = {
     id: `founding-overview-${event.id}`,
     month: state.month,
-    text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. Each carried a different portion of inherited knowledge into the same untouched world.`,
+    text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. No landing carried the whole inheritance; each began with a different combination of knowledge, skills, supplies, and terrain.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds: baseline.communities.map(community => community.settlementId),
@@ -187,7 +210,7 @@ function communityScene(historian: Historian, state: SimulationState, community:
   const statement = {
     id: `founding-community-${community.podId}`,
     month: state.month,
-    text: `${community.settlementName} began with ${community.founderCount.toLocaleString()} founders from ${community.podName}. Their inherited strengths were ${list(domains)}; the knowledge carried through the landing included ${list(knowledge)}. This was one of ${baselineCount(state)} communities beginning from different places and skills.`,
+    text: `${community.settlementName} began with ${community.founderCount.toLocaleString()} founders from ${community.podName}. Their inherited strengths were ${list(domains)}; they carried ${list(knowledge)} into a ${readable(community.site.biome)} landing site. This was one of ${baselineCount(state)} communities beginning from different conditions.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds: [community.settlementId],
