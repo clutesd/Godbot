@@ -54,6 +54,11 @@ interface FoundingChapterMemory {
   complete: boolean;
   startedMonth: number;
   baseline: FoundingChapterBaseline;
+  autoRunBeforeOrientation?: boolean;
+}
+
+interface HistorianConfigAccess {
+  config: { autoRun: boolean };
 }
 
 const memories = new WeakMap<Historian, FoundingChapterMemory>();
@@ -67,7 +72,7 @@ let chapterInstalled = false;
  */
 export const FOUNDING_CHAPTER_LATEST_MONTH = 18;
 
-/** The camera may still ask for a presentation speed, but tickBudget() holds authoritative time. */
+/** The camera may still ask for a presentation speed, but autoRun is held during orientation. */
 export const FOUNDING_CHAPTER_MONTHS_PER_SECOND = 0.08;
 
 const scoreBreakdown = (continuity: number) => ({
@@ -117,6 +122,29 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
     waterAccess: community.site.waterAccess,
   }));
   return new Set(signatures).size > 1;
+}
+
+function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
+  return (historian as unknown as HistorianConfigAccess).config;
+}
+
+function holdFoundingChapter(historian: Historian, state: SimulationState, memory: FoundingChapterMemory): void {
+  const config = historianConfig(historian);
+  if (memory.autoRunBeforeOrientation === undefined) memory.autoRunBeforeOrientation = config.autoRun;
+  config.autoRun = false;
+  frozenStates.add(state);
+}
+
+/**
+ * Release the presentation hold after the final 1a shot. This is exported so the outer 1b wrapper
+ * can hand off directly without requiring a dummy Historian scene selection in between.
+ */
+export function releaseFoundingChapterHold(historian: Historian, state: SimulationState): void {
+  frozenStates.delete(state);
+  const memory = memories.get(historian);
+  if (!memory || memory.autoRunBeforeOrientation === undefined) return;
+  historianConfig(historian).autoRun = memory.autoRunBeforeOrientation;
+  delete memory.autoRunBeforeOrientation;
 }
 
 /**
@@ -279,7 +307,7 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') {
-    frozenStates.delete(state);
+    releaseFoundingChapterHold(historian, state);
     return undefined;
   }
 
@@ -287,19 +315,19 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
   if (!memory) {
     const baseline = foundingChapterBaseline(state);
     if (!baseline || state.month > baseline.eventMonth) {
-      frozenStates.delete(state);
+      releaseFoundingChapterHold(historian, state);
       return undefined;
     }
     memory = { nextBeat: 0, complete: false, startedMonth: state.month, baseline };
     memories.set(historian, memory);
   }
   if (memory.complete) {
-    frozenStates.delete(state);
+    releaseFoundingChapterHold(historian, state);
     return undefined;
   }
   if (state.month > FOUNDING_CHAPTER_LATEST_MONTH) {
     memory.complete = true;
-    frozenStates.delete(state);
+    releaseFoundingChapterHold(historian, state);
     return undefined;
   }
 
@@ -312,14 +340,13 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
       : communityScene(historian, state, memory.baseline, memory.baseline.communities[beat - 1]!);
     if (scene) {
       if (memory.nextBeat >= totalBeats) memory.complete = true;
-      // Keep Month 0 fixed through the final orientation shot. The next chooseScene() call releases it.
-      frozenStates.add(state);
+      holdFoundingChapter(historian, state, memory);
       return scene;
     }
   }
 
   memory.complete = true;
-  frozenStates.delete(state);
+  releaseFoundingChapterHold(historian, state);
   return undefined;
 }
 
@@ -328,8 +355,8 @@ export function isFoundingChapterScene(scene: ObservationCandidate): boolean {
 }
 
 /**
- * Presentation speed still controls camera/event tempo, but tickBudget=0 prevents the opening
- * orientation from consuming Year One before the viewer knows who the communities are.
+ * tickBudget=0 is a defensive backstop for direct PresentationDirector users. In the app, autoRun
+ * is also held false so the frame accumulator cannot build a catch-up burst during the prologue.
  */
 export function installFoundingChapterPacing(): void {
   if (pacingInstalled) return;
