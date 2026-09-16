@@ -1,5 +1,6 @@
 import type { GodboxConfigInput } from './src/config';
 import { installFoundingCast } from './src/historian/FoundingCast';
+import { installFoundingCharacterMemory } from './src/historian/FoundingCharacterMemory';
 import { installFoundingChapter } from './src/historian/FoundingChapter';
 import { installFoundingContinuity } from './src/historian/FoundingContinuity';
 import { installFoundingYearOne } from './src/historian/FoundingYearOne';
@@ -20,6 +21,8 @@ installFoundingContinuity();
 installFoundingYearOne();
 // Installed outermost so a pending person introduction lands before the Year-One payoff.
 installFoundingCast();
+// Human-scale memory observes the final chosen cast scene and survives archive/resume.
+installFoundingCharacterMemory();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
