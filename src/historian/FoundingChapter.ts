@@ -171,6 +171,7 @@ export function installFoundingChapterPacing(): void {
   pacingInstalled = true;
   const targetSpeed = PresentationDirector.prototype.targetSpeed;
   PresentationDirector.prototype.targetSpeed = function foundingTargetSpeed(
+    this: PresentationDirector,
     state: Parameters<typeof targetSpeed>[0],
     observation: Parameters<typeof targetSpeed>[1],
   ): number {
@@ -190,7 +191,11 @@ export function installFoundingChapter(): void {
   installFoundingChapterPacing();
 
   const chooseScene = Historian.prototype.chooseScene;
-  Historian.prototype.chooseScene = function foundingChooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
+  Historian.prototype.chooseScene = function foundingChooseScene(
+    this: Historian,
+    state: SimulationState,
+    focusEventId?: string,
+  ): ObservationCandidate {
     if (!focusEventId) {
       const founding = chooseFoundingChapterScene(this, state);
       if (founding) return founding;
