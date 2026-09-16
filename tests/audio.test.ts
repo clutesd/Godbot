@@ -17,11 +17,11 @@ class FakeAudio {
 }
 
 const manifest: AudioManifest = {
-  version: 2,
+  version: 3,
   ambience: {
     'ambient-wilderness': [], settlement: [{ file: 'settlement.ogg' }], 'ritual-culture': [], discovery: [], conflict: [{ file: 'conflict.ogg' }], tragedy: [], industry: [], historian: [], 'major-threshold': [], ending: [],
   },
-  music: { settlement: [], urban: [], recorded: [], industrial: [], atomic: [], machine: [], interplanetary: [] },
+  music: { arrival: [], settlement: [], urban: [], recorded: [], industrial: [], atomic: [], machine: [], interplanetary: [] },
   events: {},
   voiceAssets: { witness: 'voice/witness.ogg' },
 };
@@ -109,5 +109,38 @@ describe('AudioDirector', () => {
     expect(FakeAudio.instances[2]?.loop).toBe(false);
     expect(FakeAudio.instances[2]?.volume).toBe(0.5);
     expect(FakeAudio.instances[3]?.volume).toBe(0.25);
+  });
+
+  it('lets a non-looping arrival score finish before the settlement loop begins', () => {
+    vi.stubGlobal('Audio', FakeAudio);
+    const layered: AudioManifest = {
+      ...manifest,
+      music: {
+        ...manifest.music,
+        arrival: [{ file: 'music/arrival.ogg', volume: 0.8, loop: false }],
+        settlement: [{ file: 'music/moonlit.ogg', volume: 0.5, loop: true }],
+      },
+    };
+    const director = new AudioDirector(configWith({ audio: { masterVolume: 1, musicVolume: 1, crossfadeSeconds: 1 } }), layered);
+
+    director.transitionTo('ambient-wilderness', undefined, 'arrival');
+    director.update(1);
+    const arrival = FakeAudio.instances.find((audio) => audio.src === '/audio/music/arrival.ogg')!;
+    expect(arrival.loop).toBe(false);
+    expect(arrival.volume).toBe(0.8);
+
+    director.transitionTo('settlement', undefined, 'settlement');
+    expect(FakeAudio.instances.some((audio) => audio.src === '/audio/music/moonlit.ogg')).toBe(false);
+
+    arrival.ended = true;
+    arrival.paused = true;
+    director.update(0.5);
+    const moonlit = FakeAudio.instances.find((audio) => audio.src === '/audio/music/moonlit.ogg')!;
+    expect(moonlit.loop).toBe(true);
+    expect(moonlit.paused).toBe(false);
+    expect(moonlit.volume).toBe(0.25);
+
+    director.update(0.5);
+    expect(moonlit.volume).toBe(0.5);
   });
 });
