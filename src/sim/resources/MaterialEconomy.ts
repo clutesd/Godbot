@@ -160,9 +160,15 @@ function round(value: number): number {
   return Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
 }
 
-/** Canonical typed-material availability view. Physical quantity lives in localMaterials. */
+/**
+ * Canonical typed-material availability view. Once a localMaterials key exists it is authoritative,
+ * including an explicit zero. The legacy stock is only a compatibility fallback for material kinds
+ * that have not yet crossed the Step 1B bridge; Step 1C removes that fallback.
+ */
 export function materialAmount(settlement: Settlement, kind: MaterialKind): number {
-  return Math.max(0, settlement.localMaterials[kind] ?? 0);
+  const canonical = settlement.localMaterials[kind];
+  if (canonical !== undefined) return Math.max(0, canonical);
+  return Math.max(0, settlement.materials?.stock[kind] ?? 0);
 }
 
 export function recordMaterialExtraction(
