@@ -56,8 +56,9 @@ export interface MaterialInventoryState {
 declare module '../types' {
   interface Settlement {
     /**
-     * Typed physical material ledger. Legacy `resources.wood/minerals/goods` remain compatibility
-     * aggregates until construction/trade are migrated to specific materials in Step 3.
+     * Legacy typed material ledger retained during the authority migration. Step 1B removes it as
+     * a construction/material-availability authority; localMaterials is canonical physical stock.
+     * The remaining extraction/processing/logistics writers are retired or bridged in Step 1C.
      */
     materials?: MaterialInventoryState;
   }
@@ -159,8 +160,9 @@ function round(value: number): number {
   return Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
 }
 
+/** Canonical typed-material availability view. Physical quantity lives in localMaterials. */
 export function materialAmount(settlement: Settlement, kind: MaterialKind): number {
-  return settlement.materials?.stock[kind] ?? 0;
+  return Math.max(0, settlement.localMaterials[kind] ?? 0);
 }
 
 export function recordMaterialExtraction(
