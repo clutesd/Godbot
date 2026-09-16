@@ -116,7 +116,7 @@ describe('Founding character memory 2b', () => {
     const member = firstMember(simulation);
     const person = simulation.state.people.find(candidate => candidate.id === member.personId);
     if (!person) throw new Error('Expected founder');
-    person.role = 'worker';
+    person.role = 'builder';
     introduce(simulation, historian, member);
 
     simulation.state.month = 8;
@@ -141,7 +141,7 @@ describe('Founding character memory 2b', () => {
     expect(early.statement.text).not.toContain('When I last watched');
 
     simulation.state.month = 18;
-    person.activity = person.activity === 'craft' ? 'construct' : 'craft';
+    person.activity = 'craft';
     const later = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:18`));
     expect(later.statement.observerMemory?.callbackApplied).toBe(true);
     expect(later.statement.text).toContain('I last watched');
