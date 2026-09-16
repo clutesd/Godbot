@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import type { DevelopmentProject, DevelopmentResponse } from '../src/sim/development/types';
-import { ensureMaterialInventory, type MaterialKind } from '../src/sim/resources/MaterialEconomy';
+import { emptyMaterialStock, ensureMaterialInventory, type MaterialKind } from '../src/sim/resources/MaterialEconomy';
 import {
   advanceSettlementMaterialUse,
   consumeConstructionMaterials,
@@ -57,7 +57,7 @@ function fill(settlement: Settlement, amount: number): void {
 }
 
 describe('authoritative material use', () => {
-  it('uses canonical local stock for construction even when the legacy typed ledger disagrees', () => {
+  it('uses canonical local stock for construction and spends it exactly once', () => {
     const sim = new Simulation({ seed: 'material-construction-authority', startingPopulation: 120, settlementCount: [2, 2] });
     const settlement = sim.state.settlements[0]!;
     const culture = sim.state.cultures[0]!;
@@ -67,11 +67,10 @@ describe('authoritative material use', () => {
     };
     const requirements = structureMaterialRequirements(response);
     const inventory = ensureMaterialInventory(settlement);
-    inventory.stock.lumber = 0;
-    inventory.stock.textile = 0;
     settlement.localMaterials.lumber = requirements[0]!.amount * 0.5;
     settlement.localMaterials.textile = requirements[1]!.amount * 0.5;
 
+    expect(inventory.stock).toBe(settlement.localMaterials);
     expect(materialRequirementCoverage(settlement, requirements)).toBeCloseTo(0.5, 5);
     expect(maxMaterialProgressIncrement(settlement, requirements)).toBeCloseTo(0.5, 5);
 
@@ -90,25 +89,29 @@ describe('authoritative material use', () => {
     expect(maxMaterialProgressIncrement(settlement, requirements)).toBe(0);
   });
 
-  it('bridges legacy-only stock into canonical storage without duplicating overlapping raw materials', () => {
-    const sim = new Simulation({ seed: 'material-authority-bridge', startingPopulation: 90, settlementCount: [2, 2] });
+  it('migrates legacy-only save stock without duplicating overlapping canonical raw materials', () => {
+    const sim = new Simulation({ seed: 'material-authority-save-migration', startingPopulation: 90, settlementCount: [2, 2] });
     const settlement = sim.state.settlements[0]!;
-    const residents = sim.state.people.filter(person => person.alive && person.homeId === settlement.id);
-    const inventory = ensureMaterialInventory(settlement);
-    inventory.stock['plant-fiber'] = 2;
-    inventory.stock.lumber = 3;
-    inventory.stock.timber = 7;
-    settlement.localMaterials.timber = 5;
-    sim.state.month = 6;
+    const legacy = emptyMaterialStock();
+    legacy['plant-fiber'] = 2;
+    legacy.lumber = 3;
+    legacy.timber = 7;
+    settlement.localMaterials = { timber: 5 };
+    settlement.materials = {
+      stock: legacy,
+      revision: 0,
+      lifetimeExtracted: {},
+      lifetimeConsumed: {},
+      lifetimeProduced: {},
+    };
 
-    advanceSettlementMaterialUse(sim.state, settlement, residents);
+    const inventory = ensureMaterialInventory(settlement);
 
     expect(settlement.localMaterials['plant-fiber']).toBeCloseTo(2, 5);
     expect(settlement.localMaterials.lumber).toBeCloseTo(3, 5);
-    expect(inventory.stock['plant-fiber']).toBeCloseTo(0, 5);
-    expect(inventory.stock.lumber).toBeCloseTo(0, 5);
     expect(settlement.localMaterials.timber).toBeCloseTo(5, 5);
-    expect(inventory.stock.timber).toBeCloseTo(7, 5);
+    expect(inventory.stock).toBe(settlement.localMaterials);
+    expect(inventory.stock.timber).toBeCloseTo(5, 5);
   });
 
   it('turns operating shortages into explicit pressure and never consumes twice in one month', () => {
