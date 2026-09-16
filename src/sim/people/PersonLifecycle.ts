@@ -25,9 +25,12 @@ export function killPeople(state: SimulationState, victims: readonly Person[], c
     const settlement = settlements.get(person.homeId);
     const expert = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence)[0];
     emitEvent(state, {
-      type: 'death', location: settlement?.position ?? person.position, locationId: settlement?.id, actors: [person.id], causes: [cause],
+      type: 'death', location: settlement?.position ?? person.position, locationId: settlement?.id, actors: [person.id],
+      causes: [cause, ...((cause === 'scarcity' || cause === 'exposure') && settlement?.survival?.observations[cause === 'scarcity' ? 'food' : 'cold']?.eventId
+        ? [settlement.survival.observations[cause === 'scarcity' ? 'food' : 'cold']!.eventId!] : [])],
       context: { name: person.name, age: Math.floor(person.ageMonths / 12), bornMonth: person.bornMonth, occupation: person.occupation,
         cultureId: person.cultureId, homeId: person.homeId, prestige: person.prestige,
+        ...(settlement?.survival ? { deprivation: settlement.survival.deprivation, exposureDose: settlement.survival.exposureDose } : {}),
         expertiseState: JSON.stringify(person.expertise ?? []), careerState: JSON.stringify(person.career ?? null),
         familyIds: [...person.parents, ...person.children, ...(partner ? [partner.id] : [])].join(','),
         expertise: expert?.domain ?? '', competence: expert?.competence ?? 0, teacherId: expert?.teacherId ?? '', documentary: isStatistical(state) },

@@ -163,7 +163,8 @@ export class PeopleSystem {
       person.target = { ...person.position };
       person.navigation = undefined;
     }
-    const danger = weather && (weather.wind > 0.72 || weather.floodDepth > 0.035 || (weather.kind === 'heavy-snow' && weather.intensity > 0.65));
+    const danger = weather && (weather.wind > 0.72 || weather.floodDepth > 0.035 || (weather.kind === 'heavy-snow' && weather.intensity > 0.65)
+      || weather.temperature < 0.16 && (settlement.survival?.cold.exposure ?? 0) > 0.3);
     if (danger && !waterTransport) {
       if (person.navigation?.reason !== 'sheltering from severe weather') {
         this.assignDestination(person, settlement, state, {

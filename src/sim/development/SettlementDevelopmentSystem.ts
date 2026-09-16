@@ -1,4 +1,5 @@
 import { settlementLabour } from '../people/HumanCapital';
+import { seedHash } from '../prng';
 import type { Culture, Institution, InstitutionKind, Person, ResourceStock, Settlement, SimulationState, StructurePlot, TradeRoute } from '../types';
 import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
 import { materialAmount } from '../resources/MaterialEconomy';
@@ -110,7 +111,7 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
   const scale = Math.min(4, Math.sqrt(c.population / 65));
   const backing = (kind: InstitutionKind) => { const i = institution(c, kind); return i ? i.support * 1.5 + Math.min(1, i.members / 24) : 0; };
   const pressures: ServiceSupply = {
-    housing: c.population / 17,
+    housing: c.population / 17 * (1 + (s.survival?.observations.cold?.perceived ?? 0) * 0.5),
     food: c.farmers > 0 ? scale * (0.7 + (1 - s.foodSecurity) * 1.3 + (c.fertile ? 0.25 : 0) + (s.specialization === 'agriculture' ? 0.6 : 0)) : scale * 0.3,
     trade: c.routes > 0 ? scale * (0.5 + d.tradeOrientation + c.routes * 0.35) + backing('merchant-association') : 0,
     government: scale * (0.15 + d.hierarchy * 0.35) + backing('council') + c.capitalReach * 0.6,
@@ -125,6 +126,8 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
       + (waterState ? waterState.droughtStress * 1.8 + (1 - waterState.quality) * 0.8 + waterState.floodContamination * 0.7 : 0)),
     memory: c.memory > 0.3 ? scale * Math.min(1.8, c.memory) * d.longTermOrientation : 0,
   };
+  // A documented famine makes reserve infrastructure useful even after this year's harvest recovers.
+  pressures.food = (pressures.food ?? 0) + scale * (c.culture.memory.foodScarcity?.strength ?? 0) * 0.7;
   // Household care, elders, rituals and mutual watch do not imply dedicated buildings.
   const decentralized = d.hierarchy < 0.42 && s.politicalPower.kinship >= s.politicalPower.institutional;
   const informalWater = waterState
@@ -170,7 +173,9 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   switch (need) {
     case 'housing': form = 'dwelling'; names = ['household shelter', 'household compound', 'dense housing court']; maxLevel = engineered ? 2 : 1; break;
     case 'food':
-      if (c.farmers > 2 && c.fertile && knows('crop-selection', 0.15)) {
+      if (c.farmers > 2 && c.fertile && !(c.culture.memory.foodScarcity
+        && seedHash(`${s.id}:storage:${s.development?.evaluatedMonth}:${c.culture.memory.foodScarcity.eventId}`) / 0x100000000
+          < c.culture.memory.foodScarcity.strength * 0.7) && knows('crop-selection', 0.15)) {
         form = 'field'; names = ['farmstead', 'agricultural estate', 'mechanized agricultural site'];
         if (knows('agrarian-surplus')) maxLevel = 2;
         if (maxLevel === 2 && knows('mechanical-power', 0.45) && c.artisans >= 5 && s.resources.wood > 12) maxLevel = 3;
@@ -282,6 +287,8 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   if (need === 'government') services.security = level * (d.militarism < 0.5 ? 0.5 : 0.2);
   if (need === 'trade') services.food = level * 0.25;
   const reasons = [need + '-pressure', ...(sponsor ? [sponsor.kind, sponsor.id] : ['household-cooperation']),
+    ...(need === 'food' && c.culture.memory.foodScarcity ? ['remembered-food-shortage', c.culture.memory.foodScarcity.eventId] : []),
+    ...(need === 'housing' && (s.survival?.observations.cold?.perceived ?? 0) > 0.3 ? ['thermal-exposure'] : []),
     ...(need === 'security' ? [s.conflictPressure > 0.3 ? 'frontier-conflict' : 'local-order'] : []),
     ...(need === 'food' ? [s.monthlyBalance.food > 0 ? 'agricultural-surplus' : 'food-resilience'] : []),
     ...(need === 'water' && s.development?.water ? [s.development.water.droughtStress > 0.4 ? 'drought-resilience' : s.development.water.quality < 0.55 ? 'clean-water' : 'water-security'] : []),

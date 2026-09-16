@@ -99,6 +99,7 @@ export interface RunArchiveRecord {
 }
 
 const IMPORTANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
+  'pressure-detected', 'response-attempted', 'response-resolved', 'adaptation-established',
   'ARRIVAL_DAY',
   'resource-deposit-discovered', 'resource-site-established', 'resource-site-abandoned', 'resource-depleted', 'recipe-learned', 'resource-trade',
   'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'trade-route-established',

@@ -1,4 +1,5 @@
 import { emitEvent } from './History';
+import { adaptFoodCareer, applyCold, beginFoodMonth, chooseFoodResponse, resolveSurvival, survivalHealthChange, survivalMortality } from './pressures/Survival';
 import { assertPristine, createFoundingArrival, FoundingArrivalDirector, type FoundingPod } from './founding/FoundingArrival';
 import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
 import { killPeople, observeDeaths } from './people/PersonLifecycle';
@@ -410,6 +411,22 @@ export class Simulation {
       }
     }
     this.rebuildLookupIndexes();
+    // Observe locally and choose before the shared monthly labour allocation is frozen.
+    const survivalCities = new Map(this.state.advanced.cities.map(city => [city.settlementId, city]));
+    const survivalPopulation = (s: Settlement): number => this.state.advanced.scale === 'modern-statistical'
+      ? survivalCities.get(s.id)?.population ?? 0 : this.peopleAt(s.id).length;
+    for (const settlement of this.livingSettlements()) {
+      const residents = this.peopleAt(settlement.id);
+      const population = survivalPopulation(settlement);
+      const workforce = survivalCities.get(settlement.id)?.workforce;
+      const workers = this.state.advanced.scale === 'modern-statistical'
+        ? Object.values(workforce?.effective ?? {}).reduce((sum, share) => sum + share, 0) * population
+        : residents.filter(p => p.ageMonths >= 180 && p.ageMonths < 816 && p.health > 0.25).length;
+      chooseFoodResponse(this.state, settlement, population, workers, this.dominantCulture(settlement));
+      const specialist = adaptFoodCareer(this.state, settlement, residents);
+      if (specialist) this.peopleSystem.refreshIdentity(specialist, settlement, this.state);
+      applyCold(this.state, settlement, population);
+    }
     beginLabourMonth(this.state, this.peopleBySettlement);
     this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
     this.runEconomy();
@@ -421,6 +438,8 @@ export class Simulation {
     this.knowledgeSystem.advanceMonth(this.state);
     this.transportationSystem.advanceMonth();
     this.runTrade();
+    for (const settlement of this.livingSettlements()) resolveSurvival(this.state, settlement,
+      survivalPopulation(settlement), this.dominantCulture(settlement));
     if (this.state.month % 12 === 0) this.formPartnerships();
     advanceHumanCapital(this.state);
     this.runPeople();
@@ -774,9 +793,15 @@ export class Simulation {
       const floodedWorkLoss = (settlement.structurePlots ?? []).filter(plot => !plot.development || plot.development.status === 'active')
         .reduce((sum, plot) => sum + Math.max(plot.condition < 0.65 ? 1 - plot.condition : 0,
           clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
-      const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5);
+      const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5)
+        * (1 - (settlement.survival?.cold.exposure ?? 0) * 0.15);
       const irrigation = 1 + waterEconomy(cell, settlement).irrigation * 0.12;
-      balance.food = (farmers * (0.86 + cell.fertility * 1.12) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0)) + foragers * (0.29 + cell.fertility * 0.4)) * safetyFactor * productivity.food * exposedWork - population * (0.31 + settlement.urbanization * 0.018);
+      const farmYield = (0.86 + cell.fertility * 1.12) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0));
+      const forageYield = (0.29 + cell.fertility * 0.4);
+      const foodFactor = safetyFactor * productivity.food * exposedWork;
+      const production = (farmers * farmYield + foragers * forageYield) * foodFactor;
+      const extraProduction = (settlement.survival?.reassignedLabour ?? 0) * 0.7
+        * (settlement.survival?.response?.kind === 'cultivate' ? farmYield : forageYield) * foodFactor;
       // The settlement must request actual raw-material extraction before it can consume finished stocks.
       // Legacy `resources.wood/minerals` still model broad stockpiles; the positive monthlyBalance values
       // are the physical-demand signal that activates world-resource extraction and typed material accounting.
@@ -788,16 +813,13 @@ export class Simulation {
       balance.minerals = mineralDemand - mineralUse;
       balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods - population * (0.016 + settlement.urbanization * 0.006);
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
-      for (const key of ['food', 'wood', 'minerals', 'goods', 'wealth'] as const) {
+      for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) {
         settlement.resources[key] = Math.max(0, settlement.resources[key] + balance[key]);
       }
       balance.wood += materialEconomy(settlement).delivered.timber ?? 0;
       balance.minerals += materialEconomy(settlement).delivered.stone ?? 0;
-      const foodStorage = Math.max(180, population * 6 + settlement.buildings * 24);
-      settlement.resources.food = Math.min(settlement.resources.food, foodStorage);
       settlement.monthlyBalance = balance;
-      const monthsOfFood = settlement.resources.food / Math.max(1, population * 0.31);
-      settlement.foodSecurity = clamp(monthsOfFood / 5 * 0.7 + (balance.food >= 0 ? 0.3 : 0));
+      beginFoodMonth(settlement, population, production, this.state.month, extraProduction);
       settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, population * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, population * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
       settlement.prosperity *= 1 - Math.min(0.3, materialEconomy(settlement).shortageMonths * 0.001);
       const builderCapacity = builders > 0 ? clamp(builders / Math.max(3, population * 0.055), 0.2, 1.35) : 0;
@@ -816,8 +838,8 @@ export class Simulation {
       else if (settlement.crisisMonths >= 3 && settlement.foodSecurity > 0.55) {
         this.addEvent({
           type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
-          causes: ['restored-food-stores', 'collective-adaptation'], context: { crisisMonths: settlement.crisisMonths, food: settlement.resources.food },
-          outcome: 'Rationing ended and households resumed ordinary work.', affectedPopulation: population, magnitude: clamp(settlement.crisisMonths / 18),
+          causes: ['restored-food-stores'], context: { crisisMonths: settlement.crisisMonths, food: settlement.resources.food },
+          outcome: 'Recorded food reserves recovered after a sustained shortage.', affectedPopulation: population, magnitude: clamp(settlement.crisisMonths / 18),
           significance: 0.5, tags: ['recovery', 'food'], summary: `${settlement.name} recovers from a long shortage.`,
         });
         const culture = this.dominantCulture(settlement);
@@ -827,8 +849,8 @@ export class Simulation {
       if (settlement.foodSecurity < 0.13 && this.state.month % 12 === 0) {
         this.addEvent({
           type: 'harvest-crisis', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
-          causes: ['food-deficit', cell.moisture < 0.35 ? 'dry-climate' : 'population-pressure', ...(weather && weather.snowpack > 0.5 ? ['deep-snow'] : []), ...(weather && weather.cropDamage > 0.05 ? ['storm-crop-damage'] : [])], context: { food: settlement.resources.food, balance: balance.food, snowpack: weather?.snowpack ?? 0, cropDamage: weather?.cropDamage ?? 0 },
-          outcome: 'Households rationed food and considered leaving.', affectedPopulation: population, magnitude: clamp(1 - settlement.foodSecurity), significance: 0.64,
+          causes: ['low-food-reserves', ...(balance.food < 0 ? ['negative-food-balance'] : []), ...(cell.moisture < 0.35 ? ['dry-climate'] : []), ...(weather && weather.snowpack > 0.5 ? ['deep-snow'] : []), ...(weather && weather.cropDamage > 0.05 ? ['storm-crop-damage'] : [])], context: { food: settlement.resources.food, balance: balance.food, snowpack: weather?.snowpack ?? 0, cropDamage: weather?.cropDamage ?? 0 },
+          outcome: 'Low reserves increased incentives to gather, ration, trade or leave.', affectedPopulation: population, magnitude: clamp(1 - settlement.foodSecurity), significance: 0.64,
           tags: ['scarcity', 'migration-pressure'], summary: `Food stores run dangerously low in ${settlement.name}.`,
         });
       }
@@ -864,18 +886,20 @@ export class Simulation {
         this.importanceSystem.evaluate(person, this.state, this.state.month);
       }
       const nutritionalChange = (settlement.foodSecurity - 0.46) * 0.026;
-      person.health = clamp(person.health + nutritionalChange + this.random.range(-0.008, 0.008));
+      person.health = clamp(person.health + nutritionalChange + survivalHealthChange(settlement) + this.random.range(-0.008, 0.008));
       person.energy = clamp(person.energy + (settlement.foodSecurity - 0.38) * 0.11 + this.random.range(-0.12, 0.1));
       const contribution = person.occupation === 'keeper' ? settlement.knowledge.literacy : person.occupation === 'builder' ? settlement.buildings / 30 : person.occupation === 'carrier' ? this.routesAt(settlement.id).length / 8 : 0;
       person.prestige = clamp(person.prestige * 0.9996 + contribution * 0.0008 + person.traits.ambition * 0.00005);
       this.moveAndChooseActivity(person, settlement);
       const annualMortality = ageYears < 1 ? 0.055 : ageYears < 15 ? 0.0018 : ageYears < 48 ? 0.0035 : ageYears < 63 ? 0.014 : ageYears < 76 ? 0.052 : ageYears < 90 ? 0.16 : 0.42;
       const healthHazard = Math.max(0, 0.48 - person.health) * 0.24;
-      const scarcityHazard = settlement.foodSecurity < 0.15 ? (0.15 - settlement.foodSecurity) * 0.24 : 0;
+      const scarcityHazard = survivalMortality(settlement, 'food');
+      const exposureHazard = survivalMortality(settlement, 'cold');
       const medicalProtection = this.knowledgeSystem.healthProtection(settlement);
       const pollutionHazard = settlement.pollution * 0.009;
-      if (this.random.chance((annualMortality * (1 - medicalProtection * 0.42) + healthHazard * (1 - medicalProtection * 0.28) + scarcityHazard + pollutionHazard) / 12)) {
-        deaths.push({ person, cause: scarcityHazard > healthHazard && scarcityHazard > annualMortality ? 'scarcity' : ageYears > 68 ? 'age' : 'illness' });
+      if (this.random.chance((annualMortality * (1 - medicalProtection * 0.42) + healthHazard * (1 - medicalProtection * 0.28) + scarcityHazard + exposureHazard + pollutionHazard) / 12)) {
+        deaths.push({ person, cause: exposureHazard > Math.max(scarcityHazard, healthHazard, annualMortality) ? 'exposure'
+          : scarcityHazard > healthHazard && scarcityHazard > annualMortality ? 'scarcity' : ageYears > 68 ? 'age' : 'illness' });
         continue;
       }
       if (person.sex === 'female' && ageYears >= 18 && ageYears <= 41 && person.partnerId && settlement.foodSecurity > 0.28) {
@@ -883,7 +907,8 @@ export class Simulation {
         const cell = this.state.world.cells[settlement.cellIndex];
         const carryingCapacity = 52 + (cell?.habitability ?? 0.5) * 175 + settlement.buildings * 4;
         const pressureFactor = clamp(1.25 - localPopulation / carryingCapacity, 0.05, 1);
-        const birthChance = 0.0105 * pressureFactor * popLimitFactor * (0.62 + person.health * 0.52);
+        const birthChance = 0.0105 * pressureFactor * popLimitFactor * (0.62 + person.health * 0.52)
+          * (1 - clamp((settlement.survival?.deprivation ?? 0) / 4) * 0.85);
         if (this.random.chance(birthChance)) {
           const partner = this.person(person.partnerId);
           const otherCulture = partner ? this.culture(partner.cultureId) : undefined;
@@ -905,7 +930,7 @@ export class Simulation {
         }
       }
     }
-    for (const cause of ['scarcity', 'age', 'illness', 'displacement']) killPeople(this.state, deaths.filter(d => d.cause === cause).map(d => d.person), cause);
+    for (const cause of ['scarcity', 'exposure', 'age', 'illness', 'displacement']) killPeople(this.state, deaths.filter(d => d.cause === cause).map(d => d.person), cause);
     this.state.people.push(...newborns);
     for (const child of newborns) this.indexPerson(child);
     if (this.state.month % 12 === 0) this.state.notableFigures = this.importanceSystem.roster(this.state.people);
@@ -1407,7 +1432,8 @@ export class Simulation {
       const memory = culture.memory;
       const settlements = this.livingSettlements().filter((settlement) => settlement.cultureShares[culture.id]);
       if (settlements.length === 0) {
-        for (const key of Object.keys(memory) as Array<keyof typeof memory>) memory[key] *= 0.76;
+        for (const key of ['tradeSuccess', 'collectiveSuccess', 'frontierViolence', 'militarySuccess'] as const) memory[key] *= 0.76;
+        if (memory.foodScarcity) memory.foodScarcity.strength *= 0.98;
         continue;
       }
       const prosperity = mean(settlements.map((settlement) => settlement.prosperity));
@@ -1428,7 +1454,8 @@ export class Simulation {
       culture.dimensions.hierarchy = clamp(culture.dimensions.hierarchy + (powerConcentration - 0.16) * 0.003);
       culture.dimensions.religiousTendency = clamp(culture.dimensions.religiousTendency + (templePrestige - 0.42) * 0.0015);
       culture.dimensions.longTermOrientation = clamp(culture.dimensions.longTermOrientation + (knowledge - 0.38) * 0.002 + memory.collectiveSuccess * 0.0006);
-      for (const key of Object.keys(memory) as Array<keyof typeof memory>) memory[key] *= 0.76;
+      for (const key of ['tradeSuccess', 'collectiveSuccess', 'frontierViolence', 'militarySuccess'] as const) memory[key] *= 0.76;
+      if (memory.foodScarcity) memory.foodScarcity.strength *= 0.98;
       const totalShift = Object.keys(before).reduce((sum, key) => sum + Math.abs(before[key as keyof CultureDimensions] - culture.dimensions[key as keyof CultureDimensions]), 0);
       if (this.state.month % 240 === 0 && totalShift > 0.002) {
         const largestShift = (Object.keys(before) as Array<keyof CultureDimensions>).sort((a, b) => Math.abs(before[b] - culture.dimensions[b]) - Math.abs(before[a] - culture.dimensions[a]))[0];

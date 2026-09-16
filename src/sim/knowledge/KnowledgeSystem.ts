@@ -342,8 +342,8 @@ export class KnowledgeSystem {
     for (const domain of DOMAINS) {
       const specialists = this.domainWorkers(settlement, domain);
       const institutionalSupport = institutions.filter((institution) => this.institutionSupportsDomain(institution, domain)).reduce((sum, institution) => sum + institution.support * institution.prestige, 0);
-      const pressure = domain === 'agriculture' ? (1 - settlement.foodSecurity) + settlement.climateStress
-        : domain === 'medicine' ? settlement.pollution + settlement.conflictPressure * 0.5
+      const pressure = domain === 'agriculture' ? (settlement.survival?.observations.food?.perceived ?? (1 - settlement.foodSecurity)) + settlement.climateStress
+        : domain === 'medicine' ? settlement.pollution + settlement.conflictPressure * 0.5 + Math.min(1, (settlement.survival?.deprivation ?? 0) / 4)
           : domain === 'transport' || domain === 'navigation' ? routes * 0.08
             : domain === 'materials' || domain === 'energy' ? settlement.conflictPressure * 0.35
               : domain === 'records' ? Math.max(0, settlementRepresentedPopulation(state, settlement.id, people) / 80 - 0.4) : 0;

@@ -1,5 +1,6 @@
 import type { KnowledgeDomain, Occupation, Person, Settlement, SimulationState } from '../types';
 import { isStatistical, settlementRepresentedPopulation } from '../Population';
+import { allocateSurvivalLabour } from '../pressures/Survival';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 export const OCCUPATIONS: readonly Occupation[] = ['farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper', 'child', 'elder'];
@@ -31,6 +32,7 @@ export interface WorkforceProfile {
   experts: Partial<Record<KnowledgeDomain, number>>;
 }
 export interface LabourSummary {
+  survivalReassigned?: number;
   month: number;
   population: number;
   infrastructure: number;
@@ -113,7 +115,11 @@ const monthlySummaries = new WeakMap<SimulationState, { month: number; summaries
 export function beginLabourMonth(state: SimulationState, residents: ReadonlyMap<string, readonly Person[]>): void {
   monthlySummaries.delete(state);
   const summaries = new Map<string, LabourSummary>();
-  for (const settlement of state.settlements) if (settlement.alive) summaries.set(settlement.id, settlementLabour(state, settlement, residents.get(settlement.id) ?? []));
+  for (const settlement of state.settlements) if (settlement.alive) {
+    const summary = settlementLabour(state, settlement, residents.get(settlement.id) ?? []);
+    if (settlement.survival) settlement.survival.reassignedLabour = summary.survivalReassigned ?? 0;
+    summaries.set(settlement.id, summary);
+  }
   monthlySummaries.set(state, { month: state.month, summaries });
 }
 export function invalidateLabour(state: SimulationState): void { monthlySummaries.delete(state); }
@@ -151,7 +157,7 @@ function reserveCivilianLabour(state: SimulationState, settlement: Settlement, s
     summary.industry = (summary.economy.artisan ?? 0) * 0.5;
     summary.economy.artisan = (summary.economy.artisan ?? 0) * 0.5;
   }
-  return summary;
+  return allocateSurvivalLabour(settlement, summary);
 }
 
 /** Annual review is bounded; ordinary birthdays retain both occupation and workplace. */

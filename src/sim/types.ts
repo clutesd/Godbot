@@ -1,4 +1,5 @@
 import type { WorkforceProfile } from './people/HumanCapital';
+import type { SurvivalState } from './pressures/types';
 import type { FoundingArrivalState } from './founding/FoundingArrival';
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
@@ -588,6 +589,8 @@ export interface IndustrialState {
 }
 
 export interface Settlement {
+  /** Optional for archives predating consequence-driven survival. */
+  survival?: SurvivalState;
   foundingPodId?: string;
   id: string;
   development?: SettlementDevelopment;
@@ -693,6 +696,7 @@ export interface Culture {
   dimensions: CultureDimensions;
   style: CultureStyle;
   memory: {
+    foodScarcity?: { strength: number; eventId: string };
     tradeSuccess: number;
     collectiveSuccess: number;
     frontierViolence: number;
@@ -970,6 +974,10 @@ export interface AdvancedCivilizationState {
 }
 
 export type HistoricalEventType =
+  | 'pressure-detected'
+  | 'response-attempted'
+  | 'response-resolved'
+  | 'adaptation-established'
   | 'ARRIVAL_DAY'
   | 'world-awakening'
   | 'birth'

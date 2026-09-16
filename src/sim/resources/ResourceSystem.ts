@@ -56,7 +56,7 @@ export class ResourceSystem {
       const economy = materialEconomy(s);
       const people = peopleByHome.get(s.id) ?? [];
       const budget: LabourBudget = resourceLabourBudget(state, s, people);
-      economy.demand = { timber: Math.max(12, s.buildings * 3), stone: Math.max(6, s.buildings) };
+      economy.demand = { timber: Math.max(12, s.buildings * 3, (s.survival?.cold.fuelNeed ?? 0) * 4), stone: Math.max(6, s.buildings) };
       economy.energyDemand = 0; economy.energySupplied = 0; economy.labourUsed = 0;
       economy.delivered = {};
       this.deliver(state, s, deposits);

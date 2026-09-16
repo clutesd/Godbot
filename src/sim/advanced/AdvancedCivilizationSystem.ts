@@ -1,5 +1,6 @@
 import { killPeople } from '../people/PersonLifecycle';
 import { workforceProfile } from '../people/HumanCapital';
+import { survivalMortality } from '../pressures/Survival';
 import { representedPopulation, settlementRepresentedPopulation } from '../Population';
 export { representedPopulation, settlementRepresentedPopulation } from '../Population';
 import type { GodboxConfig } from '../../config';
@@ -140,7 +141,11 @@ export class AdvancedCivilizationSystem {
       Math.max(25_000, landCapacity * (1 + advanced.sectors.industry * 18 + advanced.sectors.energy * 10)));
     const annualGrowth = clamp(0.002 + foodSecurity * 0.012 + health * 0.01 - pressure * 0.018 - advanced.governance.fragmentation * 0.006, -0.035, 0.024);
     const logistic = Math.max(-1, 1 - advanced.representedPopulation / carryingCapacity);
-    advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 + annualGrowth * logistic / 12));
+    const cities = new Map(advanced.cities.map(city => [city.settlementId, city]));
+    const deprivationHazard = state.settlements.reduce((sum, s) => sum + (s.alive ? survivalMortality(s) * (cities.get(s.id)?.population ?? 0) : 0), 0)
+      / Math.max(1, advanced.representedPopulation);
+    // Mortality never changes sign above carrying capacity and is charged to represented citizens once.
+    advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 + (annualGrowth * logistic - deprivationHazard) / 12));
     const elderTarget = clamp(0.1 + health * 0.16, 0.07, 0.3);
     const childTarget = clamp(0.3 - health * 0.12 - advanced.sectors.information * 0.04, 0.12, 0.34);
     advanced.cohorts.elders += (elderTarget - advanced.cohorts.elders) * 0.002;
@@ -160,7 +165,8 @@ export class AdvancedCivilizationSystem {
       const local = people.length;
       const old = previous.get(settlement.id);
       const share = old && priorTotal > 0 ? old.population / priorTotal : 0;
-      const health = clamp(0.35 + this.knowledgeAt(settlement, 'modern-medicine') * 0.42 + settlement.foodSecurity * 0.18 - settlement.pollution * 0.2);
+      const health = clamp(0.35 + this.knowledgeAt(settlement, 'modern-medicine') * 0.42 + settlement.foodSecurity * 0.18 - settlement.pollution * 0.2
+        - Math.min(1, (settlement.survival?.deprivation ?? 0) / 6) * 0.3 - (settlement.survival?.cold.exposure ?? 0) * 0.05);
       const targetPopulation = state.advanced.scale === 'modern-statistical' ? state.advanced.representedPopulation * share : local;
       return {
         settlementId: settlement.id,
