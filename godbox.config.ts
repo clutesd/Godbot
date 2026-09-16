@@ -1,4 +1,5 @@
 import type { GodboxConfigInput } from './src/config';
+import { installFoundingCast } from './src/historian/FoundingCast';
 import { installFoundingChapter } from './src/historian/FoundingChapter';
 import { installFoundingContinuity } from './src/historian/FoundingContinuity';
 import { installFoundingYearOne } from './src/historian/FoundingYearOne';
@@ -17,6 +18,8 @@ installWatcherHistorian();
 installFoundingChapter();
 installFoundingContinuity();
 installFoundingYearOne();
+// Installed outermost so a pending person introduction lands before the Year-One payoff.
+installFoundingCast();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
