@@ -3,6 +3,7 @@ import { GODBOX_CONFIG } from '../godbox.config';
 import { AudioDirector } from './audio/AudioDirector';
 import type { AudioEra } from './audio/audio.manifest';
 import { configWith } from './config';
+import { restoreFoundingCharacterMemory } from './historian/FoundingCharacterMemory';
 import { Historian } from './historian/Historian';
 import { PresentationDirector, type PresentationTelemetry } from './historian/PresentationDirector';
 import {
@@ -333,6 +334,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
 
   const historian = new Historian(simulation.config, { observationNumber: identity.observationNumber,
     crossRunContext: computeCrossRunContext(simulation.state.arrival ? [] : previousRuns) });
+  if (resumable) restoreFoundingCharacterMemory(historian, simulation.state, resumable.historianStatements);
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
