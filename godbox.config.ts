@@ -1,5 +1,6 @@
 import type { GodboxConfigInput } from './src/config';
 import { installFoundingCast } from './src/historian/FoundingCast';
+import { installFoundingCharacterArcs } from './src/historian/FoundingCharacterArc';
 import { installFoundingCharacterMemory } from './src/historian/FoundingCharacterMemory';
 import { installFoundingChapter } from './src/historian/FoundingChapter';
 import { installFoundingContinuity } from './src/historian/FoundingContinuity';
@@ -23,6 +24,8 @@ installFoundingYearOne();
 installFoundingCast();
 // Human-scale memory observes the final chosen cast scene and survives archive/resume.
 installFoundingCharacterMemory();
+// Life arcs sit outermost: they synthesize remembered changes and close watched lives without altering them.
+installFoundingCharacterArcs();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
