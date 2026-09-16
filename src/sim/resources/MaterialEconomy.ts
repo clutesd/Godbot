@@ -2,7 +2,7 @@ import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
 import type { Person, Settlement, SimulationState } from '../types';
-import { addMaterial, takeMaterial } from './Inventory';
+import { addMaterial, publishBulkStocks, takeMaterial } from './Inventory';
 
 export const RAW_MATERIAL_KINDS = [
   'timber',
@@ -158,6 +158,7 @@ function round(value: number): number {
 function attachCanonicalStock(settlement: Settlement, inventory: MaterialInventoryState): void {
   const canonical = settlement.localMaterials;
   const legacy = inventory.stock;
+  let migrated = false;
   if (legacy !== canonical) {
     const canonicalHasPhysicalStock = Object.values(canonical).some((amount) => Number.isFinite(amount) && amount > EPSILON);
     const migrate = canonicalHasPhysicalStock ? LEGACY_ONLY_MATERIAL_KINDS : MATERIAL_KINDS;
@@ -165,10 +166,12 @@ function attachCanonicalStock(settlement: Settlement, inventory: MaterialInvento
       const amount = Math.max(0, legacy?.[kind] ?? 0);
       if (amount <= EPSILON) continue;
       canonical[kind] = round((canonical[kind] ?? 0) + amount);
+      migrated = true;
     }
   }
   for (const kind of MATERIAL_KINDS) canonical[kind] = round(canonical[kind] ?? 0);
   inventory.stock = canonical as MaterialStock;
+  if (migrated) publishBulkStocks(settlement);
 }
 
 export function ensureMaterialInventory(settlement: Settlement): MaterialInventoryState {
