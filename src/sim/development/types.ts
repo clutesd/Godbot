@@ -7,6 +7,58 @@ export type StructureForm = 'dwelling' | 'field' | 'store' | 'gathering' | 'hall
 export type StructureMaterial = 'earth' | 'timber' | 'masonry' | 'ceramic' | 'metal';
 export type ServiceSupply = Partial<Record<SettlementNeed, number>>;
 
+export const DEVELOPMENT_BLOCK_CODES = [
+  'response-unavailable',
+  'no-builders',
+  'insufficient-food',
+  'insufficient-wood',
+  'insufficient-minerals',
+  'insufficient-goods',
+  'insufficient-wealth',
+  'fuel-reserve',
+  'insufficient-structural-material',
+  'insufficient-processed-material',
+  'invalid-existing-plot',
+  'no-valid-plot',
+] as const;
+export type DevelopmentBlockCode = typeof DEVELOPMENT_BLOCK_CODES[number];
+
+/** One concrete reason a candidate structure could not begin during an annual development attempt. */
+export interface DevelopmentBlocker {
+  code: DevelopmentBlockCode;
+  /** Generic budget channel when the blocker is a settlement resource shortage. */
+  resource?: keyof ResourceStock;
+  /** Physical material/component or requirement id when the blocker is material-specific. */
+  material?: string;
+  available?: number;
+  required?: number;
+  /** Compact deterministic context such as acceptable material substitutions or a plot id. */
+  detail?: string;
+}
+
+/** Diagnostic trace for one unmet need considered during the annual project-start decision. */
+export interface DevelopmentCandidateDecision {
+  need: SettlementNeed;
+  desiredLevel: number;
+  responseName?: string;
+  responseLevel?: number;
+  action?: StructureHistoryEntry['action'];
+  plotId?: string;
+  blockers: DevelopmentBlocker[];
+}
+
+/**
+ * The most recent annual project-start decision. This is observational state only: it records the
+ * exact gates already used by SettlementDevelopmentSystem and must never introduce a new gate.
+ */
+export interface DevelopmentAttemptDecision {
+  month: number;
+  outcome: 'started' | 'blocked' | 'no-pressure';
+  selectedNeed?: SettlementNeed;
+  plotId?: string;
+  candidates: DevelopmentCandidateDecision[];
+}
+
 export interface SettlementWaterState {
   /** Simulation month in which this state was last applied. */
   evaluatedMonth: number;
@@ -94,5 +146,7 @@ export interface SettlementDevelopment {
   revision: number;
   /** Dynamic coupling between physical hydrology and civilization. Optional for old archives. */
   water?: SettlementWaterState;
+  /** Latest annual explanation of why construction started or why every candidate was blocked. */
+  lastAttempt?: DevelopmentAttemptDecision;
   project?: DevelopmentProject;
 }
