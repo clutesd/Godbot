@@ -10,6 +10,7 @@ interface FoundingChapterMemory {
 
 const memories = new WeakMap<Historian, FoundingChapterMemory>();
 let pacingInstalled = false;
+let chapterInstalled = false;
 
 /**
  * The founding handoff is deliberately short-lived. If an observation is resumed well after the
@@ -66,7 +67,7 @@ function overviewScene(historian: Historian, state: SimulationState): Observatio
   if (!arrival || !event) return undefined;
   const settlements = arrival.pods
     .map(pod => state.settlements.find(settlement => settlement.id === pod.settlementId))
-    .filter((settlement): settlement is NonNullable<typeof settlement> => Boolean(settlement));
+    .filter((settlement): settlement is SimulationState['settlements'][number] => Boolean(settlement));
   const population = Number(event.context.population ?? arrival.pods.reduce((sum, pod) => sum + pod.population, 0));
   const names = arrival.pods.map(pod => pod.name);
   const statement = {
@@ -175,5 +176,25 @@ export function installFoundingChapterPacing(): void {
   ): number {
     if (observation.eventType === 'ARRIVAL_DAY') return FOUNDING_CHAPTER_MONTHS_PER_SECOND;
     return targetSpeed.call(this, state, observation);
+  };
+}
+
+/**
+ * Installs the one-time founding chapter over the already-installed Watcher Historian. A focused
+ * major event is still allowed to interrupt; otherwise the opening six shots run before normal
+ * Historian scene rotation begins.
+ */
+export function installFoundingChapter(): void {
+  if (chapterInstalled) return;
+  chapterInstalled = true;
+  installFoundingChapterPacing();
+
+  const chooseScene = Historian.prototype.chooseScene;
+  Historian.prototype.chooseScene = function foundingChooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
+    if (!focusEventId) {
+      const founding = chooseFoundingChapterScene(this, state);
+      if (founding) return founding;
+    }
+    return chooseScene.call(this, state, focusEventId);
   };
 }
