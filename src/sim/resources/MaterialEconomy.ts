@@ -2,7 +2,7 @@ import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
 import type { Person, Settlement, SimulationState } from '../types';
-import { addMaterial, publishBulkStocks, takeMaterial } from './Inventory';
+import { addMaterial, takeMaterial } from './Inventory';
 
 export const RAW_MATERIAL_KINDS = [
   'timber',
@@ -172,7 +172,6 @@ function attachCanonicalStock(settlement: Settlement, inventory: MaterialInvento
   }
   for (const kind of MATERIAL_KINDS) canonical[kind] = round(canonical[kind] ?? 0);
   inventory.stock = canonical as MaterialStock;
-  publishBulkStocks(settlement);
 }
 
 export function ensureMaterialInventory(settlement: Settlement): MaterialInventoryState {
