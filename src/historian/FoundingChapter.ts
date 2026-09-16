@@ -107,9 +107,24 @@ function finitePopulation(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function differingStartingConditions(baseline: FoundingChapterBaseline): boolean {
+  const signatures = baseline.communities.map(community => JSON.stringify({
+    domains: community.domains,
+    knowledge: community.knowledge,
+    supplies: community.supplies,
+    biome: community.site.biome,
+    landform: community.site.landform,
+    fertility: community.site.fertility,
+    woodland: community.site.woodland,
+    waterAccess: community.site.waterAccess,
+  }));
+  return new Set(signatures).size > 1;
+}
+
 /**
  * Stable Year-Zero reference data for both 1a and the later 1b continuity layer. The snapshot is
  * deliberately cloned and frozen so later simulation mutations cannot rewrite what "arrival" meant.
+ * It is reconstructed from the permanent arrival record and world, not from settlement survival.
  */
 export function foundingChapterBaseline(state: SimulationState): FoundingChapterBaseline | undefined {
   const arrival = state.arrival;
@@ -118,16 +133,16 @@ export function foundingChapterBaseline(state: SimulationState): FoundingChapter
 
   const communities = arrival.pods.flatMap((pod, order): FoundingCommunityBaseline[] => {
     if (!pod.settlementId) return [];
-    const settlement = state.settlements.find(candidate => candidate.id === pod.settlementId);
     const cell = state.world.cells[pod.cellIndex];
-    if (!settlement || !cell) return [];
+    if (!cell) return [];
+    const settlement = state.settlements.find(candidate => candidate.id === pod.settlementId);
     return [Object.freeze({
       order,
       podId: pod.id,
       groupId: pod.groupId,
       podName: pod.name,
-      settlementId: settlement.id,
-      settlementName: settlement.name,
+      settlementId: pod.settlementId,
+      settlementName: settlement?.name ?? `${pod.name} Landing`,
       position: Object.freeze({ x: pod.position.x, z: pod.position.z }),
       founderIds: Object.freeze([...pod.personIds]),
       founderCount: pod.population,
@@ -174,16 +189,26 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   const resolvedCount = baseline.communities.length;
   const coverage = resolvedCount === count
     ? `${count} separated landing communities`
-    : `${resolvedCount} currently traceable landing communities from ${count} recorded vessels`;
+    : `${resolvedCount} traceable landing communities from ${count} recorded vessels`;
+  const contrast = differingStartingConditions(baseline)
+    ? 'The landings did not begin identically: knowledge, skills, supplies, or terrain differed between them.'
+    : 'Their common beginning is recorded before later history begins to separate them.';
   const statement = {
     id: `founding-overview-${event.id}`,
     month: state.month,
-    text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. No landing carried the whole inheritance; each began with a different combination of knowledge, skills, supplies, and terrain.`,
+    text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. ${contrast}`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
-    sourceEntityIds: baseline.communities.map(community => community.settlementId),
+    sourceEntityIds: baseline.communities
+      .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
+      .map(community => community.settlementId),
     sourceArchiveIds: [],
-    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: baseline.communities.map(community => community.settlementId) },
+    claims: {
+      eventType: 'ARRIVAL_DAY' as const,
+      entityIds: baseline.communities
+        .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
+        .map(community => community.settlementId),
+    },
   };
   return rememberStatement(historian, {
     id: `founding:overview:${event.id}`,
@@ -200,8 +225,13 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   }, state);
 }
 
-function communityScene(historian: Historian, state: SimulationState, community: FoundingCommunityBaseline): ObservationCandidate | undefined {
-  const event = state.history.find(candidate => candidate.type === 'ARRIVAL_DAY');
+function communityScene(
+  historian: Historian,
+  state: SimulationState,
+  baseline: FoundingChapterBaseline,
+  community: FoundingCommunityBaseline,
+): ObservationCandidate | undefined {
+  const event = state.history.find(candidate => candidate.id === baseline.eventId && candidate.type === 'ARRIVAL_DAY');
   const settlement = state.settlements.find(candidate => candidate.id === community.settlementId);
   if (!event || !settlement) return undefined;
 
@@ -210,7 +240,7 @@ function communityScene(historian: Historian, state: SimulationState, community:
   const statement = {
     id: `founding-community-${community.podId}`,
     month: state.month,
-    text: `${community.settlementName} began with ${community.founderCount.toLocaleString()} founders from ${community.podName}. Their inherited strengths were ${list(domains)}; they carried ${list(knowledge)} into a ${readable(community.site.biome)} landing site. This was one of ${baselineCount(state)} communities beginning from different conditions.`,
+    text: `${community.settlementName} began with ${community.founderCount.toLocaleString()} founders from ${community.podName}. Their inherited strengths were ${list(domains)}; they carried ${list(knowledge)} into a ${readable(community.site.biome)} landing site. This was one of ${baseline.expectedCommunityCount} communities beginning from different conditions.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds: [community.settlementId],
@@ -230,10 +260,6 @@ function communityScene(historian: Historian, state: SimulationState, community:
     breakdown: scoreBreakdown(0.72),
     event,
   }, state);
-}
-
-function baselineCount(state: SimulationState): number {
-  return state.arrival?.pods.length ?? 0;
 }
 
 export function foundingChapterProgress(historian: Historian, state: SimulationState): FoundingChapterProgress {
@@ -278,7 +304,7 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
     memory.nextBeat += 1;
     const scene = beat === 0
       ? overviewScene(historian, state, memory.baseline)
-      : communityScene(historian, state, memory.baseline.communities[beat - 1]!);
+      : communityScene(historian, state, memory.baseline, memory.baseline.communities[beat - 1]!);
     if (scene) {
       if (memory.nextBeat >= totalBeats) memory.complete = true;
       return scene;
