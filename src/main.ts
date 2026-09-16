@@ -167,6 +167,7 @@ syncAudioToggle();
 const monthNames = ['LATE WINTER', 'EARLY SPRING', 'SPRING', 'LATE SPRING', 'EARLY SUMMER', 'SUMMER', 'LATE SUMMER', 'EARLY AUTUMN', 'AUTUMN', 'LATE AUTUMN', 'EARLY WINTER', 'WINTER'];
 
 function audioEra(state: SimulationState): AudioEra {
+  if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') return 'arrival';
   if (state.advanced.space.selfSustainingBodies >= 2) return 'interplanetary';
   if (state.advanced.machine.capability >= 0.7) return 'machine';
   if (state.advanced.atomic.thresholdMonth !== undefined) return 'atomic';
@@ -422,7 +423,11 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     if (arrivalCaptionElement.textContent !== caption.text) arrivalCaptionElement.textContent = caption.text;
     arrivalCaptionElement.style.opacity = String(caption.opacity);
     arrivalCaptionElement.classList.toggle('arrival-title', caption.text === 'ARRIVAL DAY');
-    if (!arrivalWasRunning && simulation.historyRunning) { arrivalWasRunning = true; void persist(); }
+    if (!arrivalWasRunning && simulation.historyRunning) {
+      arrivalWasRunning = true;
+      audio.transitionMusicTo(audioEra(simulation.state));
+      void persist();
+    }
     const monthsPerSecond = presentation.update(deltaSeconds, simulation.state, view.observation);
     const tickDuration = 1 / Math.max(0.1, monthsPerSecond);
     if (simulation.config.autoRun && !runEnded && !wasArriving && !arrivalPaused) {
