@@ -53,11 +53,11 @@ function provisionModern(settlement: Settlement): void {
 
 function fill(settlement: Settlement, amount: number): void {
   const inventory = ensureMaterialInventory(settlement);
-  for (const kind of Object.keys(inventory.stock) as MaterialKind[]) inventory.stock[kind] = amount;
+  for (const kind of Object.keys(inventory.stock) as MaterialKind[]) settlement.localMaterials[kind] = amount;
 }
 
 describe('authoritative material use', () => {
-  it('freezes a physical construction bill and consumes exactly the progress-supported share', () => {
+  it('uses canonical local stock for construction even when the legacy typed ledger disagrees', () => {
     const sim = new Simulation({ seed: 'material-construction-authority', startingPopulation: 120, settlementCount: [2, 2] });
     const settlement = sim.state.settlements[0]!;
     const culture = sim.state.cultures[0]!;
@@ -67,8 +67,10 @@ describe('authoritative material use', () => {
     };
     const requirements = structureMaterialRequirements(response);
     const inventory = ensureMaterialInventory(settlement);
-    inventory.stock.lumber = requirements[0]!.amount * 0.5;
-    inventory.stock.textile = requirements[1]!.amount * 0.5;
+    inventory.stock.lumber = 0;
+    inventory.stock.textile = 0;
+    settlement.localMaterials.lumber = requirements[0]!.amount * 0.5;
+    settlement.localMaterials.textile = requirements[1]!.amount * 0.5;
 
     expect(materialRequirementCoverage(settlement, requirements)).toBeCloseTo(0.5, 5);
     expect(maxMaterialProgressIncrement(settlement, requirements)).toBeCloseTo(0.5, 5);
@@ -79,11 +81,34 @@ describe('authoritative material use', () => {
     };
     consumeConstructionMaterials(settlement, project, 0.5, 1);
 
-    expect(inventory.stock.lumber).toBeCloseTo(0, 5);
-    expect(inventory.stock.textile).toBeCloseTo(0, 5);
+    expect(settlement.localMaterials.lumber).toBeCloseTo(0, 5);
+    expect(settlement.localMaterials.textile).toBeCloseTo(0, 5);
+    expect(inventory.stock.lumber).toBe(0);
+    expect(inventory.stock.textile).toBe(0);
     expect(project.materialSpent?.lumber).toBeCloseTo(requirements[0]!.amount * 0.5, 5);
     expect(project.materialSpent?.textile).toBeCloseTo(requirements[1]!.amount * 0.5, 5);
     expect(maxMaterialProgressIncrement(settlement, requirements)).toBe(0);
+  });
+
+  it('bridges legacy-only stock into canonical storage without duplicating overlapping raw materials', () => {
+    const sim = new Simulation({ seed: 'material-authority-bridge', startingPopulation: 90, settlementCount: [2, 2] });
+    const settlement = sim.state.settlements[0]!;
+    const residents = sim.state.people.filter(person => person.alive && person.homeId === settlement.id);
+    const inventory = ensureMaterialInventory(settlement);
+    inventory.stock['plant-fiber'] = 2;
+    inventory.stock.lumber = 3;
+    inventory.stock.timber = 7;
+    settlement.localMaterials.timber = 5;
+    sim.state.month = 6;
+
+    advanceSettlementMaterialUse(sim.state, settlement, residents);
+
+    expect(settlement.localMaterials['plant-fiber']).toBeCloseTo(2, 5);
+    expect(settlement.localMaterials.lumber).toBeCloseTo(3, 5);
+    expect(inventory.stock['plant-fiber']).toBeCloseTo(0, 5);
+    expect(inventory.stock.lumber).toBeCloseTo(0, 5);
+    expect(settlement.localMaterials.timber).toBeCloseTo(5, 5);
+    expect(inventory.stock.timber).toBeCloseTo(7, 5);
   });
 
   it('turns operating shortages into explicit pressure and never consumes twice in one month', () => {
@@ -115,7 +140,7 @@ describe('authoritative material use', () => {
     expect(settlement.materials!.revision).toBe(revision);
   });
 
-  it('consumes stocked operating materials while preserving full readiness', () => {
+  it('consumes canonical stocked operating materials while preserving full readiness', () => {
     const sim = new Simulation({ seed: 'material-operating-supplied', startingPopulation: 180, settlementCount: [3, 3] });
     const settlement = sim.state.settlements[0]!;
     const residents = sim.state.people.filter(person => person.alive && person.homeId === settlement.id);
@@ -128,16 +153,16 @@ describe('authoritative material use', () => {
     settlement.conflictPressure = 0.6;
     settlement.politicalPower.military = 0.65;
     sim.state.month = 24;
-    const steelBefore = settlement.materials!.stock.steel;
-    const coalBefore = settlement.materials!.stock.coal;
+    const steelBefore = settlement.localMaterials.steel!;
+    const coalBefore = settlement.localMaterials.coal!;
 
     const state = advanceSettlementMaterialUse(sim.state, settlement, residents);
 
     expect(state.readiness.infrastructure).toBeCloseTo(1);
     expect(state.readiness.industry).toBeCloseTo(1);
     expect(state.readiness.military).toBeCloseTo(1);
-    expect(settlement.materials!.stock.steel).toBeLessThan(steelBefore);
-    expect(settlement.materials!.stock.coal).toBeLessThan(coalBefore);
+    expect(settlement.localMaterials.steel).toBeLessThan(steelBefore);
+    expect(settlement.localMaterials.coal).toBeLessThan(coalBefore);
     expect(settlement.resourceScarcityPressure).toBe(0);
   });
 

@@ -6,6 +6,7 @@ import {
   type MaterialFlowSnapshot,
   type MaterialKind,
 } from './MaterialEconomy';
+import { addMaterial, takeMaterial } from './Inventory';
 
 export type MaterialUseDomain = 'infrastructure' | 'industry' | 'healthcare' | 'military';
 
@@ -34,7 +35,7 @@ export interface MaterialUseState {
 
 declare module '../types' {
   interface Settlement {
-    /** Current operating material sufficiency, derived from real typed stocks each month. */
+    /** Current operating material sufficiency, derived from canonical local material stocks each month. */
     materialUse?: MaterialUseState;
     /** 0..1 aggregate physical-input shortage signal for future trade/migration/politics systems. */
     resourceScarcityPressure?: number;
@@ -55,6 +56,36 @@ const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 const round = (value: number): number => Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
 const zeroPressure = (): MaterialPressureState => ({ demand: 0, supplied: 0, unmet: 0, coverage: 1, pressure: 0 });
 
+/**
+ * Materials still produced only by the legacy typed extraction/processing graph. Overlapping raw
+ * stocks already owned by ResourceSystem (timber, stone and ores) are intentionally excluded so
+ * Step 1B does not double-count parallel extraction while Step 1C removes the old writers.
+ */
+const LEGACY_ONLY_MATERIALS: readonly MaterialKind[] = [
+  'medicinal-flora', 'plant-fiber', 'clay', 'coal', 'uranium-ore',
+  'lumber', 'brick', 'copper', 'tin', 'iron', 'steel', 'medicine', 'textile',
+] as const;
+
+/**
+ * Temporary Step 1B bridge. Move legacy-only physical stock into localMaterials and leave any
+ * overflow in the legacy ledger rather than destroying it. This keeps localMaterials authoritative
+ * for consumers without duplicating stocks already gathered by the modern ResourceSystem.
+ */
+function bridgeLegacyMaterialStock(settlement: Settlement): void {
+  const inventory = settlement.materials;
+  if (!inventory) return;
+  let moved = false;
+  for (const kind of LEGACY_ONLY_MATERIALS) {
+    const legacy = Math.max(0, inventory.stock[kind] ?? 0);
+    if (legacy <= EPSILON) continue;
+    const accepted = addMaterial(settlement, kind, legacy);
+    if (accepted <= EPSILON) continue;
+    inventory.stock[kind] = round(legacy - accepted);
+    moved = true;
+  }
+  if (moved) inventory.revision += 1;
+}
+
 function flowForMonth(settlement: Settlement, month: number): MaterialFlowSnapshot {
   const inventory = ensureMaterialInventory(settlement);
   if (inventory.lastFlow?.month === month) return inventory.lastFlow;
@@ -62,13 +93,15 @@ function flowForMonth(settlement: Settlement, month: number): MaterialFlowSnapsh
   return inventory.lastFlow;
 }
 
-/** Single conservation-safe path for non-recipe material consumption. */
+/**
+ * Single conservation-safe path for typed non-recipe consumption. Physical quantity is owned by
+ * localMaterials/Inventory.ts; the legacy typed inventory only retains flow/lifetime telemetry.
+ */
 export function consumeMaterial(settlement: Settlement, kind: MaterialKind, requested: number, month: number): number {
   if (!Number.isFinite(requested) || requested <= EPSILON) return 0;
-  const inventory = ensureMaterialInventory(settlement);
-  const supplied = round(Math.min(requested, inventory.stock[kind]));
+  const supplied = round(takeMaterial(settlement, kind, requested));
   if (supplied <= EPSILON) return 0;
-  inventory.stock[kind] = round(inventory.stock[kind] - supplied);
+  const inventory = ensureMaterialInventory(settlement);
   inventory.lifetimeConsumed[kind] = round((inventory.lifetimeConsumed[kind] ?? 0) + supplied);
   const flow = flowForMonth(settlement, month);
   flow.consumed[kind] = round((flow.consumed[kind] ?? 0) + supplied);
@@ -76,8 +109,13 @@ export function consumeMaterial(settlement: Settlement, kind: MaterialKind, requ
   return supplied;
 }
 
+/**
+ * Transitional authority switch for Step 1B. A real canonical inventory, or the presence of the
+ * legacy typed telemetry object, enables physical material gating. Empty legacy test fixtures that
+ * never entered either material system retain their compatibility path until Step 1C.
+ */
 export function hasMaterialAuthority(settlement: Settlement): boolean {
-  return settlement.materials !== undefined;
+  return settlement.materials !== undefined || Object.keys(settlement.localMaterials).length > 0;
 }
 
 function formScale(response: DevelopmentResponse): number {
@@ -125,20 +163,19 @@ export function structureMaterialRequirements(response: DevelopmentResponse): Fl
 }
 
 function availableForRequirement(settlement: Settlement, requirement: FlexibleMaterialRequirement): number {
-  if (!settlement.materials) return Number.POSITIVE_INFINITY;
-  return requirement.options.reduce((sum, kind) => sum + settlement.materials!.stock[kind], 0);
+  return requirement.options.reduce((sum, kind) => sum + Math.max(0, settlement.localMaterials[kind] ?? 0), 0);
 }
 
-/** 0..1 fraction of a bill that could be supplied right now. */
+/** 0..1 fraction of a bill that canonical physical stock could supply right now. */
 export function materialRequirementCoverage(settlement: Settlement, requirements: readonly FlexibleMaterialRequirement[]): number {
-  if (!settlement.materials || requirements.length === 0) return 1;
+  if (requirements.length === 0) return 1;
   return clamp01(Math.min(...requirements.map((requirement) =>
     requirement.amount <= EPSILON ? 1 : availableForRequirement(settlement, requirement) / requirement.amount)));
 }
 
-/** Maximum additional project progress supportable by current physical stocks. */
+/** Maximum additional project progress supportable by canonical physical stocks. */
 export function maxMaterialProgressIncrement(settlement: Settlement, requirements: readonly FlexibleMaterialRequirement[]): number {
-  if (!settlement.materials || requirements.length === 0) return 1;
+  if (requirements.length === 0) return 1;
   return Math.max(0, Math.min(...requirements.map((requirement) =>
     requirement.amount <= EPSILON ? 1 : availableForRequirement(settlement, requirement) / requirement.amount)));
 }
@@ -171,7 +208,7 @@ export function consumeConstructionMaterials(
   month: number,
 ): void {
   const requirements = project.materialRequirements;
-  if (!settlement.materials || !requirements || progressDelta <= EPSILON) return;
+  if (!requirements || progressDelta <= EPSILON) return;
   project.materialSpent ??= {};
   for (const requirement of requirements) {
     const needed = requirement.amount * progressDelta;
@@ -268,7 +305,8 @@ export function advanceSettlementMaterialUse(
   residents: readonly Person[],
 ): MaterialUseState {
   if (settlement.materialUse?.month === state.month) return settlement.materialUse;
-  if (!settlement.materials) {
+  bridgeLegacyMaterialStock(settlement);
+  if (!hasMaterialAuthority(settlement)) {
     const legacy: MaterialUseState = {
       month: state.month,
       domains: { infrastructure: zeroPressure(), industry: zeroPressure(), healthcare: zeroPressure(), military: zeroPressure() },
@@ -328,6 +366,6 @@ export function advanceSettlementMaterialUse(
 }
 
 export function materialReadiness(settlement: Settlement, domain: MaterialUseDomain): number {
-  if (!settlement.materials) return 1;
+  if (!hasMaterialAuthority(settlement)) return 1;
   return settlement.materialUse?.readiness[domain] ?? 1;
 }
