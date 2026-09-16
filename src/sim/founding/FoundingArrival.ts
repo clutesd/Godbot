@@ -23,6 +23,17 @@ export interface FoundingPod {
   entryOffset: Vec2;
   /** Immutable manifest; supplies are transferred once to the camp's finite stock. */
   supplies: { food: number; goods: number; timber: number; stone: number };
+  /** Immutable landing conditions. Optional only for archives created before this field existed. */
+  site?: {
+    biome: string;
+    landform: string;
+    elevation: number;
+    fertility: number;
+    woodland: number;
+    waterAccess: number;
+    habitability: number;
+    parentRock: string;
+  };
   condition: number;
 }
 export interface FoundingArrivalState {
@@ -79,7 +90,17 @@ export function createFoundingArrival(world: WorldState, seed: string): Founding
         groundY: surfaceHeightAt(world, site.point.x, site.point.z), cellIndex: site.cell.z * world.size + site.cell.x,
         population: 22, personIds: [], landed: false, condition: 1,
         entrySeconds: 13 + [0, 1.8, 4.3, 5.5, 7.6][i]!, descentSeconds: 12 + [0, 1.2, -0.4, 0.7, 1.4][i]!,
-        entryOffset: { x: -20 + i * 6, z: -25 - i * 2 }, supplies: { food: 100, goods: 6, timber: 8, stone: 3 } };
+        entryOffset: { x: -20 + i * 6, z: -25 - i * 2 }, supplies: { food: 100, goods: 6, timber: 8, stone: 3 },
+        site: {
+          biome: site.cell.biome,
+          landform: site.cell.landform,
+          elevation: site.cell.elevation,
+          fertility: site.cell.fertility,
+          woodland: site.cell.wood,
+          waterAccess: site.cell.soil?.waterAccess ?? 0,
+          habitability: site.cell.habitability,
+          parentRock: site.cell.geology?.family ?? 'unknown',
+        } };
     }) };
 }
 
