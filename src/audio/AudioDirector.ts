@@ -18,6 +18,7 @@ export class AudioDirector {
   failureReason?: string;
   private currentCategory?: AudioCategory;
   private currentEra?: AudioEra;
+  private queuedEra?: AudioEra;
   private muted = false;
   private readonly ambience: LayerState = { fadingToSilence: false };
   private readonly music: LayerState = { fadingToSilence: false };
@@ -52,12 +53,15 @@ export class AudioDirector {
   transitionTo(category: AudioCategory, voiceAssetId?: string, era: AudioEra = 'settlement'): void {
     if (!this.config.audio.enabled || typeof Audio === 'undefined') return;
     const categoryChanged = category !== this.currentCategory;
-    const eraChanged = era !== this.currentEra;
+    const eraRequested = era !== this.currentEra && era !== this.queuedEra;
     this.currentCategory = category;
-    this.currentEra = era;
     if (this.muted) {
       if (categoryChanged) this.clearLayer(this.ambience);
-      if (eraChanged) this.clearLayer(this.music);
+      if (eraRequested || this.queuedEra) {
+        this.currentEra = era;
+        this.queuedEra = undefined;
+        this.clearLayer(this.music);
+      }
       return;
     }
     if (voiceAssetId) this.playVoice(voiceAssetId);
@@ -65,10 +69,11 @@ export class AudioDirector {
       this.transitionLayer(this.ambience, this.manifest.ambience[category]);
       this.playEvent(category);
     }
-    if (eraChanged) this.transitionLayer(this.music, this.manifest.music[era]);
+    if (eraRequested) this.requestMusicEra(era);
   }
 
   update(deltaSeconds: number): void {
+    this.advanceQueuedMusic();
     const voiceActive = Boolean(this.voice && !this.voice.paused && !this.voice.ended);
     const bedScale = voiceActive ? this.config.audio.ducking : 1;
     this.updateLayer(this.ambience, deltaSeconds, this.config.audio.ambienceVolume * bedScale);
@@ -83,6 +88,7 @@ export class AudioDirector {
       layer.incoming = undefined;
       layer.fadingToSilence = false;
     }
+    this.queuedEra = undefined;
     this.event?.pause();
     this.voice?.pause();
     this.event = undefined;
@@ -111,6 +117,33 @@ export class AudioDirector {
     layer.current = undefined;
     layer.incoming = undefined;
     layer.fadingToSilence = false;
+  }
+
+  /**
+   * A non-looping score cue is allowed to finish before a requested era replaces it. This keeps
+   * one-off pieces such as Arrival Day intact while still letting ambience, events and narration
+   * react immediately to the documentary state underneath it.
+   */
+  private requestMusicEra(era: AudioEra): void {
+    const active = this.music.incoming ?? this.music.current;
+    if (active && active.definition.loop === false && !active.audio.ended) {
+      this.queuedEra = era;
+      return;
+    }
+    this.startMusicEra(era);
+  }
+
+  private startMusicEra(era: AudioEra): void {
+    this.currentEra = era;
+    this.queuedEra = undefined;
+    this.transitionLayer(this.music, this.manifest.music[era]);
+  }
+
+  private advanceQueuedMusic(): void {
+    if (!this.queuedEra) return;
+    const active = this.music.incoming ?? this.music.current;
+    if (active && active.definition.loop === false && !active.audio.ended) return;
+    this.startMusicEra(this.queuedEra);
   }
 
   private transitionLayer(layer: LayerState, choices: readonly AudioTrackDefinition[]): void {
