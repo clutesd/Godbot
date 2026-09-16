@@ -109,8 +109,8 @@ const recipe = (
 
 /**
  * Advanced production not yet represented by the newer ResourceSystem recipe catalog. Charcoal
- * and bronze are intentionally absent here because the modern recipe system already owns those
- * transformations. This prevents two processors competing to perform the same physical work.
+ * and bronze are intentionally absent because the modern recipe system already owns them. Tin ore
+ * likewise stays with canonical bronze casting rather than being refined into an unused dead-end.
  */
 export const MATERIAL_RECIPES: readonly MaterialRecipe[] = [
   recipe('saw-lumber', { timber: 1 }, { lumber: 0.84 }, [
@@ -122,9 +122,6 @@ export const MATERIAL_RECIPES: readonly MaterialRecipe[] = [
   recipe('smelt-copper', { 'copper-ore': 1, charcoal: 0.32 }, { copper: 0.68 }, [
     { id: 'metal-smelting', stage: 'adopted', minPractice: 0.3 },
   ], 0.62, 0.32),
-  recipe('smelt-tin', { 'tin-ore': 1, charcoal: 0.28 }, { tin: 0.66 }, [
-    { id: 'metal-smelting', stage: 'adopted', minPractice: 0.3 },
-  ], 0.58, 0.3),
   recipe('smelt-iron', { 'iron-ore': 1, charcoal: 0.55 }, { iron: 0.56 }, [
     { id: 'iron-working', stage: 'adopted', minPractice: 0.34 },
     { id: 'high-temperature-ceramics', stage: 'adopted', minPractice: 0.28 },
