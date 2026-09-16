@@ -6,7 +6,7 @@ import {
   type MaterialFlowSnapshot,
   type MaterialKind,
 } from './MaterialEconomy';
-import { takeMaterial } from './Inventory';
+import { addMaterial, takeMaterial } from './Inventory';
 
 export type MaterialUseDomain = 'infrastructure' | 'industry' | 'healthcare' | 'military';
 
@@ -55,6 +55,36 @@ const EPSILON = 1e-9;
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 const round = (value: number): number => Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
 const zeroPressure = (): MaterialPressureState => ({ demand: 0, supplied: 0, unmet: 0, coverage: 1, pressure: 0 });
+
+/**
+ * Materials still produced only by the legacy typed extraction/processing graph. Overlapping raw
+ * stocks already owned by ResourceSystem (timber, stone and ores) are intentionally excluded so
+ * Step 1B does not double-count parallel extraction while Step 1C removes the old writers.
+ */
+const LEGACY_ONLY_MATERIALS: readonly MaterialKind[] = [
+  'medicinal-flora', 'plant-fiber', 'clay', 'coal', 'uranium-ore',
+  'lumber', 'brick', 'copper', 'tin', 'iron', 'steel', 'medicine', 'textile',
+] as const;
+
+/**
+ * Temporary Step 1B bridge. Move legacy-only physical stock into localMaterials and leave any
+ * overflow in the legacy ledger rather than destroying it. This keeps localMaterials authoritative
+ * for consumers without duplicating stocks already gathered by the modern ResourceSystem.
+ */
+function bridgeLegacyMaterialStock(settlement: Settlement): void {
+  const inventory = settlement.materials;
+  if (!inventory) return;
+  let moved = false;
+  for (const kind of LEGACY_ONLY_MATERIALS) {
+    const legacy = Math.max(0, inventory.stock[kind] ?? 0);
+    if (legacy <= EPSILON) continue;
+    const accepted = addMaterial(settlement, kind, legacy);
+    if (accepted <= EPSILON) continue;
+    inventory.stock[kind] = round(legacy - accepted);
+    moved = true;
+  }
+  if (moved) inventory.revision += 1;
+}
 
 function flowForMonth(settlement: Settlement, month: number): MaterialFlowSnapshot {
   const inventory = ensureMaterialInventory(settlement);
@@ -275,6 +305,7 @@ export function advanceSettlementMaterialUse(
   residents: readonly Person[],
 ): MaterialUseState {
   if (settlement.materialUse?.month === state.month) return settlement.materialUse;
+  bridgeLegacyMaterialStock(settlement);
   if (!hasMaterialAuthority(settlement)) {
     const legacy: MaterialUseState = {
       month: state.month,
