@@ -53,15 +53,10 @@ export class AudioDirector {
   transitionTo(category: AudioCategory, voiceAssetId?: string, era: AudioEra = 'settlement'): void {
     if (!this.config.audio.enabled || typeof Audio === 'undefined') return;
     const categoryChanged = category !== this.currentCategory;
-    const eraRequested = era !== this.currentEra && era !== this.queuedEra;
     this.currentCategory = category;
     if (this.muted) {
       if (categoryChanged) this.clearLayer(this.ambience);
-      if (eraRequested || this.queuedEra) {
-        this.currentEra = era;
-        this.queuedEra = undefined;
-        this.clearLayer(this.music);
-      }
+      this.transitionMusicTo(era);
       return;
     }
     if (voiceAssetId) this.playVoice(voiceAssetId);
@@ -69,7 +64,20 @@ export class AudioDirector {
       this.transitionLayer(this.ambience, this.manifest.ambience[category]);
       this.playEvent(category);
     }
-    if (eraRequested) this.requestMusicEra(era);
+    this.transitionMusicTo(era);
+  }
+
+  /** Change only the score bed, leaving ambience, event one-shots and narration untouched. */
+  transitionMusicTo(era: AudioEra): void {
+    if (!this.config.audio.enabled || typeof Audio === 'undefined') return;
+    if (era === this.currentEra || era === this.queuedEra) return;
+    if (this.muted) {
+      this.currentEra = era;
+      this.queuedEra = undefined;
+      this.clearLayer(this.music);
+      return;
+    }
+    this.requestMusicEra(era);
   }
 
   update(deltaSeconds: number): void {
@@ -140,10 +148,11 @@ export class AudioDirector {
   }
 
   private advanceQueuedMusic(): void {
-    if (!this.queuedEra) return;
+    const nextEra = this.queuedEra;
+    if (!nextEra) return;
     const active = this.music.incoming ?? this.music.current;
     if (active && active.definition.loop === false && !active.audio.ended) return;
-    this.startMusicEra(this.queuedEra);
+    this.startMusicEra(nextEra);
   }
 
   private transitionLayer(layer: LayerState, choices: readonly AudioTrackDefinition[]): void {
