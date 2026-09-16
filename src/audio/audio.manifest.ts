@@ -1,6 +1,6 @@
 import type { AudioCategory } from '../historian/types';
 
-export type AudioEra = 'settlement' | 'urban' | 'recorded' | 'industrial' | 'atomic' | 'machine' | 'interplanetary';
+export type AudioEra = 'arrival' | 'settlement' | 'urban' | 'recorded' | 'industrial' | 'atomic' | 'machine' | 'interplanetary';
 
 export interface AudioTrackDefinition {
   file: string;
@@ -16,6 +16,7 @@ export interface AudioManifest {
   voiceAssets: Record<string, string>;
 }
 
+const ARRIVAL_DAY: AudioTrackDefinition = { file: 'music/arrival-day.mp3', volume: 0.55, loop: false };
 const MOONLIT_DRIFT: AudioTrackDefinition = { file: 'music/moonlit-drift.mp3', volume: 0.45, loop: true };
 
 /**
@@ -23,7 +24,7 @@ const MOONLIT_DRIFT: AudioTrackDefinition = { file: 'music/moonlit-drift.mp3', v
  * Missing layers are silent; the documentary never depends on an audio asset.
  */
 export const AUDIO_MANIFEST: AudioManifest = {
-  version: 2,
+  version: 3,
   ambience: {
     'ambient-wilderness': [],
     settlement: [],
@@ -37,6 +38,7 @@ export const AUDIO_MANIFEST: AudioManifest = {
     ending: [],
   },
   music: {
+    arrival: [ARRIVAL_DAY],
     settlement: [MOONLIT_DRIFT],
     urban: [MOONLIT_DRIFT],
     recorded: [MOONLIT_DRIFT],
