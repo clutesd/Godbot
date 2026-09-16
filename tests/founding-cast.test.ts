@@ -118,7 +118,7 @@ describe('Founding documentary cast 2a', () => {
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
   });
 
-  it('uses real current work and expertise in the introduction without granting historical status', () => {
+  it('uses real current work and expertise without changing the person simulation chose to make important', () => {
     const simulation = completedArrival('founding-cast-grounding');
     const historian = new Historian(simulation.config);
     completeOrientation(simulation, historian);
@@ -126,9 +126,13 @@ describe('Founding documentary cast 2a', () => {
     const castIds = new Set(foundingDocumentaryCast(simulation.state).map(member => member.personId));
 
     let scene = undefined as ReturnType<typeof chooseFoundingCastScene>;
+    let statusBefore: string | undefined;
     while (!scene) {
       simulation.step(1);
       expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
+      const progress = foundingContinuityProgress(historian, simulation.state);
+      const nextMember = foundingDocumentaryCast(simulation.state).find(member => progress.visitedSettlementIds.includes(member.settlementId));
+      if (nextMember) statusBefore = simulation.state.people.find(person => person.id === nextMember.personId)?.historical?.status;
       scene = chooseFoundingCastScene(historian, simulation.state);
     }
     const person = simulation.state.people.find(candidate => candidate.id === scene?.subjectId);
@@ -136,7 +140,7 @@ describe('Founding documentary cast 2a', () => {
     expect(castIds.has(person!.id)).toBe(true);
     expect(scene?.statement.text).toContain(person!.name);
     expect(scene?.statement.text).toContain((person!.role ?? person!.occupation).replaceAll('-', ' '));
-    expect(person?.historical?.status ?? 'ordinary').not.toBe('historical');
+    expect(person?.historical?.status).toBe(statusBefore);
   });
 
   it('does nothing for a non-arrival start', () => {
