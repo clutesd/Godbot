@@ -57,19 +57,17 @@ interface FoundingChapterMemory {
 }
 
 const memories = new WeakMap<Historian, FoundingChapterMemory>();
+const frozenStates = new WeakSet<SimulationState>();
 let pacingInstalled = false;
 let chapterInstalled = false;
 
 /**
- * Once the orientation has actually begun at Month 0, allow enough simulated time for all shots
- * to finish at documentary pace. A new Historian created after Month 0 never starts the prologue.
+ * A defensive expiry only. Normal 1a playback is frozen at Month 0, so the six opening beats
+ * finish before authoritative monthly history begins. Resumed observations never replay them.
  */
 export const FOUNDING_CHAPTER_LATEST_MONTH = 18;
 
-/**
- * main.ts currently clamps observer time to at least 0.1 months/sec. Requesting slightly less here
- * makes the opening orientation use that floor rather than the normal documentary pace.
- */
+/** The camera may still ask for a presentation speed, but tickBudget() holds authoritative time. */
 export const FOUNDING_CHAPTER_MONTHS_PER_SECOND = 0.08;
 
 const scoreBreakdown = (continuity: number) => ({
@@ -122,7 +120,7 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
 }
 
 /**
- * Stable Year-Zero reference data for both 1a and the later 1b continuity layer. New runs persist
+ * Stable Year-Zero reference data for both 1a and the later continuity layers. New runs persist
  * their immutable site snapshot inside FoundingArrivalState, which RunArchive already preserves.
  * Older archives without that field fall back to the replayed world cell for compatibility.
  */
@@ -280,18 +278,28 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
  * Beat 0 establishes the whole founding event; the remaining beats introduce traceable communities.
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
-  if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') return undefined;
+  if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') {
+    frozenStates.delete(state);
+    return undefined;
+  }
 
   let memory = memories.get(historian);
   if (!memory) {
     const baseline = foundingChapterBaseline(state);
-    if (!baseline || state.month > baseline.eventMonth) return undefined;
+    if (!baseline || state.month > baseline.eventMonth) {
+      frozenStates.delete(state);
+      return undefined;
+    }
     memory = { nextBeat: 0, complete: false, startedMonth: state.month, baseline };
     memories.set(historian, memory);
   }
-  if (memory.complete) return undefined;
+  if (memory.complete) {
+    frozenStates.delete(state);
+    return undefined;
+  }
   if (state.month > FOUNDING_CHAPTER_LATEST_MONTH) {
     memory.complete = true;
+    frozenStates.delete(state);
     return undefined;
   }
 
@@ -304,11 +312,14 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
       : communityScene(historian, state, memory.baseline, memory.baseline.communities[beat - 1]!);
     if (scene) {
       if (memory.nextBeat >= totalBeats) memory.complete = true;
+      // Keep Month 0 fixed through the final orientation shot. The next chooseScene() call releases it.
+      frozenStates.add(state);
       return scene;
     }
   }
 
   memory.complete = true;
+  frozenStates.delete(state);
   return undefined;
 }
 
@@ -317,8 +328,8 @@ export function isFoundingChapterScene(scene: ObservationCandidate): boolean {
 }
 
 /**
- * Keep authoritative history running, but at the slowest supported viewing cadence while the
- * founding orientation is on screen. This is presentation-only and never changes simulation rules.
+ * Presentation speed still controls camera/event tempo, but tickBudget=0 prevents the opening
+ * orientation from consuming Year One before the viewer knows who the communities are.
  */
 export function installFoundingChapterPacing(): void {
   if (pacingInstalled) return;
@@ -331,6 +342,15 @@ export function installFoundingChapterPacing(): void {
   ): number {
     if (observation.eventType === 'ARRIVAL_DAY') return FOUNDING_CHAPTER_MONTHS_PER_SECOND;
     return targetSpeed.call(this, state, observation);
+  };
+
+  const tickBudget = PresentationDirector.prototype.tickBudget;
+  PresentationDirector.prototype.tickBudget = function foundingTickBudget(
+    this: PresentationDirector,
+    state: Parameters<typeof tickBudget>[0],
+  ): number {
+    if (frozenStates.has(state)) return 0;
+    return tickBudget.call(this, state);
   };
 }
 
