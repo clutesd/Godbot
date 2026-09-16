@@ -40,7 +40,7 @@ function sceneFor(simulation: Simulation, member: FoundingCastMember, id: string
   const person = simulation.state.people.find(candidate => candidate.id === member.personId);
   const home = simulation.state.settlements.find(candidate => candidate.id === person?.homeId);
   const arrival = simulation.state.history.find(event => event.type === 'ARRIVAL_DAY');
-  if (!person || !home || !arrival) throw new Error('Expected live founder, home, and Arrival Day');
+  if (!person || !home || !arrival) throw new Error('Expected founder, home, and Arrival Day');
   return {
     id,
     subjectId: person.id,
@@ -110,7 +110,23 @@ describe('Founding character memory 2b', () => {
     expect(foundingCharacterNarrativeMemory(historian, member.personId)?.callbacks).toBe(1);
   });
 
-  it('does not narrate trivial activity churn until enough time has passed', () => {
+  it('treats occupation changes as meaningful even when a specific role label stays the same', () => {
+    const simulation = completedArrival('founding-memory-occupation');
+    const historian = new Historian(simulation.config);
+    const member = firstMember(simulation);
+    const person = simulation.state.people.find(candidate => candidate.id === member.personId);
+    if (!person) throw new Error('Expected founder');
+    person.role = 'worker';
+    introduce(simulation, historian, member);
+
+    simulation.state.month = 8;
+    person.occupation = person.occupation === 'builder' ? 'artisan' : 'builder';
+    const scene = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:8`));
+    expect(scene.statement.text).toContain('recorded occupation has changed');
+    expect(scene.statement.observerMemory?.callbackApplied).toBe(true);
+  });
+
+  it('does not turn ordinary activity churn into a character-development callback', () => {
     const simulation = completedArrival('founding-memory-noise');
     const historian = new Historian(simulation.config);
     const member = firstMember(simulation);
@@ -118,17 +134,18 @@ describe('Founding character memory 2b', () => {
     const person = simulation.state.people.find(candidate => candidate.id === member.personId);
     if (!person) throw new Error('Expected founder');
 
-    simulation.state.month = 2;
+    simulation.state.month = 6;
     person.activity = person.activity === 'farm' ? 'gather' : 'farm';
-    const early = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:2`));
+    const early = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:6`));
     expect(early.statement.observerMemory?.callbackApplied).toBe(false);
     expect(early.statement.text).not.toContain('When I last watched');
 
-    simulation.state.month = 6;
-    person.activity = 'craft';
-    const later = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:6`));
+    simulation.state.month = 18;
+    person.activity = person.activity === 'craft' ? 'construct' : 'craft';
+    const later = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:18`));
     expect(later.statement.observerMemory?.callbackApplied).toBe(true);
-    expect(later.statement.text).toContain('immediate activity has changed');
+    expect(later.statement.text).toContain('I last watched');
+    expect(later.statement.text).not.toContain('immediate activity has changed');
   });
 
   it('remembers a person-linked historical event and carries its provenance into the callback', () => {
@@ -164,7 +181,7 @@ describe('Founding character memory 2b', () => {
     expect(scene.statement.observerMemory?.callbackApplied).toBe(true);
   });
 
-  it('rebuilds observer memory from archived statements without changing the simulated person', () => {
+  it('rebuilds observer memory idempotently without changing the simulated person', () => {
     const simulation = completedArrival('founding-memory-restore');
     const originalHistorian = new Historian(simulation.config);
     const member = firstMember(simulation);
@@ -178,7 +195,9 @@ describe('Founding character memory 2b', () => {
     const before = { homeId: person.homeId, role: person.role, occupation: person.occupation, prestige: person.prestige, historical: person.historical?.status };
 
     const restoredHistorian = new Historian(simulation.config);
-    restoreFoundingCharacterMemory(restoredHistorian, simulation.state, [intro.statement, returnScene.statement]);
+    const archive = [intro.statement, returnScene.statement];
+    restoreFoundingCharacterMemory(restoredHistorian, simulation.state, archive);
+    restoreFoundingCharacterMemory(restoredHistorian, simulation.state, archive);
     const restored = foundingCharacterNarrativeMemory(restoredHistorian, member.personId);
     const after = { homeId: person.homeId, role: person.role, occupation: person.occupation, prestige: person.prestige, historical: person.historical?.status };
 
@@ -186,6 +205,15 @@ describe('Founding character memory 2b', () => {
     expect(restored?.lastObservedMonth).toBe(12);
     expect(restored?.lastObservation.role).toBe('builder');
     expect(after).toEqual(before);
+  });
+
+  it('does not double-count the same live scene if a wrapper sees it twice', () => {
+    const simulation = completedArrival('founding-memory-duplicate-scene');
+    const historian = new Historian(simulation.config);
+    const member = firstMember(simulation);
+    const intro = introduce(simulation, historian, member);
+    observeFoundingCharacterScene(historian, simulation.state, intro);
+    expect(foundingCharacterNarrativeMemory(historian, member.personId)?.appearances).toBe(1);
   });
 
   it('keeps an archived cast member eligible for later person-follow scenes after resume', () => {
