@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { advanceSettlementDevelopment } from '../src/sim/development/SettlementDevelopmentSystem';
+import { addMaterial } from '../src/sim/resources/Inventory';
 import { residents, societyFixture } from './fixtures/settlementDevelopment';
 
 function attemptOnce(setup?: (fixture: ReturnType<typeof societyFixture>) => void) {
@@ -35,18 +36,24 @@ describe('Step 2A development decision diagnostics', () => {
   it('identifies canonical structural-material scarcity separately from generic budgets', () => {
     const { attempt } = attemptOnce(({ settlements: [s] }) => {
       s!.conflictPressure = 1;
-      // Explicit keys activate canonical physical-material authority while leaving fabric unavailable.
-      s!.localMaterials = { timber: 0, stone: 0 };
+      // Use a physically possible Step-1C state: ample timber and a finished frame satisfy the
+      // bulk/component gates, while missing textile/plant-fiber blocks the timber structure fabric.
+      s!.localMaterials = {};
+      s!.knownRecipes = [...new Set([...s!.knownRecipes, 'timber-framing'])];
+      addMaterial(s!, 'timber', 20);
+      addMaterial(s!, 'timber-frame', 2);
     });
 
     expect(attempt.outcome).toBe('blocked');
     const security = attempt.candidates.find(candidate => candidate.need === 'security');
     const fabric = security?.blockers.find(blocker => blocker.code === 'insufficient-structural-material');
     expect(fabric).toBeDefined();
-    expect(fabric?.material).toBe('earth-frame');
+    expect(fabric?.material).toBe('binding');
     expect(fabric?.available).toBe(0);
     expect(fabric?.required).toBeGreaterThan(0);
-    expect(fabric?.detail).toContain('timber');
+    expect(fabric?.detail).toBe('textile|plant-fiber');
+    expect(security?.blockers.some(blocker => blocker.code === 'insufficient-wood')).toBe(false);
+    expect(security?.blockers.some(blocker => blocker.code === 'insufficient-processed-material')).toBe(false);
   });
 
   it('distinguishes placement failure from resource or labour failure', () => {
