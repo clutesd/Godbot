@@ -19,7 +19,8 @@ import { Historian } from '../src/historian/Historian';
 import { Simulation } from '../src/sim/Simulation';
 
 function completedArrival(seed: string): Simulation {
-  const simulation = new Simulation({ seed, startMode: 'arrival' });
+  // Year-One narrative tests should not fail because a small procedural fixture cannot place five pods.
+  const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
   simulation.advanceArrival(60);
   expect(simulation.historyRunning).toBe(true);
   return simulation;

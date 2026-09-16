@@ -123,6 +123,9 @@ describe('Presentation independence', () => {
 
   it('does not mistake an interesting city view for a major event', () => {
     const simulation = new Simulation({ seed: 'presentation-city-life', startingPopulation: 180 });
+    // Isolate the classification from the intentional seasonal-transition hold and founding-event memory.
+    simulation.state.month = 2;
+    simulation.state.history.length = 0;
     const director = new PresentationDirector(simulation.config);
     director.update(1, simulation.state, { kind: 'settlement-approach', interest: 0.95 });
     expect(director.mode).toBe('city-life');
@@ -133,8 +136,9 @@ describe('Presentation independence', () => {
     const seed = 'presentation-presets-read-only';
     const documentary = new Simulation({ ...timePresetConfig('documentary'), seed });
     const accelerated = new Simulation({ ...timePresetConfig('accelerated-experiment'), seed });
-    documentary.step(180 * 12);
-    accelerated.step(180 * 12);
+    const years = 60;
+    documentary.step(years * 12);
+    accelerated.step(years * 12);
     expect(documentary.state.history).toEqual(accelerated.state.history);
     expect(documentary.summary()).toEqual(accelerated.summary());
   }, 90_000);

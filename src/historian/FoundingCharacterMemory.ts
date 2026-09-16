@@ -31,6 +31,7 @@ interface CharacterMemoryRecord {
   appearances: number;
   callbacks: number;
   readonly rememberedEventIds: Set<string>;
+  readonly seenSceneIds: Set<string>;
 }
 
 interface MemoryFact {
@@ -45,7 +46,10 @@ interface CallbackResult {
   readonly sourceEntityIds: readonly string[];
 }
 
+type RestoreObserver = (historian: Historian, state: SimulationState, statements: readonly HistorianStatement[]) => void;
+
 const memories = new WeakMap<Historian, Map<string, CharacterMemoryRecord>>();
+const restoreObservers = new Set<RestoreObserver>();
 let installed = false;
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
@@ -96,6 +100,7 @@ export function foundingCharacterObservation(
   const person = state.people.find(candidate => candidate.id === member.personId);
   if (!person) return undefined;
   const home = state.settlements.find(candidate => candidate.id === person.homeId);
+  const expertise = strongestExpertise(person);
   return {
     kind: 'founding-character',
     personId: person.id,
@@ -107,7 +112,7 @@ export function foundingCharacterObservation(
     activity: person.activity,
     ...(person.partnerId ? { partnerId: person.partnerId } : {}),
     childrenCount: person.children.length,
-    ...(strongestExpertise(person) ? { strongestExpertise: strongestExpertise(person) } : {}),
+    ...(expertise ? { strongestExpertise: expertise } : {}),
     historicalStatus: person.historical?.status ?? 'ordinary',
     sceneId,
     introduction,
@@ -156,7 +161,6 @@ function changeFacts(
   const person = state.people.find(candidate => candidate.id === member.personId);
   if (!person) return [];
   const words = pronouns(person);
-  const elapsed = current.observedMonth - previous.observedMonth;
   const facts: MemoryFact[] = [];
 
   if (current.homeId !== previous.homeId) facts.push({
@@ -167,11 +171,15 @@ function changeFacts(
     weight: 0.92,
     text: `${words.possessive} recorded role has changed from ${previous.role} to ${current.role}.`,
   });
+  if (current.occupation !== previous.occupation && current.role === previous.role) facts.push({
+    weight: 0.78,
+    text: `${words.possessive} recorded occupation has changed from ${readable(previous.occupation)} to ${readable(current.occupation)}.`,
+  });
   if (current.partnerId !== previous.partnerId) {
     const text = !previous.partnerId && current.partnerId
       ? `A partner is now recorded in ${words.possessive.toLowerCase()} life.`
       : previous.partnerId && !current.partnerId
-        ? `The partnership recorded at the last observation is no longer present.`
+        ? 'The partnership recorded at the last observation is no longer present.'
         : `${words.possessive} recorded partner has changed.`;
     facts.push({ weight: 0.86, text });
   }
@@ -199,11 +207,6 @@ function changeFacts(
     weight: 0.88 + event.significance * 0.08,
     text: `The interval also records: ${event.summary}`,
     eventId: event.id,
-  });
-
-  if (facts.length === 0 && elapsed >= 4 && current.activity !== previous.activity) facts.push({
-    weight: 0.32,
-    text: `${words.possessive} immediate activity has changed from ${activityLabel(previous.activity)} to ${activityLabel(current.activity)}.`,
   });
 
   return facts.sort((a, b) => b.weight - a.weight || a.text.localeCompare(b.text));
@@ -236,9 +239,9 @@ export function foundingCharacterCallback(
     };
   }
 
-  if (elapsed >= FOUNDING_CHARACTER_GENERIC_RECALL_MONTHS
-    && elapsed < FOUNDING_CHARACTER_DEEP_MEMORY_MONTHS
-    && !existingText.includes('I have returned to')) {
+  // This remains valid after reload: if the generic Watcher has already supplied its deep callback,
+  // do not duplicate it; otherwise a remembered founder may still receive a restrained long-gap recall.
+  if (elapsed >= FOUNDING_CHARACTER_GENERIC_RECALL_MONTHS && !existingText.includes('I have returned to')) {
     return {
       text: `I last watched ${member.name} ${elapsedPhrase(elapsed)} ago at ${previous.homeName}. ${words.subject} is still recorded as ${article(current.role)} ${current.role} at ${current.homeName}.`,
       eventIds: [],
@@ -277,9 +280,15 @@ export function foundingCharacterMemories(historian: Historian): readonly Foundi
     .map(publicMemory));
 }
 
+/** Register a presentation-only resume listener. Used by 2c so main.ts keeps one restoration entrypoint. */
+export function registerFoundingCharacterRestoreObserver(observer: RestoreObserver): () => void {
+  restoreObservers.add(observer);
+  return () => restoreObservers.delete(observer);
+}
+
 /**
  * Rebuild presentation memory from the run archive after deterministic simulation replay. The
- * snapshots came from prior watched scenes; they never alter people, settlements, or history.
+ * restore is idempotent: repeated calls replace, rather than double-count, reconstructed attention.
  */
 export function restoreFoundingCharacterMemory(
   historian: Historian,
@@ -288,7 +297,12 @@ export function restoreFoundingCharacterMemory(
 ): void {
   const cast = new Map(foundingDocumentaryCast(state).map(member => [member.personId, member] as const));
   const map = memoryMap(historian);
-  for (const statement of statements) {
+  map.clear();
+  const ordered = statements
+    .filter(statement => statement.observerMemory?.kind === 'founding-character')
+    .sort((a, b) => (a.observerMemory?.observedMonth ?? a.month) - (b.observerMemory?.observedMonth ?? b.month) || a.id.localeCompare(b.id));
+
+  for (const statement of ordered) {
     const snapshot = statement.observerMemory;
     if (!snapshot || snapshot.kind !== 'founding-character') continue;
     const member = cast.get(snapshot.personId);
@@ -302,15 +316,19 @@ export function restoreFoundingCharacterMemory(
         appearances: 1,
         callbacks: snapshot.callbackApplied ? 1 : 0,
         rememberedEventIds: new Set(statement.sourceEventIds),
+        seenSceneIds: new Set([snapshot.sceneId]),
       });
       continue;
     }
+    if (existing.seenSceneIds.has(snapshot.sceneId)) continue;
+    existing.seenSceneIds.add(snapshot.sceneId);
     existing.firstObservedMonth = Math.min(existing.firstObservedMonth, snapshot.observedMonth);
     existing.appearances += 1;
     if (snapshot.callbackApplied) existing.callbacks += 1;
     for (const eventId of statement.sourceEventIds) existing.rememberedEventIds.add(eventId);
     if (snapshot.observedMonth >= existing.lastObservation.observedMonth) existing.lastObservation = { ...snapshot };
   }
+  for (const observer of restoreObservers) observer(historian, state, statements);
 }
 
 /** Apply human-scale memory to a chosen cast scene. Exported separately for deterministic tests. */
@@ -319,17 +337,24 @@ export function observeFoundingCharacterScene(
   state: SimulationState,
   scene: ObservationCandidate,
 ): ObservationCandidate {
-  const member = foundingDocumentaryCast(state).find(candidate => candidate.personId === scene.subjectId);
+  const map = memoryMap(historian);
+  const existingRecord = map.get(scene.subjectId);
+  const member = existingRecord?.member ?? foundingDocumentaryCast(state).find(candidate => candidate.personId === scene.subjectId);
   if (!member) return scene;
   const introduction = scene.id.startsWith('founding-cast:introduction:');
   const current = foundingCharacterObservation(state, member, scene.id, introduction);
   if (!current) return scene;
-  const map = memoryMap(historian);
-  let record = map.get(member.personId);
+  let record = existingRecord;
+  if (record?.seenSceneIds.has(current.sceneId)) {
+    scene.statement.observerMemory ??= { ...current, callbackApplied: false };
+    return scene;
+  }
+
   let callbackApplied = false;
   let usedEventIds: readonly string[] = [];
+  const narrativeOwnedByArc = scene.id.startsWith('founding-character-arc:') || scene.id.startsWith('founding-character-ending:');
 
-  if (record && !introduction) {
+  if (record && !introduction && !narrativeOwnedByArc) {
     const callback = foundingCharacterCallback(
       state,
       member,
@@ -375,9 +400,11 @@ export function observeFoundingCharacterScene(
       appearances: 1,
       callbacks: callbackApplied ? 1 : 0,
       rememberedEventIds: new Set(usedEventIds),
+      seenSceneIds: new Set([current.sceneId]),
     };
     map.set(member.personId, record);
   } else {
+    record.seenSceneIds.add(current.sceneId);
     record.firstObservedMonth = Math.min(record.firstObservedMonth, current.observedMonth);
     record.lastObservation = archivedSnapshot;
     record.appearances += 1;
@@ -434,8 +461,8 @@ function restoredRecurringCandidate(
     position: person.position,
     title: person.name,
     statement,
-    score: clamp(0.52 + gapBoost + person.prestige * 0.06 - repetitionPenalty, 0.28, 0.67),
-    interest: clamp(0.38 + gapBoost),
+    score: clamp(0.54 + gapBoost + person.prestige * 0.06 - repetitionPenalty, 0.3, 0.69),
+    interest: clamp(0.4 + gapBoost),
     audioCategory: person.activity === 'travel' || person.activity === 'migrate' ? 'ambient-wilderness' : 'settlement',
     breakdown: breakdown(0.86, repetitionPenalty),
   };
