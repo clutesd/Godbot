@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   chooseFoundingChapterScene,
   FOUNDING_CHAPTER_MONTHS_PER_SECOND,
+  foundingChapterBaseline,
+  foundingChapterProgress,
   installFoundingChapterPacing,
 } from '../src/historian/FoundingChapter';
 import { Historian } from '../src/historian/Historian';
@@ -17,34 +19,116 @@ function completedArrival(seed: string): Simulation {
 }
 
 describe('Founding Chapter 1a', () => {
-  it('hands Arrival Day into one grounded overview and all five founding communities', () => {
+  it('captures an immutable Year-Zero baseline for later continuity comparisons', () => {
+    const simulation = completedArrival('founding-chapter-baseline');
+    const baseline = foundingChapterBaseline(simulation.state);
+    const arrivalEvent = simulation.state.history.find(event => event.type === 'ARRIVAL_DAY');
+
+    expect(baseline).toBeDefined();
+    expect(baseline?.population).toBe(Number(arrivalEvent?.context.population));
+    expect(baseline?.expectedCommunityCount).toBe(simulation.state.arrival?.pods.length);
+    expect(baseline?.communities).toHaveLength(simulation.state.arrival?.pods.length ?? 0);
+    expect(Object.isFrozen(baseline)).toBe(true);
+    expect(Object.isFrozen(baseline?.communities)).toBe(true);
+
+    for (const community of baseline?.communities ?? []) {
+      const pod = simulation.state.arrival?.pods.find(candidate => candidate.id === community.podId);
+      const cell = pod ? simulation.state.world.cells[pod.cellIndex] : undefined;
+      expect(pod).toBeDefined();
+      expect(pod?.site).toBeDefined();
+      expect(cell).toBeDefined();
+      expect(community.founderCount).toBe(pod?.population);
+      expect(community.founderIds).toEqual(pod?.personIds);
+      expect(community.domains).toEqual(pod?.domains);
+      expect(community.knowledge).toEqual(pod?.knowledge);
+      expect(community.supplies).toEqual(pod?.supplies);
+      expect(community.site).toEqual(pod?.site);
+      expect(Object.isFrozen(community)).toBe(true);
+      expect(Object.isFrozen(community.supplies)).toBe(true);
+      expect(Object.isFrozen(community.site)).toBe(true);
+    }
+  });
+
+  it('reconstructs Year-Zero site conditions from the archived arrival manifest, not mutable world cells', () => {
+    const simulation = completedArrival('founding-chapter-site-persistence');
+    const pod = simulation.state.arrival?.pods[0];
+    if (!pod?.site) throw new Error('Expected a persisted founding site snapshot');
+    const originalSite = { ...pod.site };
+    const cell = simulation.state.world.cells[pod.cellIndex];
+    if (!cell) throw new Error('Expected founding world cell');
+    cell.fertility = originalSite.fertility === 0 ? 1 : 0;
+    cell.wood = originalSite.woodland === 0 ? 1 : 0;
+
+    const reconstructed = foundingChapterBaseline(simulation.state);
+    const community = reconstructed?.communities.find(candidate => candidate.podId === pod.id);
+    expect(community?.site).toEqual(originalSite);
+    expect(community?.site.fertility).not.toBe(cell.fertility);
+    expect(community?.site.woodland).not.toBe(cell.wood);
+  });
+
+  it('hands Arrival Day into one grounded overview and every traceable founding community', () => {
     const simulation = completedArrival('founding-chapter-sequence');
     const historian = new Historian(simulation.config);
-    const scenes = Array.from({ length: 6 }, () => chooseFoundingChapterScene(historian, simulation.state));
+    const baseline = foundingChapterBaseline(simulation.state);
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('ready');
+
+    const sceneCount = (baseline?.communities.length ?? 0) + 1;
+    const scenes = Array.from({ length: sceneCount }, () => chooseFoundingChapterScene(historian, simulation.state));
 
     expect(scenes.every(Boolean)).toBe(true);
     const grounded = scenes.filter((scene): scene is NonNullable<typeof scene> => Boolean(scene));
-    expect(grounded).toHaveLength(6);
-    expect(grounded[0]?.title).toBe('ARRIVAL DAY · THE FIVE LANDINGS');
+    expect(grounded).toHaveLength(sceneCount);
+    expect(grounded[0]?.title).toBe(`ARRIVAL DAY · THE ${baseline?.expectedCommunityCount} LANDINGS`);
     expect(grounded[0]?.event?.type).toBe('ARRIVAL_DAY');
     expect(grounded.every(scene => historian.validateStatement(scene.statement, simulation.state))).toBe(true);
 
-    const pods = simulation.state.arrival?.pods ?? [];
-    for (const pod of pods) {
-      const settlement = simulation.state.settlements.find(candidate => candidate.id === pod.settlementId);
-      expect(settlement).toBeDefined();
-      expect(grounded.some(scene => scene.subjectId === settlement?.id && scene.statement.text.includes(pod.name))).toBe(true);
-      expect(grounded.some(scene => pod.knowledge.every(knowledge => scene.statement.text.includes(knowledge.replaceAll('-', ' '))))).toBe(true);
+    for (const community of baseline?.communities ?? []) {
+      expect(grounded.some(scene => scene.subjectId === community.settlementId && scene.statement.text.includes(community.podName))).toBe(true);
+      expect(grounded.some(scene => community.knowledge.every(knowledge => scene.statement.text.includes(knowledge.replaceAll('-', ' '))))).toBe(true);
+      expect(grounded.some(scene => scene.subjectId === community.settlementId && scene.statement.text.includes(community.site.biome.replaceAll('-', ' ')))).toBe(true);
     }
 
+    expect(historian.statements).toHaveLength(sceneCount);
+    expect(new Set(historian.statements.map(statement => statement.id)).size).toBe(sceneCount);
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('does not replay the founding orientation when an observation resumes long after Year One', () => {
-    const simulation = completedArrival('founding-chapter-resume');
-    simulation.step(19);
+  it('continues an orientation that started at Month 0 even after simulated time advances', () => {
+    const simulation = completedArrival('founding-chapter-continuity');
     const historian = new Historian(simulation.config);
+    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    simulation.step(6);
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('orientation');
+    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+  });
+
+  it('does not begin the Year-Zero orientation on a newly created Historian after Month 0', () => {
+    const simulation = completedArrival('founding-chapter-resume');
+    simulation.step(1);
+    const historian = new Historian(simulation.config);
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('missed-opening');
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
+  });
+
+  it('skips an invalid community beat without discarding the rest of the opening chapter', () => {
+    const simulation = completedArrival('founding-chapter-degraded');
+    const historian = new Historian(simulation.config);
+    const baseline = foundingChapterBaseline(simulation.state);
+    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    const missing = baseline?.communities[0];
+    if (!missing) throw new Error('Expected a founding community');
+    const index = simulation.state.settlements.findIndex(candidate => candidate.id === missing.settlementId);
+    if (index < 0) throw new Error('Expected the founding settlement in authoritative state');
+    simulation.state.settlements.splice(index, 1);
+
+    const reconstructed = foundingChapterBaseline(simulation.state);
+    expect(reconstructed?.communities.some(community => community.settlementId === missing.settlementId)).toBe(true);
+
+    const next = chooseFoundingChapterScene(historian, simulation.state);
+    expect(next).toBeDefined();
+    expect(next?.subjectId).not.toBe(missing.settlementId);
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('orientation');
   });
 
   it('requests the slowest supported documentary cadence while Arrival Day context is on screen', () => {
