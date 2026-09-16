@@ -122,9 +122,9 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
 }
 
 /**
- * Stable Year-Zero reference data for both 1a and the later 1b continuity layer. The snapshot is
- * deliberately cloned and frozen so later simulation mutations cannot rewrite what "arrival" meant.
- * It is reconstructed from the permanent arrival record and world, not from settlement survival.
+ * Stable Year-Zero reference data for both 1a and the later 1b continuity layer. New runs persist
+ * their immutable site snapshot inside FoundingArrivalState, which RunArchive already preserves.
+ * Older archives without that field fall back to the replayed world cell for compatibility.
  */
 export function foundingChapterBaseline(state: SimulationState): FoundingChapterBaseline | undefined {
   const arrival = state.arrival;
@@ -134,7 +134,17 @@ export function foundingChapterBaseline(state: SimulationState): FoundingChapter
   const communities = arrival.pods.flatMap((pod, order): FoundingCommunityBaseline[] => {
     if (!pod.settlementId) return [];
     const cell = state.world.cells[pod.cellIndex];
-    if (!cell) return [];
+    const site = pod.site ?? (cell ? {
+      biome: cell.biome,
+      landform: cell.landform,
+      elevation: cell.elevation,
+      fertility: cell.fertility,
+      woodland: cell.wood,
+      waterAccess: cell.soil?.waterAccess ?? 0,
+      habitability: cell.habitability,
+      parentRock: cell.geology?.family ?? 'unknown',
+    } : undefined);
+    if (!site) return [];
     const settlement = state.settlements.find(candidate => candidate.id === pod.settlementId);
     return [Object.freeze({
       order,
@@ -149,16 +159,7 @@ export function foundingChapterBaseline(state: SimulationState): FoundingChapter
       domains: Object.freeze([...pod.domains]),
       knowledge: Object.freeze([...pod.knowledge]),
       supplies: Object.freeze({ ...pod.supplies }),
-      site: Object.freeze({
-        biome: cell.biome,
-        landform: cell.landform,
-        elevation: cell.elevation,
-        fertility: cell.fertility,
-        woodland: cell.wood,
-        waterAccess: cell.soil?.waterAccess ?? 0,
-        habitability: cell.habitability,
-        parentRock: cell.geology?.family ?? 'unknown',
-      }),
+      site: Object.freeze({ ...site }),
     })];
   });
   const foundingPopulation = arrival.pods.reduce((sum, pod) => sum + pod.population, 0);
@@ -193,22 +194,18 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   const contrast = differingStartingConditions(baseline)
     ? 'The landings did not begin identically: knowledge, skills, supplies, or terrain differed between them.'
     : 'Their common beginning is recorded before later history begins to separate them.';
+  const sourceEntityIds = baseline.communities
+    .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
+    .map(community => community.settlementId);
   const statement = {
     id: `founding-overview-${event.id}`,
     month: state.month,
     text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. ${contrast}`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
-    sourceEntityIds: baseline.communities
-      .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
-      .map(community => community.settlementId),
+    sourceEntityIds,
     sourceArchiveIds: [],
-    claims: {
-      eventType: 'ARRIVAL_DAY' as const,
-      entityIds: baseline.communities
-        .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
-        .map(community => community.settlementId),
-    },
+    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: sourceEntityIds },
   };
   return rememberStatement(historian, {
     id: `founding:overview:${event.id}`,
