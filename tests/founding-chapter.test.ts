@@ -56,8 +56,8 @@ describe('Founding Chapter 1a', () => {
     const originalSite = { ...pod.site };
     const cell = simulation.state.world.cells[pod.cellIndex];
     if (!cell) throw new Error('Expected founding world cell');
-    cell.fertility = 0;
-    cell.wood = 0;
+    cell.fertility = originalSite.fertility === 0 ? 1 : 0;
+    cell.wood = originalSite.woodland === 0 ? 1 : 0;
 
     const reconstructed = foundingChapterBaseline(simulation.state);
     const community = reconstructed?.communities.find(candidate => candidate.podId === pod.id);
