@@ -35,20 +35,35 @@ describe('Founding Chapter 1a', () => {
       const pod = simulation.state.arrival?.pods.find(candidate => candidate.id === community.podId);
       const cell = pod ? simulation.state.world.cells[pod.cellIndex] : undefined;
       expect(pod).toBeDefined();
+      expect(pod?.site).toBeDefined();
       expect(cell).toBeDefined();
       expect(community.founderCount).toBe(pod?.population);
       expect(community.founderIds).toEqual(pod?.personIds);
       expect(community.domains).toEqual(pod?.domains);
       expect(community.knowledge).toEqual(pod?.knowledge);
       expect(community.supplies).toEqual(pod?.supplies);
-      expect(community.site.biome).toBe(cell?.biome);
-      expect(community.site.fertility).toBe(cell?.fertility);
-      expect(community.site.woodland).toBe(cell?.wood);
-      expect(community.site.waterAccess).toBe(cell?.soil?.waterAccess ?? 0);
+      expect(community.site).toEqual(pod?.site);
       expect(Object.isFrozen(community)).toBe(true);
       expect(Object.isFrozen(community.supplies)).toBe(true);
       expect(Object.isFrozen(community.site)).toBe(true);
     }
+  });
+
+  it('reconstructs Year-Zero site conditions from the archived arrival manifest, not mutable world cells', () => {
+    const simulation = completedArrival('founding-chapter-site-persistence');
+    const pod = simulation.state.arrival?.pods[0];
+    if (!pod?.site) throw new Error('Expected a persisted founding site snapshot');
+    const originalSite = { ...pod.site };
+    const cell = simulation.state.world.cells[pod.cellIndex];
+    if (!cell) throw new Error('Expected founding world cell');
+    cell.fertility = 0;
+    cell.wood = 0;
+
+    const reconstructed = foundingChapterBaseline(simulation.state);
+    const community = reconstructed?.communities.find(candidate => candidate.podId === pod.id);
+    expect(community?.site).toEqual(originalSite);
+    expect(community?.site.fertility).not.toBe(cell.fertility);
+    expect(community?.site.woodland).not.toBe(cell.wood);
   });
 
   it('hands Arrival Day into one grounded overview and every traceable founding community', () => {
