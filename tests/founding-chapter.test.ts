@@ -107,6 +107,9 @@ describe('Founding Chapter 1a', () => {
     if (index < 0) throw new Error('Expected the founding settlement in authoritative state');
     simulation.state.settlements.splice(index, 1);
 
+    const reconstructed = foundingChapterBaseline(simulation.state);
+    expect(reconstructed?.communities.some(community => community.settlementId === missing.settlementId)).toBe(true);
+
     const next = chooseFoundingChapterScene(historian, simulation.state);
     expect(next).toBeDefined();
     expect(next?.subjectId).not.toBe(missing.settlementId);
