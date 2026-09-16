@@ -1,6 +1,6 @@
 import type { Settlement } from '../types';
 import { MATERIAL_KINDS, materialAmount, type MaterialKind } from './MaterialEconomy';
-import { addMaterial, takeMaterial } from './Inventory';
+import { addMaterial, storageRoom, takeMaterial } from './Inventory';
 
 const EPSILON = 1e-9;
 const round = (value: number): number => Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
@@ -98,12 +98,14 @@ function candidateForDirection(
 ): MaterialShipmentCandidate | undefined {
   const targetState = targetNeed(target, material);
   if (targetState.need <= EPSILON) return undefined;
+  const room = storageRoom(target);
+  if (room <= 0.08) return undefined;
   const ownPressure = source.materialUse?.materials[material]?.pressure ?? 0;
   if (ownPressure > 0.28 || source.materialUse?.criticalInputs.includes(material)) return undefined;
   const stock = materialAmount(source, material);
   const surplus = Math.max(0, stock - sourceReserve(source, material));
   if (surplus <= 0.08) return undefined;
-  const capacity = Math.max(0.2, routeVolume * 4.2);
+  const capacity = Math.min(room, Math.max(0.2, routeVolume * 4.2));
   const quantity = round(Math.min(surplus * 0.32, targetState.need, capacity));
   if (quantity <= 0.08) return undefined;
   const strategicWeight = targetState.critical ? 1.7 : 1;
@@ -121,7 +123,7 @@ function candidateForDirection(
 /**
  * Chooses one physically useful material shipment for a route. Demand comes from the shared
  * shortage model plus stalled construction; supply must be a genuine surplus after the exporting
- * settlement's own reserve.
+ * settlement's own reserve, and the destination must currently have room for the cargo.
  */
 export function chooseMaterialShipment(
   a: Settlement,
@@ -151,7 +153,7 @@ export function dispatchMaterialShipment(
   if (requested <= EPSILON) return 0;
   const reserve = sourceReserve(source, material);
   const available = Math.max(0, materialAmount(source, material) - reserve);
-  const quantity = round(Math.min(requested, available));
+  const quantity = round(Math.min(requested, available, storageRoom(target)));
   if (quantity <= EPSILON) return 0;
   const dispatched = round(takeMaterial(source, material, quantity));
   if (dispatched <= EPSILON) return 0;
@@ -174,8 +176,8 @@ export function dispatchMaterialShipment(
 }
 
 /**
- * Delivery preserves conservation. Transit loss and any quantity the destination cannot store are
- * both explicit losses; only accepted material becomes target stock.
+ * Delivery preserves conservation. Transit loss and any quantity the destination can no longer
+ * store are explicit losses; only accepted material becomes target stock.
  */
 export function deliverMaterialShipment(
   source: Settlement,
