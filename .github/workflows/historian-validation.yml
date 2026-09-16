@@ -1,0 +1,28 @@
+name: Historian narrative validation
+
+on:
+  pull_request:
+    paths:
+      - 'godbox.config.ts'
+      - 'src/main.ts'
+      - 'src/historian/**'
+      - 'tests/historian.test.ts'
+      - 'tests/founding-*.test.ts'
+      - '.github/workflows/historian-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx eslint src/historian/*.ts src/main.ts tests/historian.test.ts tests/founding-*.test.ts
+      - run: npx vitest run tests/historian.test.ts tests/founding-chapter.test.ts tests/founding-continuity.test.ts tests/founding-year-one.test.ts tests/founding-cast.test.ts tests/founding-character-memory.test.ts tests/founding-character-arc.test.ts
+      - run: npm run build
