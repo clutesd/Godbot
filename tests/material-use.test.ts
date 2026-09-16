@@ -118,6 +118,10 @@ describe('authoritative material use', () => {
     const sim = new Simulation({ seed: 'material-operating-pressure', startingPopulation: 240, settlementCount: [3, 3] });
     const settlement = sim.state.settlements[0]!;
     const residents = sim.state.people.filter(person => person.alive && person.homeId === settlement.id);
+
+    // Make this a genuinely empty physical-inventory fixture; founding timber/stone would otherwise
+    // partially satisfy maintenance and dilute the shortage signal being tested.
+    settlement.localMaterials = {};
     ensureMaterialInventory(settlement);
     settlement.infrastructure.roads = 0.7;
     settlement.infrastructure.bridges = 0.5;
