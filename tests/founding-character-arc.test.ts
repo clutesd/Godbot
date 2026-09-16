@@ -26,7 +26,8 @@ const BREAKDOWN: CandidateScoreBreakdown = {
 };
 
 function completedArrival(seed: string): Simulation {
-  const simulation = new Simulation({ seed, startMode: 'arrival' });
+  // Arc tests need stable five-pod geography so failures reflect narrative logic, not world placement.
+  const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
   simulation.advanceArrival(60);
   expect(simulation.historyRunning).toBe(true);
   return simulation;
