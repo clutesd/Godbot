@@ -9,6 +9,7 @@ import {
   chooseFoundingContinuityScene,
   FOUNDING_CONTINUITY_GRACE_END_MONTH,
   FOUNDING_CONTINUITY_MONTHS_PER_SECOND,
+  FOUNDING_CONTINUITY_PRIMARY_END_MONTH,
   foundingCommunitySnapshot,
   foundingContinuityProgress,
   installFoundingContinuityPacing,
@@ -33,7 +34,7 @@ function completeOrientation(simulation: Simulation, historian: Historian): void
     safety -= 1;
   }
   expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
-  // The next lookup releases the Month-Zero presentation freeze after the final shot has finished.
+  // The next lookup releases the Month-Zero presentation hold after the final shot has finished.
   expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
 }
 
@@ -89,7 +90,7 @@ describe('Founding Chapter 1b continuity', () => {
     const settlement = simulation.state.settlements.find(candidate => candidate.id === community.settlementId);
     if (!settlement) throw new Error('Expected founding settlement');
     simulation.step(3);
-    settlement.buildings = 2;
+    settlement.buildings = 8;
     settlement.resources.food = community.supplies.food * 0.55;
     settlement.localMaterials['timber'] = community.supplies.timber * 2;
 
@@ -128,6 +129,13 @@ describe('Founding Chapter 1b continuity', () => {
     expect(foundingContinuityProgress(historian, simulation.state).bridgeShown).toBe(true);
   });
 
+  it('does not start a fresh first-year chapter after the primary window has passed', () => {
+    const simulation = completedArrival('founding-continuity-late-resume');
+    simulation.step(FOUNDING_CONTINUITY_PRIMARY_END_MONTH + 1);
+    const historian = new Historian(simulation.config);
+    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
+  });
+
   it('expires the special continuity layer after its interruption grace window', () => {
     const simulation = completedArrival('founding-continuity-expiry');
     simulation.step(FOUNDING_CONTINUITY_GRACE_END_MONTH + 1);
@@ -135,17 +143,20 @@ describe('Founding Chapter 1b continuity', () => {
     expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('uses a deliberate first-year pace and freezes authoritative Month Zero during 1a', () => {
+  it('uses a deliberate first-year pace and holds authoritative Month Zero without catch-up', () => {
     const simulation = completedArrival('founding-continuity-pacing');
     const historian = new Historian(simulation.config);
+    const originalAutoRun = simulation.config.autoRun;
     installFoundingChapterPacing();
     installFoundingContinuityPacing();
     const presentation = new PresentationDirector(simulation.config);
 
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(simulation.config.autoRun).toBe(false);
     expect(presentation.tickBudget(simulation.state)).toBe(0);
 
     completeOrientation(simulation, historian);
+    expect(simulation.config.autoRun).toBe(originalAutoRun);
     const bridge = chooseFoundingContinuityScene(historian, simulation.state);
     expect(bridge).toBeDefined();
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
