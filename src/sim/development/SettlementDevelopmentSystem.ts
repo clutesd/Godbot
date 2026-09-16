@@ -336,8 +336,8 @@ function resourceBlockers(settlement: Settlement, response: DevelopmentResponse,
   for (const key of STOCK_KEYS) {
     const required = response.cost[key] + (key === 'wood' ? fuelReserve : 0);
     const available = settlement.resources[key];
-    if (available + 1e-9 >= required) continue;
-    const fuelOnly = key === 'wood' && fuelReserve > 0 && available + 1e-9 >= response.cost.wood;
+    if (available >= required) continue;
+    const fuelOnly = key === 'wood' && fuelReserve > 0 && available >= response.cost.wood;
     blockers.push({ code: fuelOnly ? 'fuel-reserve' : RESOURCE_BLOCK_CODE[key], resource: key, available, required });
   }
   return blockers;
@@ -358,7 +358,7 @@ function structuralMaterialBlockers(settlement: Settlement, requirements: readon
 
 function processedMaterialBlockers(settlement: Settlement, response: DevelopmentResponse): DevelopmentBlocker[] {
   return Object.entries(response.materialCost ?? {})
-    .filter(([id, required]) => (settlement.localMaterials[id] ?? 0) + 1e-9 < required)
+    .filter(([id, required]) => (settlement.localMaterials[id] ?? 0) < required)
     .map(([id, required]) => ({ code: 'insufficient-processed-material' as const, material: id,
       available: settlement.localMaterials[id] ?? 0, required }));
 }
