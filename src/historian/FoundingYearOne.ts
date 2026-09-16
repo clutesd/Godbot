@@ -1,4 +1,3 @@
-import { representedPopulation } from '../sim/Population';
 import type { HistoricalEvent, SimulationState } from '../sim/types';
 import { foundingChapterBaseline, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
 import {
@@ -52,7 +51,6 @@ interface HistorianConfigAccess {
 
 interface CommunityStory {
   community: FoundingCommunityBaseline;
-  snapshot: FoundingCommunitySnapshot;
   score: number;
   fact: string;
 }
@@ -250,7 +248,7 @@ function communityStory(community: FoundingCommunityBaseline, snapshot: Founding
   ];
   candidates.sort((a, b) => b.score - a.score || a.fact.localeCompare(b.fact));
   const strongest = candidates[0] ?? { score: 0.2, fact: 'remains close to its landing conditions' };
-  return { community, snapshot, score: strongest.score, fact: strongest.fact };
+  return { community, score: strongest.score, fact: strongest.fact };
 }
 
 function divergenceScene(
@@ -300,7 +298,7 @@ function divergenceScene(
   }, state);
 }
 
-function unresolvedStory(state: SimulationState, baseline: FoundingChapterBaseline, snapshot: FoundingYearOneSnapshot): UnresolvedStory {
+function unresolvedStory(baseline: FoundingChapterBaseline, snapshot: FoundingYearOneSnapshot): UnresolvedStory {
   const stories: UnresolvedStory[] = [];
   for (const current of snapshot.communities) {
     const community = baseline.communities.find(candidate => candidate.settlementId === current.settlementId);
@@ -339,7 +337,7 @@ function unresolvedScene(
 ): ObservationCandidate | undefined {
   const arrival = state.history.find(event => event.id === baseline.eventId && event.type === 'ARRIVAL_DAY');
   if (!arrival) return undefined;
-  const unresolved = unresolvedStory(state, baseline, snapshot);
+  const unresolved = unresolvedStory(baseline, snapshot);
   const standout = snapshot.significantEvents
     .map(id => state.history.find(event => event.id === id))
     .filter((event): event is HistoricalEvent => Boolean(event))
