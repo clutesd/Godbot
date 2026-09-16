@@ -90,6 +90,27 @@ describe('authoritative material use', () => {
     expect(maxMaterialProgressIncrement(settlement, requirements)).toBe(0);
   });
 
+  it('bridges legacy-only stock into canonical storage without duplicating overlapping raw materials', () => {
+    const sim = new Simulation({ seed: 'material-authority-bridge', startingPopulation: 90, settlementCount: [2, 2] });
+    const settlement = sim.state.settlements[0]!;
+    const residents = sim.state.people.filter(person => person.alive && person.homeId === settlement.id);
+    const inventory = ensureMaterialInventory(settlement);
+    inventory.stock['plant-fiber'] = 2;
+    inventory.stock.lumber = 3;
+    inventory.stock.timber = 7;
+    settlement.localMaterials.timber = 5;
+    sim.state.month = 6;
+
+    advanceSettlementMaterialUse(sim.state, settlement, residents);
+
+    expect(settlement.localMaterials['plant-fiber']).toBeCloseTo(2, 5);
+    expect(settlement.localMaterials.lumber).toBeCloseTo(3, 5);
+    expect(inventory.stock['plant-fiber']).toBeCloseTo(0, 5);
+    expect(inventory.stock.lumber).toBeCloseTo(0, 5);
+    expect(settlement.localMaterials.timber).toBeCloseTo(5, 5);
+    expect(inventory.stock.timber).toBeCloseTo(7, 5);
+  });
+
   it('turns operating shortages into explicit pressure and never consumes twice in one month', () => {
     const sim = new Simulation({ seed: 'material-operating-pressure', startingPopulation: 240, settlementCount: [3, 3] });
     const settlement = sim.state.settlements[0]!;
