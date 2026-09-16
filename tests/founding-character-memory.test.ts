@@ -125,7 +125,7 @@ describe('Founding character memory 2b', () => {
     expect(early.statement.text).not.toContain('When I last watched');
 
     simulation.state.month = 6;
-    person.activity = person.activity === 'craft' ? 'construct' : 'craft';
+    person.activity = 'craft';
     const later = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:6`));
     expect(later.statement.observerMemory?.callbackApplied).toBe(true);
     expect(later.statement.text).toContain('immediate activity has changed');
