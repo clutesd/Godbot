@@ -32,6 +32,30 @@ export interface HistorianClaimSet {
   eventType?: HistoricalEventType;
 }
 
+/**
+ * Presentation-only memory persisted with a Historian statement. It lets an interrupted browser
+ * observation remember what it previously saw without making documentary attention simulation state.
+ */
+export interface FoundingCharacterObserverMemory {
+  kind: 'founding-character';
+  personId: string;
+  observedMonth: number;
+  homeId: string;
+  homeName: string;
+  role: string;
+  occupation: string;
+  activity: string;
+  partnerId?: string;
+  childrenCount: number;
+  strongestExpertise?: { domain: string; competence: number };
+  historicalStatus: 'ordinary' | 'notable' | 'historical';
+  sceneId: string;
+  introduction: boolean;
+  callbackApplied: boolean;
+}
+
+export type HistorianObserverMemory = FoundingCharacterObserverMemory;
+
 export interface HistorianStatement {
   id: string;
   month: number;
@@ -42,6 +66,7 @@ export interface HistorianStatement {
   sourceArchiveIds: string[];
   claims: HistorianClaimSet;
   voiceAssetId?: string;
+  observerMemory?: HistorianObserverMemory;
 }
 
 export interface CandidateScoreBreakdown {
