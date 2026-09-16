@@ -6,9 +6,11 @@ import { cellAt } from '../world';
 import {
   advanceMaterialProcessing,
   ensureMaterialInventory,
+  materialAmount,
   recordMaterialExtraction,
   type RawMaterialKind,
 } from './MaterialEconomy';
+import { storageRoom } from './Inventory';
 import { recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import {
   extractDeposit,
@@ -19,16 +21,23 @@ import {
 } from './WorldResources';
 
 const CATCHMENT_RADIUS_CELLS = 2;
-const BASE_DEPOSITS: readonly DepositResourceKind[] = ['stone', 'clay'];
-const METAL_DEPOSITS: readonly DepositResourceKind[] = ['copper-ore', 'tin-ore', 'iron-ore'];
+/**
+ * These resources are not yet represented by the newer generic ResourceSystem catalog. Timber,
+ * stone and metal ores are intentionally absent: ResourceSystem is their sole extraction authority.
+ */
+const SUPPLEMENTAL_DEPOSITS = ['clay', 'coal', 'uranium-ore'] as const satisfies readonly DepositResourceKind[];
 const SUPPLEMENTAL_RENEWABLES = ['medicinal-flora', 'plant-fiber'] as const;
+type SupplementalDeposit = typeof SUPPLEMENTAL_DEPOSITS[number];
 type SupplementalRenewable = typeof SUPPLEMENTAL_RENEWABLES[number];
 
 export interface SettlementExtractionResult {
+  /** True when a physical legacy-only resource catchment exists and was evaluated. */
   authoritative: boolean;
+  /** Compatibility diagnostics only; timber is extracted exclusively by ResourceSystem. */
   requestedWood: number;
   harvestedWood: number;
   requestedMinerals: number;
+  /** Supplemental clay/coal/uranium extracted this pass; excludes stone and metal ores. */
   extractedMinerals: number;
   deposits: Partial<Record<DepositResourceKind, number>>;
   renewables: Partial<Record<SupplementalRenewable, number>>;
@@ -37,10 +46,6 @@ export interface SettlementExtractionResult {
 interface ExtractionSite {
   cell: WorldCell;
   amount: number;
-}
-
-interface DepositExtractionSite extends ExtractionSite {
-  kind: DepositResourceKind;
 }
 
 const distanceScore = (cell: WorldCell, home: WorldCell): number =>
@@ -78,17 +83,10 @@ function advanceRenewablesToMonth(cell: WorldCell, month: number): void {
   resources.lastRegeneratedMonth = month;
 }
 
-function eligibleDeposits(settlement: Settlement): DepositResourceKind[] {
-  const kinds: DepositResourceKind[] = [...BASE_DEPOSITS];
-  if (practical(settlement, 'metal-smelting') > 0.12 || practical(settlement, 'iron-working') > 0.12) {
-    kinds.push(...METAL_DEPOSITS);
-  }
-  if (practical(settlement, 'mechanical-power') > 0.12 || practical(settlement, 'industrial-chemistry') > 0.12) {
-    kinds.push('coal');
-  }
-  if (practical(settlement, 'nuclear-fission') > 0.12 || practical(settlement, 'nuclear-energy') > 0.12) {
-    kinds.push('uranium-ore');
-  }
+function eligibleSupplementalDeposits(settlement: Settlement): SupplementalDeposit[] {
+  const kinds: SupplementalDeposit[] = ['clay'];
+  if (practical(settlement, 'mechanical-power') > 0.12 || practical(settlement, 'industrial-chemistry') > 0.12) kinds.push('coal');
+  if (practical(settlement, 'nuclear-fission') > 0.12 || practical(settlement, 'nuclear-energy') > 0.12) kinds.push('uranium-ore');
   return kinds;
 }
 
@@ -119,39 +117,34 @@ function harvestRenewableAcross(
   return { total, sites };
 }
 
-function extractMinerals(
-  settlement: Settlement,
+function extractDepositAcross(
   cells: readonly WorldCell[],
+  kind: SupplementalDeposit,
   requested: number,
-): { total: number; deposits: Partial<Record<DepositResourceKind, number>>; sites: DepositExtractionSite[] } {
-  const extracted: Partial<Record<DepositResourceKind, number>> = {};
-  const sites: DepositExtractionSite[] = [];
-  if (requested <= 0) return { total: 0, deposits: extracted, sites };
-  const kinds = eligibleDeposits(settlement);
-  const candidates: Array<{ cell: WorldCell; kind: DepositResourceKind; score: number }> = [];
-  for (let distance = 0; distance < cells.length; distance += 1) {
-    const cell = cells[distance];
-    if (!cell) continue;
-    for (const kind of kinds) {
+): { total: number; sites: ExtractionSite[] } {
+  if (requested <= 0) return { total: 0, sites: [] };
+  const ranked = cells
+    .map((cell, distance) => {
       const deposit = cell.naturalResources?.deposits[kind];
-      if (!deposit || deposit.reserve <= 0) continue;
-      const score = deposit.accessibility * (0.55 + deposit.grade * 0.45) * (0.5 + Math.min(1, deposit.reserve / 120)) / (1 + distance * 0.06);
-      candidates.push({ cell, kind, score });
-    }
-  }
-  candidates.sort((a, b) => b.score - a.score);
+      const score = deposit
+        ? deposit.accessibility * (0.55 + deposit.grade * 0.45) * (0.5 + Math.min(1, deposit.reserve / 120)) / (1 + distance * 0.06)
+        : 0;
+      return { cell, score };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score);
   let remaining = requested;
   let total = 0;
-  for (const candidate of candidates) {
+  const sites: ExtractionSite[] = [];
+  for (const candidate of ranked) {
     if (remaining <= 1e-9) break;
-    const amount = extractDeposit(candidate.cell, candidate.kind, remaining);
+    const amount = extractDeposit(candidate.cell, kind, remaining);
     if (amount <= 0) continue;
-    extracted[candidate.kind] = (extracted[candidate.kind] ?? 0) + amount;
-    sites.push({ cell: candidate.cell, kind: candidate.kind, amount });
     total += amount;
     remaining -= amount;
+    sites.push({ cell: candidate.cell, amount });
   }
-  return { total, deposits: extracted, sites };
+  return { total, sites };
 }
 
 function scaleLabour(use: LabourUse, share: number): LabourUse {
@@ -191,23 +184,31 @@ function recordWorldWorkSites(
   }
 }
 
-function reconcilePositiveBalance(settlement: Settlement, key: 'wood' | 'minerals', actual: number): void {
-  const requested = Math.max(0, settlement.monthlyBalance[key]);
-  if (requested <= 0) return;
-  const shortfall = Math.max(0, requested - actual);
-  settlement.monthlyBalance[key] -= shortfall;
-  settlement.resources[key] = Math.max(0, settlement.resources[key] - shortfall);
-}
-
-function requestedSupplementalRenewables(workers: Partial<Record<Person['occupation'], number>>): Record<SupplementalRenewable, number> {
+function requestedSupplementalRenewables(
+  settlement: Settlement,
+  workers: Partial<Record<Person['occupation'], number>>,
+): Record<SupplementalRenewable, number> {
   const count = (occupation: Person['occupation']): number => workers[occupation] ?? 0;
   const foragers = count('forager');
   const keepers = count('keeper');
   const builders = count('builder');
+  const medicinalTarget = 4 + keepers * 0.12 + foragers * 0.04;
+  const fiberTarget = 6 + builders * 0.12 + foragers * 0.06;
   return {
-    'medicinal-flora': foragers * 0.018 + keepers * 0.006,
-    'plant-fiber': foragers * 0.032 + builders * 0.01,
+    'medicinal-flora': Math.min(foragers * 0.018 + keepers * 0.006, Math.max(0, medicinalTarget - materialAmount(settlement, 'medicinal-flora'))),
+    'plant-fiber': Math.min(foragers * 0.032 + builders * 0.01, Math.max(0, fiberTarget - materialAmount(settlement, 'plant-fiber'))),
   };
+}
+
+function requestedSupplementalDeposit(settlement: Settlement, kind: SupplementalDeposit): number {
+  const operatingDemand = settlement.materialUse?.materials[kind]?.demand ?? 0;
+  const baseTarget = kind === 'clay'
+    ? 4 + settlement.infrastructure.workshops * 8 + settlement.infrastructure.factories * 2
+    : kind === 'coal'
+      ? 4 + settlement.industry.intensity * 12 + settlement.infrastructure.factories * 6
+      : 1 + settlement.infrastructure.power * 2;
+  const target = Math.max(baseTarget, operatingDemand * 6);
+  return Math.max(0, target - materialAmount(settlement, kind));
 }
 
 function extractionSnapshotFromFlow(settlement: Settlement, month: number): SettlementExtractionResult | undefined {
@@ -215,14 +216,14 @@ function extractionSnapshotFromFlow(settlement: Settlement, month: number): Sett
   if (!inventory || inventory.lastExtractionMonth !== month || inventory.lastFlow?.month !== month) return undefined;
   const extracted = inventory.lastFlow.extracted;
   const deposits: Partial<Record<DepositResourceKind, number>> = {};
-  for (const kind of [...BASE_DEPOSITS, ...METAL_DEPOSITS, 'coal', 'uranium-ore'] as const) {
+  for (const kind of SUPPLEMENTAL_DEPOSITS) {
     const amount = extracted[kind];
     if (amount !== undefined) deposits[kind] = amount;
   }
   return {
     authoritative: true,
     requestedWood: Math.max(0, settlement.monthlyBalance.wood),
-    harvestedWood: extracted.timber ?? 0,
+    harvestedWood: 0,
     requestedMinerals: Math.max(0, settlement.monthlyBalance.minerals),
     extractedMinerals: Object.values(deposits).reduce((sum, amount) => sum + (amount ?? 0), 0),
     deposits,
@@ -234,9 +235,9 @@ function extractionSnapshotFromFlow(settlement: Settlement, month: number): Sett
 }
 
 /**
- * Converts legacy monthly wood/mineral production estimates into real extraction, writes exact
- * physical identities into the typed material ledger, then gives local specialists one bounded
- * processing pass. Legacy aggregates remain the compatibility demand/value layer until Step 3.
+ * Supplemental extraction for material kinds the generic ResourceSystem does not yet model.
+ * ResourceSystem alone owns timber, stone and metal-ore extraction. This pass therefore cannot
+ * double-deplete those deposits or spend labour on a second version of the same gathering work.
  */
 export function advanceSettlementResourceExtraction(
   state: SimulationState,
@@ -249,9 +250,9 @@ export function advanceSettlementResourceExtraction(
   const empty: SettlementExtractionResult = {
     authoritative: false,
     requestedWood,
-    harvestedWood: requestedWood,
+    harvestedWood: 0,
     requestedMinerals,
-    extractedMinerals: requestedMinerals,
+    extractedMinerals: 0,
     deposits: {},
     renewables: {},
   };
@@ -259,8 +260,9 @@ export function advanceSettlementResourceExtraction(
 
   const cells = settlementResourceCatchment(state, settlement);
   const authoritative = cells.some((cell) => cell.naturalResources !== undefined);
+  const inventory = ensureMaterialInventory(settlement);
   if (!authoritative) {
-    if (settlement.materials) advanceMaterialProcessing(state, settlement, localResidents);
+    advanceMaterialProcessing(state, settlement, localResidents);
     return empty;
   }
 
@@ -273,74 +275,46 @@ export function advanceSettlementResourceExtraction(
   for (const cell of cells) advanceRenewablesToMonth(cell, state.month);
 
   const budget = resourceLabourBudget(state, settlement, localResidents);
-  const timberCapacity = (budget.forager ?? 0) + (budget.builder ?? 0);
-  const timberHarvest = harvestRenewableAcross(cells, 'timber', Math.min(requestedWood, timberCapacity));
-  const harvestedWood = timberHarvest.total;
-  const timberLabour = useLabourDetailed(budget, ['forager', 'builder'], harvestedWood);
-  recordWorldWorkSites(state, settlement, 'timber', timberHarvest.sites, ['forager', 'builder'], timberLabour);
-
-  const mineralCapacity = (budget.artisan ?? 0) + (budget.builder ?? 0);
-  const mineralExtraction = extractMinerals(settlement, cells, Math.min(requestedMinerals, mineralCapacity));
-  const mineralLabour = useLabourDetailed(budget, ['artisan', 'builder'], mineralExtraction.total);
-  const mineralTotal = mineralExtraction.sites.reduce((sum, site) => sum + site.amount, 0);
-  if (mineralTotal > 0 && mineralLabour.total > 0) {
-    for (const site of mineralExtraction.sites) {
-      recordWorldWorkSites(
-        state,
-        settlement,
-        site.kind,
-        [site],
-        ['artisan', 'builder'],
-        scaleLabour(mineralLabour, site.amount / mineralTotal),
-      );
-    }
-  }
-
-  const supplementalRequests = requestedSupplementalRenewables(settlementLabour(state, settlement, localResidents).effective);
   const renewables: Partial<Record<SupplementalRenewable, number>> = {};
+  const renewableRequests = requestedSupplementalRenewables(
+    settlement,
+    settlementLabour(state, settlement, localResidents).effective,
+  );
   for (const kind of SUPPLEMENTAL_RENEWABLES) {
-    const harvest = harvestRenewableAcross(cells, kind, Math.min(supplementalRequests[kind], (budget.forager ?? 0) + (budget.keeper ?? 0)));
+    const capacity = (budget.forager ?? 0) + (budget.keeper ?? 0);
+    const requested = Math.min(renewableRequests[kind], capacity, storageRoom(settlement));
+    const harvest = harvestRenewableAcross(cells, kind, requested);
     const harvested = harvest.total;
     const supplementalLabour = useLabourDetailed(budget, ['forager', 'keeper'], harvested);
     recordWorldWorkSites(state, settlement, kind, harvest.sites, ['forager', 'keeper'], supplementalLabour);
-    if (harvested > 0) renewables[kind] = harvested;
+    const accepted = recordMaterialExtraction(settlement, kind, harvested, state.month);
+    if (accepted > 0) renewables[kind] = accepted;
   }
 
-  reconcilePositiveBalance(settlement, 'wood', harvestedWood);
-  reconcilePositiveBalance(settlement, 'minerals', mineralExtraction.total);
+  const deposits: Partial<Record<DepositResourceKind, number>> = {};
+  let extractedMinerals = 0;
+  for (const kind of eligibleSupplementalDeposits(settlement)) {
+    const capacity = (budget.artisan ?? 0) + (budget.builder ?? 0);
+    const requested = Math.min(requestedSupplementalDeposit(settlement, kind), capacity, storageRoom(settlement));
+    const extraction = extractDepositAcross(cells, kind, requested);
+    const labour = useLabourDetailed(budget, ['artisan', 'builder'], extraction.total);
+    recordWorldWorkSites(state, settlement, kind, extraction.sites, ['artisan', 'builder'], labour);
+    const accepted = recordMaterialExtraction(settlement, kind, extraction.total, state.month);
+    if (accepted <= 0) continue;
+    deposits[kind] = accepted;
+    extractedMinerals += accepted;
+  }
 
-  const extractedAny = harvestedWood > 0 || mineralExtraction.total > 0
-    || Object.values(renewables).some((amount) => (amount ?? 0) > 0);
-  if (!settlement.materials && !extractedAny) {
-    return {
-      authoritative: true,
-      requestedWood,
-      harvestedWood,
-      requestedMinerals,
-      extractedMinerals: mineralExtraction.total,
-      deposits: mineralExtraction.deposits,
-      renewables,
-    };
-  }
-  const inventory = ensureMaterialInventory(settlement);
-  if (harvestedWood > 0) recordMaterialExtraction(settlement, 'timber', harvestedWood, state.month);
-  for (const [kind, amount] of Object.entries(mineralExtraction.deposits) as Array<[DepositResourceKind, number | undefined]>) {
-    if (amount && amount > 0) recordMaterialExtraction(settlement, kind as RawMaterialKind, amount, state.month);
-  }
-  for (const kind of SUPPLEMENTAL_RENEWABLES) {
-    const amount = renewables[kind] ?? 0;
-    if (amount > 0) recordMaterialExtraction(settlement, kind, amount, state.month);
-  }
   inventory.lastExtractionMonth = state.month;
   advanceMaterialProcessing(state, settlement, localResidents);
 
   return {
     authoritative: true,
     requestedWood,
-    harvestedWood,
+    harvestedWood: 0,
     requestedMinerals,
-    extractedMinerals: mineralExtraction.total,
-    deposits: mineralExtraction.deposits,
+    extractedMinerals,
+    deposits,
     renewables,
   };
 }
