@@ -101,6 +101,19 @@ describe('settlement supplemental resource extraction', () => {
     const { settlement } = emptyCatchment(sim);
     sim.state.month = 1;
     const residents = sim.state.people.filter((person) => person.alive && person.homeId === settlement.id);
+
+    // Isolate extraction from legitimate operating consumption in MaterialUse.
+    settlement.infrastructure.roads = 0;
+    settlement.infrastructure.bridges = 0;
+    settlement.infrastructure.ports = 0;
+    settlement.infrastructure.workshops = 0;
+    settlement.infrastructure.factories = 0;
+    settlement.infrastructure.rail = 0;
+    settlement.infrastructure.power = 0;
+    settlement.industry.intensity = 0;
+    settlement.conflictPressure = 0;
+    settlement.politicalPower.military = 0;
+
     addMaterial(settlement, 'timber', 12);
     addMaterial(settlement, 'stone', 8);
     const timberBefore = settlement.localMaterials.timber;
