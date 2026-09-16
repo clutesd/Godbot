@@ -1,6 +1,7 @@
 import type { GodboxConfigInput } from './src/config';
 import { installFoundingChapter } from './src/historian/FoundingChapter';
 import { installFoundingContinuity } from './src/historian/FoundingContinuity';
+import { installFoundingYearOne } from './src/historian/FoundingYearOne';
 import { installWatcherHistorian } from './src/historian/WatcherHistorian';
 import { presetConfig, timePresetConfig, type GodboxPresetName, type GodboxTimePresetName } from './src/presets';
 
@@ -15,6 +16,7 @@ export const GODBOX_TIME_PRESET: GodboxTimePresetName = 'documentary';
 installWatcherHistorian();
 installFoundingChapter();
 installFoundingContinuity();
+installFoundingYearOne();
 
 const LOCAL_OVERRIDES: GodboxConfigInput = {
   seed: 'witness-the-saffron-river',
