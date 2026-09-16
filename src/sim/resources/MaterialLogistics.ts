@@ -1,5 +1,6 @@
 import type { Settlement } from '../types';
-import { ensureMaterialInventory, type MaterialKind } from './MaterialEconomy';
+import { MATERIAL_KINDS, materialAmount, type MaterialKind } from './MaterialEconomy';
+import { addMaterial, takeMaterial } from './Inventory';
 
 const EPSILON = 1e-9;
 const round = (value: number): number => Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
@@ -62,13 +63,13 @@ function sourceReserve(settlement: Settlement, material: MaterialKind): number {
 
 function preferredProjectNeed(settlement: Settlement, material: MaterialKind): number {
   const project = settlement.development?.project;
-  if (!project?.materialRequirements || !settlement.materials) return 0;
+  if (!project?.materialRequirements) return 0;
   let preferredNeed = 0;
   for (const requirement of project.materialRequirements) {
     if (requirement.options[0] !== material) continue;
     const remainingProgress = Math.max(0, 1 - project.progress);
     const remainingBill = requirement.amount * remainingProgress;
-    const availableSubstitutes = requirement.options.reduce((sum, option) => sum + settlement.materials!.stock[option], 0);
+    const availableSubstitutes = requirement.options.reduce((sum, option) => sum + materialAmount(settlement, option), 0);
     preferredNeed += Math.max(0, remainingBill - availableSubstitutes);
   }
   return round(preferredNeed);
@@ -81,8 +82,7 @@ function targetNeed(settlement: Settlement, material: MaterialKind): { need: num
   const critical = operatingCritical || projectNeed > EPSILON;
   const pressure = Math.max(materialPressure?.pressure ?? 0, operatingCritical ? 0.65 : 0, projectNeed > EPSILON ? 0.82 : 0);
   if (pressure <= 0.08) return { need: 0, pressure, critical };
-  const inventory = settlement.materials;
-  const stock = inventory?.stock[material] ?? 0;
+  const stock = materialAmount(settlement, material);
   const demand = materialPressure?.demand ?? 0;
   const unmet = materialPressure?.unmet ?? 0;
   // Import enough to cover several future cycles rather than oscillating cargo every month.
@@ -96,12 +96,11 @@ function candidateForDirection(
   material: MaterialKind,
   routeVolume: number,
 ): MaterialShipmentCandidate | undefined {
-  if (!source.materials || !target.materials) return undefined;
   const targetState = targetNeed(target, material);
   if (targetState.need <= EPSILON) return undefined;
   const ownPressure = source.materialUse?.materials[material]?.pressure ?? 0;
   if (ownPressure > 0.28 || source.materialUse?.criticalInputs.includes(material)) return undefined;
-  const stock = source.materials.stock[material];
+  const stock = materialAmount(source, material);
   const surplus = Math.max(0, stock - sourceReserve(source, material));
   if (surplus <= 0.08) return undefined;
   const capacity = Math.max(0.2, routeVolume * 4.2);
@@ -129,10 +128,8 @@ export function chooseMaterialShipment(
   b: Settlement,
   routeVolume: number,
 ): MaterialShipmentCandidate | undefined {
-  if (!a.materials || !b.materials) return undefined;
-  const materials = Object.keys(a.materials.stock) as MaterialKind[];
   let best: MaterialShipmentCandidate | undefined;
-  for (const material of materials) {
+  for (const material of MATERIAL_KINDS) {
     for (const [source, target] of [[a, b], [b, a]] as const) {
       const candidate = candidateForDirection(source, target, material, routeVolume);
       if (!candidate) continue;
@@ -143,7 +140,7 @@ export function chooseMaterialShipment(
   return best;
 }
 
-/** Cargo leaves the source immediately and is therefore unavailable to local consumers in transit. */
+/** Cargo leaves canonical source stock immediately and is unavailable to local consumers in transit. */
 export function dispatchMaterialShipment(
   source: Settlement,
   target: Settlement,
@@ -151,15 +148,15 @@ export function dispatchMaterialShipment(
   requested: number,
   month: number,
 ): number {
-  if (!source.materials || requested <= EPSILON) return 0;
+  if (requested <= EPSILON) return 0;
   const reserve = sourceReserve(source, material);
-  const available = Math.max(0, source.materials.stock[material] - reserve);
+  const available = Math.max(0, materialAmount(source, material) - reserve);
   const quantity = round(Math.min(requested, available));
   if (quantity <= EPSILON) return 0;
-  source.materials.stock[material] = round(source.materials.stock[material] - quantity);
-  source.materials.revision += 1;
+  const dispatched = round(takeMaterial(source, material, quantity));
+  if (dispatched <= EPSILON) return 0;
   const state = logistics(source);
-  state.lifetimeExports[material] = round((state.lifetimeExports[material] ?? 0) + quantity);
+  state.lifetimeExports[material] = round((state.lifetimeExports[material] ?? 0) + dispatched);
   state.lastExportMonth = month;
   const key = dependencyKey(target.id, material);
   const record = state.dependencies[key] ?? {
@@ -170,13 +167,16 @@ export function dispatchMaterialShipment(
     lostInTransit: 0,
     lastShipmentMonth: month,
   };
-  record.exported = round(record.exported + quantity);
+  record.exported = round(record.exported + dispatched);
   record.lastShipmentMonth = month;
   state.dependencies[key] = record;
-  return quantity;
+  return dispatched;
 }
 
-/** Delivery preserves conservation: only the delivered fraction reaches the target; loss is explicit. */
+/**
+ * Delivery preserves conservation. Transit loss and any quantity the destination cannot store are
+ * both explicit losses; only accepted material becomes target stock.
+ */
 export function deliverMaterialShipment(
   source: Settlement,
   target: Settlement,
@@ -186,11 +186,9 @@ export function deliverMaterialShipment(
   month: number,
 ): number {
   if (dispatched <= EPSILON) return 0;
-  const inventory = ensureMaterialInventory(target);
-  const delivered = round(dispatched * Math.max(0, Math.min(1, deliveryFraction)));
+  const potential = round(dispatched * Math.max(0, Math.min(1, deliveryFraction)));
+  const delivered = round(addMaterial(target, material, potential));
   const lost = round(Math.max(0, dispatched - delivered));
-  inventory.stock[material] = round(inventory.stock[material] + delivered);
-  inventory.revision += 1;
 
   const targetState = logistics(target);
   targetState.lifetimeImports[material] = round((targetState.lifetimeImports[material] ?? 0) + delivered);
