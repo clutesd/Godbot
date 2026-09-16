@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import type { Settlement } from '../src/sim/types';
 import { advanceMovementPaths, installMovementRoadAuthority, movementPathStage } from '../src/sim/environment/PathEvolution';
-import { ensureMaterialInventory } from '../src/sim/resources/MaterialEconomy';
 import { TransportationSystem } from '../src/sim/transport/TransportationSystem';
 
 function grant(settlement: Settlement, id: string, practice = 0.9): void {
@@ -23,7 +22,7 @@ function grant(settlement: Settlement, id: string, practice = 0.9): void {
 }
 
 describe('movement-shaped road evolution', () => {
-  it('promotes only a genuinely used footpath, then gates cart and engineered roads behind capability', () => {
+  it('promotes only a genuinely used footpath, then gates cart and engineered roads behind capability and canonical material', () => {
     const simulation = new Simulation({ seed: 'path-evolution-regression', startingPopulation: 30, settlementCount: [2, 2] });
     const state = simulation.state;
     const settlement = state.settlements[0]!;
@@ -48,16 +47,16 @@ describe('movement-shaped road evolution', () => {
     grant(settlement, 'improved-roads');
     settlement.infrastructure.workshops = 0.5;
     settlement.resources.wealth = 50;
-    const inventory = ensureMaterialInventory(settlement);
-    inventory.stock.stone = 2;
-    const stoneBefore = inventory.stock.stone;
+    // No ensureMaterialInventory call: an engineered road must recognize canonical stone directly.
+    settlement.localMaterials.stone = 2;
+    const stoneBefore = settlement.localMaterials.stone;
     state.month = 36;
     cell.modifications.footpath.lastMonth = 36;
     advanceMovementPaths(state);
 
     expect(cell.modifications.road?.intensity).toBeGreaterThan(0.1);
     expect(movementPathStage(cell)).toBe('engineered-road');
-    expect(inventory.stock.stone).toBeLessThan(stoneBefore);
+    expect(settlement.localMaterials.stone).toBeLessThan(stoneBefore);
     expect(settlement.infrastructure.roads).toBeGreaterThan(0.03);
   });
 
