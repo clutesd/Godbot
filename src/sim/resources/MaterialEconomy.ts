@@ -2,6 +2,7 @@ import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
 import type { Person, Settlement, SimulationState } from '../types';
+import { addMaterial, publishBulkStocks, takeMaterial } from './Inventory';
 
 export const RAW_MATERIAL_KINDS = [
   'timber',
@@ -34,6 +35,19 @@ export type ProcessedMaterialKind = typeof PROCESSED_MATERIAL_KINDS[number];
 export type MaterialKind = RawMaterialKind | ProcessedMaterialKind;
 export type MaterialStock = Record<MaterialKind, number>;
 
+export const MATERIAL_KINDS = [...RAW_MATERIAL_KINDS, ...PROCESSED_MATERIAL_KINDS] as const;
+
+/**
+ * Material kinds that existed only in the old typed economy. When loading a Step-1B-era save that
+ * already has canonical ResourceSystem stock, these may be migrated safely. Timber, stone, ores,
+ * charcoal and bronze are deliberately excluded because both old and modern systems could have
+ * produced them and merging would double-count physical stock.
+ */
+export const LEGACY_ONLY_MATERIAL_KINDS: readonly MaterialKind[] = [
+  'medicinal-flora', 'plant-fiber', 'clay', 'coal', 'uranium-ore',
+  'lumber', 'brick', 'copper', 'tin', 'iron', 'steel', 'medicine', 'textile',
+] as const;
+
 export interface MaterialFlowSnapshot {
   month: number;
   extracted: Partial<Record<RawMaterialKind, number>>;
@@ -43,6 +57,10 @@ export interface MaterialFlowSnapshot {
 }
 
 export interface MaterialInventoryState {
+  /**
+   * Compatibility alias only. After ensureMaterialInventory() this is the same object as
+   * Settlement.localMaterials, never an independently mutable physical ledger.
+   */
   stock: MaterialStock;
   revision: number;
   lastExtractionMonth?: number;
@@ -56,9 +74,8 @@ export interface MaterialInventoryState {
 declare module '../types' {
   interface Settlement {
     /**
-     * Legacy typed material ledger retained during the authority migration. Step 1B removes it as
-     * a construction/material-availability authority; localMaterials is canonical physical stock.
-     * The remaining extraction/processing/logistics writers are retired or bridged in Step 1C.
+     * Typed material telemetry and a compatibility stock alias. Physical quantity is owned solely
+     * by localMaterials/Inventory.ts; `materials.stock` is normalized to that same object.
      */
     materials?: MaterialInventoryState;
   }
@@ -91,29 +108,20 @@ const recipe = (
 ): MaterialRecipe => ({ id, inputs, outputs, knowledge, work, maxInputShare });
 
 /**
- * First production graph. Ordering is deliberately dependency-safe so products made earlier in a
- * month may feed a later recipe, while monthly share/capacity limits prevent instant stock churn.
+ * Advanced production not yet represented by the newer ResourceSystem recipe catalog. Charcoal
+ * and bronze are intentionally absent because the modern recipe system already owns them. Tin ore
+ * likewise stays with canonical bronze casting rather than being refined into an unused dead-end.
  */
 export const MATERIAL_RECIPES: readonly MaterialRecipe[] = [
   recipe('saw-lumber', { timber: 1 }, { lumber: 0.84 }, [
     { id: 'stone-composites', stage: 'adopted', minPractice: 0.18 },
   ], 0.3, 0.22),
-  recipe('burn-charcoal', { timber: 1 }, { charcoal: 0.6 }, [
-    { id: 'fire-control', stage: 'adopted', minPractice: 0.18 },
-  ], 0.24, 0.18),
   recipe('fire-brick', { clay: 1, timber: 0.22 }, { brick: 0.88 }, [
     { id: 'pottery-firing', stage: 'adopted', minPractice: 0.28 },
   ], 0.48, 0.28),
   recipe('smelt-copper', { 'copper-ore': 1, charcoal: 0.32 }, { copper: 0.68 }, [
     { id: 'metal-smelting', stage: 'adopted', minPractice: 0.3 },
   ], 0.62, 0.32),
-  recipe('smelt-tin', { 'tin-ore': 1, charcoal: 0.28 }, { tin: 0.66 }, [
-    { id: 'metal-smelting', stage: 'adopted', minPractice: 0.3 },
-  ], 0.58, 0.3),
-  recipe('alloy-bronze', { copper: 0.88, tin: 0.12 }, { bronze: 0.9 }, [
-    { id: 'metal-smelting', stage: 'adopted', minPractice: 0.34 },
-    { id: 'material-testing', stage: 'adopted', minPractice: 0.18 },
-  ], 0.48, 0.35),
   recipe('smelt-iron', { 'iron-ore': 1, charcoal: 0.55 }, { iron: 0.56 }, [
     { id: 'iron-working', stage: 'adopted', minPractice: 0.34 },
     { id: 'high-temperature-ceramics', stage: 'adopted', minPractice: 0.28 },
@@ -131,22 +139,54 @@ export const MATERIAL_RECIPES: readonly MaterialRecipe[] = [
   ], 0.28, 0.24),
 ] as const;
 
-const ALL_MATERIALS = [...RAW_MATERIAL_KINDS, ...PROCESSED_MATERIAL_KINDS] as const;
 const EPSILON = 1e-9;
 
 export function emptyMaterialStock(): MaterialStock {
-  return Object.fromEntries(ALL_MATERIALS.map((kind) => [kind, 0])) as MaterialStock;
+  return Object.fromEntries(MATERIAL_KINDS.map((kind) => [kind, 0])) as MaterialStock;
+}
+
+function round(value: number): number {
+  return Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
+}
+
+/**
+ * Normalizes old saves and the old API without preserving a second stock authority. If the
+ * canonical inventory is empty we can safely migrate the complete historical typed stock. If the
+ * modern inventory already contains physical stock, only legacy-only kinds are migrated to avoid
+ * duplicating timber/stone/ore/charcoal/bronze that may have been produced by both systems.
+ */
+function attachCanonicalStock(settlement: Settlement, inventory: MaterialInventoryState): void {
+  const canonical = settlement.localMaterials;
+  const legacy = inventory.stock;
+  let migrated = false;
+  if (legacy !== canonical) {
+    const canonicalHasPhysicalStock = Object.values(canonical).some((amount) => Number.isFinite(amount) && amount > EPSILON);
+    const migrate = canonicalHasPhysicalStock ? LEGACY_ONLY_MATERIAL_KINDS : MATERIAL_KINDS;
+    for (const kind of migrate) {
+      const amount = Math.max(0, legacy?.[kind] ?? 0);
+      if (amount <= EPSILON) continue;
+      canonical[kind] = round((canonical[kind] ?? 0) + amount);
+      migrated = true;
+    }
+  }
+  for (const kind of MATERIAL_KINDS) canonical[kind] = round(canonical[kind] ?? 0);
+  inventory.stock = canonical as MaterialStock;
+  if (migrated) publishBulkStocks(settlement);
 }
 
 export function ensureMaterialInventory(settlement: Settlement): MaterialInventoryState {
-  if (settlement.materials) return settlement.materials;
+  if (settlement.materials) {
+    attachCanonicalStock(settlement, settlement.materials);
+    return settlement.materials;
+  }
   settlement.materials = {
-    stock: emptyMaterialStock(),
+    stock: settlement.localMaterials as MaterialStock,
     revision: 0,
     lifetimeExtracted: {},
     lifetimeConsumed: {},
     lifetimeProduced: {},
   };
+  attachCanonicalStock(settlement, settlement.materials);
   return settlement.materials;
 }
 
@@ -156,35 +196,30 @@ function flowForMonth(inventory: MaterialInventoryState, month: number): Materia
   return inventory.lastFlow;
 }
 
-function round(value: number): number {
-  return Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
+/** Canonical typed-material availability view. */
+export function materialAmount(settlement: Settlement, kind: MaterialKind): number {
+  return Math.max(0, settlement.localMaterials[kind] ?? 0);
 }
 
 /**
- * Canonical typed-material availability view. Once a localMaterials key exists it is authoritative,
- * including an explicit zero. The legacy stock is only a compatibility fallback for material kinds
- * that have not yet crossed the Step 1B bridge; Step 1C removes that fallback.
+ * Records supplemental extraction into the one physical inventory. Storage limits are respected;
+ * telemetry records only material that was actually accepted into settlement storage.
  */
-export function materialAmount(settlement: Settlement, kind: MaterialKind): number {
-  const canonical = settlement.localMaterials[kind];
-  if (canonical !== undefined) return Math.max(0, canonical);
-  return Math.max(0, settlement.materials?.stock[kind] ?? 0);
-}
-
 export function recordMaterialExtraction(
   settlement: Settlement,
   kind: RawMaterialKind,
   amount: number,
   month: number,
-): void {
-  if (!Number.isFinite(amount) || amount <= EPSILON) return;
+): number {
+  if (!Number.isFinite(amount) || amount <= EPSILON) return 0;
   const inventory = ensureMaterialInventory(settlement);
-  const value = round(amount);
-  inventory.stock[kind] = round(inventory.stock[kind] + value);
-  inventory.lifetimeExtracted[kind] = round((inventory.lifetimeExtracted[kind] ?? 0) + value);
+  const accepted = round(addMaterial(settlement, kind, amount));
+  if (accepted <= EPSILON) return 0;
+  inventory.lifetimeExtracted[kind] = round((inventory.lifetimeExtracted[kind] ?? 0) + accepted);
   const flow = flowForMonth(inventory, month);
-  flow.extracted[kind] = round((flow.extracted[kind] ?? 0) + value);
+  flow.extracted[kind] = round((flow.extracted[kind] ?? 0) + accepted);
   inventory.revision += 1;
+  return accepted;
 }
 
 function recipeEnabled(settlement: Settlement, recipeDefinition: MaterialRecipe): boolean {
@@ -192,7 +227,7 @@ function recipeEnabled(settlement: Settlement, recipeDefinition: MaterialRecipe)
     capabilityPractice(settlement, requirement.id, requirement.stage) >= requirement.minPractice);
 }
 
-function maxBatchesFromInputs(stock: MaterialStock, recipeDefinition: MaterialRecipe): number {
+function maxBatchesFromInputs(settlement: Settlement, recipeDefinition: MaterialRecipe): number {
   let possible = Number.POSITIVE_INFINITY;
   let primaryKind: MaterialKind | undefined;
   let primaryAmount = 0;
@@ -200,14 +235,15 @@ function maxBatchesFromInputs(stock: MaterialStock, recipeDefinition: MaterialRe
     if (!amount || amount <= 0) continue;
     primaryKind ??= kind;
     primaryAmount ||= amount;
-    possible = Math.min(possible, stock[kind] / amount);
+    possible = Math.min(possible, materialAmount(settlement, kind) / amount);
   }
   if (!Number.isFinite(possible) || !primaryKind || primaryAmount <= 0) return 0;
-  const shareLimit = stock[primaryKind] * recipeDefinition.maxInputShare / primaryAmount;
+  const shareLimit = materialAmount(settlement, primaryKind) * recipeDefinition.maxInputShare / primaryAmount;
   return Math.max(0, Math.min(possible, shareLimit));
 }
 
 function applyRecipe(
+  settlement: Settlement,
   inventory: MaterialInventoryState,
   recipeDefinition: MaterialRecipe,
   batches: number,
@@ -217,17 +253,17 @@ function applyRecipe(
   const flow = flowForMonth(inventory, month);
   for (const [kind, perBatch] of Object.entries(recipeDefinition.inputs) as Array<[MaterialKind, number | undefined]>) {
     if (!perBatch || perBatch <= 0) continue;
-    const amount = round(perBatch * batches);
-    inventory.stock[kind] = round(Math.max(0, inventory.stock[kind] - amount));
-    inventory.lifetimeConsumed[kind] = round((inventory.lifetimeConsumed[kind] ?? 0) + amount);
-    flow.consumed[kind] = round((flow.consumed[kind] ?? 0) + amount);
+    const requested = round(perBatch * batches);
+    const consumed = round(takeMaterial(settlement, kind, requested));
+    if (consumed + 1e-6 < requested) throw new Error(`material processing conservation violation: ${recipeDefinition.id}:${kind}`);
+    inventory.lifetimeConsumed[kind] = round((inventory.lifetimeConsumed[kind] ?? 0) + consumed);
+    flow.consumed[kind] = round((flow.consumed[kind] ?? 0) + consumed);
   }
   for (const [kind, perBatch] of Object.entries(recipeDefinition.outputs) as Array<[ProcessedMaterialKind, number | undefined]>) {
     if (!perBatch || perBatch <= 0) continue;
-    const amount = round(perBatch * batches);
-    inventory.stock[kind] = round(inventory.stock[kind] + amount);
-    inventory.lifetimeProduced[kind] = round((inventory.lifetimeProduced[kind] ?? 0) + amount);
-    flow.produced[kind] = round((flow.produced[kind] ?? 0) + amount);
+    const produced = round(addMaterial(settlement, kind, round(perBatch * batches)));
+    inventory.lifetimeProduced[kind] = round((inventory.lifetimeProduced[kind] ?? 0) + produced);
+    flow.produced[kind] = round((flow.produced[kind] ?? 0) + produced);
   }
   flow.recipes[recipeDefinition.id] = round((flow.recipes[recipeDefinition.id] ?? 0) + batches);
   inventory.revision += 1;
@@ -241,8 +277,9 @@ export interface MaterialProcessingResult {
 }
 
 /**
- * Runs at most once per settlement/month. It is deterministic, bounded by specialist capacity,
- * cannot drive inventory negative, and only deploys knowledge at the explicitly required stage.
+ * Runs at most once per settlement/month. It is deterministic, uses the shared resource labour
+ * budget, and reads/writes only canonical physical stock. These recipes cover advanced products
+ * that the newer generic ResourceSystem does not yet manufacture.
  */
 export function advanceMaterialProcessing(
   state: SimulationState,
@@ -262,11 +299,11 @@ export function advanceMaterialProcessing(
 
   for (const recipeDefinition of MATERIAL_RECIPES) {
     if (remainingCapacity <= EPSILON || !recipeEnabled(settlement, recipeDefinition)) continue;
-    const inputBatches = maxBatchesFromInputs(inventory.stock, recipeDefinition);
+    const inputBatches = maxBatchesFromInputs(settlement, recipeDefinition);
     const capacityBatches = remainingCapacity / recipeDefinition.work;
     const batches = round(Math.min(inputBatches, capacityBatches));
     if (batches <= EPSILON) continue;
-    applyRecipe(inventory, recipeDefinition, batches, state.month);
+    applyRecipe(settlement, inventory, recipeDefinition, batches, state.month);
     remainingCapacity = Math.max(0, remainingCapacity - batches * recipeDefinition.work);
     ran[recipeDefinition.id] = batches;
   }
@@ -316,6 +353,6 @@ export function validateMaterialRecipes(recipes: readonly MaterialRecipe[] = MAT
     visited.add(node);
     return false;
   };
-  if (ALL_MATERIALS.some((kind) => visit(kind))) errors.push('material recipe graph contains a cycle');
+  if (MATERIAL_KINDS.some((kind) => visit(kind))) errors.push('material recipe graph contains a cycle');
   return errors;
 }

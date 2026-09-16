@@ -58,7 +58,7 @@ function ownerFor(state: SimulationState, mark: LandModification): Settlement | 
 }
 
 function canAffordRoadSurface(settlement: Settlement, requested: number, month: number): number {
-  if (!settlement.materials || requested <= 0) return 0;
+  if (requested <= 0) return 0;
   let supplied = consumeMaterial(settlement, 'stone', requested, month);
   if (supplied + 1e-9 < requested) supplied += consumeMaterial(settlement, 'brick', requested - supplied, month);
   return supplied;
