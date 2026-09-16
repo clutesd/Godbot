@@ -1,6 +1,12 @@
 import { settlementRepresentedPopulation } from '../sim/Population';
 import type { SimulationState } from '../sim/types';
-import { foundingChapterBaseline, foundingChapterProgress, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
+import {
+  foundingChapterBaseline,
+  foundingChapterProgress,
+  releaseFoundingChapterHold,
+  type FoundingChapterBaseline,
+  type FoundingCommunityBaseline,
+} from './FoundingChapter';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
 import type { CandidateScoreBreakdown, ObservationCandidate } from './types';
@@ -90,8 +96,10 @@ function memoryFor(historian: Historian): FoundingContinuityMemory {
 export function foundingCommunitySnapshot(
   state: SimulationState,
   community: FoundingCommunityBaseline,
-  baseline: FoundingChapterBaseline = foundingChapterBaseline(state)!,
+  suppliedBaseline?: FoundingChapterBaseline,
 ): FoundingCommunitySnapshot | undefined {
+  const baseline = suppliedBaseline ?? foundingChapterBaseline(state);
+  if (!baseline) return undefined;
   const settlement = state.settlements.find(candidate => candidate.id === community.settlementId);
   if (!settlement) return undefined;
 
@@ -298,17 +306,22 @@ export function foundingContinuityProgress(historian: Historian, state: Simulati
 
 /**
  * First-year continuity layer. The opening bridge releases time after the frozen orientation, then
- * each traceable founding community receives one grounded revisit. The 12-month window is primary;
- * an 18-month grace window prevents a war/event interruption from permanently skipping a landing.
+ * each traceable founding community receives one grounded revisit. New continuity starts only in
+ * the primary 12-month window; an already-started chapter can finish through Month 18 if interrupted.
  */
 export function chooseFoundingContinuityScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   pacedStates.delete(state);
   const founding = foundingChapterProgress(historian, state);
   if (founding.phase === 'ready' || founding.phase === 'orientation' || founding.phase === 'unavailable') return undefined;
+  if (founding.phase === 'complete') releaseFoundingChapterHold(historian, state);
   const baseline = founding.baseline ?? foundingChapterBaseline(state);
   if (!baseline || state.month > baseline.eventMonth + FOUNDING_CONTINUITY_GRACE_END_MONTH) return undefined;
 
-  const memory = memoryFor(historian);
+  let memory = memories.get(historian);
+  if (!memory) {
+    if (state.month > baseline.eventMonth + FOUNDING_CONTINUITY_PRIMARY_END_MONTH) return undefined;
+    memory = memoryFor(historian);
+  }
   if (!memory.bridgeShown) {
     memory.bridgeShown = true;
     if (state.month <= baseline.eventMonth) {
@@ -320,9 +333,6 @@ export function chooseFoundingContinuityScene(historian: Historian, state: Simul
 
   const unvisited = baseline.communities.filter(community => !memory.visitedSettlementIds.has(community.settlementId));
   if (unvisited.length === 0) return undefined;
-  const withinPrimaryWindow = state.month <= baseline.eventMonth + FOUNDING_CONTINUITY_PRIMARY_END_MONTH;
-  if (!withinPrimaryWindow && state.month > baseline.eventMonth + FOUNDING_CONTINUITY_GRACE_END_MONTH) return undefined;
-
   for (const community of unvisited.sort((a, b) => a.order - b.order)) {
     const scene = communityScene(historian, state, baseline, community);
     if (!scene) continue;
@@ -367,6 +377,7 @@ export function installFoundingContinuity(): void {
       pacedStates.delete(state);
       return chooseScene.call(this, state);
     }
+    if (founding.phase === 'complete') releaseFoundingChapterHold(this, state);
     const continuity = chooseFoundingContinuityScene(this, state);
     if (continuity) return continuity;
     return chooseScene.call(this, state);
