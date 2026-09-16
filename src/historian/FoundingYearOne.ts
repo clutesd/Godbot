@@ -2,6 +2,7 @@ import { representedPopulation } from '../sim/Population';
 import type { HistoricalEvent, SimulationState } from '../sim/types';
 import { foundingChapterBaseline, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
 import {
+  FOUNDING_CONTINUITY_GRACE_END_MONTH,
   foundingCommunitySnapshot,
   foundingContinuityProgress,
   type FoundingCommunitySnapshot,
@@ -188,10 +189,16 @@ function worldPayoffScene(
   const contact = snapshot.firstContacts > 0
     ? `${snapshot.firstContacts.toLocaleString()} first-contact ${snapshot.firstContacts === 1 ? 'encounter was' : 'encounters were'} recorded`
     : 'no first contact between landing communities was yet recorded';
+  const routes = snapshot.tradeRoutesEstablished > 0
+    ? `; ${snapshot.tradeRoutesEstablished.toLocaleString()} trade ${snapshot.tradeRoutesEstablished === 1 ? 'route was' : 'routes were'} established`
+    : '';
   const structures = snapshot.permanentStructuresFounded > 0
     ? `${snapshot.permanentStructuresFounded.toLocaleString()} permanent ${snapshot.permanentStructuresFounded === 1 ? 'structure had been founded' : 'structures had been founded'}`
     : 'no permanent structure had yet been completed';
-  const text = `The first year is now in the record. From ${snapshot.foundingPopulation.toLocaleString()} founders, ${snapshot.births.toLocaleString()} births and ${snapshot.deaths.toLocaleString()} deaths left a recorded population of ${snapshot.yearOnePopulation.toLocaleString()} after twelve months. ${snapshot.activeFoundingCommunities} of ${baseline.expectedCommunityCount} founding communities remained active; ${structures}; ${contact}.`;
+  const knowledge = snapshot.knowledgeAdded > 0
+    ? `; ${snapshot.knowledgeAdded.toLocaleString()} new knowledge ${snapshot.knowledgeAdded === 1 ? 'record had' : 'records had'} entered the founding communities`
+    : '';
+  const text = `The first year is now in the record. From ${snapshot.foundingPopulation.toLocaleString()} founders, ${snapshot.births.toLocaleString()} births and ${snapshot.deaths.toLocaleString()} deaths left a recorded population of ${snapshot.yearOnePopulation.toLocaleString()} after twelve months. ${snapshot.activeFoundingCommunities} of ${baseline.expectedCommunityCount} founding communities remained active; ${structures}; ${contact}${routes}${knowledge}.`;
   const statement = {
     id: `founding-year-one-world-${baseline.eventId}`,
     month: state.month,
@@ -242,7 +249,7 @@ function communityStory(community: FoundingCommunityBaseline, snapshot: Founding
     ...(stockDelta > 0.6 ? [{ score: 0.4 + Math.min(0.4, stockDelta * 0.2), fact: 'has materially changed the finite stores it carried through the landing' }] : []),
   ];
   candidates.sort((a, b) => b.score - a.score || a.fact.localeCompare(b.fact));
-  const strongest = candidates[0] ?? { score: 0.2, fact: `remains close to its landing conditions` };
+  const strongest = candidates[0] ?? { score: 0.2, fact: 'remains close to its landing conditions' };
   return { community, snapshot, score: strongest.score, fact: strongest.fact };
 }
 
@@ -267,7 +274,7 @@ function divergenceScene(
   const observed = snapshot.observedMonth <= snapshot.yearEndMonth
     ? 'At the end of the first year'
     : `By Month ${snapshot.observedMonth.toLocaleString()}, with the first year already behind them`;
-  const text = `${observed}, the five landings are no longer interchangeable. ${clauses.join('; while ')}. A common arrival has already become different local histories.`;
+  const text = `${observed}, the founding landings are no longer interchangeable. ${clauses.join('; while ')}. A common arrival has already become different local histories.`;
   const sourceEntityIds = selected.map(story => story.community.settlementId);
   const statement = {
     id: `founding-year-one-divergence-${baseline.eventId}`,
@@ -308,18 +315,17 @@ function unresolvedStory(state: SimulationState, baseline: FoundingChapterBaseli
     const unused = community.knowledge.filter(id => !current.inheritedKnowledgeUsed.includes(id));
     if (unused.length > 0) stories.push({ score: 0.46 + unused.length * 0.04, text: `${community.settlementName} still carries inherited knowledge that has not yet entered regular practice: ${unused.slice(0, 2).map(readable).join(' and ')}.`, sourceEntityIds: [community.settlementId], position: community.position, title: community.settlementName });
   }
+  const traceableIds = snapshot.communities.map(community => community.settlementId);
   if (snapshot.firstContacts === 0) {
-    const ids = baseline.communities.map(community => community.settlementId);
-    stories.push({ score: 0.72, text: 'The first year closes without a recorded first contact between the separated landing communities. They share an origin, but not yet a common history.', sourceEntityIds: ids, position: baseline.center, title: 'The separated landings' });
+    stories.push({ score: 0.72, text: 'The first year closes without a recorded first contact between the separated landing communities. They share an origin, but not yet a common history.', sourceEntityIds: traceableIds, position: baseline.center, title: 'The separated landings' });
   } else if (snapshot.tradeRoutesEstablished === 0) {
-    const ids = baseline.communities.map(community => community.settlementId);
-    stories.push({ score: 0.62, text: 'The landings have begun to encounter one another, but no trade route was established during the first year. Contact has not yet become a durable corridor.', sourceEntityIds: ids, position: baseline.center, title: 'The spaces between' });
+    stories.push({ score: 0.62, text: 'The landings have begun to encounter one another, but no trade route was established during the first year. Contact has not yet become a durable corridor.', sourceEntityIds: traceableIds, position: baseline.center, title: 'The spaces between' });
   }
   stories.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
   return stories[0] ?? {
     score: 0.35,
     text: 'The first year ends without a single dominant crisis. What remains unresolved is which differences between the landings will matter over generations.',
-    sourceEntityIds: baseline.communities.map(community => community.settlementId),
+    sourceEntityIds: traceableIds,
     position: baseline.center,
     title: 'The next chapter',
   };
@@ -377,7 +383,8 @@ export function foundingYearOneProgress(historian: Historian, state: SimulationS
   if (state.month < dueMonth) return { phase: 'waiting', nextBeat: 0, totalBeats: 3 };
   if (state.month > baseline.eventMonth + FOUNDING_YEAR_ONE_LATEST_START_MONTH) return { phase: 'missed', nextBeat: 0, totalBeats: 3 };
   const continuity = foundingContinuityProgress(historian, state);
-  if (continuity.bridgeShown && !continuity.complete) return { phase: 'waiting', nextBeat: 0, totalBeats: 3 };
+  const continuityGraceEnd = baseline.eventMonth + FOUNDING_CONTINUITY_GRACE_END_MONTH;
+  if (continuity.bridgeShown && !continuity.complete && state.month <= continuityGraceEnd) return { phase: 'waiting', nextBeat: 0, totalBeats: 3 };
   return { phase: 'ready', nextBeat: 0, totalBeats: 3, snapshot: foundingYearOneSnapshot(state) };
 }
 
