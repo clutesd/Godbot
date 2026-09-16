@@ -3,9 +3,45 @@ import type { ObservationCandidate } from './types';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
 
+export interface FoundingCommunityBaseline {
+  readonly order: number;
+  readonly podId: string;
+  readonly groupId: string;
+  readonly podName: string;
+  readonly settlementId: string;
+  readonly settlementName: string;
+  readonly position: Readonly<Vec2>;
+  readonly founderIds: readonly string[];
+  readonly founderCount: number;
+  readonly domains: readonly string[];
+  readonly knowledge: readonly string[];
+  readonly supplies: Readonly<{ food: number; goods: number; timber: number; stone: number }>;
+}
+
+export interface FoundingChapterBaseline {
+  readonly eventId: string;
+  readonly eventMonth: number;
+  readonly population: number;
+  readonly expectedCommunityCount: number;
+  readonly communities: readonly FoundingCommunityBaseline[];
+  readonly center: Readonly<Vec2>;
+}
+
+export type FoundingChapterPhase = 'unavailable' | 'ready' | 'orientation' | 'complete' | 'missed-opening';
+
+export interface FoundingChapterProgress {
+  readonly phase: FoundingChapterPhase;
+  readonly nextBeat: number;
+  readonly totalBeats: number;
+  readonly startedMonth?: number;
+  readonly baseline?: FoundingChapterBaseline;
+}
+
 interface FoundingChapterMemory {
   nextBeat: number;
   complete: boolean;
+  startedMonth: number;
+  baseline: FoundingChapterBaseline;
 }
 
 const memories = new WeakMap<Historian, FoundingChapterMemory>();
@@ -13,8 +49,8 @@ let pacingInstalled = false;
 let chapterInstalled = false;
 
 /**
- * The founding handoff is deliberately short-lived. If an observation is resumed well after the
- * opening, the Historian must not suddenly replay Year Zero as though it were current history.
+ * Once the orientation has actually begun at Month 0, allow enough simulated time for all shots
+ * to finish at documentary pace. A new Historian created after Month 0 never starts the prologue.
  */
 export const FOUNDING_CHAPTER_LATEST_MONTH = 18;
 
@@ -46,7 +82,7 @@ function list(values: readonly string[]): string {
   return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
 }
 
-function center(points: readonly Vec2[]): Vec2 {
+function center(points: readonly Readonly<Vec2>[]): Vec2 {
   if (points.length === 0) return { x: 0, z: 0 };
   return {
     x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
@@ -54,38 +90,84 @@ function center(points: readonly Vec2[]): Vec2 {
   };
 }
 
+function finitePopulation(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+/**
+ * Stable Year-Zero reference data for both 1a and the later 1b continuity layer. The snapshot is
+ * deliberately cloned and frozen so later simulation mutations cannot rewrite what "arrival" meant.
+ */
+export function foundingChapterBaseline(state: SimulationState): FoundingChapterBaseline | undefined {
+  const arrival = state.arrival;
+  const event = state.history.find(candidate => candidate.type === 'ARRIVAL_DAY');
+  if (!arrival || !event) return undefined;
+
+  const communities = arrival.pods.flatMap((pod, order): FoundingCommunityBaseline[] => {
+    if (!pod.settlementId) return [];
+    const settlement = state.settlements.find(candidate => candidate.id === pod.settlementId);
+    if (!settlement) return [];
+    return [Object.freeze({
+      order,
+      podId: pod.id,
+      groupId: pod.groupId,
+      podName: pod.name,
+      settlementId: settlement.id,
+      settlementName: settlement.name,
+      position: Object.freeze({ x: settlement.position.x, z: settlement.position.z }),
+      founderIds: Object.freeze([...pod.personIds]),
+      founderCount: pod.population,
+      domains: Object.freeze([...pod.domains]),
+      knowledge: Object.freeze([...pod.knowledge]),
+      supplies: Object.freeze({ ...pod.supplies }),
+    })];
+  });
+  const foundingPopulation = arrival.pods.reduce((sum, pod) => sum + pod.population, 0);
+  const positions = communities.length > 0 ? communities.map(community => community.position) : arrival.pods.map(pod => pod.position);
+
+  return Object.freeze({
+    eventId: event.id,
+    eventMonth: event.month,
+    population: finitePopulation(event.context.population, foundingPopulation),
+    expectedCommunityCount: arrival.pods.length,
+    communities: Object.freeze(communities),
+    center: Object.freeze(center(positions)),
+  });
+}
+
 function rememberStatement(historian: Historian, scene: ObservationCandidate, state: SimulationState): ObservationCandidate | undefined {
   if (!historian.validateStatement(scene.statement, state)) return undefined;
-  historian.statements.push(scene.statement);
+  if (!historian.statements.some(statement => statement.id === scene.statement.id)) historian.statements.push(scene.statement);
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return scene;
 }
 
-function overviewScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
-  const arrival = state.arrival;
-  const event = state.history.find(candidate => candidate.type === 'ARRIVAL_DAY');
-  if (!arrival || !event) return undefined;
-  const settlements = arrival.pods
-    .map(pod => state.settlements.find(settlement => settlement.id === pod.settlementId))
-    .filter((settlement): settlement is SimulationState['settlements'][number] => Boolean(settlement));
-  const population = Number(event.context.population ?? arrival.pods.reduce((sum, pod) => sum + pod.population, 0));
-  const names = arrival.pods.map(pod => pod.name);
+function overviewScene(historian: Historian, state: SimulationState, baseline: FoundingChapterBaseline): ObservationCandidate | undefined {
+  const event = state.history.find(candidate => candidate.id === baseline.eventId && candidate.type === 'ARRIVAL_DAY');
+  if (!event) return undefined;
+  const communityNames = baseline.communities.map(community => community.podName);
+  const count = baseline.expectedCommunityCount;
+  const resolvedCount = baseline.communities.length;
+  const coverage = resolvedCount === count
+    ? `${count} separated landing communities`
+    : `${resolvedCount} currently traceable landing communities from ${count} recorded vessels`;
   const statement = {
     id: `founding-overview-${event.id}`,
     month: state.month,
-    text: `Arrival Day is the permanent beginning of this record. Five vessels placed ${population.toLocaleString()} founders across five separated landing communities: ${list(names)}. Each carried a different portion of inherited knowledge into the same untouched world.`,
+    text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. Each carried a different portion of inherited knowledge into the same untouched world.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
-    sourceEntityIds: settlements.map(settlement => settlement.id),
+    sourceEntityIds: baseline.communities.map(community => community.settlementId),
     sourceArchiveIds: [],
-    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: settlements.map(settlement => settlement.id) },
+    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: baseline.communities.map(community => community.settlementId) },
   };
   return rememberStatement(historian, {
     id: `founding:overview:${event.id}`,
     subjectId: 'world',
     kind: 'world-establishing',
-    position: center(arrival.pods.map(pod => pod.position)),
-    title: 'ARRIVAL DAY · THE FIVE LANDINGS',
+    position: baseline.center,
+    title: `ARRIVAL DAY · THE ${count} LANDINGS`,
     statement,
     score: 0.98,
     interest: 1,
@@ -95,32 +177,29 @@ function overviewScene(historian: Historian, state: SimulationState): Observatio
   }, state);
 }
 
-function communityScene(historian: Historian, state: SimulationState, podIndex: number): ObservationCandidate | undefined {
-  const arrival = state.arrival;
+function communityScene(historian: Historian, state: SimulationState, community: FoundingCommunityBaseline): ObservationCandidate | undefined {
   const event = state.history.find(candidate => candidate.type === 'ARRIVAL_DAY');
-  const pod = arrival?.pods[podIndex];
-  if (!arrival || !event || !pod?.settlementId) return undefined;
-  const settlement = state.settlements.find(candidate => candidate.id === pod.settlementId);
-  if (!settlement) return undefined;
+  const settlement = state.settlements.find(candidate => candidate.id === community.settlementId);
+  if (!event || !settlement) return undefined;
 
-  const domains = pod.domains.map(readable);
-  const knowledge = pod.knowledge.map(readable);
+  const domains = community.domains.map(readable);
+  const knowledge = community.knowledge.map(readable);
   const statement = {
-    id: `founding-community-${pod.id}`,
+    id: `founding-community-${community.podId}`,
     month: state.month,
-    text: `${settlement.name} began with ${pod.population.toLocaleString()} founders from ${pod.name}. Their inherited strengths were ${list(domains)}; the knowledge carried through the landing included ${list(knowledge)}. This was one of five communities beginning from different places, skills, and finite supplies.`,
+    text: `${community.settlementName} began with ${community.founderCount.toLocaleString()} founders from ${community.podName}. Their inherited strengths were ${list(domains)}; the knowledge carried through the landing included ${list(knowledge)}. This was one of ${baselineCount(state)} communities beginning from different places and skills.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
-    sourceEntityIds: [settlement.id],
+    sourceEntityIds: [community.settlementId],
     sourceArchiveIds: [],
-    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: [settlement.id] },
+    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: [community.settlementId] },
   };
   return rememberStatement(historian, {
-    id: `founding:community:${pod.id}`,
-    subjectId: settlement.id,
+    id: `founding:community:${community.podId}`,
+    subjectId: community.settlementId,
     kind: 'settlement-approach',
-    position: settlement.position,
-    title: `${settlement.name} · ${pod.name.toUpperCase()}`,
+    position: community.position,
+    title: `${community.settlementName} · ${community.podName.toUpperCase()}`,
     statement,
     score: 0.78,
     interest: 0.82,
@@ -130,32 +209,61 @@ function communityScene(historian: Historian, state: SimulationState, podIndex: 
   }, state);
 }
 
+function baselineCount(state: SimulationState): number {
+  return state.arrival?.pods.length ?? 0;
+}
+
+export function foundingChapterProgress(historian: Historian, state: SimulationState): FoundingChapterProgress {
+  const baseline = foundingChapterBaseline(state);
+  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
+  const memory = memories.get(historian);
+  const totalBeats = baseline.communities.length + 1;
+  if (memory) return {
+    phase: memory.complete ? 'complete' : 'orientation',
+    nextBeat: memory.nextBeat,
+    totalBeats: memory.baseline.communities.length + 1,
+    startedMonth: memory.startedMonth,
+    baseline: memory.baseline,
+  };
+  if (state.month > baseline.eventMonth) return { phase: 'missed-opening', nextBeat: 0, totalBeats, baseline };
+  return { phase: 'ready', nextBeat: 0, totalBeats, baseline };
+}
+
 /**
  * Returns the next grounded scene in the one-time post-arrival orientation sequence.
- * Beat 0 establishes the whole founding event; beats 1-5 introduce the five communities.
+ * Beat 0 establishes the whole founding event; the remaining beats introduce traceable communities.
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
-  if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING' || state.month > FOUNDING_CHAPTER_LATEST_MONTH) return undefined;
-  const arrivalEvent = state.history.find(candidate => candidate.type === 'ARRIVAL_DAY');
-  if (!arrivalEvent) return undefined;
+  if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') return undefined;
 
   let memory = memories.get(historian);
   if (!memory) {
-    memory = { nextBeat: 0, complete: false };
+    const baseline = foundingChapterBaseline(state);
+    if (!baseline || state.month > baseline.eventMonth) return undefined;
+    memory = { nextBeat: 0, complete: false, startedMonth: state.month, baseline };
     memories.set(historian, memory);
   }
   if (memory.complete) return undefined;
-
-  const beat = memory.nextBeat;
-  const scene = beat === 0 ? overviewScene(historian, state) : communityScene(historian, state, beat - 1);
-  if (!scene) {
+  if (state.month > FOUNDING_CHAPTER_LATEST_MONTH) {
     memory.complete = true;
     return undefined;
   }
 
-  memory.nextBeat += 1;
-  if (memory.nextBeat > state.arrival.pods.length) memory.complete = true;
-  return scene;
+  const totalBeats = memory.baseline.communities.length + 1;
+  while (memory.nextBeat < totalBeats) {
+    const beat = memory.nextBeat;
+    memory.nextBeat += 1;
+    const scene = beat === 0
+      ? overviewScene(historian, state, memory.baseline)
+      : communityScene(historian, state, memory.baseline.communities[beat - 1]!);
+    if (scene) {
+      if (memory.nextBeat >= totalBeats) memory.complete = true;
+      return scene;
+    }
+  }
+
+  memory.complete = true;
+  return undefined;
 }
 
 export function isFoundingChapterScene(scene: ObservationCandidate): boolean {
@@ -182,7 +290,7 @@ export function installFoundingChapterPacing(): void {
 
 /**
  * Installs the one-time founding chapter over the already-installed Watcher Historian. A focused
- * major event is still allowed to interrupt; otherwise the opening six shots run before normal
+ * major event is still allowed to interrupt; otherwise the opening orientation runs before normal
  * Historian scene rotation begins.
  */
 export function installFoundingChapter(): void {
