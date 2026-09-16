@@ -81,6 +81,11 @@ describe('settlement supplemental resource extraction', () => {
     const { settlement } = emptyCatchment(sim);
     sim.state.month = 1;
 
+    // Isolate extraction from the advanced processor, which legitimately spends canonical timber.
+    sim.state.people.filter(p => p.homeId === settlement.id).forEach((p) => {
+      p.occupation = 'forager';
+      p.health = 1;
+    });
     settlement.monthlyBalance.wood = 15;
     settlement.monthlyBalance.minerals = 9;
     const woodBefore = settlement.resources.wood;
@@ -102,7 +107,7 @@ describe('settlement supplemental resource extraction', () => {
     sim.state.month = 1;
     const residents = sim.state.people.filter((person) => person.alive && person.homeId === settlement.id);
 
-    // Isolate extraction from legitimate operating consumption in MaterialUse.
+    // Isolate extraction from legitimate operating consumption and advanced processing.
     settlement.infrastructure.roads = 0;
     settlement.infrastructure.bridges = 0;
     settlement.infrastructure.ports = 0;
@@ -113,6 +118,10 @@ describe('settlement supplemental resource extraction', () => {
     settlement.industry.intensity = 0;
     settlement.conflictPressure = 0;
     settlement.politicalPower.military = 0;
+    residents.forEach((person) => {
+      person.occupation = 'forager';
+      person.health = 1;
+    });
 
     addMaterial(settlement, 'timber', 12);
     addMaterial(settlement, 'stone', 8);
