@@ -19,7 +19,9 @@ import { PresentationDirector } from '../src/historian/PresentationDirector';
 import { Simulation } from '../src/sim/Simulation';
 
 function completedArrival(seed: string): Simulation {
-  const simulation = new Simulation({ seed, startMode: 'arrival' });
+  // Founding-story tests care about narrative contracts, not whether a particular tiny procedural
+  // world happens to contain five safely separated sites. Keep enough deterministic land available.
+  const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
   simulation.advanceArrival(60);
   expect(simulation.historyRunning).toBe(true);
   return simulation;
