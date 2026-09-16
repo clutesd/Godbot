@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
+import { MATERIAL_RECIPES } from '../src/sim/resources/MaterialEconomy';
 import {
   advanceSettlementResourceExtraction,
   settlementResourceCatchment,
@@ -25,5 +26,12 @@ describe('Step 1C material authority invariants', () => {
 
     expect(timber.stock).toBe(10);
     expect(cell.naturalResources.lastRegeneratedMonth).toBe(12);
+  });
+
+  it('does not spend advanced labour on transformations owned elsewhere or on orphan tin stock', () => {
+    const ids = new Set(MATERIAL_RECIPES.map((recipe) => recipe.id));
+    expect(ids.has('burn-charcoal')).toBe(false);
+    expect(ids.has('alloy-bronze')).toBe(false);
+    expect(ids.has('smelt-tin')).toBe(false);
   });
 });
