@@ -1452,6 +1452,9 @@ export class GodboxRenderer {
       if (opacity >= 0.995) return;
       const tune = (material: THREE.Material): THREE.Material => {
         const clone = material.clone();
+        // This fade material belongs only to the active site. Palette materials are marked shared;
+        // clear that flag on the clone so ordinary settlement teardown can dispose it.
+        clone.userData = { ...clone.userData, shared: false };
         clone.transparent = true;
         clone.opacity = opacity;
         clone.depthWrite = false;
