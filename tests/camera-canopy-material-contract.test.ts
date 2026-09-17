@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildTreeLibrary, TREE_LOD_NEAR } from '../src/render/vegetation/TreeLibrary';
-import { bindTreeMaterial } from '../src/render/vegetation/TreeMaterials';
+import { bindTreeMaterial, setTreeCanopyDissolveStrength } from '../src/render/vegetation/TreeMaterials';
 
 function compileSource(material: THREE.Material, shaderName: 'standard' | 'depth' | 'distance'): string {
   const source = THREE.ShaderLib[shaderName];
@@ -26,6 +26,11 @@ describe('camera canopy material contract', () => {
 
     expect(foliageColour).toContain('canopyViewDistance');
     expect(foliageColour).toContain('canopyDither');
+    expect(foliageColour).toContain('cameraCanopyDissolveStrength');
+    const dissolveUniform = (foliage.material as THREE.Material).userData['cameraCanopyDissolveUniform'] as { value: number };
+    expect(dissolveUniform.value).toBe(0);
+    setTreeCanopyDissolveStrength(foliage, 0.63);
+    expect(dissolveUniform.value).toBeCloseTo(0.63);
     expect(foliageDepth).not.toContain('canopyViewDistance');
     expect(foliageDistance).not.toContain('canopyViewDistance');
 
