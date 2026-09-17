@@ -4,6 +4,7 @@ import { cellAt } from '../sim/world';
 
 export const CAMERA_FOREST_CLEARANCE = {
   triggerPressure: 0.16,
+  releasePressure: 0.08,
   probeForward: 2.6,
   maxVertical: 4.8,
   maxLateral: 3.8,
@@ -19,16 +20,14 @@ export interface ForestCameraClearance {
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
-/**
- * Coarse presentation estimate of whether the lens occupies standing canopy.
- * Exact foliage remains renderer-owned; this is only an emergency camera-composition guard.
- */
-export function forestCanopyPressure(
+function forestCanopyPressureAt(
   world: SimulationState['world'],
-  position: THREE.Vector3,
+  x: number,
+  y: number,
+  z: number,
   elevationAt: (x: number, z: number) => number,
 ): number {
-  const cell = cellAt(world, position.x, position.z);
+  const cell = cellAt(world, x, z);
   if (!cell || cell.water) return 0;
 
   const capacity = Math.max(0.01, cell.forestCapacity ?? cell.wood);
@@ -40,42 +39,69 @@ export function forestCanopyPressure(
       : cell.river ? 0.64
         : 0.44;
   const canopyHeight = 3.8 + standing * 2.6;
-  const canopyTop = elevationAt(position.x, position.z) + canopyHeight;
-  const overlap = clamp01((canopyTop - position.y + 0.75) / 3.4);
+  const canopyTop = elevationAt(x, z) + canopyHeight;
+  const overlap = clamp01((canopyTop - y + 0.75) / 3.4);
   return standing * biomeWeight * overlap;
 }
 
-function corridorPressure(
+/**
+ * Coarse presentation estimate of whether the lens occupies standing canopy.
+ * Exact foliage remains renderer-owned; this is only an emergency camera-composition guard.
+ */
+export function forestCanopyPressure(
   world: SimulationState['world'],
   position: THREE.Vector3,
-  target: THREE.Vector3,
   elevationAt: (x: number, z: number) => number,
 ): number {
-  const lens = forestCanopyPressure(world, position, elevationAt);
-  const directionX = target.x - position.x;
-  const directionZ = target.z - position.z;
+  return forestCanopyPressureAt(world, position.x, position.y, position.z, elevationAt);
+}
+
+function corridorPressureAt(
+  world: SimulationState['world'],
+  x: number,
+  y: number,
+  z: number,
+  targetX: number,
+  targetZ: number,
+  elevationAt: (x: number, z: number) => number,
+): number {
+  const lens = forestCanopyPressureAt(world, x, y, z, elevationAt);
+  const directionX = targetX - x;
+  const directionZ = targetZ - z;
   const length = Math.max(0.001, Math.hypot(directionX, directionZ));
-  const probe = new THREE.Vector3(
-    position.x + directionX / length * CAMERA_FOREST_CLEARANCE.probeForward,
-    position.y,
-    position.z + directionZ / length * CAMERA_FOREST_CLEARANCE.probeForward,
+  const forward = forestCanopyPressureAt(
+    world,
+    x + directionX / length * CAMERA_FOREST_CLEARANCE.probeForward,
+    y,
+    z + directionZ / length * CAMERA_FOREST_CLEARANCE.probeForward,
+    elevationAt,
   );
-  const forward = forestCanopyPressure(world, probe, elevationAt);
   return lens * 0.72 + forward * 0.28;
 }
 
 /**
  * Find the smallest cinematic camera escape that materially improves local canopy clearance.
  * Candidates prefer a crane before lateral displacement, preserving authored composition.
+ * The active flag lowers the release threshold so the lens does not chatter at a canopy boundary.
  */
 export function resolveForestCameraClearance(
   world: SimulationState['world'],
   position: THREE.Vector3,
   target: THREE.Vector3,
   elevationAt: (x: number, z: number) => number,
+  active = false,
 ): ForestCameraClearance {
-  const pressureBefore = corridorPressure(world, position, target, elevationAt);
-  if (pressureBefore < CAMERA_FOREST_CLEARANCE.triggerPressure) {
+  const pressureBefore = corridorPressureAt(
+    world,
+    position.x,
+    position.y,
+    position.z,
+    target.x,
+    target.z,
+    elevationAt,
+  );
+  const threshold = active ? CAMERA_FOREST_CLEARANCE.releasePressure : CAMERA_FOREST_CLEARANCE.triggerPressure;
+  if (pressureBefore < threshold) {
     return { offset: new THREE.Vector3(), pressureBefore, pressureAfter: pressureBefore };
   }
 
@@ -85,35 +111,49 @@ export function resolveForestCameraClearance(
   const tangentX = -viewZ / viewLength;
   const tangentZ = viewX / viewLength;
 
-  const candidates = [
-    new THREE.Vector3(0, 1.4, 0),
-    new THREE.Vector3(0, 2.8, 0),
-    new THREE.Vector3(0, CAMERA_FOREST_CLEARANCE.maxVertical, 0),
-    new THREE.Vector3(tangentX * 1.6, 0.9, tangentZ * 1.6),
-    new THREE.Vector3(-tangentX * 1.6, 0.9, -tangentZ * 1.6),
-    new THREE.Vector3(tangentX * 2.8, 1.5, tangentZ * 2.8),
-    new THREE.Vector3(-tangentX * 2.8, 1.5, -tangentZ * 2.8),
-    new THREE.Vector3(tangentX * CAMERA_FOREST_CLEARANCE.maxLateral, 2.3, tangentZ * CAMERA_FOREST_CLEARANCE.maxLateral),
-    new THREE.Vector3(-tangentX * CAMERA_FOREST_CLEARANCE.maxLateral, 2.3, -tangentZ * CAMERA_FOREST_CLEARANCE.maxLateral),
-  ];
-
-  let bestOffset = new THREE.Vector3();
+  let bestX = 0;
+  let bestY = 0;
+  let bestZ = 0;
   let bestPressure = pressureBefore;
   let bestScore = pressureBefore * 4;
 
-  for (const offset of candidates) {
-    const candidate = position.clone().add(offset);
-    const pressure = corridorPressure(world, candidate, target, elevationAt);
-    const lateral = Math.hypot(offset.x, offset.z);
+  const consider = (offsetX: number, offsetY: number, offsetZ: number): void => {
+    const pressure = corridorPressureAt(
+      world,
+      position.x + offsetX,
+      position.y + offsetY,
+      position.z + offsetZ,
+      target.x,
+      target.z,
+      elevationAt,
+    );
+    const lateral = Math.hypot(offsetX, offsetZ);
     // Preserve the authored shot unless canopy pressure clearly improves.
-    const displacementPenalty = offset.y * 0.012 + lateral * 0.022;
+    const displacementPenalty = offsetY * 0.012 + lateral * 0.022;
     const score = pressure * 4 + displacementPenalty;
     if (score < bestScore - 0.025) {
       bestScore = score;
       bestPressure = pressure;
-      bestOffset = offset;
+      bestX = offsetX;
+      bestY = offsetY;
+      bestZ = offsetZ;
     }
-  }
+  };
 
-  return { offset: bestOffset, pressureBefore, pressureAfter: bestPressure };
+  // A crane is visually cheaper than a sidestep, so evaluate it first and let ties prefer it.
+  consider(0, 1.4, 0);
+  consider(0, 2.8, 0);
+  consider(0, CAMERA_FOREST_CLEARANCE.maxVertical, 0);
+  consider(tangentX * 1.6, 0.9, tangentZ * 1.6);
+  consider(-tangentX * 1.6, 0.9, -tangentZ * 1.6);
+  consider(tangentX * 2.8, 1.5, tangentZ * 2.8);
+  consider(-tangentX * 2.8, 1.5, -tangentZ * 2.8);
+  consider(tangentX * CAMERA_FOREST_CLEARANCE.maxLateral, 2.3, tangentZ * CAMERA_FOREST_CLEARANCE.maxLateral);
+  consider(-tangentX * CAMERA_FOREST_CLEARANCE.maxLateral, 2.3, -tangentZ * CAMERA_FOREST_CLEARANCE.maxLateral);
+
+  return {
+    offset: new THREE.Vector3(bestX, bestY, bestZ),
+    pressureBefore,
+    pressureAfter: bestPressure,
+  };
 }
