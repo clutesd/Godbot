@@ -1,0 +1,109 @@
+import type { Person, Settlement, Vec2, WeatherCellState } from '../../sim/types';
+import type { DevelopmentProject } from '../../sim/development/types';
+import type { FarmGeometry } from '../../shared/FarmGeometry';
+import { farmerCanPresent, sampleFarmAction, type FarmPresentationState } from '../farming/FarmActionPresentation';
+import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction, type ConstructionPlayback } from '../construction/ConstructionActionPresentation';
+import { constructionWorkerLane, rotateConstructionAnchor, type ConstructionWorkerAnchors } from '../construction/ConstructionWorkerMotion';
+import { constructionWorksiteAnchors } from '../construction/ConstructionWorksite';
+import { createResourceWorkMotion, type ResourceWorkMotion } from '../animation/ResourceWorkMotion';
+import { atInteraction, facingTarget, type PhysicalActionPresentation } from './PhysicalActionPresentation';
+import type { PersonVisualState } from './PeopleVisualState';
+
+export interface WorkPlacement { key: string; worldX: number; worldZ: number; width: number; depth: number; rotationY: number }
+export interface PhysicalWorker {
+  action: PhysicalActionPresentation;
+  motion: ResourceWorkMotion;
+  seconds: number;
+  blend: number;
+  ready: boolean;
+  seen: boolean;
+  project?: DevelopmentProject;
+  anchors?: ConstructionWorkerAnchors;
+  playback?: ConstructionPlayback;
+  field?: FarmGeometry;
+  fieldState?: FarmPresentationState;
+  assembler: boolean;
+  material?: import('../../sim/development/types').StructureMaterial;
+}
+
+/** Bounded renderer continuity only. Revalidated against live authority on every visible frame. */
+export class PhysicalWorkScene {
+  private readonly workers = new Map<string, PhysicalWorker>();
+  private readonly assemblers = new Set<string>();
+  beginFrame(people: readonly Person[]): void {
+    for (const worker of this.workers.values()) worker.seen = false;
+    this.assemblers.clear();
+    const crews = new Map<string, string[]>();
+    for (const person of people) if (person.alive && person.activity === 'construct' && !person.navigation?.traveling) {
+      const key = `${person.homeId}:${person.navigation?.destinationId}`;
+      const crew = crews.get(key) ?? []; crew.push(person.id); crews.set(key, crew);
+    }
+    for (const crew of crews.values()) if (crew.length >= 3) crew.sort().forEach((id, i) => { if (i % 3 === 2) this.assemblers.add(id); });
+  }
+  plan(person: Person, settlement: Settlement | undefined, placement: WorkPlacement | undefined,
+    farm: { geometry: FarmGeometry; state: FarmPresentationState } | undefined, weather: WeatherCellState | undefined,
+    safeSegment: (a: Vec2, b: Vec2) => boolean): PhysicalWorker | undefined {
+    const builder = settlement && placement && builderCanPresent(person, settlement, weather);
+    const farmer = farm && farmerCanPresent(person, farm.geometry, farm.state, weather);
+    if (!builder && !farmer) { this.workers.delete(person.id); return undefined; }
+    let worker = this.workers.get(person.id);
+    const project = builder ? settlement.development!.project : undefined;
+    if (worker && (worker.project !== project || worker.field?.id !== (farmer ? farm.geometry.id : undefined))) {
+      this.workers.delete(person.id); worker = undefined;
+    }
+    if (!worker) {
+      if (this.workers.size >= 128) return undefined;
+      const motion = createResourceWorkMotion();
+      if (builder && project) {
+        const center = { x: placement.worldX, z: placement.worldZ };
+        const local = constructionWorksiteAnchors(placement.width, placement.depth, project.plotId, constructionWorkerLane(person.id));
+        const rotate = (p: Vec2) => rotateConstructionAnchor(p, center, placement.rotationY);
+        const anchors = { pickup: rotate(local.pickup), delivery: rotate(local.delivery), materialCenter: rotate(local.materialCenter), siteCenter: center };
+        if (!safeSegment(person.position, anchors.pickup) || !safeSegment(anchors.pickup, anchors.delivery)) return undefined;
+        const playback = createConstructionPlayback();
+        const assembler = this.assemblers.has(person.id);
+        if (assembler) playback.phase = 'assemble';
+        worker = { motion, project, anchors, playback, assembler, material: constructionPresentedMaterial(settlement!), seconds: 0, blend: 0, ready: false, seen: true,
+          action: sampleConstructionAction(person, project.plotId, playback, anchors, constructionPresentedMaterial(settlement!), motion) };
+      } else if (farmer) {
+        const action = sampleFarmAction(person, farm.geometry, farm.state, 0, motion);
+        if (!safeSegment(person.position, action.locomotionTarget)) return undefined;
+        worker = { motion, action, field: farm.geometry, fieldState: farm.state, seconds: 0, blend: 0, ready: false, seen: true, assembler: false };
+      }
+      if (!worker) return undefined;
+      this.workers.set(person.id, worker);
+    }
+    worker.seen = true;
+    if (builder && worker.playback) {
+      const blocked = constructionBlockedReason(settlement);
+      worker.material = constructionPresentedMaterial(settlement);
+      advanceConstruction(worker.playback, 0, false, !!blocked, worker.assembler);
+      worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!, constructionPresentedMaterial(settlement), worker.motion, blocked);
+    } else if (farmer) {
+      worker.fieldState = farm.state;
+      const action = sampleFarmAction(person, farm.geometry, farm.state, worker.seconds, worker.motion);
+      if (!safeSegment(worker.action.locomotionTarget, action.locomotionTarget)) { this.workers.delete(person.id); return undefined; }
+      worker.action = action;
+    }
+    return worker;
+  }
+  advance(person: Person, worker: PhysicalWorker, visual: PersonVisualState, delta: number): void {
+    const action = worker.action;
+    worker.ready = atInteraction(visual, action.locomotionTarget, visual.facing, facingTarget(action.locomotionTarget, action.interactionAnchor), visual.speed) && !visual.traveling;
+    worker.blend = Math.max(0, Math.min(1, worker.blend + (worker.ready ? 1 : -1) * Math.max(0, delta) / 0.25));
+    // Acquisition/placement only starts once the approach blend has settled.
+    const ready = worker.ready && worker.blend >= 1;
+    if (worker.playback) {
+      advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.assembler);
+      worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!, worker.material!, worker.motion, action.blockedReason);
+    } else if (ready && worker.field) {
+      worker.seconds += Math.max(0, Math.min(0.1, delta));
+      // New anchors take effect in plan next frame, so a recovery never jumps straight into contact.
+    }
+  }
+  inspect(personId: string): PhysicalActionPresentation | undefined {
+    const action = this.workers.get(personId)?.action;
+    return action ? { ...action, interactionAnchor: { ...action.interactionAnchor }, locomotionTarget: { ...action.locomotionTarget } } : undefined;
+  }
+  endFrame(): void { for (const [id, worker] of this.workers) if (!worker.seen) this.workers.delete(id); }
+}

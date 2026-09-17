@@ -802,6 +802,9 @@ export class Simulation {
       const farmYield = (0.86 + cell.fertility * 1.12) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0));
       const forageYield = (0.29 + cell.fertility * 0.4);
       const foodFactor = safetyFactor * productivity.food * exposedWork;
+      settlement.agriculture = { month: this.state.month, labour: farmers,
+        yieldPerWorker: farmYield * foodFactor, production: farmers * farmYield * foodFactor,
+        irrigation: waterEconomy(cell, settlement).irrigation };
       const production = (farmers * farmYield + foragers * forageYield) * foodFactor;
       const extraProduction = (settlement.survival?.reassignedLabour ?? 0) * 0.7
         * (settlement.survival?.response?.kind === 'cultivate' ? farmYield : forageYield) * foodFactor;

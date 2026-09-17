@@ -1,4 +1,5 @@
 import type { Person, Vec2, WorldState } from '../../sim/types';
+import { workInterruption } from '../people/PhysicalActionPresentation';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import { resourceWorkDestinationId } from '../../sim/people/ResourceWorkRouting';
 import { resourceWorkAssignmentsForWorld, type ResourceWorkAssignment } from '../../sim/resources/ResourceWorkAssignments';
@@ -23,6 +24,7 @@ export interface ResourceWorkerVisual {
   station: ResourceWorkStation;
   variation: ResourceWorkerVariation;
   blend: number;
+  contacted?: boolean;
 }
 
 /** Shared, bounded scene plan. Rebuilt at ledger updates, never from animation time. */
@@ -127,7 +129,8 @@ export class ResourceWorkScene {
 }
 
 export function resourceWorkerCanPresent(person: Person, assignment: ResourceWorkAssignment): boolean {
-  return person.homeId === assignment.settlementId
+  return !workInterruption(person) && assignment.amountExtracted > 0 && assignment.labourUsed > 0
+    && person.homeId === assignment.settlementId
     && person.navigation?.destinationId === resourceWorkDestinationId(assignment)
     && person.alive && person.activity === 'gather' && !person.navigation?.traveling
     && person.navigation?.schedulePhase !== 'emergency' && person.displacedSinceMonth === undefined

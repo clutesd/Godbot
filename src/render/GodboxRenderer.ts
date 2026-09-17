@@ -39,6 +39,10 @@ import { ResourceSiteRenderer } from './resources/ResourceSiteRenderer';
 import { ResourceWorkScene, resourceWorkerCanPresent } from './resources/ResourceWorkScene';
 import { ResourceWorkerRenderer } from './resources/ResourceWorkerRenderer';
 import { resourceWorkAlternateAnchor } from './animation/ResourceWorkMotion';
+import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
+import { PhysicalWorkScene } from './people/PhysicalWorkScene';
+import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
+import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -193,6 +197,7 @@ export class GodboxRenderer {
   private readonly personDetailColor = new THREE.Color();
   private readonly partPosition = new THREE.Vector3();
   private readonly partQuaternion = new THREE.Quaternion();
+  private readonly partEuler = new THREE.Euler();
   private readonly partScale = new THREE.Vector3();
   private readonly animationController: AnimationController;
   private readonly assetBuilder: AssetBuilder;
@@ -229,6 +234,17 @@ export class GodboxRenderer {
   private readonly resourceSites: ResourceSiteRenderer;
   private readonly resourceWork: ResourceWorkScene;
   private readonly resourceWorkers = new ResourceWorkerRenderer();
+  private readonly physicalWorkers = new ResourceWorkerRenderer();
+  private readonly physicalWork = new PhysicalWorkScene();
+  private readonly farmFields = new FarmFieldRenderer();
+  private readonly actionInspections = new Map<string, PhysicalActionPresentation>();
+  private readonly workSettlements = new Map<string, Settlement>();
+
+  /** Copy on demand: camera/debug consumers cannot modify the renderer's working records. */
+  inspectPhysicalAction(personId: string): PhysicalActionPresentation | undefined {
+    const action = this.actionInspections.get(personId) ?? this.physicalWork.inspect(personId);
+    return action ? { ...action, interactionAnchor: { ...action.interactionAnchor }, locomotionTarget: { ...action.locomotionTarget } } : undefined;
+  }
   private resourceWorkersMonth = -1;
   private resourceWorkersRevision = -1;
   private readonly skyAtmosphere: SkyAtmosphere;
@@ -318,7 +334,7 @@ export class GodboxRenderer {
       (assignment) => this.vegetation.resourceWorkTree(assignment),
       (id) => { const settlement = state.settlements.find(s => s.id === id); return Boolean(settlement && eraRank(this.eraForSettlement(settlement)) >= 2); });
     this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface, this.resourceWork);
-    this.scene.add(this.resourceWorkers.group);
+    this.scene.add(this.resourceWorkers.group, this.physicalWorkers.group, this.farmFields.group);
     this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
@@ -447,6 +463,9 @@ export class GodboxRenderer {
     this.lastVisualSeason = this.state.month;
     this.vegetation.setSeason(this.state.month);
     this.resourceSites.update();
+    this.farmFields.update(this.state, (x, z) => this.elevationAt(x, z), (x, z) => this.personStandable(x, z));
+    this.workSettlements.clear();
+    for (const settlement of this.state.settlements) this.workSettlements.set(settlement.id, settlement);
     if (force) this.vegetation.updateLod(this.camera.position);
     const isSpring = season >= 1 && season <= 3;
     const isAutumn = season >= 7 && season <= 9;
@@ -465,6 +484,9 @@ export class GodboxRenderer {
       this.resourceWork.bindWorkers(this.visiblePeople);
     }
     this.resourceWorkers.beginFrame();
+    this.physicalWorkers.beginFrame();
+    this.physicalWork.beginFrame(this.visiblePeople);
+    this.actionInspections.clear();
     this.vegetation.beginResourceImpacts();
     this.peopleVisuals.beginFrame();
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
@@ -482,26 +504,50 @@ export class GodboxRenderer {
       if (!person) continue;
       const group = this.socialGroups.get(groupKeyFor(person) ?? '');
       const binding = this.resourceWork.workers.get(person.id);
-      const worker = binding && resourceWorkerCanPresent(person, binding.site.assignment) ? binding : undefined;
+      const settlement = this.workSettlements.get(person.homeId);
+      const weather = settlement ? this.state.weather.cells[settlement.cellIndex] : undefined;
+      const interruption = workInterruption(person, weather);
+      const worker = binding && !interruption && resourceWorkerCanPresent(person, binding.site.assignment) ? binding : undefined;
+      const project = settlement?.development?.project;
+      const site = project ? this.settlementBuildingPlacements.get(person.homeId)?.find(p => p.key === project.plotId) : undefined;
+      const physical = this.physicalWork.plan(person, settlement, site, this.farmFields.fields.get(person.homeId), weather,
+        (a, b) => this.resourceWork.safeSegment(a, b));
       const aim = worker ? resourceWorkAlternateAnchor(worker.site.profile, worker.variation, elapsedSeconds)
-        ? worker.station.alternate : worker.station.anchor : this.personDisplayTarget(person, group);
+        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? this.personDisplayTarget(person, group);
       const visual = this.peopleVisuals.resolve(person.id, {
         destination: aim,
-        arrivalEase: Boolean(worker),
-        ...(person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
+        arrivalEase: Boolean(worker || physical),
+        ...(!worker && !physical && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
-          : ('restFacing' in aim ? aim.restFacing as number : undefined),
+          : physical ? facingTarget(physical.action.locomotionTarget, physical.action.interactionAnchor) : ('restFacing' in aim ? aim.restFacing as number : undefined),
       }, deltaSeconds, this.personGround);
       const display = visual;
       const tier = visualTierFor(person);
       const detailed = tier !== 'population' || Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
       this.animationController.getOrCreateCharacterState(person.id, person.occupation);
-      if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity, travelAnimationFor(visual.speed, person));
+      if (physical) this.physicalWork.advance(person, physical, visual, deltaSeconds);
+      const physicalStanding = physical && physical.ready && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
+      const loaded = physical?.action.carriedObject !== undefined;
+      const travel = travelAnimationFor(visual.speed, person);
+      const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
+      if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
+        travel ? loaded ? 'carry' : travel : interruption || unsupportedWork ? 'idle' : physical ? 'idle' : undefined);
       let pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
-      const oriented = worker && Math.cos(visual.facing - worker.station.facing) > 0.94;
+      const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
       const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
       if (worker) this.resourceWorkers.sample(worker, elapsedSeconds, deltaSeconds, Boolean(working && oriented));
       if (working) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
+      if (physicalStanding) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
+      const articulated = working || physicalStanding || physical && loaded;
+      if (worker) {
+        const m = this.resourceWorkers.motion;
+        this.actionInspections.set(person.id, { personId: person.id, actionKind: `resource-${worker.site.profile.kind}`,
+          authoritativeActivity: person.activity, sourceAuthority: 'current resource work ledger', targetId: worker.site.assignment.siteId,
+          targetKind: worker.site.profile.kind, interactionAnchor: worker.station.target, locomotionTarget: aim,
+          phase: !working || !oriented ? 'approach' : m.impact > 0 ? 'contact' : m.held > 0 ? 'transfer' : 'prepare-recover',
+          phaseProgress: m.impact, activeTool: worker.site.profile.tool, carriedObject: working && m.held > 0 ? worker.site.assignment.resourceId : undefined,
+          contactStrength: working && oriented ? m.impact : 0 });
+      }
       const ageScale = person.ageMonths < 14 * 12 ? 0.64 + person.ageMonths / (14 * 12) * 0.08 : person.ageMonths > 68 * 12 ? 0.88 : 1;
       const heightScale = HUMAN_WORLD_SCALE * ageScale * (person.appearance?.heightScale ?? 1);
       const buildScale = person.appearance?.buildScale ?? 1;
@@ -509,12 +555,12 @@ export class GodboxRenderer {
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
       const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0.035 : person.activity === 'rest' ? 0.006 : 0.014;
       const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
-      const footY = visual.footY + (working ? 0 : bob);
+      const footY = visual.footY + (articulated ? 0 : bob);
       // Crouching and stooping lower the upper body only; the legs keep their hip pivot so the
       // feet stay on the ground instead of sinking with the pose.
-      const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (working ? 1 : 0.35) * heightScale;
+      const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, working ? pose?.spineRotation ?? 0 : 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, articulated ? pose?.spineRotation ?? 0 : 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
         materialQuality: person.appearance?.materialQuality ?? 0.5,
@@ -525,7 +571,7 @@ export class GodboxRenderer {
       // documentary distance. It is geometry, not a billboard/icon, and follows the body pose.
       this.setInstanceTransform(
         this.peopleRoleGarments, index, display.x, footY + 0.53 * heightScale + poseLift, display.z,
-        heightScale * buildScale, heightScale, heightScale * buildScale, working ? pose?.spineRotation ?? 0 : 0,
+        heightScale * buildScale, heightScale, heightScale * buildScale, articulated ? pose?.spineRotation ?? 0 : 0,
         facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0,
       );
       this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
@@ -536,18 +582,19 @@ export class GodboxRenderer {
       this.setInstanceTransform(this.peopleHeads, index, display.x, footY + 0.84 * heightScale + poseLift, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
       this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, 0.32);
       this.peopleHeads.setColorAt(index, this.personDetailColor);
-      const limbScale = detailed && !working ? heightScale : 0.001;
+      const limbScale = detailed && !articulated ? heightScale : 0.001;
       this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.15 * buildScale * heightScale, 0.62, pose?.leftShoulderRotation ?? 0.1, this.peopleArms, poseLift);
       this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.15 * buildScale * heightScale, 0.62, pose?.rightShoulderRotation ?? -0.1, this.peopleArms, poseLift);
       this.peopleArms.setColorAt(index * 2, this.personColor);
       this.peopleArms.setColorAt(index * 2 + 1, this.personColor);
-      this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.07 * buildScale * heightScale, 0.36, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
-      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.07 * buildScale * heightScale, 0.36, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
+      const legScale = detailed && (!articulated || physical && !physicalStanding) ? heightScale : 0.001;
+      this.setLimbInstance(index * 2, display.x, footY, display.z, legScale, heightScale, facing, -0.07 * buildScale * heightScale, 0.36, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
+      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.07 * buildScale * heightScale, 0.36, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
       this.peopleLegs.setColorAt(index * 2, this.personColor);
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
-      const toolScale = detailed && longTool && !working ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
+      const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
       this.setInstanceTransform(this.peopleTools, index, display.x + Math.sin(facing) * 0.17, footY + 0.55 * heightScale + poseLift, display.z + Math.cos(facing) * 0.17, toolScale, toolScale, toolScale, Math.PI / 7, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
@@ -565,11 +612,16 @@ export class GodboxRenderer {
       this.peopleHeadwear.setColorAt(index, this.personDetailColor);
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
-      const cargoScale = detailed && cargoVisible && !working ? heightScale : 0.001;
+      const cargoScale = detailed && cargoVisible && !articulated ? heightScale : 0.001;
       this.setInstanceTransform(this.peopleCargo, index, display.x + Math.cos(facing) * 0.2, footY + 0.47 * heightScale + poseLift, display.z - Math.sin(facing) * 0.2, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
       this.personDetailColor.set(carried === 'ledger' ? (culture?.style.accent ?? '#d9a748') : '#8b6840');
       this.peopleCargo.setColorAt(index, this.personDetailColor);
-      if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor);
+      if (physical && articulated && detailed) this.physicalWorkers.drawPhysical(physical.motion, physical.action.interactionAnchor,
+        physicalStanding ? physical.action.activeTool : 'none', physical.action.carriedObject,
+        physical.action.carriedObject === 'crop' ? '#b5a159' : physical.material === 'timber' ? '#987149' : '#898576',
+        loaded ? 1 : physical.blend, display.x, footY, display.z, heightScale, facing, this.personColor,
+        physical.action.actionKind === 'farm-harvest', physicalStanding && Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18, !physicalStanding);
+      if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor, Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
       if (working && worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
         this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
       }
@@ -585,6 +637,8 @@ export class GodboxRenderer {
     }
     this.peopleMantles.count = mantles;
     this.resourceWorkers.endFrame();
+    this.physicalWorkers.endFrame();
+    this.physicalWork.endFrame();
     this.peopleVisuals.prune((personId) => this.animationController.release(personId));
     this.people.instanceMatrix.needsUpdate = true;
     this.peopleRoleGarments.instanceMatrix.needsUpdate = true;
@@ -756,7 +810,7 @@ export class GodboxRenderer {
 
   private setInstanceTransform(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number): void {
     this.partPosition.set(x, y, z);
-    this.partQuaternion.setFromEuler(new THREE.Euler(rotationX, rotationY, rotationZ));
+    this.partQuaternion.setFromEuler(this.partEuler.set(rotationX, rotationY, rotationZ));
     this.partScale.set(scaleX, scaleY, scaleZ);
     this.personMatrix.compose(this.partPosition, this.partQuaternion, this.partScale);
     mesh.setMatrixAt(index, this.personMatrix);
@@ -1284,6 +1338,22 @@ export class GodboxRenderer {
     foundation.receiveShadow = true;
     const stage = Math.max(BUILD_STAGE.FOUNDATION, Math.min(BUILD_STAGE.WALLS, Math.floor(progress * (BUILD_STAGE.WALLS + 1)))) as BuildStage;
     site.add(foundation, this.createScaffold(placement, palette, placement.width, placement.depth, stage));
+    // Every solid component is a direct threshold of paid simulation progress.
+    // Foundation -> partial wall courses -> covered shell; no animation advances these stages.
+    if (progress > 0.4) {
+      const wallHeight = Math.max(0.04, Math.min(1, (progress - 0.4) / 0.4)) * placement.height * 0.65;
+      const wallMaterial = palette.getSurfaceMaterial(placement.development?.material === 'timber' ? 'timber' : 'stone');
+      for (const side of [-1, 1]) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(placement.width * 0.86, wallHeight, 0.055), wallMaterial);
+        wall.position.set(0, 0.1 + wallHeight / 2, side * placement.depth * 0.42); wall.castShadow = true;
+        wall.userData['constructionCue'] = 'paid-wall-courses'; site.add(wall);
+      }
+      if (progress >= 0.82) {
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(placement.width * 0.94, 0.045, placement.depth * 0.94), palette.getSurfaceMaterial('timber'));
+        roof.position.y = 0.12 + wallHeight; roof.castShadow = true;
+        roof.userData['constructionCue'] = 'paid-roof'; site.add(roof);
+      }
+    }
     return site;
   }
 
@@ -1472,7 +1542,7 @@ export class GodboxRenderer {
     const stops = Object.values(this.state.transportation.stops).filter(stop => stop.settlementId === settlement.id && stop.status === 'complete').map(stop => stop.id).join(',');
     // The era is part of the signature because its thresholds do not line up with the coarse
     // buckets below, and a missed era change would leave a settlement rendered as its past.
-    return [settlement.development?.revision ?? 0, this.eraForSettlement(settlement), ...[infrastructure.roads, infrastructure.ports, infrastructure.bridges, infrastructure.workshops, infrastructure.archives, infrastructure.rail, infrastructure.power, infrastructure.factories, settlement.industry.intensity, settlement.urbanization, settlement.constructionProgress, this.state.advanced.atomic.applications.energy, this.state.advanced.machine.capability, this.state.advanced.space.orbitalInfrastructure]
+    return [settlement.development?.revision ?? 0, constructionBlockedReason(settlement), this.eraForSettlement(settlement), ...[infrastructure.roads, infrastructure.ports, infrastructure.bridges, infrastructure.workshops, infrastructure.archives, infrastructure.rail, infrastructure.power, infrastructure.factories, settlement.industry.intensity, settlement.urbanization, settlement.constructionProgress, this.state.advanced.atomic.applications.energy, this.state.advanced.machine.capability, this.state.advanced.space.orbitalInfrastructure]
       .map((value) => Math.floor(value * 5)), stops, ...(settlement.structurePlots ?? []).map((plot) => Math.floor(plot.condition * 20))].join(':');
   }
 
@@ -2428,25 +2498,7 @@ export class GodboxRenderer {
     const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
 
     if (settlement.specialization === 'agriculture') {
-      const soil = new THREE.MeshStandardMaterial({ color: '#5d4632', roughness: 1 });
-      const crop = new THREE.MeshStandardMaterial({ color: '#7f9946', roughness: 1 });
-      for (let plot = 0; plot < 2; plot += 1) {
-        const px = baseX + (plot === 0 ? 0 : Math.cos(angle + 1.2) * 2.1);
-        const pz = baseZ + (plot === 0 ? 0 : Math.sin(angle + 1.2) * 2.1);
-        const bed = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.05, 1.15), soil);
-        bed.position.set(px, 0.03, pz);
-        bed.rotation.y = angle;
-        bed.receiveShadow = true;
-        group.add(bed);
-        for (let row = 0; row < 4; row += 1) {
-          const line = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 0.09), crop);
-          const offset = (row - 1.5) * 0.26;
-          line.position.set(px + Math.sin(angle) * offset, 0.1, pz + Math.cos(angle) * offset);
-          line.rotation.y = angle;
-          line.castShadow = true;
-          group.add(line);
-        }
-      }
+      // FarmFieldRenderer owns crops and the exact geometry used by farmers.
     } else if (settlement.specialization === 'forestry') {
       // A stacked log pile and a pair of saw trestles.
       for (let layer = 0; layer < 3; layer += 1) {

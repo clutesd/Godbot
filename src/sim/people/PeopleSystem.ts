@@ -1,5 +1,6 @@
 import { createSettlementLayoutPlan, type BuildingDistrict, type SettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
 import { structureDestination } from '../../shared/StructureDestinations';
+import { farmGeometry, farmAnchor } from '../../shared/FarmGeometry';
 import { isEstablishmentBuilder, isEstablishmentFireTender, physicalRestSite } from './EstablishmentWork';
 import type {
   Activity,
@@ -532,6 +533,10 @@ export class PeopleSystem {
   }
 
   private destinationPoint(person: Person, settlement: Settlement, state: SimulationState, kind: DestinationKind): Vec2 {
+    if (kind === 'field' && person.occupation === 'farmer') {
+      const field = farmGeometry(settlement);
+      if (field) return this.walkability.nearestWalkable(farmAnchor(field, person.id).anchor, `${person.id}:${field.id}`);
+    }
     if (kind === 'home') {
       const shelter = physicalRestSite(state, person);
       if (shelter) return this.walkability.nearestWalkable(shelter, `${person.id}:physical-shelter`);
@@ -579,6 +584,10 @@ export class PeopleSystem {
   }
 
   private destinationId(person: Person, settlement: Settlement, kind: DestinationKind): string {
+    if (kind === 'field' && person.occupation === 'farmer') {
+      const field = farmGeometry(settlement);
+      if (field) return field.id;
+    }
     const site = structureDestination(settlement, kind);
     if (site) return site.id;
     return kind === 'home' ? `${person.householdId}:home` : `${settlement.id}:${kind}`;

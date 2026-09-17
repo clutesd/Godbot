@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { Vec2 } from '../../sim/types';
+import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import type { ResourceWorkerVisual } from './ResourceWorkScene';
 import { MAX_ACTIVE_WORK_SITES } from './ResourceWorkScene';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../animation/ResourceWorkMotion';
@@ -14,6 +16,8 @@ export class ResourceWorkerRenderer {
   private readonly handles: THREE.InstancedMesh;
   private readonly heads: THREE.InstancedMesh;
   private readonly chips: THREE.InstancedMesh;
+  private readonly loads: THREE.InstancedMesh;
+  private readonly baskets: THREE.InstancedMesh;
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
   private readonly scale = new THREE.Vector3();
@@ -32,6 +36,8 @@ export class ResourceWorkerRenderer {
 
   constructor() {
     this.group.name = 'Articulated resource workers';
+    this.loads = this.pool('Contact acquired material', new THREE.BoxGeometry(1, 1, 1), '#ffffff', CAPACITY);
+    this.baskets = this.pool('Worker baskets', new THREE.CylinderGeometry(0.12, 0.09, 0.16, 7, 1, true), '#8b6840', CAPACITY);
     this.limbs = this.pool('Resource worker joints', new THREE.CylinderGeometry(0.028, 0.033, 1, 5), '#ffffff', CAPACITY * 8);
     this.handles = this.pool('Resource worker tool shafts', new THREE.CylinderGeometry(0.018, 0.023, 1, 6), '#765235', CAPACITY);
     this.heads = this.pool('Resource worker axe and pick heads', resourceToolHeadGeometry(), '#ffffff', CAPACITY);
@@ -41,19 +47,31 @@ export class ResourceWorkerRenderer {
   sample(worker: ResourceWorkerVisual, seconds: number, delta: number, ready: boolean): void {
     worker.blend = Math.min(1, Math.max(0, worker.blend + (ready ? 1 : -1) * Math.max(0, delta) / 0.35));
     sampleResourceWorkMotion(worker.site.profile, worker.variation, seconds, this.motion);
+    if (!ready || this.motion.held === 0 && this.motion.impact === 0 && this.motion.basket === 0) worker.contacted = false;
+    if (ready && worker.blend > 0.95 && this.motion.impact > 0) worker.contacted = true;
+    if (!worker.contacted) this.motion.held = 0;
+    if (!ready) this.motion.impact = 0;
   }
 
   beginFrame(): void { this.count = 0; this.chipCount = 0; }
 
-  draw(worker: ResourceWorkerVisual, x: number, y: number, z: number, size: number, facing: number, colour: THREE.Color): void {
+  draw(worker: ResourceWorkerVisual, x: number, y: number, z: number, size: number, facing: number, colour: THREE.Color, effects = true): void {
+    this.drawPhysical(this.motion, worker.station.target, worker.site.profile.tool,
+      worker.site.profile.kind === 'plant' && this.motion.held > 0 ? 'crop' : undefined,
+      worker.site.profile.materialColour, worker.blend, x, y, z, size, facing, colour,
+      worker.site.profile.kind === 'plant', effects);
+  }
+
+  /** Shared instanced limbs/props, not a shared action state machine. All phases come from callers. */
+  drawPhysical(m: ResourceWorkMotion, target: Readonly<Vec2>, tool: string, load: string | undefined,
+    materialColour: string, blend: number, x: number, y: number, z: number, size: number, facing: number,
+    colour: THREE.Color, basket = false, effects = true, walking = false): void {
     if (this.count >= CAPACITY) return;
     const index = this.count++;
     this.baseX = x; this.baseY = y; this.baseZ = z; this.size = size;
     this.sin = Math.sin(facing); this.cos = Math.cos(facing);
-    const m = this.motion;
-    const blend = worker.blend;
     const crouch = m.crouch * blend;
-    const plant = worker.site.profile.tool === 'basket' || worker.site.profile.tool === 'none';
+    const plant = tool === 'basket' || tool === 'none';
     const handY = 0.4 + (m.handY - 0.4) * blend;
     const handZ = 0.12 + (m.handZ - 0.12) * blend;
     const toolAngle = 1.9 + (m.toolAngle - 1.9) * blend;
@@ -71,8 +89,8 @@ export class ResourceWorkerRenderer {
       const elbowZ = hz * 0.5 + 0.015;
       this.segment(this.limbs, index * 8 + side * 2, sign * 0.15, shoulderY, 0, elbowX, elbowY, elbowZ, 1);
       this.segment(this.limbs, index * 8 + side * 2 + 1, elbowX, elbowY, elbowZ, hx, hy, hz, 0.85);
-      this.segment(this.limbs, index * 8 + 4 + side * 2, sign * 0.075, 0.35 - crouch, 0, sign * 0.085, 0.18 - crouch * 0.25, crouch * 0.65, 1.13);
-      this.segment(this.limbs, index * 8 + 5 + side * 2, sign * 0.085, 0.18 - crouch * 0.25, crouch * 0.65, sign * 0.085, 0.02, sign * 0.035, 1.02);
+      this.segment(this.limbs, index * 8 + 4 + side * 2, sign * 0.075, 0.35 - crouch, 0, sign * 0.085, 0.18 - crouch * 0.25, crouch * 0.65, walking ? 0 : 1.13);
+      this.segment(this.limbs, index * 8 + 5 + side * 2, sign * 0.085, 0.18 - crouch * 0.25, crouch * 0.65, sign * 0.085, 0.02, sign * 0.035, walking ? 0 : 1.02);
     }
     for (let limb = 0; limb < 8; limb++) this.limbs.setColorAt(index * 8 + limb, colour);
     const toolSize = plant ? 0 : 1;
@@ -80,17 +98,29 @@ export class ResourceWorkerRenderer {
     const tipZ = handZ + shaftZ * 0.32;
     this.segment(this.handles, index, 0, handY - shaftY * 0.18, handZ - shaftZ * 0.18, 0, tipY, tipZ, toolSize);
     this.position.set(x + tipZ * this.sin * size, y + tipY * size, z + tipZ * this.cos * size);
-    this.scale.set((worker.site.profile.tool === 'axe' ? 0.2 : 0.3) * size * toolSize,
-      (worker.site.profile.tool === 'axe' ? 0.13 : 0.055) * size * toolSize, 0.075 * size * toolSize);
+    this.scale.set((tool === 'axe' || tool === 'hammer' ? 0.2 : 0.3) * size * toolSize,
+      (tool === 'axe' || tool === 'hammer' ? 0.13 : 0.055) * size * toolSize, 0.075 * size * toolSize);
     this.matrix.compose(this.position, this.rotation, this.scale);
     this.heads.setMatrixAt(index, this.matrix);
-    this.colour.set(worker.site.developed ? '#737d7e' : '#8b877c');
+    this.colour.set('#8b877c');
     this.heads.setColorAt(index, this.colour);
     // Three tiny analytic chips, only at actual contact.
     // No particle history, spawned objects, or per-frame site geometry rebuilds.
-    if (m.impact > 0 && blend > 0.95) {
-      const target = worker.station.target;
-      this.colour.set(worker.site.profile.materialColour);
+    const receive = m.basket * blend;
+    const loadX = plant ? receive * 0.32 : 0;
+    const loadZ = handZ - (plant ? receive * 0.15 : 0);
+    this.position.set(x + (loadX * this.cos + loadZ * this.sin) * size,
+      y + handY * size, z + (loadZ * this.cos - loadX * this.sin) * size);
+    const visible = load && blend > 0.95 ? size : 0;
+    this.scale.set(visible * (load === 'timber' ? 0.65 : 0.16), visible * 0.1, visible * 0.12);
+    this.rotation.setFromAxisAngle(this.up, facing);
+    this.matrix.compose(this.position, this.rotation, this.scale); this.loads.setMatrixAt(index, this.matrix);
+    this.colour.set(materialColour); this.loads.setColorAt(index, this.colour);
+    this.position.set(x + 0.32 * this.cos * size, y + (0.35 - crouch * 0.3) * size, z - 0.32 * this.sin * size);
+    this.scale.setScalar(basket ? size : 0); this.matrix.compose(this.position, this.rotation, this.scale);
+    this.baskets.setMatrixAt(index, this.matrix);
+    if (effects && m.impact > 0 && blend > 0.95) {
+      this.colour.set(materialColour);
       for (let chip = 0; chip < 3; chip++) {
         const spread = (chip - 1) * 0.025 * m.impact;
         this.position.set(target.x + spread * this.cos, y + 0.04 + Math.sin(m.impact * Math.PI / 2) * 0.025, target.z - spread * this.sin);
@@ -108,7 +138,8 @@ export class ResourceWorkerRenderer {
     this.handles.count = this.count;
     this.heads.count = this.count;
     this.chips.count = this.chipCount;
-    for (const mesh of [this.limbs, this.handles, this.heads, this.chips]) {
+    this.loads.count = this.baskets.count = this.count;
+    for (const mesh of [this.limbs, this.handles, this.heads, this.chips, this.loads, this.baskets]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }

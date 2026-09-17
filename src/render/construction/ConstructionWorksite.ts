@@ -8,6 +8,8 @@ export interface ConstructionWorksiteSpec {
   progress: number;
   response?: DevelopmentResponse;
   seedKey: string;
+  /** False when current project inputs are unavailable; spent inputs are already in the structure. */
+  materialsAvailable?: boolean;
 }
 
 export interface ConstructionWorksiteAnchors {
@@ -39,9 +41,9 @@ export function constructionWorksiteAnchors(
   return {
     materialCenter: { x: stagingX, z: stagingZ },
     // Stand just outside the pile so the character does not clip through the stock itself.
-    pickup: { x: side * width * 1.12, z: stagingZ + laneOffset },
+    pickup: { x: stagingX + side * 0.32, z: stagingZ + laneOffset },
     // Meet the building beside the scaffold instead of walking into the foundation volume.
-    delivery: { x: side * width * 0.7, z: laneOffset * 0.72 },
+    delivery: { x: side * (width * 0.45 + 0.13), z: laneOffset * 0.72 },
   };
 }
 
@@ -67,7 +69,8 @@ export function createConstructionWorksite(
   const material = spec.response?.material ?? 'timber';
 
   addWorkPad(group, width, depth, palette);
-  addMaterialStaging(group, width, depth, material, progress, palette, spec.seedKey);
+  if (spec.materialsAvailable !== false) addMaterialStaging(group, width, depth, material, progress, palette, spec.seedKey);
+  group.userData['blocked'] = spec.materialsAvailable === false;
   addSawhorses(group, width, depth, palette);
   addBoundaryMarkers(group, width, depth, palette);
 
@@ -122,7 +125,11 @@ function addMaterialStaging(
   const stagingZ = materialCenter.z;
   const remaining = Math.max(0.28, 1 - progress * 0.62);
 
-  if (material === 'timber' || material === 'earth') {
+  if (material === 'earth') {
+    addEarthBasket(group, stagingX, stagingZ, palette);
+    return;
+  }
+  if (material === 'timber') {
     const timber = palette.getSurfaceMaterial('timber');
     const beamLength = Math.max(0.5, depth * 0.54);
     const beamGeometry = new THREE.BoxGeometry(0.075, 0.075, beamLength);
@@ -137,7 +144,6 @@ function addMaterialStaging(
       beam.userData['constructionCue'] = 'staged-material';
       group.add(beam);
     }
-    if (material === 'earth') addEarthBasket(group, stagingX, stagingZ + depth * 0.42, palette);
     return;
   }
 

@@ -169,6 +169,7 @@ export function humanStoryCueFor(person: Person): HumanStoryCue {
  */
 export function travelAnimationFor(speed: number, person: Person): AnimationState | undefined {
   if (speed < WALK_SPEED_THRESHOLD) {
+    if (person.navigation?.traveling) return person.activity === 'flee' ? 'run' : 'walk';
     if (person.activity !== 'gather') return undefined;
     if (person.navigation?.traveling) return 'walk';
     if (person.navigation?.schedulePhase === 'emergency' || person.displacedSinceMonth !== undefined) return undefined;

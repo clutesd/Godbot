@@ -9,11 +9,13 @@ export interface ResourceWorkMotion {
   toolAngle: number;
   impact: number;
   basket: number;
+  /** Gathered piece is visible only between plant contact and basket release. */
+  held: number;
   reposition: boolean;
 }
 
 export function createResourceWorkMotion(): ResourceWorkMotion {
-  return { lean: 0, twist: 0, crouch: 0, handY: 0, handZ: 0, toolAngle: 0, impact: 0, basket: 0, reposition: false };
+  return { lean: 0, twist: 0, crouch: 0, handY: 0, handZ: 0, toolAngle: 0, impact: 0, basket: 0, held: 0, reposition: false };
 }
 
 /** Small safe plant-patch steps occur only after standing at the end of a harvesting cycle. */
@@ -35,6 +37,7 @@ export function sampleResourceWorkMotion(
   out.reposition = rest && phase > 0.45;
   out.impact = 0;
   out.basket = 0;
+  out.held = 0;
   if (profile.kind === 'plant' || profile.kind === 'generic') {
     // Stand -> crouch -> reach/pluck -> inspect -> basket -> stand. The hands follow the action.
     const crouch = smooth(phase / 0.2) * (1 - smooth((phase - 0.72) / 0.22));
@@ -47,6 +50,7 @@ export function sampleResourceWorkMotion(
     out.handZ = 0.18 + reach * 0.26;
     out.toolAngle = 0;
     out.basket = basket;
+    out.held = phase >= 0.46 && phase < 0.8 ? 1 : 0;
     out.impact = phase > 0.4 && phase < 0.46 ? Math.sin((phase - 0.4) / 0.06 * Math.PI) : 0;
     out.reposition = phase > 0.94;
     return out;

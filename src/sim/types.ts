@@ -589,6 +589,9 @@ export interface IndustrialState {
 }
 
 export interface Settlement {
+  /** Last evaluated agricultural contribution, recorded by the economy, never by presentation.
+   * Needed because net food balance includes consumption/foraging and cannot recover farm output. */
+  agriculture?: { month: number; labour: number; yieldPerWorker: number; production: number; irrigation: number };
   /** Optional for archives predating consequence-driven survival. */
   survival?: SurvivalState;
   foundingPodId?: string;
