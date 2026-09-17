@@ -6,6 +6,7 @@ import type { Historian } from '../historian/Historian';
 import type { AudioCategory, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
+import { CAMERA_FOREST_CLEARANCE, resolveForestCameraClearance } from './CameraForestClearance';
 
 export interface CurrentObservation {
   label: string;
@@ -136,6 +137,9 @@ export class CameraDirector {
   private readonly workingDirection = new THREE.Vector3();
   private readonly workingTangent = new THREE.Vector3();
   private readonly forestCandidatePosition = new THREE.Vector3();
+  /** Smoothed presentation-only lens escape; never feeds back into simulation state. */
+  private readonly forestClearanceOffset = new THREE.Vector3();
+  private readonly forestClearanceTarget = new THREE.Vector3();
   private shotAge = 0;
   private shotDuration = 12;
   private currentScene?: ObservationCandidate;
@@ -193,6 +197,7 @@ export class CameraDirector {
     }
 
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
+    this.applyForestCameraClearance(deltaSeconds, state, elevationAt);
 
     // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
     // never simulation months, so deep historical acceleration does not make the camera race.
@@ -277,6 +282,43 @@ export class CameraDirector {
       }
     }
     return bestAzimuth;
+  }
+
+  /**
+   * Last-resort lens clearance after authored framing and motion are known.
+   * It eases into a tiny crane/lateral escape only when the lens itself occupies canopy;
+   * the subject target never moves, so the documentary intent stays intact.
+   */
+  private applyForestCameraClearance(
+    deltaSeconds: number,
+    state: SimulationState,
+    elevationAt: (x: number, z: number) => number,
+  ): void {
+    const scene = this.currentScene;
+    if (scene && FOREST_AWARE_KINDS.has(scene.kind)) {
+      const clearance = resolveForestCameraClearance(
+        state.world,
+        this.desiredPosition,
+        this.desiredTarget,
+        elevationAt,
+      );
+      this.forestClearanceTarget.copy(clearance.offset);
+    } else {
+      this.forestClearanceTarget.set(0, 0, 0);
+    }
+
+    const entering = this.forestClearanceTarget.lengthSq() > this.forestClearanceOffset.lengthSq() + 0.01;
+    const response = entering ? CAMERA_FOREST_CLEARANCE.responseIn : CAMERA_FOREST_CLEARANCE.responseOut;
+    const amount = 1 - Math.exp(-Math.max(0, deltaSeconds) * response);
+    this.forestClearanceOffset.lerp(this.forestClearanceTarget, amount);
+
+    if (this.forestClearanceTarget.lengthSq() < 1e-6 && this.forestClearanceOffset.lengthSq() < 0.0004) {
+      this.forestClearanceOffset.set(0, 0, 0);
+    }
+    if (this.forestClearanceOffset.lengthSq() <= 0) return;
+
+    this.desiredPosition.add(this.forestClearanceOffset);
+    this.raiseForTerrain(elevationAt);
   }
 
   private animateShot(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
