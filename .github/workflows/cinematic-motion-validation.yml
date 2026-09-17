@@ -6,11 +6,15 @@ on:
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/CameraDirector.ts'
       - 'src/render/CameraForestClearance.ts'
+      - 'src/render/CameraVegetationOcclusion.ts'
+      - 'src/render/GodboxRenderer.ts'
+      - 'src/render/vegetation/VegetationRenderer.ts'
       - 'src/render/vegetation/TreeMaterials.ts'
       - 'tests/camera-forest-sightline.test.ts'
       - 'tests/camera-canopy-dissolve.test.ts'
       - 'tests/camera-canopy-material-contract.test.ts'
       - 'tests/camera-forest-clearance.test.ts'
+      - 'tests/camera-vegetation-occlusion.test.ts'
       - 'tests/cinematic-presentation.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   workflow_dispatch:
@@ -26,17 +30,21 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # Keep focused camera validation useful even when an unrelated repository-wide typecheck is red.
+      # Run focused camera checks first so failures point directly at cinematography regressions.
       - run: >-
           npx eslint
           src/historian/PresentationDirector.ts
           src/render/CameraDirector.ts
           src/render/CameraForestClearance.ts
+          src/render/CameraVegetationOcclusion.ts
+          src/render/GodboxRenderer.ts
+          src/render/vegetation/VegetationRenderer.ts
           src/render/vegetation/TreeMaterials.ts
           tests/camera-forest-sightline.test.ts
           tests/camera-canopy-dissolve.test.ts
           tests/camera-canopy-material-contract.test.ts
           tests/camera-forest-clearance.test.ts
+          tests/camera-vegetation-occlusion.test.ts
           tests/cinematic-presentation.test.ts
       - run: >-
           npx vitest run
@@ -44,6 +52,7 @@ jobs:
           tests/camera-canopy-dissolve.test.ts
           tests/camera-canopy-material-contract.test.ts
           tests/camera-forest-clearance.test.ts
+          tests/camera-vegetation-occlusion.test.ts
           tests/cinematic-presentation.test.ts
           tests/pacing.test.ts
       - run: npm run typecheck
