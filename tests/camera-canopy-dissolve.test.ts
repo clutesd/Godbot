@@ -6,6 +6,14 @@ describe('camera-aware canopy dissolve', () => {
     expect(cameraCanopyDissolveStrength(2.5, 0.04)).toBeGreaterThan(0.85);
   });
 
+  it('stays completely dormant until the camera director explicitly arms it', () => {
+    expect(cameraCanopyDissolveStrength(2.5, 0.04, 0)).toBe(0);
+    const partial = cameraCanopyDissolveStrength(2.5, 0.04, 0.5);
+    const full = cameraCanopyDissolveStrength(2.5, 0.04, 1);
+    expect(partial).toBeGreaterThan(0);
+    expect(partial).toBeLessThan(full);
+  });
+
   it('keeps distant canopy fully present', () => {
     expect(cameraCanopyDissolveStrength(12, 0.02)).toBe(0);
   });
