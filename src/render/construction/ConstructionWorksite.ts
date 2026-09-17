@@ -10,6 +10,41 @@ export interface ConstructionWorksiteSpec {
   seedKey: string;
 }
 
+export interface ConstructionWorksiteAnchors {
+  /** Centre of the visible staged-material pile. */
+  materialCenter: { x: number; z: number };
+  /** Where a worker stands to collect the next load. */
+  pickup: { x: number; z: number };
+  /** Where a worker hands the load into the unfinished structure. */
+  delivery: { x: number; z: number };
+}
+
+/**
+ * Stable semantic anchors shared by the static worksite and worker choreography.
+ * `lane` is -1..1 and only separates workers along the face of the site; it never changes
+ * which material pile or building the simulation says they are using.
+ */
+export function constructionWorksiteAnchors(
+  inputWidth: number,
+  inputDepth: number,
+  seedKey: string,
+  lane = 0,
+): ConstructionWorksiteAnchors {
+  const width = Math.max(0.9, inputWidth);
+  const depth = Math.max(0.8, inputDepth);
+  const side = stableUnit(`${seedKey}:staging-side`) > 0.5 ? 1 : -1;
+  const stagingX = side * width * 0.92;
+  const stagingZ = -depth * 0.26;
+  const laneOffset = Math.max(-1, Math.min(1, lane)) * Math.min(0.3, depth * 0.18);
+  return {
+    materialCenter: { x: stagingX, z: stagingZ },
+    // Stand just outside the pile so the character does not clip through the stock itself.
+    pickup: { x: side * width * 1.12, z: stagingZ + laneOffset },
+    // Meet the building beside the scaffold instead of walking into the foundation volume.
+    delivery: { x: side * width * 0.7, z: laneOffset * 0.72 },
+  };
+}
+
 /**
  * Presentation-only dressing for an active construction plot.
  *
@@ -80,16 +115,15 @@ function addMaterialStaging(
   palette: MaterialPalette,
   seedKey: string,
 ): void {
-  // Keep the staging area consistently to one side of the footprint so Action 1B can later use
-  // the same place as a real pickup anchor. Slight deterministic variation prevents every site
-  // from looking stamped out without changing the semantic location.
-  const side = stableUnit(`${seedKey}:staging-side`) > 0.5 ? 1 : -1;
-  const stagingX = side * width * 0.92;
-  const stagingZ = -depth * 0.26;
+  // The exact same semantic material centre is exported to Action 1B. Workers therefore collect
+  // loads from the pile the viewer can actually see, rather than from an unrelated magic point.
+  const { materialCenter } = constructionWorksiteAnchors(width, depth, seedKey);
+  const stagingX = materialCenter.x;
+  const stagingZ = materialCenter.z;
   const remaining = Math.max(0.28, 1 - progress * 0.62);
 
   if (material === 'timber' || material === 'earth') {
-    const timber = palette.getSurfaceMaterial(material === 'earth' ? 'timber' : 'timber');
+    const timber = palette.getSurfaceMaterial('timber');
     const beamLength = Math.max(0.5, depth * 0.54);
     const beamGeometry = new THREE.BoxGeometry(0.075, 0.075, beamLength);
     const count = 4 + Math.round(remaining * 4);
