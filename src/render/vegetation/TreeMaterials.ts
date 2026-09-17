@@ -19,12 +19,12 @@ const smoothstep01 = (value: number): number => {
  * CPU mirror of the foliage shader envelope, used by tests and tuning tools.
  * `tangentAngle` is view-space radial offset / forward depth, so the response is resolution and FOV stable.
  */
-export function cameraCanopyDissolveStrength(distance: number, tangentAngle: number): number {
+export function cameraCanopyDissolveStrength(distance: number, tangentAngle: number, cameraStrength = 1): number {
   const distanceSpan = CAMERA_CANOPY_DISSOLVE.clearDistance - CAMERA_CANOPY_DISSOLVE.fullDistance;
   const angleSpan = CAMERA_CANOPY_DISSOLVE.outerAngle - CAMERA_CANOPY_DISSOLVE.innerAngle;
   const near = 1 - smoothstep01((distance - CAMERA_CANOPY_DISSOLVE.fullDistance) / Math.max(0.001, distanceSpan));
   const centered = 1 - smoothstep01((tangentAngle - CAMERA_CANOPY_DISSOLVE.innerAngle) / Math.max(0.001, angleSpan));
-  return clamp01(near * centered * CAMERA_CANOPY_DISSOLVE.maxDissolve);
+  return clamp01(near * centered * CAMERA_CANOPY_DISSOLVE.maxDissolve * clamp01(cameraStrength));
 }
 
 /** Shared colour/shadow deformation. Attributes are owned by each existing instance bucket. */
@@ -36,6 +36,8 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   const distance = new THREE.MeshDistanceMaterial();
   const bark = kind === 'bark';
+  const cameraCanopyDissolveUniform = { value: 0 };
+  if (!bark) material.userData['cameraCanopyDissolveUniform'] = cameraCanopyDissolveUniform;
   const declarations = `varying vec3 treeLocal; varying vec4 treeCondition;`;
   const fracture = `
     float fractureY = treeHeight * treeCondition.x + treeHeight * 0.008 *
@@ -57,6 +59,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
   for (const target of [material, depth, distance]) {
     target.onBeforeCompile = shader => {
       shader.uniforms['treeHeight'] = { value: height };
+      if (!bark && target === material) shader.uniforms['cameraCanopyDissolveStrength'] = cameraCanopyDissolveUniform;
       shader.vertexShader = `attribute vec4 treeState; ${bark ? '' : 'attribute vec3 canopyAnchor;'}
         ${declarations}\n${shader.vertexShader}`;
       shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
@@ -67,7 +70,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         // w is transient presentation feedback, cleared each frame, never a damage counter.
         transformed.x += treeState.w * max(0.0, transformed.y) * 0.004;
       `);
-      shader.fragmentShader = `uniform float treeHeight; ${declarations}\n${shader.fragmentShader}`;
+      shader.fragmentShader = `uniform float treeHeight; ${!bark && target === material ? 'uniform float cameraCanopyDissolveStrength;' : ''} ${declarations}\n${shader.fragmentShader}`;
       shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
         #include <clipping_planes_fragment>
         ${bark ? fracture : `if (treeCondition.x < 0.001) discard;${target === material ? canopyDissolve : ''}`}
@@ -100,11 +103,17 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         `);
       }
     };
-    target.customProgramCacheKey = () => `tree-v3:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
+    target.customProgramCacheKey = () => `tree-v4:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
   }
   mesh.customDepthMaterial = depth;
   mesh.customDistanceMaterial = distance;
   // The existing renderer disposes the main material; keep shadow resource lifetime identical.
   material.addEventListener('dispose', () => { depth.dispose(); distance.dispose(); });
   return state;
+}
+
+export function setTreeCanopyDissolveStrength(mesh: THREE.InstancedMesh, strength: number): void {
+  const material = mesh.material as THREE.Material;
+  const uniform = material.userData['cameraCanopyDissolveUniform'] as { value: number } | undefined;
+  if (uniform) uniform.value = clamp01(strength);
 }
