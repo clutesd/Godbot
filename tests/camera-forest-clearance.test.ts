@@ -54,6 +54,20 @@ describe('cinematic forest camera clearance', () => {
     expect(active.offset.lengthSq()).toBeGreaterThan(0);
   });
 
+  it('trusts the rendered-crown probe over coarse forest stock when an actual gap is clear', () => {
+    const world = forestFixture('camera-clearance-rendered-gap');
+    const camera = new THREE.Vector3(0, 3.5, 0);
+    const target = new THREE.Vector3(10, 1, 0);
+    const clearProbe = {
+      sightlineObstruction: () => 0,
+      canopyPressureAt: () => 0,
+    };
+
+    const clearance = resolveForestCameraClearance(world, camera, target, () => 0, false, clearProbe);
+    expect(clearance.pressureBefore).toBe(0);
+    expect(clearance.offset.lengthSq()).toBe(0);
+  });
+
   it('does nothing when the forest has already been cleared', () => {
     const world = forestFixture('camera-clearance-empty');
     for (const cell of world.cells) cell.wood = 0;
