@@ -38,7 +38,7 @@ function construction(settlement: Settlement, person: Person) {
     style: fixture.simulation.state.cultures[0]!.style, services: { housing: 1 }, reasons: [], capabilities: [],
     cost: { food: 0, wood: 4, minerals: 0, goods: 0, wealth: 0 }, labor: 4 } as const;
   const project = { plotId: 'plot', response, action: 'founded', startedMonth: 0, progress: 0.3,
-    spent: { food: 0, wood: 1.2, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] } as const;
+    spent: { food: 0, wood: 1.2, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] as string[] } as const;
   settlement.development = { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: 6, nextAttemptMonth: 12, revision: 1,
     project: structuredClone(project) };
   settlement.structurePlots = [{ id: 'plot', worldX: 0, worldZ: 0, width: 2, depth: 1.5, height: 1, radius: 1, condition: 1, foundedMonth: 0 }];
