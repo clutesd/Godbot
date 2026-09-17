@@ -104,6 +104,19 @@ describe('construction workflow', () => {
     expect(constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0)).toEqual(a);
   });
 
+  it('uses the rendered construction footprint for worker/site alignment when available', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    placement.constructionWidth = 1.1;
+    placement.constructionDepth = 0.9;
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame([person]);
+    const worker = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
+    const local = constructionWorksiteAnchors(1.1, 0.9, 'plot', constructionWorkerLane(person.id), constructionWorkfaceIndex('plot', person.id));
+    expect(worker.action.locomotionTarget.x).toBeCloseTo(local.pickup.x);
+    expect(worker.action.locomotionTarget.z).toBeCloseTo(local.pickup.z);
+  });
+
   it('gives a three-person project distinct role-specific movement targets without changing authority', () => {
     const { settlement, person, weather } = setup();
     const placement = construction(settlement, person);
