@@ -5,6 +5,7 @@ import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import type { AudioCategory, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
+import { cellAt } from '../sim/world';
 
 export interface CurrentObservation {
   label: string;
@@ -58,6 +59,68 @@ const DOCUMENTARY_BREAK_TYPES = new Set([
   'natural-catastrophe', 'civilization-collapse', 'planetary-stability', 'post-biological-transition', 'observation-lost', 'outcome-classified',
 ]);
 
+/** Close and medium shots where a dense canopy can hide the actual documentary subject. */
+const FOREST_AWARE_KINDS = new Set<ObservationKind>([
+  'settlement-approach',
+  'street-observation',
+  'worker-follow',
+  'traveler-follow',
+  'institution-exterior',
+  'discovery-scene',
+  'infrastructure-scene',
+  'atomic-threshold',
+]);
+
+/** Preserve the authored angle when possible; only search nearby compositions. */
+const FOREST_AZIMUTH_OFFSETS = [0, Math.PI / 7.2, -Math.PI / 7.2, Math.PI / 3.6, -Math.PI / 3.6] as const;
+
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+
+/**
+ * Cheap presentation-only estimate of how strongly standing forest occupies a camera sightline.
+ * It deliberately reads world forest state rather than renderer meshes so CameraDirector never
+ * becomes coupled to vegetation instance buckets. Larger values mean a more obstructed view.
+ */
+export function forestSightlineObstruction(
+  world: SimulationState['world'],
+  from: THREE.Vector3,
+  target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+): number {
+  const horizontalDistance = Math.hypot(target.x - from.x, target.z - from.z);
+  if (horizontalDistance < 2) return 0;
+  const samples = Math.max(6, Math.min(14, Math.ceil(horizontalDistance / 3)));
+  let obstruction = 0;
+
+  for (let index = 1; index < samples; index += 1) {
+    const amount = index / samples;
+    const x = THREE.MathUtils.lerp(from.x, target.x, amount);
+    const z = THREE.MathUtils.lerp(from.z, target.z, amount);
+    const cell = cellAt(world, x, z);
+    if (!cell || cell.water) continue;
+
+    const capacity = Math.max(0.01, cell.forestCapacity ?? cell.wood);
+    const standing = clamp01(cell.wood / capacity);
+    if (standing < 0.08) continue;
+
+    const biomeWeight = cell.biome === 'forest' ? 1
+      : cell.biome === 'wetland' ? 0.78
+        : cell.river ? 0.62
+          : 0.42;
+    const sightY = THREE.MathUtils.lerp(from.y, target.y, amount);
+    const canopyHeight = 3.8 + standing * 2.6;
+    const canopyTop = elevationAt(x, z) + canopyHeight;
+    const verticalOverlap = clamp01((canopyTop - sightY + 0.45) / 3.2);
+    if (verticalOverlap <= 0) continue;
+
+    // Foreground foliage consumes much more of the frame than the same canopy near the subject.
+    const foregroundWeight = 1 + (1 - amount) * 0.75;
+    obstruction += standing * biomeWeight * verticalOverlap * foregroundWeight;
+  }
+
+  return obstruction / samples;
+}
+
 /**
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
@@ -72,6 +135,7 @@ export class CameraDirector {
   private readonly trackedFocus = new THREE.Vector3();
   private readonly workingDirection = new THREE.Vector3();
   private readonly workingTangent = new THREE.Vector3();
+  private readonly forestCandidatePosition = new THREE.Vector3();
   private shotAge = 0;
   private shotDuration = 12;
   private currentScene?: ObservationCandidate;
@@ -173,15 +237,46 @@ export class CameraDirector {
     this.observation.revision += 1;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
-    this.shotAzimuth = this.stableAzimuth(scene.id);
+    const baseAzimuth = this.stableAzimuth(scene.id);
     const radius = this.interpolate(framing.radius, 0.36 + scene.score * 0.4);
     const height = this.interpolate(framing.height, 0.42 + scene.interest * 0.32);
     this.shotBaseTarget.set(scene.position.x, ground + framing.targetHeight, scene.position.z);
+    this.shotAzimuth = this.chooseForestAwareAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
     this.shotBasePosition.set(scene.position.x + Math.cos(this.shotAzimuth) * radius, ground + height, scene.position.z + Math.sin(this.shotAzimuth) * radius);
     this.desiredTarget.copy(this.shotBaseTarget);
     this.desiredPosition.copy(this.shotBasePosition);
     this.raiseForTerrain(elevationAt);
     this.shotBasePosition.copy(this.desiredPosition);
+  }
+
+  private chooseForestAwareAzimuth(
+    state: SimulationState,
+    kind: ObservationKind,
+    baseAzimuth: number,
+    radius: number,
+    height: number,
+    ground: number,
+    elevationAt: (x: number, z: number) => number,
+  ): number {
+    if (!FOREST_AWARE_KINDS.has(kind)) return baseAzimuth;
+
+    let bestAzimuth = baseAzimuth;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const offset of FOREST_AZIMUTH_OFFSETS) {
+      const azimuth = baseAzimuth + offset;
+      const x = this.shotBaseTarget.x + Math.cos(azimuth) * radius;
+      const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius;
+      this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + 3), z);
+      const obstruction = forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
+      // A small composition penalty prevents needless angle changes when two views are effectively tied.
+      const compositionPenalty = Math.abs(offset) * 0.045;
+      const score = obstruction + compositionPenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        bestAzimuth = azimuth;
+      }
+    }
+    return bestAzimuth;
   }
 
   private animateShot(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
