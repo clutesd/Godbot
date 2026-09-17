@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
+import type { CameraVegetationProbe } from './CameraVegetationOcclusion';
 
 export const CAMERA_FOREST_CLEARANCE = {
   triggerPressure: 0.16,
@@ -64,17 +65,18 @@ function corridorPressureAt(
   targetX: number,
   targetZ: number,
   elevationAt: (x: number, z: number) => number,
+  probe?: CameraVegetationProbe,
 ): number {
-  const lens = forestCanopyPressureAt(world, x, y, z, elevationAt);
+  const pressureAt = (px: number, py: number, pz: number): number =>
+    probe ? probe.canopyPressureAt(px, py, pz) : forestCanopyPressureAt(world, px, py, pz, elevationAt);
+  const lens = pressureAt(x, y, z);
   const directionX = targetX - x;
   const directionZ = targetZ - z;
   const length = Math.max(0.001, Math.hypot(directionX, directionZ));
-  const forward = forestCanopyPressureAt(
-    world,
+  const forward = pressureAt(
     x + directionX / length * CAMERA_FOREST_CLEARANCE.probeForward,
     y,
     z + directionZ / length * CAMERA_FOREST_CLEARANCE.probeForward,
-    elevationAt,
   );
   return lens * 0.72 + forward * 0.28;
 }
@@ -90,6 +92,7 @@ export function resolveForestCameraClearance(
   target: THREE.Vector3,
   elevationAt: (x: number, z: number) => number,
   active = false,
+  probe?: CameraVegetationProbe,
 ): ForestCameraClearance {
   const pressureBefore = corridorPressureAt(
     world,
@@ -99,6 +102,7 @@ export function resolveForestCameraClearance(
     target.x,
     target.z,
     elevationAt,
+    probe,
   );
   const threshold = active ? CAMERA_FOREST_CLEARANCE.releasePressure : CAMERA_FOREST_CLEARANCE.triggerPressure;
   if (pressureBefore < threshold) {
@@ -126,6 +130,7 @@ export function resolveForestCameraClearance(
       target.x,
       target.z,
       elevationAt,
+      probe,
     );
     const lateral = Math.hypot(offsetX, offsetZ);
     // Preserve the authored shot unless canopy pressure clearly improves.
