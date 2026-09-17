@@ -7,6 +7,7 @@ import type { AudioCategory, HistorianStatement, ObservationCandidate, Observati
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
 import { CAMERA_FOREST_CLEARANCE, resolveForestCameraClearance } from './CameraForestClearance';
+import type { CameraVegetationProbe } from './CameraVegetationOcclusion';
 
 export interface CurrentObservation {
   label: string;
@@ -74,6 +75,10 @@ const FOREST_AWARE_KINDS = new Set<ObservationKind>([
 
 /** Preserve the authored angle when possible; only search nearby compositions. */
 const FOREST_AZIMUTH_OFFSETS = [0, Math.PI / 7.2, -Math.PI / 7.2, Math.PI / 3.6, -Math.PI / 3.6] as const;
+const CANOPY_DISSOLVE_START = 0.08;
+const CANOPY_DISSOLVE_FULL = 0.34;
+const CANOPY_DISSOLVE_RESPONSE_IN = 4.2;
+const CANOPY_DISSOLVE_RESPONSE_OUT = 1.45;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
@@ -140,6 +145,8 @@ export class CameraDirector {
   /** Smoothed presentation-only lens escape; never feeds back into simulation state. */
   private readonly forestClearanceOffset = new THREE.Vector3();
   private readonly forestClearanceTarget = new THREE.Vector3();
+  private vegetationProbe?: CameraVegetationProbe;
+  private canopyDissolve = 0;
   private shotAge = 0;
   private shotDuration = 12;
   private currentScene?: ObservationCandidate;
@@ -215,6 +222,14 @@ export class CameraDirector {
     return this.currentScene;
   }
 
+  setVegetationProbe(probe: CameraVegetationProbe): void {
+    this.vegetationProbe = probe;
+  }
+
+  canopyDissolveStrength(): number {
+    return this.canopyDissolve;
+  }
+
   private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
     const scene = this.historian.chooseScene(state, focusEventId);
     this.currentScene = scene;
@@ -272,7 +287,9 @@ export class CameraDirector {
       const x = this.shotBaseTarget.x + Math.cos(azimuth) * radius;
       const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius;
       this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + 3), z);
-      const obstruction = forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
+      const obstruction = this.vegetationProbe
+        ? this.vegetationProbe.sightlineObstruction(this.forestCandidatePosition, this.shotBaseTarget)
+        : forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
       // A small composition penalty prevents needless angle changes when two views are effectively tied.
       const compositionPenalty = Math.abs(offset) * 0.045;
       const score = obstruction + compositionPenalty;
@@ -302,6 +319,7 @@ export class CameraDirector {
         this.desiredTarget,
         elevationAt,
         this.forestClearanceOffset.lengthSq() > 0.01,
+        this.vegetationProbe,
       );
       this.forestClearanceTarget.copy(clearance.offset);
     } else {
@@ -316,10 +334,29 @@ export class CameraDirector {
     if (this.forestClearanceTarget.lengthSq() < 1e-6 && this.forestClearanceOffset.lengthSq() < 0.0004) {
       this.forestClearanceOffset.set(0, 0, 0);
     }
-    if (this.forestClearanceOffset.lengthSq() <= 0) return;
+    if (this.forestClearanceOffset.lengthSq() > 0) {
+      this.desiredPosition.add(this.forestClearanceOffset);
+      this.raiseForTerrain(elevationAt);
+    }
 
-    this.desiredPosition.add(this.forestClearanceOffset);
-    this.raiseForTerrain(elevationAt);
+    let dissolveTarget = 0;
+    if (scene && FOREST_AWARE_KINDS.has(scene.kind)) {
+      const obstruction = this.vegetationProbe
+        ? this.vegetationProbe.sightlineObstruction(this.desiredPosition, this.desiredTarget)
+        : forestSightlineObstruction(state.world, this.desiredPosition, this.desiredTarget, elevationAt);
+      dissolveTarget = this.smoothstep(
+        (obstruction - CANOPY_DISSOLVE_START) / Math.max(0.001, CANOPY_DISSOLVE_FULL - CANOPY_DISSOLVE_START),
+      );
+    }
+    const dissolveResponse = dissolveTarget > this.canopyDissolve
+      ? CANOPY_DISSOLVE_RESPONSE_IN
+      : CANOPY_DISSOLVE_RESPONSE_OUT;
+    this.canopyDissolve = THREE.MathUtils.lerp(
+      this.canopyDissolve,
+      dissolveTarget,
+      1 - Math.exp(-Math.max(0, deltaSeconds) * dissolveResponse),
+    );
+    if (dissolveTarget === 0 && this.canopyDissolve < 0.002) this.canopyDissolve = 0;
   }
 
   private animateShot(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
