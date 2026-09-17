@@ -301,6 +301,7 @@ export class CameraDirector {
         this.desiredPosition,
         this.desiredTarget,
         elevationAt,
+        this.forestClearanceOffset.lengthSq() > 0.01,
       );
       this.forestClearanceTarget.copy(clearance.offset);
     } else {
