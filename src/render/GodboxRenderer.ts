@@ -43,6 +43,7 @@ import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
+import { constructionBuildStage, constructionScaffoldSurface } from './construction/ConstructionVisualGrammar';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -907,7 +908,7 @@ export class GodboxRenderer {
         mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
         mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
         group.add(mesh);
-      } else group.add(this.createActiveConstructionSite(activeSite, palette, settlementY, settlement.constructionProgress));
+      } else group.add(this.createActiveConstructionSite(activeSite, response?.style ?? cultureStyle, response ? developmentPresentationEra(response) : era, settlementY, settlement.constructionProgress));
     }
     if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
       // This hearth exists only while the monthly survival ledger records paid fuel and tending.
@@ -1292,7 +1293,7 @@ export class GodboxRenderer {
     });
 
     if (stage < BUILD_STAGE.DETAIL) {
-      building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), grammarWidth * fit, grammarDepth * fit, stage));
+      building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), grammarWidth * fit, grammarDepth * fit, stage, undefined, era, Number(asset.mesh.userData['buildingHeight'] ?? placement.height) * fit));
     }
     return building;
   }
@@ -1317,26 +1318,30 @@ export class GodboxRenderer {
     depth: number,
     stage: BuildStage,
     projectProgress?: number,
+    era: Era = placement.builtEra,
+    targetHeight = placement.height,
   ): THREE.Group {
     const scaffold = new THREE.Group();
     scaffold.name = `construction-scaffold:${placement.key}`;
     scaffold.userData['constructionCue'] = 'scaffold';
-    const material = palette.getSurfaceMaterial('timber');
-    const height = placement.height * Math.min(0.9, 0.42 + stage * 0.14);
+    const surface = constructionScaffoldSurface(era, placement.role, placement.development?.material);
+    const material = palette.getSurfaceMaterial(surface);
+    const primitiveRig = era === 'primitive';
+    const height = targetHeight * Math.min(0.94, 0.42 + stage * 0.14);
     const extentX = width * 0.62;
     const extentZ = depth * 0.62;
     const lateStrip = projectProgress !== undefined && projectProgress >= 0.95;
 
-    // Eight verticals give the scaffold a readable cage silhouette instead of four isolated poles.
-    // Near completion one face is intentionally stripped first, making "almost finished" legible.
-    const poleGeometry = new THREE.BoxGeometry(0.028, height, 0.028);
-    const poleSites: Array<readonly [number, number]> = lateStrip
-      ? [[-extentX, -extentZ], [0, -extentZ], [extentX, -extentZ], [-extentX, 0], [extentX, 0]]
-      : [
-        [-extentX, -extentZ], [0, -extentZ], [extentX, -extentZ],
-        [-extentX, extentZ], [0, extentZ], [extentX, extentZ],
-        [-extentX, 0], [extentX, 0],
-      ];
+    const poleGeometry = new THREE.BoxGeometry(primitiveRig ? 0.034 : surface === 'metal' ? 0.022 : 0.028, height, primitiveRig ? 0.034 : surface === 'metal' ? 0.022 : 0.028);
+    const poleSites: Array<readonly [number, number]> = primitiveRig
+      ? [[-extentX, -extentZ], [extentX, -extentZ], [-extentX, extentZ], [extentX, extentZ]]
+      : lateStrip
+        ? [[-extentX, -extentZ], [0, -extentZ], [extentX, -extentZ], [-extentX, 0], [extentX, 0]]
+        : [
+          [-extentX, -extentZ], [0, -extentZ], [extentX, -extentZ],
+          [-extentX, extentZ], [0, extentZ], [extentX, extentZ],
+          [-extentX, 0], [extentX, 0],
+        ];
     for (const [x, z] of poleSites) {
       const pole = new THREE.Mesh(poleGeometry, material);
       pole.position.set(x, height * 0.5, z);
@@ -1345,14 +1350,16 @@ export class GodboxRenderer {
       scaffold.add(pole);
     }
 
-    const railLevels = stage >= BUILD_STAGE.ROOF ? [0.27, 0.52, 0.77]
-      : stage >= BUILD_STAGE.WALLS ? [0.3, 0.6]
-        : stage >= BUILD_STAGE.FRAME ? [0.38, 0.72] : [0.42];
+    const railLevels = primitiveRig ? [0.45]
+      : stage >= BUILD_STAGE.ROOF ? [0.27, 0.52, 0.77]
+        : stage >= BUILD_STAGE.WALLS ? [0.3, 0.6]
+          : stage >= BUILD_STAGE.FRAME ? [0.38, 0.72] : [0.42];
     for (const level of railLevels) {
       const y = height * level;
-      const longRailGeometry = new THREE.BoxGeometry(extentX * 2 + 0.04, 0.024, 0.024);
-      const shortRailGeometry = new THREE.BoxGeometry(0.024, 0.024, extentZ * 2 + 0.04);
-      for (const z of lateStrip ? [-extentZ] : [-extentZ, extentZ]) {
+      const railThickness = surface === 'metal' ? 0.018 : 0.024;
+      const longRailGeometry = new THREE.BoxGeometry(extentX * 2 + 0.04, railThickness, railThickness);
+      const shortRailGeometry = new THREE.BoxGeometry(railThickness, railThickness, extentZ * 2 + 0.04);
+      for (const z of lateStrip && !primitiveRig ? [-extentZ] : [-extentZ, extentZ]) {
         const rail = new THREE.Mesh(longRailGeometry, material);
         rail.position.set(0, y, z);
         rail.castShadow = true;
@@ -1367,10 +1374,9 @@ export class GodboxRenderer {
         scaffold.add(rail);
       }
 
-      // Working decks are deliberately a little oversized so they survive the documentary camera.
-      if (stage >= BUILD_STAGE.FRAME && level >= 0.5) {
+      if (!primitiveRig && stage >= BUILD_STAGE.FRAME && level >= 0.5) {
         const deck = new THREE.Mesh(
-          new THREE.BoxGeometry(extentX * 1.82, 0.026, Math.max(0.13, depth * 0.12)),
+          new THREE.BoxGeometry(extentX * 1.82, surface === 'metal' ? 0.022 : 0.026, Math.max(0.13, depth * 0.12)),
           material,
         );
         deck.position.set(0, y + 0.025, lateStrip ? -extentZ : extentZ - Math.max(0.08, depth * 0.06));
@@ -1380,13 +1386,12 @@ export class GodboxRenderer {
       }
     }
 
-    if (stage >= BUILD_STAGE.FRAME && !lateStrip) {
-      // Cross-bracing creates the strongest "under construction" silhouette at medium distance.
+    if (!primitiveRig && stage >= BUILD_STAGE.FRAME && !lateStrip) {
       const braceRise = height * 0.48;
       const braceSpan = extentX * 2;
       const braceLength = Math.hypot(braceSpan, braceRise);
       const braceAngle = Math.atan2(braceRise, braceSpan);
-      const braceGeometry = new THREE.BoxGeometry(braceLength, 0.018, 0.018);
+      const braceGeometry = new THREE.BoxGeometry(braceLength, surface === 'metal' ? 0.014 : 0.018, surface === 'metal' ? 0.014 : 0.018);
       for (const z of [-extentZ, extentZ]) {
         for (const direction of [-1, 1]) {
           const brace = new THREE.Mesh(braceGeometry, material);
@@ -1399,12 +1404,12 @@ export class GodboxRenderer {
       }
     }
 
-    if (stage >= BUILD_STAGE.WALLS && !lateStrip) {
-      // One simple ladder gives the scaffold a human-scale access cue without adding animation state.
+    if (!primitiveRig && stage >= BUILD_STAGE.WALLS && !lateStrip) {
       const ladderHeight = height * 0.7;
       const ladderZ = extentZ + 0.035;
       const ladderX = -extentX * 0.58;
-      const ladderRailGeometry = new THREE.BoxGeometry(0.018, ladderHeight, 0.018);
+      const railThickness = surface === 'metal' ? 0.014 : 0.018;
+      const ladderRailGeometry = new THREE.BoxGeometry(railThickness, ladderHeight, railThickness);
       for (const dx of [-0.08, 0.08]) {
         const rail = new THREE.Mesh(ladderRailGeometry, material);
         rail.position.set(ladderX + dx, ladderHeight * 0.5, ladderZ);
@@ -1412,7 +1417,7 @@ export class GodboxRenderer {
         rail.userData['constructionCue'] = 'scaffold-ladder';
         scaffold.add(rail);
       }
-      const rungGeometry = new THREE.BoxGeometry(0.18, 0.014, 0.018);
+      const rungGeometry = new THREE.BoxGeometry(0.18, 0.014, railThickness);
       for (let rung = 1; rung <= 5; rung += 1) {
         const mesh = new THREE.Mesh(rungGeometry, material);
         mesh.position.set(ladderX, ladderHeight * rung / 6, ladderZ);
@@ -1424,169 +1429,85 @@ export class GodboxRenderer {
     return scaffold;
   }
 
-  private createActiveConstructionSite(placement: BuildingPlacement, palette: MaterialPalette, settlementY: number, progress: number): THREE.Group {
+  /**
+   * Active construction is a partial realization of the exact future building grammar.
+   * The same seed, culture, role, era and DevelopmentResponse are used for both this shell and the
+   * completed structure, so a shrine grows into its shrine roof, a tower rises as a tower, and an
+   * industrial project exposes its own frame instead of passing through a generic rectangle.
+   */
+  private createActiveConstructionSite(
+    placement: BuildingPlacement,
+    cultureStyle: Culture['style'],
+    era: Era,
+    settlementY: number,
+    progress: number,
+  ): THREE.Group {
     const site = new THREE.Group();
     site.position.set(placement.localX, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.localZ);
     site.rotation.y = placement.rotationY;
     site.userData['placementKey'] = placement.key;
     site.userData['constructionSite'] = true;
+
     const paidProgress = Math.max(0, Math.min(1, progress));
+    const stage = constructionBuildStage(paidProgress);
+    const seed = `${cultureStyle.primary}:${cultureStyle.symbol}:${placement.role}:v${placement.variation}`;
+    const baseConfig = {
+      seed,
+      culture: cultureStyle,
+      era,
+      development: placement.development,
+    };
+    const stagedAsset = this.assetBuilder.getAsset('building', {
+      ...baseConfig,
+      variant: `${placement.role}#${stage}`,
+    });
+    // Fit every construction stage against the completed grammar footprint. This prevents a
+    // forecourt, wing, tower or crown from changing the whole building's scale when a new stage appears.
+    const targetAsset = stage === BUILD_STAGE.DETAIL ? stagedAsset : this.assetBuilder.getAsset('building', {
+      ...baseConfig,
+      variant: `${placement.role}#${BUILD_STAGE.DETAIL}`,
+    });
+    const targetWidth = Number(targetAsset.mesh.userData['footprintWidth'] ?? 1);
+    const targetDepth = Number(targetAsset.mesh.userData['footprintDepth'] ?? 1);
+    const targetHeight = Number(targetAsset.mesh.userData['buildingHeight'] ?? placement.height);
+    const developmentScale = placement.development ? 0.64 + placement.development.level * 0.12 : 1;
+    const fit = Math.min(placement.width / targetWidth, placement.depth / targetDepth) * developmentScale;
 
-    const structureMaterial = placement.development?.material === 'timber'
-      ? palette.getSurfaceMaterial('timber')
-      : placement.development?.material === 'ceramic'
-        ? palette.getSurfaceMaterial('brick')
-        : placement.development?.material === 'metal'
-          ? palette.getSurfaceMaterial('metal')
-          : placement.development?.material === 'earth'
-            ? palette.getSurfaceMaterial('ground')
-            : palette.getSurfaceMaterial('stone');
-
-    // Early work reads as a deliberate footprint: a low paid slab plus perimeter footing courses.
-    const foundationHeight = 0.055 + Math.min(1, paidProgress / 0.28) * 0.095;
-    const foundation = new THREE.Mesh(
-      new THREE.BoxGeometry(placement.width * 0.9, foundationHeight, placement.depth * 0.9),
-      paidProgress < 0.18 ? palette.getSurfaceMaterial('ground') : structureMaterial,
-    );
-    foundation.position.y = foundationHeight * 0.5;
-    foundation.receiveShadow = true;
-    foundation.userData['constructionCue'] = 'paid-foundation';
-    site.add(foundation);
-
-    if (paidProgress >= 0.08) {
-      const footingHeight = 0.055;
-      const footingWidth = 0.075;
-      const longFooting = new THREE.BoxGeometry(placement.width * 0.94, footingHeight, footingWidth);
-      const shortFooting = new THREE.BoxGeometry(footingWidth, footingHeight, placement.depth * 0.94);
-      for (const z of [-placement.depth * 0.45, placement.depth * 0.45]) {
-        const footing = new THREE.Mesh(longFooting, structureMaterial);
-        footing.position.set(0, foundationHeight + footingHeight * 0.5, z);
-        footing.castShadow = true;
-        footing.userData['constructionCue'] = 'paid-foundation-course';
-        site.add(footing);
+    const shell = stagedAsset.mesh.clone(true);
+    shell.scale.setScalar(fit);
+    shell.userData['constructionCue'] = 'future-building-shell';
+    shell.userData['constructionStage'] = stage;
+    shell.userData['constructionProgress'] = paidProgress;
+    shell.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+        object.userData['constructionCue'] = 'future-building-fabric';
       }
-      for (const x of [-placement.width * 0.45, placement.width * 0.45]) {
-        const footing = new THREE.Mesh(shortFooting, structureMaterial);
-        footing.position.set(x, foundationHeight + footingHeight * 0.5, 0);
-        footing.castShadow = true;
-        footing.userData['constructionCue'] = 'paid-foundation-course';
-        site.add(footing);
-      }
-    }
+    });
+    site.add(shell);
 
-    const stage = paidProgress < 0.2 ? BUILD_STAGE.FOUNDATION
-      : paidProgress < 0.45 ? BUILD_STAGE.FRAME
-        : paidProgress < 0.78 ? BUILD_STAGE.WALLS : BUILD_STAGE.ROOF;
-    site.add(this.createScaffold(placement, palette, placement.width, placement.depth, stage, paidProgress));
+    const renderedWidth = targetWidth * fit;
+    const renderedDepth = targetDepth * fit;
+    const renderedHeight = targetHeight * fit;
+    site.userData['constructionStage'] = stage;
+    site.userData['constructionProgress'] = paidProgress;
+    site.userData['constructionTargetRole'] = placement.role;
+    site.userData['constructionFootprintWidth'] = renderedWidth;
+    site.userData['constructionFootprintDepth'] = renderedDepth;
+    site.userData['constructionTargetHeight'] = renderedHeight;
 
-    // From one fifth onward, the building gains a structural skeleton before opaque walls.
-    if (paidProgress >= 0.2) {
-      const frameProgress = Math.min(1, (paidProgress - 0.2) / 0.42);
-      const frameHeight = Math.max(0.16, frameProgress * placement.height * 0.72);
-      const postGeometry = new THREE.BoxGeometry(0.06, frameHeight, 0.06);
-      const frameMaterial = placement.development?.material === 'timber'
-        ? structureMaterial : palette.getSurfaceMaterial('timber');
-      for (const [x, z] of [
-        [-placement.width * 0.4, -placement.depth * 0.4],
-        [placement.width * 0.4, -placement.depth * 0.4],
-        [-placement.width * 0.4, placement.depth * 0.4],
-        [placement.width * 0.4, placement.depth * 0.4],
-      ] as const) {
-        const post = new THREE.Mesh(postGeometry, frameMaterial);
-        post.position.set(x, foundationHeight + frameHeight * 0.5, z);
-        post.castShadow = true;
-        post.userData['constructionCue'] = 'paid-structural-frame';
-        site.add(post);
-      }
-      if (frameProgress > 0.48) {
-        const ringY = foundationHeight + frameHeight;
-        const longBeam = new THREE.BoxGeometry(placement.width * 0.86, 0.055, 0.055);
-        const shortBeam = new THREE.BoxGeometry(0.055, 0.055, placement.depth * 0.86);
-        for (const z of [-placement.depth * 0.4, placement.depth * 0.4]) {
-          const beam = new THREE.Mesh(longBeam, frameMaterial);
-          beam.position.set(0, ringY, z);
-          beam.castShadow = true;
-          beam.userData['constructionCue'] = 'paid-structural-frame';
-          site.add(beam);
-        }
-        for (const x of [-placement.width * 0.4, placement.width * 0.4]) {
-          const beam = new THREE.Mesh(shortBeam, frameMaterial);
-          beam.position.set(x, ringY, 0);
-          beam.castShadow = true;
-          beam.userData['constructionCue'] = 'paid-structural-frame';
-          site.add(beam);
-        }
-      }
-    }
-
-    // Walls rise as courses around a still-readable doorway instead of two anonymous strips.
-    let wallHeight = 0;
-    if (paidProgress >= 0.4) {
-      const wallProgress = Math.min(1, (paidProgress - 0.4) / 0.42);
-      wallHeight = Math.max(0.06, wallProgress * placement.height * 0.66);
-      const wallThickness = 0.065;
-      const baseY = foundationHeight + 0.035;
-      const back = new THREE.Mesh(
-        new THREE.BoxGeometry(placement.width * 0.84, wallHeight, wallThickness),
-        structureMaterial,
-      );
-      back.position.set(0, baseY + wallHeight * 0.5, -placement.depth * 0.4);
-      back.castShadow = true;
-      back.userData['constructionCue'] = 'paid-wall-courses';
-      site.add(back);
-
-      if (wallProgress >= 0.22) {
-        const sideDepth = placement.depth * 0.8;
-        const sideGeometry = new THREE.BoxGeometry(wallThickness, wallHeight, sideDepth);
-        for (const x of [-placement.width * 0.4, placement.width * 0.4]) {
-          const wall = new THREE.Mesh(sideGeometry, structureMaterial);
-          wall.position.set(x, baseY + wallHeight * 0.5, 0);
-          wall.castShadow = true;
-          wall.userData['constructionCue'] = 'paid-wall-courses';
-          site.add(wall);
-        }
-      }
-
-      if (wallProgress >= 0.48) {
-        const doorGap = Math.min(placement.width * 0.34, 0.58);
-        const segmentWidth = Math.max(0.12, (placement.width * 0.84 - doorGap) * 0.5);
-        const frontGeometry = new THREE.BoxGeometry(segmentWidth, wallHeight, wallThickness);
-        const offset = doorGap * 0.5 + segmentWidth * 0.5;
-        for (const x of [-offset, offset]) {
-          const wall = new THREE.Mesh(frontGeometry, structureMaterial);
-          wall.position.set(x, baseY + wallHeight * 0.5, placement.depth * 0.4);
-          wall.castShadow = true;
-          wall.userData['constructionCue'] = 'paid-wall-courses';
-          site.add(wall);
-        }
-      }
-    }
-
-    // Late work first exposes a roof frame, then fills it progressively instead of popping in.
-    if (paidProgress >= 0.76) {
-      const roofBase = foundationHeight + Math.max(wallHeight, placement.height * 0.52) + 0.05;
-      const roofFrameMaterial = palette.getSurfaceMaterial('timber');
-      const rafterGeometry = new THREE.BoxGeometry(0.045, 0.045, placement.depth * 0.94);
-      for (const x of [-0.34, 0, 0.34].map(value => value * placement.width)) {
-        const rafter = new THREE.Mesh(rafterGeometry, roofFrameMaterial);
-        rafter.position.set(x, roofBase, 0);
-        rafter.castShadow = true;
-        rafter.userData['constructionCue'] = 'paid-roof-frame';
-        site.add(rafter);
-      }
-
-      if (paidProgress >= 0.86) {
-        const roofProgress = Math.min(1, (paidProgress - 0.86) / 0.14);
-        const roofWidth = placement.width * 0.94 * Math.max(0.12, roofProgress);
-        const roof = new THREE.Mesh(
-          new THREE.BoxGeometry(roofWidth, 0.05, placement.depth * 0.94),
-          roofFrameMaterial,
-        );
-        roof.position.set(-placement.width * 0.47 + roofWidth * 0.5, roofBase + 0.045, 0);
-        roof.castShadow = true;
-        roof.userData['constructionCue'] = 'paid-roof';
-        site.add(roof);
-      }
+    if (paidProgress < 1) {
+      site.add(this.createScaffold(
+        placement,
+        this.getPalette(cultureStyle, era),
+        renderedWidth,
+        renderedDepth,
+        stage,
+        paidProgress,
+        era,
+        renderedHeight,
+      ));
     }
     return site;
   }

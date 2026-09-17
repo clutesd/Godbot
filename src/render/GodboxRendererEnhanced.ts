@@ -3,6 +3,7 @@ import { GodboxRenderer } from './GodboxRenderer';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations } from '../sim/transport/TransportNetwork';
 import { eraRank } from './assets/BuildingGrammar';
+import { constructionPresentationBucket } from './construction/ConstructionVisualGrammar';
 import type { Settlement, SimulationState } from '../sim/types';
 import type { TransportSegment } from '../sim/transport/types';
 import type { Era, MaterialPalette } from './materials/MaterialPalette';
@@ -441,7 +442,7 @@ function heavySettlementSignature(
     .sort()
     .join(',');
   const progress = Math.max(0, Math.min(1, settlement.constructionProgress));
-  const constructionPresentationStage = progress <= 0 ? 0 : 1 + Math.floor(Math.min(0.999999, progress) * 3);
+  const constructionPresentationStage = constructionPresentationBucket(progress);
   return [
     settlement.id,
     settlement.alive ? settlement.buildings : 0,
@@ -462,9 +463,7 @@ function heavySettlementSignature(
     bucket(settlement.industry.intensity),
     bucket(settlement.urbanization),
     constructionPresentationStage,
-    Math.floor(progress * 4),
     Number((settlement.survival?.cold.fuelUsed ?? 0) > 0),
-    Number(progress > 0.55),
     bucket(self.state.advanced.atomic.applications.energy),
     bucket(self.state.advanced.machine.capability),
     bucket(self.state.advanced.space.orbitalInfrastructure),

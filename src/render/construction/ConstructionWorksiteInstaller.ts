@@ -46,11 +46,14 @@ if (!prototype[INSTALL_KEY]) {
 
     const foundation = activeSite.children.find((child): child is THREE.Mesh => child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry);
     const geometry = foundation?.geometry as ActiveSiteGeometry | undefined;
-    const renderedWidth = geometry?.parameters.width ?? 1.35;
-    const renderedDepth = geometry?.parameters.depth ?? 1.1;
-    // Core construction foundation occupies 90% of the reserved plot dimensions.
-    const width = renderedWidth / 0.9;
-    const depth = renderedDepth / 0.9;
+    const fallbackWidth = (geometry?.parameters.width ?? 1.35) / 0.9;
+    const fallbackDepth = (geometry?.parameters.depth ?? 1.1) / 0.9;
+    // Step 1B publishes the exact rendered future-building footprint. Keep the old foundation
+    // inference only as a compatibility fallback for survival/legacy presentation paths.
+    const metadataWidth = Number(activeSite.userData['constructionFootprintWidth']);
+    const metadataDepth = Number(activeSite.userData['constructionFootprintDepth']);
+    const width = Number.isFinite(metadataWidth) && metadataWidth > 0 ? metadataWidth : fallbackWidth;
+    const depth = Number.isFinite(metadataDepth) && metadataDepth > 0 ? metadataDepth : fallbackDepth;
     const renderer = this as unknown as RendererInternals;
     const era = developmentPresentationEra(project.response);
     const palette = renderer.getPalette(project.response.style, era);

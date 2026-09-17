@@ -4,6 +4,7 @@ import type { CultureStyle } from '../src/sim/types';
 import type { DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../src/sim/development/types';
 import { AssetBuilder } from '../src/render/assets/AssetBuilder';
 import { BUILD_STAGE } from '../src/render/assets/BuildingComposer';
+import { constructionBuildStage, constructionPresentationBucket, constructionScaffoldSurface } from '../src/render/construction/ConstructionVisualGrammar';
 import { developmentBuildingRole } from '../src/render/assets/BuildingGrammar';
 import { heritageFingerprint } from '../src/render/assets/StructureHeritage';
 import { structureVisualHistorySignature } from '../src/render/assets/StructureVisualSignature';
@@ -192,6 +193,57 @@ describe('structure renderer and performance validation', () => {
       .filter(lod => hallIds.has(String(lod.userData['architectureGalleryCase'])))
       .map(lod => boundsSignature(lod.levels[1]!.object));
     expect(new Set(hallMidSignatures).size).toBe(4);
+    builder.dispose();
+  });
+
+  it('aligns paid progress, cache rebuilds and canonical building stages', () => {
+    expect([
+      constructionBuildStage(0.05),
+      constructionBuildStage(0.2),
+      constructionBuildStage(0.45),
+      constructionBuildStage(0.78),
+      constructionBuildStage(1),
+    ]).toEqual([
+      BUILD_STAGE.FOUNDATION,
+      BUILD_STAGE.FRAME,
+      BUILD_STAGE.WALLS,
+      BUILD_STAGE.ROOF,
+      BUILD_STAGE.DETAIL,
+    ]);
+    expect([0, 0.1, 0.3, 0.6, 0.9, 1].map(constructionPresentationBucket)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('keeps construction technology era-appropriate', () => {
+    expect(constructionScaffoldSurface('primitive', 'shelter', 'timber')).toBe('timber');
+    expect(constructionScaffoldSurface('village', 'hall', 'masonry')).toBe('timber');
+    expect(constructionScaffoldSurface('industrial', 'factory', 'ceramic')).toBe('metal');
+    expect(constructionScaffoldSurface('industrial', 'house', 'timber')).toBe('timber');
+    expect(constructionScaffoldSurface('advanced', 'research', 'metal')).toBe('metal');
+  });
+
+  it('preserves target architectural identity throughout canonical construction stages', () => {
+    const builder = new AssetBuilder('construction-continuity-validation');
+    const stages = [BUILD_STAGE.FOUNDATION, BUILD_STAGE.FRAME, BUILD_STAGE.WALLS, BUILD_STAGE.ROOF] as const;
+    const factory = stages.map(stage => builder.getAsset('building', {
+      seed: 'continuity:factory',
+      culture: CULTURE,
+      era: 'industrial',
+      variant: `factory#${stage}`,
+    }).mesh);
+    const shrine = stages.map(stage => builder.getAsset('building', {
+      seed: 'continuity:shrine',
+      culture: CULTURE,
+      era: 'industrial',
+      variant: `shrine#${stage}`,
+    }).mesh);
+
+    expect(factory.every(mesh => mesh.userData['grammarRole'] === 'factory')).toBe(true);
+    expect(shrine.every(mesh => mesh.userData['grammarRole'] === 'shrine')).toBe(true);
+    // The staged procedural path must not collapse unlike future buildings into one generic shell.
+    expect(boundsSignature(factory[1]!)).not.toBe(boundsSignature(shrine[1]!));
+    expect(boundsSignature(factory[3]!)).not.toBe(boundsSignature(shrine[3]!));
+    expect(factory.every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
+    expect(shrine.every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
     builder.dispose();
   });
 
