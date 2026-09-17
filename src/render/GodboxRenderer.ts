@@ -87,6 +87,9 @@ interface BuildingPlacement {
   worldZ: number;
   width: number;
   depth: number;
+  /** Exact rendered active-construction footprint; presentation-only and populated while building. */
+  constructionWidth?: number;
+  constructionDepth?: number;
   height: number;
   rotationY: number;
   major: boolean;
@@ -1562,6 +1565,10 @@ export class GodboxRenderer {
     const renderedWidth = targetWidth * fit;
     const renderedDepth = targetDepth * fit;
     const renderedHeight = targetHeight * fit;
+    // Publish the same dimensions used by static worksite dressing to worker choreography.
+    // This mutates renderer-owned placement metadata only; simulation plot geometry is untouched.
+    placement.constructionWidth = renderedWidth;
+    placement.constructionDepth = renderedDepth;
     site.userData['constructionStage'] = stage;
     site.userData['constructionProgress'] = paidProgress;
     site.userData['constructionReveal'] = presentation.phase;
