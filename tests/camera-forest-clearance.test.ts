@@ -40,6 +40,20 @@ describe('cinematic forest camera clearance', () => {
     expect(clearance.pressureAfter).toBeLessThan(clearance.pressureBefore);
   });
 
+  it('uses release hysteresis so a small boundary crossing does not chatter', () => {
+    const world = forestFixture('camera-clearance-hysteresis');
+    const camera = new THREE.Vector3(0, 6.7, 0);
+    const target = new THREE.Vector3(10, 1, 0);
+
+    const inactive = resolveForestCameraClearance(world, camera, target, () => 0, false);
+    const active = resolveForestCameraClearance(world, camera, target, () => 0, true);
+
+    expect(inactive.pressureBefore).toBeLessThan(CAMERA_FOREST_CLEARANCE.triggerPressure);
+    expect(inactive.offset.lengthSq()).toBe(0);
+    expect(active.pressureBefore).toBeGreaterThan(CAMERA_FOREST_CLEARANCE.releasePressure);
+    expect(active.offset.lengthSq()).toBeGreaterThan(0);
+  });
+
   it('does nothing when the forest has already been cleared', () => {
     const world = forestFixture('camera-clearance-empty');
     for (const cell of world.cells) cell.wood = 0;
