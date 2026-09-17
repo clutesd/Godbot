@@ -102,6 +102,19 @@ describe('settlement render budgeting', () => {
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).pending).toBe(0);
   });
 
+  it('rebuilds when a project enters finishing so scaffold stripping is reachable', () => {
+    const test = harness('settlement-render-budget-finishing');
+    const settlement = test.state.settlements.find(candidate => candidate.alive)!;
+    settlement.constructionProgress = 0.945;
+    sync(test.renderer, true);
+    test.resetCreated();
+
+    settlement.constructionProgress = 0.95;
+    sync(test.renderer);
+    expect(test.created()).toBe(1);
+    expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
+  });
+
   it('ignores microscopic construction progress until its visible presentation stage changes', () => {
     const test = harness('settlement-render-budget-progress');
     const settlement = test.state.settlements.find(candidate => candidate.alive)!;

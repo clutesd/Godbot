@@ -43,7 +43,7 @@ import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
-import { constructionBuildStage, constructionScaffoldSurface } from './construction/ConstructionVisualGrammar';
+import { constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -908,7 +908,7 @@ export class GodboxRenderer {
         mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
         mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
         group.add(mesh);
-      } else group.add(this.createActiveConstructionSite(activeSite, response?.style ?? cultureStyle, response ? developmentPresentationEra(response) : era, settlementY, settlement.constructionProgress));
+      } else group.add(this.createActiveConstructionSite(activeSite, response?.style ?? cultureStyle, response ? developmentPresentationEra(response) : era, settlementY, settlement.constructionProgress, response));
     }
     if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
       // This hearth exists only while the monthly survival ledger records paid fuel and tending.
@@ -1430,10 +1430,47 @@ export class GodboxRenderer {
   }
 
   /**
+   * Clone a shared procedural asset for one active construction site. Transparent reveal clones
+   * get private materials so fading never mutates the palette or another building.
+   */
+  private constructionShell(
+    source: THREE.Object3D,
+    fit: number,
+    cue: string,
+    opacity = 1,
+  ): THREE.Object3D {
+    const shell = source.clone(true);
+    shell.scale.setScalar(fit);
+    shell.userData['constructionCue'] = cue;
+    shell.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      object.userData['constructionCue'] = cue === 'future-building-shell'
+        ? 'future-building-fabric'
+        : 'previous-building-fabric';
+      if (opacity >= 0.995) return;
+      const tune = (material: THREE.Material): THREE.Material => {
+        const clone = material.clone();
+        clone.transparent = true;
+        clone.opacity = opacity;
+        clone.depthWrite = false;
+        clone.polygonOffset = true;
+        clone.polygonOffsetFactor = -1;
+        clone.polygonOffsetUnits = -1;
+        return clone;
+      };
+      object.material = Array.isArray(object.material)
+        ? object.material.map(tune)
+        : tune(object.material);
+    });
+    return shell;
+  }
+
+  /**
    * Active construction is a partial realization of the exact future building grammar.
-   * The same seed, culture, role, era and DevelopmentResponse are used for both this shell and the
-   * completed structure, so a shrine grows into its shrine roof, a tower rises as a tower, and an
-   * industrial project exposes its own frame instead of passing through a generic rectangle.
+   * New builds reveal the canonical structure progressively; upgrades/repurposes derive their
+   * target identity from the active project rather than the old fabric still occupying the plot.
    */
   private createActiveConstructionSite(
     placement: BuildingPlacement,
@@ -1441,71 +1478,105 @@ export class GodboxRenderer {
     era: Era,
     settlementY: number,
     progress: number,
+    project?: DevelopmentResponse,
   ): THREE.Group {
+    const targetIdentity = constructionTargetIdentity(project, placement.role, era);
+    const targetPlacement: BuildingPlacement = project
+      ? {
+        ...placement,
+        development: project,
+        role: targetIdentity.role,
+        builtEra: targetIdentity.era,
+        district: districtForResponse(project),
+        major: ['civic', 'sacred', 'industrial'].includes(districtForResponse(project)),
+      }
+      : placement;
+    const targetEra = targetIdentity.era;
+
     const site = new THREE.Group();
-    site.position.set(placement.localX, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.localZ);
-    site.rotation.y = placement.rotationY;
-    site.userData['placementKey'] = placement.key;
+    site.position.set(targetPlacement.localX, this.elevationAt(targetPlacement.worldX, targetPlacement.worldZ) - settlementY, targetPlacement.localZ);
+    site.rotation.y = targetPlacement.rotationY;
+    site.userData['placementKey'] = targetPlacement.key;
     site.userData['constructionSite'] = true;
 
     const paidProgress = Math.max(0, Math.min(1, progress));
-    const stage = constructionBuildStage(paidProgress);
-    const seed = `${cultureStyle.primary}:${cultureStyle.symbol}:${placement.role}:v${placement.variation}`;
+    const presentation = constructionStagePresentation(paidProgress);
+    const stage = presentation.stage;
+    const seed = `${cultureStyle.primary}:${cultureStyle.symbol}:${targetPlacement.role}:v${targetPlacement.variation}`;
     const baseConfig = {
       seed,
       culture: cultureStyle,
-      era,
-      development: placement.development,
+      era: targetEra,
+      development: targetPlacement.development,
     };
     const stagedAsset = this.assetBuilder.getAsset('building', {
       ...baseConfig,
-      variant: `${placement.role}#${stage}`,
+      variant: `${targetPlacement.role}#${stage}`,
     });
-    // Fit every construction stage against the completed grammar footprint. This prevents a
-    // forecourt, wing, tower or crown from changing the whole building's scale when a new stage appears.
+    // Fit every construction stage against the completed grammar footprint. Forecourts, wings,
+    // towers and crowns therefore never resize the whole project when a later stage appears.
     const targetAsset = stage === BUILD_STAGE.DETAIL ? stagedAsset : this.assetBuilder.getAsset('building', {
       ...baseConfig,
-      variant: `${placement.role}#${BUILD_STAGE.DETAIL}`,
+      variant: `${targetPlacement.role}#${BUILD_STAGE.DETAIL}`,
     });
     const targetWidth = Number(targetAsset.mesh.userData['footprintWidth'] ?? 1);
     const targetDepth = Number(targetAsset.mesh.userData['footprintDepth'] ?? 1);
-    const targetHeight = Number(targetAsset.mesh.userData['buildingHeight'] ?? placement.height);
-    const developmentScale = placement.development ? 0.64 + placement.development.level * 0.12 : 1;
-    const fit = Math.min(placement.width / targetWidth, placement.depth / targetDepth) * developmentScale;
+    const targetHeight = Number(targetAsset.mesh.userData['buildingHeight'] ?? targetPlacement.height);
+    const developmentScale = targetPlacement.development ? 0.64 + targetPlacement.development.level * 0.12 : 1;
+    const fit = Math.min(targetPlacement.width / targetWidth, targetPlacement.depth / targetDepth) * developmentScale;
 
-    const shell = stagedAsset.mesh.clone(true);
-    shell.scale.setScalar(fit);
-    shell.userData['constructionCue'] = 'future-building-shell';
-    shell.userData['constructionStage'] = stage;
-    shell.userData['constructionProgress'] = paidProgress;
-    shell.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-        object.userData['constructionCue'] = 'future-building-fabric';
+    // A new project starts as a marked worksite. Foundation fabric rises from paid work; later
+    // canonical stages cross-fade over the fully-built previous stage so frames/walls/roofs no
+    // longer pop into existence at one threshold.
+    if (paidProgress > 0) {
+      if (stage === BUILD_STAGE.FOUNDATION) {
+        const shell = this.constructionShell(stagedAsset.mesh, fit, 'future-building-shell');
+        shell.scale.y = fit * Math.max(0.06, presentation.phase);
+        shell.userData['constructionReveal'] = presentation.phase;
+        site.add(shell);
+      } else {
+        const eased = presentation.phase * presentation.phase * (3 - 2 * presentation.phase);
+        if (presentation.previousStage !== undefined && eased < 0.985) {
+          const previousAsset = this.assetBuilder.getAsset('building', {
+            ...baseConfig,
+            variant: `${targetPlacement.role}#${presentation.previousStage}`,
+          });
+          site.add(this.constructionShell(previousAsset.mesh, fit, 'previous-building-shell'));
+        }
+        if (eased >= 0.015) {
+          const shell = this.constructionShell(
+            stagedAsset.mesh,
+            fit,
+            'future-building-shell',
+            eased >= 0.985 ? 1 : Math.max(0.08, eased),
+          );
+          shell.userData['constructionReveal'] = eased;
+          site.add(shell);
+        }
       }
-    });
-    site.add(shell);
+    }
 
     const renderedWidth = targetWidth * fit;
     const renderedDepth = targetDepth * fit;
     const renderedHeight = targetHeight * fit;
     site.userData['constructionStage'] = stage;
     site.userData['constructionProgress'] = paidProgress;
-    site.userData['constructionTargetRole'] = placement.role;
+    site.userData['constructionReveal'] = presentation.phase;
+    site.userData['constructionFinishing'] = presentation.finishing;
+    site.userData['constructionTargetRole'] = targetPlacement.role;
     site.userData['constructionFootprintWidth'] = renderedWidth;
     site.userData['constructionFootprintDepth'] = renderedDepth;
     site.userData['constructionTargetHeight'] = renderedHeight;
 
     if (paidProgress < 1) {
       site.add(this.createScaffold(
-        placement,
-        this.getPalette(cultureStyle, era),
+        targetPlacement,
+        this.getPalette(cultureStyle, targetEra),
         renderedWidth,
         renderedDepth,
         stage,
         paidProgress,
-        era,
+        targetEra,
         renderedHeight,
       ));
     }

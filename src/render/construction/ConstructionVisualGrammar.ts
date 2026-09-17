@@ -1,38 +1,106 @@
-import type { StructureMaterial } from '../../sim/development/types';
+import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
 import type { Era } from '../materials/MaterialPalette';
 import { BUILD_STAGE, type BuildStage } from '../assets/BuildingComposer';
-import type { BuildingRole } from '../assets/BuildingGrammar';
+import { developmentBuildingRole, developmentPresentationEra, type BuildingRole } from '../assets/BuildingGrammar';
 
 /**
  * Active projects rebuild only when one of these presentation thresholds is crossed.
- * The same thresholds drive both geometry and the heavy-render signature, so the renderer
- * never computes a construction state that its settlement cache is unable to display.
+ * The same thresholds drive geometry, worksite dressing and the heavy-render signature.
  */
 export const CONSTRUCTION_STAGE_THRESHOLDS = {
   frame: 0.2,
   walls: 0.45,
   roof: 0.78,
   detail: 1,
+  finishing: 0.95,
 } as const;
+
+export interface ConstructionStagePresentation {
+  stage: BuildStage;
+  previousStage?: BuildStage;
+  /** 0..1 reveal amount within the current canonical stage. */
+  phase: number;
+  /** Late-stage scaffold stripping / cleanup state. */
+  finishing: boolean;
+}
 
 /** Map paid simulation progress onto the canonical procedural building lifecycle. */
 export function constructionBuildStage(progress: number): BuildStage {
-  const paid = Math.max(0, Math.min(1, progress));
-  if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.detail) return BUILD_STAGE.DETAIL;
-  if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.roof) return BUILD_STAGE.ROOF;
-  if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.walls) return BUILD_STAGE.WALLS;
-  if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.frame) return BUILD_STAGE.FRAME;
-  return BUILD_STAGE.FOUNDATION;
+  return constructionStagePresentation(progress).stage;
 }
 
 /**
- * Stable cache bucket for active construction. Zero means no visible paid work yet; one through
- * four are foundation/frame/walls/roof, and five is the completed-detail boundary.
+ * Continuous presentation state inside the canonical stages. Simulation progress remains the only
+ * authority; this merely converts it into a staged reveal amount for rendering.
+ */
+export function constructionStagePresentation(progress: number): ConstructionStagePresentation {
+  const paid = Math.max(0, Math.min(1, progress));
+  let stage: BuildStage;
+  let previousStage: BuildStage | undefined;
+  let start = 0;
+  let end = CONSTRUCTION_STAGE_THRESHOLDS.frame;
+
+  if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.detail) {
+    stage = BUILD_STAGE.DETAIL;
+    previousStage = BUILD_STAGE.ROOF;
+    start = CONSTRUCTION_STAGE_THRESHOLDS.roof;
+    end = 1;
+  } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.roof) {
+    stage = BUILD_STAGE.ROOF;
+    previousStage = BUILD_STAGE.WALLS;
+    start = CONSTRUCTION_STAGE_THRESHOLDS.roof;
+    end = CONSTRUCTION_STAGE_THRESHOLDS.detail;
+  } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.walls) {
+    stage = BUILD_STAGE.WALLS;
+    previousStage = BUILD_STAGE.FRAME;
+    start = CONSTRUCTION_STAGE_THRESHOLDS.walls;
+    end = CONSTRUCTION_STAGE_THRESHOLDS.roof;
+  } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.frame) {
+    stage = BUILD_STAGE.FRAME;
+    previousStage = BUILD_STAGE.FOUNDATION;
+    start = CONSTRUCTION_STAGE_THRESHOLDS.frame;
+    end = CONSTRUCTION_STAGE_THRESHOLDS.walls;
+  } else {
+    stage = BUILD_STAGE.FOUNDATION;
+  }
+
+  const phase = stage === BUILD_STAGE.FOUNDATION
+    ? paid / Math.max(1e-6, CONSTRUCTION_STAGE_THRESHOLDS.frame)
+    : stage === BUILD_STAGE.DETAIL
+      ? 1
+      : (paid - start) / Math.max(1e-6, end - start);
+  return {
+    stage,
+    previousStage,
+    phase: Math.max(0, Math.min(1, phase)),
+    finishing: paid >= CONSTRUCTION_STAGE_THRESHOLDS.finishing && paid < 1,
+  };
+}
+
+/**
+ * Stable cache bucket for active construction. Four reveal slices per canonical stage preserve
+ * readable growth without rebuilding a settlement for every microscopic simulation tick.
  */
 export function constructionPresentationBucket(progress: number): number {
   const paid = Math.max(0, Math.min(1, progress));
   if (paid <= 0) return 0;
-  return constructionBuildStage(paid) + 1;
+  const presentation = constructionStagePresentation(paid);
+  const revealSlice = Math.min(3, Math.floor(presentation.phase * 4));
+  return 1 + presentation.stage * 4 + revealSlice;
+}
+
+/**
+ * During an upgrade/repurpose the active project, not the old plot fabric, defines the future
+ * structure being built. This keeps the construction silhouette continuous with completion.
+ */
+export function constructionTargetIdentity(
+  project: DevelopmentResponse | undefined,
+  fallbackRole: BuildingRole,
+  fallbackEra: Era,
+): { role: BuildingRole; era: Era } {
+  return project
+    ? { role: developmentBuildingRole(project), era: developmentPresentationEra(project) }
+    : { role: fallbackRole, era: fallbackEra };
 }
 
 /**

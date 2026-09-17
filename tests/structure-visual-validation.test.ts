@@ -4,7 +4,7 @@ import type { CultureStyle } from '../src/sim/types';
 import type { DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../src/sim/development/types';
 import { AssetBuilder } from '../src/render/assets/AssetBuilder';
 import { BUILD_STAGE } from '../src/render/assets/BuildingComposer';
-import { constructionBuildStage, constructionPresentationBucket, constructionScaffoldSurface } from '../src/render/construction/ConstructionVisualGrammar';
+import { constructionBuildStage, constructionPresentationBucket, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from '../src/render/construction/ConstructionVisualGrammar';
 import { developmentBuildingRole } from '../src/render/assets/BuildingGrammar';
 import { heritageFingerprint } from '../src/render/assets/StructureHeritage';
 import { structureVisualHistorySignature } from '../src/render/assets/StructureVisualSignature';
@@ -210,7 +210,34 @@ describe('structure renderer and performance validation', () => {
       BUILD_STAGE.ROOF,
       BUILD_STAGE.DETAIL,
     ]);
-    expect([0, 0.1, 0.3, 0.6, 0.9, 1].map(constructionPresentationBucket)).toEqual([0, 1, 2, 3, 4, 5]);
+
+    const frameStart = constructionStagePresentation(0.2);
+    const frameMid = constructionStagePresentation(0.325);
+    expect(frameStart.previousStage).toBe(BUILD_STAGE.FOUNDATION);
+    expect(frameStart.phase).toBeCloseTo(0);
+    expect(frameMid.phase).toBeCloseTo(0.5);
+    expect(constructionStagePresentation(0.96).finishing).toBe(true);
+
+    // Tiny progress changes within one reveal slice stay cheap; visible slices do rebuild.
+    expect(constructionPresentationBucket(0.12)).toBe(constructionPresentationBucket(0.14));
+    expect(constructionPresentationBucket(0.14)).not.toBe(constructionPresentationBucket(0.19));
+  });
+
+  it('uses the active project as the future identity during upgrades and repurposes', () => {
+    const existing = currentResponse();
+    const project: DevelopmentResponse = {
+      ...existing,
+      need: 'manufacturing',
+      form: 'works',
+      name: 'machine works',
+      material: 'metal',
+      level: 3,
+      services: { manufacturing: 3 },
+    };
+    const target = constructionTargetIdentity(project, 'hall', 'preIndustrial');
+    expect(target.role).toBe(developmentBuildingRole(project));
+    expect(target.role).not.toBe('hall');
+    expect(target.era).toBe('industrial');
   });
 
   it('keeps construction technology era-appropriate', () => {
