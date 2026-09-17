@@ -285,6 +285,7 @@ export class VegetationRenderer implements CameraVegetationProbe {
   updateLod(camera: THREE.Vector3): void {
     this.birds.setCamera(camera);
     this.leafSites.length = 0;
+    this.cameraCrowns.length = 0;
     const scars = this.world.weather?.forestScars ?? [];
     const signature = `${scars.length}:${scars[0]?.id}:${scars.at(-1)?.id}`;
     if (signature !== this.scarSignature) {
@@ -365,6 +366,13 @@ export class VegetationRenderer implements CameraVegetationProbe {
       if (placement.disturbedYear !== undefined) lifecycle = resolveTreeLifecycle(placement, (this.world.weather?.month ?? this.ecologyYear * 12) / 12);
       const phenotype = this.phenotypes[index] ?? resolveTreePhenotype(this.seed, placement);
       const morphology = resolveTreeMorphology(phenotype, lifecycle);
+      if (lifecycle.foliageVisible && !lifecycle.fallen) {
+        const seasonalCanopy = cell
+          ? resolveTreePhenology(this.season, cell, weather ?? cell, placement.family, phenotype.phenology).canopy
+          : 1;
+        const cameraDensity = clamp01(seasonalCanopy * morphology.foliageDensity);
+        if (cameraDensity > 0.04) this.cacheCameraCrown(target, placement, lifecycle, morphology, cameraDensity);
+      }
       this.workTreeBuckets[index] = target;
       this.workTreeSlots[index] = target.count;
       this.write(target, placement, lifecycle, phenotype, morphology);
@@ -398,6 +406,52 @@ export class VegetationRenderer implements CameraVegetationProbe {
     const winter = this.targetSeason < 1 || this.targetSeason >= 10;
     this.flowers.update(camera, winter ? this.targetSeason : this.season, [...this.disturbance, ...this.occupiedGround]);
     this.luminousFlora?.updateLod(camera, this.world.weather?.month ?? this.ecologyYear * 12 + this.targetSeason, [...this.disturbance, ...this.occupiedGround]);
+  }
+
+  sightlineObstruction(from: THREE.Vector3, target: THREE.Vector3): number {
+    return crownSightlineObstruction(this.cameraCrowns, from, target);
+  }
+
+  canopyPressureAt(x: number, y: number, z: number): number {
+    return crownPressureAt(this.cameraCrowns, x, y, z);
+  }
+
+  /**
+   * The dissolve is explicitly camera-directed. Wilderness/establishing shots therefore keep their
+   * full canopy even though every foliage material contains the same dormant shader path.
+   */
+  setCameraCanopyDissolveStrength(strength: number): void {
+    const next = clamp01(strength);
+    if (Math.abs(next - this.cameraDissolveStrength) < 0.002) return;
+    this.cameraDissolveStrength = next;
+    for (const bucket of this.nearBuckets.values()) setTreeCanopyDissolveStrength(bucket.foliage, next);
+    for (const bucket of this.farBuckets.values()) setTreeCanopyDissolveStrength(bucket.foliage, next);
+  }
+
+  private cacheCameraCrown(
+    bucket: Bucket,
+    placement: TreePlacement,
+    lifecycle: ResolvedTreeLifecycle,
+    morphology: TreeMorphology,
+    density: number,
+  ): void {
+    const scale = lifecycle.scale;
+    const cos = Math.cos(placement.rotation);
+    const sin = Math.sin(placement.rotation);
+    const localX = morphology.crownOffsetX * scale;
+    const localZ = morphology.crownOffsetZ * scale;
+    const offsetX = localX * cos + localZ * sin;
+    const offsetZ = -localX * sin + localZ * cos;
+    const height = Math.max(0.2, bucket.crownHeight * scale * morphology.crownHeight);
+    this.cameraCrowns.push({
+      x: placement.worldX + offsetX,
+      y: placement.y + morphology.crownLift * scale + height * 0.62,
+      z: placement.worldZ + offsetZ,
+      radiusX: Math.max(0.12, bucket.crownRadius * scale * morphology.crownWidthX * 1.04),
+      radiusY: Math.max(0.12, height * 0.44),
+      radiusZ: Math.max(0.12, bucket.crownRadius * scale * morphology.crownWidthZ * 1.04),
+      density,
+    });
   }
 
   /** Read existing tree placements only; harvesting animations can never remove a tree. */
