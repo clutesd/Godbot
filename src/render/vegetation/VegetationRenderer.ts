@@ -17,6 +17,13 @@ import { bindTreeMaterial } from './TreeMaterials';
 import { insideVegetationTerrain } from './VegetationPlacement';
 import { BioluminescentFlora } from './BioluminescentFlora';
 import { DEFAULT_ECOLOGY_QUALITY, type EcologyField, type EcologyQuality } from '../ecology/EcologyField';
+import {
+  crownPressureAt,
+  crownSightlineObstruction,
+  type CameraTreeCrown,
+  type CameraVegetationProbe,
+} from '../CameraVegetationOcclusion';
+import { setTreeCanopyDissolveStrength } from './TreeMaterials';
 
 export interface VegetationReport {
   trees: number;
@@ -40,6 +47,7 @@ interface Bucket {
   capacity: number;
   count: number;
   crownHeight: number;
+  crownRadius: number;
   barkState: THREE.InstancedBufferAttribute;
   canopyState: THREE.InstancedBufferAttribute;
 }
@@ -71,7 +79,7 @@ const ROOT_PLATE_CAPACITY = 512;
  * re-sorted by camera distance a few times a second: high perceived density, bounded triangles.
  * Settlement plantings join the same placement/lifecycle pool instead of using decorative meshes.
  */
-export class VegetationRenderer {
+export class VegetationRenderer implements CameraVegetationProbe {
   readonly group = new THREE.Group();
   private readonly placements: TreePlacement[];
   private readonly workTreesByCell = new Map<number, number[]>();
@@ -117,6 +125,9 @@ export class VegetationRenderer {
   private occupiedGround: { x: number; z: number; radius: number }[] = [];
   private scarSignature = '';
   private readonly scarsByCell = new Map<number, TornadoState[]>();
+  /** Crown envelopes mirror the currently rendered/living foliage and refresh at vegetation LOD cadence. */
+  private readonly cameraCrowns: CameraTreeCrown[] = [];
+  private cameraDissolveStrength = 0;
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, private readonly seed: string, budget: number, anchors: readonly { x: number; z: number }[] = [], ecology?: EcologyField, quality: EcologyQuality = DEFAULT_ECOLOGY_QUALITY) {
     this.group.name = 'vegetation';
@@ -598,7 +609,7 @@ export class VegetationRenderer {
     foliage.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     foliage.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, capacity) * 3), 3);
     this.group.add(bark, foliage);
-    return { family, variant, bark, foliage, barkState, canopyState, capacity: Math.max(1, capacity), count: 0, crownHeight: source.height };
+    return { family, variant, bark, foliage, barkState, canopyState, capacity: Math.max(1, capacity), count: 0, crownHeight: source.height, crownRadius: source.radius };
   }
 
   private write(bucket: Bucket, placement: TreePlacement, lifecycle: ResolvedTreeLifecycle,
