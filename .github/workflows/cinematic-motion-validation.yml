@@ -5,6 +5,12 @@ on:
     paths:
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/CameraDirector.ts'
+      - 'src/render/CameraForestClearance.ts'
+      - 'src/render/vegetation/TreeMaterials.ts'
+      - 'tests/camera-forest-sightline.test.ts'
+      - 'tests/camera-canopy-dissolve.test.ts'
+      - 'tests/camera-canopy-material-contract.test.ts'
+      - 'tests/camera-forest-clearance.test.ts'
       - 'tests/cinematic-presentation.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   workflow_dispatch:
@@ -20,7 +26,25 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Keep focused camera validation useful even when an unrelated repository-wide typecheck is red.
+      - run: >-
+          npx eslint
+          src/historian/PresentationDirector.ts
+          src/render/CameraDirector.ts
+          src/render/CameraForestClearance.ts
+          src/render/vegetation/TreeMaterials.ts
+          tests/camera-forest-sightline.test.ts
+          tests/camera-canopy-dissolve.test.ts
+          tests/camera-canopy-material-contract.test.ts
+          tests/camera-forest-clearance.test.ts
+          tests/cinematic-presentation.test.ts
+      - run: >-
+          npx vitest run
+          tests/camera-forest-sightline.test.ts
+          tests/camera-canopy-dissolve.test.ts
+          tests/camera-canopy-material-contract.test.ts
+          tests/camera-forest-clearance.test.ts
+          tests/cinematic-presentation.test.ts
+          tests/pacing.test.ts
       - run: npm run typecheck
-      - run: npx eslint src/historian/PresentationDirector.ts src/render/CameraDirector.ts tests/cinematic-presentation.test.ts
-      - run: npx vitest run tests/cinematic-presentation.test.ts tests/pacing.test.ts
       - run: npm run build
