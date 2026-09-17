@@ -13,7 +13,7 @@ import { FlowerField } from './FlowerField';
 import { buildTreeLibrary, TREE_LOD_FAR, TREE_LOD_NEAR, type TreeFamily, type TreeVariant } from './TreeLibrary';
 import { resolveTreeMorphology, resolveTreePhenotype, type TreeMorphology, type TreePhenotype } from './TreeMorphology';
 import { resolveTreePhenology, treeFoliageColour } from './TreePhenology';
-import { bindTreeMaterial } from './TreeMaterials';
+import { bindTreeMaterial, setTreeCanopyDissolveStrength } from './TreeMaterials';
 import { insideVegetationTerrain } from './VegetationPlacement';
 import { BioluminescentFlora } from './BioluminescentFlora';
 import { DEFAULT_ECOLOGY_QUALITY, type EcologyField, type EcologyQuality } from '../ecology/EcologyField';
@@ -23,7 +23,6 @@ import {
   type CameraTreeCrown,
   type CameraVegetationProbe,
 } from '../CameraVegetationOcclusion';
-import { setTreeCanopyDissolveStrength } from './TreeMaterials';
 
 export interface VegetationReport {
   trees: number;
