@@ -324,6 +324,9 @@ export class GodboxRenderer {
     this.scene.add(this.vegetation.group);
     this.vegetation.setEcologyYear(Math.floor(state.month / 12));
     this.vegetation.setDisturbance(state.settlements);
+    // Prime the exact rendered-crown cache before the first documentary shot is selected.
+    this.vegetation.updateLod(this.camera.position);
+    this.cameraDirector.setVegetationProbe(this.vegetation);
     this.weatherRenderer = new WeatherRenderer(state.world, this.terrainSurface, config.seed);
     this.weatherRenderer.bindScene(this.scene);
     this.scene.add(this.weatherRenderer.group);
@@ -425,6 +428,7 @@ export class GodboxRenderer {
       this.vegetation.updateLod(this.camera.position);
     }
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    this.vegetation.setCameraCanopyDissolveStrength(this.cameraDirector.canopyDissolveStrength());
     this.foundingPods.update(this.camera);
     this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
