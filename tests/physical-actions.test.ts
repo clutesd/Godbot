@@ -110,6 +110,8 @@ describe('construction workflow', () => {
     const people = ['crew-a', 'crew-b', 'crew-c'].map((id, index) => ({
       ...structuredClone(person), id, position: { x: 2.2 + index * 0.08, z: -0.4 },
     } as Person));
+    // Both navigation forms are legal for the same funded project and must remain one crew.
+    people[1]!.navigation!.destinationId = `${settlement.id}:construction-site`;
     const before = JSON.stringify(settlement);
     const scene = new PhysicalWorkScene();
     scene.beginFrame(people);
