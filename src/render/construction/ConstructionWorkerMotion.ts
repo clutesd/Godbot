@@ -8,6 +8,9 @@ export interface ConstructionWorkerAnchors {
   delivery: Vec2;
   materialCenter: Vec2;
   siteCenter: Vec2;
+  /** Preparation station beside visible site furniture / sawhorses. */
+  prep: Vec2;
+  prepCenter: Vec2;
 }
 
 export interface ConstructionWorkerMotionSample {

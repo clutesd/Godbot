@@ -17,8 +17,11 @@ export interface ConstructionWorksiteAnchors {
   materialCenter: { x: number; z: number };
   /** Where a worker stands to collect the next load. */
   pickup: { x: number; z: number };
-  /** Where a worker hands the load into the unfinished structure. */
+  /** One of four stable workfaces around the future structure. */
   delivery: { x: number; z: number };
+  /** Preparation position beside the sawhorses. */
+  prep: { x: number; z: number };
+  prepCenter: { x: number; z: number };
 }
 
 /**
@@ -31,19 +34,32 @@ export function constructionWorksiteAnchors(
   inputDepth: number,
   seedKey: string,
   lane = 0,
+  workfaceIndex = 0,
 ): ConstructionWorksiteAnchors {
   const width = Math.max(0.9, inputWidth);
   const depth = Math.max(0.8, inputDepth);
   const side = stableUnit(`${seedKey}:staging-side`) > 0.5 ? 1 : -1;
   const stagingX = side * width * 0.92;
   const stagingZ = -depth * 0.26;
-  const laneOffset = Math.max(-1, Math.min(1, lane)) * Math.min(0.3, depth * 0.18);
+  const laneUnit = Math.max(-1, Math.min(1, lane));
+  const laneZ = laneUnit * Math.min(0.3, depth * 0.18);
+  const laneX = laneUnit * Math.min(0.3, width * 0.18);
+  const face = ((Math.floor(workfaceIndex) % 4) + 4) % 4;
+  const edgeX = width * 0.45 + 0.13;
+  const edgeZ = depth * 0.45 + 0.13;
+  const delivery = face === 0 ? { x: edgeX, z: laneZ }
+    : face === 1 ? { x: laneX, z: edgeZ }
+      : face === 2 ? { x: -edgeX, z: -laneZ }
+        : { x: -laneX, z: -edgeZ };
+  const prepCenter = { x: -width * 0.28, z: depth * 0.72 };
   return {
     materialCenter: { x: stagingX, z: stagingZ },
     // Stand just outside the pile so the character does not clip through the stock itself.
-    pickup: { x: stagingX + side * 0.32, z: stagingZ + laneOffset },
-    // Meet the building beside the scaffold instead of walking into the foundation volume.
-    delivery: { x: side * (width * 0.45 + 0.13), z: laneOffset * 0.72 },
+    pickup: { x: stagingX + side * 0.32, z: stagingZ + laneZ },
+    delivery,
+    // Sawhorses already occupy this part of the static worksite; the worker stands just in front.
+    prep: { x: prepCenter.x + laneX * 0.55, z: depth * 0.54 },
+    prepCenter,
   };
 }
 

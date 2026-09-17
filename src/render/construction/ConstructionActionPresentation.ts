@@ -1,6 +1,7 @@
 import type { Person, Settlement, WeatherCellState } from '../../sim/types';
 import type { StructureMaterial } from '../../sim/development/types';
 import type { ConstructionWorkerAnchors } from './ConstructionWorkerMotion';
+import type { ConstructionCrewRole } from './ConstructionCrewPresentation';
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from '../people/PhysicalActionPresentation';
@@ -49,8 +50,24 @@ export function builderCanPresent(person: Person, settlement: Settlement, weathe
 
 /** Arrival gates make phase time independent of path length: no pickup or release in transit.
  * Called only for eligible workers; interruption discards this small renderer-owned state. */
-export function advanceConstruction(playback: ConstructionPlayback, delta: number, ready: boolean, blocked: boolean, assembler = false): void {
+export function advanceConstruction(
+  playback: ConstructionPlayback,
+  delta: number,
+  ready: boolean,
+  blocked: boolean,
+  crewRole: ConstructionCrewRole = 'hauler',
+): void {
   if (blocked) { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; return; }
+
+  if (crewRole === 'site-worker') {
+    if (playback.phase !== 'inspect') { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; }
+    if (!ready) return;
+    playback.seconds += Math.max(0, Math.min(delta, 0.1));
+    if (playback.seconds >= 1.6) playback.seconds = 0;
+    return;
+  }
+
+  const assembler = crewRole === 'assembler';
   if (playback.phase === 'inspect') { playback.phase = assembler ? 'assemble' : 'return'; playback.seconds = 0; }
   if (!ready) return;
   if (assembler && playback.phase === 'return') playback.phase = 'assemble';
@@ -59,16 +76,20 @@ export function advanceConstruction(playback: ConstructionPlayback, delta: numbe
   if (playback.phase === 'pickup' && playback.seconds >= 0.9 * 0.62) playback.carrying = true;
   if (playback.phase === 'deliver' && playback.seconds >= 1.15 * 0.52) playback.carrying = false;
   if (playback.seconds < duration) return;
+  // Haulers retain the brief legacy placement beat after delivery; dedicated assemblers remain
+  // at their workface. Step 2B can specialize those motions without changing role authority.
   playback.phase = playback.phase === 'return' ? 'pickup' : playback.phase === 'pickup' ? 'carry'
     : playback.phase === 'carry' ? 'deliver' : playback.phase === 'deliver' ? 'assemble' : assembler ? 'assemble' : 'return';
   playback.seconds = 0;
 }
 
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
-  anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string): PhysicalActionPresentation {
+  anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
+  crewRole: ConstructionCrewRole = 'hauler'): PhysicalActionPresentation {
   const phase = playback.phase;
-  const pickup = phase === 'return' || phase === 'pickup';
-  const duration = phase === 'pickup' ? 0.9 : phase === 'deliver' ? 1.15 : 1.8;
+  const pickup = crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
+  const prep = crewRole === 'site-worker';
+  const duration = phase === 'pickup' ? 0.9 : phase === 'deliver' ? 1.15 : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
   const bend = phase === 'pickup' || phase === 'deliver' ? Math.sin(p * Math.PI) : 0;
   const strike = phase === 'assemble' ? Math.max(0, Math.sin(p * Math.PI * 2 - 1)) : 0;
@@ -78,12 +99,17 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   motion.handZ = 0.22 + bend * 0.16; motion.toolAngle = 0.7 + strike * 1.4;
   motion.basket = 0; motion.reposition = false;
   motion.impact = (phase === 'pickup' && p >= 0.58 && p <= 0.66 || phase === 'deliver' && p >= 0.48 && p <= 0.56) ? 1 : phase === 'assemble' ? strike : 0;
-  return { personId: person.id, actionKind: 'construction', authoritativeActivity: person.activity,
-    sourceAuthority: 'development.project + construct destination + current material stocks', targetId: plotId,
-    targetKind: pickup ? 'material-pile' : 'workface', interactionAnchor: contactSurface(pickup ? anchors.pickup : anchors.delivery, pickup ? anchors.materialCenter : anchors.siteCenter),
-    locomotionTarget: pickup ? anchors.pickup : anchors.delivery, phase, phaseProgress: p,
+  const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : anchors.delivery;
+  const interactionCenter = prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
+  return { personId: person.id,
+    actionKind: crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site' : 'construction-haul',
+    authoritativeActivity: person.activity,
+    sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
+    targetKind: prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
+    interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
+    locomotionTarget, phase, phaseProgress: p,
     activeTool: phase === 'assemble' && material !== 'earth' ? 'hammer' : 'none',
-    carriedObject: playback.carrying ? material : undefined, contactStrength: motion.impact, blockedReason };
+    carriedObject: crewRole === 'hauler' && playback.carrying ? material : undefined, contactStrength: motion.impact, blockedReason };
 }
 
 function contactSurface(from: Readonly<{ x: number; z: number }>, center: Readonly<{ x: number; z: number }>): { x: number; z: number } {

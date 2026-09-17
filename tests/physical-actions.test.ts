@@ -11,7 +11,8 @@ import { farmPresentationState, farmerCanPresent, sampleFarmAction } from '../sr
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
 import { constructionWorkerLane, sampleConstructionWorkerMotion } from '../src/render/construction/ConstructionWorkerMotion';
-import { createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
+import { assignConstructionCrewRoles, constructionWorkfaceIndex } from '../src/render/construction/ConstructionCrewPresentation';
+import { constructionWorksiteAnchors, createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
 import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../src/render/animation/ResourceWorkMotion';
 import { resourceWorkProfile, resourceWorkerVariation } from '../src/sim/resources/ResourceWorkPresentation';
@@ -46,7 +47,8 @@ function construction(settlement: Settlement, person: Person) {
   person.navigation!.destinationKind = 'construction-site'; person.navigation!.destinationId = 'plot'; person.position = { x: 2.2, z: -0.4 };
   return { key: 'plot', worldX: 0, worldZ: 0, width: 2, depth: 1.5, rotationY: 0 };
 }
-const anchors = { pickup: { x: 1, z: 0 }, delivery: { x: 0, z: 1 }, materialCenter: { x: 0.87, z: 0 }, siteCenter: { x: 0, z: 0 } };
+const anchors = { pickup: { x: 1, z: 0 }, delivery: { x: 0, z: 1 }, materialCenter: { x: 0.87, z: 0 }, siteCenter: { x: 0, z: 0 },
+  prep: { x: -0.3, z: 0.8 }, prepCenter: { x: -0.3, z: 1 } };
 
 describe('physical authority and interruption', () => {
   it('prioritizes emergency, displacement, migration, weather and visible travel', () => {
@@ -80,6 +82,47 @@ describe('physical authority and interruption', () => {
 });
 
 describe('construction workflow', () => {
+  it('assigns deterministic visible crew roles with coverage for organized crews', () => {
+    const ids = ['worker-c', 'worker-a', 'worker-b'];
+    const first = assignConstructionCrewRoles('plot', ids);
+    const second = assignConstructionCrewRoles('plot', [...ids].reverse());
+    expect([...first.entries()]).toEqual([...second.entries()]);
+    expect(new Set([...first.values()].map(assignment => assignment.role))).toEqual(new Set(['hauler', 'assembler', 'site-worker']));
+    expect(assignConstructionCrewRoles('solo', ['one']).get('one')?.role).toBe('hauler');
+    expect(new Set([...assignConstructionCrewRoles('pair', ['one', 'two']).values()].map(a => a.role)))
+      .toEqual(new Set(['hauler', 'assembler']));
+  });
+
+  it('spreads workers across stable workfaces and keeps site preparation at visible furniture', () => {
+    const faces = Array.from({ length: 10 }, (_, index) => constructionWorkfaceIndex('plot', `worker-${index}`));
+    expect(faces.every(face => face >= 0 && face <= 3)).toBe(true);
+    expect(new Set(faces).size).toBeGreaterThan(1);
+    const a = constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0);
+    const b = constructionWorksiteAnchors(2, 1.5, 'plot', 0.4, 1);
+    expect(a.delivery).not.toEqual(b.delivery);
+    expect(a.prep.z).toBeLessThan(a.prepCenter.z);
+    expect(constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0)).toEqual(a);
+  });
+
+  it('gives a three-person project distinct role-specific movement targets without changing authority', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const people = ['crew-a', 'crew-b', 'crew-c'].map((id, index) => ({
+      ...structuredClone(person), id, position: { x: 2.2 + index * 0.08, z: -0.4 },
+    } as Person));
+    const before = JSON.stringify(settlement);
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame(people);
+    const workers = people.map(member => scene.plan(member, settlement, placement, undefined, weather, () => true)!);
+    expect(new Set(workers.map(worker => worker.crewRole))).toEqual(new Set(['hauler', 'assembler', 'site-worker']));
+    const byRole = new Map(workers.map(worker => [worker.crewRole, worker]));
+    expect(byRole.get('hauler')!.action.targetKind).toBe('material-pile');
+    expect(byRole.get('assembler')!.action.targetKind).toBe('workface');
+    expect(byRole.get('site-worker')!.action.targetKind).toBe('site-prep');
+    expect(byRole.get('hauler')!.action.locomotionTarget).not.toEqual(byRole.get('site-worker')!.action.locomotionTarget);
+    expect(JSON.stringify(settlement)).toBe(before);
+  });
+
   it('requires an active safe project and the matching destination', () => {
     const { settlement, person, weather } = setup(); construction(settlement, person);
     expect(builderCanPresent(person, settlement, weather)).toBe(true);
