@@ -324,6 +324,7 @@ export class GodboxRenderer {
     this.scene.add(this.vegetation.group);
     this.vegetation.setEcologyYear(Math.floor(state.month / 12));
     this.vegetation.setDisturbance(state.settlements);
+    this.cameraDirector.setVegetationProbe(this.vegetation);
     this.weatherRenderer = new WeatherRenderer(state.world, this.terrainSurface, config.seed);
     this.weatherRenderer.bindScene(this.scene);
     this.scene.add(this.weatherRenderer.group);
@@ -343,6 +344,8 @@ export class GodboxRenderer {
     this.smoke = this.createSmokePool();
     this.scene.add(this.smoke);
     this.updateSeasonalPresentation(true);
+    // Prime crown envelopes only after the current season has been applied.
+    this.vegetation.updateLod(this.camera.position);
     this.scene.add(this.catastropheLight);
 
     const visiblePersonBudget = visiblePersonBudgetForDensity(this.config.render.visualDensity);
@@ -425,6 +428,7 @@ export class GodboxRenderer {
       this.vegetation.updateLod(this.camera.position);
     }
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    this.vegetation.setCameraCanopyDissolveStrength(this.cameraDirector.canopyDissolveStrength());
     this.foundingPods.update(this.camera);
     this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
