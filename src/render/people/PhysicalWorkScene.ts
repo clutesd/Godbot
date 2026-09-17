@@ -10,7 +10,7 @@ import { createResourceWorkMotion, type ResourceWorkMotion } from '../animation/
 import { atInteraction, facingTarget, type PhysicalActionPresentation } from './PhysicalActionPresentation';
 import type { PersonVisualState } from './PeopleVisualState';
 
-export interface WorkPlacement { key: string; worldX: number; worldZ: number; width: number; depth: number; rotationY: number }
+export interface WorkPlacement { key: string; worldX: number; worldZ: number; width: number; depth: number; constructionWidth?: number; constructionDepth?: number; rotationY: number }
 export interface PhysicalWorker {
   action: PhysicalActionPresentation;
   motion: ResourceWorkMotion;
@@ -66,7 +66,9 @@ export class PhysicalWorkScene {
         const center = { x: placement.worldX, z: placement.worldZ };
         const lane = constructionWorkerLane(person.id);
         const workface = constructionWorkfaceIndex(project.plotId, person.id);
-        const local = constructionWorksiteAnchors(placement.width, placement.depth, project.plotId, lane, workface);
+        const workWidth = placement.constructionWidth ?? placement.width;
+        const workDepth = placement.constructionDepth ?? placement.depth;
+        const local = constructionWorksiteAnchors(workWidth, workDepth, project.plotId, lane, workface);
         const rotate = (p: Vec2) => rotateConstructionAnchor(p, center, placement.rotationY);
         const anchors = {
           pickup: rotate(local.pickup), delivery: rotate(local.delivery), materialCenter: rotate(local.materialCenter),
