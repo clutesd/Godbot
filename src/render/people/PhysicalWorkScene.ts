@@ -119,7 +119,7 @@ export class PhysicalWorkScene {
       worker.material = constructionPresentedMaterial(settlement);
       worker.crewSize = crewSize;
       advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, worker.crewSize);
-      const handoff = worker.crewRole === 'assembler' ? this.handoffFor(project!, person.id) : undefined;
+      const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project!, person.id) : undefined;
       worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!,
         constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole, worker.crewSize, project!.progress, handoff);
     } else if (farmer) {
@@ -137,7 +137,8 @@ export class PhysicalWorkScene {
     // Acquisition/placement only starts once the approach blend has settled.
     const ready = worker.ready && worker.blend >= 1;
     if (worker.playback) {
-      const handoff = worker.crewRole === 'assembler' ? this.handoffFor(worker.project!, person.id) : undefined;
+      const handoff = !action.blockedReason && worker.crewRole === 'assembler'
+        ? this.handoffFor(worker.project!, person.id) : undefined;
       // Receiving is renderer-owned coordination. Freeze the assembler's ordinary loop while the
       // hauler physically transfers the visible load, then resume assembly from the same state.
       if (!handoff) advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize);
