@@ -32,6 +32,37 @@ export interface PhysicalWorker {
   material?: import('../../sim/development/types').StructureMaterial;
 }
 
+function constructionAnchorsFor(
+  placement: WorkPlacement,
+  project: DevelopmentProject,
+  personId: string,
+  handoffRecipientId?: string,
+): ConstructionWorkerAnchors {
+  const center = { x: placement.worldX, z: placement.worldZ };
+  const workWidth = placement.constructionWidth ?? placement.width;
+  const workDepth = placement.constructionDepth ?? placement.depth;
+  const local = constructionWorksiteAnchors(
+    workWidth, workDepth, project.plotId,
+    constructionWorkerLane(personId), constructionWorkfaceIndex(project.plotId, personId), project.progress,
+  );
+  const recipientLocal = handoffRecipientId
+    ? constructionWorksiteAnchors(
+      workWidth, workDepth, project.plotId,
+      constructionWorkerLane(handoffRecipientId), constructionWorkfaceIndex(project.plotId, handoffRecipientId), project.progress,
+    )
+    : local;
+  const rotate = (p: Vec2) => rotateConstructionAnchor(p, center, placement.rotationY);
+  return {
+    pickup: rotate(local.pickup),
+    delivery: rotate(recipientLocal.delivery),
+    handoff: rotate(recipientLocal.handoff),
+    materialCenter: rotate(local.materialCenter),
+    prep: rotate(local.prep),
+    prepCenter: rotate(local.prepCenter),
+    siteCenter: center,
+  };
+}
+
 /** Bounded renderer continuity only. Revalidated against live authority on every visible frame. */
 export class PhysicalWorkScene {
   private readonly workers = new Map<string, PhysicalWorker>();
@@ -81,21 +112,7 @@ export class PhysicalWorkScene {
       if (this.workers.size >= 128) return undefined;
       const motion = createResourceWorkMotion();
       if (builder && project) {
-        const center = { x: placement.worldX, z: placement.worldZ };
-        const lane = constructionWorkerLane(person.id);
-        const workface = constructionWorkfaceIndex(project.plotId, person.id);
-        const workWidth = placement.constructionWidth ?? placement.width;
-        const workDepth = placement.constructionDepth ?? placement.depth;
-        const local = constructionWorksiteAnchors(workWidth, workDepth, project.plotId, lane, workface);
-        const recipientLocal = handoffRecipientId
-          ? constructionWorksiteAnchors(workWidth, workDepth, project.plotId,
-            constructionWorkerLane(handoffRecipientId), constructionWorkfaceIndex(project.plotId, handoffRecipientId))
-          : local;
-        const rotate = (p: Vec2) => rotateConstructionAnchor(p, center, placement.rotationY);
-        const anchors = {
-          pickup: rotate(local.pickup), delivery: rotate(recipientLocal.delivery), handoff: rotate(recipientLocal.handoff),
-          materialCenter: rotate(local.materialCenter), prep: rotate(local.prep), prepCenter: rotate(local.prepCenter), siteCenter: center,
-        };
+        const anchors = constructionAnchorsFor(placement, project, person.id, handoffRecipientId);
         const crewRole = crew?.role ?? 'hauler';
         const initialTarget = crewRole === 'hauler' ? anchors.pickup : crewRole === 'assembler' ? anchors.delivery : anchors.prep;
         if (!safeSegment(person.position, initialTarget)
@@ -116,7 +133,8 @@ export class PhysicalWorkScene {
       this.workers.set(person.id, worker);
     }
     worker.seen = true;
-    if (builder && worker.playback) {
+    if (builder && project && placement && worker.playback) {
+      worker.anchors = constructionAnchorsFor(placement, project, person.id, worker.handoffRecipientId);
       const blocked = constructionBlockedReason(settlement);
       worker.material = constructionPresentedMaterial(settlement);
       worker.crewSize = crewSize;

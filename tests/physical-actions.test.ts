@@ -173,6 +173,41 @@ describe('construction workflow', () => {
     expect(constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0)).toEqual(a);
   });
 
+  it('migrates workface positions across Step 1 stages without changing the assigned face', () => {
+    const foundation = constructionWorksiteAnchors(2, 1.5, 'plot', 0.35, 0, 0.1);
+    const frame = constructionWorksiteAnchors(2, 1.5, 'plot', 0.35, 0, 0.3);
+    const walls = constructionWorksiteAnchors(2, 1.5, 'plot', 0.35, 0, 0.6);
+    const roof = constructionWorksiteAnchors(2, 1.5, 'plot', 0.35, 0, 0.85);
+    const finishing = constructionWorksiteAnchors(2, 1.5, 'plot', 0.35, 0, 0.96);
+    expect(new Set([foundation, frame, walls, roof, finishing].map(a => JSON.stringify(a.delivery))).size).toBe(5);
+    expect([foundation, frame, walls, roof, finishing].every(a => a.delivery.x > 0)).toBe(true);
+    expect(Math.hypot(roof.delivery.x, roof.delivery.z)).toBeGreaterThan(Math.hypot(walls.delivery.x, walls.delivery.z));
+    expect(Math.hypot(finishing.delivery.x, finishing.delivery.z)).toBeGreaterThan(Math.hypot(roof.delivery.x, roof.delivery.z));
+  });
+
+  it('updates live worker anchors at stage boundaries without resetting crew playback', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const people = ['migrate-a', 'migrate-b'].map((id, index) => ({
+      ...structuredClone(person), id, position: { x: 2.2 + index * 0.03, z: -0.4 },
+    } as Person));
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame(people);
+    const initial = people.map(member => scene.plan(member, settlement, placement, undefined, weather, () => true)!);
+    const assemblerIndex = initial.findIndex(worker => worker.crewRole === 'assembler');
+    const assemblerPerson = people[assemblerIndex]!;
+    const before = initial[assemblerIndex]!;
+    const playback = before.playback;
+    const delivery = { ...before.anchors!.delivery };
+
+    settlement.development!.project!.progress = 0.85;
+    scene.beginFrame(people);
+    const after = scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => true)!;
+    expect(after.playback).toBe(playback);
+    expect(after.anchors!.delivery).not.toEqual(delivery);
+    expect(after.crewRole).toBe('assembler');
+  });
+
   it('reserves roles for traveling crew members so arrivals do not reshuffle workers already on site', () => {
     const { settlement, person, weather } = setup();
     const placement = construction(settlement, person);
@@ -204,7 +239,8 @@ describe('construction workflow', () => {
     const scene = new PhysicalWorkScene();
     scene.beginFrame([person]);
     const worker = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
-    const local = constructionWorksiteAnchors(1.1, 0.9, 'plot', constructionWorkerLane(person.id), constructionWorkfaceIndex('plot', person.id));
+    const local = constructionWorksiteAnchors(1.1, 0.9, 'plot', constructionWorkerLane(person.id),
+      constructionWorkfaceIndex('plot', person.id), settlement.development!.project!.progress);
     expect(worker.action.locomotionTarget.x).toBeCloseTo(local.pickup.x);
     expect(worker.action.locomotionTarget.z).toBeCloseTo(local.pickup.z);
   });

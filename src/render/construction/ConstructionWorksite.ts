@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
 import type { MaterialPalette } from '../materials/MaterialPalette';
+import { constructionStagePresentation } from './ConstructionVisualGrammar';
 
 export interface ConstructionWorksiteSpec {
   width: number;
@@ -37,6 +38,7 @@ export function constructionWorksiteAnchors(
   seedKey: string,
   lane = 0,
   workfaceIndex = 0,
+  progress?: number,
 ): ConstructionWorksiteAnchors {
   const width = Math.max(0.9, inputWidth);
   const depth = Math.max(0.8, inputDepth);
@@ -44,11 +46,28 @@ export function constructionWorksiteAnchors(
   const stagingX = side * width * 0.92;
   const stagingZ = -depth * 0.26;
   const laneUnit = Math.max(-1, Math.min(1, lane));
-  const laneZ = laneUnit * Math.min(0.3, depth * 0.18);
-  const laneX = laneUnit * Math.min(0.3, width * 0.18);
+  const stage = progress === undefined ? undefined : constructionStagePresentation(progress);
+  // Canonical-stage migration moves crews within the same safe face instead of teleporting them
+  // across the structure. Foundation work sits farther out/low, frame and wall work shifts along
+  // the bay, roof work stands farther back, and finishing clears outward with the scaffold.
+  const stageLaneShift = stage === undefined ? 0
+    : stage.finishing ? -0.11
+      : stage.stage === 0 ? -0.08
+        : stage.stage === 1 ? 0.07
+          : stage.stage === 2 ? -0.025
+            : stage.stage === 3 ? 0.11 : 0.035;
+  const edgeExtra = stage === undefined ? 0
+    : stage.finishing ? 0.14
+      : stage.stage === 0 ? 0.08
+        : stage.stage === 1 ? 0.025
+          : stage.stage === 2 ? 0
+            : stage.stage === 3 ? 0.1 : 0.04;
+  const migrationScale = Math.min(0.24, Math.min(width, depth) * 0.12);
+  const laneZ = laneUnit * Math.min(0.3, depth * 0.18) + stageLaneShift * migrationScale;
+  const laneX = laneUnit * Math.min(0.3, width * 0.18) + stageLaneShift * migrationScale;
   const face = ((Math.floor(workfaceIndex) % 4) + 4) % 4;
-  const edgeX = width * 0.45 + 0.13;
-  const edgeZ = depth * 0.45 + 0.13;
+  const edgeX = width * 0.45 + 0.13 + edgeExtra;
+  const edgeZ = depth * 0.45 + 0.13 + edgeExtra;
   const delivery = face === 0 ? { x: edgeX, z: laneZ }
     : face === 1 ? { x: laneX, z: edgeZ }
       : face === 2 ? { x: -edgeX, z: -laneZ }
