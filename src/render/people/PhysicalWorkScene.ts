@@ -4,7 +4,7 @@ import type { FarmGeometry } from '../../shared/FarmGeometry';
 import { farmerCanPresent, sampleFarmAction, type FarmPresentationState } from '../farming/FarmActionPresentation';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction, type ConstructionPlayback } from '../construction/ConstructionActionPresentation';
 import { constructionWorkerLane, rotateConstructionAnchor, type ConstructionWorkerAnchors } from '../construction/ConstructionWorkerMotion';
-import { assignConstructionCrewRoles, constructionWorkfaceIndex, type ConstructionCrewRole } from '../construction/ConstructionCrewPresentation';
+import { reconcileConstructionCrewRoles, constructionWorkfaceIndex, type ConstructionCrewAssignment, type ConstructionCrewRole } from '../construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors } from '../construction/ConstructionWorksite';
 import { createResourceWorkMotion, type ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { atInteraction, facingTarget, type PhysicalActionPresentation } from './PhysicalActionPresentation';
@@ -31,16 +31,18 @@ export interface PhysicalWorker {
 /** Bounded renderer continuity only. Revalidated against live authority on every visible frame. */
 export class PhysicalWorkScene {
   private readonly workers = new Map<string, PhysicalWorker>();
-  private readonly constructionCrews = new Map<string, string[]>();
+  private readonly constructionCrewCandidates = new Map<string, Person[]>();
+  private readonly constructionRoleAssignments = new WeakMap<DevelopmentProject, Map<string, ConstructionCrewAssignment>>();
   beginFrame(people: readonly Person[]): void {
     for (const worker of this.workers.values()) worker.seen = false;
-    this.constructionCrews.clear();
-    // SettlementDevelopmentSystem permits only one funded project per settlement. Normalize both
-    // accepted navigation forms (plot id and generic construction-site id) into that one visible crew.
-    for (const person of people) if (person.alive && person.activity === 'construct' && !person.navigation?.traveling) {
-      const crew = this.constructionCrews.get(person.homeId) ?? [];
-      crew.push(person.id);
-      this.constructionCrews.set(person.homeId, crew);
+    this.constructionCrewCandidates.clear();
+    // Keep commuters in the project roster. Travel prevents animation contact, but it must not
+    // change someone's job simply because they are still walking to the site this frame.
+    for (const person of people) if (person.alive && person.activity === 'construct'
+      && person.navigation?.destinationKind === 'construction-site') {
+      const crew = this.constructionCrewCandidates.get(person.homeId) ?? [];
+      crew.push(person);
+      this.constructionCrewCandidates.set(person.homeId, crew);
     }
   }
   plan(person: Person, settlement: Settlement | undefined, placement: WorkPlacement | undefined,
@@ -51,10 +53,18 @@ export class PhysicalWorkScene {
     if (!builder && !farmer) { this.workers.delete(person.id); return undefined; }
     let worker = this.workers.get(person.id);
     const project = builder ? settlement.development!.project : undefined;
-    const crew = builder && project
-      ? assignConstructionCrewRoles(project.plotId, this.constructionCrews.get(person.homeId) ?? [person.id]).get(person.id)
-        ?? { role: 'hauler' as const, rank: 0 }
-      : undefined;
+    let crew: ConstructionCrewAssignment | undefined;
+    if (builder && project) {
+      const candidates = (this.constructionCrewCandidates.get(person.homeId) ?? [person])
+        .filter(candidate => candidate.navigation?.destinationKind === 'construction-site'
+          && (candidate.navigation.destinationId === project.plotId
+            || candidate.navigation.destinationId === `${settlement.id}:construction-site`))
+        .map(candidate => candidate.id);
+      const previous = this.constructionRoleAssignments.get(project);
+      const assignments = reconcileConstructionCrewRoles(project.plotId, candidates.length > 0 ? candidates : [person.id], previous);
+      this.constructionRoleAssignments.set(project, assignments);
+      crew = assignments.get(person.id) ?? { role: 'hauler', rank: 0 };
+    }
     if (worker && (worker.project !== project || worker.field?.id !== (farmer ? farm.geometry.id : undefined)
       || builder && worker.crewRole !== crew?.role)) {
       this.workers.delete(person.id); worker = undefined;

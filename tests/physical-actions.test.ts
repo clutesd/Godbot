@@ -11,7 +11,7 @@ import { farmPresentationState, farmerCanPresent, sampleFarmAction } from '../sr
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
 import { constructionWorkerLane, sampleConstructionWorkerMotion } from '../src/render/construction/ConstructionWorkerMotion';
-import { assignConstructionCrewRoles, constructionWorkfaceIndex } from '../src/render/construction/ConstructionCrewPresentation';
+import { assignConstructionCrewRoles, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors, createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
 import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../src/render/animation/ResourceWorkMotion';
@@ -93,6 +93,20 @@ describe('construction workflow', () => {
       .toEqual(new Set(['hauler', 'assembler']));
   });
 
+  it('preserves established roles as crew membership changes during one project', () => {
+    const initial = assignConstructionCrewRoles('plot', ['a', 'b', 'c']);
+    const before = new Map([...initial].map(([id, assignment]) => [id, assignment.role]));
+    const withArrival = reconcileConstructionCrewRoles('plot', ['a', 'b', 'c', 'd'], initial);
+    expect(withArrival.get('a')?.role).toBe(before.get('a'));
+    expect(withArrival.get('b')?.role).toBe(before.get('b'));
+    expect(withArrival.get('c')?.role).toBe(before.get('c'));
+
+    const afterDeparture = reconcileConstructionCrewRoles('plot', ['a', 'c', 'd'], withArrival);
+    expect(afterDeparture.get('a')?.role).toBe(withArrival.get('a')?.role);
+    expect(afterDeparture.get('c')?.role).toBe(withArrival.get('c')?.role);
+    expect(afterDeparture.get('d')?.role).toBe(withArrival.get('d')?.role);
+  });
+
   it('spreads workers across stable workfaces and keeps site preparation at visible furniture', () => {
     const faces = Array.from({ length: 10 }, (_, index) => constructionWorkfaceIndex('plot', `worker-${index}`));
     expect(faces.every(face => face >= 0 && face <= 3)).toBe(true);
@@ -102,6 +116,29 @@ describe('construction workflow', () => {
     expect(a.delivery).not.toEqual(b.delivery);
     expect(a.prep.z).toBeLessThan(a.prepCenter.z);
     expect(constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0)).toEqual(a);
+  });
+
+  it('reserves roles for traveling crew members so arrivals do not reshuffle workers already on site', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const people = ['stable-a', 'stable-b', 'stable-c'].map((id, index) => ({
+      ...structuredClone(person), id, position: { x: 2.2 + index * 0.08, z: -0.4 },
+    } as Person));
+    people[2]!.navigation!.traveling = true;
+
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame(people);
+    const before = people.slice(0, 2).map(member =>
+      scene.plan(member, settlement, placement, undefined, weather, () => true)!.crewRole);
+    scene.endFrame();
+
+    people[2]!.navigation!.traveling = false;
+    scene.beginFrame(people);
+    const after = people.slice(0, 2).map(member =>
+      scene.plan(member, settlement, placement, undefined, weather, () => true)!.crewRole);
+    expect(after).toEqual(before);
+    const arrived = scene.plan(people[2]!, settlement, placement, undefined, weather, () => true)!;
+    expect(new Set([...after, arrived.crewRole])).toEqual(new Set(['hauler', 'assembler', 'site-worker']));
   });
 
   it('uses the rendered construction footprint for worker/site alignment when available', () => {

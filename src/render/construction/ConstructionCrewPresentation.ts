@@ -17,24 +17,46 @@ export function assignConstructionCrewRoles(
   projectKey: string,
   workerIds: readonly string[],
 ): Map<string, ConstructionCrewAssignment> {
+  return reconcileConstructionCrewRoles(projectKey, workerIds);
+}
+
+/**
+ * Keep existing workers in the same presentation role for the lifetime of one real project.
+ * New arrivals fill missing core roles first, then extend the repeating crew pattern. Workers who
+ * merely travel to/from the site remain in `workerIds`, so commuting never causes a reshuffle.
+ */
+export function reconcileConstructionCrewRoles(
+  projectKey: string,
+  workerIds: readonly string[],
+  previous: ReadonlyMap<string, ConstructionCrewAssignment> = new Map(),
+): Map<string, ConstructionCrewAssignment> {
   const ranked = [...new Set(workerIds)].sort((a, b) =>
     stableUnit(`${projectKey}:${a}:crew-rank`) - stableUnit(`${projectKey}:${b}:crew-rank`)
     || a.localeCompare(b));
+  const active = new Set(ranked);
   const assignments = new Map<string, ConstructionCrewAssignment>();
-  if (ranked.length === 0) return assignments;
 
-  if (ranked.length === 1) {
-    assignments.set(ranked[0]!, { role: 'hauler', rank: 0 });
-    return assignments;
-  }
-  if (ranked.length === 2) {
-    assignments.set(ranked[0]!, { role: 'hauler', rank: 0 });
-    assignments.set(ranked[1]!, { role: 'assembler', rank: 1 });
-    return assignments;
+  // Preserve every still-assigned worker exactly. Removing or adding somebody must never cause
+  // the rest of the crew to swap jobs mid-animation.
+  for (const [id, assignment] of previous) {
+    if (active.has(id)) assignments.set(id, assignment);
   }
 
+  let nextRank = Math.max(-1, ...[...assignments.values()].map(assignment => assignment.rank)) + 1;
+  const count = (role: ConstructionCrewRole): number =>
+    [...assignments.values()].filter(assignment => assignment.role === role).length;
   const sequence: readonly ConstructionCrewRole[] = ['hauler', 'assembler', 'site-worker'];
-  ranked.forEach((id, rank) => assignments.set(id, { role: sequence[rank % sequence.length]!, rank }));
+
+  for (const id of ranked) {
+    if (assignments.has(id)) continue;
+    let role: ConstructionCrewRole;
+    if (count('hauler') === 0) role = 'hauler';
+    else if (ranked.length >= 2 && count('assembler') === 0) role = 'assembler';
+    else if (ranked.length >= 3 && count('site-worker') === 0) role = 'site-worker';
+    else role = sequence[nextRank % sequence.length]!;
+    assignments.set(id, { role, rank: nextRank });
+    nextRank += 1;
+  }
   return assignments;
 }
 
