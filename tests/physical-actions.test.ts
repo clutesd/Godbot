@@ -304,6 +304,8 @@ describe('construction workflow', () => {
 
     const initial = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
     const playback = initial.playback;
+    const oldPlayback = structuredClone(initial.playback!);
+    const oldMotion = structuredClone(initial.motion);
     const oldAnchors = structuredClone(initial.anchors!);
     const oldActionTarget = { ...initial.action.locomotionTarget };
 
@@ -318,6 +320,8 @@ describe('construction workflow', () => {
     expect(blocked).toBeUndefined();
     expect(safeCalls.length).toBeGreaterThan(0);
     expect(initial.playback).toBe(playback);
+    expect(initial.playback).toEqual(oldPlayback);
+    expect(initial.motion).toEqual(oldMotion);
     expect(initial.anchors).toEqual(oldAnchors);
     expect(initial.action.locomotionTarget).toEqual(oldActionTarget);
   });
