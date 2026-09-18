@@ -1,9 +1,15 @@
-name: Structure identity validation
+name: Structure and construction integration validation
 
 on:
   pull_request:
     paths:
+      - 'src/render/GodboxRenderer.ts'
       - 'src/render/GodboxRendererEnhanced.ts'
+      - 'src/render/construction/**'
+      - 'src/render/people/PhysicalWorkScene.ts'
+      - 'src/render/people/PhysicalActionPresentation.ts'
+      - 'src/render/resources/ResourceWorkerRenderer.ts'
+      - 'src/render/animation/ResourceWorkMotion.ts'
       - 'src/render/assets/AssetBuilder.ts'
       - 'src/render/assets/BuildingGrammar.ts'
       - 'src/render/assets/BuildingComposer.ts'
@@ -15,6 +21,9 @@ on:
       - 'src/render/assets/StructureVisualValidation.ts'
       - 'src/render/materials/MaterialPalette.ts'
       - 'tests/settlement-render-budget.test.ts'
+      - 'tests/physical-actions.test.ts'
+      - 'tests/construction-worksite.test.ts'
+      - 'tests/construction-step1-step2-integration.test.ts'
       - 'tests/structure-identity.test.ts'
       - 'tests/structure-heritage.test.ts'
       - 'tests/structure-components.test.ts'
@@ -36,6 +45,42 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/render/GodboxRendererEnhanced.ts src/render/assets/AssetBuilder.ts src/render/assets/BuildingGrammar.ts src/render/assets/StructureComposition.ts src/render/assets/StructureHeritage.ts src/render/assets/StructureComponents.ts src/render/assets/StructureGenerations.ts src/render/assets/StructureVisualSignature.ts src/render/assets/StructureVisualValidation.ts tests/settlement-render-budget.test.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/structure-generations.test.ts tests/structure-visual-validation.test.ts
-      - run: npx vitest run tests/settlement-render-budget.test.ts tests/structure-identity.test.ts tests/structure-heritage.test.ts tests/structure-components.test.ts tests/structure-generations.test.ts tests/structure-visual-validation.test.ts tests/architecture.test.ts
+      - run: >-
+          npx eslint
+          src/render/GodboxRenderer.ts
+          src/render/GodboxRendererEnhanced.ts
+          src/render/construction/*.ts
+          src/render/people/PhysicalWorkScene.ts
+          src/render/people/PhysicalActionPresentation.ts
+          src/render/resources/ResourceWorkerRenderer.ts
+          src/render/animation/ResourceWorkMotion.ts
+          src/render/assets/AssetBuilder.ts
+          src/render/assets/BuildingGrammar.ts
+          src/render/assets/StructureComposition.ts
+          src/render/assets/StructureHeritage.ts
+          src/render/assets/StructureComponents.ts
+          src/render/assets/StructureGenerations.ts
+          src/render/assets/StructureVisualSignature.ts
+          src/render/assets/StructureVisualValidation.ts
+          tests/settlement-render-budget.test.ts
+          tests/physical-actions.test.ts
+          tests/construction-worksite.test.ts
+          tests/construction-step1-step2-integration.test.ts
+          tests/structure-identity.test.ts
+          tests/structure-heritage.test.ts
+          tests/structure-components.test.ts
+          tests/structure-generations.test.ts
+          tests/structure-visual-validation.test.ts
+      - run: >-
+          npx vitest run
+          tests/settlement-render-budget.test.ts
+          tests/physical-actions.test.ts
+          tests/construction-worksite.test.ts
+          tests/construction-step1-step2-integration.test.ts
+          tests/structure-identity.test.ts
+          tests/structure-heritage.test.ts
+          tests/structure-components.test.ts
+          tests/structure-generations.test.ts
+          tests/structure-visual-validation.test.ts
+          tests/architecture.test.ts
       - run: npm run build
