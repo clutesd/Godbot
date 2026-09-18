@@ -174,11 +174,11 @@ describe('Step 1 + Step 2 construction presentation contract', () => {
     const assemblerAssignment = scene.constructionCrewAssignment(settlement.id, assembler.id)!;
 
     const checkpoints = [
-      { progress: 0.10, stage: BUILD_STAGE.FOUNDATION, finishing: false },
-      { progress: 0.30, stage: BUILD_STAGE.FRAME, finishing: false },
-      { progress: 0.60, stage: BUILD_STAGE.WALLS, finishing: false },
-      { progress: 0.85, stage: BUILD_STAGE.ROOF, finishing: false },
-      { progress: 0.96, stage: BUILD_STAGE.DETAIL, finishing: true },
+      { progress: 0.10, stage: BUILD_STAGE.FOUNDATION, phase: 0.50, finishing: false },
+      { progress: 0.30, stage: BUILD_STAGE.FRAME, phase: 0.40, finishing: false },
+      { progress: 0.60, stage: BUILD_STAGE.WALLS, phase: (0.60 - 0.45) / (0.78 - 0.45), finishing: false },
+      { progress: 0.85, stage: BUILD_STAGE.ROOF, phase: 0.50, finishing: false },
+      { progress: 0.96, stage: BUILD_STAGE.DETAIL, phase: 0.50, finishing: true },
     ] as const;
 
     const deliveryTargets: string[] = [];
@@ -191,6 +191,7 @@ describe('Step 1 + Step 2 construction presentation contract', () => {
       const stagePresentation = constructionStagePresentation(checkpoint.progress);
       expect(constructionPresentationProgress(settlement)).toBeCloseTo(checkpoint.progress);
       expect(stagePresentation.stage).toBe(checkpoint.stage);
+      expect(stagePresentation.phase).toBeCloseTo(checkpoint.phase);
       expect(stagePresentation.finishing).toBe(checkpoint.finishing);
 
       const stageAsset = builder.getAsset('building', {
