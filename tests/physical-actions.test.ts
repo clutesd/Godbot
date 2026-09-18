@@ -530,6 +530,18 @@ describe('construction workflow', () => {
     expect(playback.phase).toBe('inspect');
   });
 
+  it('keeps a one-person crew visibly finishing instead of cleaning up forever', () => {
+    const { person } = setup();
+    const playback = { phase: 'assemble', seconds: 0.7, carrying: false } as ReturnType<typeof createConstructionPlayback>;
+    advanceConstruction(playback, 0.1, true, false, 'hauler', 1, true, true);
+    expect(playback.phase).toBe('assemble');
+    const action = sampleConstructionAction(person, 'plot', playback, anchors, 'timber',
+      createResourceWorkMotion(), undefined, 'hauler', 1, 0.96, undefined, 'early');
+    expect(action.actionKind).toBe('construction-finish');
+    expect(action.phase).toBe('assemble');
+    expect(action.locomotionTarget).toEqual(anchors.delivery);
+  });
+
   it('turns late-stage support roles into cleanup while the assembler performs light finishing', () => {
     const { person } = setup();
     const haulerPlayback = { phase: 'carry', seconds: 0.4, carrying: true } as ReturnType<typeof createConstructionPlayback>;
