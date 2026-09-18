@@ -20,6 +20,9 @@ on:
       - 'src/render/assets/StructureVisualSignature.ts'
       - 'src/render/assets/StructureVisualValidation.ts'
       - 'src/render/materials/MaterialPalette.ts'
+      - 'src/sim/development/SettlementDevelopmentSystem.ts'
+      - 'src/sim/development/types.ts'
+      - 'src/sim/resources/MaterialUse.ts'
       - 'tests/settlement-render-budget.test.ts'
       - 'tests/physical-actions.test.ts'
       - 'tests/construction-worksite.test.ts'
@@ -62,6 +65,9 @@ jobs:
           src/render/assets/StructureGenerations.ts
           src/render/assets/StructureVisualSignature.ts
           src/render/assets/StructureVisualValidation.ts
+          src/sim/development/SettlementDevelopmentSystem.ts
+          src/sim/development/types.ts
+          src/sim/resources/MaterialUse.ts
           tests/settlement-render-budget.test.ts
           tests/physical-actions.test.ts
           tests/construction-worksite.test.ts
