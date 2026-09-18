@@ -628,7 +628,8 @@ export class GodboxRenderer {
         loaded ? 1 : physical.blend, display.x, footY, display.z, heightScale, facing, this.personColor,
         physical.action.actionKind === 'farm-harvest',
         physicalStanding && Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18,
-        !physicalStanding, physical.action.contactEffect);
+        !physicalStanding, physical.action.contactEffect
+          ?? (physical.action.actionKind.startsWith('construction-') ? 'none' : 'generic'));
       if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor, Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
       if (working && worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
         this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
