@@ -44,6 +44,7 @@ import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
 import { constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
+import { constructionMaterialColour } from './construction/ConstructionChoreography';
 import { constructionVisibleCrewIds } from './construction/ConstructionCrewPresentation';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
@@ -623,7 +624,7 @@ export class GodboxRenderer {
       this.peopleCargo.setColorAt(index, this.personDetailColor);
       if (physical && articulated && detailed) this.physicalWorkers.drawPhysical(physical.motion, physical.action.interactionAnchor,
         physicalStanding ? physical.action.activeTool : 'none', physical.action.carriedObject,
-        physical.action.carriedObject === 'crop' ? '#b5a159' : physical.material === 'timber' ? '#987149' : '#898576',
+        physical.action.carriedObject === 'crop' ? '#b5a159' : constructionMaterialColour(physical.material),
         loaded ? 1 : physical.blend, display.x, footY, display.z, heightScale, facing, this.personColor,
         physical.action.actionKind === 'farm-harvest', physicalStanding && Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18, !physicalStanding);
       if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor, Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);

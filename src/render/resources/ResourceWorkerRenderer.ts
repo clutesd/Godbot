@@ -112,7 +112,13 @@ export class ResourceWorkerRenderer {
     this.position.set(x + (loadX * this.cos + loadZ * this.sin) * size,
       y + handY * size, z + (loadZ * this.cos - loadX * this.sin) * size);
     const visible = load && blend > 0.95 ? size : 0;
-    this.scale.set(visible * (load === 'timber' ? 0.65 : 0.16), visible * 0.1, visible * 0.12);
+    const loadShape = load === 'timber' ? [0.65, 0.1, 0.12] as const
+      : load === 'metal' ? [0.48, 0.075, 0.09] as const
+        : load === 'masonry' ? [0.2, 0.16, 0.18] as const
+          : load === 'ceramic' ? [0.24, 0.095, 0.15] as const
+            : load === 'earth' ? [0.24, 0.14, 0.2] as const
+              : [0.16, 0.1, 0.12] as const;
+    this.scale.set(visible * loadShape[0], visible * loadShape[1], visible * loadShape[2]);
     this.rotation.setFromAxisAngle(this.up, facing);
     this.matrix.compose(this.position, this.rotation, this.scale); this.loads.setMatrixAt(index, this.matrix);
     this.colour.set(materialColour); this.loads.setColorAt(index, this.colour);

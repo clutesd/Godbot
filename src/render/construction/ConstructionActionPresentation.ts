@@ -2,6 +2,7 @@ import type { Person, Settlement, WeatherCellState } from '../../sim/types';
 import type { StructureMaterial } from '../../sim/development/types';
 import type { ConstructionWorkerAnchors } from './ConstructionWorkerMotion';
 import type { ConstructionCrewRole } from './ConstructionCrewPresentation';
+import { constructionChoreography, type ConstructionChoreographyProfile } from './ConstructionChoreography';
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from '../people/PhysicalActionPresentation';
@@ -93,7 +94,7 @@ export function advanceConstruction(
 
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
   anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
-  crewRole: ConstructionCrewRole = 'hauler', crewSize = 1): PhysicalActionPresentation {
+  crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5): PhysicalActionPresentation {
   const phase = playback.phase;
   const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
   const assembling = crewRole === 'assembler' || soloGeneralist && phase === 'assemble';
@@ -101,15 +102,10 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   const prep = crewRole === 'site-worker';
   const duration = phase === 'pickup' ? 0.9 : phase === 'deliver' ? 1.15 : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
-  const bend = phase === 'pickup' || phase === 'deliver' ? Math.sin(p * Math.PI) : 0;
-  const strike = assembling && phase === 'assemble' ? Math.max(0, Math.sin(p * Math.PI * 2 - 1)) : 0;
-  motion.crouch = bend * 0.13; motion.lean = bend * 0.22 + (playback.carrying ? 0.07 : strike * 0.1);
-  motion.twist = assembling && phase === 'assemble' ? strike * (0.12 + resourceVisualUnit(person.id) * 0.08) : 0;
-  motion.handY = playback.carrying ? 0.43 - bend * 0.19 : 0.5 - bend * 0.32 + strike * 0.2;
-  motion.handZ = 0.22 + bend * 0.16; motion.toolAngle = 0.7 + strike * 1.4;
-  motion.basket = 0; motion.reposition = false;
-  motion.impact = (phase === 'pickup' && p >= 0.58 && p <= 0.66 || phase === 'deliver' && p >= 0.48 && p <= 0.56) ? 1
-    : assembling && phase === 'assemble' ? strike : 0;
+  const choreography = constructionChoreography(material, progress);
+  if (assembling && phase === 'assemble') applyAssemblyMotion(choreography, p, person.id, motion);
+  else if (prep) applyPrepMotion(choreography, p, person.id, motion);
+  else applyHaulMotion(playback, phase, p, motion);
   const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : anchors.delivery;
   const interactionCenter = prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
   return { personId: person.id,
@@ -120,9 +116,125 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
     targetKind: prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
     interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
     locomotionTarget, phase, phaseProgress: p,
-    activeTool: assembling && phase === 'assemble' && material !== 'earth' ? 'hammer' : 'none',
+    activeTool: assembling && phase === 'assemble' ? choreography.assemblerTool : prep ? choreography.prepTool : 'none',
     carriedObject: crewRole === 'hauler' && playback.carrying ? material : undefined,
-    contactStrength: assembling || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0, blockedReason };
+    contactStrength: assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0, blockedReason };
+}
+
+function applyHaulMotion(
+  playback: ConstructionPlayback,
+  phase: ConstructionPhase,
+  p: number,
+  motion: ResourceWorkMotion,
+): void {
+  const bend = phase === 'pickup' || phase === 'deliver' ? Math.sin(p * Math.PI) : 0;
+  motion.crouch = bend * 0.13;
+  motion.lean = bend * 0.22 + (playback.carrying ? 0.07 : 0);
+  motion.twist = 0;
+  motion.handY = playback.carrying ? 0.43 - bend * 0.19 : 0.5 - bend * 0.32;
+  motion.handZ = 0.22 + bend * 0.16;
+  motion.toolAngle = 0.7;
+  motion.basket = 0;
+  motion.held = playback.carrying ? 1 : 0;
+  motion.reposition = false;
+  motion.impact = (phase === 'pickup' && p >= 0.58 && p <= 0.66
+    || phase === 'deliver' && p >= 0.48 && p <= 0.56) ? 1 : 0;
+}
+
+function applyAssemblyMotion(
+  profile: ConstructionChoreographyProfile,
+  p: number,
+  personId: string,
+  motion: ResourceWorkMotion,
+): void {
+  const variation = 0.9 + resourceVisualUnit(personId) * 0.2;
+  const pulse = Math.max(0, Math.sin(p * Math.PI * 2 - 0.8));
+  const reach = Math.sin(p * Math.PI);
+  motion.basket = 0; motion.held = 0; motion.reposition = p > 0.94;
+
+  if (profile.assemblyMotion === 'pack') {
+    const tamp = Math.max(0, Math.sin(p * Math.PI * 3 - 0.5));
+    motion.crouch = 0.11 + reach * 0.09;
+    motion.lean = 0.17 + tamp * 0.12;
+    motion.twist = Math.sin(p * Math.PI * 2) * 0.08 * variation;
+    motion.handY = 0.38 - tamp * 0.18;
+    motion.handZ = 0.3 + reach * 0.09;
+    motion.toolAngle = 1.6;
+    motion.impact = tamp * 0.72;
+    return;
+  }
+
+  if (profile.assemblyMotion === 'place') {
+    const foundationBias = profile.stage === 0 ? 0.1 : 0;
+    motion.crouch = foundationBias + reach * 0.08;
+    motion.lean = 0.08 + reach * 0.12;
+    motion.twist = Math.sin(p * Math.PI * 2) * 0.09 * variation;
+    motion.handY = 0.46 - foundationBias - reach * 0.12 + pulse * 0.05;
+    motion.handZ = 0.27 + reach * 0.12;
+    motion.toolAngle = 0.95 + pulse * 0.75;
+    motion.impact = pulse * (profile.material === 'ceramic' ? 0.28 : 0.62);
+    return;
+  }
+
+  const highWork = profile.stage >= 1 ? 0.08 : 0;
+  const fit = profile.assemblyMotion === 'fit';
+  motion.crouch = reach * (fit ? 0.045 : 0.065);
+  motion.lean = pulse * (fit ? 0.14 : 0.1);
+  motion.twist = pulse * (fit ? 0.16 : 0.2) * variation;
+  motion.handY = 0.52 + highWork + pulse * (fit ? 0.18 : 0.24);
+  motion.handZ = 0.21 + reach * 0.08;
+  motion.toolAngle = 0.55 + pulse * (fit ? 1.05 : 1.45);
+  motion.impact = pulse * (fit ? 0.78 : 0.9);
+}
+
+function applyPrepMotion(
+  profile: ConstructionChoreographyProfile,
+  p: number,
+  personId: string,
+  motion: ResourceWorkMotion,
+): void {
+  const variation = 0.9 + resourceVisualUnit(personId) * 0.2;
+  const stroke = Math.max(0, Math.sin(p * Math.PI * 3 - 0.7));
+  const reach = Math.sin(p * Math.PI);
+  motion.basket = 0; motion.held = 0; motion.reposition = p > 0.92;
+
+  if (profile.prepMotion === 'cut') {
+    motion.crouch = 0.06 + reach * 0.06;
+    motion.lean = 0.1 + stroke * 0.13;
+    motion.twist = stroke * 0.22 * variation;
+    motion.handY = 0.5 + stroke * 0.16;
+    motion.handZ = 0.28;
+    motion.toolAngle = 0.65 + stroke * 1.4;
+    motion.impact = stroke * 0.88;
+    return;
+  }
+  if (profile.prepMotion === 'dress') {
+    motion.crouch = 0.09 + reach * 0.08;
+    motion.lean = 0.12 + stroke * 0.09;
+    motion.twist = stroke * 0.12 * variation;
+    motion.handY = 0.42 + stroke * 0.12;
+    motion.handZ = 0.31;
+    motion.toolAngle = 0.85 + stroke * 0.95;
+    motion.impact = stroke * (profile.material === 'metal' ? 0.76 : 0.58);
+    return;
+  }
+  if (profile.prepMotion === 'sort') {
+    motion.crouch = 0.08 + reach * 0.08;
+    motion.lean = 0.16 + reach * 0.08;
+    motion.twist = Math.sin(p * Math.PI * 2) * 0.18 * variation;
+    motion.handY = 0.4 - reach * 0.1;
+    motion.handZ = 0.3 + reach * 0.12;
+    motion.toolAngle = 1.8;
+    motion.impact = 0;
+    return;
+  }
+  motion.crouch = 0.12 + reach * 0.1;
+  motion.lean = 0.18 + reach * 0.09;
+  motion.twist = Math.sin(p * Math.PI * 2) * 0.1 * variation;
+  motion.handY = 0.36 - reach * 0.12;
+  motion.handZ = 0.32 + reach * 0.1;
+  motion.toolAngle = 1.7;
+  motion.impact = stroke * 0.35;
 }
 
 function contactSurface(from: Readonly<{ x: number; z: number }>, center: Readonly<{ x: number; z: number }>): { x: number; z: number } {

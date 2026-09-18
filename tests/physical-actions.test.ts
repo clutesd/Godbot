@@ -10,6 +10,7 @@ import { farmAnchor, farmGeometry } from '../src/shared/FarmGeometry';
 import { farmPresentationState, farmerCanPresent, sampleFarmAction } from '../src/render/farming/FarmActionPresentation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
+import { constructionChoreography, constructionMaterialColour } from '../src/render/construction/ConstructionChoreography';
 import { constructionWorkerLane, sampleConstructionWorkerMotion } from '../src/render/construction/ConstructionWorkerMotion';
 import { assignConstructionCrewRoles, constructionVisibleCrewIds, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors, createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
@@ -212,6 +213,57 @@ describe('construction workflow', () => {
     expect(byRole.get('site-worker')!.action.targetKind).toBe('site-prep');
     expect(byRole.get('hauler')!.action.locomotionTarget).not.toEqual(byRole.get('site-worker')!.action.locomotionTarget);
     expect(JSON.stringify(settlement)).toBe(before);
+  });
+
+  it('derives material-specific choreography from the same construction stages as the building', () => {
+    const timberFrame = constructionChoreography('timber', 0.3);
+    const timberRoof = constructionChoreography('timber', 0.85);
+    const stoneWalls = constructionChoreography('masonry', 0.6);
+    const metalFrame = constructionChoreography('metal', 0.3);
+    const earthFoundation = constructionChoreography('earth', 0.1);
+    expect(timberFrame.stageName).toBe('frame');
+    expect(timberFrame.assemblerVerb).toBe('fasten-frame');
+    expect(timberFrame.prepTool).toBe('axe');
+    expect(timberRoof.stageName).toBe('roof');
+    expect(timberRoof.assemblerVerb).toBe('fix-rafters');
+    expect(stoneWalls.assemblerVerb).toBe('lay-stone-course');
+    expect(metalFrame.assemblyMotion).toBe('fit');
+    expect(earthFoundation.assemblyMotion).toBe('pack');
+    expect(earthFoundation.assemblerTool).toBe('none');
+    expect(constructionChoreography('ceramic', 0.6).assemblerTool).toBe('none');
+    expect(constructionChoreography('metal', 0.96).finishing).toBe(true);
+  });
+
+  it('produces visibly distinct assembler motion for different construction materials', () => {
+    const { person } = setup();
+    const samples = (['earth', 'timber', 'masonry', 'ceramic', 'metal'] as const).map(material => {
+      const motion = createResourceWorkMotion();
+      const action = sampleConstructionAction(person, 'plot', { phase: 'assemble', seconds: 0.82, carrying: false },
+        anchors, material, motion, undefined, 'assembler', 3, 0.6);
+      return { material, motion: { ...motion }, tool: action.activeTool };
+    });
+    expect(new Set(samples.map(sample => JSON.stringify(sample.motion))).size).toBe(5);
+    expect(samples.find(sample => sample.material === 'earth')!.tool).toBe('none');
+    expect(samples.find(sample => sample.material === 'timber')!.tool).toBe('hammer');
+    expect(samples.find(sample => sample.material === 'ceramic')!.tool).toBe('none');
+  });
+
+  it('turns the site-worker prep station into material-specific work', () => {
+    const { person } = setup();
+    const timberMotion = createResourceWorkMotion();
+    const stoneMotion = createResourceWorkMotion();
+    const timber = sampleConstructionAction(person, 'plot', { phase: 'inspect', seconds: 0.7, carrying: false },
+      anchors, 'timber', timberMotion, undefined, 'site-worker', 3, 0.3);
+    const stone = sampleConstructionAction(person, 'plot', { phase: 'inspect', seconds: 0.7, carrying: false },
+      anchors, 'masonry', stoneMotion, undefined, 'site-worker', 3, 0.6);
+    expect(timber.activeTool).toBe('axe');
+    expect(stone.activeTool).toBe('hammer');
+    expect(timberMotion).not.toEqual(stoneMotion);
+    expect(timber.targetKind).toBe('site-prep');
+  });
+
+  it('uses readable material colours for carried construction loads', () => {
+    expect(new Set((['earth', 'timber', 'masonry', 'ceramic', 'metal'] as const).map(constructionMaterialColour)).size).toBe(5);
   });
 
   it('requires an active safe project and the matching destination', () => {
