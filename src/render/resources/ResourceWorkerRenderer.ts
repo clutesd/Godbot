@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { Vec2 } from '../../sim/types';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import type { PhysicalContactEffectKind } from '../people/PhysicalActionPresentation';
+
+type ContactEffectMode = PhysicalContactEffectKind | 'generic' | 'none';
 import type { ResourceWorkerVisual } from './ResourceWorkScene';
 import { MAX_ACTIVE_WORK_SITES } from './ResourceWorkScene';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../animation/ResourceWorkMotion';
@@ -70,7 +72,7 @@ export class ResourceWorkerRenderer {
   drawPhysical(m: ResourceWorkMotion, target: Readonly<Vec2>, tool: string, load: string | undefined,
     materialColour: string, blend: number, x: number, y: number, z: number, size: number, facing: number,
     colour: THREE.Color, basket = false, effects = true, walking = false,
-    contactEffect?: PhysicalContactEffectKind): void {
+    contactEffect: ContactEffectMode = 'generic'): void {
     if (this.count >= CAPACITY) return;
     const index = this.count++;
     this.baseX = x; this.baseY = y; this.baseZ = z; this.size = size;
@@ -130,7 +132,7 @@ export class ResourceWorkerRenderer {
     this.position.set(x + 0.32 * this.cos * size, y + (0.35 - crouch * 0.3) * size, z - 0.32 * this.sin * size);
     this.scale.setScalar(basket ? size : 0); this.matrix.compose(this.position, this.rotation, this.scale);
     this.baskets.setMatrixAt(index, this.matrix);
-    if (effects && m.impact > 0 && blend > 0.95) {
+    if (effects && contactEffect !== 'none' && m.impact > 0 && blend > 0.95) {
       const contactY = contactEffect ? y + Math.max(0.05, handY * size * 0.82)
         : y + 0.04 + Math.sin(m.impact * Math.PI / 2) * 0.025;
       if (contactEffect === 'metal-spark') {
