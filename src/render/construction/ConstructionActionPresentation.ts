@@ -131,9 +131,10 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   else if (assembling && phase === 'assemble') applyAssemblyMotion(choreography, p, person.id, motion);
   else if (prep) applyPrepMotion(choreography, p, person.id, motion);
   else applyHaulMotion(playback, phase, p, motion);
-  const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : handoffing ? anchors.handoff : anchors.delivery;
+  const haulingToHandoff = crewRole === 'hauler' && !pickup && phase !== 'assemble';
+  const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : haulingToHandoff ? anchors.handoff : anchors.delivery;
   const interactionCenter = receiving ? anchors.handoff
-    : handoffing ? anchors.delivery
+    : haulingToHandoff ? anchors.delivery
       : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
   const presentedPhase = receiving ? 'receive' : phase;
   return { personId: person.id,
@@ -142,7 +143,7 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
         : soloGeneralist ? 'construction-generalist' : 'construction-haul',
     authoritativeActivity: person.activity,
     sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
-    targetKind: receiving || handoffing ? 'handoff' : prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
+    targetKind: receiving || haulingToHandoff ? 'handoff' : prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
     interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
     locomotionTarget, phase: presentedPhase, phaseProgress: receiving ? handoff.progress : p,
     activeTool: receiving || handoffing ? 'none'
