@@ -310,6 +310,16 @@ describe('construction workflow', () => {
     expect(new Set((['earth', 'timber', 'masonry', 'ceramic', 'metal'] as const).map(constructionMaterialColour)).size).toBe(5);
   });
 
+  it('holds the handoff load until the paired assembler is ready to receive it', () => {
+    const playback = { phase: 'handoff', seconds: 0.2, carrying: true } as ReturnType<typeof createConstructionPlayback>;
+    for (let i = 0; i < 20; i++) advanceConstruction(playback, 0.1, true, false, 'hauler', 3, false);
+    expect(playback.phase).toBe('handoff');
+    expect(playback.seconds).toBeCloseTo(0.2);
+    expect(playback.carrying).toBe(true);
+    advanceConstruction(playback, 0.1, true, false, 'hauler', 3, true);
+    expect(playback.seconds).toBeCloseTo(0.3);
+  });
+
   it('keeps a delivered load visible until the middle of the handoff beat', () => {
     const playback = { phase: 'deliver', seconds: 0, carrying: true } as ReturnType<typeof createConstructionPlayback>;
     for (let i = 0; i < 6; i++) advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
