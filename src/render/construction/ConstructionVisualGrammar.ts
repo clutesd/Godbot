@@ -56,7 +56,7 @@ export function constructionStagePresentation(progress: number): ConstructionSta
   if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.detail) {
     stage = BUILD_STAGE.DETAIL;
     previousStage = BUILD_STAGE.ROOF;
-    start = CONSTRUCTION_STAGE_THRESHOLDS.roof;
+    start = CONSTRUCTION_STAGE_THRESHOLDS.detail;
     end = 1;
   } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.roof) {
     stage = BUILD_STAGE.ROOF;
