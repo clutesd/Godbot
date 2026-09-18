@@ -152,16 +152,25 @@ function applyAssemblyMotion(
   motion: ResourceWorkMotion,
 ): void {
   const variation = 0.9 + resourceVisualUnit(personId) * 0.2;
-  const pulse = Math.max(0, Math.sin(p * Math.PI * 2 - 0.8));
+  const stageReach = profile.stageName === 'foundation' ? -0.08
+    : profile.stageName === 'frame' ? 0.08
+      : profile.stageName === 'partial-walls' ? 0.025
+        : profile.stageName === 'roof' ? 0.13 : 0.04;
+  const stageCrouch = profile.stageName === 'foundation' ? 0.08
+    : profile.stageName === 'partial-walls' ? 0.035 : 0;
+  const cycles = profile.stageName === 'partial-walls' ? 3 : profile.stageName === 'roof' ? 2.4 : 2;
+  const effort = profile.finishing ? 0.55 : 1;
+  const pulse = Math.max(0, Math.sin(p * Math.PI * cycles - 0.8)) * effort;
   const reach = Math.sin(p * Math.PI);
   motion.basket = 0; motion.held = 0; motion.reposition = p > 0.94;
 
   if (profile.assemblyMotion === 'pack') {
-    const tamp = Math.max(0, Math.sin(p * Math.PI * 3 - 0.5));
-    motion.crouch = 0.11 + reach * 0.09;
-    motion.lean = 0.17 + tamp * 0.12;
+    const tampCycles = profile.stageName === 'partial-walls' ? 4 : 3;
+    const tamp = Math.max(0, Math.sin(p * Math.PI * tampCycles - 0.5)) * effort;
+    motion.crouch = 0.08 + stageCrouch + reach * 0.08;
+    motion.lean = 0.15 + tamp * 0.12;
     motion.twist = Math.sin(p * Math.PI * 2) * 0.08 * variation;
-    motion.handY = 0.38 - tamp * 0.18;
+    motion.handY = 0.4 + stageReach - tamp * 0.18;
     motion.handZ = 0.3 + reach * 0.09;
     motion.toolAngle = 1.6;
     motion.impact = tamp * 0.72;
@@ -169,23 +178,21 @@ function applyAssemblyMotion(
   }
 
   if (profile.assemblyMotion === 'place') {
-    const foundationBias = profile.stage === 0 ? 0.1 : 0;
-    motion.crouch = foundationBias + reach * 0.08;
+    motion.crouch = stageCrouch + reach * 0.07;
     motion.lean = 0.08 + reach * 0.12;
     motion.twist = Math.sin(p * Math.PI * 2) * 0.09 * variation;
-    motion.handY = 0.46 - foundationBias - reach * 0.12 + pulse * 0.05;
+    motion.handY = 0.48 + stageReach - stageCrouch - reach * 0.1 + pulse * 0.05;
     motion.handZ = 0.27 + reach * 0.12;
     motion.toolAngle = 0.95 + pulse * 0.75;
     motion.impact = pulse * (profile.material === 'ceramic' ? 0.28 : 0.62);
     return;
   }
 
-  const highWork = profile.stage >= 1 ? 0.08 : 0;
   const fit = profile.assemblyMotion === 'fit';
-  motion.crouch = reach * (fit ? 0.045 : 0.065);
+  motion.crouch = stageCrouch * 0.5 + reach * (fit ? 0.04 : 0.055);
   motion.lean = pulse * (fit ? 0.14 : 0.1);
   motion.twist = pulse * (fit ? 0.16 : 0.2) * variation;
-  motion.handY = 0.52 + highWork + pulse * (fit ? 0.18 : 0.24);
+  motion.handY = 0.52 + stageReach + pulse * (fit ? 0.18 : 0.24);
   motion.handZ = 0.21 + reach * 0.08;
   motion.toolAngle = 0.55 + pulse * (fit ? 1.05 : 1.45);
   motion.impact = pulse * (fit ? 0.78 : 0.9);
@@ -198,15 +205,21 @@ function applyPrepMotion(
   motion: ResourceWorkMotion,
 ): void {
   const variation = 0.9 + resourceVisualUnit(personId) * 0.2;
-  const stroke = Math.max(0, Math.sin(p * Math.PI * 3 - 0.7));
+  const prepCycles = profile.stageName === 'foundation' ? 2.4
+    : profile.stageName === 'frame' ? 3.2
+      : profile.stageName === 'partial-walls' ? 3.8
+        : profile.stageName === 'roof' ? 3.4 : 2.6;
+  const effort = profile.finishing ? 0.55 : 1;
+  const stroke = Math.max(0, Math.sin(p * Math.PI * prepCycles - 0.7)) * effort;
   const reach = Math.sin(p * Math.PI);
+  const stageLift = profile.stageName === 'roof' ? 0.09 : profile.stageName === 'frame' ? 0.045 : 0;
   motion.basket = 0; motion.held = 0; motion.reposition = p > 0.92;
 
   if (profile.prepMotion === 'cut') {
     motion.crouch = 0.06 + reach * 0.06;
     motion.lean = 0.1 + stroke * 0.13;
     motion.twist = stroke * 0.22 * variation;
-    motion.handY = 0.5 + stroke * 0.16;
+    motion.handY = 0.5 + stageLift + stroke * 0.16;
     motion.handZ = 0.28;
     motion.toolAngle = 0.65 + stroke * 1.4;
     motion.impact = stroke * 0.88;
@@ -216,7 +229,7 @@ function applyPrepMotion(
     motion.crouch = 0.09 + reach * 0.08;
     motion.lean = 0.12 + stroke * 0.09;
     motion.twist = stroke * 0.12 * variation;
-    motion.handY = 0.42 + stroke * 0.12;
+    motion.handY = 0.42 + stageLift + stroke * 0.12;
     motion.handZ = 0.31;
     motion.toolAngle = 0.85 + stroke * 0.95;
     motion.impact = stroke * (profile.material === 'metal' ? 0.76 : 0.58);
@@ -226,7 +239,7 @@ function applyPrepMotion(
     motion.crouch = 0.08 + reach * 0.08;
     motion.lean = 0.16 + reach * 0.08;
     motion.twist = Math.sin(p * Math.PI * 2) * 0.18 * variation;
-    motion.handY = 0.4 - reach * 0.1;
+    motion.handY = 0.4 + stageLift * 0.5 - reach * 0.1;
     motion.handZ = 0.3 + reach * 0.12;
     motion.toolAngle = 1.8;
     motion.impact = 0;
@@ -235,7 +248,7 @@ function applyPrepMotion(
   motion.crouch = 0.12 + reach * 0.1;
   motion.lean = 0.18 + reach * 0.09;
   motion.twist = Math.sin(p * Math.PI * 2) * 0.1 * variation;
-  motion.handY = 0.36 - reach * 0.12;
+  motion.handY = 0.36 + stageLift * 0.4 - reach * 0.12;
   motion.handZ = 0.32 + reach * 0.1;
   motion.toolAngle = 1.7;
   motion.impact = stroke * 0.35;
