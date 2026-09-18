@@ -296,6 +296,75 @@ describe('construction workflow', () => {
     expect(after.crewRole).toBe('assembler');
   });
 
+  it('fails closed when a stage-migrated construction target crosses an unsafe segment', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame([person], [settlement]);
+
+    const initial = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
+    const playback = initial.playback;
+    const oldAnchors = structuredClone(initial.anchors!);
+    const oldActionTarget = { ...initial.action.locomotionTarget };
+
+    settlement.development!.project!.progress = 0.85;
+    const safeCalls: Array<{ a: { x: number; z: number }; b: { x: number; z: number } }> = [];
+    const blocked = scene.plan(person, settlement, placement, undefined, weather, (a, b) => {
+      safeCalls.push({ a: { ...a }, b: { ...b } });
+      // Initial/unchanged segments are safe; reject the stage migration away from the old target.
+      return Math.hypot(a.x - oldActionTarget.x, a.z - oldActionTarget.z) > 0.0001;
+    });
+
+    expect(blocked).toBeUndefined();
+    expect(safeCalls.length).toBeGreaterThan(0);
+    expect(initial.playback).toBe(playback);
+    expect(initial.anchors).toEqual(oldAnchors);
+    expect(initial.action.locomotionTarget).toEqual(oldActionTarget);
+  });
+
+  it('commits a stage-migrated target only after the new route passes safety validation', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame([person], [settlement]);
+
+    const initial = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
+    const playback = initial.playback;
+    const before = { ...initial.action.locomotionTarget };
+
+    settlement.development!.project!.progress = 0.85;
+    let checks = 0;
+    const migrated = scene.plan(person, settlement, placement, undefined, weather, () => {
+      checks += 1;
+      return true;
+    })!;
+
+    expect(checks).toBeGreaterThan(0);
+    expect(migrated.playback).toBe(playback);
+    expect(migrated.action.locomotionTarget).not.toEqual(before);
+  });
+
+  it('revalidates the migrated hauler pickup-to-handoff corridor before committing it', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame([person], [settlement]);
+
+    const initial = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
+    expect(initial.crewRole).toBe('hauler');
+    const previousAnchors = structuredClone(initial.anchors!);
+
+    settlement.development!.project!.progress = 0.85;
+    const rejected = scene.plan(person, settlement, placement, undefined, weather, (a, b) => {
+      // Permit worker migration itself but reject the characteristic material-pile -> handoff leg.
+      const fromPickup = Math.hypot(a.x - initial.anchors!.pickup.x, a.z - initial.anchors!.pickup.z) < 0.0001;
+      return !fromPickup || Math.hypot(b.x - a.x, b.z - a.z) < 0.1;
+    });
+
+    expect(rejected).toBeUndefined();
+    expect(initial.anchors).toEqual(previousAnchors);
+  });
+
   it('reserves roles for traveling crew members so arrivals do not reshuffle workers already on site', () => {
     const { settlement, person, weather } = setup();
     const placement = construction(settlement, person);

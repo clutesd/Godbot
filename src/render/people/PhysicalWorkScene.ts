@@ -174,16 +174,30 @@ export class PhysicalWorkScene {
     }
     worker.seen = true;
     if (builder && project && placement && worker.playback) {
-      worker.anchors = constructionAnchorsFor(placement, project, person.id, worker.handoffRecipientId);
+      const candidateAnchors = constructionAnchorsFor(placement, project, person.id, worker.handoffRecipientId);
       const blocked = constructionBlockedReason(settlement);
-      worker.material = constructionPresentedMaterial(settlement);
-      worker.crewSize = crewSize;
-      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, worker.crewSize, true,
-        constructionStagePresentation(project!.progress).finishing);
-      const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project!, person.id) : undefined;
-      worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!,
-        constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole, worker.crewSize, project!.progress,
-        handoff, developmentPresentationEra(project!.response));
+      const material = constructionPresentedMaterial(settlement);
+      const candidateCrewSize = crewSize;
+      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, candidateCrewSize, true,
+        constructionStagePresentation(project.progress).finishing);
+      const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project, person.id) : undefined;
+      const candidateAction = sampleConstructionAction(person, project.plotId, worker.playback, candidateAnchors,
+        material, worker.motion, blocked, worker.crewRole, candidateCrewSize, project.progress,
+        handoff, developmentPresentationEra(project.response));
+
+      // Stage migration is presentation-only, but its new path must satisfy the same safety contract
+      // as initial construction placement. Validate before mutating the persistent worker so an
+      // unsafe transition fails closed for this frame and can be retried later without losing
+      // playback/role continuity.
+      const migrationSafe = safeSegment(worker.action.locomotionTarget, candidateAction.locomotionTarget);
+      const haulCorridorSafe = worker.crewRole !== 'hauler'
+        || safeSegment(candidateAnchors.pickup, candidateAnchors.handoff);
+      if (!migrationSafe || !haulCorridorSafe) return undefined;
+
+      worker.anchors = candidateAnchors;
+      worker.material = material;
+      worker.crewSize = candidateCrewSize;
+      worker.action = candidateAction;
     } else if (farmer) {
       worker.fieldState = farm.state;
       const action = sampleFarmAction(person, farm.geometry, farm.state, worker.seconds, worker.motion);
