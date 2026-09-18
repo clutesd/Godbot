@@ -1783,11 +1783,36 @@ export class GodboxRenderer {
 
   private developmentSignature(settlement: Settlement): string {
     const infrastructure = settlement.infrastructure;
-    const stops = Object.values(this.state.transportation.stops).filter(stop => stop.settlementId === settlement.id && stop.status === 'complete').map(stop => stop.id).join(',');
-    // The era is part of the signature because its thresholds do not line up with the coarse
-    // buckets below, and a missed era change would leave a settlement rendered as its past.
-    return [settlement.development?.revision ?? 0, constructionBlockedReason(settlement), this.eraForSettlement(settlement), ...[infrastructure.roads, infrastructure.ports, infrastructure.bridges, infrastructure.workshops, infrastructure.archives, infrastructure.rail, infrastructure.power, infrastructure.factories, settlement.industry.intensity, settlement.urbanization, settlement.constructionProgress, this.state.advanced.atomic.applications.energy, this.state.advanced.machine.capability, this.state.advanced.space.orbitalInfrastructure]
-      .map((value) => Math.floor(value * 5)), stops, ...(settlement.structurePlots ?? []).map((plot) => Math.floor(plot.condition * 20))].join(':');
+    const stops = Object.values(this.state.transportation.stops)
+      .filter(stop => stop.settlementId === settlement.id && stop.status === 'complete')
+      .map(stop => stop.id)
+      .join(',');
+    const coarseBuckets = [
+      infrastructure.roads,
+      infrastructure.ports,
+      infrastructure.bridges,
+      infrastructure.workshops,
+      infrastructure.archives,
+      infrastructure.rail,
+      infrastructure.power,
+      infrastructure.factories,
+      settlement.industry.intensity,
+      settlement.urbanization,
+      settlement.constructionProgress,
+      this.state.advanced.atomic.applications.energy,
+      this.state.advanced.machine.capability,
+      this.state.advanced.space.orbitalInfrastructure,
+    ].map(value => Math.floor(value * 5));
+    // Categorical state belongs directly in the signature; only continuous numeric state is
+    // quantized. Keeping these domains separate also prevents string/undefined arithmetic.
+    return [
+      settlement.development?.revision ?? 0,
+      constructionBlockedReason(settlement) ?? '',
+      this.eraForSettlement(settlement),
+      ...coarseBuckets,
+      stops,
+      ...(settlement.structurePlots ?? []).map(plot => Math.floor(plot.condition * 20)),
+    ].join(':');
   }
 
   private addInfrastructure(group: THREE.Group, settlement: Settlement, culture: Culture | undefined, smokeSources: SmokeSource[]): void {

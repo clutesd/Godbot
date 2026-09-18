@@ -1,4 +1,6 @@
 import type { StructureMaterial } from '../../sim/development/types';
+import type { PhysicalContactEffectKind } from '../people/PhysicalActionPresentation';
+import type { Era } from '../materials/MaterialPalette';
 import { BUILD_STAGE, BUILD_STAGE_ORDER, type BuildStage } from '../assets/BuildingComposer';
 import { constructionStagePresentation } from './ConstructionVisualGrammar';
 
