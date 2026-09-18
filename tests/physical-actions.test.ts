@@ -171,7 +171,7 @@ describe('construction workflow', () => {
     const fullCrew = Array.from({ length: 7 }, (_, index) => ({
       ...structuredClone(person),
       id: `shared-authority-builder-${index}`,
-      navigation: { ...structuredClone(person.navigation!), traveling: index >= 5 },
+      navigation: { ...structuredClone(person.navigation!), traveling: false },
     } as Person));
     const scene = new PhysicalWorkScene();
     scene.refreshConstructionCrewAuthority(fullCrew, [settlement]);
