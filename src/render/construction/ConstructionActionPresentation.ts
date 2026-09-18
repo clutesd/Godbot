@@ -71,8 +71,18 @@ export function advanceConstruction(
   crewRole: ConstructionCrewRole = 'hauler',
   crewSize = 1,
   handoffReady = true,
+  finishing = false,
 ): void {
   if (blocked) { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; return; }
+
+  if (finishing && crewRole !== 'assembler') {
+    if (playback.phase !== 'inspect') { playback.phase = 'inspect'; playback.seconds = 0; }
+    playback.carrying = false;
+    if (!ready) return;
+    playback.seconds += Math.max(0, Math.min(delta, 0.1));
+    if (playback.seconds >= 2.2) playback.seconds = 0;
+    return;
+  }
 
   if (crewRole === 'site-worker') {
     if (playback.phase !== 'inspect') { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; }
@@ -119,47 +129,95 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5,
   handoff?: ConstructionHandoffCue, era: Era = 'early'): PhysicalActionPresentation {
   const phase = playback.phase;
+  const blocked = blockedReason !== undefined;
+  const choreography = constructionChoreography(material, progress);
+  const finishingCleanup = choreography.finishing && crewRole !== 'assembler' && !blocked;
+  const finishingAssembler = choreography.finishing && crewRole === 'assembler' && !blocked;
   const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
-  const assembling = crewRole === 'assembler' || soloGeneralist && phase === 'assemble';
-  const pickup = crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
-  const handoffing = crewRole === 'hauler' && phase === 'handoff';
-  const receiving = crewRole === 'assembler' && handoff !== undefined;
-  const prep = crewRole === 'site-worker';
+  const assembling = !blocked && !finishingCleanup && (crewRole === 'assembler' || soloGeneralist && phase === 'assemble');
+  const pickup = !blocked && !finishingCleanup && crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
+  const handoffing = !blocked && !finishingCleanup && crewRole === 'hauler' && phase === 'handoff';
+  const receiving = !blocked && !choreography.finishing && crewRole === 'assembler' && handoff !== undefined;
+  const prep = !blocked && !finishingCleanup && crewRole === 'site-worker';
   const duration = phase === 'pickup' ? 0.9
     : phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
       : phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
         : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
-  const choreography = constructionChoreography(material, progress);
-  if (receiving) applyReceiveMotion(handoff.progress, motion);
+  if (blocked) applyQuietInspectionMotion(p, person.id, motion);
+  else if (finishingCleanup) applyCleanupMotion(p, person.id, crewRole, motion);
+  else if (receiving) applyReceiveMotion(handoff.progress, motion);
   else if (handoffing) applyHandoffMotion(playback, p, motion);
   else if (assembling && phase === 'assemble') applyAssemblyMotion(choreography, p, person.id, motion);
   else if (prep) applyPrepMotion(choreography, p, person.id, motion);
   else applyHaulMotion(playback, phase, p, motion);
-  const haulingToHandoff = crewRole === 'hauler' && !pickup && phase !== 'assemble';
-  const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : haulingToHandoff ? anchors.handoff : anchors.delivery;
-  const interactionCenter = receiving ? anchors.handoff
-    : haulingToHandoff ? anchors.delivery
-      : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
-  const presentedPhase = receiving ? 'receive' : phase;
+  const haulingToHandoff = !blocked && !finishingCleanup && crewRole === 'hauler' && !pickup && phase !== 'assemble';
+  const cleanupTarget = crewRole === 'hauler' ? anchors.pickup : anchors.handoff;
+  const blockedTarget = crewRole === 'hauler' ? anchors.pickup : crewRole === 'assembler' ? anchors.delivery : anchors.prep;
+  const locomotionTarget = blocked ? blockedTarget
+    : finishingCleanup ? cleanupTarget
+      : prep ? anchors.prep : pickup ? anchors.pickup : haulingToHandoff ? anchors.handoff : anchors.delivery;
+  const interactionCenter = blocked ? anchors.siteCenter
+    : finishingCleanup ? crewRole === 'hauler' ? anchors.materialCenter : anchors.siteCenter
+      : receiving ? anchors.handoff
+        : haulingToHandoff ? anchors.delivery
+          : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
+  const presentedPhase = blocked ? 'inspect' : finishingCleanup ? 'cleanup' : receiving ? 'receive' : phase;
   return { personId: person.id,
-    actionKind: receiving ? 'construction-receive'
-      : crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site'
-        : soloGeneralist ? 'construction-generalist' : 'construction-haul',
+    actionKind: blocked ? 'construction-blocked'
+      : finishingCleanup ? 'construction-cleanup'
+        : receiving ? 'construction-receive'
+          : finishingAssembler ? 'construction-finish'
+            : crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site'
+              : soloGeneralist ? 'construction-generalist' : 'construction-haul',
     authoritativeActivity: person.activity,
     sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
     targetKind: receiving || haulingToHandoff ? 'handoff' : prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
     interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
     locomotionTarget, phase: presentedPhase, phaseProgress: receiving ? handoff.progress : p,
-    activeTool: receiving || handoffing ? 'none'
+    activeTool: blocked || finishingCleanup || receiving || handoffing ? 'none'
       : assembling && phase === 'assemble' ? choreography.assemblerTool : prep ? choreography.prepTool : 'none',
-    carriedObject: receiving && handoff.progress >= 0.48 && handoff.progress < 0.88 ? handoff.material
-      : crewRole === 'hauler' && playback.carrying ? material : undefined,
-    contactStrength: receiving || handoffing ? motion.impact
-      : assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0,
-    contactEffect: !blockedReason && !receiving && !handoffing && (assembling || prep) && motion.impact > 0
+    carriedObject: blocked || finishingCleanup ? undefined
+      : receiving && handoff.progress >= 0.48 && handoff.progress < 0.88 ? handoff.material
+        : crewRole === 'hauler' && playback.carrying ? material : undefined,
+    contactStrength: blocked || finishingCleanup ? 0
+      : receiving || handoffing ? motion.impact
+        : assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0,
+    contactEffect: !blocked && !finishingCleanup && !receiving && !handoffing && (assembling || prep) && motion.impact > 0
       ? constructionContactEffect(material, era) : undefined,
     blockedReason };
+}
+
+function applyQuietInspectionMotion(p: number, personId: string, motion: ResourceWorkMotion): void {
+  const variation = 0.85 + resourceVisualUnit(personId) * 0.3;
+  const look = Math.sin(p * Math.PI * 2) * variation;
+  motion.crouch = 0;
+  motion.lean = 0.015 + Math.max(0, Math.sin(p * Math.PI)) * 0.025;
+  motion.twist = look * 0.08;
+  motion.handY = 0.43 + Math.max(0, Math.sin(p * Math.PI)) * 0.025;
+  motion.handZ = 0.15;
+  motion.toolAngle = 1.9;
+  motion.basket = 0; motion.held = 0; motion.reposition = p > 0.9;
+  motion.impact = 0;
+}
+
+function applyCleanupMotion(
+  p: number,
+  personId: string,
+  role: ConstructionCrewRole,
+  motion: ResourceWorkMotion,
+): void {
+  const variation = 0.9 + resourceVisualUnit(personId) * 0.2;
+  const reach = Math.sin(p * Math.PI);
+  const shift = Math.sin(p * Math.PI * 2) * variation;
+  motion.crouch = role === 'site-worker' ? reach * 0.1 : reach * 0.06;
+  motion.lean = 0.05 + reach * 0.12;
+  motion.twist = shift * 0.12;
+  motion.handY = 0.42 - reach * 0.11;
+  motion.handZ = 0.2 + reach * 0.14;
+  motion.toolAngle = 1.9;
+  motion.basket = 0; motion.held = 0; motion.reposition = p > 0.82;
+  motion.impact = 0;
 }
 
 function applyHandoffMotion(

@@ -1,6 +1,7 @@
 import type { Person, Settlement, Vec2, WeatherCellState } from '../../sim/types';
 import type { DevelopmentProject } from '../../sim/development/types';
 import { developmentPresentationEra } from '../assets/BuildingGrammar';
+import { constructionStagePresentation } from '../construction/ConstructionVisualGrammar';
 import type { FarmGeometry } from '../../shared/FarmGeometry';
 import { farmerCanPresent, sampleFarmAction, type FarmPresentationState } from '../farming/FarmActionPresentation';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, CONSTRUCTION_HANDOFF_SECONDS, createConstructionPlayback, sampleConstructionAction, type ConstructionHandoffCue, type ConstructionPlayback } from '../construction/ConstructionActionPresentation';
@@ -119,7 +120,8 @@ export class PhysicalWorkScene {
       const blocked = constructionBlockedReason(settlement);
       worker.material = constructionPresentedMaterial(settlement);
       worker.crewSize = crewSize;
-      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, worker.crewSize);
+      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, worker.crewSize, true,
+        constructionStagePresentation(project!.progress).finishing);
       const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project!, person.id) : undefined;
       worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!,
         constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole, worker.crewSize, project!.progress,
@@ -146,7 +148,8 @@ export class PhysicalWorkScene {
       if (!handoff) {
         const handoffReady = !worker.handoffRecipientId
           || this.handoffRecipientReady(worker.project!, worker.handoffRecipientId);
-        advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize, handoffReady);
+        advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize, handoffReady,
+          constructionStagePresentation(worker.project!.progress).finishing);
       }
       worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!,
         worker.material!, worker.motion, action.blockedReason, worker.crewRole, worker.crewSize, worker.project!.progress,

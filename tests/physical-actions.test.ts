@@ -441,6 +441,48 @@ describe('construction workflow', () => {
     expect(fragments.count).toBe(3);
   });
 
+  it('makes every blocked construction role visibly quiet with no tools, cargo or contact', () => {
+    const { person } = setup();
+    for (const role of ['hauler', 'assembler', 'site-worker'] as const) {
+      const motion = createResourceWorkMotion();
+      const action = sampleConstructionAction(person, 'plot', { phase: 'inspect', seconds: 0.7, carrying: false },
+        anchors, 'timber', motion, 'missing:wood', role, 3, 0.6, undefined, 'early');
+      expect(action.actionKind).toBe('construction-blocked');
+      expect(action.phase).toBe('inspect');
+      expect(action.activeTool).toBe('none');
+      expect(action.carriedObject).toBeUndefined();
+      expect(action.contactStrength).toBe(0);
+      expect(action.contactEffect).toBeUndefined();
+      expect(motion.impact).toBe(0);
+    }
+  });
+
+  it('turns late-stage support roles into cleanup while the assembler performs light finishing', () => {
+    const { person } = setup();
+    const haulerPlayback = { phase: 'carry', seconds: 0.4, carrying: true } as ReturnType<typeof createConstructionPlayback>;
+    advanceConstruction(haulerPlayback, 0, false, false, 'hauler', 3, true, true);
+    expect(haulerPlayback.phase).toBe('inspect');
+    expect(haulerPlayback.carrying).toBe(false);
+
+    const cleanup = sampleConstructionAction(person, 'plot', haulerPlayback, anchors, 'timber',
+      createResourceWorkMotion(), undefined, 'hauler', 3, 0.96, undefined, 'early');
+    expect(cleanup.actionKind).toBe('construction-cleanup');
+    expect(cleanup.phase).toBe('cleanup');
+    expect(cleanup.activeTool).toBe('none');
+    expect(cleanup.carriedObject).toBeUndefined();
+    expect(cleanup.contactStrength).toBe(0);
+    expect(cleanup.locomotionTarget).toEqual(anchors.pickup);
+
+    const activeMotion = createResourceWorkMotion();
+    const finishMotion = createResourceWorkMotion();
+    const active = sampleConstructionAction(person, 'plot', { phase: 'assemble', seconds: 0.7, carrying: false },
+      anchors, 'timber', activeMotion, undefined, 'assembler', 3, 0.85, undefined, 'early');
+    const finishing = sampleConstructionAction(person, 'plot', { phase: 'assemble', seconds: 0.7, carrying: false },
+      anchors, 'timber', finishMotion, undefined, 'assembler', 3, 0.96, undefined, 'early');
+    expect(finishing.actionKind).toBe('construction-finish');
+    expect(finishing.contactStrength).toBeLessThanOrEqual(active.contactStrength);
+  });
+
   it('requires an active safe project and the matching destination', () => {
     const { settlement, person, weather } = setup(); construction(settlement, person);
     expect(builderCanPresent(person, settlement, weather)).toBe(true);
