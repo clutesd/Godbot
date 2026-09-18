@@ -46,6 +46,7 @@ import { constructionBlockedReason } from './construction/ConstructionActionPres
 import { constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
 import { constructionMaterialColour } from './construction/ConstructionChoreography';
 import { constructionVisibleCrewIds } from './construction/ConstructionCrewPresentation';
+import { decorateConstructionWorksite } from './construction/ConstructionWorksiteInstaller';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -930,7 +931,15 @@ export class GodboxRenderer {
         mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
         mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
         group.add(mesh);
-      } else group.add(this.createActiveConstructionSite(activeSite, response?.style ?? cultureStyle, response ? developmentPresentationEra(response) : era, settlementY, constructionProgress, response));
+      } else group.add(this.createActiveConstructionSite(
+        activeSite,
+        response?.style ?? cultureStyle,
+        response ? developmentPresentationEra(response) : era,
+        settlementY,
+        constructionProgress,
+        response,
+        settlement,
+      ));
     }
     if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
       // This hearth exists only while the monthly survival ledger records paid fuel and tending.
@@ -1504,6 +1513,7 @@ export class GodboxRenderer {
     settlementY: number,
     progress: number,
     project?: DevelopmentResponse,
+    settlement?: Settlement,
   ): THREE.Group {
     const targetIdentity = constructionTargetIdentity(project, placement.role, era);
     const targetPlacement: BuildingPlacement = project
@@ -1597,10 +1607,11 @@ export class GodboxRenderer {
     site.userData['constructionFootprintDepth'] = renderedDepth;
     site.userData['constructionTargetHeight'] = renderedHeight;
 
+    const constructionPalette = this.getPalette(cultureStyle, targetEra);
     if (paidProgress < 1) {
       site.add(this.createScaffold(
         targetPlacement,
-        this.getPalette(cultureStyle, targetEra),
+        constructionPalette,
         renderedWidth,
         renderedDepth,
         stage,
@@ -1609,6 +1620,7 @@ export class GodboxRenderer {
         renderedHeight,
       ));
     }
+    if (settlement && project) decorateConstructionWorksite(site, settlement, constructionPalette);
     return site;
   }
 
