@@ -299,10 +299,16 @@ describe('construction workflow', () => {
   it('fails closed when a stage-migrated construction target crosses an unsafe segment', () => {
     const { settlement, person, weather } = setup();
     const placement = construction(settlement, person);
+    const people = ['migration-hauler', 'migration-assembler'].map((id, index) => ({
+      ...structuredClone(person), id, position: { x: 2.2 + index * 0.04, z: -0.4 },
+    } as Person));
     const scene = new PhysicalWorkScene();
-    scene.beginFrame([person], [settlement]);
-
-    const initial = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
+    scene.beginFrame(people, [settlement]);
+    const initialWorkers = people.map(member =>
+      scene.plan(member, settlement, placement, undefined, weather, () => true)!);
+    const assemblerIndex = initialWorkers.findIndex(worker => worker.crewRole === 'assembler');
+    const assemblerPerson = people[assemblerIndex]!;
+    const initial = initialWorkers[assemblerIndex]!;
     const playback = initial.playback;
     const oldPlayback = structuredClone(initial.playback!);
     const oldMotion = structuredClone(initial.motion);
@@ -311,10 +317,11 @@ describe('construction workflow', () => {
 
     settlement.development!.project!.progress = 0.85;
     const safeCalls: Array<{ a: { x: number; z: number }; b: { x: number; z: number } }> = [];
-    const blocked = scene.plan(person, settlement, placement, undefined, weather, (a, b) => {
+    const blocked = scene.plan(assemblerPerson, settlement, placement, undefined, weather, (a, b) => {
       safeCalls.push({ a: { ...a }, b: { ...b } });
-      // Initial/unchanged segments are safe; reject the stage migration away from the old target.
-      return Math.hypot(a.x - oldActionTarget.x, a.z - oldActionTarget.z) > 0.0001;
+      const startsAtOldTarget = Math.hypot(a.x - oldActionTarget.x, a.z - oldActionTarget.z) < 0.0001;
+      const movesAway = Math.hypot(b.x - oldActionTarget.x, b.z - oldActionTarget.z) > 0.0001;
+      return !(startsAtOldTarget && movesAway);
     });
 
     expect(blocked).toBeUndefined();
@@ -329,16 +336,22 @@ describe('construction workflow', () => {
   it('commits a stage-migrated target only after the new route passes safety validation', () => {
     const { settlement, person, weather } = setup();
     const placement = construction(settlement, person);
+    const people = ['safe-migration-hauler', 'safe-migration-assembler'].map((id, index) => ({
+      ...structuredClone(person), id, position: { x: 2.2 + index * 0.04, z: -0.4 },
+    } as Person));
     const scene = new PhysicalWorkScene();
-    scene.beginFrame([person], [settlement]);
-
-    const initial = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
+    scene.beginFrame(people, [settlement]);
+    const initialWorkers = people.map(member =>
+      scene.plan(member, settlement, placement, undefined, weather, () => true)!);
+    const assemblerIndex = initialWorkers.findIndex(worker => worker.crewRole === 'assembler');
+    const assemblerPerson = people[assemblerIndex]!;
+    const initial = initialWorkers[assemblerIndex]!;
     const playback = initial.playback;
     const before = { ...initial.action.locomotionTarget };
 
     settlement.development!.project!.progress = 0.85;
     let checks = 0;
-    const migrated = scene.plan(person, settlement, placement, undefined, weather, () => {
+    const migrated = scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => {
       checks += 1;
       return true;
     })!;
