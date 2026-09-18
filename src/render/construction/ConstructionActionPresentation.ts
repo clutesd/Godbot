@@ -69,6 +69,7 @@ export function advanceConstruction(
   blocked: boolean,
   crewRole: ConstructionCrewRole = 'hauler',
   crewSize = 1,
+  handoffReady = true,
 ): void {
   if (blocked) { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; return; }
 
@@ -91,6 +92,9 @@ export function advanceConstruction(
   if (playback.phase === 'inspect') { playback.phase = assembler ? 'assemble' : 'return'; playback.seconds = 0; }
   if (!ready) return;
   if (assembler && playback.phase === 'return') playback.phase = 'assemble';
+  // Dedicated haulers wait with the load in their hands until their paired assembler is actually
+  // standing at the receive point. Solo generalists do not need a partner.
+  if (playback.phase === 'handoff' && !soloGeneralist && !handoffReady) return;
   playback.seconds += Math.max(0, Math.min(delta, 0.1));
   const duration = playback.phase === 'pickup' ? 0.9
     : playback.phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
