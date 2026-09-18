@@ -57,6 +57,21 @@ export function reconcileConstructionCrewRoles(
     assignments.set(id, { role, rank: nextRank });
     nextRank += 1;
   }
+
+  // A genuine crew departure may leave an essential role empty. Rebalance only the minimum
+  // number of people required for a viable visible workflow, preferring the newest worker from
+  // an overrepresented/non-required role. Temporary travel never reaches this path because
+  // commuters remain in workerIds.
+  const required: ConstructionCrewRole[] = ['hauler'];
+  if (ranked.length >= 2) required.push('assembler');
+  if (ranked.length >= 3) required.push('site-worker');
+  for (const missing of required.filter(role => count(role) === 0)) {
+    const donor = [...assignments.entries()]
+      .filter(([, assignment]) => !required.includes(assignment.role) || count(assignment.role) > 1)
+      .sort((a, b) => b[1].rank - a[1].rank)[0];
+    if (!donor) continue;
+    assignments.set(donor[0], { ...donor[1], role: missing });
+  }
   return assignments;
 }
 
