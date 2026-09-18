@@ -137,6 +137,20 @@ export function reconcileConstructionCrewRoles(
   return assignments;
 }
 
+/** Pair a hauler with one stable assembler so both sides of a handoff share a workface. */
+export function constructionHandoffRecipientId(
+  personId: string,
+  assignments: ReadonlyMap<string, ConstructionCrewAssignment>,
+): string | undefined {
+  const source = assignments.get(personId);
+  if (source?.role !== 'hauler') return undefined;
+  const assemblers = [...assignments.entries()]
+    .filter(([, assignment]) => assignment.role === 'assembler')
+    .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]));
+  if (assemblers.length === 0) return undefined;
+  return assemblers[source.rank % assemblers.length]![0];
+}
+
 /** Stable face selection spreads workers around the future structure instead of one magic point. */
 export function constructionWorkfaceIndex(projectKey: string, personId: string): number {
   return Math.min(3, Math.floor(stableUnit(`${projectKey}:${personId}:workface`) * 4));

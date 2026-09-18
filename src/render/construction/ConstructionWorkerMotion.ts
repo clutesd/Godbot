@@ -6,6 +6,8 @@ export type ConstructionWorkerPhase = 'return' | 'pickup' | 'carry' | 'deliver';
 export interface ConstructionWorkerAnchors {
   pickup: Vec2;
   delivery: Vec2;
+  /** Hauler stand point just outside delivery; assembler remains at delivery. */
+  handoff: Vec2;
   materialCenter: Vec2;
   siteCenter: Vec2;
   /** Preparation station beside visible site furniture / sawhorses. */

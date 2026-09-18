@@ -19,6 +19,8 @@ export interface ConstructionWorksiteAnchors {
   pickup: { x: number; z: number };
   /** One of four stable workfaces around the future structure. */
   delivery: { x: number; z: number };
+  /** Where a hauler stands just outside that workface during a physical handoff. */
+  handoff: { x: number; z: number };
   /** Preparation position beside the sawhorses. */
   prep: { x: number; z: number };
   prepCenter: { x: number; z: number };
@@ -51,12 +53,18 @@ export function constructionWorksiteAnchors(
     : face === 1 ? { x: laneX, z: edgeZ }
       : face === 2 ? { x: -edgeX, z: -laneZ }
         : { x: -laneX, z: -edgeZ };
+  const deliveryDistance = Math.hypot(delivery.x, delivery.z) || 1;
+  const handoff = {
+    x: delivery.x + delivery.x / deliveryDistance * 0.22,
+    z: delivery.z + delivery.z / deliveryDistance * 0.22,
+  };
   const prepCenter = { x: -width * 0.28, z: depth * 0.72 };
   return {
     materialCenter: { x: stagingX, z: stagingZ },
     // Stand just outside the pile so the character does not clip through the stock itself.
     pickup: { x: stagingX + side * 0.32, z: stagingZ + laneZ },
     delivery,
+    handoff,
     // Sawhorses already occupy this part of the static worksite; the worker stands just in front.
     prep: { x: prepCenter.x + laneX * 0.55, z: depth * 0.54 },
     prepCenter,

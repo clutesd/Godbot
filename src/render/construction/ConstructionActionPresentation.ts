@@ -7,8 +7,15 @@ import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from '../people/PhysicalActionPresentation';
 
-export type ConstructionPhase = 'return' | 'pickup' | 'carry' | 'deliver' | 'assemble' | 'inspect';
+export type ConstructionPhase = 'return' | 'pickup' | 'carry' | 'deliver' | 'handoff' | 'assemble' | 'inspect';
 export interface ConstructionPlayback { phase: ConstructionPhase; seconds: number; carrying: boolean }
+export interface ConstructionHandoffCue {
+  sourcePersonId: string;
+  progress: number;
+  material: StructureMaterial;
+}
+export const CONSTRUCTION_HANDOFF_SECONDS = 0.9;
+const CONSTRUCTION_DELIVER_SECONDS = 0.55;
 export function createConstructionPlayback(): ConstructionPlayback { return { phase: 'return', seconds: 0, carrying: false }; }
 
 /** Current stock gates loads; already spent stock is in the structure, never back in the pile. */
@@ -85,44 +92,98 @@ export function advanceConstruction(
   if (!ready) return;
   if (assembler && playback.phase === 'return') playback.phase = 'assemble';
   playback.seconds += Math.max(0, Math.min(delta, 0.1));
-  const duration = playback.phase === 'pickup' ? 0.9 : playback.phase === 'deliver' ? 1.15 : playback.phase === 'assemble' ? 1.8 : 0;
+  const duration = playback.phase === 'pickup' ? 0.9
+    : playback.phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
+      : playback.phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
+        : playback.phase === 'assemble' ? 1.8 : 0;
   if (playback.phase === 'pickup' && playback.seconds >= 0.9 * 0.62) playback.carrying = true;
-  if (playback.phase === 'deliver' && playback.seconds >= 1.15 * 0.52) playback.carrying = false;
+  // Keep the load visible into the receive beat; it transfers near the middle of handoff.
+  if (playback.phase === 'handoff' && playback.seconds >= CONSTRUCTION_HANDOFF_SECONDS * 0.52) playback.carrying = false;
   if (playback.seconds < duration) return;
+  if (playback.phase === 'handoff') playback.carrying = false;
   playback.phase = playback.phase === 'return' ? 'pickup' : playback.phase === 'pickup' ? 'carry'
     : playback.phase === 'carry' ? 'deliver'
-      : playback.phase === 'deliver' ? soloGeneralist ? 'assemble' : 'return'
-        : assembler ? 'assemble' : 'return';
+      : playback.phase === 'deliver' ? 'handoff'
+        : playback.phase === 'handoff' ? soloGeneralist ? 'assemble' : 'return'
+          : assembler ? 'assemble' : 'return';
   playback.seconds = 0;
 }
 
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
   anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
-  crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5): PhysicalActionPresentation {
+  crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5,
+  handoff?: ConstructionHandoffCue): PhysicalActionPresentation {
   const phase = playback.phase;
   const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
   const assembling = crewRole === 'assembler' || soloGeneralist && phase === 'assemble';
   const pickup = crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
+  const handoffing = crewRole === 'hauler' && phase === 'handoff';
+  const receiving = crewRole === 'assembler' && handoff !== undefined;
   const prep = crewRole === 'site-worker';
-  const duration = phase === 'pickup' ? 0.9 : phase === 'deliver' ? 1.15 : phase === 'inspect' ? 1.6 : 1.8;
+  const duration = phase === 'pickup' ? 0.9
+    : phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
+      : phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
+        : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
   const choreography = constructionChoreography(material, progress);
-  if (assembling && phase === 'assemble') applyAssemblyMotion(choreography, p, person.id, motion);
+  if (receiving) applyReceiveMotion(handoff.progress, motion);
+  else if (handoffing) applyHandoffMotion(playback, p, motion);
+  else if (assembling && phase === 'assemble') applyAssemblyMotion(choreography, p, person.id, motion);
   else if (prep) applyPrepMotion(choreography, p, person.id, motion);
   else applyHaulMotion(playback, phase, p, motion);
-  const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : anchors.delivery;
-  const interactionCenter = prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
+  const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : handoffing ? anchors.handoff : anchors.delivery;
+  const interactionCenter = receiving ? anchors.handoff
+    : handoffing ? anchors.delivery
+      : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
+  const presentedPhase = receiving ? 'receive' : phase;
   return { personId: person.id,
-    actionKind: crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site'
-      : soloGeneralist ? 'construction-generalist' : 'construction-haul',
+    actionKind: receiving ? 'construction-receive'
+      : crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site'
+        : soloGeneralist ? 'construction-generalist' : 'construction-haul',
     authoritativeActivity: person.activity,
     sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
-    targetKind: prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
+    targetKind: receiving || handoffing ? 'handoff' : prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
     interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
-    locomotionTarget, phase, phaseProgress: p,
-    activeTool: assembling && phase === 'assemble' ? choreography.assemblerTool : prep ? choreography.prepTool : 'none',
-    carriedObject: crewRole === 'hauler' && playback.carrying ? material : undefined,
-    contactStrength: assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0, blockedReason };
+    locomotionTarget, phase: presentedPhase, phaseProgress: receiving ? handoff.progress : p,
+    activeTool: receiving || handoffing ? 'none'
+      : assembling && phase === 'assemble' ? choreography.assemblerTool : prep ? choreography.prepTool : 'none',
+    carriedObject: receiving && handoff.progress >= 0.48 && handoff.progress < 0.88 ? handoff.material
+      : crewRole === 'hauler' && playback.carrying ? material : undefined,
+    contactStrength: receiving || handoffing ? motion.impact
+      : assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0, blockedReason };
+}
+
+function applyHandoffMotion(
+  playback: ConstructionPlayback,
+  p: number,
+  motion: ResourceWorkMotion,
+): void {
+  const transfer = Math.sin(Math.min(1, p) * Math.PI);
+  motion.crouch = transfer * 0.07;
+  motion.lean = 0.08 + transfer * 0.13;
+  motion.twist = 0;
+  motion.handY = playback.carrying ? 0.43 - transfer * 0.08 : 0.46 + transfer * 0.03;
+  motion.handZ = 0.25 + transfer * 0.18;
+  motion.toolAngle = 1.7;
+  motion.basket = 0;
+  motion.held = playback.carrying ? 1 : 0;
+  motion.reposition = p > 0.88;
+  motion.impact = Math.max(0, 1 - Math.abs(p - 0.52) / 0.18) * 0.34;
+}
+
+function applyReceiveMotion(p: number, motion: ResourceWorkMotion): void {
+  const receive = Math.sin(Math.min(1, Math.max(0, p)) * Math.PI);
+  const settle = p > 0.52 ? Math.sin(Math.min(1, (p - 0.52) / 0.48) * Math.PI) : 0;
+  motion.crouch = receive * 0.045;
+  motion.lean = 0.06 + receive * 0.11;
+  motion.twist = -receive * 0.08;
+  motion.handY = 0.47 - receive * 0.06 + settle * 0.035;
+  motion.handZ = 0.22 + receive * 0.2 - settle * 0.06;
+  motion.toolAngle = 1.8;
+  motion.basket = 0;
+  motion.held = p >= 0.48 && p < 0.88 ? 1 : 0;
+  motion.reposition = p > 0.88;
+  motion.impact = Math.max(0, 1 - Math.abs(p - 0.52) / 0.18) * 0.26;
 }
 
 function applyHaulMotion(

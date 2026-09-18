@@ -9,10 +9,10 @@ import { travelAnimationFor } from '../src/render/people/PeoplePresentation';
 import { farmAnchor, farmGeometry } from '../src/shared/FarmGeometry';
 import { farmPresentationState, farmerCanPresent, sampleFarmAction } from '../src/render/farming/FarmActionPresentation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
-import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
+import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, CONSTRUCTION_HANDOFF_SECONDS, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
 import { constructionChoreography, constructionMaterialColour } from '../src/render/construction/ConstructionChoreography';
 import { constructionWorkerLane, sampleConstructionWorkerMotion } from '../src/render/construction/ConstructionWorkerMotion';
-import { assignConstructionCrewRoles, constructionVisibleCrewIds, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
+import { assignConstructionCrewRoles, constructionHandoffRecipientId, constructionVisibleCrewIds, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors, createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
 import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../src/render/animation/ResourceWorkMotion';
@@ -48,7 +48,8 @@ function construction(settlement: Settlement, person: Person) {
   person.navigation!.destinationKind = 'construction-site'; person.navigation!.destinationId = 'plot'; person.position = { x: 2.2, z: -0.4 };
   return { key: 'plot', worldX: 0, worldZ: 0, width: 2, depth: 1.5, rotationY: 0 };
 }
-const anchors = { pickup: { x: 1, z: 0 }, delivery: { x: 0, z: 1 }, materialCenter: { x: 0.87, z: 0 }, siteCenter: { x: 0, z: 0 },
+const anchors = { pickup: { x: 1, z: 0 }, delivery: { x: 0, z: 1 }, handoff: { x: 0, z: 1.22 },
+  materialCenter: { x: 0.87, z: 0 }, siteCenter: { x: 0, z: 0 },
   prep: { x: -0.3, z: 0.8 }, prepCenter: { x: -0.3, z: 1 } };
 
 describe('physical authority and interruption', () => {
@@ -92,6 +93,19 @@ describe('construction workflow', () => {
     expect(assignConstructionCrewRoles('solo', ['one']).get('one')?.role).toBe('hauler');
     expect(new Set([...assignConstructionCrewRoles('pair', ['one', 'two']).values()].map(a => a.role)))
       .toEqual(new Set(['hauler', 'assembler']));
+  });
+
+  it('pairs each hauler with a stable assembler handoff recipient', () => {
+    const assignments = assignConstructionCrewRoles('plot', ['a', 'b', 'c', 'd', 'e', 'f']);
+    const assemblerIds = new Set([...assignments.entries()]
+      .filter(([, assignment]) => assignment.role === 'assembler').map(([id]) => id));
+    for (const [id, assignment] of assignments) {
+      if (assignment.role !== 'hauler') continue;
+      const recipient = constructionHandoffRecipientId(id, assignments);
+      expect(recipient).toBeDefined();
+      expect(assemblerIds.has(recipient!)).toBe(true);
+      expect(constructionHandoffRecipientId(id, assignments)).toBe(recipient);
+    }
   });
 
   it('preserves established roles as crew membership changes during one project', () => {
@@ -154,6 +168,7 @@ describe('construction workflow', () => {
     const a = constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0);
     const b = constructionWorksiteAnchors(2, 1.5, 'plot', 0.4, 1);
     expect(a.delivery).not.toEqual(b.delivery);
+    expect(Math.hypot(a.handoff.x, a.handoff.z)).toBeGreaterThan(Math.hypot(a.delivery.x, a.delivery.z));
     expect(a.prep.z).toBeLessThan(a.prepCenter.z);
     expect(constructionWorksiteAnchors(2, 1.5, 'plot', -0.4, 0)).toEqual(a);
   });
@@ -295,6 +310,61 @@ describe('construction workflow', () => {
     expect(new Set((['earth', 'timber', 'masonry', 'ceramic', 'metal'] as const).map(constructionMaterialColour)).size).toBe(5);
   });
 
+  it('keeps a delivered load visible until the middle of the handoff beat', () => {
+    const playback = { phase: 'deliver', seconds: 0, carrying: true } as ReturnType<typeof createConstructionPlayback>;
+    for (let i = 0; i < 6; i++) advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
+    expect(playback.phase).toBe('handoff');
+    expect(playback.carrying).toBe(true);
+    while (playback.seconds < CONSTRUCTION_HANDOFF_SECONDS * 0.45) {
+      advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
+    }
+    expect(playback.carrying).toBe(true);
+    while (playback.seconds < CONSTRUCTION_HANDOFF_SECONDS * 0.6) {
+      advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
+    }
+    expect(playback.carrying).toBe(false);
+    expect(playback.phase).toBe('handoff');
+  });
+
+  it('gives the assembler an explicit receive/placement beat during handoff', () => {
+    const { person } = setup();
+    const motion = createResourceWorkMotion();
+    const action = sampleConstructionAction(person, 'plot', { phase: 'assemble', seconds: 0.6, carrying: false },
+      anchors, 'timber', motion, undefined, 'assembler', 3, 0.3,
+      { sourcePersonId: 'hauler', progress: 0.62, material: 'timber' });
+    expect(action.phase).toBe('receive');
+    expect(action.actionKind).toBe('construction-receive');
+    expect(action.targetKind).toBe('handoff');
+    expect(action.activeTool).toBe('none');
+    expect(action.carriedObject).toBe('timber');
+    expect(action.locomotionTarget).toEqual(anchors.delivery);
+    expect(action.interactionAnchor.z).toBeGreaterThan(anchors.delivery.z);
+  });
+
+  it('aligns a paired hauler and assembler to the same physical handoff workface', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const people = ['handoff-a', 'handoff-b'].map((id, index) => ({
+      ...structuredClone(person), id, position: { x: 2.2 + index * 0.04, z: -0.4 },
+    } as Person));
+    const scene = new PhysicalWorkScene();
+    scene.beginFrame(people);
+    const workers = people.map(member => scene.plan(member, settlement, placement, undefined, weather, () => true)!);
+    const hauler = workers.find(worker => worker.crewRole === 'hauler')!;
+    const assembler = workers.find(worker => worker.crewRole === 'assembler')!;
+    const assemblerPerson = people.find(member => member.id === assembler.action.personId)!;
+    expect(hauler.handoffRecipientId).toBe(assembler.action.personId);
+    expect(hauler.anchors!.delivery).toEqual(assembler.anchors!.delivery);
+    expect(hauler.anchors!.handoff).toEqual(assembler.anchors!.handoff);
+
+    hauler.playback!.phase = 'handoff';
+    hauler.playback!.seconds = CONSTRUCTION_HANDOFF_SECONDS * 0.62;
+    hauler.playback!.carrying = false;
+    const receiving = scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => true)!;
+    expect(receiving.action.phase).toBe('receive');
+    expect(receiving.action.carriedObject).toBe('timber');
+  });
+
   it('requires an active safe project and the matching destination', () => {
     const { settlement, person, weather } = setup(); construction(settlement, person);
     expect(builderCanPresent(person, settlement, weather)).toBe(true);
@@ -315,7 +385,7 @@ describe('construction workflow', () => {
       expect(action.actionKind).toBe('construction-haul');
     }
     expect(seen.has('assemble')).toBe(false);
-    expect([...seen]).toEqual(expect.arrayContaining(['pickup', 'carry', 'deliver', 'return']));
+    expect([...seen]).toEqual(expect.arrayContaining(['pickup', 'carry', 'deliver', 'handoff', 'return']));
   });
 
   it('keeps a true one-person construction crew as an explicit generalist fallback', () => {
@@ -355,9 +425,10 @@ describe('construction workflow', () => {
     for (let i = 0; i < 100; i++) advanceConstruction(playback, 0.1, false, false);
     expect(playback.carrying).toBe(true); expect(playback.phase).toBe('carry');
     advanceConstruction(playback, 0.1, true, false); expect(playback.phase).toBe('deliver');
+    for (let i = 0; i < 6; i++) advanceConstruction(playback, 0.1, true, false);
+    expect(playback.phase).toBe('handoff'); expect(playback.carrying).toBe(true);
     for (let i = 0; i < 5; i++) advanceConstruction(playback, 0.1, true, false);
-    expect(playback.carrying).toBe(true);
-    advanceConstruction(playback, 0.1, true, false); expect(playback.carrying).toBe(false);
+    expect(playback.carrying).toBe(false);
   });
   it('blocks both modern material bills and legacy resource budgets without spending anything', () => {
     const { settlement, person } = setup(); construction(settlement, person);
@@ -400,7 +471,7 @@ describe('construction workflow', () => {
       if (visual.traveling) expect(worker.ready).toBe(false);
       scene.endFrame();
     }
-    expect([...phases]).toEqual(expect.arrayContaining(['return', 'pickup', 'carry', 'deliver', 'assemble']));
+    expect([...phases]).toEqual(expect.arrayContaining(['return', 'pickup', 'carry', 'deliver', 'handoff', 'assemble']));
     expect(acquired).toBe(true); expect(JSON.stringify({ settlement, person })).toBe(before);
     settlement.development!.project = undefined;
     expect(scene.plan(person, settlement, placement, undefined, weather, () => true)).toBeUndefined();
