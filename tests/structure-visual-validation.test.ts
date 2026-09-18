@@ -280,8 +280,10 @@ describe('structure renderer and performance validation', () => {
 
     expect(factory.every(mesh => mesh.userData['grammarRole'] === 'factory')).toBe(true);
     expect(shrine.every(mesh => mesh.userData['grammarRole'] === 'shrine')).toBe(true);
-    expect(factory[BUILD_STAGE.DETAIL]!.userData['buildStage']).toBe(BUILD_STAGE.DETAIL);
-    expect(shrine[BUILD_STAGE.DETAIL]!.userData['buildStage']).toBe(BUILD_STAGE.DETAIL);
+    // DETAIL is a materially richer asset than ROOF, so revealing it before completion is visible
+    // rather than merely changing an enum.
+    expect(vertexCount(factory[BUILD_STAGE.DETAIL]!)).toBeGreaterThan(vertexCount(factory[BUILD_STAGE.ROOF]!));
+    expect(vertexCount(shrine[BUILD_STAGE.DETAIL]!)).toBeGreaterThan(vertexCount(shrine[BUILD_STAGE.ROOF]!));
     // The staged procedural path must not collapse unlike future buildings into one generic shell.
     expect(boundsSignature(factory[1]!)).not.toBe(boundsSignature(shrine[1]!));
     expect(boundsSignature(factory[3]!)).not.toBe(boundsSignature(shrine[3]!));
