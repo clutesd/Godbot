@@ -222,6 +222,44 @@ describe('construction workflow', () => {
     expect(builderCanPresent(person, settlement, weather)).toBe(false);
     settlement.development!.project = undefined; expect(builderCanPresent(person, settlement, weather)).toBe(false);
   });
+  it('keeps dedicated haulers out of assembler phases and tools', () => {
+    const { person } = setup();
+    const playback = createConstructionPlayback();
+    const seen = new Set<string>();
+    for (let step = 0; step < 120; step++) {
+      advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
+      seen.add(playback.phase);
+      const action = sampleConstructionAction(person, 'plot', playback, anchors, 'timber', createResourceWorkMotion(), undefined, 'hauler', 3);
+      expect(action.activeTool).toBe('none');
+      expect(action.actionKind).toBe('construction-haul');
+    }
+    expect(seen.has('assemble')).toBe(false);
+    expect([...seen]).toEqual(expect.arrayContaining(['pickup', 'carry', 'deliver', 'return']));
+  });
+
+  it('keeps a true one-person construction crew as an explicit generalist fallback', () => {
+    const { person } = setup();
+    const playback = createConstructionPlayback();
+    let assembled = false;
+    for (let step = 0; step < 120; step++) {
+      advanceConstruction(playback, 0.1, true, false, 'hauler', 1);
+      const action = sampleConstructionAction(person, 'plot', playback, anchors, 'timber', createResourceWorkMotion(), undefined, 'hauler', 1);
+      if (playback.phase === 'assemble') {
+        assembled = true;
+        expect(action.actionKind).toBe('construction-generalist');
+        expect(action.activeTool).toBe('hammer');
+      }
+    }
+    expect(assembled).toBe(true);
+  });
+
+  it('drops the legacy assemble beat immediately when a solo generalist gains a crew mate', () => {
+    const playback = { phase: 'assemble', seconds: 0.8, carrying: false } as const;
+    const mutable = { ...playback };
+    advanceConstruction(mutable, 0, false, false, 'hauler', 2);
+    expect(mutable.phase).toBe('return');
+  });
+
   it('cannot acquire in transit, retains a load through delayed travel and releases after placement', () => {
     const playback = createConstructionPlayback();
     for (let i = 0; i < 100; i++) advanceConstruction(playback, 0.1, false, false);

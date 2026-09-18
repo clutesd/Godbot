@@ -25,6 +25,7 @@ export interface PhysicalWorker {
   fieldState?: FarmPresentationState;
   crewRole: ConstructionCrewRole;
   crewRank: number;
+  crewSize: number;
   material?: import('../../sim/development/types').StructureMaterial;
 }
 
@@ -65,6 +66,7 @@ export class PhysicalWorkScene {
       this.constructionRoleAssignments.set(project, assignments);
       crew = assignments.get(person.id) ?? { role: 'hauler', rank: 0 };
     }
+    const crewSize = builder && project ? this.constructionRoleAssignments.get(project)?.size ?? 1 : 1;
     if (worker && (worker.project !== project || worker.field?.id !== (farmer ? farm.geometry.id : undefined)
       || builder && worker.crewRole !== crew?.role)) {
       this.workers.delete(person.id); worker = undefined;
@@ -91,13 +93,13 @@ export class PhysicalWorkScene {
         const playback = createConstructionPlayback();
         if (crewRole === 'assembler') playback.phase = 'assemble';
         if (crewRole === 'site-worker') playback.phase = 'inspect';
-        worker = { motion, project, anchors, playback, crewRole, crewRank: crew?.rank ?? 0,
+        worker = { motion, project, anchors, playback, crewRole, crewRank: crew?.rank ?? 0, crewSize,
           material: constructionPresentedMaterial(settlement!), seconds: 0, blend: 0, ready: false, seen: true,
-          action: sampleConstructionAction(person, project.plotId, playback, anchors, constructionPresentedMaterial(settlement!), motion, undefined, crewRole) };
+          action: sampleConstructionAction(person, project.plotId, playback, anchors, constructionPresentedMaterial(settlement!), motion, undefined, crewRole, crewSize) };
       } else if (farmer) {
         const action = sampleFarmAction(person, farm.geometry, farm.state, 0, motion);
         if (!safeSegment(person.position, action.locomotionTarget)) return undefined;
-        worker = { motion, action, field: farm.geometry, fieldState: farm.state, seconds: 0, blend: 0, ready: false, seen: true, crewRole: 'hauler', crewRank: 0 };
+        worker = { motion, action, field: farm.geometry, fieldState: farm.state, seconds: 0, blend: 0, ready: false, seen: true, crewRole: 'hauler', crewRank: 0, crewSize: 1 };
       }
       if (!worker) return undefined;
       this.workers.set(person.id, worker);
@@ -106,8 +108,10 @@ export class PhysicalWorkScene {
     if (builder && worker.playback) {
       const blocked = constructionBlockedReason(settlement);
       worker.material = constructionPresentedMaterial(settlement);
-      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole);
-      worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!, constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole);
+      worker.crewSize = crewSize;
+      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, worker.crewSize);
+      worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!,
+        constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole, worker.crewSize);
     } else if (farmer) {
       worker.fieldState = farm.state;
       const action = sampleFarmAction(person, farm.geometry, farm.state, worker.seconds, worker.motion);
@@ -123,8 +127,9 @@ export class PhysicalWorkScene {
     // Acquisition/placement only starts once the approach blend has settled.
     const ready = worker.ready && worker.blend >= 1;
     if (worker.playback) {
-      advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole);
-      worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!, worker.material!, worker.motion, action.blockedReason, worker.crewRole);
+      advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize);
+      worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!,
+        worker.material!, worker.motion, action.blockedReason, worker.crewRole, worker.crewSize);
     } else if (ready && worker.field) {
       worker.seconds += Math.max(0, Math.min(0.1, delta));
       // New anchors take effect in plan next frame, so a recovery never jumps straight into contact.

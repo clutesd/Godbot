@@ -56,6 +56,7 @@ export function advanceConstruction(
   ready: boolean,
   blocked: boolean,
   crewRole: ConstructionCrewRole = 'hauler',
+  crewSize = 1,
 ): void {
   if (blocked) { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; return; }
 
@@ -68,6 +69,13 @@ export function advanceConstruction(
   }
 
   const assembler = crewRole === 'assembler';
+  const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
+  // If a second worker joins while the former solo generalist is assembling, specialization takes
+  // effect immediately rather than letting the new hauler finish a builder-only beat.
+  if (crewRole === 'hauler' && !soloGeneralist && playback.phase === 'assemble') {
+    playback.phase = 'return';
+    playback.seconds = 0;
+  }
   if (playback.phase === 'inspect') { playback.phase = assembler ? 'assemble' : 'return'; playback.seconds = 0; }
   if (!ready) return;
   if (assembler && playback.phase === 'return') playback.phase = 'assemble';
@@ -76,17 +84,19 @@ export function advanceConstruction(
   if (playback.phase === 'pickup' && playback.seconds >= 0.9 * 0.62) playback.carrying = true;
   if (playback.phase === 'deliver' && playback.seconds >= 1.15 * 0.52) playback.carrying = false;
   if (playback.seconds < duration) return;
-  // Haulers retain the brief legacy placement beat after delivery; dedicated assemblers remain
-  // at their workface. Step 2B can specialize those motions without changing role authority.
   playback.phase = playback.phase === 'return' ? 'pickup' : playback.phase === 'pickup' ? 'carry'
-    : playback.phase === 'carry' ? 'deliver' : playback.phase === 'deliver' ? 'assemble' : assembler ? 'assemble' : 'return';
+    : playback.phase === 'carry' ? 'deliver'
+      : playback.phase === 'deliver' ? soloGeneralist ? 'assemble' : 'return'
+        : assembler ? 'assemble' : 'return';
   playback.seconds = 0;
 }
 
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
   anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
-  crewRole: ConstructionCrewRole = 'hauler'): PhysicalActionPresentation {
+  crewRole: ConstructionCrewRole = 'hauler', crewSize = 1): PhysicalActionPresentation {
   const phase = playback.phase;
+  const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
+  const assembling = crewRole === 'assembler' || soloGeneralist && phase === 'assemble';
   const pickup = crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
   const prep = crewRole === 'site-worker';
   const duration = phase === 'pickup' ? 0.9 : phase === 'deliver' ? 1.15 : phase === 'inspect' ? 1.6 : 1.8;
@@ -102,14 +112,16 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : anchors.delivery;
   const interactionCenter = prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
   return { personId: person.id,
-    actionKind: crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site' : 'construction-haul',
+    actionKind: crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site'
+      : soloGeneralist ? 'construction-generalist' : 'construction-haul',
     authoritativeActivity: person.activity,
     sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
     targetKind: prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
     interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
     locomotionTarget, phase, phaseProgress: p,
-    activeTool: phase === 'assemble' && material !== 'earth' ? 'hammer' : 'none',
-    carriedObject: crewRole === 'hauler' && playback.carrying ? material : undefined, contactStrength: motion.impact, blockedReason };
+    activeTool: assembling && phase === 'assemble' && material !== 'earth' ? 'hammer' : 'none',
+    carriedObject: crewRole === 'hauler' && playback.carrying ? material : undefined,
+    contactStrength: assembling || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0, blockedReason };
 }
 
 function contactSurface(from: Readonly<{ x: number; z: number }>, center: Readonly<{ x: number; z: number }>): { x: number; z: number } {
