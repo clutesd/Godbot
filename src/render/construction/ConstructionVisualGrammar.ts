@@ -96,7 +96,9 @@ export function constructionPresentationBucket(progress: number): number {
   const paid = Math.max(0, Math.min(1, progress));
   if (paid <= 0) return 0;
   const presentation = constructionStagePresentation(paid);
-  const revealSlice = Math.min(3, Math.floor(presentation.phase * 4));
+  // Small epsilon makes exact quarter-stage boundaries stable despite binary floating-point
+  // representation (e.g. DETAIL 0.94 => phase 0.25 rather than 0.249999999999...).
+  const revealSlice = Math.min(3, Math.floor(presentation.phase * 4 + 1e-9));
   return 1 + presentation.stage * 4 + revealSlice;
 }
 
