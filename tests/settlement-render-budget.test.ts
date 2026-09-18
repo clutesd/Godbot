@@ -127,6 +127,32 @@ function attachActiveProject(
 }
 
 
+describe('construction site presentation state', () => {
+  it('classifies active, finishing, material-blocked and work-blocked sites from live authority', async () => {
+    const test = harness('construction-site-state');
+    const settlement = test.state.settlements.find(candidate => candidate.alive)!;
+    const { constructionSitePresentationState } = await import('../src/render/construction/ConstructionActionPresentation');
+    attachActiveProject(settlement, test.state, 0.6);
+    settlement.resources.wood = 10;
+
+    expect(constructionSitePresentationState(settlement)).toBe('active');
+
+    settlement.resources.wood = 0;
+    expect(constructionSitePresentationState(settlement)).toBe('blocked-material');
+
+    settlement.resources.wood = 10;
+    settlement.development!.project!.blockedReasons = ['labour-unavailable'];
+    expect(constructionSitePresentationState(settlement)).toBe('blocked-work');
+
+    settlement.development!.project!.blockedReasons = [];
+    settlement.development!.project!.progress = 0.96;
+    expect(constructionSitePresentationState(settlement)).toBe('finishing');
+
+    settlement.development!.project = undefined;
+    expect(constructionSitePresentationState(settlement)).toBe('inactive');
+  });
+});
+
 describe('construction presentation progress authority', () => {
   it('prefers an active project and falls back to the legacy mirror only without one', async () => {
     const test = harness('construction-progress-authority');
@@ -159,6 +185,42 @@ describe('settlement render budgeting', () => {
     sync(test.renderer);
     expect(test.created()).toBe(2);
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).pending).toBe(0);
+  });
+
+  it('rebuilds static worksite dressing when material availability changes at unchanged progress', () => {
+    const test = harness('settlement-render-budget-blocked-material');
+    const settlement = test.state.settlements.find(candidate => candidate.alive)!;
+    attachActiveProject(settlement, test.state, 0.6);
+    settlement.resources.wood = 10;
+    sync(test.renderer, true);
+    test.resetCreated();
+
+    // Same project and same progress; only material availability changes.
+    settlement.resources.wood = 0;
+    sync(test.renderer);
+    expect(test.created()).toBe(1);
+    expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
+
+    test.resetCreated();
+    settlement.resources.wood = 10;
+    sync(test.renderer);
+    expect(test.created()).toBe(1);
+    expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
+    expect(settlement.development!.project!.progress).toBeCloseTo(0.6);
+  });
+
+  it('rebuilds when an explicit work blocker changes the site story without changing progress', () => {
+    const test = harness('settlement-render-budget-blocked-work');
+    const settlement = test.state.settlements.find(candidate => candidate.alive)!;
+    attachActiveProject(settlement, test.state, 0.6);
+    settlement.resources.wood = 10;
+    sync(test.renderer, true);
+    test.resetCreated();
+
+    settlement.development!.project!.blockedReasons = ['labour-unavailable'];
+    sync(test.renderer);
+    expect(test.created()).toBe(1);
+    expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
   });
 
   it('rebuilds through pre-completion DETAIL reveal slices before the project disappears', () => {

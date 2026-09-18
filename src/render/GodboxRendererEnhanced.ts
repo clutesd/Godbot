@@ -4,6 +4,7 @@ import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations } from '../sim/transport/TransportNetwork';
 import { eraRank } from './assets/BuildingGrammar';
 import { constructionPresentationBucket, constructionPresentationProgress } from './construction/ConstructionVisualGrammar';
+import { constructionSitePresentationState } from './construction/ConstructionActionPresentation';
 import type { Settlement, SimulationState } from '../sim/types';
 import type { TransportSegment } from '../sim/transport/types';
 import type { Era, MaterialPalette } from './materials/MaterialPalette';
@@ -443,6 +444,7 @@ function heavySettlementSignature(
     .join(',');
   const progress = constructionPresentationProgress(settlement);
   const constructionPresentationStage = constructionPresentationBucket(progress);
+  const constructionSiteState = constructionSitePresentationState(settlement);
   return [
     settlement.id,
     settlement.alive ? settlement.buildings : 0,
@@ -463,7 +465,7 @@ function heavySettlementSignature(
     bucket(settlement.industry.intensity),
     bucket(settlement.urbanization),
     constructionPresentationStage,
-    Number(progress >= 0.95),
+    constructionSiteState,
     Number((settlement.survival?.cold.fuelUsed ?? 0) > 0),
     bucket(self.state.advanced.atomic.applications.energy),
     bucket(self.state.advanced.machine.capability),

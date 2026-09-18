@@ -5,7 +5,7 @@ import { GodboxRenderer } from '../GodboxRenderer';
 import type { MaterialPalette } from '../materials/MaterialPalette';
 import { createConstructionWorksite } from './ConstructionWorksite';
 import { constructionPresentationProgress } from './ConstructionVisualGrammar';
-import { constructionBlockedReason, constructionPresentedMaterial } from './ConstructionActionPresentation';
+import { constructionPresentedMaterial, constructionSitePresentationState } from './ConstructionActionPresentation';
 
 interface SettlementVisualLike {
   group: THREE.Group;
@@ -58,14 +58,16 @@ if (!prototype[INSTALL_KEY]) {
     const renderer = this as unknown as RendererInternals;
     const era = developmentPresentationEra(project.response);
     const palette = renderer.getPalette(project.response.style, era);
+    const siteState = constructionSitePresentationState(settlement);
     const worksite = createConstructionWorksite({
       width,
       depth,
       progress: constructionPresentationProgress(settlement),
       response: { ...project.response, material: constructionPresentedMaterial(settlement) },
       seedKey: project.plotId,
-      materialsAvailable: !constructionBlockedReason(settlement),
+      materialsAvailable: siteState === 'active' || siteState === 'finishing',
     }, palette);
+    worksite.userData['constructionSiteState'] = siteState;
     activeSite.add(worksite);
     return visual;
   };

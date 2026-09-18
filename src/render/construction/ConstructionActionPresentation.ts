@@ -7,6 +7,7 @@ import type { Era } from '../materials/MaterialPalette';
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from '../people/PhysicalActionPresentation';
+import { constructionPresentationProgress, constructionStagePresentation } from './ConstructionVisualGrammar';
 
 export type ConstructionPhase = 'return' | 'pickup' | 'carry' | 'deliver' | 'handoff' | 'assemble' | 'inspect';
 export interface ConstructionPlayback { phase: ConstructionPhase; seconds: number; carrying: boolean }
@@ -34,6 +35,25 @@ export function constructionBlockedReason(settlement: Settlement): string | unde
     if (project.response.cost[key] > 0 && settlement.resources[key] <= 0.000001) return `missing:${key}`;
   }
   return undefined;
+}
+
+export type ConstructionSitePresentationState =
+  | 'inactive'
+  | 'active'
+  | 'blocked-material'
+  | 'blocked-work'
+  | 'finishing';
+
+/**
+ * Compact renderer-facing state for the whole active worksite. This intentionally collapses raw
+ * blocker wording into visual categories so heavy geometry rebuilds only when the site story changes.
+ */
+export function constructionSitePresentationState(settlement: Settlement): ConstructionSitePresentationState {
+  const project = settlement.development?.project;
+  if (!settlement.alive || !project || project.progress >= 1) return 'inactive';
+  const blocked = constructionBlockedReason(settlement);
+  if (blocked) return blocked.startsWith('missing:') ? 'blocked-material' : 'blocked-work';
+  return constructionStagePresentation(constructionPresentationProgress(settlement)).finishing ? 'finishing' : 'active';
 }
 
 /** Honour actual substitutes in the project's structural bill of materials. */
