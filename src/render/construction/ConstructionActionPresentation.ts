@@ -102,13 +102,14 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   const duration = phase === 'pickup' ? 0.9 : phase === 'deliver' ? 1.15 : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
   const bend = phase === 'pickup' || phase === 'deliver' ? Math.sin(p * Math.PI) : 0;
-  const strike = phase === 'assemble' ? Math.max(0, Math.sin(p * Math.PI * 2 - 1)) : 0;
+  const strike = assembling && phase === 'assemble' ? Math.max(0, Math.sin(p * Math.PI * 2 - 1)) : 0;
   motion.crouch = bend * 0.13; motion.lean = bend * 0.22 + (playback.carrying ? 0.07 : strike * 0.1);
-  motion.twist = phase === 'assemble' ? strike * (0.12 + resourceVisualUnit(person.id) * 0.08) : 0;
+  motion.twist = assembling && phase === 'assemble' ? strike * (0.12 + resourceVisualUnit(person.id) * 0.08) : 0;
   motion.handY = playback.carrying ? 0.43 - bend * 0.19 : 0.5 - bend * 0.32 + strike * 0.2;
   motion.handZ = 0.22 + bend * 0.16; motion.toolAngle = 0.7 + strike * 1.4;
   motion.basket = 0; motion.reposition = false;
-  motion.impact = (phase === 'pickup' && p >= 0.58 && p <= 0.66 || phase === 'deliver' && p >= 0.48 && p <= 0.56) ? 1 : phase === 'assemble' ? strike : 0;
+  motion.impact = (phase === 'pickup' && p >= 0.58 && p <= 0.66 || phase === 'deliver' && p >= 0.48 && p <= 0.56) ? 1
+    : assembling && phase === 'assemble' ? strike : 0;
   const locomotionTarget = prep ? anchors.prep : pickup ? anchors.pickup : anchors.delivery;
   const interactionCenter = prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
   return { personId: person.id,
