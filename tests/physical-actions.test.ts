@@ -315,13 +315,11 @@ describe('construction workflow', () => {
     for (let i = 0; i < 6; i++) advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
     expect(playback.phase).toBe('handoff');
     expect(playback.carrying).toBe(true);
-    while (playback.seconds < CONSTRUCTION_HANDOFF_SECONDS * 0.45) {
-      advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
-    }
+    for (let i = 0; i < 4; i++) advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
+    expect(playback.seconds).toBeCloseTo(0.4);
     expect(playback.carrying).toBe(true);
-    while (playback.seconds < CONSTRUCTION_HANDOFF_SECONDS * 0.6) {
-      advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
-    }
+    advanceConstruction(playback, 0.1, true, false, 'hauler', 3);
+    expect(playback.seconds).toBeCloseTo(0.5);
     expect(playback.carrying).toBe(false);
     expect(playback.phase).toBe('handoff');
   });
@@ -386,6 +384,19 @@ describe('construction workflow', () => {
     }
     expect(seen.has('assemble')).toBe(false);
     expect([...seen]).toEqual(expect.arrayContaining(['pickup', 'carry', 'deliver', 'handoff', 'return']));
+  });
+
+  it('moves a solo generalist from the outer handoff point back to the workface before assembly', () => {
+    const { person } = setup();
+    const handoffAction = sampleConstructionAction(person, 'plot',
+      { phase: 'handoff', seconds: 0.3, carrying: true }, anchors, 'timber', createResourceWorkMotion(),
+      undefined, 'hauler', 1, 0.3);
+    const assembleAction = sampleConstructionAction(person, 'plot',
+      { phase: 'assemble', seconds: 0.3, carrying: false }, anchors, 'timber', createResourceWorkMotion(),
+      undefined, 'hauler', 1, 0.3);
+    expect(handoffAction.locomotionTarget).toEqual(anchors.handoff);
+    expect(assembleAction.locomotionTarget).toEqual(anchors.delivery);
+    expect(handoffAction.locomotionTarget).not.toEqual(assembleAction.locomotionTarget);
   });
 
   it('keeps a true one-person construction crew as an explicit generalist fallback', () => {
