@@ -215,6 +215,17 @@ describe('construction workflow', () => {
     expect(JSON.stringify(settlement)).toBe(before);
   });
 
+  it('does not mistake earth-building frame stock for the building fabric', () => {
+    const { settlement, person } = setup();
+    construction(settlement, person);
+    settlement.development!.project!.response.material = 'earth';
+    settlement.development!.project!.materialRequirements = [
+      { id: 'earth-frame', amount: 1, options: ['timber', 'lumber'], reason: 'structural-frame' },
+    ];
+    settlement.localMaterials.timber = 5;
+    expect(constructionPresentedMaterial(settlement)).toBe('earth');
+  });
+
   it('derives material-specific choreography from the same construction stages as the building', () => {
     const timberFrame = constructionChoreography('timber', 0.3);
     const timberRoof = constructionChoreography('timber', 0.85);
