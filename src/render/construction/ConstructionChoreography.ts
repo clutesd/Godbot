@@ -95,6 +95,16 @@ export function constructionChoreography(
   };
 }
 
+export function constructionContactEffect(
+  material: StructureMaterial,
+  era: Era,
+): PhysicalContactEffectKind {
+  if (material === 'timber') return 'timber-chip';
+  if (material === 'masonry' || material === 'ceramic') return 'mineral-dust';
+  if (material === 'earth') return 'earth-crumb';
+  return era === 'industrial' || era === 'advanced' ? 'metal-spark' : 'metal-fragment';
+}
+
 export function constructionMaterialColour(material: StructureMaterial | undefined): string {
   return material === 'earth' ? '#8b6d4d'
     : material === 'timber' ? '#987149'

@@ -1,5 +1,12 @@
 import type { Activity, Person, Vec2, WeatherCellState } from '../../sim/types';
 
+export type PhysicalContactEffectKind =
+  | 'timber-chip'
+  | 'mineral-dust'
+  | 'earth-crumb'
+  | 'metal-fragment'
+  | 'metal-spark';
+
 /** Common documentary vocabulary; each action owns its workflow and articulation. */
 export interface PhysicalActionPresentation {
   readonly personId: string;
@@ -15,6 +22,8 @@ export interface PhysicalActionPresentation {
   readonly activeTool: string;
   readonly carriedObject?: string;
   readonly contactStrength: number;
+  /** Ephemeral evidence drawn only at real presentation contact; never simulation state. */
+  readonly contactEffect?: PhysicalContactEffectKind;
   readonly blockedReason?: string;
 }
 

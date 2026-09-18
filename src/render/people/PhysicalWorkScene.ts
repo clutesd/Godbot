@@ -1,5 +1,6 @@
 import type { Person, Settlement, Vec2, WeatherCellState } from '../../sim/types';
 import type { DevelopmentProject } from '../../sim/development/types';
+import { developmentPresentationEra } from '../assets/BuildingGrammar';
 import type { FarmGeometry } from '../../shared/FarmGeometry';
 import { farmerCanPresent, sampleFarmAction, type FarmPresentationState } from '../farming/FarmActionPresentation';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, CONSTRUCTION_HANDOFF_SECONDS, createConstructionPlayback, sampleConstructionAction, type ConstructionHandoffCue, type ConstructionPlayback } from '../construction/ConstructionActionPresentation';
@@ -104,7 +105,7 @@ export class PhysicalWorkScene {
         worker = { motion, project, anchors, playback, crewRole, crewRank: crew?.rank ?? 0, crewSize, handoffRecipientId,
           material: constructionPresentedMaterial(settlement!), seconds: 0, blend: 0, ready: false, seen: true,
           action: sampleConstructionAction(person, project.plotId, playback, anchors, constructionPresentedMaterial(settlement!), motion,
-            undefined, crewRole, crewSize, project.progress) };
+            undefined, crewRole, crewSize, project.progress, undefined, developmentPresentationEra(project.response)) };
       } else if (farmer) {
         const action = sampleFarmAction(person, farm.geometry, farm.state, 0, motion);
         if (!safeSegment(person.position, action.locomotionTarget)) return undefined;
@@ -121,7 +122,8 @@ export class PhysicalWorkScene {
       advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, worker.crewSize);
       const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project!, person.id) : undefined;
       worker.action = sampleConstructionAction(person, project!.plotId, worker.playback, worker.anchors!,
-        constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole, worker.crewSize, project!.progress, handoff);
+        constructionPresentedMaterial(settlement), worker.motion, blocked, worker.crewRole, worker.crewSize, project!.progress,
+        handoff, developmentPresentationEra(project!.response));
     } else if (farmer) {
       worker.fieldState = farm.state;
       const action = sampleFarmAction(person, farm.geometry, farm.state, worker.seconds, worker.motion);
@@ -147,7 +149,8 @@ export class PhysicalWorkScene {
         advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize, handoffReady);
       }
       worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!,
-        worker.material!, worker.motion, action.blockedReason, worker.crewRole, worker.crewSize, worker.project!.progress, handoff);
+        worker.material!, worker.motion, action.blockedReason, worker.crewRole, worker.crewSize, worker.project!.progress,
+        handoff, developmentPresentationEra(worker.project!.response));
     } else if (ready && worker.field) {
       worker.seconds += Math.max(0, Math.min(0.1, delta));
       // New anchors take effect in plan next frame, so a recovery never jumps straight into contact.

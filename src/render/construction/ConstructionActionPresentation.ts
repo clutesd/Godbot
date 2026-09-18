@@ -2,7 +2,8 @@ import type { Person, Settlement, WeatherCellState } from '../../sim/types';
 import type { StructureMaterial } from '../../sim/development/types';
 import type { ConstructionWorkerAnchors } from './ConstructionWorkerMotion';
 import type { ConstructionCrewRole } from './ConstructionCrewPresentation';
-import { constructionChoreography, type ConstructionChoreographyProfile } from './ConstructionChoreography';
+import { constructionChoreography, constructionContactEffect, type ConstructionChoreographyProfile } from './ConstructionChoreography';
+import type { Era } from '../materials/MaterialPalette';
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from '../people/PhysicalActionPresentation';
@@ -116,7 +117,7 @@ export function advanceConstruction(
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
   anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
   crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5,
-  handoff?: ConstructionHandoffCue): PhysicalActionPresentation {
+  handoff?: ConstructionHandoffCue, era: Era = 'early'): PhysicalActionPresentation {
   const phase = playback.phase;
   const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
   const assembling = crewRole === 'assembler' || soloGeneralist && phase === 'assemble';
@@ -155,7 +156,10 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
     carriedObject: receiving && handoff.progress >= 0.48 && handoff.progress < 0.88 ? handoff.material
       : crewRole === 'hauler' && playback.carrying ? material : undefined,
     contactStrength: receiving || handoffing ? motion.impact
-      : assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0, blockedReason };
+      : assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0,
+    contactEffect: !blockedReason && !receiving && !handoffing && (assembling || prep) && motion.impact > 0
+      ? constructionContactEffect(material, era) : undefined,
+    blockedReason };
 }
 
 function applyHandoffMotion(

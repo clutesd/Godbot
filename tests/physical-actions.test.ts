@@ -10,7 +10,7 @@ import { farmAnchor, farmGeometry } from '../src/shared/FarmGeometry';
 import { farmPresentationState, farmerCanPresent, sampleFarmAction } from '../src/render/farming/FarmActionPresentation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, CONSTRUCTION_HANDOFF_SECONDS, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
-import { constructionChoreography, constructionMaterialColour } from '../src/render/construction/ConstructionChoreography';
+import { constructionChoreography, constructionContactEffect, constructionMaterialColour } from '../src/render/construction/ConstructionChoreography';
 import { constructionWorkerLane, sampleConstructionWorkerMotion } from '../src/render/construction/ConstructionWorkerMotion';
 import { assignConstructionCrewRoles, constructionHandoffRecipientId, constructionVisibleCrewIds, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors, createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
@@ -371,6 +371,59 @@ describe('construction workflow', () => {
     const receiving = scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => true)!;
     expect(receiving.action.phase).toBe('receive');
     expect(receiving.action.carriedObject).toBe('timber');
+  });
+
+  it('maps construction materials to restrained contact evidence by era', () => {
+    expect(constructionContactEffect('timber', 'early')).toBe('timber-chip');
+    expect(constructionContactEffect('masonry', 'village')).toBe('mineral-dust');
+    expect(constructionContactEffect('ceramic', 'preIndustrial')).toBe('mineral-dust');
+    expect(constructionContactEffect('earth', 'early')).toBe('earth-crumb');
+    expect(constructionContactEffect('metal', 'preIndustrial')).toBe('metal-fragment');
+    expect(constructionContactEffect('metal', 'industrial')).toBe('metal-spark');
+    expect(constructionContactEffect('metal', 'advanced')).toBe('metal-spark');
+  });
+
+  it('emits contact evidence only for actual construction work contact', () => {
+    const { person } = setup();
+    const assemblerMotion = createResourceWorkMotion();
+    const assembler = sampleConstructionAction(person, 'plot',
+      { phase: 'assemble', seconds: 0.7, carrying: false }, anchors, 'metal', assemblerMotion,
+      undefined, 'assembler', 3, 0.3, undefined, 'industrial');
+    expect(assembler.contactStrength).toBeGreaterThan(0);
+    expect(assembler.contactEffect).toBe('metal-spark');
+
+    const handoff = sampleConstructionAction(person, 'plot',
+      { phase: 'handoff', seconds: 0.46, carrying: true }, anchors, 'metal', createResourceWorkMotion(),
+      undefined, 'hauler', 3, 0.3, undefined, 'industrial');
+    expect(handoff.contactEffect).toBeUndefined();
+
+    const blocked = sampleConstructionAction(person, 'plot',
+      { phase: 'assemble', seconds: 0.7, carrying: false }, anchors, 'timber', createResourceWorkMotion(),
+      'missing:wood', 'assembler', 3, 0.3, undefined, 'early');
+    expect(blocked.contactEffect).toBeUndefined();
+  });
+
+  it('keeps contact effects pooled and separates industrial sparks from ordinary fragments', () => {
+    const renderer = new ResourceWorkerRenderer();
+    const colour = new THREE.Color('#ffffff');
+    const motion = createResourceWorkMotion();
+    motion.handY = 0.5; motion.handZ = 0.2; motion.toolAngle = 1; motion.impact = 1;
+
+    renderer.beginFrame();
+    renderer.drawPhysical(motion, { x: 0, z: 0 }, 'hammer', undefined, '#6f7882', 1,
+      0, 0, 0, 1, 0, colour, false, true, false, 'metal-spark');
+    renderer.endFrame();
+    const sparks = renderer.group.children.find(child => child.name === 'Construction contact sparks') as THREE.InstancedMesh;
+    const fragments = renderer.group.children.find(child => child.name === 'Resource and construction contact fragments') as THREE.InstancedMesh;
+    expect(sparks.count).toBe(2);
+    expect(fragments.count).toBe(0);
+
+    renderer.beginFrame();
+    renderer.drawPhysical(motion, { x: 0, z: 0 }, 'hammer', undefined, '#987149', 1,
+      0, 0, 0, 1, 0, colour, false, true, false, 'timber-chip');
+    renderer.endFrame();
+    expect(sparks.count).toBe(0);
+    expect(fragments.count).toBe(3);
   });
 
   it('requires an active safe project and the matching destination', () => {

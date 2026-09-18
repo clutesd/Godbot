@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Vec2 } from '../../sim/types';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
+import type { PhysicalContactEffectKind } from '../people/PhysicalActionPresentation';
 import type { ResourceWorkerVisual } from './ResourceWorkScene';
 import { MAX_ACTIVE_WORK_SITES } from './ResourceWorkScene';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../animation/ResourceWorkMotion';
@@ -16,6 +17,7 @@ export class ResourceWorkerRenderer {
   private readonly handles: THREE.InstancedMesh;
   private readonly heads: THREE.InstancedMesh;
   private readonly chips: THREE.InstancedMesh;
+  private readonly sparks: THREE.InstancedMesh;
   private readonly loads: THREE.InstancedMesh;
   private readonly baskets: THREE.InstancedMesh;
   private readonly matrix = new THREE.Matrix4();
@@ -27,6 +29,7 @@ export class ResourceWorkerRenderer {
   private readonly colour = new THREE.Color();
   private count = 0;
   private chipCount = 0;
+  private sparkCount = 0;
   private baseX = 0;
   private baseY = 0;
   private baseZ = 0;
@@ -41,7 +44,8 @@ export class ResourceWorkerRenderer {
     this.limbs = this.pool('Resource worker joints', new THREE.CylinderGeometry(0.028, 0.033, 1, 5), '#ffffff', CAPACITY * 8);
     this.handles = this.pool('Resource worker tool shafts', new THREE.CylinderGeometry(0.018, 0.023, 1, 6), '#765235', CAPACITY);
     this.heads = this.pool('Resource worker axe and pick heads', resourceToolHeadGeometry(), '#ffffff', CAPACITY);
-    this.chips = this.pool('Resource contact chips and leaves', new THREE.TetrahedronGeometry(1), '#ffffff', CAPACITY * 3);
+    this.chips = this.pool('Resource and construction contact fragments', new THREE.TetrahedronGeometry(1), '#ffffff', CAPACITY * 3);
+    this.sparks = this.sparkPool('Construction contact sparks', CAPACITY * 2);
   }
 
   sample(worker: ResourceWorkerVisual, seconds: number, delta: number, ready: boolean): void {
@@ -53,7 +57,7 @@ export class ResourceWorkerRenderer {
     if (!ready) this.motion.impact = 0;
   }
 
-  beginFrame(): void { this.count = 0; this.chipCount = 0; }
+  beginFrame(): void { this.count = 0; this.chipCount = 0; this.sparkCount = 0; }
 
   draw(worker: ResourceWorkerVisual, x: number, y: number, z: number, size: number, facing: number, colour: THREE.Color, effects = true): void {
     this.drawPhysical(this.motion, worker.station.target, worker.site.profile.tool,
@@ -65,7 +69,8 @@ export class ResourceWorkerRenderer {
   /** Shared instanced limbs/props, not a shared action state machine. All phases come from callers. */
   drawPhysical(m: ResourceWorkMotion, target: Readonly<Vec2>, tool: string, load: string | undefined,
     materialColour: string, blend: number, x: number, y: number, z: number, size: number, facing: number,
-    colour: THREE.Color, basket = false, effects = true, walking = false): void {
+    colour: THREE.Color, basket = false, effects = true, walking = false,
+    contactEffect?: PhysicalContactEffectKind): void {
     if (this.count >= CAPACITY) return;
     const index = this.count++;
     this.baseX = x; this.baseY = y; this.baseZ = z; this.size = size;
@@ -126,15 +131,46 @@ export class ResourceWorkerRenderer {
     this.scale.setScalar(basket ? size : 0); this.matrix.compose(this.position, this.rotation, this.scale);
     this.baskets.setMatrixAt(index, this.matrix);
     if (effects && m.impact > 0 && blend > 0.95) {
-      this.colour.set(materialColour);
-      for (let chip = 0; chip < 3; chip++) {
-        const spread = (chip - 1) * 0.025 * m.impact;
-        this.position.set(target.x + spread * this.cos, y + 0.04 + Math.sin(m.impact * Math.PI / 2) * 0.025, target.z - spread * this.sin);
-        const radius = (plant ? 0.006 : 0.004) * (1 - m.impact * 0.5);
-        this.scale.setScalar(radius);
-        this.matrix.compose(this.position, this.rotation, this.scale);
-        this.chips.setMatrixAt(this.chipCount, this.matrix);
-        this.chips.setColorAt(this.chipCount++, this.colour);
+      const contactY = contactEffect ? y + Math.max(0.05, handY * size * 0.82)
+        : y + 0.04 + Math.sin(m.impact * Math.PI / 2) * 0.025;
+      if (contactEffect === 'metal-spark') {
+        for (let spark = 0; spark < 2; spark++) {
+          const sign = spark === 0 ? -1 : 1;
+          const spread = sign * 0.018 * (0.45 + m.impact);
+          this.position.set(target.x + spread * this.cos, contactY + (0.018 + spark * 0.014) * m.impact,
+            target.z - spread * this.sin);
+          this.scale.set(0.0018 * size, (0.008 + 0.01 * m.impact) * size, 0.0018 * size);
+          this.rotation.setFromAxisAngle(this.up, facing + sign * 0.55);
+          this.matrix.compose(this.position, this.rotation, this.scale);
+          this.sparks.setMatrixAt(this.sparkCount++, this.matrix);
+        }
+      } else {
+        this.colour.set(materialColour);
+        const count = contactEffect === 'metal-fragment' ? 2 : 3;
+        for (let chip = 0; chip < count; chip++) {
+          const spread = (chip - (count - 1) * 0.5) * 0.025 * m.impact;
+          this.position.set(target.x + spread * this.cos,
+            contactY + (contactEffect === 'mineral-dust' ? chip * 0.006 : chip * 0.003) * m.impact,
+            target.z - spread * this.sin);
+          if (contactEffect === 'timber-chip') {
+            this.scale.set(0.009 * size, 0.0028 * size, 0.0035 * size);
+          } else if (contactEffect === 'mineral-dust') {
+            const radius = (0.0045 + chip * 0.001) * size * (0.75 + m.impact * 0.25);
+            this.scale.setScalar(radius);
+          } else if (contactEffect === 'earth-crumb') {
+            const radius = (0.0055 + chip * 0.0012) * size;
+            this.scale.set(radius, radius * 0.72, radius * 1.12);
+          } else if (contactEffect === 'metal-fragment') {
+            this.scale.set(0.006 * size, 0.0022 * size, 0.0028 * size);
+          } else {
+            const radius = (plant ? 0.006 : 0.004) * (1 - m.impact * 0.5);
+            this.scale.setScalar(radius);
+          }
+          this.rotation.setFromAxisAngle(this.up, facing + (chip - 1) * 0.28);
+          this.matrix.compose(this.position, this.rotation, this.scale);
+          this.chips.setMatrixAt(this.chipCount, this.matrix);
+          this.chips.setColorAt(this.chipCount++, this.colour);
+        }
       }
     }
   }
@@ -144,8 +180,9 @@ export class ResourceWorkerRenderer {
     this.handles.count = this.count;
     this.heads.count = this.count;
     this.chips.count = this.chipCount;
+    this.sparks.count = this.sparkCount;
     this.loads.count = this.baskets.count = this.count;
-    for (const mesh of [this.limbs, this.handles, this.heads, this.chips, this.loads, this.baskets]) {
+    for (const mesh of [this.limbs, this.handles, this.heads, this.chips, this.sparks, this.loads, this.baskets]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
@@ -161,6 +198,18 @@ export class ResourceWorkerRenderer {
     this.scale.set(width * this.size, length * this.size * (width > 0 ? 1 : 0), width * this.size);
     this.matrix.compose(this.position, this.rotation, this.scale);
     mesh.setMatrixAt(index, this.matrix);
+  }
+
+  private sparkPool(name: string, capacity: number): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: '#ffd27a' }),
+      capacity,
+    );
+    mesh.name = name; mesh.count = 0; mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.group.add(mesh);
+    return mesh;
   }
 
   private pool(name: string, geometry: THREE.BufferGeometry, colour: string, capacity: number): THREE.InstancedMesh {
