@@ -161,6 +161,29 @@ describe('settlement render budgeting', () => {
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).pending).toBe(0);
   });
 
+  it('rebuilds through pre-completion DETAIL reveal slices before the project disappears', () => {
+    const test = harness('settlement-render-budget-detail');
+    const settlement = test.state.settlements.find(candidate => candidate.alive)!;
+    attachActiveProject(settlement, test.state, 0.919);
+    settlement.constructionProgress = 0.2;
+    sync(test.renderer, true);
+    test.resetCreated();
+
+    settlement.development!.project!.progress = 0.92;
+    sync(test.renderer);
+    expect(test.created()).toBe(1);
+    expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
+
+    test.resetCreated();
+    settlement.development!.project!.progress = 0.94;
+    sync(test.renderer);
+    expect(test.created()).toBe(1);
+    expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
+
+    // The mirror stays stale throughout: DETAIL is driven entirely by the live project.
+    expect(settlement.constructionProgress).toBe(0.2);
+  });
+
   it('rebuilds from authoritative project progress when finishing begins even if the legacy mirror is stale', () => {
     const test = harness('settlement-render-budget-finishing');
     const settlement = test.state.settlements.find(candidate => candidate.alive)!;

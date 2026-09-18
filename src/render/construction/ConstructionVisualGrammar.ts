@@ -12,7 +12,9 @@ export const CONSTRUCTION_STAGE_THRESHOLDS = {
   frame: 0.2,
   walls: 0.45,
   roof: 0.78,
-  detail: 1,
+  // Reserve the final 8% of paid work for doors, trim, glow, ornament, frontage and yard detail.
+  // Cleanup/scaffold stripping begins shortly after, at 95%, while this stage continues revealing.
+  detail: 0.92,
   finishing: 0.95,
 } as const;
 
@@ -77,9 +79,7 @@ export function constructionStagePresentation(progress: number): ConstructionSta
 
   const phase = stage === BUILD_STAGE.FOUNDATION
     ? paid / Math.max(1e-6, CONSTRUCTION_STAGE_THRESHOLDS.frame)
-    : stage === BUILD_STAGE.DETAIL
-      ? 1
-      : (paid - start) / Math.max(1e-6, end - start);
+    : (paid - start) / Math.max(1e-6, end - start);
   return {
     stage,
     previousStage,

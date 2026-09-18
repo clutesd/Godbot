@@ -202,25 +202,39 @@ describe('structure renderer and performance validation', () => {
       constructionBuildStage(0.2),
       constructionBuildStage(0.45),
       constructionBuildStage(0.78),
+      constructionBuildStage(0.91),
+      constructionBuildStage(0.92),
       constructionBuildStage(1),
     ]).toEqual([
       BUILD_STAGE.FOUNDATION,
       BUILD_STAGE.FRAME,
       BUILD_STAGE.WALLS,
       BUILD_STAGE.ROOF,
+      BUILD_STAGE.ROOF,
+      BUILD_STAGE.DETAIL,
       BUILD_STAGE.DETAIL,
     ]);
 
     const frameStart = constructionStagePresentation(0.2);
     const frameMid = constructionStagePresentation(0.325);
+    const detailStart = constructionStagePresentation(0.92);
+    const detailMid = constructionStagePresentation(0.96);
+    const detailAlmostDone = constructionStagePresentation(0.999);
     expect(frameStart.previousStage).toBe(BUILD_STAGE.FOUNDATION);
     expect(frameStart.phase).toBeCloseTo(0);
     expect(frameMid.phase).toBeCloseTo(0.5);
-    expect(constructionStagePresentation(0.96).finishing).toBe(true);
+    expect(detailStart.previousStage).toBe(BUILD_STAGE.ROOF);
+    expect(detailStart.phase).toBeCloseTo(0);
+    expect(detailMid.stage).toBe(BUILD_STAGE.DETAIL);
+    expect(detailMid.phase).toBeCloseTo(0.5);
+    expect(detailMid.finishing).toBe(true);
+    expect(detailAlmostDone.phase).toBeGreaterThan(0.98);
 
-    // Tiny progress changes within one reveal slice stay cheap; visible slices do rebuild.
+    // Tiny progress changes within one reveal slice stay cheap; visible slices and DETAIL do rebuild.
     expect(constructionPresentationBucket(0.12)).toBe(constructionPresentationBucket(0.14));
     expect(constructionPresentationBucket(0.14)).not.toBe(constructionPresentationBucket(0.19));
+    expect(constructionPresentationBucket(0.919)).not.toBe(constructionPresentationBucket(0.92));
+    expect(constructionPresentationBucket(0.92)).not.toBe(constructionPresentationBucket(0.94));
   });
 
   it('uses the active project as the future identity during upgrades and repurposes', () => {
@@ -250,7 +264,7 @@ describe('structure renderer and performance validation', () => {
 
   it('preserves target architectural identity throughout canonical construction stages', () => {
     const builder = new AssetBuilder('construction-continuity-validation');
-    const stages = [BUILD_STAGE.FOUNDATION, BUILD_STAGE.FRAME, BUILD_STAGE.WALLS, BUILD_STAGE.ROOF] as const;
+    const stages = [BUILD_STAGE.FOUNDATION, BUILD_STAGE.FRAME, BUILD_STAGE.WALLS, BUILD_STAGE.ROOF, BUILD_STAGE.DETAIL] as const;
     const factory = stages.map(stage => builder.getAsset('building', {
       seed: 'continuity:factory',
       culture: CULTURE,
@@ -266,6 +280,8 @@ describe('structure renderer and performance validation', () => {
 
     expect(factory.every(mesh => mesh.userData['grammarRole'] === 'factory')).toBe(true);
     expect(shrine.every(mesh => mesh.userData['grammarRole'] === 'shrine')).toBe(true);
+    expect(factory[BUILD_STAGE.DETAIL]!.userData['buildStage']).toBe(BUILD_STAGE.DETAIL);
+    expect(shrine[BUILD_STAGE.DETAIL]!.userData['buildStage']).toBe(BUILD_STAGE.DETAIL);
     // The staged procedural path must not collapse unlike future buildings into one generic shell.
     expect(boundsSignature(factory[1]!)).not.toBe(boundsSignature(shrine[1]!));
     expect(boundsSignature(factory[3]!)).not.toBe(boundsSignature(shrine[3]!));
