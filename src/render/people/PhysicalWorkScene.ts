@@ -141,13 +141,22 @@ export class PhysicalWorkScene {
         ? this.handoffFor(worker.project!, person.id) : undefined;
       // Receiving is renderer-owned coordination. Freeze the assembler's ordinary loop while the
       // hauler physically transfers the visible load, then resume assembly from the same state.
-      if (!handoff) advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize);
+      if (!handoff) {
+        const handoffReady = !worker.handoffRecipientId
+          || this.handoffRecipientReady(worker.project!, worker.handoffRecipientId);
+        advanceConstruction(worker.playback, delta, ready, !!action.blockedReason, worker.crewRole, worker.crewSize, handoffReady);
+      }
       worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!,
         worker.material!, worker.motion, action.blockedReason, worker.crewRole, worker.crewSize, worker.project!.progress, handoff);
     } else if (ready && worker.field) {
       worker.seconds += Math.max(0, Math.min(0.1, delta));
       // New anchors take effect in plan next frame, so a recovery never jumps straight into contact.
     }
+  }
+  private handoffRecipientReady(project: DevelopmentProject, recipientId: string): boolean {
+    const recipient = this.workers.get(recipientId);
+    return Boolean(recipient && recipient.project === project && recipient.crewRole === 'assembler'
+      && recipient.ready && !recipient.action.blockedReason);
   }
   private handoffFor(project: DevelopmentProject, recipientId: string): ConstructionHandoffCue | undefined {
     const source = [...this.workers.entries()]
