@@ -245,6 +245,24 @@ describe('construction workflow', () => {
     expect(constructionChoreography('metal', 0.96).finishing).toBe(true);
   });
 
+  it('changes worker motion when the same material crosses Step 1 construction stages', () => {
+    const { person } = setup();
+    const sample = (progress: number) => {
+      const motion = createResourceWorkMotion();
+      sampleConstructionAction(person, 'plot', { phase: 'assemble', seconds: 0.76, carrying: false },
+        anchors, 'timber', motion, undefined, 'assembler', 3, progress);
+      return motion;
+    };
+    const foundation = sample(0.1);
+    const frame = sample(0.3);
+    const walls = sample(0.6);
+    const roof = sample(0.85);
+    const finishing = sample(0.96);
+    expect(new Set([foundation, frame, walls, roof].map(motion => JSON.stringify(motion))).size).toBe(4);
+    expect(roof.handY).toBeGreaterThan(foundation.handY);
+    expect(finishing.impact).toBeLessThanOrEqual(roof.impact);
+  });
+
   it('produces visibly distinct assembler motion for different construction materials', () => {
     const { person } = setup();
     const samples = (['earth', 'timber', 'masonry', 'ceramic', 'metal'] as const).map(material => {
