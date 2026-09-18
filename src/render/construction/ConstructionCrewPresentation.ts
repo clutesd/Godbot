@@ -1,9 +1,85 @@
+import type { Person, Settlement } from '../../sim/types';
+
 export type ConstructionCrewRole = 'hauler' | 'assembler' | 'site-worker';
 
 export interface ConstructionCrewAssignment {
   role: ConstructionCrewRole;
   /** Stable rank inside the visible project crew; useful for presentation diagnostics. */
   rank: number;
+}
+
+export const CONSTRUCTION_VISIBLE_CREW_PER_PROJECT = 3;
+
+/**
+ * Protect a tiny documentary crew for each funded project from the general population budget.
+ * On-site workers win over commuters; within each group we try to show distinct crew roles first.
+ * This never changes who the simulation assigned to construction.
+ */
+export function constructionVisibleCrewIds(
+  people: readonly Person[],
+  settlements: readonly Settlement[],
+  perProject = CONSTRUCTION_VISIBLE_CREW_PER_PROJECT,
+): Set<string> {
+  const visible = new Set<string>();
+  const limit = Math.max(0, Math.floor(perProject));
+  if (limit === 0) return visible;
+
+  for (const settlement of settlements) {
+    const project = settlement.alive ? settlement.development?.project : undefined;
+    if (!project || project.progress >= 1) continue;
+    const candidates = people.filter(person => person.alive
+      && person.homeId === settlement.id
+      && person.activity === 'construct'
+      && person.navigation?.destinationKind === 'construction-site'
+      && (person.navigation.destinationId === project.plotId
+        || person.navigation.destinationId === `${settlement.id}:construction-site`));
+    if (candidates.length === 0) continue;
+
+    const assignments = assignConstructionCrewRoles(project.plotId, candidates.map(person => person.id));
+    const roleOrder: readonly ConstructionCrewRole[] = ['hauler', 'assembler', 'site-worker'];
+    const ordered = [...candidates].sort((a, b) =>
+      Number(Boolean(a.navigation?.traveling)) - Number(Boolean(b.navigation?.traveling))
+      || roleOrder.indexOf(assignments.get(a.id)?.role ?? 'hauler')
+        - roleOrder.indexOf(assignments.get(b.id)?.role ?? 'hauler')
+      || (assignments.get(a.id)?.rank ?? 0) - (assignments.get(b.id)?.rank ?? 0)
+      || a.id.localeCompare(b.id));
+
+    // First pass: distinct on-site roles. Second pass: any remaining on-site workers. Only then
+    // protect commuters, so a busy site does not spend its protected slots on people still en route.
+    const selectedRoles = new Set<ConstructionCrewRole>();
+    for (const person of ordered) {
+      if (visible.size >= settlements.length * limit) break;
+      if (person.navigation?.traveling) continue;
+      const role = assignments.get(person.id)?.role ?? 'hauler';
+      if (selectedRoles.has(role)) continue;
+      visible.add(person.id);
+      selectedRoles.add(role);
+      if (selectedRoles.size >= limit) break;
+    }
+    for (const person of ordered) {
+      const projectCount = [...visible].filter(id => candidates.some(candidate => candidate.id === id)).length;
+      if (projectCount >= limit) break;
+      if (person.navigation?.traveling || visible.has(person.id)) continue;
+      visible.add(person.id);
+    }
+    for (const role of roleOrder) {
+      const projectCount = [...visible].filter(id => candidates.some(candidate => candidate.id === id)).length;
+      if (projectCount >= limit) break;
+      if (selectedRoles.has(role)) continue;
+      const commuter = ordered.find(person => person.navigation?.traveling && !visible.has(person.id)
+        && assignments.get(person.id)?.role === role);
+      if (commuter) {
+        visible.add(commuter.id);
+        selectedRoles.add(role);
+      }
+    }
+    for (const person of ordered) {
+      const projectCount = [...visible].filter(id => candidates.some(candidate => candidate.id === id)).length;
+      if (projectCount >= limit) break;
+      if (!visible.has(person.id)) visible.add(person.id);
+    }
+  }
+  return visible;
 }
 
 /**

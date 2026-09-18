@@ -11,7 +11,7 @@ import { farmPresentationState, farmerCanPresent, sampleFarmAction } from '../sr
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, createConstructionPlayback, sampleConstructionAction } from '../src/render/construction/ConstructionActionPresentation';
 import { constructionWorkerLane, sampleConstructionWorkerMotion } from '../src/render/construction/ConstructionWorkerMotion';
-import { assignConstructionCrewRoles, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
+import { assignConstructionCrewRoles, constructionVisibleCrewIds, constructionWorkfaceIndex, reconcileConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors, createConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
 import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../src/render/animation/ResourceWorkMotion';
@@ -113,6 +113,37 @@ describe('construction workflow', () => {
     const survivorId = remaining.find(id => afterDeparture.get(id)?.role !== 'hauler')!;
     const solo = reconcileConstructionCrewRoles('plot', [survivorId], afterDeparture);
     expect(solo.get(survivorId)?.role).toBe('hauler');
+  });
+
+  it('protects a bounded visible crew for each active construction project', () => {
+    const { settlement, person } = setup();
+    construction(settlement, person);
+    const people = Array.from({ length: 7 }, (_, index) => ({
+      ...structuredClone(person),
+      id: `visible-builder-${index}`,
+      navigation: {
+        ...structuredClone(person.navigation!),
+        traveling: index >= 5,
+      },
+    } as Person));
+    const protectedIds = constructionVisibleCrewIds(people, [settlement]);
+    expect(protectedIds.size).toBe(3);
+    expect([...protectedIds].every(id => people.find(person => person.id === id)?.activity === 'construct')).toBe(true);
+    // On-site workers are preferred while enough of them exist.
+    expect([...protectedIds].every(id => !people.find(person => person.id === id)?.navigation?.traveling)).toBe(true);
+  });
+
+  it('does not protect stale or unrelated construction destinations', () => {
+    const { settlement, person } = setup();
+    construction(settlement, person);
+    const valid = { ...structuredClone(person), id: 'valid-builder' } as Person;
+    const stale = { ...structuredClone(person), id: 'stale-builder' } as Person;
+    stale.navigation!.destinationId = 'old-plot';
+    const unrelated = { ...structuredClone(person), id: 'not-building', activity: 'socialize' } as Person;
+    const protectedIds = constructionVisibleCrewIds([valid, stale, unrelated], [settlement]);
+    expect(protectedIds.has(valid.id)).toBe(true);
+    expect(protectedIds.has(stale.id)).toBe(false);
+    expect(protectedIds.has(unrelated.id)).toBe(false);
   });
 
   it('spreads workers across stable workfaces and keeps site preparation at visible furniture', () => {

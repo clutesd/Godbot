@@ -44,6 +44,7 @@ import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
 import { constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
+import { constructionVisibleCrewIds } from './construction/ConstructionCrewPresentation';
 import { EcologyField } from './ecology/EcologyField';
 import { EcologyPostProcessing } from './atmosphere/EcologyPostProcessing';
 
@@ -712,9 +713,12 @@ export class GodboxRenderer {
     this.visiblePeoplePopulation = this.state.people.length;
     const capacity = this.people.instanceMatrix.count;
     const alive = this.state.people.filter((person) => person.alive && this.personOnRenderableGround(person));
+    const protectedConstruction = constructionVisibleCrewIds(alive, this.state.settlements);
     this.visiblePeople = alive
-      // Notable and historical lives always hold a slot so a documentary subject cannot vanish.
+      // Notable/historical lives remain first. Then reserve up to three people per live project so
+      // a crowded settlement cannot render an active worksite with nobody visibly building it.
       .sort((a, b) => tierRank(b) - tierRank(a)
+        || Number(protectedConstruction.has(b.id)) - Number(protectedConstruction.has(a.id))
         || Number(this.resourceWork.sites.has(`${b.homeId}\u0000${b.navigation?.destinationId ?? ''}`))
           - Number(this.resourceWork.sites.has(`${a.homeId}\u0000${a.navigation?.destinationId ?? ''}`))
         || stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
