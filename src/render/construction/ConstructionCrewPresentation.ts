@@ -37,47 +37,33 @@ export function constructionVisibleCrewIds(
 
     const assignments = assignConstructionCrewRoles(project.plotId, candidates.map(person => person.id));
     const roleOrder: readonly ConstructionCrewRole[] = ['hauler', 'assembler', 'site-worker'];
-    const ordered = [...candidates].sort((a, b) =>
-      Number(Boolean(a.navigation?.traveling)) - Number(Boolean(b.navigation?.traveling))
-      || roleOrder.indexOf(assignments.get(a.id)?.role ?? 'hauler')
-        - roleOrder.indexOf(assignments.get(b.id)?.role ?? 'hauler')
-      || (assignments.get(a.id)?.rank ?? 0) - (assignments.get(b.id)?.rank ?? 0)
-      || a.id.localeCompare(b.id));
+    const rank = (person: Person): number => assignments.get(person.id)?.rank ?? Number.MAX_SAFE_INTEGER;
+    const byRank = (a: Person, b: Person): number => rank(a) - rank(b) || a.id.localeCompare(b.id);
+    const onSite = candidates.filter(person => !person.navigation?.traveling).sort(byRank);
+    const commuters = candidates.filter(person => person.navigation?.traveling).sort(byRank);
+    const selected = new Set<string>();
 
-    // First pass: distinct on-site roles. Second pass: any remaining on-site workers. Only then
-    // protect commuters, so a busy site does not spend its protected slots on people still en route.
-    const selectedRoles = new Set<ConstructionCrewRole>();
-    for (const person of ordered) {
-      if (visible.size >= settlements.length * limit) break;
-      if (person.navigation?.traveling) continue;
-      const role = assignments.get(person.id)?.role ?? 'hauler';
-      if (selectedRoles.has(role)) continue;
-      visible.add(person.id);
-      selectedRoles.add(role);
-      if (selectedRoles.size >= limit) break;
-    }
-    for (const person of ordered) {
-      const projectCount = [...visible].filter(id => candidates.some(candidate => candidate.id === id)).length;
-      if (projectCount >= limit) break;
-      if (person.navigation?.traveling || visible.has(person.id)) continue;
-      visible.add(person.id);
-    }
-    for (const role of roleOrder) {
-      const projectCount = [...visible].filter(id => candidates.some(candidate => candidate.id === id)).length;
-      if (projectCount >= limit) break;
-      if (selectedRoles.has(role)) continue;
-      const commuter = ordered.find(person => person.navigation?.traveling && !visible.has(person.id)
-        && assignments.get(person.id)?.role === role);
-      if (commuter) {
-        visible.add(commuter.id);
-        selectedRoles.add(role);
+    const addDistinctRoles = (pool: readonly Person[]): void => {
+      for (const role of roleOrder) {
+        if (selected.size >= limit) return;
+        const candidate = pool.find(person => !selected.has(person.id) && assignments.get(person.id)?.role === role);
+        if (candidate) selected.add(candidate.id);
       }
-    }
-    for (const person of ordered) {
-      const projectCount = [...visible].filter(id => candidates.some(candidate => candidate.id === id)).length;
-      if (projectCount >= limit) break;
-      if (!visible.has(person.id)) visible.add(person.id);
-    }
+    };
+    const fill = (pool: readonly Person[]): void => {
+      for (const person of pool) {
+        if (selected.size >= limit) return;
+        selected.add(person.id);
+      }
+    };
+
+    // Keep the site visibly inhabited first, and prefer one recognizable worker from each core
+    // role before duplicates. Commuters are protected only when fewer than three people are on site.
+    addDistinctRoles(onSite);
+    fill(onSite);
+    addDistinctRoles(commuters);
+    fill(commuters);
+    for (const id of selected) visible.add(id);
   }
   return visible;
 }
