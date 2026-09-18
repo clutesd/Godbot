@@ -178,17 +178,18 @@ export class PhysicalWorkScene {
       const blocked = constructionBlockedReason(settlement);
       const material = constructionPresentedMaterial(settlement);
       const candidateCrewSize = crewSize;
-      advanceConstruction(worker.playback, 0, false, !!blocked, worker.crewRole, candidateCrewSize, true,
+      const candidatePlayback: ConstructionPlayback = { ...worker.playback };
+      const candidateMotion: ResourceWorkMotion = { ...worker.motion };
+      advanceConstruction(candidatePlayback, 0, false, !!blocked, worker.crewRole, candidateCrewSize, true,
         constructionStagePresentation(project.progress).finishing);
       const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project, person.id) : undefined;
-      const candidateAction = sampleConstructionAction(person, project.plotId, worker.playback, candidateAnchors,
-        material, worker.motion, blocked, worker.crewRole, candidateCrewSize, project.progress,
+      const candidateAction = sampleConstructionAction(person, project.plotId, candidatePlayback, candidateAnchors,
+        material, candidateMotion, blocked, worker.crewRole, candidateCrewSize, project.progress,
         handoff, developmentPresentationEra(project.response));
 
       // Stage migration is presentation-only, but its new path must satisfy the same safety contract
-      // as initial construction placement. Validate before mutating the persistent worker so an
-      // unsafe transition fails closed for this frame and can be retried later without losing
-      // playback/role continuity.
+      // as initial construction placement. Derive everything on temporary copies first; an unsafe
+      // transition fails closed without changing anchors, playback or pose and can be retried later.
       const migrationSafe = safeSegment(worker.action.locomotionTarget, candidateAction.locomotionTarget);
       const haulCorridorSafe = worker.crewRole !== 'hauler'
         || safeSegment(candidateAnchors.pickup, candidateAnchors.handoff);
@@ -197,6 +198,8 @@ export class PhysicalWorkScene {
       worker.anchors = candidateAnchors;
       worker.material = material;
       worker.crewSize = candidateCrewSize;
+      Object.assign(worker.playback, candidatePlayback);
+      Object.assign(worker.motion, candidateMotion);
       worker.action = candidateAction;
     } else if (farmer) {
       worker.fieldState = farm.state;
