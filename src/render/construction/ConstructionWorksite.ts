@@ -63,15 +63,17 @@ export function constructionWorksiteAnchors(
           : stage.stage === 2 ? 0
             : stage.stage === 3 ? 0.1 : 0.04;
   const migrationScale = Math.min(0.24, Math.min(width, depth) * 0.12);
-  const laneZ = laneUnit * Math.min(0.3, depth * 0.18) + stageLaneShift * migrationScale;
-  const laneX = laneUnit * Math.min(0.3, width * 0.18) + stageLaneShift * migrationScale;
+  const baseLaneZ = laneUnit * Math.min(0.3, depth * 0.18);
+  const baseLaneX = laneUnit * Math.min(0.3, width * 0.18);
+  const workLaneZ = baseLaneZ + stageLaneShift * migrationScale;
+  const workLaneX = baseLaneX + stageLaneShift * migrationScale;
   const face = ((Math.floor(workfaceIndex) % 4) + 4) % 4;
   const edgeX = width * 0.45 + 0.13 + edgeExtra;
   const edgeZ = depth * 0.45 + 0.13 + edgeExtra;
-  const delivery = face === 0 ? { x: edgeX, z: laneZ }
-    : face === 1 ? { x: laneX, z: edgeZ }
-      : face === 2 ? { x: -edgeX, z: -laneZ }
-        : { x: -laneX, z: -edgeZ };
+  const delivery = face === 0 ? { x: edgeX, z: workLaneZ }
+    : face === 1 ? { x: workLaneX, z: edgeZ }
+      : face === 2 ? { x: -edgeX, z: -workLaneZ }
+        : { x: -workLaneX, z: -edgeZ };
   const deliveryDistance = Math.hypot(delivery.x, delivery.z) || 1;
   const handoff = {
     x: delivery.x + delivery.x / deliveryDistance * 0.22,
@@ -81,11 +83,11 @@ export function constructionWorksiteAnchors(
   return {
     materialCenter: { x: stagingX, z: stagingZ },
     // Stand just outside the pile so the character does not clip through the stock itself.
-    pickup: { x: stagingX + side * 0.32, z: stagingZ + laneZ },
+    pickup: { x: stagingX + side * 0.32, z: stagingZ + baseLaneZ },
     delivery,
     handoff,
     // Sawhorses already occupy this part of the static worksite; the worker stands just in front.
-    prep: { x: prepCenter.x + laneX * 0.55, z: depth * 0.54 },
+    prep: { x: prepCenter.x + baseLaneX * 0.55, z: depth * 0.54 },
     prepCenter,
   };
 }
@@ -110,12 +112,14 @@ export function createConstructionWorksite(
   const depth = Math.max(0.8, spec.depth);
   const progress = clamp01(spec.progress);
   const material = spec.response?.material ?? 'timber';
+  const finishing = constructionStagePresentation(progress).finishing;
 
   addWorkPad(group, width, depth, palette);
-  if (spec.materialsAvailable !== false) addMaterialStaging(group, width, depth, material, progress, palette, spec.seedKey);
+  if (spec.materialsAvailable !== false) addMaterialStaging(group, width, depth, material, progress, palette, spec.seedKey, finishing);
   group.userData['blocked'] = spec.materialsAvailable === false;
-  addSawhorses(group, width, depth, palette);
-  addBoundaryMarkers(group, width, depth, palette);
+  group.userData['finishing'] = finishing;
+  addSawhorses(group, width, depth, palette, finishing);
+  addBoundaryMarkers(group, width, depth, palette, finishing);
 
   return group;
 }
@@ -160,13 +164,14 @@ function addMaterialStaging(
   progress: number,
   palette: MaterialPalette,
   seedKey: string,
+  finishing = false,
 ): void {
   // The exact same semantic material centre is exported to Action 1B. Workers therefore collect
   // loads from the pile the viewer can actually see, rather than from an unrelated magic point.
   const { materialCenter } = constructionWorksiteAnchors(width, depth, seedKey);
   const stagingX = materialCenter.x;
   const stagingZ = materialCenter.z;
-  const remaining = Math.max(0.28, 1 - progress * 0.62);
+  const remaining = Math.max(finishing ? 0.05 : 0.18, 1 - progress * 0.9);
 
   if (material === 'earth') {
     addEarthBasket(group, stagingX, stagingZ, palette);
@@ -176,7 +181,7 @@ function addMaterialStaging(
     const timber = palette.getSurfaceMaterial('timber');
     const beamLength = Math.max(0.5, depth * 0.54);
     const beamGeometry = new THREE.BoxGeometry(0.075, 0.075, beamLength);
-    const count = 4 + Math.round(remaining * 4);
+    const count = finishing ? 2 : 4 + Math.round(remaining * 4);
     for (let index = 0; index < count; index += 1) {
       const beam = new THREE.Mesh(beamGeometry, timber);
       const layer = Math.floor(index / 4);
@@ -197,7 +202,7 @@ function addMaterialStaging(
       : palette.getSurfaceMaterial('stone');
   const blockSize = Math.max(0.11, Math.min(0.18, width * 0.09));
   const blockGeometry = new THREE.BoxGeometry(blockSize * 1.35, blockSize, blockSize);
-  const count = 6 + Math.round(remaining * 7);
+  const count = finishing ? 3 : 6 + Math.round(remaining * 7);
   for (let index = 0; index < count; index += 1) {
     const column = index % 3;
     const row = Math.floor(index / 3) % 2;
@@ -226,11 +231,11 @@ function addEarthBasket(group: THREE.Group, x: number, z: number, palette: Mater
   group.add(basket);
 }
 
-function addSawhorses(group: THREE.Group, width: number, depth: number, palette: MaterialPalette): void {
+function addSawhorses(group: THREE.Group, width: number, depth: number, palette: MaterialPalette, finishing = false): void {
   const timber = palette.getSurfaceMaterial('timber');
   const beamGeometry = new THREE.BoxGeometry(Math.max(0.48, width * 0.34), 0.045, 0.06);
   const legGeometry = new THREE.BoxGeometry(0.035, 0.3, 0.035);
-  for (const z of [depth * 0.72, depth * 0.96]) {
+  for (const z of finishing ? [depth * 0.72] : [depth * 0.72, depth * 0.96]) {
     const bench = new THREE.Group();
     const top = new THREE.Mesh(beamGeometry, timber);
     top.position.y = 0.3;
@@ -251,16 +256,19 @@ function addSawhorses(group: THREE.Group, width: number, depth: number, palette:
   }
 }
 
-function addBoundaryMarkers(group: THREE.Group, width: number, depth: number, palette: MaterialPalette): void {
+function addBoundaryMarkers(group: THREE.Group, width: number, depth: number, palette: MaterialPalette, finishing = false): void {
   const timber = palette.getSurfaceMaterial('timber');
   const cloth = palette.getSurfaceMaterial('cloth');
   const stakeGeometry = new THREE.CylinderGeometry(0.018, 0.024, 0.44, 6);
-  for (const [x, z] of [
-    [-width * 0.8, -depth * 0.82],
-    [width * 0.8, -depth * 0.82],
-    [-width * 0.8, depth * 0.82],
-    [width * 0.8, depth * 0.82],
-  ] as const) {
+  const markerSites: ReadonlyArray<readonly [number, number]> = finishing
+    ? [[-width * 0.8, -depth * 0.82], [width * 0.8, -depth * 0.82]]
+    : [
+      [-width * 0.8, -depth * 0.82],
+      [width * 0.8, -depth * 0.82],
+      [-width * 0.8, depth * 0.82],
+      [width * 0.8, depth * 0.82],
+    ];
+  for (const [x, z] of markerSites) {
     const stake = new THREE.Mesh(stakeGeometry, timber);
     stake.position.set(x, 0.22, z);
     stake.castShadow = true;

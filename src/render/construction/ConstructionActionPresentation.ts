@@ -73,7 +73,14 @@ export function advanceConstruction(
   handoffReady = true,
   finishing = false,
 ): void {
-  if (blocked) { playback.phase = 'inspect'; playback.seconds = 0; playback.carrying = false; return; }
+  if (blocked) {
+    if (playback.phase !== 'inspect') { playback.phase = 'inspect'; playback.seconds = 0; }
+    playback.carrying = false;
+    if (!ready) return;
+    playback.seconds += Math.max(0, Math.min(delta, 0.1));
+    if (playback.seconds >= 2.6) playback.seconds = 0;
+    return;
+  }
 
   if (finishing && crewRole !== 'assembler') {
     if (playback.phase !== 'inspect') { playback.phase = 'inspect'; playback.seconds = 0; }
@@ -139,10 +146,12 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   const handoffing = !blocked && !finishingCleanup && crewRole === 'hauler' && phase === 'handoff';
   const receiving = !blocked && !choreography.finishing && crewRole === 'assembler' && handoff !== undefined;
   const prep = !blocked && !finishingCleanup && crewRole === 'site-worker';
-  const duration = phase === 'pickup' ? 0.9
-    : phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
-      : phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
-        : phase === 'inspect' ? 1.6 : 1.8;
+  const duration = blocked ? 2.6
+    : finishingCleanup ? 2.2
+      : phase === 'pickup' ? 0.9
+        : phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
+          : phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
+            : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
   if (blocked) applyQuietInspectionMotion(p, person.id, motion);
   else if (finishingCleanup) applyCleanupMotion(p, person.id, crewRole, motion);

@@ -185,6 +185,39 @@ describe('construction workflow', () => {
     expect(Math.hypot(finishing.delivery.x, finishing.delivery.z)).toBeGreaterThan(Math.hypot(roof.delivery.x, roof.delivery.z));
   });
 
+  it('keeps pickup and prep furniture fixed while only the workface migrates', () => {
+    const foundation = constructionWorksiteAnchors(2, 1.5, 'plot', 0.4, 1, 0.1);
+    const roof = constructionWorksiteAnchors(2, 1.5, 'plot', 0.4, 1, 0.85);
+    expect(roof.delivery).not.toEqual(foundation.delivery);
+    expect(roof.handoff).not.toEqual(foundation.handoff);
+    expect(roof.pickup).toEqual(foundation.pickup);
+    expect(roof.prep).toEqual(foundation.prep);
+    expect(roof.prepCenter).toEqual(foundation.prepCenter);
+    expect(roof.materialCenter).toEqual(foundation.materialCenter);
+  });
+
+  it('visibly thins site dressing during finishing cleanup', () => {
+    const { settlement, person } = setup();
+    construction(settlement, person);
+    const response = settlement.development!.project!.response;
+    const palette = new MaterialPalette({ culture: response.style, era: 'early' });
+    const active = createConstructionWorksite({
+      width: 2, depth: 2, progress: 0.85, seedKey: 'active-cleanup', response, materialsAvailable: true,
+    }, palette);
+    const finishing = createConstructionWorksite({
+      width: 2, depth: 2, progress: 0.96, seedKey: 'finishing-cleanup', response, materialsAvailable: true,
+    }, palette);
+    const countCue = (root: THREE.Object3D, cue: string) => {
+      let count = 0;
+      root.traverse(object => { if (object.userData['constructionCue'] === cue) count += 1; });
+      return count;
+    };
+    expect(finishing.userData['finishing']).toBe(true);
+    expect(countCue(finishing, 'staged-material')).toBeLessThan(countCue(active, 'staged-material'));
+    expect(countCue(finishing, 'site-furniture')).toBeLessThan(countCue(active, 'site-furniture'));
+    expect(countCue(finishing, 'survey-marker')).toBeLessThan(countCue(active, 'survey-marker'));
+  });
+
   it('updates live worker anchors at stage boundaries without resetting crew playback', () => {
     const { settlement, person, weather } = setup();
     const placement = construction(settlement, person);
@@ -491,6 +524,10 @@ describe('construction workflow', () => {
       expect(action.contactEffect).toBeUndefined();
       expect(motion.impact).toBe(0);
     }
+    const playback = { phase: 'inspect', seconds: 0, carrying: false } as ReturnType<typeof createConstructionPlayback>;
+    advanceConstruction(playback, 0.1, true, true, 'assembler', 3);
+    expect(playback.seconds).toBeGreaterThan(0);
+    expect(playback.phase).toBe('inspect');
   });
 
   it('turns late-stage support roles into cleanup while the assembler performs light finishing', () => {
