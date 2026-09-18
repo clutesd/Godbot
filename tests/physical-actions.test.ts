@@ -74,7 +74,7 @@ describe('physical authority and interruption', () => {
   it('never creates bindings without a safe path, and clears invalidated authority', () => {
     const { settlement, person, field, weather } = setup();
     const farm = { geometry: field, state: farmPresentationState(settlement, 6, weather) };
-    const scene = new PhysicalWorkScene(); scene.beginFrame([person]);
+    const scene = new PhysicalWorkScene(); scene.beginFrame([person], [settlement]);
     expect(scene.plan(person, settlement, undefined, farm, weather, () => false)).toBeUndefined();
     expect(scene.plan(person, settlement, undefined, farm, weather, () => true)).toBeDefined();
     person.navigation!.destinationId = 'elsewhere';
@@ -130,6 +130,59 @@ describe('construction workflow', () => {
     expect(solo.get(survivorId)?.role).toBe('hauler');
   });
 
+  it('keeps project roles authoritative when only a subset of the crew is rendered', () => {
+    const { settlement, person, weather } = setup();
+    const placement = construction(settlement, person);
+    const fullCrew = Array.from({ length: 6 }, (_, index) => ({
+      ...structuredClone(person),
+      id: `authority-builder-${index}`,
+      position: { x: 2.2 + index * 0.03, z: -0.4 },
+    } as Person));
+
+    const scene = new PhysicalWorkScene();
+    scene.refreshConstructionCrewAuthority(fullCrew, [settlement]);
+    const before = new Map(fullCrew.map(member => [
+      member.id,
+      scene.constructionCrewAssignment(settlement.id, member.id)!,
+    ]));
+
+    // Render only two workers. Their roles must come from the six-person authority, not a new
+    // two-person hauler/assembler assignment derived from visibility.
+    scene.beginFrame();
+    const visibleSubset = [fullCrew[2]!, fullCrew[5]!];
+    for (const member of visibleSubset) {
+      const worker = scene.plan(member, settlement, placement, undefined, weather, () => true)!;
+      expect(worker.crewRole).toBe(before.get(member.id)!.role);
+      expect(worker.crewRank).toBe(before.get(member.id)!.rank);
+      expect(worker.crewSize).toBe(6);
+    }
+
+    scene.endFrame();
+    scene.beginFrame();
+    const previouslyHidden = fullCrew[0]!;
+    const later = scene.plan(previouslyHidden, settlement, placement, undefined, weather, () => true)!;
+    expect(later.crewRole).toBe(before.get(previouslyHidden.id)!.role);
+    expect(later.crewRank).toBe(before.get(previouslyHidden.id)!.rank);
+  });
+
+  it('uses the same authoritative assignments for visibility protection and runtime choreography', () => {
+    const { settlement, person } = setup();
+    construction(settlement, person);
+    const fullCrew = Array.from({ length: 7 }, (_, index) => ({
+      ...structuredClone(person),
+      id: `shared-authority-builder-${index}`,
+      navigation: { ...structuredClone(person.navigation!), traveling: index >= 5 },
+    } as Person));
+    const scene = new PhysicalWorkScene();
+    scene.refreshConstructionCrewAuthority(fullCrew, [settlement]);
+    const authority = scene.constructionCrewAuthority();
+    const protectedIds = constructionVisibleCrewIds(fullCrew, [settlement], 3, authority);
+
+    expect(protectedIds.size).toBe(3);
+    const protectedRoles = [...protectedIds].map(id => authority.get(settlement.id)!.get(id)!.role);
+    expect(new Set(protectedRoles)).toEqual(new Set(['hauler', 'assembler', 'site-worker']));
+  });
+
   it('protects a bounded visible crew for each active construction project', () => {
     const { settlement, person } = setup();
     construction(settlement, person);
@@ -141,7 +194,9 @@ describe('construction workflow', () => {
         traveling: index >= 5,
       },
     } as Person));
-    const protectedIds = constructionVisibleCrewIds(people, [settlement]);
+    const scene = new PhysicalWorkScene();
+    scene.refreshConstructionCrewAuthority(people, [settlement]);
+    const protectedIds = constructionVisibleCrewIds(people, [settlement], 3, scene.constructionCrewAuthority());
     expect(protectedIds.size).toBe(3);
     expect([...protectedIds].every(id => people.find(person => person.id === id)?.activity === 'construct')).toBe(true);
     // On-site workers are preferred while enough of them exist.
@@ -225,7 +280,7 @@ describe('construction workflow', () => {
       ...structuredClone(person), id, position: { x: 2.2 + index * 0.03, z: -0.4 },
     } as Person));
     const scene = new PhysicalWorkScene();
-    scene.beginFrame(people);
+    scene.beginFrame(people, [settlement]);
     const initial = people.map(member => scene.plan(member, settlement, placement, undefined, weather, () => true)!);
     const assemblerIndex = initial.findIndex(worker => worker.crewRole === 'assembler');
     const assemblerPerson = people[assemblerIndex]!;
@@ -234,7 +289,7 @@ describe('construction workflow', () => {
     const delivery = { ...before.anchors!.delivery };
 
     settlement.development!.project!.progress = 0.85;
-    scene.beginFrame(people);
+    scene.beginFrame(people, [settlement]);
     const after = scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => true)!;
     expect(after.playback).toBe(playback);
     expect(after.anchors!.delivery).not.toEqual(delivery);
@@ -250,13 +305,13 @@ describe('construction workflow', () => {
     people[2]!.navigation!.traveling = true;
 
     const scene = new PhysicalWorkScene();
-    scene.beginFrame(people);
+    scene.beginFrame(people, [settlement]);
     const before = people.slice(0, 2).map(member =>
       scene.plan(member, settlement, placement, undefined, weather, () => true)!.crewRole);
     scene.endFrame();
 
     people[2]!.navigation!.traveling = false;
-    scene.beginFrame(people);
+    scene.beginFrame(people, [settlement]);
     const after = people.slice(0, 2).map(member =>
       scene.plan(member, settlement, placement, undefined, weather, () => true)!.crewRole);
     expect(after).toEqual(before);
@@ -270,7 +325,7 @@ describe('construction workflow', () => {
     placement.constructionWidth = 1.1;
     placement.constructionDepth = 0.9;
     const scene = new PhysicalWorkScene();
-    scene.beginFrame([person]);
+    scene.beginFrame([person], [settlement]);
     const worker = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
     const local = constructionWorksiteAnchors(1.1, 0.9, 'plot', constructionWorkerLane(person.id),
       constructionWorkfaceIndex('plot', person.id), settlement.development!.project!.progress);
@@ -288,7 +343,7 @@ describe('construction workflow', () => {
     people[1]!.navigation!.destinationId = `${settlement.id}:construction-site`;
     const before = JSON.stringify(settlement);
     const scene = new PhysicalWorkScene();
-    scene.beginFrame(people);
+    scene.beginFrame(people, [settlement]);
     const workers = people.map(member => scene.plan(member, settlement, placement, undefined, weather, () => true)!);
     expect(new Set(workers.map(worker => worker.crewRole))).toEqual(new Set(['hauler', 'assembler', 'site-worker']));
     const byRole = new Map(workers.map(worker => [worker.crewRole, worker]));
@@ -425,7 +480,7 @@ describe('construction workflow', () => {
       ...structuredClone(person), id, position: { x: 2.2 + index * 0.04, z: -0.4 },
     } as Person));
     const scene = new PhysicalWorkScene();
-    scene.beginFrame(people);
+    scene.beginFrame(people, [settlement]);
     const workers = people.map(member => scene.plan(member, settlement, placement, undefined, weather, () => true)!);
     const hauler = workers.find(worker => worker.crewRole === 'hauler')!;
     const assembler = workers.find(worker => worker.crewRole === 'assembler')!;
@@ -678,7 +733,7 @@ describe('construction workflow', () => {
     const scene = new PhysicalWorkScene(), visuals = new PeopleVisualStateStore();
     const phases = new Set<string>(); let acquired = false;
     for (let frame = 0; frame < 1800; frame++) {
-      scene.beginFrame([person]); visuals.beginFrame();
+      scene.beginFrame([person], [settlement]); visuals.beginFrame();
       const worker = scene.plan(person, settlement, placement, undefined, weather, () => true)!;
       const a = worker.action;
       const visual = visuals.resolve(person.id, { destination: a.locomotionTarget, restFacing: Math.atan2(a.interactionAnchor.x - a.locomotionTarget.x, a.interactionAnchor.z - a.locomotionTarget.z) }, 1 / 60, { heightAt: () => 0, isStandable: () => true });

@@ -6,7 +6,7 @@ import type { FarmGeometry } from '../../shared/FarmGeometry';
 import { farmerCanPresent, sampleFarmAction, type FarmPresentationState } from '../farming/FarmActionPresentation';
 import { advanceConstruction, builderCanPresent, constructionBlockedReason, constructionPresentedMaterial, CONSTRUCTION_HANDOFF_SECONDS, createConstructionPlayback, sampleConstructionAction, type ConstructionHandoffCue, type ConstructionPlayback } from '../construction/ConstructionActionPresentation';
 import { constructionWorkerLane, rotateConstructionAnchor, type ConstructionWorkerAnchors } from '../construction/ConstructionWorkerMotion';
-import { constructionHandoffRecipientId, reconcileConstructionCrewRoles, constructionWorkfaceIndex, type ConstructionCrewAssignment, type ConstructionCrewRole } from '../construction/ConstructionCrewPresentation';
+import { constructionHandoffRecipientId, reconcileConstructionCrewRoles, constructionWorkfaceIndex, type ConstructionCrewAssignment, type ConstructionCrewAuthority, type ConstructionCrewRole } from '../construction/ConstructionCrewPresentation';
 import { constructionWorksiteAnchors } from '../construction/ConstructionWorksite';
 import { createResourceWorkMotion, type ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { atInteraction, facingTarget, type PhysicalActionPresentation } from './PhysicalActionPresentation';
@@ -66,19 +66,56 @@ function constructionAnchorsFor(
 /** Bounded renderer continuity only. Revalidated against live authority on every visible frame. */
 export class PhysicalWorkScene {
   private readonly workers = new Map<string, PhysicalWorker>();
-  private readonly constructionCrewCandidates = new Map<string, Person[]>();
   private readonly constructionRoleAssignments = new WeakMap<DevelopmentProject, Map<string, ConstructionCrewAssignment>>();
-  beginFrame(people: readonly Person[]): void {
-    for (const worker of this.workers.values()) worker.seen = false;
-    this.constructionCrewCandidates.clear();
-    // Keep commuters in the project roster. Travel prevents animation contact, but it must not
-    // change someone's job simply because they are still walking to the site this frame.
-    for (const person of people) if (person.alive && person.activity === 'construct'
-      && person.navigation?.destinationKind === 'construction-site') {
-      const crew = this.constructionCrewCandidates.get(person.homeId) ?? [];
-      crew.push(person);
-      this.constructionCrewCandidates.set(person.homeId, crew);
+  private readonly constructionAuthorityBySettlement = new Map<string, {
+    project: DevelopmentProject;
+    assignments: Map<string, ConstructionCrewAssignment>;
+  }>();
+
+  /**
+   * Reconcile project roles from the full simulation workforce, not the rendered population.
+   * The renderer calls this only with its visibility refresh cadence, so city-scale populations are
+   * not scanned every animation frame. Commuters remain in the roster and therefore keep their job.
+   */
+  refreshConstructionCrewAuthority(people: readonly Person[], settlements: readonly Settlement[]): void {
+    this.constructionAuthorityBySettlement.clear();
+    for (const settlement of settlements) {
+      const project = settlement.alive ? settlement.development?.project : undefined;
+      if (!project || project.progress >= 1) continue;
+      const candidateIds = people
+        .filter(person => person.alive
+          && person.homeId === settlement.id
+          && person.activity === 'construct'
+          && person.navigation?.destinationKind === 'construction-site'
+          && (person.navigation.destinationId === project.plotId
+            || person.navigation.destinationId === `${settlement.id}:construction-site`))
+        .map(person => person.id);
+      if (candidateIds.length === 0) continue;
+      const previous = this.constructionRoleAssignments.get(project);
+      const assignments = reconcileConstructionCrewRoles(project.plotId, candidateIds, previous);
+      this.constructionRoleAssignments.set(project, assignments);
+      this.constructionAuthorityBySettlement.set(settlement.id, { project, assignments });
     }
+  }
+
+  constructionCrewAuthority(): ConstructionCrewAuthority {
+    const authority = new Map<string, ReadonlyMap<string, ConstructionCrewAssignment>>();
+    for (const [settlementId, entry] of this.constructionAuthorityBySettlement) {
+      authority.set(settlementId, entry.assignments);
+    }
+    return authority;
+  }
+
+  constructionCrewAssignment(settlementId: string, personId: string): ConstructionCrewAssignment | undefined {
+    const assignment = this.constructionAuthorityBySettlement.get(settlementId)?.assignments.get(personId);
+    return assignment ? { ...assignment } : undefined;
+  }
+
+  beginFrame(people?: readonly Person[], settlements?: readonly Settlement[]): void {
+    // Test/tool convenience: callers may refresh authority here. Runtime supplies no arguments
+    // because refreshVisiblePeople already reconciled against state.people.
+    if (people && settlements) this.refreshConstructionCrewAuthority(people, settlements);
+    for (const worker of this.workers.values()) worker.seen = false;
   }
   plan(person: Person, settlement: Settlement | undefined, placement: WorkPlacement | undefined,
     farm: { geometry: FarmGeometry; state: FarmPresentationState } | undefined, weather: WeatherCellState | undefined,
@@ -91,17 +128,20 @@ export class PhysicalWorkScene {
     let crew: ConstructionCrewAssignment | undefined;
     let assignments: Map<string, ConstructionCrewAssignment> | undefined;
     if (builder && project) {
-      const candidates = (this.constructionCrewCandidates.get(person.homeId) ?? [person])
-        .filter(candidate => candidate.navigation?.destinationKind === 'construction-site'
-          && (candidate.navigation.destinationId === project.plotId
-            || candidate.navigation.destinationId === `${settlement.id}:construction-site`))
-        .map(candidate => candidate.id);
-      const previous = this.constructionRoleAssignments.get(project);
-      assignments = reconcileConstructionCrewRoles(project.plotId, candidates.length > 0 ? candidates : [person.id], previous);
-      this.constructionRoleAssignments.set(project, assignments);
+      const authority = this.constructionAuthorityBySettlement.get(settlement.id);
+      assignments = authority?.project === project ? authority.assignments : this.constructionRoleAssignments.get(project);
+
+      // Same-month newcomers can appear before the next visibility refresh. Extend the existing
+      // authority minimally instead of recomputing from the visible subset.
+      if (!assignments?.has(person.id)) {
+        const previous = assignments ?? new Map<string, ConstructionCrewAssignment>();
+        assignments = reconcileConstructionCrewRoles(project.plotId, [...previous.keys(), person.id], previous);
+        this.constructionRoleAssignments.set(project, assignments);
+        this.constructionAuthorityBySettlement.set(settlement.id, { project, assignments });
+      }
       crew = assignments.get(person.id) ?? { role: 'hauler', rank: 0 };
     }
-    const crewSize = builder && project ? this.constructionRoleAssignments.get(project)?.size ?? 1 : 1;
+    const crewSize = assignments?.size ?? 1;
     const handoffRecipientId = builder && project && assignments && crew?.role === 'hauler'
       ? constructionHandoffRecipientId(person.id, assignments) : undefined;
     if (worker && (worker.project !== project || worker.field?.id !== (farmer ? farm.geometry.id : undefined)

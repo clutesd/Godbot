@@ -491,7 +491,7 @@ export class GodboxRenderer {
     }
     this.resourceWorkers.beginFrame();
     this.physicalWorkers.beginFrame();
-    this.physicalWork.beginFrame(this.visiblePeople);
+    this.physicalWork.beginFrame();
     this.actionInspections.clear();
     this.vegetation.beginResourceImpacts();
     this.peopleVisuals.beginFrame();
@@ -715,9 +715,17 @@ export class GodboxRenderer {
     if (this.visiblePeopleMonth === this.state.month && this.visiblePeoplePopulation === this.state.people.length) return;
     this.visiblePeopleMonth = this.state.month;
     this.visiblePeoplePopulation = this.state.people.length;
+    // Reconcile construction roles against the full authoritative workforce before any rendering
+    // budget is applied. Visibility can choose representatives; it cannot define their jobs.
+    this.physicalWork.refreshConstructionCrewAuthority(this.state.people, this.state.settlements);
     const capacity = this.people.instanceMatrix.count;
     const alive = this.state.people.filter((person) => person.alive && this.personOnRenderableGround(person));
-    const protectedConstruction = constructionVisibleCrewIds(alive, this.state.settlements);
+    const protectedConstruction = constructionVisibleCrewIds(
+      alive,
+      this.state.settlements,
+      undefined,
+      this.physicalWork.constructionCrewAuthority(),
+    );
     this.visiblePeople = alive
       // Notable/historical lives remain first. Then reserve up to three people per live project so
       // a crowded settlement cannot render an active worksite with nobody visibly building it.

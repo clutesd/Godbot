@@ -4,9 +4,11 @@ export type ConstructionCrewRole = 'hauler' | 'assembler' | 'site-worker';
 
 export interface ConstructionCrewAssignment {
   role: ConstructionCrewRole;
-  /** Stable rank inside the visible project crew; useful for presentation diagnostics. */
+  /** Stable rank inside the project presentation crew; useful for presentation diagnostics. */
   rank: number;
 }
+
+export type ConstructionCrewAuthority = ReadonlyMap<string, ReadonlyMap<string, ConstructionCrewAssignment>>;
 
 export const CONSTRUCTION_VISIBLE_CREW_PER_PROJECT = 3;
 
@@ -19,6 +21,7 @@ export function constructionVisibleCrewIds(
   people: readonly Person[],
   settlements: readonly Settlement[],
   perProject = CONSTRUCTION_VISIBLE_CREW_PER_PROJECT,
+  authority?: ConstructionCrewAuthority,
 ): Set<string> {
   const visible = new Set<string>();
   const limit = Math.max(0, Math.floor(perProject));
@@ -35,7 +38,10 @@ export function constructionVisibleCrewIds(
         || person.navigation.destinationId === `${settlement.id}:construction-site`));
     if (candidates.length === 0) continue;
 
-    const assignments = assignConstructionCrewRoles(project.plotId, candidates.map(person => person.id));
+    // Runtime visibility consumes the full-workforce authority prepared by PhysicalWorkScene.
+    // The deterministic fallback keeps this helper independently useful in tests/tools.
+    const assignments = authority?.get(settlement.id)
+      ?? assignConstructionCrewRoles(project.plotId, candidates.map(person => person.id));
     const roleOrder: readonly ConstructionCrewRole[] = ['hauler', 'assembler', 'site-worker'];
     const rank = (person: Person): number => assignments.get(person.id)?.rank ?? Number.MAX_SAFE_INTEGER;
     const byRank = (a: Person, b: Person): number => rank(a) - rank(b) || a.id.localeCompare(b.id);
