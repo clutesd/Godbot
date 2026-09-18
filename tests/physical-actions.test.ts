@@ -101,10 +101,18 @@ describe('construction workflow', () => {
     expect(withArrival.get('b')?.role).toBe(before.get('b'));
     expect(withArrival.get('c')?.role).toBe(before.get('c'));
 
-    const afterDeparture = reconcileConstructionCrewRoles('plot', ['a', 'c', 'd'], withArrival);
-    expect(afterDeparture.get('a')?.role).toBe(withArrival.get('a')?.role);
-    expect(afterDeparture.get('c')?.role).toBe(withArrival.get('c')?.role);
-    expect(afterDeparture.get('d')?.role).toBe(withArrival.get('d')?.role);
+    // Removing a duplicate role does not disturb the established core crew.
+    const duplicate = [...withArrival.entries()].find(([id, assignment]) =>
+      id === 'd' && [...withArrival.values()].filter(value => value.role === assignment.role).length > 1)?.[0] ?? 'd';
+    const remaining = ['a', 'b', 'c', 'd'].filter(id => id !== duplicate);
+    const afterDeparture = reconcileConstructionCrewRoles('plot', remaining, withArrival);
+    for (const id of remaining) expect(afterDeparture.get(id)?.role).toBe(withArrival.get(id)?.role);
+
+    // If the crew truly collapses to one person, only that necessary fallback changes: someone
+    // must become the hauler or the visible workflow would be impossible.
+    const survivorId = remaining.find(id => afterDeparture.get(id)?.role !== 'hauler')!;
+    const solo = reconcileConstructionCrewRoles('plot', [survivorId], afterDeparture);
+    expect(solo.get(survivorId)?.role).toBe('hauler');
   });
 
   it('spreads workers across stable workfaces and keeps site preparation at visible furniture', () => {
