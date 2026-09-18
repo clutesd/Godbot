@@ -403,6 +403,21 @@ describe('construction workflow', () => {
     expect(blocked.contactEffect).toBeUndefined();
   });
 
+  it('can explicitly suppress legacy generic debris for construction phases without contact', () => {
+    const renderer = new ResourceWorkerRenderer();
+    const colour = new THREE.Color('#ffffff');
+    const motion = createResourceWorkMotion();
+    motion.handY = 0.5; motion.handZ = 0.2; motion.toolAngle = 1; motion.impact = 1;
+    renderer.beginFrame();
+    renderer.drawPhysical(motion, { x: 0, z: 0 }, 'none', undefined, '#987149', 1,
+      0, 0, 0, 1, 0, colour, false, true, false, 'none');
+    renderer.endFrame();
+    const sparks = renderer.group.children.find(child => child.name === 'Construction contact sparks') as THREE.InstancedMesh;
+    const fragments = renderer.group.children.find(child => child.name === 'Resource and construction contact fragments') as THREE.InstancedMesh;
+    expect(sparks.count).toBe(0);
+    expect(fragments.count).toBe(0);
+  });
+
   it('keeps contact effects pooled and separates industrial sparks from ordinary fragments', () => {
     const renderer = new ResourceWorkerRenderer();
     const colour = new THREE.Color('#ffffff');
