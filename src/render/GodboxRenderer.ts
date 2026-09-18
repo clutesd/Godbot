@@ -43,7 +43,7 @@ import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
-import { constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
+import { constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
 import { constructionMaterialColour } from './construction/ConstructionChoreography';
 import { constructionVisibleCrewIds } from './construction/ConstructionCrewPresentation';
 import { EcologyField } from './ecology/EcologyField';
@@ -762,7 +762,8 @@ export class GodboxRenderer {
     let restFacing: number | undefined;
     const settlement = this.state.settlements.find((candidate) => candidate.id === person.homeId);
     const placements = settlement ? this.settlementBuildingPlacements.get(settlement.id) ?? [] : [];
-    if (settlement && person.navigation?.destinationKind === 'construction-site' && !person.navigation.traveling && settlement.constructionProgress > 0) {
+    if (settlement && person.navigation?.destinationKind === 'construction-site' && !person.navigation.traveling
+      && constructionPresentationProgress(settlement) > 0) {
       const site = placements[this.shownBuildingCount(settlement)];
       if (site) {
         const angle = stableUnit(`${person.id}:construction-ring`) * Math.PI * 2;
@@ -889,7 +890,9 @@ export class GodboxRenderer {
     const shownBuildings = this.shownBuildingCount(settlement);
     const layout = this.layoutForSettlement(settlement, era);
     const bannerLegacy = this.bannerLegacyForSettlement(settlement, bannerIdentity, culture, era, layout);
-    const hasActiveConstruction = Boolean(settlement.development?.project) || settlement.constructionProgress > 0 && settlement.buildings < settlement.targetBuildings;
+    const constructionProgress = constructionPresentationProgress(settlement);
+    const hasActiveConstruction = Boolean(settlement.development?.project)
+      || constructionProgress > 0 && settlement.buildings < settlement.targetBuildings;
     const reservedPlacements = this.getSettlementBuildingPlacements(settlement, shownBuildings + (hasActiveConstruction ? 1 : 0), layout);
     const placements = settlement.development ? reservedPlacements.filter(p => settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shownBuildings) : reservedPlacements.slice(0, shownBuildings);
     for (const placement of placements) {
@@ -915,11 +918,11 @@ export class GodboxRenderer {
     if (activeSite) {
       const response = settlement.development?.project?.response;
       if (response?.adaptation) {
-        const mesh = createSurvivalStructure(response, settlement.constructionProgress, activeSite.width, activeSite.depth, palette);
+        const mesh = createSurvivalStructure(response, constructionProgress, activeSite.width, activeSite.depth, palette);
         mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
         mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
         group.add(mesh);
-      } else group.add(this.createActiveConstructionSite(activeSite, response?.style ?? cultureStyle, response ? developmentPresentationEra(response) : era, settlementY, settlement.constructionProgress, response));
+      } else group.add(this.createActiveConstructionSite(activeSite, response?.style ?? cultureStyle, response ? developmentPresentationEra(response) : era, settlementY, constructionProgress, response));
     }
     if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
       // This hearth exists only while the monthly survival ledger records paid fuel and tending.
@@ -1798,7 +1801,7 @@ export class GodboxRenderer {
       infrastructure.factories,
       settlement.industry.intensity,
       settlement.urbanization,
-      settlement.constructionProgress,
+      constructionPresentationProgress(settlement),
       this.state.advanced.atomic.applications.energy,
       this.state.advanced.machine.capability,
       this.state.advanced.space.orbitalInfrastructure,

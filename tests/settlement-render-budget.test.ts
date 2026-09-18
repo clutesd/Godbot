@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { GodboxRenderer } from '../src/render/GodboxRenderer';
 import '../src/render/GodboxRendererEnhanced';
 import { Simulation } from '../src/sim/Simulation';
+import type { Settlement } from '../src/sim/types';
+import type { DevelopmentResponse } from '../src/sim/development/types';
 
 interface SettlementVisualState {
   group: THREE.Group;
@@ -83,6 +85,63 @@ function sync(renderer: GodboxRenderer, force = false): void {
   method.call(renderer, force);
 }
 
+function attachActiveProject(
+  settlement: Settlement,
+  state: Simulation['state'],
+  progress: number,
+): void {
+  const culture = state.cultures[0]!;
+  const response: DevelopmentResponse = {
+    need: 'housing',
+    form: 'dwelling',
+    name: 'render budget house',
+    level: 1,
+    material: 'timber',
+    cultureId: culture.id,
+    style: culture.style,
+    services: { housing: 1 },
+    reasons: [],
+    capabilities: [],
+    cost: { food: 0, wood: 4, minerals: 0, goods: 0, wealth: 0 },
+    labor: 4,
+  };
+  settlement.development = {
+    pressures: {},
+    unmet: {},
+    informal: {},
+    providers: {},
+    evaluatedMonth: state.month,
+    nextAttemptMonth: state.month + 12,
+    revision: 1,
+    project: {
+      plotId: 'render-budget-project',
+      response,
+      action: 'founded',
+      startedMonth: state.month,
+      progress,
+      spent: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 },
+      blockedReasons: [],
+    },
+  };
+  settlement.targetBuildings = settlement.buildings + 1;
+}
+
+
+describe('construction presentation progress authority', () => {
+  it('prefers an active project and falls back to the legacy mirror only without one', async () => {
+    const test = harness('construction-progress-authority');
+    const settlement = test.state.settlements.find(candidate => candidate.alive)!;
+    const { constructionPresentationProgress } = await import('../src/render/construction/ConstructionVisualGrammar');
+
+    settlement.constructionProgress = 0.77;
+    expect(constructionPresentationProgress(settlement)).toBeCloseTo(0.77);
+
+    attachActiveProject(settlement, test.state, 0.31);
+    settlement.constructionProgress = 0.91;
+    expect(constructionPresentationProgress(settlement)).toBeCloseTo(0.31);
+  });
+});
+
 describe('settlement render budgeting', () => {
   it('spreads simultaneous heavy settlement changes across structural passes', () => {
     const test = harness('settlement-render-budget-queue');
@@ -102,34 +161,39 @@ describe('settlement render budgeting', () => {
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).pending).toBe(0);
   });
 
-  it('rebuilds when a project enters finishing so scaffold stripping is reachable', () => {
+  it('rebuilds from authoritative project progress when finishing begins even if the legacy mirror is stale', () => {
     const test = harness('settlement-render-budget-finishing');
     const settlement = test.state.settlements.find(candidate => candidate.alive)!;
-    settlement.constructionProgress = 0.945;
+    attachActiveProject(settlement, test.state, 0.945);
+    settlement.constructionProgress = 0.12;
     sync(test.renderer, true);
     test.resetCreated();
 
-    settlement.constructionProgress = 0.95;
+    settlement.development!.project!.progress = 0.95;
+    // Deliberately leave the compatibility mirror stale. Presentation must follow the project.
+    expect(settlement.constructionProgress).toBe(0.12);
     sync(test.renderer);
     expect(test.created()).toBe(1);
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
   });
 
-  it('ignores microscopic construction progress until its visible presentation stage changes', () => {
+  it('uses project progress for visible construction buckets while ignoring a stale legacy mirror', () => {
     const test = harness('settlement-render-budget-progress');
     const settlement = test.state.settlements.find(candidate => candidate.alive)!;
-    settlement.constructionProgress = 0.12;
+    attachActiveProject(settlement, test.state, 0.12);
+    settlement.constructionProgress = 0.88;
     sync(test.renderer, true);
     test.resetCreated();
 
-    settlement.constructionProgress = 0.14;
+    settlement.development!.project!.progress = 0.14;
     sync(test.renderer);
     expect(test.created()).toBe(0);
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).pending).toBe(0);
 
-    settlement.constructionProgress = 0.42;
+    settlement.development!.project!.progress = 0.42;
     sync(test.renderer);
     expect(test.created()).toBe(1);
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
+    expect(settlement.constructionProgress).toBe(0.88);
   });
 });

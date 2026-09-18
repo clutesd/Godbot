@@ -1,4 +1,5 @@
 import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
+import type { Settlement } from '../../sim/types';
 import type { Era } from '../materials/MaterialPalette';
 import { BUILD_STAGE, type BuildStage } from '../assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, type BuildingRole } from '../assets/BuildingGrammar';
@@ -14,6 +15,16 @@ export const CONSTRUCTION_STAGE_THRESHOLDS = {
   detail: 1,
   finishing: 0.95,
 } as const;
+
+/**
+ * Single presentation authority for construction progress.
+ * A live DevelopmentProject is authoritative; settlement.constructionProgress is retained only
+ * as a compatibility mirror for legacy/founding states that have no active project object.
+ */
+export function constructionPresentationProgress(settlement: Settlement): number {
+  const progress = settlement.development?.project?.progress ?? settlement.constructionProgress;
+  return Math.max(0, Math.min(1, progress));
+}
 
 export interface ConstructionStagePresentation {
   stage: BuildStage;

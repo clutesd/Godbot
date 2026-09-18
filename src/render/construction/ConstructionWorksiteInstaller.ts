@@ -4,6 +4,7 @@ import { developmentPresentationEra } from '../assets/BuildingGrammar';
 import { GodboxRenderer } from '../GodboxRenderer';
 import type { MaterialPalette } from '../materials/MaterialPalette';
 import { createConstructionWorksite } from './ConstructionWorksite';
+import { constructionPresentationProgress } from './ConstructionVisualGrammar';
 import { constructionBlockedReason, constructionPresentedMaterial } from './ConstructionActionPresentation';
 
 interface SettlementVisualLike {
@@ -60,7 +61,7 @@ if (!prototype[INSTALL_KEY]) {
     const worksite = createConstructionWorksite({
       width,
       depth,
-      progress: project.progress,
+      progress: constructionPresentationProgress(settlement),
       response: { ...project.response, material: constructionPresentedMaterial(settlement) },
       seedKey: project.plotId,
       materialsAvailable: !constructionBlockedReason(settlement),

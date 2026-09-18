@@ -3,7 +3,7 @@ import { GodboxRenderer } from './GodboxRenderer';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations } from '../sim/transport/TransportNetwork';
 import { eraRank } from './assets/BuildingGrammar';
-import { constructionPresentationBucket } from './construction/ConstructionVisualGrammar';
+import { constructionPresentationBucket, constructionPresentationProgress } from './construction/ConstructionVisualGrammar';
 import type { Settlement, SimulationState } from '../sim/types';
 import type { TransportSegment } from '../sim/transport/types';
 import type { Era, MaterialPalette } from './materials/MaterialPalette';
@@ -441,7 +441,7 @@ function heavySettlementSignature(
     .map(stop => stop.id)
     .sort()
     .join(',');
-  const progress = Math.max(0, Math.min(1, settlement.constructionProgress));
+  const progress = constructionPresentationProgress(settlement);
   const constructionPresentationStage = constructionPresentationBucket(progress);
   return [
     settlement.id,
