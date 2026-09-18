@@ -31,12 +31,16 @@ export function constructionBlockedReason(settlement: Settlement): string | unde
 /** Honour actual substitutes in the project's structural bill of materials. */
 export function constructionPresentedMaterial(settlement: Settlement): StructureMaterial {
   const project = settlement.development?.project;
+  const responseMaterial = project?.response.material ?? 'earth';
+  // Earth construction legitimately consumes timber/lumber for structural frames, but that support
+  // material must not visually turn the whole earth building into a timber project.
+  if (responseMaterial === 'earth') return 'earth';
   const supplied = project?.materialRequirements?.[0]?.options.find(id => (settlement.localMaterials[id] ?? 0) > 0.000001);
   if (supplied === 'timber' || supplied === 'lumber') return 'timber';
-  if (supplied === 'brick') return 'ceramic';
+  if (supplied === 'brick') return responseMaterial === 'masonry' ? 'ceramic' : responseMaterial;
   if (supplied === 'stone') return 'masonry';
   if (supplied === 'iron' || supplied === 'steel' || supplied === 'bronze') return 'metal';
-  return project?.response.material ?? 'earth';
+  return responseMaterial;
 }
 
 export function builderCanPresent(person: Person, settlement: Settlement, weather?: WeatherCellState): boolean {
