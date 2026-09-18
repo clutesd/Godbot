@@ -82,7 +82,9 @@ export function advanceConstruction(
     return;
   }
 
-  if (finishing && crewRole !== 'assembler') {
+  const assembler = crewRole === 'assembler';
+  const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
+  if (finishing && !assembler && !soloGeneralist) {
     if (playback.phase !== 'inspect') { playback.phase = 'inspect'; playback.seconds = 0; }
     playback.carrying = false;
     if (!ready) return;
@@ -99,8 +101,6 @@ export function advanceConstruction(
     return;
   }
 
-  const assembler = crewRole === 'assembler';
-  const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
   // If a second worker joins while the former solo generalist is assembling, specialization takes
   // effect immediately rather than letting the new hauler finish a builder-only beat.
   if (crewRole === 'hauler' && !soloGeneralist && playback.phase === 'assemble') {
@@ -138,9 +138,9 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   const phase = playback.phase;
   const blocked = blockedReason !== undefined;
   const choreography = constructionChoreography(material, progress);
-  const finishingCleanup = choreography.finishing && crewRole !== 'assembler' && !blocked;
-  const finishingAssembler = choreography.finishing && crewRole === 'assembler' && !blocked;
   const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
+  const finishingAssembler = choreography.finishing && (crewRole === 'assembler' || soloGeneralist) && !blocked;
+  const finishingCleanup = choreography.finishing && !finishingAssembler && !blocked;
   const assembling = !blocked && !finishingCleanup && (crewRole === 'assembler' || soloGeneralist && phase === 'assemble');
   const pickup = !blocked && !finishingCleanup && crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
   const handoffing = !blocked && !finishingCleanup && crewRole === 'hauler' && phase === 'handoff';
