@@ -9,6 +9,7 @@ import { beginResourceWorkMonth, recordResourceWorkAssignment, type ResourceWork
 import { resourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
 import { resourceWorkAlternateAnchor } from '../src/render/animation/ResourceWorkMotion';
 import type { Person } from '../src/sim/types';
+import { COSMIC_HEIGHT_MULTIPLIER, CosmicRoleAccents, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial } from '../src/render/people/CosmicPeople';
 
 const { simulation, world, surface } = vegetationFixture('resource-work-study');
 for (const cell of world.cells) { cell.landform = 'lowland'; cell.movementCost = 1; }
@@ -30,8 +31,12 @@ floor.rotation.x = -Math.PI / 2; floor.position.y = groundY - 0.004; floor.recei
 const work = new ResourceWorkScene(world, 'resource-work-study');
 const sites = new ResourceSiteRenderer(world, surface, work);
 const rigs = new ResourceWorkerRenderer(); scene.add(sites.group, rigs.group);
-const body = new THREE.InstancedMesh(new THREE.CapsuleGeometry(0.12, 0.34, 2, 5), new THREE.MeshStandardMaterial({ color: '#b88a61', roughness: 1 }), 4);
-const heads = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.12, 1), new THREE.MeshStandardMaterial({ color: '#d6b180', roughness: 1 }), 4);
+const cosmicMaterial = createCosmicBodyMaterial(false);
+const body = new THREE.InstancedMesh(createCosmicBodyGeometry(), cosmicMaterial, 4);
+const heads = new THREE.InstancedMesh(createCosmicHeadGeometry(), cosmicMaterial, 4);
+const accents = new CosmicRoleAccents(4); scene.add(accents.mesh);
+const personSize = 0.28 * COSMIC_HEIGHT_MULTIPLIER;
+const headAnchor = new THREE.Vector3();
 body.castShadow = true; heads.castShadow = true; body.frustumCulled = false; heads.frustumCulled = false; scene.add(body, heads);
 const marker = new THREE.Object3D(); const colour = new THREE.Color('#af8157');
 let seconds = 0, paused = false, medium = false, previous = performance.now();
@@ -66,12 +71,19 @@ function frame(now: number) {
     const facing = Math.atan2(worker.station.target.x - point.x, worker.station.target.z - point.z);
     rigs.sample(worker, seconds, delta, true);
     const motion = rigs.motion;
-    marker.position.set(point.x, groundY + (0.44 + (0.03 - motion.crouch) * worker.blend) * 0.28, point.z);
-    marker.rotation.set(motion.lean * worker.blend, facing + motion.twist * worker.blend, 0); marker.scale.setScalar(0.28); marker.updateMatrix(); body.setMatrixAt(index, marker.matrix);
-    marker.position.y = groundY + (0.84 - motion.crouch * worker.blend) * 0.28; marker.rotation.set(0, facing, 0); marker.updateMatrix(); heads.setMatrixAt(index++, marker.matrix);
-    rigs.draw(worker, point.x, groundY, point.z, 0.28, facing, colour);
+    const role = worker.site.profile.kind === 'plant' ? 'gatherer' : worker.site.profile.kind === 'mineral' ? 'miner' : 'laborer';
+    colour.set(cosmicRoleFor(role).color);
+    marker.position.set(point.x, groundY + (0.44 + (0.03 - motion.crouch) * worker.blend) * personSize, point.z);
+    marker.rotation.set(motion.lean * worker.blend, facing + motion.twist * worker.blend, 0); marker.scale.setScalar(personSize); marker.updateMatrix(); body.setMatrixAt(index, marker.matrix);
+    accents.set(index, role, marker.matrix, 1); body.setColorAt(index, colour); heads.setColorAt(index, colour);
+    headAnchor.set(0, 0.4, 0).applyMatrix4(marker.matrix);
+    marker.position.copy(headAnchor); marker.rotation.set(motion.lean * worker.blend, facing, 0); marker.updateMatrix(); heads.setMatrixAt(index++, marker.matrix);
+    rigs.draw(worker, point.x, groundY, point.z, personSize, facing, colour);
   }
   body.count = index; heads.count = index; body.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
+  accents.mesh.count = index; accents.endFrame();
+  if (body.instanceColor) body.instanceColor.needsUpdate = true;
+  if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
   rigs.endFrame(); renderer.render(scene, camera);
   document.querySelector('#status')!.textContent = `${index} fixture residents · ${select.selectedOptions[0]!.text} · ${seconds.toFixed(2)}s · ${renderer.info.render.calls} draw calls · ${renderer.info.memory.geometries} geometries · work stays gather · current ledger only`;
   requestAnimationFrame(frame);

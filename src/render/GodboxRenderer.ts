@@ -12,8 +12,7 @@ import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
-import { roleVisualColor } from './people/RoleVisualProfile';
-import { createRoleGarmentMaterial, updateRoleGarmentMaterial } from './people/RoleGarmentPresentation';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
@@ -170,9 +169,9 @@ const SETTLEMENT_LIGHT_BUDGET = 18;
 const HUMAN_WORLD_SCALE = 0.28;
 const NO_ACTIVITY_STRUCTURES: readonly ActivityStructure[] = [];
 /** Canonical adult humanoid height in world units (feet to crown) at `heightScale === 1`. */
-export const CANONICAL_ADULT_HEIGHT = HUMAN_WORLD_SCALE * 0.96;
+export const CANONICAL_ADULT_HEIGHT = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * COSMIC_CROWN_HEIGHT;
 export const visiblePersonBudgetForDensity = (density: number): number => Math.max(48, Math.round(384 * density));
-/** Notable and historical lives are the only characters allowed extra geometry. */
+/** Cap for the additional mantle batch reserved for notable and historical lives. */
 export const NOTABLE_VISUAL_BUDGET = 32;
 
 export class GodboxRenderer {
@@ -196,9 +195,11 @@ export class GodboxRenderer {
   private readonly peopleHeadwear: THREE.InstancedMesh;
   private readonly peopleCargo: THREE.InstancedMesh;
   private readonly peopleMantles: THREE.InstancedMesh;
-  /** Unlit-but-daylight-gated upper-torso cloth that keeps role colour readable at tiny scale. */
-  private readonly peopleRoleGarments: THREE.InstancedMesh;
-  private readonly roleGarmentMaterial: THREE.MeshBasicMaterial;
+  /** One shared batch for role cores and lightweight silhouette accents. */
+  private readonly peopleRoleAccents: THREE.InstancedMesh;
+  private readonly cosmicAccents: CosmicRoleAccents;
+  private readonly cosmicMaterial: THREE.MeshStandardMaterial;
+  private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
   private readonly peopleVisuals = new PeopleVisualStateStore();
   private readonly localActivities = new LocalActivityPresentation();
   private readonly localPeers = new Map<string, Person>();
@@ -213,6 +214,7 @@ export class GodboxRenderer {
   private readonly personColor = new THREE.Color();
   private readonly personDetailColor = new THREE.Color();
   private readonly partPosition = new THREE.Vector3();
+  private readonly personHeadwearPosition = new THREE.Vector3();
   private readonly partQuaternion = new THREE.Quaternion();
   private readonly partEuler = new THREE.Euler();
   private readonly partScale = new THREE.Vector3();
@@ -371,25 +373,22 @@ export class GodboxRenderer {
     this.scene.add(this.catastropheLight);
 
     const visiblePersonBudget = visiblePersonBudgetForDensity(this.config.render.visualDensity);
-    const peopleGeometry = new THREE.CapsuleGeometry(0.12, 0.34, 2, 5);
-    const peopleMaterial = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
+    const peopleGeometry = createCosmicBodyGeometry();
+    const peopleMaterial = this.cosmicMaterial = createCosmicBodyMaterial();
     this.people = new THREE.InstancedMesh(peopleGeometry, peopleMaterial, visiblePersonBudget);
     this.people.castShadow = true;
     this.people.frustumCulled = false;
-    this.roleGarmentMaterial = createRoleGarmentMaterial();
-    this.peopleRoleGarments = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.132, 0.15, 0.29, 6),
-      this.roleGarmentMaterial,
-      visiblePersonBudget,
-    );
-    this.peopleRoleGarments.frustumCulled = false;
-    this.peopleHeads = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.12, 1), peopleMaterial, visiblePersonBudget);
+    this.cosmicAccents = new CosmicRoleAccents(visiblePersonBudget);
+    this.peopleRoleAccents = this.cosmicAccents.mesh;
+    this.peopleRoleAccents.frustumCulled = false;
+    this.peopleHeads = new THREE.InstancedMesh(createCosmicHeadGeometry(), peopleMaterial, visiblePersonBudget);
     this.peopleArms = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 5).translate(0, -0.17, 0), peopleMaterial, visiblePersonBudget * 2);
     this.peopleLegs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.032, 0.04, 0.36, 5).translate(0, -0.18, 0), peopleMaterial, visiblePersonBudget * 2);
     this.peopleTools = new THREE.InstancedMesh(new THREE.BoxGeometry(0.05, 0.36, 0.05), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05 }), visiblePersonBudget);
-    this.peopleHeadwear = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.14, 0.12, 7), new THREE.MeshStandardMaterial({ roughness: 0.86 }), visiblePersonBudget);
+    this.peopleHeadwear = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.07, 0.09, 0.025, 7, 1, true), peopleMaterial, visiblePersonBudget);
     this.peopleCargo = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), new THREE.MeshStandardMaterial({ roughness: 0.95 }), visiblePersonBudget);
-    this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.2, 0.46, 7, 1, true).translate(0, -0.23, 0), new THREE.MeshStandardMaterial({ roughness: 0.88, side: THREE.DoubleSide }), NOTABLE_VISUAL_BUDGET);
+    this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.15, 0.37, 7, 1, true).translate(0, -0.185, 0), peopleMaterial, NOTABLE_VISUAL_BUDGET);
+    this.cosmicVariations = [this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleHeadwear, this.peopleMantles].map(bindCosmicVariation);
     this.peopleMantles.castShadow = true;
     this.peopleMantles.frustumCulled = false;
     this.peopleMantles.count = 0;
@@ -406,7 +405,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.peopleCargo.frustumCulled = false;
-    this.scene.add(this.people, this.peopleRoleGarments, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles);
+    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -536,7 +535,7 @@ export class GodboxRenderer {
     }
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
-    this.peopleRoleGarments.count = count;
+    this.peopleRoleAccents.count = count;
     this.peopleHeads.count = count;
     this.peopleArms.count = count * 2;
     this.peopleLegs.count = count * 2;
@@ -548,7 +547,7 @@ export class GodboxRenderer {
       const person = this.visiblePeople[index];
       if (!person) continue;
       if (!person.alive) {
-        for (const mesh of [this.people, this.peopleRoleGarments, this.peopleHeads, this.peopleTools, this.peopleHeadwear, this.peopleCargo]) {
+        for (const mesh of [this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleTools, this.peopleHeadwear, this.peopleCargo]) {
           this.setInstanceTransform(mesh, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
         }
         for (const mesh of [this.peopleArms, this.peopleLegs]) for (let side = 0; side < 2; side++) {
@@ -625,8 +624,11 @@ export class GodboxRenderer {
           contactStrength: working && oriented ? m.impact : 0 });
       }
       const ageScale = person.ageMonths < 14 * 12 ? 0.64 + person.ageMonths / (14 * 12) * 0.08 : person.ageMonths > 68 * 12 ? 0.88 : 1;
-      const heightScale = HUMAN_WORLD_SCALE * ageScale * (person.appearance?.heightScale ?? 1);
-      const buildScale = person.appearance?.buildScale ?? 1;
+      const cosmic = cosmicAppearanceFor(person.id);
+      const heightScale = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * ageScale * (person.appearance?.heightScale ?? 1) * cosmic.height;
+      const buildScale = (person.appearance?.buildScale ?? 1) * COSMIC_BUILD_MULTIPLIER * cosmic.build;
+      for (const part of [0, 1, 4]) this.cosmicVariations[part]!.setXYZ(index, cosmic.seed, cosmic.nebula, cosmic.brightness);
+      for (const part of [2, 3]) for (let side = 0; side < 2; side++) this.cosmicVariations[part]!.setXYZ(index * 2 + side, cosmic.seed, cosmic.nebula, cosmic.brightness);
       // The rendered terrain under the *visual* position is the only anchor: the soles sit on
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
       const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0 : person.activity === 'rest' ? 0.003 : 0.006;
@@ -638,26 +640,16 @@ export class GodboxRenderer {
       const facing = visual.facing;
       this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, pose?.spineRotation ?? 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
       const culture = this.cultureById.get(person.cultureId);
-      this.personColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
-        materialQuality: person.appearance?.materialQuality ?? 0.5,
-      }));
-      if (tier !== 'population') this.personColor.offsetHSL(0, 0.16, tier === 'historical' ? 0.1 : 0.05);
+      this.personColor.set(cosmicRoleFor(person.role).color);
       this.people.setColorAt(index, this.personColor);
-      // A narrow upper-torso cloth shell carries the occupational family through shade and at
-      // documentary distance. It is geometry, not a billboard/icon, and follows the body pose.
-      this.setInstanceTransform(
-        this.peopleRoleGarments, index, display.x, footY + 0.53 * heightScale + poseLift, display.z,
-        heightScale * buildScale, heightScale, heightScale * buildScale, pose?.spineRotation ?? 0,
-        facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0,
-      );
-      this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
-        roleWeight: person.role === 'child' || person.role === 'elder' || !person.role ? 0.6 : 0.9,
-        materialQuality: 0.55,
-      }));
-      this.peopleRoleGarments.setColorAt(index, this.personDetailColor);
-      this.setInstanceTransform(this.peopleHeads, index, display.x, footY + 0.84 * heightScale + poseLift, display.z, heightScale, heightScale, heightScale, 0, facing + (pose?.headRotation ?? 0), 0);
-      this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, 0.32);
-      this.peopleHeads.setColorAt(index, this.personDetailColor);
+      // Reuse the exact torso transform: cores stay attached through crouch, twist and work lean.
+      this.cosmicAccents.set(index, person.role, this.personMatrix, cosmic.brightness);
+      // The smaller faceless head must follow the existing spine pose at its neck attachment.
+      this.partPosition.set(0, 0.4, 0).applyMatrix4(this.personMatrix);
+      this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
+        heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, facing + (pose?.headRotation ?? 0), 0);
+      this.personHeadwearPosition.set(0, 0.095, 0).applyMatrix4(this.personMatrix);
+      this.peopleHeads.setColorAt(index, this.personColor);
       const limbScale = detailed && !articulated ? heightScale : 0.001;
       this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.15 * buildScale * heightScale, 0.62, pose?.leftShoulderRotation ?? 0.1, this.peopleArms, poseLift);
       this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.15 * buildScale * heightScale, 0.62, pose?.rightShoulderRotation ?? -0.1, this.peopleArms, poseLift);
@@ -671,7 +663,14 @@ export class GodboxRenderer {
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
       const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
-      this.setInstanceTransform(this.peopleTools, index, display.x + Math.sin(facing) * 0.17, footY + 0.55 * heightScale + poseLift, display.z + Math.cos(facing) * 0.17, toolScale, toolScale, toolScale, Math.PI / 7, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
+      const handSwing = pose?.rightShoulderRotation ?? -0.1;
+      const handSide = 0.15 * buildScale * heightScale;
+      const handForward = -Math.sin(handSwing) * 0.30 * heightScale;
+      this.setInstanceTransform(this.peopleTools, index,
+        display.x + Math.cos(facing) * handSide + Math.sin(facing) * handForward,
+        footY + (0.72 - Math.cos(handSwing) * 0.30) * heightScale + poseLift,
+        display.z - Math.sin(facing) * handSide + Math.cos(facing) * handForward,
+        toolScale, toolScale, toolScale, handSwing, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
 
@@ -679,17 +678,12 @@ export class GodboxRenderer {
       const hatScale = !detailed || headwear === 'none' ? 0.001 : heightScale;
       const hatWidth = headwear === 'brim' ? 1.35 : headwear === 'helmet' ? 0.82 : 0.95;
       const hatHeight = headwear === 'cap' ? 0.52 : headwear === 'brim' ? 0.32 : 0.86;
-      this.setInstanceTransform(this.peopleHeadwear, index, display.x, footY + 0.99 * heightScale + poseLift, display.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, 0, facing, 0);
-      this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.secondary ?? '#313550', {
-        roleWeight: headwear === 'helmet' ? 0.48 : 0.58,
-        materialQuality: person.appearance?.materialQuality ?? 0.5,
-      }));
-      if (tier === 'historical') this.personDetailColor.offsetHSL(0, 0.2, 0.12);
-      this.peopleHeadwear.setColorAt(index, this.personDetailColor);
+      this.setInstanceTransform(this.peopleHeadwear, index, this.personHeadwearPosition.x, this.personHeadwearPosition.y, this.personHeadwearPosition.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, pose?.spineRotation ?? 0, facing, 0);
+      this.peopleHeadwear.setColorAt(index, this.personColor);
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
       const cargoScale = detailed && cargoVisible && !articulated ? heightScale : 0.001;
-      this.setInstanceTransform(this.peopleCargo, index, display.x + Math.cos(facing) * 0.2, footY + 0.47 * heightScale + poseLift, display.z - Math.sin(facing) * 0.2, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
+      this.setInstanceTransform(this.peopleCargo, index, display.x + Math.sin(facing) * 0.17 * heightScale, footY + 0.43 * heightScale + poseLift, display.z + Math.cos(facing) * 0.17 * heightScale, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
       this.personDetailColor.set(carried === 'ledger' ? (culture?.style.accent ?? '#d9a748') : '#8b6840');
       this.peopleCargo.setColorAt(index, this.personDetailColor);
       if (physical && articulated && detailed) this.physicalWorkers.drawPhysical(physical.motion, physical.action.interactionAnchor,
@@ -710,12 +704,15 @@ export class GodboxRenderer {
         // Notable lives read at documentary distance through one extra silhouette element only.
         const mantleScale = heightScale * (tier === 'historical' ? 1.06 : 1);
         this.setInstanceTransform(this.peopleMantles, mantles, display.x, footY + 0.7 * heightScale + poseLift, display.z, mantleScale * buildScale, mantleScale, mantleScale * buildScale, 0, facing, 0);
-        this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, tier === 'historical' ? 0.18 : 0.4);
+        this.cosmicVariations[5]!.setXYZ(mantles, cosmic.seed, cosmic.nebula, cosmic.brightness);
+        this.personDetailColor.set(culture?.style.accent ?? '#d9a748').lerp(this.personColor, 0.75);
         this.peopleMantles.setColorAt(mantles, this.personDetailColor);
         mantles += 1;
       }
     }
     this.peopleMantles.count = mantles;
+    this.cosmicAccents.endFrame();
+    for (const variation of this.cosmicVariations) variation.needsUpdate = true;
     this.resourceWorkers.endFrame();
     this.physicalWorkers.endFrame();
     this.physicalWork.endFrame();
@@ -726,7 +723,7 @@ export class GodboxRenderer {
       this.localPeerPositions.delete(personId);
     });
     this.people.instanceMatrix.needsUpdate = true;
-    this.peopleRoleGarments.instanceMatrix.needsUpdate = true;
+    this.peopleRoleAccents.instanceMatrix.needsUpdate = true;
     this.peopleHeads.instanceMatrix.needsUpdate = true;
     this.peopleArms.instanceMatrix.needsUpdate = true;
     this.peopleLegs.instanceMatrix.needsUpdate = true;
@@ -735,7 +732,7 @@ export class GodboxRenderer {
     this.peopleCargo.instanceMatrix.needsUpdate = true;
     this.peopleMantles.instanceMatrix.needsUpdate = true;
     if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
-    if (this.peopleRoleGarments.instanceColor) this.peopleRoleGarments.instanceColor.needsUpdate = true;
+    if (this.peopleRoleAccents.instanceColor) this.peopleRoleAccents.instanceColor.needsUpdate = true;
     if (this.peopleHeads.instanceColor) this.peopleHeads.instanceColor.needsUpdate = true;
     if (this.peopleArms.instanceColor) this.peopleArms.instanceColor.needsUpdate = true;
     if (this.peopleLegs.instanceColor) this.peopleLegs.instanceColor.needsUpdate = true;
@@ -3095,7 +3092,7 @@ export class GodboxRenderer {
 
   private createFreightCarrier(): THREE.Group {
     const carrier = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.24, 3, 5), new THREE.MeshStandardMaterial({ color: '#86694b' }));
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.29, 3, 5), createCosmicBodyMaterial(false));
     body.position.y = 0.27;
     const pack = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.19, 0.13), new THREE.MeshStandardMaterial({ color: '#b59c6c' }));
     pack.position.set(0, 0.27, -0.11);
@@ -3107,7 +3104,11 @@ export class GodboxRenderer {
     const phase = (elapsedSeconds / 58 + 0.16) % 1;
     const daylight = THREE.MathUtils.smoothstep(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 0.12, 0.72);
     this.ecology.animate(elapsedSeconds, daylight);
-    updateRoleGarmentMaterial(this.roleGarmentMaterial, daylight);
+    this.cosmicAccents.updateDaylight(daylight);
+    updateCosmicBodyMaterial(this.cosmicMaterial, daylight);
+    this.resourceWorkers.updateDaylight(daylight);
+    this.physicalWorkers.updateDaylight(daylight);
+    this.warRenderer.updateDaylight(daylight);
     const angle = phase * Math.PI * 2;
     this.sun.position.set(Math.cos(angle) * 72, Math.sin(angle) * 64, 24);
     this.sun.intensity = 0.08 + daylight * 3.25;

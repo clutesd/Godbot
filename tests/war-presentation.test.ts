@@ -79,6 +79,9 @@ describe('Step 3 military presentation', () => {
     expect(renderer.group.getObjectByName('vehicle-0')).toBeDefined();
     expect(renderer.group.getObjectByName('artillery-0')).toBeDefined();
     expect(renderer.group.getObjectByName('Capability battle spectacle')).toBeDefined();
+    const cores = renderer.group.getObjectByName('Cosmic role cores and silhouettes');
+    expect(cores).toBeDefined();
+    renderer.updateDaylight(0);
     expect(JSON.stringify(fixture.state)).toBe(before);
     renderer.dispose();
   });

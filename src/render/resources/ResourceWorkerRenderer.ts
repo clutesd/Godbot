@@ -8,6 +8,7 @@ import type { ResourceWorkerVisual } from './ResourceWorkScene';
 import { MAX_ACTIVE_WORK_SITES } from './ResourceWorkScene';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { resourceToolHeadGeometry } from './ResourceWorkGeometry';
+import { createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
 
 const CAPACITY = MAX_ACTIVE_WORK_SITES * 4;
 
@@ -44,6 +45,8 @@ export class ResourceWorkerRenderer {
     this.loads = this.pool('Contact acquired material', new THREE.BoxGeometry(1, 1, 1), '#ffffff', CAPACITY);
     this.baskets = this.pool('Worker baskets', new THREE.CylinderGeometry(0.12, 0.09, 0.16, 7, 1, true), '#8b6840', CAPACITY);
     this.limbs = this.pool('Resource worker joints', new THREE.CylinderGeometry(0.028, 0.033, 1, 5), '#ffffff', CAPACITY * 8);
+    (this.limbs.material as THREE.Material).dispose();
+    this.limbs.material = createCosmicBodyMaterial(false);
     this.handles = this.pool('Resource worker tool shafts', new THREE.CylinderGeometry(0.018, 0.023, 1, 6), '#765235', CAPACITY);
     this.heads = this.pool('Resource worker axe and pick heads', resourceToolHeadGeometry(), '#ffffff', CAPACITY);
     this.chips = this.pool('Resource and construction contact fragments', new THREE.TetrahedronGeometry(1), '#ffffff', CAPACITY * 3);
@@ -60,6 +63,10 @@ export class ResourceWorkerRenderer {
   }
 
   beginFrame(): void { this.count = 0; this.chipCount = 0; this.sparkCount = 0; }
+
+  updateDaylight(daylight: number): void {
+    updateCosmicBodyMaterial(this.limbs.material as THREE.MeshStandardMaterial, daylight);
+  }
 
   draw(worker: ResourceWorkerVisual, x: number, y: number, z: number, size: number, facing: number, colour: THREE.Color, effects = true): void {
     this.drawPhysical(this.motion, worker.station.target, worker.site.profile.tool,

@@ -5,6 +5,7 @@ import { deriveMilitaryProfile, militaryProfileForWar, type MilitaryCapabilityPr
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import { BattleSpectacle } from './BattleSpectacle';
 import { militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
 
 interface Standard {
   pole: THREE.Mesh;
@@ -20,6 +21,7 @@ interface SupportVisual {
 }
 
 interface Company {
+  accents: CosmicRoleAccents;
   body: THREE.InstancedMesh;
   head: THREE.InstancedMesh;
   legs: THREE.InstancedMesh;
@@ -49,6 +51,7 @@ interface CampaignVisual {
 
 const MAX_CAMPAIGNS = 4;
 const MAX_FIGURES = 20;
+const COMPANY_BODY_SCALE = 0.28 * COSMIC_HEIGHT_MULTIPLIER;
 const clamp = THREE.MathUtils.clamp;
 
 /**
@@ -60,8 +63,8 @@ export class WarRenderer {
   readonly group = new THREE.Group();
   private readonly visuals = new Map<string, CampaignVisual>();
   private readonly walking: WalkabilityLayer;
-  private readonly bodyGeometry = new THREE.ConeGeometry(0.075, 0.17, 5);
-  private readonly headGeometry = new THREE.IcosahedronGeometry(0.044, 0);
+  private readonly bodyGeometry = createCosmicBodyGeometry();
+  private readonly headGeometry = createCosmicHeadGeometry();
   private readonly legGeometry = new THREE.BoxGeometry(0.035, 0.095, 0.035);
   private readonly shieldGeometry = new THREE.CylinderGeometry(0.065, 0.065, 0.018, 6);
   private readonly helmetGeometry = new THREE.SphereGeometry(0.052, 6, 4, 0, Math.PI * 2, 0, Math.PI * 0.58);
@@ -86,6 +89,13 @@ export class WarRenderer {
 
   get report(): { campaigns: number; figures: number; budget: number } {
     return { campaigns: this.visuals.size, figures: [...this.visuals.values()].reduce((n, v) => n + v.companies.reduce((sum, c) => sum + c.body.count, 0), 0), budget: MAX_CAMPAIGNS * MAX_FIGURES * 2 };
+  }
+
+  updateDaylight(daylight: number): void {
+    for (const visual of this.visuals.values()) for (const company of visual.companies) {
+      updateCosmicBodyMaterial(company.body.material as THREE.MeshStandardMaterial, daylight);
+      company.accents.updateDaylight(daylight);
+    }
   }
 
   update(delta: number, elapsed: number, focusId?: string, reducedMotion = false): void {
@@ -144,8 +154,9 @@ export class WarRenderer {
           if (!this.walking.isWalkable(p)) continue;
           const step = Math.sin(time * 8 + i * 1.9 + side) * (moving ? 1 : battlePulse * 0.3);
           const ground = this.elevationAt(p.x, p.z);
-          this.part(company.body, visible, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
-          this.part(company.head, visible, p.x, ground + 0.285 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
+          this.part(company.body, visible, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, 0, fade * COMPANY_BODY_SCALE);
+          company.accents.set(visible, 'soldier', this.matrix.matrix, 1);
+          this.part(company.head, visible, p.x, ground + 0.285 + Math.abs(step) * 0.012, p.z, yaw, 0, fade * COMPANY_BODY_SCALE);
           for (let leg = 0; leg < 2; leg++) {
             const offset = (leg === 0 ? -1 : 1) * 0.03;
             this.part(company.legs, visible * 2 + leg, p.x + Math.cos(yaw) * offset, ground + 0.052, p.z - Math.sin(yaw) * offset, yaw, step * (leg === 0 ? 0.6 : -0.6), fade);
@@ -162,6 +173,8 @@ export class WarRenderer {
           visible++;
         }
         company.body.count = company.head.count = company.weapon.count = visible;
+        company.accents.mesh.count = visible;
+        company.accents.endFrame();
         company.legs.count = visible * 2;
         company.shield.count = company.style.shields ? visible : 0;
         company.helmet.count = company.style.armour ? visible : 0;
@@ -286,13 +299,16 @@ export class WarRenderer {
     const accent = culture?.style.accent ?? '#ddba76';
     const style = militaryVisualStyle(profile);
     const material = new THREE.MeshStandardMaterial({ color: primary, roughness: style.doctrine === 'combined-arms' ? 0.72 : 0.9, metalness: style.armour ? 0.08 : 0 });
-    const skin = new THREE.MeshStandardMaterial({ color: '#c1a17c', roughness: 1 });
+    const cosmic = createCosmicBodyMaterial(false);
     const trim = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.75, metalness: style.armour ? 0.12 : 0 });
     const dark = new THREE.MeshStandardMaterial({ color: '#433b35', roughness: 1 });
     const metal = new THREE.MeshStandardMaterial({ color: '#5b5e5b', roughness: 0.66, metalness: 0.18 });
-    const body = new THREE.InstancedMesh(this.bodyGeometry, material, MAX_FIGURES);
-    const head = new THREE.InstancedMesh(this.headGeometry, skin, MAX_FIGURES);
-    const legs = new THREE.InstancedMesh(this.legGeometry, dark, MAX_FIGURES * 2);
+    const body = new THREE.InstancedMesh(this.bodyGeometry, cosmic, MAX_FIGURES);
+    const head = new THREE.InstancedMesh(this.headGeometry, cosmic, MAX_FIGURES);
+    const legs = new THREE.InstancedMesh(this.legGeometry, cosmic, MAX_FIGURES * 2);
+    const accents = new CosmicRoleAccents(MAX_FIGURES);
+    this.color.set(cosmicRoleFor('soldier').color);
+    for (const mesh of [body, head, legs]) for (let i = 0; i < mesh.instanceMatrix.count; i++) mesh.setColorAt(i, this.color);
     const shield = new THREE.InstancedMesh(this.shieldGeometry, trim, MAX_FIGURES);
     const helmet = new THREE.InstancedMesh(this.helmetGeometry, metal, MAX_FIGURES);
     const weaponGeometry = this.makeWeaponGeometry(style.weapon);
@@ -331,11 +347,11 @@ export class WarRenderer {
     const support: SupportVisual[] = [];
     for (let i = 0; i < style.artillery; i++) support.push(this.makeArtillery(i, material, dark, metal));
     for (let i = 0; i < style.vehicles; i++) support.push(this.makeVehicle(i, material, dark, metal));
-    group.add(body, head, legs, shield, helmet, weapon, pole, cloth, camp, ...support.map(item => item.group));
+    group.add(body, head, legs, accents.mesh, shield, helmet, weapon, pole, cloth, camp, ...support.map(item => item.group));
     const initial = war.phase === 'mobilizing' ? (side === 0 ? 0.12 : 0.84)
       : war.phase === 'marching' ? (side === 0 ? 0.12 + war.marchProgress * 0.62 : 0.84)
         : 0.76 + clamp(war.progress, -1, 1) * 0.08 + (side === 0 ? -0.015 : 0.015);
-    return { body, head, legs, shield, helmet, weapon, weaponGeometry, standard: { pole, cloth, rest }, camp, support, profile, style, progress: initial };
+    return { body, head, legs, accents, shield, helmet, weapon, weaponGeometry, standard: { pole, cloth, rest }, camp, support, profile, style, progress: initial };
   }
 
   private makeWeaponGeometry(weapon: PrimaryWeaponVisual): THREE.BufferGeometry {
@@ -397,6 +413,7 @@ export class WarRenderer {
     visual.spectacle.dispose();
     materials.forEach(material => material.dispose());
     visual.companies.forEach(company => {
+      company.accents.mesh.geometry.dispose();
       company.standard.cloth.geometry.dispose();
       company.weaponGeometry.dispose();
     });
