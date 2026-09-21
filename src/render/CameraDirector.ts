@@ -149,8 +149,9 @@ export function foundingEditorialTimingFor(sceneId: string | undefined): Foundin
   if (!sceneId) return undefined;
   if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 9.5, transitionSeconds: 2.4 };
   if (sceneId.startsWith('founding:community:')) return { durationSeconds: 5.8, transitionSeconds: 1.8 };
-  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 4.6, transitionSeconds: 1.5 };
-  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 3.8, transitionSeconds: 1.1 };
+  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 3.8, transitionSeconds: 1.3 };
+  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 2.9, transitionSeconds: 0.9 };
+  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 8.8, transitionSeconds: 1.5 };
   return undefined;
 }
 
@@ -181,6 +182,35 @@ export function foundingLandingShotProfileFor(sceneId: string | undefined): Foun
   const order = Number(sceneId.split(':')[2]);
   if (!Number.isInteger(order)) return undefined;
   return FOUNDING_LANDING_SHOTS.find(profile => profile.order === order);
+}
+
+export interface FoundingCastShotProfile {
+  readonly index: number;
+  readonly role: 'portrait' | 'side-profile' | 'life-in-place' | 'last-look';
+  readonly radius: number;
+  readonly height: number;
+  readonly targetHeight: number;
+  readonly azimuthOffset: number;
+  readonly orbitSpan: number;
+  readonly distanceDelta: number;
+}
+
+const FOUNDING_CAST_SHOTS: readonly FoundingCastShotProfile[] = [
+  { index: 0, role: 'portrait', radius: 2.25, height: 0.68, targetHeight: 0.14, azimuthOffset: -0.12, orbitSpan: 0.035, distanceDelta: -0.12 },
+  { index: 1, role: 'side-profile', radius: 2.9, height: 0.84, targetHeight: 0.15, azimuthOffset: 0.38, orbitSpan: 0.14, distanceDelta: 0 },
+  { index: 2, role: 'life-in-place', radius: 4.1, height: 1.42, targetHeight: 0.18, azimuthOffset: -0.46, orbitSpan: -0.09, distanceDelta: -0.45 },
+  { index: 3, role: 'last-look', radius: 2.55, height: 0.76, targetHeight: 0.14, azimuthOffset: 0.3, orbitSpan: 0.05, distanceDelta: 0.9 },
+];
+
+export function foundingCastShotProfileFor(sceneId: string | undefined): FoundingCastShotProfile | undefined {
+  if (!sceneId?.startsWith('founding-cast:introduction:')) return undefined;
+  const index = Number(sceneId.split(':')[2]);
+  if (!Number.isInteger(index)) return undefined;
+  return FOUNDING_CAST_SHOTS.find(profile => profile.index === index);
+}
+
+export function isFoundingReleaseScene(sceneId: string | undefined): boolean {
+  return Boolean(sceneId?.startsWith('founding-release:'));
 }
 
 function angularDistance(a: number, b: number): number {
@@ -435,8 +465,10 @@ export class CameraDirector {
     this.trackingInitialized = false;
     const framing = FRAMING[scene.kind];
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
+    const castProfile = foundingCastShotProfileFor(scene.id);
+    const releaseScene = isFoundingReleaseScene(scene.id);
     const baseDuration = this.config.camera.shotSeconds[0] + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
-    this.currentMotion = foundingProfile?.motion ?? this.motionFor(scene);
+    this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : this.motionFor(scene));
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
@@ -459,10 +491,10 @@ export class CameraDirector {
     this.observation.revision += 1;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
-    const baseAzimuth = this.stableAzimuth(scene.id) + (foundingProfile?.azimuthOffset ?? 0);
-    const radius = foundingProfile?.radius ?? this.interpolate(framing.radius, 0.36 + scene.score * 0.4);
-    const height = foundingProfile?.height ?? this.interpolate(framing.height, 0.42 + scene.interest * 0.32);
-    const targetHeight = foundingProfile?.targetHeight ?? framing.targetHeight;
+    const baseAzimuth = this.stableAzimuth(scene.id) + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
+    const radius = foundingProfile?.radius ?? castProfile?.radius ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
+    const height = foundingProfile?.height ?? castProfile?.height ?? (releaseScene ? 3.4 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
+    const targetHeight = foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight);
     this.shotBaseTarget.set(scene.position.x, ground + targetHeight, scene.position.z);
     this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
     this.shotBasePosition.set(scene.position.x + Math.cos(this.shotAzimuth) * radius, ground + height, scene.position.z + Math.sin(this.shotAzimuth) * radius);
@@ -542,6 +574,7 @@ export class CameraDirector {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
       if (person) {
         const framing = FRAMING[scene.kind];
+        const castProfile = foundingCastShotProfileFor(scene.id);
         const presentation = this.subjectPresentation?.(person.id);
         const actorX = presentation?.x ?? person.position.x;
         const actorZ = presentation?.z ?? person.position.z;
@@ -549,7 +582,7 @@ export class CameraDirector {
         const action = scene.kind === 'traveler-follow' ? undefined : presentation?.action;
         const composition = action ? interactionCameraComposition({ x: actorX, z: actorZ }, action, this.shotAzimuth) : undefined;
 
-        const actorFocusY = actorGround + framing.targetHeight + Math.max(0, action?.platformHeight ?? 0);
+        const actorFocusY = actorGround + (castProfile?.targetHeight ?? framing.targetHeight) + Math.max(0, action?.platformHeight ?? 0);
         const interactionY = composition && action
           ? elevationAt(composition.targetX, composition.targetZ) + Math.max(0.06, action.contactHeight ?? framing.targetHeight)
           : actorFocusY;
@@ -561,12 +594,14 @@ export class CameraDirector {
         // Step 2: when the renderer has an authoritative presentation action, the camera photographs
         // actor + work object as one composition. Otherwise it remains a close person-follow shot.
         const framingVariation = 0.34 + this.stableUnit(`${scene.id}:follow-framing`) * 0.36;
-        const followingDistance = this.interpolate(framing.radius, framingVariation) + (composition?.distanceBoost ?? 0);
-        const cameraHeight = this.interpolate(framing.height, framingVariation);
+        const castDistance = castProfile ? castProfile.radius + castProfile.distanceDelta * eased : undefined;
+        const followingDistance = (castDistance ?? this.interpolate(framing.radius, framingVariation)) + (composition?.distanceBoost ?? 0);
+        const cameraHeight = castProfile?.height ?? this.interpolate(framing.height, framingVariation);
         const contactLock = composition?.contactLock ?? 0;
         const baseAngle = composition?.azimuth ?? this.shotAzimuth;
+        const authoredOrbit = castProfile ? (eased - 0.5) * castProfile.orbitSpan : 0;
         const microOrbit = Math.sin(elapsedSeconds * 0.11 + this.shotAzimuth) * 0.035 * (1 - contactLock * 0.88);
-        const angle = baseAngle + microOrbit;
+        const angle = baseAngle + authoredOrbit + microOrbit;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
         const clearance = cameraClearanceFor(scene.kind);
