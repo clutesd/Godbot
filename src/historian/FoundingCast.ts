@@ -299,11 +299,11 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
   const memory = memories.get(historian);
   const members = memory?.members ?? foundingDocumentaryCast(state);
   const introduced = memory ? [...memory.introducedPersonIds] : [];
-  if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH && introduced.length === 0) {
-    return { phase: 'missed', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
-  }
   if (memory?.releaseShown && introduced.length >= members.length) {
     return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
+  }
+  if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH) {
+    return { phase: 'missed', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
   }
   const founding = foundingChapterProgress(historian, state);
   return {
@@ -490,6 +490,7 @@ export function installFoundingCast(): void {
   ): ObservationCandidate {
     if (focusEventId) {
       releaseIntroduction(this, state);
+      releaseStates.delete(state);
       return chooseScene.call(this, state, focusEventId);
     }
     const introduction = chooseFoundingCastScene(this, state);
