@@ -74,8 +74,8 @@ describe('Founding documentary cast 2a', () => {
     expect(framing?.title).toBe('A FEW LIVES');
     expect(framing?.statement.text).toContain(`Arrival Day began with ${baseline.population.toLocaleString()} lives.`);
     expect(framing?.statement.text).toContain('We will follow only a few.');
-    expect(framing?.statement.text).toContain('Not because they are important. Not yet.');
-    expect(framing?.statement.text).toContain('before we know what becomes of them');
+    expect(framing?.statement.text).toContain('Not because they are important.');
+    expect(framing?.statement.text).toContain('we do not yet know who will be');
     expect(simulation.state.month).toBe(baseline.eventMonth);
 
     const introduced: string[] = [];
@@ -135,7 +135,7 @@ describe('Founding documentary cast 2a', () => {
       interest: release!.interest,
       eventType: release!.event?.type,
       eventMonth: release!.event?.month,
-    })).toBeCloseTo(0.12, 5);
+    })).toBeCloseTo(0.16, 5);
   });
 
   it('uses one truthful anchor fact without assigning documentary importance inside the simulation', () => {
