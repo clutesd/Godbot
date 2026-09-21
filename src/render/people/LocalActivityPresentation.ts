@@ -21,6 +21,10 @@ const LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD = 0.24;
 /** After following a meaningful shift, leave this much slack before following again. */
 const LOCAL_ACTIVITY_BASE_RELEASE_RADIUS = 0.1;
 const LOCAL_ACTIVITY_REANCHOR_LIMIT = 0.9;
+/** Presentation-only crowd comfort. We do not run crowd physics, but local intents must respect bodies. */
+const LOCAL_PEER_HARD_CLEARANCE = 0.28;
+const LOCAL_PEER_ROUTE_CLEARANCE = 0.22;
+const LOCAL_PEER_SOFT_CLEARANCE = 0.62;
 export interface ActivityStructure {
   key: string; worldX: number; worldZ: number; width: number; depth: number; rotationY: number;
   role?: string;
@@ -95,14 +99,27 @@ export interface LocalActivityState {
   seconds: number;
   hold: number;
   partnerId?: string;
+  /** A presentation-only listener cue: another resident addressed this person on the prior frame. */
+  acknowledgingId?: string;
 }
 
 export class LocalActivityPresentation {
   private readonly states = new Map<string, LocalActivityState>();
+  /** Incoming social intent snapshot; avoids visible-person iteration-order bias. */
+  private readonly incomingPartners = new Map<string, string>();
   private frame = 0;
   get size(): number { return this.states.size; }
   get(id: string): Readonly<LocalActivityState> | undefined { return this.states.get(id); }
-  beginFrame(): void { this.frame++; }
+  beginFrame(): void {
+    this.frame++;
+    this.incomingPartners.clear();
+    for (const [speakerId, state] of this.states) {
+      const listenerId = state.partnerId;
+      if (!listenerId) continue;
+      const existing = this.incomingPartners.get(listenerId);
+      if (!existing || speakerId < existing) this.incomingPartners.set(listenerId, speakerId);
+    }
+  }
   prune(): void { for (const [id, state] of this.states) if (state.seen !== this.frame) this.states.delete(id); }
   clear(): void { this.states.clear(); }
 
@@ -168,6 +185,7 @@ export class LocalActivityPresentation {
       this.reanchor(person, context, state, hysteresisBase(state.base, context.base));
     }
     state.seen = this.frame;
+    delete state.acknowledgingId;
     const visual = context.visual;
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
       && Math.hypot(visual.x - state.destination.x, visual.z - state.destination.z) > 0.035) {
@@ -192,6 +210,18 @@ export class LocalActivityPresentation {
         const at = context.visualFor?.(peer.id) ?? peer.position;
         state.focus.x = at.x; state.focus.z = at.z;
         state.restFacing = facingTarget(state.destination, state.focus);
+      }
+    } else if (arrived && state.animation === 'idle' && state.action !== 'wait-for-clearance') {
+      // A one-sided conversation looks artificial. Snapshot incoming intent from the prior frame
+      // and let an available listener acknowledge the speaker without mutating simulation state.
+      const speakerId = this.incomingPartners.get(person.id);
+      const speaker = speakerId ? context.people.get(speakerId) : undefined;
+      if (speaker && canInteract(person, speaker)) {
+        const at = context.visualFor?.(speaker.id) ?? speaker.position;
+        if (Math.hypot(at.x - state.destination.x, at.z - state.destination.z) <= 2.8) {
+          state.restFacing = facingTarget(state.destination, at);
+          state.acknowledgingId = speaker.id;
+        }
       }
     }
     if (oriented && state.seconds >= state.hold) {
@@ -286,9 +316,12 @@ export class LocalActivityPresentation {
     const pointOffset = step === 'reposition'
       ? state.cycle + Math.floor(unit(`${person.id}:${state.step}:reposition`) * state.points.length)
       : 0;
-    let point = state.points[(pointIndex + pointOffset) % state.points.length]!;
+    const preferredIndex = (pointIndex + pointOffset) % state.points.length;
+    const from = context.visual ?? state.destination;
+    let point = selectPeerAwarePoint(person, state, context, preferredIndex, from) ?? state.destination;
     let focus: Readonly<Vec2> = state.stationFocus;
-    if (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task') {
+    const wantsInteraction = step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task';
+    if (wantsInteraction && socialEngagementAllowed(person, kind, state)) {
       const members = context.group?.members;
       if (members && members.length > 1) {
         const own = members.indexOf(person.id);
@@ -299,16 +332,28 @@ export class LocalActivityPresentation {
           const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
           const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
           if (distance < 0.18 || distance > 2.7) continue;
-          // Approach a real companion while keeping conversational personal space.
-          const personalSpace = 0.42 + unit(`${person.id}:${peer.id}:social-space`) * 0.16;
-          const approach = Math.min(0.72, Math.max(0.08, distance - personalSpace));
-          const candidate = { x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
-            z: state.base.z + (peerPosition.z - state.base.z) / distance * approach };
-          if (!bounded(person, candidate) || !localSegmentSafe(state.destination, candidate, context)) continue;
+          // One member closes the pair distance; the other can acknowledge and listen in place.
+          // A stable pair role prevents two independently resolved agents from walking to the
+          // same midpoint. Different partners naturally change who moves over time.
+          const sociability = Math.max(0, Math.min(1, person.traits.sociability));
+          const personalSpace = 0.44 + (1 - sociability) * 0.1
+            + unit(`${person.id}:${peer.id}:social-space`) * 0.06;
+          const closesDistance = person.id < peer.id;
+          if (!closesDistance && distance > 1.35) continue;
+          const approach = closesDistance ? Math.min(0.68, Math.max(0, distance - personalSpace)) : 0;
+          const candidate = approach > 0
+            ? { x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
+              z: state.base.z + (peerPosition.z - state.base.z) / distance * approach }
+            : { x: from.x, z: from.z };
+          if (!bounded(person, candidate) || !localSegmentSafe(from, candidate, context)
+            || !Number.isFinite(peerRoutePenalty(person, from, candidate, context, peer.id))) continue;
           point = candidate; focus = peerPosition; state.partnerId = peer.id;
           state.animation = 'converse'; state.action = 'conversation'; break;
         }
       }
+    }
+    if (wantsInteraction && !state.partnerId) {
+      state.action = kind === 'plaza' || kind === 'market' ? 'observe-group' : 'work-focus';
     }
     if (step === 'task' || step === 'return') {
       if (kind === 'home' && person.activity === 'rest') { state.animation = 'rest'; state.action = 'rest'; }
@@ -323,8 +368,9 @@ export class LocalActivityPresentation {
       state.action = 'check-carried-object'; state.animation = 'carry';
     }
     // Validate the actual connecting segment, not just the cached endpoints. No local pathfinder.
-    const from = context.visual ?? state.destination;
-    if (bounded(person, point) && localSegmentSafe(from, point, context)) state.destination = point;
+    // Previous-frame peer positions keep this deterministic while preventing obvious body crossings.
+    if (bounded(person, point) && localSegmentSafe(from, point, context)
+      && Number.isFinite(peerRoutePenalty(person, from, point, context, state.partnerId))) state.destination = point;
     else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
     state.restFacing = facingTarget(state.destination, focus);
     // Own the focus vector; never retain/mutate a simulation position through a peer alias.
@@ -342,6 +388,83 @@ function activityRadius(kind: DestinationKind): number {
   if (kind === 'shrine') return 0.52;
   if (kind === 'home') return 0.44;
   return 0.5;
+}
+
+function socialEngagementAllowed(person: Person, kind: DestinationKind, state: LocalActivityState): boolean {
+  if (person.activity === 'socialize') return true;
+  const sociability = Math.max(0, Math.min(1, person.traits.sociability));
+  const cooperation = Math.max(0, Math.min(1, person.traits.cooperation));
+  const socialPlace = kind === 'plaza' || kind === 'market' || kind === 'home';
+  const chance = Math.min(0.98, (socialPlace ? 0.72 : 0.46) + sociability * 0.18 + cooperation * 0.08);
+  return unit(`${person.id}:${kind}:${state.cycle}:${state.step}:engage`) < chance;
+}
+
+function selectPeerAwarePoint(person: Person, state: LocalActivityState, context: LocalActivityContext,
+  preferredIndex: number, from: Readonly<Vec2>): Vec2 | undefined {
+  let best: Vec2 | undefined;
+  let bestScore = Infinity;
+  const crowdedAtStart = hasPeerOverlap(person, from, context);
+  const egressOffset = crowdedAtStart && state.points.length > 1
+    ? 1 + Math.floor(unit(`${person.id}:peer-egress`) * (state.points.length - 1))
+    : 0;
+  for (let offset = 0; offset < state.points.length; offset++) {
+    const point = state.points[(preferredIndex + egressOffset + offset) % state.points.length]!;
+    if (!bounded(person, point) || !localSegmentSafe(from, point, context)) continue;
+    const crowd = peerRoutePenalty(person, from, point, context);
+    if (!Number.isFinite(crowd)) continue;
+    const travel = Math.hypot(point.x - from.x, point.z - from.z);
+    const score = crowd * 3 + offset * 0.055 + travel * 0.08;
+    if (score < bestScore) { best = point; bestScore = score; }
+  }
+  return best;
+}
+
+function peerRoutePenalty(person: Person, from: Readonly<Vec2>, to: Readonly<Vec2>, context: LocalActivityContext,
+  ignoreId?: string): number {
+  const members = context.group?.members;
+  if (!members || members.length <= 1) return 0;
+  let penalty = 0;
+  for (const id of members) {
+    if (id === person.id || id === ignoreId) continue;
+    const peer = context.people.get(id);
+    if (!peer) continue;
+    const at = context.visualFor?.(id) ?? peer.position;
+    const startDistance = Math.hypot(from.x - at.x, from.z - at.z);
+    const endpointDistance = Math.hypot(to.x - at.x, to.z - at.z);
+    const routeDistance = distanceToSegment(at, from, to);
+    // If two residents are already overlapping, blocking every route creates a permanent deadlock.
+    // Permit only routes that materially increase separation; once clear, normal corridor rules resume.
+    if (startDistance < LOCAL_PEER_HARD_CLEARANCE) {
+      if (endpointDistance <= startDistance + 0.08) return Infinity;
+      penalty += Math.max(0, (LOCAL_PEER_SOFT_CLEARANCE - endpointDistance) / LOCAL_PEER_SOFT_CLEARANCE);
+      continue;
+    }
+    if (endpointDistance < LOCAL_PEER_HARD_CLEARANCE || routeDistance < LOCAL_PEER_ROUTE_CLEARANCE) return Infinity;
+    if (endpointDistance < LOCAL_PEER_SOFT_CLEARANCE) {
+      penalty += (LOCAL_PEER_SOFT_CLEARANCE - endpointDistance) / LOCAL_PEER_SOFT_CLEARANCE;
+    }
+  }
+  return penalty;
+}
+
+function hasPeerOverlap(person: Person, at: Readonly<Vec2>, context: LocalActivityContext): boolean {
+  const members = context.group?.members;
+  if (!members) return false;
+  return members.some(id => {
+    if (id === person.id) return false;
+    const peer = context.people.get(id);
+    if (!peer) return false;
+    const position = context.visualFor?.(id) ?? peer.position;
+    return Math.hypot(at.x - position.x, at.z - position.z) < LOCAL_PEER_HARD_CLEARANCE;
+  });
+}
+
+function distanceToSegment(point: Readonly<Vec2>, a: Readonly<Vec2>, b: Readonly<Vec2>): number {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const lengthSquared = dx * dx + dz * dz;
+  if (lengthSquared <= 1e-8) return Math.hypot(point.x - a.x, point.z - a.z);
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.z - a.z) * dz) / lengthSquared));
+  return Math.hypot(point.x - (a.x + dx * t), point.z - (a.z + dz * t));
 }
 
 function sampledEntryStep(person: Person, sample: number): number {

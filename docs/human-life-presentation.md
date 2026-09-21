@@ -89,8 +89,14 @@ work still take precedence.
 Group occupancy positions are **arrival/safety anchors, not permanent mannequin slots**.
 Each local-life state derives a bounded frontage of nearby semantic positions and may step between
 them for work, inspection, household activity and real peer interaction. Market/plaza conversations
-approach a visible companion while preserving personal space; repeated routines vary which safe
-frontage point is used so group topology changes over real seconds without random wandering.
+approach a visible companion while preserving personal space; paired approaches split the closing
+distance so two initiators do not independently walk to the same midpoint. Local target selection
+also rejects endpoints and short corridors that intrude on another visible resident's space.
+Incoming social intent is snapshotted before each frame: an available listener turns toward the
+speaker on the following frame, so conversations read as reciprocal without shared mutable crowd
+authority or iteration-order dependence. Sociability and cooperation modestly shape engagement
+frequency. Repeated routines vary which safe frontage point is used so group topology changes over
+real seconds without random wandering.
 
 Persistent appearance posture is no longer applied as a whole-body sideways roll. Ambient bodies
 remain nearly upright with only a small forward posture cue; deeper lean is reserved for explicit
@@ -161,6 +167,7 @@ and normal-camera readability still need an on-screen review.
 The procedural rig has no foot IK or planted-foot solver, so compressed long journeys can still
 slide. Generic occupations share coarse work gestures and building-relative exterior points;
 there are no authored indoor desk, machine or workbench contact sockets. Head turns are limited
-by the simple head silhouette. Conversations use bounded point selection, not collision avoidance
-or mutual turn-taking, so dense groups can still overlap. Large or obstructed sites may have no
+by the simple head silhouette. Conversations now use peer-aware endpoint/corridor clearance and reciprocal listener orientation,
+but this remains a lightweight presentation system rather than full continuous crowd physics,
+footstep avoidance or authored conversational turn-taking. Large or obstructed sites may have no
 safe local candidates and intentionally remain in stationary presentation.
