@@ -97,6 +97,19 @@ const DESTINATION_DISTRICT: Partial<Record<DestinationKind, BuildingDistrict>> =
 export class PeopleSystem {
   readonly walkability: WalkabilityLayer;
   private readonly layoutCache = new Map<string, { signature: string; layout: SettlementLayoutPlan }>();
+  private structureMonth = -1;
+
+  /** Read-only daily projection: reuse real roles, resource assignments and shelter allocation. */
+  dailyPlan(person: Person, settlement: Settlement, state: SimulationState, hour: number): Person {
+    const projected = { ...person, position: { ...person.position }, target: { ...person.target }, navigation: undefined };
+    this.assignDestination(projected, settlement, state, this.scheduleFor(person, settlement, state, hour), 'walk');
+    return projected;
+  }
+
+  dailyKey(person: Person, settlement: Settlement, state: SimulationState, hour: number): string {
+    const schedule = this.scheduleFor(person, settlement, state, hour);
+    return `${schedule.kind}:${schedule.phase}:${schedule.destinationId ?? ''}`;
+  }
 
   constructor(private readonly world: WorldState, private readonly seed: string) {
     this.walkability = new WalkabilityLayer(world);
@@ -149,6 +162,10 @@ export class PeopleSystem {
   }
 
   advancePerson(person: Person, settlement: Settlement, state: SimulationState): void {
+    if (this.structureMonth !== state.month) {
+      this.structureMonth = state.month;
+      this.walkability.setStructures(state.settlements.flatMap(s => s.structurePlots ?? []));
+    }
     const cellX = Math.round(person.position.x / this.world.cellSize + this.world.size / 2);
     const cellZ = Math.round(person.position.z / this.world.cellSize + this.world.size / 2);
     const weather = state.weather.cells[cellZ * this.world.size + cellX];
@@ -365,13 +382,15 @@ export class PeopleSystem {
     };
   }
 
-  private scheduleFor(person: Person, settlement: Settlement, state: SimulationState): ScheduledDestination {
+  private scheduleFor(person: Person, settlement: Settlement, state: SimulationState, hour?: number): ScheduledDestination {
     const role = person.role ?? 'gatherer';
     const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
-    const shiftedHour = (state.month * 3 + Math.floor(stableUnit(`${person.id}:schedule`) * (settlement.foundingPodId ? 24 : 3))) % 24;
+    const shiftedHour = hour === undefined
+      ? (state.month * 3 + Math.floor(stableUnit(`${person.id}:schedule`) * (settlement.foundingPodId ? 24 : 3))) % 24
+      : (hour + stableUnit(`${person.id}:schedule`) * 2.4 + 24) % 24;
     const building = isEstablishmentBuilder(state, person);
     const winter = state.month % 12 <= 1 || state.month % 12 >= 10;
-    if (person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
+    if (hour === undefined && person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
       return { kind: 'home', phase: 'home', activity: 'rest', reason: physicalRestSite(state, person) ? 'resting in available physical shelter' : 'resting at the household camp' };
     }
     if (shiftedHour < 8) {
@@ -381,6 +400,10 @@ export class PeopleSystem {
       return { kind, phase: 'commute', activity: 'travel', reason: `taking the morning route to ${humanDestination(kind)}` };
     }
     if (shiftedHour < 16) {
+      if (hour !== undefined && shiftedHour >= 12 && shiftedHour < 12.35) return {
+        kind: 'plaza', phase: 'meal', activity: 'socialize', reason: 'taking a short midday break',
+        point: person.position,
+      };
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'work');
       if (building) return { kind: 'construction-site', phase: 'work', activity: 'construct', reason: 'helping build physical protection for the settlement' };
       if (isEstablishmentFireTender(state, person)) return { kind: 'plaza', phase: 'work', activity: 'craft',

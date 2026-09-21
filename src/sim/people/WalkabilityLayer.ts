@@ -1,6 +1,7 @@
 import { cellAt } from '../world';
 import { fineSegmentDry, waterAt } from '../transport/TerrainTraversal';
 import type { Vec2, WorldCell, WorldState } from '../types';
+import { StructureNavigation, type PedestrianFootprint } from './StructureNavigation';
 
 export type CrossingMode = 'walk' | 'bridge' | 'ferry' | 'boat' | 'rail';
 
@@ -19,6 +20,12 @@ const GRID_OFFSETS = [[0, -1], [-1, 0], [1, 0], [0, 1], [-1, -1], [1, -1], [-1, 
  * guarantee explicit.
  */
 export class WalkabilityLayer {
+  readonly structures = new StructureNavigation();
+  setStructures(structures: readonly PedestrianFootprint[]): void {
+    if (!this.structures.set(structures)) return;
+    this.routeCache.clear(); this.failedRouteRevisions.clear(); this.groundCache.clear();
+    this.gridEdges.clear(); this.components.fill(0); this.nextComponent = 1; this.gridRevision++;
+  }
   private readonly routeCache = new Map<string, Vec2[]>();
   private readonly failedRouteRevisions = new Map<string, number>();
   private readonly gridEdges = new Map<number, boolean>();
@@ -45,7 +52,7 @@ export class WalkabilityLayer {
 
   isWalkable(point: Vec2): boolean {
     const cell = cellAt(this.world, point.x, point.z);
-    return Boolean(cell && this.isWalkableCell(cell) && !waterAt(this.world, point, cell));
+    return Boolean(cell && this.isWalkableCell(cell) && !waterAt(this.world, point, cell) && this.structures.clear(point));
   }
 
   isDeepWater(point: Vec2): boolean {
@@ -56,6 +63,7 @@ export class WalkabilityLayer {
   }
 
   isSegmentWalkable(start: Vec2, end: Vec2): boolean {
+    if (!this.structures.clear(start, end)) return false;
     if (!this.isWalkable(start) || !this.isWalkable(end)) return false;
     if (!fineSegmentDry(this.world, start, end)) return false;
     // Exact cell-level traversal (supercover DDA). Walkability is a per-cell predicate, so
@@ -170,9 +178,14 @@ export class WalkabilityLayer {
     // A mode label is not a ticket or crossing. Passenger legs need explicit network support.
     if (mode === 'boat' || mode === 'ferry' || mode === 'rail') return [];
 
+    // Road hints are preferences, never a compulsory trip across town.
+    const directLength = Math.hypot(end.x - start.x, end.z - start.z);
+    let hintedLength = 0, lastHint = start;
+    for (const hint of [...preferred, end]) { hintedLength += Math.hypot(hint.x - lastHint.x, hint.z - lastHint.z); lastHint = hint; }
+    const hints = hintedLength <= directLength * 1.4 + 0.5 ? preferred : [];
     const nodes = [
       this.nearestWalkable(start, `origin:${start.x}:${start.z}`),
-      ...preferred.map((point, index) => this.nearestWalkable(point, `preferred:${index}:${point.x}:${point.z}`)),
+      ...hints.map((point, index) => this.nearestWalkable(point, `preferred:${index}:${point.x}:${point.z}`)),
       destination,
     ];
     const result: Vec2[] = [];
@@ -180,16 +193,18 @@ export class WalkabilityLayer {
     for (let index = 1; index < nodes.length; index += 1) {
       const to = nodes[index];
       if (!to) continue;
-      const segment = this.isSegmentWalkable(cursor, to) ? [{ ...to }] : this.gridRoute(cursor, to);
+      let segment = this.isSegmentWalkable(cursor, to) ? [{ ...to }] : [];
+      if (!segment.length && !this.structures.clear(cursor, to)) segment = this.structures.detour(cursor, to, (a, b) => this.isSegmentWalkable(a, b));
+      if (!segment.length) segment = this.gridRoute(cursor, to);
       if (segment.length > 0 && !this.isSegmentWalkable(cursor, segment[0]!)) {
-        return result;
+        return [];
       }
       if (segment.length === 0) {
         const safe = this.nearestWalkable(to, `unreachable:${to.x}:${to.z}`);
         if (this.isSegmentWalkable(cursor, safe)) {
           result.push(safe);
           cursor = safe;
-        }
+        } else return [];
       } else {
         result.push(...segment);
         cursor = segment[segment.length - 1]!;
