@@ -20,7 +20,7 @@ installWatcherHistorian();
 installFoundingChapter();
 installFoundingContinuity();
 installFoundingYearOne();
-// Installed outermost so a pending person introduction lands before the Year-One payoff.
+// Installed outermost so Arrival Day ends on its human handoff before continuity and Year-One narration.
 installFoundingCast();
 // Human-scale memory observes the final chosen cast scene and survives archive/resume.
 installFoundingCharacterMemory();
