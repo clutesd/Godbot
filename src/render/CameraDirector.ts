@@ -149,9 +149,9 @@ export function foundingEditorialTimingFor(sceneId: string | undefined): Foundin
   if (!sceneId) return undefined;
   if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 9.5, transitionSeconds: 2.4 };
   if (sceneId.startsWith('founding:community:')) return { durationSeconds: 5.8, transitionSeconds: 1.8 };
-  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 3.8, transitionSeconds: 1.3 };
+  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 4.6, transitionSeconds: 1.3 };
   if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 2.9, transitionSeconds: 0.9 };
-  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 8.8, transitionSeconds: 1.5 };
+  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 7.2, transitionSeconds: 1.35 };
   return undefined;
 }
 
