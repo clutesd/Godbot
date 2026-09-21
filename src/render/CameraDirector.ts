@@ -54,7 +54,7 @@ export interface InteractionCameraComposition {
   readonly span: number;
 }
 
-type CameraMotion = 'hold' | 'drift' | 'truck' | 'dolly-in' | 'dolly-out' | 'crane' | 'orbit' | 'follow' | 'pullback';
+export type CameraMotion = 'hold' | 'drift' | 'truck' | 'dolly-in' | 'dolly-out' | 'crane' | 'orbit' | 'follow' | 'pullback';
 
 const FRAMING: Record<ObservationKind, CameraFraming> = {
   'world-establishing': { radius: [46, 62], height: [42, 58], targetHeight: 1, durationScale: 1.25 },
