@@ -7,7 +7,7 @@ import type { CandidateScoreBreakdown, ObservationCandidate } from './types';
 export const FOUNDING_CAST_TARGET_SIZE = 4;
 export const FOUNDING_CAST_LATEST_INTRO_MONTH = 1;
 export const FOUNDING_CAST_MONTHS_PER_SECOND = 0.08;
-export const FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND = 0.12;
+export const FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND = 0.16;
 
 export interface FoundingCastMember {
   readonly personId: string;
@@ -222,7 +222,7 @@ function framingScene(
   const statement = {
     id: `founding-cast-framing-${arrival.id}`,
     month: state.month,
-    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow only a few. Not because they are important. Not yet. So we can know them before we know what becomes of them.`,
+    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow only a few. Not because they are important. Because we do not yet know who will be.`,
     epistemicStatus: 'derived-statistic' as const,
     sourceEventIds: [arrival.id],
     sourceEntityIds,
