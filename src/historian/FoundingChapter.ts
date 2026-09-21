@@ -248,6 +248,63 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   }, state);
 }
 
+type FoundingSiteSignalKey = 'fertility' | 'woodland' | 'waterAccess' | 'habitability';
+
+const foundingSiteSignals: readonly { key: FoundingSiteSignalKey; label: string }[] = [
+  { key: 'fertility', label: 'fertility' },
+  { key: 'woodland', label: 'woodland' },
+  { key: 'waterAccess', label: 'water access' },
+  { key: 'habitability', label: 'overall habitability' },
+];
+
+function siteContrast(baseline: FoundingChapterBaseline, community: FoundingCommunityBaseline): string {
+  const signals = foundingSiteSignals.map(signal => {
+    const peers = baseline.communities.map(candidate => candidate.site[signal.key]);
+    const mean = peers.reduce((sum, value) => sum + value, 0) / Math.max(1, peers.length);
+    return {
+      ...signal,
+      delta: community.site[signal.key] - mean,
+    };
+  }).sort((a, b) => b.delta - a.delta);
+
+  const strongest = signals[0]!;
+  const weakest = signals.at(-1)!;
+  const strongEnough = strongest.delta >= 0.05;
+  const weakEnough = weakest.delta <= -0.05;
+
+  if (strongEnough && weakEnough) {
+    return `Compared with the other landings, the site is stronger in ${strongest.label} but weaker in ${weakest.label}.`;
+  }
+  if (strongEnough) {
+    return `Its clearest physical edge over the other landings is ${strongest.label}.`;
+  }
+  if (weakEnough) {
+    return `Its clearest physical constraint beside the other landings is ${weakest.label}.`;
+  }
+  return 'The site offers no overwhelming physical advantage over the other landings.';
+}
+
+function communityOpeningText(baseline: FoundingChapterBaseline, community: FoundingCommunityBaseline): string {
+  const domains = community.domains.map(readable);
+  const inheritance = list(domains.slice(0, 2));
+  const biome = readable(community.site.biome);
+  const contrast = siteContrast(baseline, community);
+  const count = community.founderCount.toLocaleString();
+
+  switch (community.order % 5) {
+    case 0:
+      return `${community.settlementName} begins in ${biome} terrain with ${count} founders from ${community.podName}, carrying strength in ${inheritance}. ${contrast} What matters now is what they make of that combination.`;
+    case 1:
+      return `${community.podName}'s ${count} founders reach ${community.settlementName} with ${inheritance} as their clearest inheritance. They have landed in ${biome} terrain. ${contrast} Their history begins in that imbalance.`;
+    case 2:
+      return `At ${community.settlementName}, ${count} people from ${community.podName} bring ${inheritance} into ${biome} terrain. ${contrast} Which starting condition matters most is still unknown.`;
+    case 3:
+      return `${community.settlementName} starts with ${count} founders, ${inheritance}, and a ${biome} site. ${contrast} Nothing in that advantage or constraint decides the outcome.`;
+    default:
+      return `${count} founders from ${community.podName} begin at ${community.settlementName}, carrying ${inheritance} into ${biome} terrain. ${contrast} This is the baseline; everything after it is consequence.`;
+  }
+}
+
 function communityScene(
   historian: Historian,
   state: SimulationState,
@@ -258,12 +315,10 @@ function communityScene(
   const settlement = state.settlements.find(candidate => candidate.id === community.settlementId);
   if (!event || !settlement) return undefined;
 
-  const domains = community.domains.map(readable);
-  const knowledge = community.knowledge.map(readable);
   const statement = {
     id: `founding-community-${community.podId}`,
     month: state.month,
-    text: `${community.settlementName} began with ${community.founderCount.toLocaleString()} founders from ${community.podName}. Their inherited strengths were ${list(domains)}; they carried ${list(knowledge)} into a ${readable(community.site.biome)} landing site. This was one of ${baseline.expectedCommunityCount} communities beginning from different conditions.`,
+    text: communityOpeningText(baseline, community),
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds: [community.settlementId],
