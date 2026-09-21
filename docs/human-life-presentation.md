@@ -100,6 +100,27 @@ Persistent appearance posture is no longer applied as a whole-body sideways roll
 remain nearly upright with only a small forward posture cue; deeper lean is now gated by an actual
 standing physical/resource-work action rather than merely by using an articulated body representation.
 
+### Meaningful social encounters
+
+Social presentation now reads the simulation's authoritative relationship graph when visible people
+share a local activity space. Partner choice prefers actual family, friends, mentors, collaborators,
+allies and colleagues over merely convenient proximity; rivals are not treated as friendly
+companions. A selected encounter persists across several real-time beats instead of collapsing into
+one generic gesture. Family/friend encounters may greet, converse and linger; mentorship can read as
+guidance/listening/reflection; collaborators consult and consider together; formal ties keep more
+distance; rivals use a guarded, shorter exchange.
+
+Recent consequential memory can change the tone without inventing new history. When a person with
+recent grief or shock is with a genuinely close positive tie, the presentation may use a quiet
+check-in/companionship sequence. These labels and motions are documentary staging of already-known
+relationship and memory state. They never mutate trust, strength, memories, prestige, production,
+history or any other simulation authority.
+
+Social body language also has distinct presentation clips for warm, quiet, teaching and tense
+encounters. Personal space remains a live constraint throughout the encounter, and repeated partner
+choice is discouraged when a group contains other plausible meaningful ties.
+
+
 Local activity bases use a dead-band/hysteresis follower. Small monthly social-layout or authority
 jitter is ignored. Once drift becomes meaningful, the local frontage follows far enough to return
 inside a stable release radius without resetting the current action, timer or cycle. This keeps

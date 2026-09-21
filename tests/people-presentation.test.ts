@@ -382,6 +382,29 @@ describe('Ambient body posture', () => {
   });
 });
 
+describe('Social body language', () => {
+  it('gives quiet support, teaching, warmth and tension visibly different poses', () => {
+    const controller = new AnimationController('social-body-language');
+    const sample = (state: 'converse-warm' | 'converse-quiet' | 'converse-teach' | 'converse-tense') => {
+      const id = `person-${state}`;
+      controller.getOrCreateCharacterState(id, 'artisan');
+      for (let frame = 0; frame < 45; frame++) controller.updateCharacterAnimation(id, 1 / 30, 'socialize', state, 0);
+      return { ...controller.getCurrentPose(id)! };
+    };
+    const warm = sample('converse-warm');
+    const quiet = sample('converse-quiet');
+    const teaching = sample('converse-teach');
+    const tense = sample('converse-tense');
+
+    expect(Math.abs(quiet.rightShoulderRotation)).toBeLessThan(Math.abs(warm.rightShoulderRotation) + 0.08);
+    const teachingGesture = Math.max(Math.abs(teaching.leftShoulderRotation), Math.abs(teaching.rightShoulderRotation));
+    const quietGesture = Math.max(Math.abs(quiet.leftShoulderRotation), Math.abs(quiet.rightShoulderRotation));
+    expect(teachingGesture).toBeGreaterThan(quietGesture + 0.04);
+    expect(tense.leftElbowRotation + tense.rightElbowRotation).toBeGreaterThan(quiet.leftElbowRotation + quiet.rightElbowRotation);
+    expect(new Set([warm.name, quiet.name, teaching.name, tense.name]).size).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe('Animation integration', () => {
   it('plays a continuous walk cycle on real time, independent of simulation speed', () => {
     const controller = new AnimationController('walk-cycle');
