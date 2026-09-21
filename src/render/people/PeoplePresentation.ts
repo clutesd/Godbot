@@ -8,9 +8,10 @@ import { RUN_SPEED_THRESHOLD, WALK_SPEED_THRESHOLD } from './PeopleVisualState';
  * PeoplePresentation.ts
  *
  * Presentation-only reading of simulation state: who belongs to which visible gathering, where a
- * character stands within it, how much individuality it earns, and which animation its visual
- * travel implies. Nothing here changes simulation authority; every offset is deterministic in the
- * person's identity so a crowd is stable between frames instead of reshuffling.
+ * character safely arrives within it, how much individuality it earns, and which animation its
+ * visual travel implies. Group placement is a stable anchor, not a permanent standing slot;
+ * LocalActivityPresentation supplies bounded social/work choreography around it. Nothing here
+ * changes simulation authority.
  */
 
 export type VisualTier = 'population' | 'notable' | 'historical';
@@ -104,9 +105,10 @@ export function buildSocialGroups(people: readonly Person[]): Map<string, Social
 }
 
 /**
- * Places one member of a gathering using destination-specific occupancy geometry. Markets resolve
+ * Gives one member of a gathering a destination-specific arrival/safety anchor. Markets resolve
  * into conversational pods, shrines into audience arcs, docks/patrols into lanes, work sites into
- * loose grids, and homes into compact household groups. Recent grief/adversity produces a restrained
+ * loose grids, and homes into compact household groups. The anchor must not become a mannequin slot:
+ * local presentation is expected to move around it over real seconds. Recent grief/adversity produces a restrained
  * presentation-only tendency to stand slightly outside the social centre. The simulation position
  * stays authoritative and every displacement remains tightly bounded.
  */

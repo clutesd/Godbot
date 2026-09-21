@@ -86,6 +86,16 @@ in-progress travel, emergency,
 displacement, migration, unsafe weather, inactivity and existing farming/construction/resource
 work still take precedence.
 
+Group occupancy positions are **arrival/safety anchors, not permanent mannequin slots**.
+Each local-life state derives a bounded frontage of nearby semantic positions and may step between
+them for work, inspection, household activity and real peer interaction. Market/plaza conversations
+approach a visible companion while preserving personal space; repeated routines vary which safe
+frontage point is used so group topology changes over real seconds without random wandering.
+
+Persistent appearance posture is no longer applied as a whole-body sideways roll. Ambient bodies
+remain nearly upright with only a small forward posture cue; deeper lean is reserved for explicit
+articulated physical work.
+
 Local activity bases use a dead-band/hysteresis follower. Small monthly social-layout or authority
 jitter is ignored. Once drift becomes meaningful, the local frontage follows far enough to return
 inside a stable release radius without resetting the current action, timer or cycle. This keeps

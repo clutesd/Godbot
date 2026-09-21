@@ -42,15 +42,18 @@ export interface LocalActivityContext {
 type Step = 'task' | 'inspect' | 'return' | 'interact' | 'pause' | 'reposition';
 type Intent = readonly [step: Step, point: number, action: string, seconds: number];
 const WORK_ROUTINE: readonly Intent[] = [
-  ['task', 0, 'task', 5], ['inspect', 1, 'inspect-work-area', 3], ['return', 0, 'return-to-task', 4],
-  ['interact', 3, 'look-to-colleague', 3], ['pause', 3, 'pause', 4], ['reposition', 2, 'adjust-work-position', 2],
+  ['task', 0, 'task', 4.5], ['inspect', 1, 'inspect-work-area', 2.6], ['reposition', 4, 'adjust-work-position', 1.8],
+  ['return', 0, 'return-to-task', 3.6], ['interact', 5, 'look-to-colleague', 3], ['pause', 3, 'pause', 2.8],
+  ['reposition', 2, 'change-work-side', 1.8],
 ];
 const ROUTINES: Partial<Record<DestinationKind, readonly Intent[]>> = {
   workshop: WORK_ROUTINE,
-  market: [['task', 0, 'attend-stall', 4], ['interact', 1, 'look-to-customer', 4], ['inspect', 2, 'check-stall', 3],
-    ['reposition', 3, 'step-aside', 2], ['interact', 0, 'look-to-neighbour', 4], ['pause', 0, 'pause', 3]],
-  plaza: [['interact', 0, 'join-pod', 5], ['pause', 0, 'pause', 3], ['reposition', 3, 'leave-pod', 2],
-    ['inspect', 2, 'observe-plaza', 3], ['interact', 1, 'join-neighbour', 5], ['pause', 1, 'pause', 3]],
+  market: [['task', 0, 'attend-stall', 3.6], ['interact', 4, 'look-to-customer', 3.4], ['reposition', 5, 'step-aside', 1.7],
+    ['inspect', 2, 'check-stall', 2.5], ['interact', 1, 'look-to-neighbour', 3.5], ['pause', 3, 'pause', 2.2],
+    ['reposition', 6, 'cross-stall-frontage', 1.8]],
+  plaza: [['interact', 0, 'join-pod', 3.8], ['reposition', 4, 'shift-in-pod', 1.6], ['interact', 1, 'join-neighbour', 3.5],
+    ['pause', 1, 'pause', 2.1], ['reposition', 5, 'leave-pod', 1.8], ['inspect', 2, 'observe-plaza', 2.5],
+    ['interact', 6, 'join-another-pod', 3.6]],
   'civic-building': [['task', 0, 'workstation-task', 5], ['interact', 1, 'consult-colleague', 3], ['return', 0, 'review-task', 4],
     ['inspect', 2, 'check-task-area', 3], ['pause', 2, 'pause', 4], ['reposition', 3, 'return-to-station', 2]],
   'knowledge-institution': [['task', 0, 'study', 6], ['inspect', 1, 'consider-task', 4], ['interact', 3, 'discuss-study', 4],
@@ -59,8 +62,9 @@ const ROUTINES: Partial<Record<DestinationKind, readonly Intent[]>> = {
     ['inspect', 2, 'inspect-work-area', 4], ['interact', 3, 'look-to-colleague', 3], ['pause', 3, 'pause', 4]],
   shrine: [['task', 0, 'ritual', 6], ['pause', 0, 'pause', 3], ['reposition', 1, 'adjust-gathering-position', 2],
     ['task', 1, 'ritual', 4], ['inspect', 2, 'observe-gathering', 3], ['reposition', 3, 'step-out-of-gathering', 3]],
-  home: [['task', 0, 'rest', 8], ['pause', 0, 'pause', 3], ['reposition', 1, 'household-step', 2],
-    ['interact', 2, 'look-to-household', 4], ['inspect', 3, 'check-household', 3], ['return', 0, 'rest', 7]],
+  home: [['task', 0, 'rest', 6.5], ['pause', 0, 'pause', 2.8], ['reposition', 1, 'household-step', 1.8],
+    ['interact', 4, 'look-to-household', 3.4], ['inspect', 3, 'check-household', 2.6],
+    ['reposition', 2, 'household-crossing', 1.8], ['return', 0, 'rest', 5.5]],
   'patrol-route': [['inspect', 1, 'watch', 3], ['reposition', 2, 'patrol-point', 2], ['pause', 2, 'watch', 4],
     ['inspect', 3, 'survey-route', 3], ['return', 0, 'patrol-point', 2], ['pause', 0, 'watch', 4]],
 };
@@ -214,15 +218,20 @@ export class LocalActivityPresentation {
     const focus = structure ? { x: structure.worldX, z: structure.worldZ }
       : { x: base.x + Math.sin(angle) * 0.4, z: base.z + Math.cos(angle) * 0.4 };
     const facing = facingTarget(base, focus);
-    const radius = person.navigation!.destinationKind === 'patrol-route' ? 0.8
-      : person.navigation!.destinationKind === 'home' ? 0.22 : 0.38;
-    // A small task frontage: current station, either side, and a step back. Never a random walk.
-    const points = [base];
-    for (const [side, back] of [[1, 0], [-1, 0], [0.5, 0.6]] as const) {
-      const candidate = { x: base.x + Math.cos(facing) * side * radius - Math.sin(facing) * back * radius,
-        z: base.z - Math.sin(facing) * side * radius - Math.cos(facing) * back * radius };
-      if (bounded(person, candidate) && localSegmentSafe(base, candidate, context)) points.push(candidate);
-    }
+    const kind = person.navigation!.destinationKind;
+    const radius = activityRadius(kind);
+    const forward = { x: Math.sin(facing), z: Math.cos(facing) };
+    const side = { x: Math.cos(facing), z: -Math.sin(facing) };
+    // Group placement is an arrival/safety anchor, not a permanent standing slot. These are
+    // nearby semantic frontage positions for the same authoritative activity.
+    const offsets = [[0, 0], [1, 0], [-1, 0], [0, -0.75], [0, 0.9], [0.72, 0.52], [-0.72, 0.52]] as const;
+    const points = offsets.map(([sideAmount, forwardAmount]) => {
+      const candidate = {
+        x: base.x + side.x * sideAmount * radius + forward.x * forwardAmount * radius,
+        z: base.z + side.z * sideAmount * radius + forward.z * forwardAmount * radius,
+      };
+      return bounded(person, candidate) && localSegmentSafe(base, candidate, context) ? candidate : base;
+    });
     const state: LocalActivityState = { authority, revision: context.revision, seen: this.frame, base, points, focus, stationFocus: { ...focus }, structure,
       destination: base, restFacing: facing, animation: 'idle', action: 'arrive', phase: 'approach',
       step: -1, cycle: 0, sample: 0, seconds: 0,
@@ -274,7 +283,10 @@ export class LocalActivityPresentation {
     state.partnerId = undefined;
     state.animation = 'idle';
     state.action = action;
-    let point = state.points[pointIndex % state.points.length]!;
+    const pointOffset = step === 'reposition'
+      ? state.cycle + Math.floor(unit(`${person.id}:${state.step}:reposition`) * state.points.length)
+      : 0;
+    let point = state.points[(pointIndex + pointOffset) % state.points.length]!;
     let focus: Readonly<Vec2> = state.stationFocus;
     if (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task') {
       const members = context.group?.members;
@@ -286,9 +298,12 @@ export class LocalActivityPresentation {
           if (!peer || !canInteract(person, peer)) continue;
           const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
           const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
-          if (distance < 0.12 || distance > 2.4) continue;
-          const candidate = { x: state.base.x + (peerPosition.x - state.base.x) / distance * Math.min(0.3, distance * 0.3),
-            z: state.base.z + (peerPosition.z - state.base.z) / distance * Math.min(0.3, distance * 0.3) };
+          if (distance < 0.18 || distance > 2.7) continue;
+          // Approach a real companion while keeping conversational personal space.
+          const personalSpace = 0.42 + unit(`${person.id}:${peer.id}:social-space`) * 0.16;
+          const approach = Math.min(0.72, Math.max(0.08, distance - personalSpace));
+          const candidate = { x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
+            z: state.base.z + (peerPosition.z - state.base.z) / distance * approach };
           if (!bounded(person, candidate) || !localSegmentSafe(state.destination, candidate, context)) continue;
           point = candidate; focus = peerPosition; state.partnerId = peer.id;
           state.animation = 'converse'; state.action = 'conversation'; break;
@@ -317,6 +332,17 @@ export class LocalActivityPresentation {
   }
 }
 
+
+function activityRadius(kind: DestinationKind): number {
+  if (kind === 'plaza' || kind === 'market') return 0.72;
+  if (kind === 'patrol-route') return 0.9;
+  if (kind === 'field') return 0.7;
+  if (kind === 'warehouse' || kind === 'industrial-site') return 0.62;
+  if (kind === 'workshop' || kind === 'knowledge-institution' || kind === 'civic-building') return 0.56;
+  if (kind === 'shrine') return 0.52;
+  if (kind === 'home') return 0.44;
+  return 0.5;
+}
 
 function sampledEntryStep(person: Person, sample: number): number {
   const routine = ROUTINES[person.navigation!.destinationKind] ?? WORK_ROUTINE;

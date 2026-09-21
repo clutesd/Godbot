@@ -8,7 +8,7 @@ import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
-import { AnimationController } from './animation/AnimationController';
+import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
 import { HumanLifeClock } from './people/HumanLifeClock';
@@ -662,7 +662,8 @@ export class GodboxRenderer {
       // feet stay on the ground instead of sinking with the pose.
       const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, pose?.spineRotation ?? 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
+      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(articulated));
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyTilt.pitch, facing + (pose?.pelvisRotation ?? 0), bodyTilt.roll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
       this.people.setColorAt(index, this.personColor);

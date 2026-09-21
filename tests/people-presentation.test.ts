@@ -10,7 +10,7 @@ import {
   type PersonVisualGround,
 } from '../src/render/people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor } from '../src/render/people/PeoplePresentation';
-import { AnimationController } from '../src/render/animation/AnimationController';
+import { AnimationController, presentationBodyTilt } from '../src/render/animation/AnimationController';
 import { HistoricalImportanceSystem } from '../src/sim/people/HistoricalImportance';
 import { NOTABLE_VISUAL_BUDGET, visiblePersonBudgetForDensity } from '../src/render/GodboxRenderer';
 import { Simulation } from '../src/sim/Simulation';
@@ -366,6 +366,19 @@ describe('Notable people in a live run', () => {
       expect(candidate.appearance!.buildScale).toBe(original.build);
     }
     expect(compared).toBeGreaterThan(20);
+  });
+});
+
+describe('Ambient body posture', () => {
+  it('keeps persistent appearance posture upright instead of applying a permanent sideways lean', () => {
+    const older = presentationBodyTilt(0, 0.24, false);
+    expect(Math.abs(older.roll)).toBeLessThanOrEqual(0.018);
+    expect(older.pitch).toBeLessThan(0.08);
+  });
+
+  it('caps ordinary ambient lean but still permits deliberate articulated work', () => {
+    expect(presentationBodyTilt(0.8, 0.24, false).pitch).toBeCloseTo(0.22);
+    expect(presentationBodyTilt(0.5, 0.24, true).pitch).toBeGreaterThan(0.4);
   });
 });
 
