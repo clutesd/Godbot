@@ -376,7 +376,7 @@ describe('Ambient body posture', () => {
     expect(older.pitch).toBeLessThan(0.08);
   });
 
-  it('caps ordinary ambient lean but still permits deliberate articulated work', () => {
+  it('caps ordinary ambient lean but still permits deliberate physical work', () => {
     expect(presentationBodyTilt(0.8, 0.24, false).pitch).toBeCloseTo(0.22);
     expect(presentationBodyTilt(0.5, 0.24, true).pitch).toBeGreaterThan(0.4);
   });
