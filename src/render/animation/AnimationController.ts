@@ -19,6 +19,10 @@ export type AnimationState =
   | 'build'
   | 'farm'
   | 'converse'
+  | 'converse-warm'
+  | 'converse-quiet'
+  | 'converse-teach'
+  | 'converse-tense'
   | 'rest'
   | 'ritual'
   | 'alert'
@@ -520,6 +524,143 @@ export class AnimationController {
       isLooping: true,
       canInterruptFrom: new Set(['idle']),
       blendDuration: 0.4,
+    });
+
+    const socialStates: AnimationState[] = ['converse', 'converse-warm', 'converse-quiet', 'converse-teach', 'converse-tense'];
+
+    this.clips.set('converse-warm', {
+      state: 'converse-warm',
+      poses: [
+        {
+          name: 'warm-open',
+          duration: 0.9,
+          pelvisRotation: 0.025, spineRotation: 0.045, headRotation: 0.035,
+          leftShoulderRotation: 0.22, leftElbowRotation: 0.32,
+          rightShoulderRotation: 0.28, rightElbowRotation: 0.34,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+        {
+          name: 'warm-share',
+          duration: 0.65,
+          pelvisRotation: -0.02, spineRotation: 0.075, headRotation: -0.055,
+          leftShoulderRotation: 0.38, leftElbowRotation: 0.28,
+          rightShoulderRotation: 0.16, rightElbowRotation: 0.36,
+          leftHipRotation: 0, leftKneeRotation: 0.07, rightHipRotation: 0, rightKneeRotation: 0.07,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+        {
+          name: 'warm-listen',
+          duration: 1.05,
+          pelvisRotation: 0, spineRotation: 0.025, headRotation: 0.08,
+          leftShoulderRotation: 0.07, leftElbowRotation: 0.18,
+          rightShoulderRotation: 0.1, rightElbowRotation: 0.2,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+      ],
+      isLooping: true,
+      canInterruptFrom: new Set(socialStates),
+      blendDuration: 0.32,
+    });
+
+    this.clips.set('converse-quiet', {
+      state: 'converse-quiet',
+      poses: [
+        {
+          name: 'quiet-attend',
+          duration: 1.35,
+          pelvisRotation: 0, spineRotation: 0.02, headRotation: 0.055,
+          leftShoulderRotation: 0.035, leftElbowRotation: 0.16,
+          rightShoulderRotation: 0.045, rightElbowRotation: 0.17,
+          leftHipRotation: 0, leftKneeRotation: 0.055, rightHipRotation: 0, rightKneeRotation: 0.055,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+        {
+          name: 'quiet-nod',
+          duration: 0.8,
+          pelvisRotation: 0.01, spineRotation: 0.035, headRotation: -0.065,
+          leftShoulderRotation: 0.045, leftElbowRotation: 0.17,
+          rightShoulderRotation: 0.06, rightElbowRotation: 0.18,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: -0.005, z: 0 },
+        },
+      ],
+      isLooping: true,
+      canInterruptFrom: new Set(socialStates),
+      blendDuration: 0.38,
+    });
+
+    this.clips.set('converse-teach', {
+      state: 'converse-teach',
+      poses: [
+        {
+          name: 'teach-indicate',
+          duration: 0.7,
+          pelvisRotation: 0.035, spineRotation: 0.065, headRotation: 0.055,
+          leftShoulderRotation: 0.16, leftElbowRotation: 0.25,
+          rightShoulderRotation: 0.52, rightElbowRotation: 0.2,
+          leftHipRotation: 0, leftKneeRotation: 0.07, rightHipRotation: 0, rightKneeRotation: 0.07,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+        {
+          name: 'teach-explain',
+          duration: 0.85,
+          pelvisRotation: -0.025, spineRotation: 0.085, headRotation: -0.035,
+          leftShoulderRotation: 0.38, leftElbowRotation: 0.26,
+          rightShoulderRotation: 0.24, rightElbowRotation: 0.32,
+          leftHipRotation: 0, leftKneeRotation: 0.07, rightHipRotation: 0, rightKneeRotation: 0.07,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+        {
+          name: 'teach-check',
+          duration: 0.9,
+          pelvisRotation: 0, spineRotation: 0.035, headRotation: 0.085,
+          leftShoulderRotation: 0.08, leftElbowRotation: 0.18,
+          rightShoulderRotation: 0.1, rightElbowRotation: 0.2,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+      ],
+      isLooping: true,
+      canInterruptFrom: new Set(socialStates),
+      blendDuration: 0.34,
+    });
+
+    this.clips.set('converse-tense', {
+      state: 'converse-tense',
+      poses: [
+        {
+          name: 'tense-guarded',
+          duration: 1.0,
+          pelvisRotation: -0.035, spineRotation: 0.055, headRotation: 0.11,
+          leftShoulderRotation: 0.22, leftElbowRotation: 0.56,
+          rightShoulderRotation: 0.18, rightElbowRotation: 0.54,
+          leftHipRotation: 0, leftKneeRotation: 0.11, rightHipRotation: 0, rightKneeRotation: 0.11,
+          positionOffset: { x: 0, y: 0, z: -0.01 },
+        },
+        {
+          name: 'tense-reply',
+          duration: 0.55,
+          pelvisRotation: 0.055, spineRotation: 0.095, headRotation: -0.09,
+          leftShoulderRotation: 0.16, leftElbowRotation: 0.48,
+          rightShoulderRotation: 0.34, rightElbowRotation: 0.35,
+          leftHipRotation: 0, leftKneeRotation: 0.12, rightHipRotation: 0, rightKneeRotation: 0.12,
+          positionOffset: { x: 0, y: 0, z: -0.015 },
+        },
+        {
+          name: 'tense-withdraw',
+          duration: 0.75,
+          pelvisRotation: -0.045, spineRotation: 0.03, headRotation: 0.14,
+          leftShoulderRotation: 0.12, leftElbowRotation: 0.42,
+          rightShoulderRotation: 0.11, rightElbowRotation: 0.42,
+          leftHipRotation: 0, leftKneeRotation: 0.08, rightHipRotation: 0, rightKneeRotation: 0.08,
+          positionOffset: { x: 0, y: 0, z: -0.02 },
+        },
+      ],
+      isLooping: true,
+      canInterruptFrom: new Set(socialStates),
+      blendDuration: 0.28,
     });
   }
 
