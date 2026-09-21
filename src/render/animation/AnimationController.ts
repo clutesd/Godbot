@@ -47,6 +47,24 @@ export interface AnimationPose {
 /**
  * Describes an animation state with multiple poses that can be cycled
  */
+export interface PresentationBodyTilt {
+  pitch: number;
+  roll: number;
+}
+
+/**
+ * Persistent appearance posture is a subtle forward cue, not a permanent sideways tilt.
+ * Ambient people stay nearly upright; explicit articulated work may lean more deeply.
+ */
+export function presentationBodyTilt(spineRotation = 0, appearancePosture = 0, allowDeepLean = false): PresentationBodyTilt {
+  const inheritedPitch = Math.max(-0.035, Math.min(0.075, appearancePosture * 0.32));
+  const maximumPitch = allowDeepLean ? 0.62 : 0.22;
+  return {
+    pitch: Math.max(-0.12, Math.min(maximumPitch, spineRotation + inheritedPitch)),
+    roll: Math.max(-0.018, Math.min(0.018, appearancePosture * 0.075)),
+  };
+}
+
 export interface AnimationClip {
   state: AnimationState;
   poses: AnimationPose[];
@@ -476,6 +494,22 @@ export class AnimationController {
         leftKneeRotation: 0.08,
         rightHipRotation: 0,
         rightKneeRotation: 0.08,
+        positionOffset: { x: 0, y: 0, z: 0 },
+      },
+      {
+        name: 'converse-listen',
+        duration: 1.15,
+        pelvisRotation: -0.025,
+        spineRotation: 0.025,
+        headRotation: -0.09,
+        leftShoulderRotation: 0.08,
+        leftElbowRotation: 0.18,
+        rightShoulderRotation: 0.03,
+        rightElbowRotation: 0.12,
+        leftHipRotation: 0,
+        leftKneeRotation: 0.06,
+        rightHipRotation: 0,
+        rightKneeRotation: 0.06,
         positionOffset: { x: 0, y: 0, z: 0 },
       },
     ];

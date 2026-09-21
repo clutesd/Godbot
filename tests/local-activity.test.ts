@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
-import { buildSocialGroups, groupKeyFor, travelAnimationFor } from '../src/render/people/PeoplePresentation';
+import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../src/render/people/PeoplePresentation';
 import type { Activity, DestinationKind, Person, Vec2 } from '../src/sim/types';
 
 function person(id = 'resident'): Person {
@@ -265,6 +265,72 @@ describe('renderer-owned local activity', () => {
       const p = person(), h = harness([p]); h.tick(); interrupt(p); h.tick(0); expect(h.local.size).toBe(0);
     }
     expect(harness([person()], { blocked: true }).tick()[0]!.action).toBeUndefined();
+  });
+
+  it('keeps a frozen visible social cluster changing formation instead of occupying mannequin slots', () => {
+    const people = Array.from({ length: 8 }, (_, index) => {
+      const p = person(`social-${index}`);
+      const angle = index / 8 * Math.PI * 2;
+      p.position = { x: Math.cos(angle) * 0.7, z: Math.sin(angle) * 0.7 };
+      p.target = { ...p.position };
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'central-plaza';
+      p.navigation!.schedulePhase = 'social';
+      return p;
+    });
+    const before = JSON.stringify(people);
+    const local = new LocalActivityPresentation();
+    const visuals = new PeopleVisualStateStore();
+    const peers = new Map(people.map(p => [p.id, p]));
+    const group = buildSocialGroups(people).get('plaza:central-plaza')!;
+    const previous = new Map<string, Vec2>();
+    const origin = new Map<string, Vec2>();
+    const maxDisplacement = new Map(people.map(p => [p.id, 0]));
+    const pairMin = new Map<string, number>();
+    const pairMax = new Map<string, number>();
+    let conversationFrames = 0;
+
+    for (let frame = 0; frame < 15 * 60; frame++) {
+      local.beginFrame(); visuals.beginFrame();
+      previous.clear();
+      for (const p of people) {
+        const v = visuals.get(p.id);
+        if (v) previous.set(p.id, { x: v.x, z: v.z });
+      }
+      for (const p of people) {
+        const base = placeInGroup(p, group, p.position);
+        const plan = local.resolve(p, {
+          base, visual: visuals.get(p.id), group, people: peers, visualFor: id => previous.get(id),
+          structures: [], safeSegment: () => true, revision: 'social-cluster', blocked: false, far: false,
+        }, 1 / 60);
+        const v = visuals.resolve(p.id, {
+          destination: plan?.destination ?? base,
+          restFacing: plan?.restFacing ?? base.restFacing,
+          localMove: Boolean(plan && plan.action !== 'arrive'),
+          smoothTravel: !plan,
+        }, 1 / 60, ground);
+        if (!origin.has(p.id)) origin.set(p.id, { x: v.x, z: v.z });
+        const start = origin.get(p.id)!;
+        maxDisplacement.set(p.id, Math.max(maxDisplacement.get(p.id)!, Math.hypot(v.x - start.x, v.z - start.z)));
+        if (plan?.partnerId) conversationFrames++;
+      }
+      for (let a = 0; a < people.length; a++) for (let b = a + 1; b < people.length; b++) {
+        const va = visuals.get(people[a]!.id)!, vb = visuals.get(people[b]!.id)!;
+        const key = `${a}:${b}`;
+        const d = Math.hypot(va.x - vb.x, va.z - vb.z);
+        pairMin.set(key, Math.min(pairMin.get(key) ?? Infinity, d));
+        pairMax.set(key, Math.max(pairMax.get(key) ?? 0, d));
+      }
+      local.prune(); visuals.prune();
+    }
+
+    const mobile = [...maxDisplacement.values()].filter(distance => distance >= 0.22).length;
+    const changingPairs = [...pairMax.keys()].filter(key => pairMax.get(key)! - pairMin.get(key)! >= 0.16).length;
+    expect(mobile).toBeGreaterThanOrEqual(5);
+    expect(changingPairs).toBeGreaterThanOrEqual(8);
+    expect(conversationFrames).toBeGreaterThan(180);
+    expect(JSON.stringify(people)).toBe(before);
   });
 
   it('turns toward a real companion without ever aliasing their authority', () => {
