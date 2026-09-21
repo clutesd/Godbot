@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingEditorialTimingFor, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingEditorialTimingFor, foundingLandingShotProfileFor, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
@@ -62,6 +62,24 @@ describe('Arrival Day editorial pacing', () => {
     expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 4.6, transitionSeconds: 1.5 });
     expect(foundingEditorialTimingFor('founding-cast:introduction:person-1')).toEqual({ durationSeconds: 3.8, transitionSeconds: 1.1 });
     expect(foundingEditorialTimingFor(undefined)).toBeUndefined();
+  });
+
+  it('gives all five landing beats different visual jobs', () => {
+    const profiles = Array.from({ length: 5 }, (_, order) =>
+      foundingLandingShotProfileFor(`founding:community:${order}:pod-${order}`)
+    );
+    expect(profiles.every(Boolean)).toBe(true);
+    expect(new Set(profiles.map(profile => profile?.role)).size).toBe(5);
+    expect(new Set(profiles.map(profile => profile?.motion)).size).toBe(5);
+    expect(new Set(profiles.map(profile => `${profile?.radius}:${profile?.height}`)).size).toBe(5);
+    expect(profiles[0]?.role).toBe('terrain-reveal');
+    expect(profiles[1]?.role).toBe('ground-approach');
+    expect(profiles[2]?.role).toBe('lateral-life');
+    expect(profiles[3]?.role).toBe('geographic-contrast');
+    expect(profiles[4]?.role).toBe('history-handoff');
+    expect(profiles[2]?.height).toBeLessThan(profiles[0]?.height ?? 0);
+    expect(profiles[3]?.height).toBeGreaterThan(profiles[1]?.height ?? 100);
+    expect(foundingLandingShotProfileFor('ordinary:scene')).toBeUndefined();
   });
 });
 
