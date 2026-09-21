@@ -5,8 +5,10 @@ import { atInteraction, facingTarget } from './PhysicalActionPresentation';
 import type { GroupPlacement, SocialGroup } from './PeoplePresentation';
 import type { PersonVisualState } from './PeopleVisualState';
 
-/** Tiny, renderer-owned routines. No clock, random source or write is shared with simulation. */
+/** The single renderer-owned micro-life projection. No clock, random source or write is shared with simulation. */
 export const LOCAL_ACTIVITY_RADIUS = 2;
+const LOCAL_ACTIVITY_BASE_EPSILON = 0.08;
+const LOCAL_ACTIVITY_REANCHOR_LIMIT = 0.9;
 export interface ActivityStructure {
   key: string; worldX: number; worldZ: number; width: number; depth: number; rotationY: number;
   role?: string;
@@ -95,10 +97,14 @@ export class LocalActivityPresentation {
       this.states.delete(person.id);
       return undefined;
     }
-    const authority = `${person.homeId}|${person.householdId}|${person.occupation}|${person.role}|${person.activity}|${person.appearance?.carriedItem}|${nav.destinationKind}|${nav.destinationId}|${nav.schedulePhase}|${nav.waypointIndex}|${person.position.x},${person.position.z}|${person.target.x},${person.target.z}`;
+    // Keep the routine alive across ordinary monthly position/target/phase churn. Commute,
+    // emergency and other exclusive authority changes already yield above; the identity below
+    // changes only when the person's actual local-life context changes.
+    const authority = localActivityAuthority(person);
     let state = this.states.get(person.id);
+    const baseDrift = state ? Math.hypot(state.base.x - context.base.x, state.base.z - context.base.z) : Infinity;
     if (!state || state.authority !== authority || state.revision !== context.revision
-      || Math.hypot(state.base.x - context.base.x, state.base.z - context.base.z) > 0.04) {
+      || baseDrift > LOCAL_ACTIVITY_REANCHOR_LIMIT) {
       if (!bounded(person, context.base) || !localSegmentSafe(context.base, context.base, context)) {
         this.states.delete(person.id);
         return undefined;
@@ -112,6 +118,11 @@ export class LocalActivityPresentation {
         state.action = 'wait-for-clearance';
       }
       this.states.set(person.id, state);
+    } else if (baseDrift > LOCAL_ACTIVITY_BASE_EPSILON) {
+      // Social-group reshuffles and small authoritative position corrections are common at the
+      // monthly tick. Re-anchor the physical frontage without restarting the person's action,
+      // timer or cycle, so history can advance while a believable local action finishes.
+      this.reanchor(person, context, state);
     }
     state.seen = this.frame;
     const visual = context.visual;
@@ -179,6 +190,39 @@ export class LocalActivityPresentation {
     return state;
   }
 
+  private reanchor(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
+    const anchored = this.create(person, context, state.authority);
+    const previousDestination = { ...state.destination };
+    state.base = anchored.base;
+    state.points = anchored.points;
+    state.stationFocus = anchored.stationFocus;
+    state.structure = anchored.structure;
+    state.revision = context.revision;
+    if (!state.partnerId) {
+      state.focus.x = anchored.focus.x;
+      state.focus.z = anchored.focus.z;
+    }
+
+    const from = context.visual ?? state.base;
+    if (bounded(person, previousDestination) && localSegmentSafe(from, previousDestination, context)) {
+      // Do not jerk a person out of an action already underway. The next routine step will use
+      // the newly anchored points.
+      state.destination = previousDestination;
+    } else {
+      let nearest = state.points[0] ?? state.base;
+      let best = Infinity;
+      for (const point of state.points) {
+        const distance = Math.hypot(point.x - previousDestination.x, point.z - previousDestination.z);
+        if (distance < best && bounded(person, point) && localSegmentSafe(from, point, context)) {
+          best = distance;
+          nearest = point;
+        }
+      }
+      state.destination = { ...nearest };
+    }
+    state.restFacing = facingTarget(state.destination, state.partnerId ? state.focus : state.stationFocus);
+  }
+
   private choose(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
     const kind = person.navigation!.destinationKind;
     const [step, pointIndex, action, seconds] = (ROUTINES[kind] ?? WORK_ROUTINE)[state.step]!;
@@ -228,6 +272,15 @@ export class LocalActivityPresentation {
     // Own the focus vector; never retain/mutate a simulation position through a peer alias.
     if (focus !== state.focus) { state.focus.x = focus.x; state.focus.z = focus.z; }
   }
+}
+
+
+function localActivityAuthority(person: Person): string {
+  const nav = person.navigation!;
+  // Intentionally omit position, target, waypoint index, schedule phase and carried appearance.
+  // Those can change on monthly presentation refreshes without changing what the person is
+  // semantically doing here. True interruptions are handled before this key is evaluated.
+  return `${person.homeId}|${person.householdId}|${person.occupation}|${person.role}|${person.activity}|${nav.destinationKind}|${nav.destinationId}`;
 }
 
 function canInteract(person: Person, peer: Person): boolean {

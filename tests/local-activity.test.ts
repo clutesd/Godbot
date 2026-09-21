@@ -90,23 +90,47 @@ describe('renderer-owned local activity', () => {
     for (let i = 0; i < 600; i++) expect(blocked.tick()[0]!.speed).toBe(0);
   });
 
-  it.each(['position', 'target', 'activity', 'destination', 'phase', 'occupation'] as const)('immediately replaces local intent when authority changes: %s', field => {
+  it.each(['activity', 'destination', 'occupation', 'household'] as const)('immediately replaces local intent when semantic authority changes: %s', field => {
     const p = person(), h = harness([p]);
     for (let i = 0; i < 360; i++) h.tick();
     const old = h.local.get(p.id)!;
-    if (field === 'position') p.position.x += 0.4;
-    if (field === 'target') p.target.z += 1;
     if (field === 'activity') p.activity = 'assist';
     if (field === 'destination') p.navigation!.destinationId = 'other';
-    if (field === 'phase') p.navigation!.schedulePhase = 'meal';
     if (field === 'occupation') p.occupation = 'keeper';
+    if (field === 'household') p.householdId = 'other-household';
     const v = h.tick(0)[0]!;
     expect(h.local.get(p.id)).not.toBe(old);
     expect(v.destination).toEqual(p.position);
     expect(v.action).toBe('arrive');
   });
 
-  it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
+
+  it('preserves an in-progress local routine across minor monthly authority churn', () => {
+    const p = person(), h = harness([p]);
+    for (let i = 0; i < 360; i++) h.tick();
+    const previous = h.local.get(p.id)!;
+    const step = previous.step, cycle = previous.cycle, seconds = previous.seconds, action = previous.action;
+
+    // These values can all change as monthly authority and group placement refresh. None changes
+    // the fact that this resident is still an artisan working at the same workshop.
+    p.position.x += 0.18;
+    p.position.z -= 0.11;
+    p.target.x += 0.35;
+    p.navigation!.schedulePhase = 'meal';
+    p.navigation!.waypointIndex = 2;
+
+    h.tick(0);
+    const next = h.local.get(p.id)!;
+    expect(next).toBe(previous);
+    expect(next.step).toBe(step);
+    expect(next.cycle).toBe(cycle);
+    expect(next.seconds).toBe(seconds);
+    expect(next.action).toBe(action);
+    expect(next.base.x).toBeCloseTo(p.position.x);
+    expect(next.base.z).toBeCloseTo(p.position.z);
+  });
+
+it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
     const p = person(), h = harness([p]); h.tick(); expect(h.local.size).toBe(1);
     p.activity = activity; h.tick(0); expect(h.local.size).toBe(0);
   });
