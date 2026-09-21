@@ -1,11 +1,21 @@
 name: Cinematic motion validation
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/historian/PresentationDirector.ts'
+      - 'src/render/CameraDirector.ts'
+      - 'tests/cinematic-presentation.test.ts'
+      - 'tests/camera-forest-sightline.test.ts'
+      - '.github/workflows/cinematic-motion-validation.yml'
   pull_request:
     paths:
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/CameraDirector.ts'
       - 'tests/cinematic-presentation.test.ts'
+      - 'tests/camera-forest-sightline.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   workflow_dispatch:
 
@@ -21,6 +31,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/historian/PresentationDirector.ts src/render/CameraDirector.ts tests/cinematic-presentation.test.ts
-      - run: npx vitest run tests/cinematic-presentation.test.ts tests/pacing.test.ts
+      - run: npx eslint src/historian/PresentationDirector.ts src/render/CameraDirector.ts tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts
+      - run: npx vitest run tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts tests/pacing.test.ts
       - run: npm run build
