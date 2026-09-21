@@ -59,9 +59,9 @@ describe('Arrival Day editorial pacing', () => {
   });
 
   it('keeps documentary anchors brief, then gives the silent release room to breathe', () => {
-    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 3.8, transitionSeconds: 1.3 });
+    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 4.6, transitionSeconds: 1.3 });
     expect(foundingEditorialTimingFor('founding-cast:introduction:0:person-1')).toEqual({ durationSeconds: 2.9, transitionSeconds: 0.9 });
-    expect(foundingEditorialTimingFor('founding-release:event-1')).toEqual({ durationSeconds: 8.8, transitionSeconds: 1.5 });
+    expect(foundingEditorialTimingFor('founding-release:event-1')).toEqual({ durationSeconds: 7.2, transitionSeconds: 1.35 });
     expect(isFoundingReleaseScene('founding-release:event-1')).toBe(true);
     expect(isFoundingReleaseScene('ordinary:scene')).toBe(false);
     expect(foundingEditorialTimingFor(undefined)).toBeUndefined();
