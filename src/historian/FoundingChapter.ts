@@ -217,16 +217,16 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   const coverage = resolvedCount === count
     ? `${count} separated landing communities`
     : `${resolvedCount} traceable landing communities from ${count} recorded vessels`;
-  const contrast = differingStartingConditions(baseline)
-    ? 'The landings did not begin identically: knowledge, skills, supplies, or terrain differed between them.'
-    : 'Their common beginning is recorded before later history begins to separate them.';
+  const thesis = differingStartingConditions(baseline)
+    ? 'They begin with different land, knowledge, skills, and finite supplies. This is the last moment their histories are known together. From here, we watch what those differences become.'
+    : 'They begin from the same recorded conditions. This is the last moment their histories are known together. From here, we watch how their paths separate.';
   const sourceEntityIds = baseline.communities
     .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
     .map(community => community.settlementId);
   const statement = {
     id: `founding-overview-${event.id}`,
     month: state.month,
-    text: `Arrival Day is the permanent beginning of this record. ${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. ${contrast}`,
+    text: `${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. ${thesis}`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds,
