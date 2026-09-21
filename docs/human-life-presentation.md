@@ -19,6 +19,25 @@ does not advance history or write to people, settlements, resources or relations
 
 ## Implementation
 
+### Documentary timebase
+
+Human presentation deliberately does **not** map walking or routine actions to the displayed day.
+The documentary preset's ordinary pace is 2 simulated months per real second; a literal 30-day
+month would make one simulated day last only about 0.017 real seconds. Driving footsteps, meals or
+work cycles from that calendar would make the population flicker between actions rather than look
+alive.
+
+`PeopleSystem` therefore remains monthly authority: it records the broad destination/activity facts
+used by history. The removed `dailyPlan` / `dailyKey` projection API is not part of production
+presentation. `LocalActivityPresentation` is the sole micro-life layer and advances from renderer
+`deltaSeconds`. Its work, conversation, inspection, rest and reposition beats are documentary
+samples of ordinary life, not claims that each displayed calendar day was individually animated.
+Emergencies, travel, migration and specialized physical work still interrupt immediately.
+
+Authoritative journey interpolation may use the observed real-time spacing between monthly
+retargets as a *catch-up ceiling* so a visible walker does not fall permanently behind history.
+That estimate never drives local routine timing and local moves never train it.
+
 Each eligible visible resident keeps a small routine, a few cached safe points, a destination,
 an interaction focus and an arrival/action timer. The entry beat is deliberately brief: after
 settling and orienting, a resident holds the arrival state for only 0.4–1.2 deterministic real
@@ -84,7 +103,10 @@ same instanced body proportions as the main renderer. The scene does not call si
 `tests/local-activity.test.ts` covers frozen-authority motion, brief bounded arrival timing, replay,
 timing offsets, authority immutability, interruption, safe paths/footprints, geometry invalidation,
 blocked-trip recovery, visibility cleanup, actual-displacement gait, carrying, acceleration and
-bounded idles. Existing
+bounded idles. `tests/documentary-human-cadence.test.ts` additionally runs the real simulation
+monthly PeopleSystem at the documentary preset's ordinary 2 months/second while resolving local
+presentation at 60 FPS for 20 presentation seconds. A matched unrendered simulation proves that
+presentation remains byte-for-byte non-authoritative. Existing
 people/physical-action/resource/construction suites cover the retained stronger work systems.
 
 Validation for this pass:

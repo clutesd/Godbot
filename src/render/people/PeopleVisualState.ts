@@ -204,6 +204,10 @@ export class PeopleVisualStateStore {
    * The duration is bounded by an unhurried travel speed *and* by the observed real-time length of
    * a simulation month. GODBOX runs history at anything from 0.3 to 50 months per second; a
    * journey that outlasts the next authoritative update would only ever fall further behind.
+   *
+   * This month estimate is only a catch-up budget for authoritative retargets. It is never treated
+   * as a human day clock. Renderer-owned local activity uses wall-clock seconds and does not train
+   * or consume this estimator.
    */
   private retarget(state: PersonVisualState, target: PersonVisualTarget): void {
     const from = { x: state.x, z: state.z };

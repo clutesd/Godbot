@@ -5,7 +5,15 @@ import { atInteraction, facingTarget } from './PhysicalActionPresentation';
 import type { GroupPlacement, SocialGroup } from './PeoplePresentation';
 import type { PersonVisualState } from './PeopleVisualState';
 
-/** The single renderer-owned micro-life projection. No clock, random source or write is shared with simulation. */
+/**
+ * The single renderer-owned micro-life projection.
+ *
+ * IMPORTANT: every hold/step below is measured in wall-clock presentation seconds. Do not convert
+ * simulated months or the displayed calendar day into local walking/action cycles. At documentary
+ * speed history can advance multiple months per real second; this layer samples believable daily
+ * life inside that history rather than attempting to animate every simulated day literally.
+ * No clock, random source or write is shared with simulation.
+ */
 export const LOCAL_ACTIVITY_RADIUS = 2;
 export const LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS = { min: 0.4, max: 1.2 } as const;
 /** Ignore monthly/group-layout drift inside this radius so local lives do not chase jitter. */
