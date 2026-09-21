@@ -57,6 +57,8 @@ export interface SurvivalState {
   exposureDose: number;
   /** Immutable founding milestone. Optional for archives created before first-fire tracking existed. */
   firstFire?: { month: number; eventId: string };
+  /** Routine communal hearth fuel, distinct from additional cold-weather heating fuel. */
+  hearth?: { fuelNeed: number; fuelUsed: number };
   cold: { severity: number; shelterCoverage: number; fuelNeed: number; fuelUsed: number; exposure: number };
   response?: {
     kind: FoodResponse;

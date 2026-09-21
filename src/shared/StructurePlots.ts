@@ -4,6 +4,7 @@ import { waterAt } from '../sim/transport/TerrainTraversal';
 import type { Settlement, SimulationState, StructurePlot } from '../sim/types';
 import { cellAt, TERRAIN_VERTICAL_SCALE } from '../sim/world';
 import { createSettlementLayoutPlan, type BuildingDistrict } from './SettlementLayoutPlan';
+import { FOUNDING_HEARTH_RESERVE_RADIUS, foundingHearthWorldPosition } from './FoundingCampLayout';
 import { PlacementContract } from './placement/PlacementContract';
 
 /** A request reserves land only after passing the same contract used by the renderer. */
@@ -12,6 +13,7 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
     if (plots.length >= 96) return undefined;
     const allPlots = state.settlements.flatMap(entry => entry.structurePlots ?? []);
     const contract = new PlacementContract(state.world);
+    const foundingHearth = foundingHearthWorldPosition(settlement, state.arrival?.pods ?? []);
     const layout = createSettlementLayoutPlan({ settlement, settlements: state.settlements, routes: state.tradeRoutes, eraRank: 1, seed: state.seed });
     const index = plots.length;
     const random = new SeededRandom(`${state.seed}:${settlement.id}:structure:${index}`);
@@ -27,6 +29,7 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
       const worldX = anchor.worldX + Math.cos(angle) * searchRadius;
       const worldZ = anchor.worldZ + Math.sin(angle) * searchRadius;
       if (state.arrival?.pods.some(p => Math.hypot(worldX - p.position.x, worldZ - p.position.z) < radius + 1.5)) continue;
+      if (foundingHearth && Math.hypot(worldX - foundingHearth.x, worldZ - foundingHearth.z) < radius + FOUNDING_HEARTH_RESERVE_RADIUS) continue;
       const cell = cellAt(state.world, worldX, worldZ);
       if (!cell || waterAt(state.world, { x: worldX, z: worldZ }, cell) || cell.slope > 0.42 || cell.biome === 'mountain') continue;
       if (allPlots.some(plot => Math.hypot(plot.worldX - worldX, plot.worldZ - worldZ) < plot.radius + radius + 0.25)) continue;

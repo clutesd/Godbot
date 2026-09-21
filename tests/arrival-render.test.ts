@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
-import { FOUNDING_HEARTH_DISTANCE, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthOffset, foundingSettlementHearthOffset } from '../src/render/founding/FoundingCampLayout';
+import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthOffset, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../src/shared/FoundingCampLayout';
 import { arrivalCameraPose, arrivalCaption, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
@@ -61,6 +61,7 @@ describe('Arrival presentation contracts', () => {
       const distance = Math.hypot(offset.x, offset.z);
       expect(distance).toBeCloseTo(FOUNDING_HEARTH_DISTANCE, 8);
       expect(distance).toBeGreaterThan(FOUNDING_VESSEL_KEEP_OUT_RADIUS + 1);
+      expect(distance).toBeLessThan(3);
       const spoke = Math.atan2(offset.z, offset.x) / spokeStep;
       expect(Math.abs(spoke - Math.round(spoke))).toBeLessThan(1e-8);
 
@@ -80,6 +81,11 @@ describe('Arrival presentation contracts', () => {
       expect(foundingSettlementHearthOffset(settlement, s.state.arrival!.pods)).toEqual(foundingHearthOffset(pod));
     }
     expect(foundingSettlementHearthOffset({}, s.state.arrival!.pods)).toBeUndefined();
+    const settlement = s.state.settlements.find(candidate => candidate.foundingPodId === s.state.arrival!.pods[0]!.id);
+    // Before settlement emergence this may be absent; the reserve itself remains deliberately large enough
+    // for the stone ring plus people tending it.
+    expect(FOUNDING_HEARTH_RESERVE_RADIUS).toBeGreaterThan(0.75);
+    if (settlement) expect(foundingHearthWorldPosition(settlement, s.state.arrival!.pods)).toBeDefined();
   });
 
   it('brakes into authoritative ground and keeps camera/caption values finite', () => {

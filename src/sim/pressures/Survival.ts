@@ -243,10 +243,42 @@ function allocateEstablishmentLabour(s: Settlement, summary: LabourSummary): Lab
   return summary;
 }
 
+const FOUNDING_HEARTH_IGNITION_FUEL = 0.03;
+const FOUNDING_HEARTH_FUEL_PER_PERSON = 0.001;
+
+/**
+ * A founding camp uses fire for ordinary cooking/light before cold weather makes it life-critical.
+ * Both ignition and routine use consume authoritative timber; presentation only observes this ledger.
+ */
+function maintainFoundingHearth(state: SimulationState, s: Settlement, population: number): void {
+  const survival = survivalState(s);
+  if (!s.foundingPodId || capabilityPractice(s, 'fire-control', 'adopted') < 0.15 || population <= 0) {
+    if (s.foundingPodId) survival.hearth = { fuelNeed: 0, fuelUsed: 0 };
+    return;
+  }
+
+  if (!survival.firstFire) {
+    const ignitionNeed = Math.min(FOUNDING_HEARTH_IGNITION_FUEL, positive(population) * 0.0015);
+    const ignitionFuel = takeMaterial(s, 'timber', ignitionNeed);
+    survival.hearth = { fuelNeed: ignitionNeed, fuelUsed: ignitionFuel };
+    if (ignitionFuel <= 0.005) return;
+    const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
+      { foundingPodId: s.foundingPodId, fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth', intensity: 1 },
+      ['founding-survival', 'fire-control', 'real-fuel-consumed'], population, 0.68);
+    survival.firstFire = { month: state.month, eventId: event.id };
+    return;
+  }
+
+  const fuelNeed = positive(population) * FOUNDING_HEARTH_FUEL_PER_PERSON;
+  const fuelUsed = takeMaterial(s, 'timber', fuelNeed);
+  survival.hearth = { fuelNeed, fuelUsed };
+}
+
 /** Cold severity uses the weather model's normalized temperature, not degrees Celsius. */
 export function applyCold(state: SimulationState, s: Settlement, population: number): void {
   const survival = survivalState(s);
   if (survival.observations.cold?.observedMonth === state.month) return;
+  maintainFoundingHearth(state, s, population);
   const temperature = state.weather.cells[s.cellIndex]?.temperature ?? 0.5;
   const severity = unit((0.3 - temperature) / 0.3);
   const shelter = shelterCapacity(s, state, population);
@@ -257,12 +289,6 @@ export function applyCold(state: SimulationState, s: Settlement, population: num
   const warmth = fuelNeed > 0 ? unit(fuelUsed / fuelNeed) : 1;
   const insulation = population > 0 ? unit(shelter.protection / population) : 1;
   const exposure = severity * (1 - insulation) * (1 - warmth * 0.65);
-  if (fuelUsed > 0 && s.foundingPodId && !survival.firstFire) {
-    const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
-      { foundingPodId: s.foundingPodId, fuelUsed, fuelNeed, warmth, shelterCoverage, temperature, intensity: warmth },
-      ['founding-survival', 'fire-control', 'real-fuel-consumed'], population, 0.68);
-    survival.firstFire = { month: state.month, eventId: event.id };
-  }
   survival.cold = { severity, shelterCoverage, fuelNeed, fuelUsed, exposure };
   survival.observations.cold = observePressure(survival.observations.cold, { kind: 'cold', intensity: exposure,
     confidence: 0.95, affectedPopulation: population, location: s.position, observedMonth: state.month,

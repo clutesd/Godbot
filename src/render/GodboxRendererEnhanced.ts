@@ -466,7 +466,7 @@ function heavySettlementSignature(
     bucket(settlement.urbanization),
     constructionPresentationStage,
     constructionSiteState,
-    Number((settlement.survival?.cold.fuelUsed ?? 0) > 0),
+    Number(((settlement.survival?.hearth?.fuelUsed ?? 0) + (settlement.survival?.cold.fuelUsed ?? 0)) > 0),
     bucket(self.state.advanced.atomic.applications.energy),
     bucket(self.state.advanced.machine.capability),
     bucket(self.state.advanced.space.orbitalInfrastructure),
