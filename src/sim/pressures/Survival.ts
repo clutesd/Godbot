@@ -298,8 +298,10 @@ export function foundingFirstFirePlan(state: SimulationState, s: Settlement, pop
   const rank = Math.max(0, ranked.findIndex(candidate => candidate.settlement.id === s.id));
   const own = ranked[rank] ?? { ...firstFireReadiness(state, s, population), settlement: s, touchdown: 0, tie: 0 };
   // One clearly leads; the middle pair follow; the final pair need more camp preparation.
-  // Severe cold overrides ceremony pacing because survival need is authoritative.
-  const delay = own.drivers.coldUrgency >= 0.75 ? 1 : 1 + Math.min(2, Math.ceil(rank / 2));
+  // Severe cold compresses the schedule, but still preserves a leader/follower beat instead of
+  // synchronizing every endangered camp on the same monthly tick.
+  const ordinaryDelay = 1 + Math.min(2, Math.ceil(rank / 2));
+  const delay = own.drivers.coldUrgency >= 0.75 ? Math.min(ordinaryDelay, rank === 0 ? 1 : 2) : ordinaryDelay;
   return {
     plannedMonth: s.foundedMonth + delay,
     readiness: own.readiness,
