@@ -37,10 +37,17 @@ rotated building footprints. Invalid candidates are discarded. Blocked corridors
 a stopped journey can retry after a pause. Geometry changes invalidate cached points, while an
 equivalent geometry rebuild preserves routine timing.
 
-Position, target, destination, schedule phase, occupation, role and household changes replace the
-current local intent on the next rendered frame. Emergency, displacement, migration, travel,
-unsafe weather, inactivity and existing farming/construction/resource work take precedence.
-State is pruned with the visible-person budget and cleared on renderer disposal.
+Semantic authority changes such as destination, occupation, role, household or actual activity
+replace the current local intent on the next rendered frame. Ordinary monthly position/target
+corrections, waypoint churn and non-interrupting schedule-phase changes do not restart the
+micro-life routine. Emergency, displacement, migration, travel, unsafe weather, inactivity and
+existing farming/construction/resource work still take precedence.
+
+Local activity bases use a dead-band/hysteresis follower. Small monthly social-layout or authority
+jitter is ignored. Once drift becomes meaningful, the local frontage follows far enough to return
+inside a stable release radius without resetting the current action, timer or cycle. This keeps
+work and social behaviour spatially relevant without making characters chase every monthly layout
+correction. State is pruned with the visible-person budget and cleared on renderer disposal.
 
 Local steps accelerate/decelerate and turn before leaving planted feet. Ordinary authoritative
 travel now eases too; specialized physical-work approach curves remain intact. Locomotion phase
