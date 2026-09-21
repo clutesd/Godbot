@@ -7,7 +7,7 @@ import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
-import { foundingHearthOffset } from './founding/FoundingCampLayout';
+import { foundingSettlementHearthOffset } from './founding/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
@@ -1043,8 +1043,7 @@ export class GodboxRenderer {
     if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
       // Founding vessels occupy the civic origin. Keep the lived-in camp beside the artifact,
       // on one of the landing site's already-validated dry spokes, rather than under its hull.
-      const foundingPod = settlement.foundingPodId ? this.state.arrival?.pods.find(pod => pod.id === settlement.foundingPodId) : undefined;
-      const hearthOffset = foundingPod ? foundingHearthOffset(foundingPod) : { x: 0, z: 1.6 };
+      const hearthOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []) ?? { x: 0, z: 1.6 };
       const hearthWorldX = settlement.position.x + hearthOffset.x;
       const hearthWorldZ = settlement.position.z + hearthOffset.z;
       const hearth = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.25, 6), palette.getSurfaceMaterial('glow'));
@@ -1071,7 +1070,7 @@ export class GodboxRenderer {
       this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
     }
     if (settlement.alive) this.addHearthSmoke(placements, era, smokeSources);
-    const lights = settlement.alive && !bareFounderCamp ? this.addSettlementLighting(group, era, palette, visualRandom) : [];
+    const lights = settlement.alive && !bareFounderCamp ? this.addSettlementLighting(group, settlement, era, palette, visualRandom) : [];
     group.userData['settlementId'] = settlement.id;
     group.traverse((object) => { if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true; });
     return { group, buildingCount: settlement.buildings, institutionCount: settlement.institutionIds.length, routeCount, politySize, bannerSignature: `${bannerIdentity.id}:${bannerLegacy.id}`, developmentSignature: this.developmentSignature(settlement), constructionSignature: this.constructionSignature(settlement.id), powerLevel: settlement.infrastructure.power, lights, smokeSources };
@@ -2646,7 +2645,7 @@ export class GodboxRenderer {
    * lanterns, an industrial city as rows of cooler street light — the distribution itself
    * makes the era legible after dark.
    */
-  private addSettlementLighting(group: THREE.Group, era: Era, palette: MaterialPalette, random: SeededRandom): SettlementLightEntry[] {
+  private addSettlementLighting(group: THREE.Group, settlement: Settlement, era: Era, palette: MaterialPalette, random: SeededRandom): SettlementLightEntry[] {
     const rank = eraRank(era);
     const aliveSettlements = Math.max(1, this.state.settlements.filter((candidate) => candidate.alive).length);
     const desired = rank <= 1 ? 1 : rank === 2 ? 2 : rank <= 4 ? 3 : 4;
@@ -2664,18 +2663,27 @@ export class GodboxRenderer {
     };
 
     if (rank <= 1) {
+      const foundingOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []);
+      // Founding camps may only light the same physical hearth that survival actually fuels.
+      // Never invent a decorative second fire at the touchdown/civic origin under the vessel.
+      if (settlement.foundingPodId && ((settlement.survival?.cold.fuelUsed ?? 0) <= 0 || !foundingOffset)) return entries;
+      const hearthOffset = foundingOffset ?? { x: 0, z: 0 };
+      const worldX = settlement.position.x + hearthOffset.x;
+      const worldZ = settlement.position.z + hearthOffset.z;
+      const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
+      const groundY = this.elevationAt(worldX, worldZ) - settlementY;
       const stone = palette.getSurfaceMaterial('stone');
       for (let index = 0; index < 7; index += 1) {
         const angle = (index / 7) * Math.PI * 2 + random.range(-0.1, 0.1);
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.085, 0), stone);
-        rock.position.set(Math.cos(angle) * 0.42, 0.05, Math.sin(angle) * 0.42);
+        rock.position.set(hearthOffset.x + Math.cos(angle) * 0.42, groundY + 0.05, hearthOffset.z + Math.sin(angle) * 0.42);
         rock.castShadow = true;
         group.add(rock);
       }
       const embers = new THREE.Mesh(new THREE.IcosahedronGeometry(0.13, 1), glow);
-      embers.position.y = 0.07;
+      embers.position.set(hearthOffset.x, groundY + 0.07, hearthOffset.z);
       group.add(embers);
-      attach(0, 0.55, 0, '#ff9448', 2, 0.42, 9);
+      attach(hearthOffset.x, groundY + 0.55, hearthOffset.z, '#ff9448', 2, 0.42, 9);
       return entries;
     }
 

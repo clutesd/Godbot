@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
-import { FOUNDING_HEARTH_DISTANCE, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthOffset } from '../src/render/founding/FoundingCampLayout';
+import { FOUNDING_HEARTH_DISTANCE, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthOffset, foundingSettlementHearthOffset } from '../src/render/founding/FoundingCampLayout';
 import { arrivalCameraPose, arrivalCaption, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
@@ -71,6 +71,15 @@ describe('Arrival presentation contracts', () => {
         + (-pod.entryOffset.z / approachLength) * (offset.z / distance);
       expect(Math.abs(dot)).toBeLessThan(0.21);
     }
+  });
+
+  it('resolves every founding-camp fire system to the same off-vessel hearth', () => {
+    const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
+    for (const pod of s.state.arrival!.pods) {
+      const settlement = { foundingPodId: pod.id };
+      expect(foundingSettlementHearthOffset(settlement, s.state.arrival!.pods)).toEqual(foundingHearthOffset(pod));
+    }
+    expect(foundingSettlementHearthOffset({}, s.state.arrival!.pods)).toBeUndefined();
   });
 
   it('brakes into authoritative ground and keeps camera/caption values finite', () => {

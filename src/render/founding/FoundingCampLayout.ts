@@ -1,5 +1,5 @@
 import { FOUNDING_LANDING_SAFE_RADIUS, type FoundingPod } from '../../sim/founding/FoundingArrival';
-import type { Vec2 } from '../../sim/types';
+import type { Settlement, Vec2 } from '../../sim/types';
 
 const LANDING_SPOKES = 16;
 const LANDING_SPOKE_STEP = Math.PI * 2 / LANDING_SPOKES;
@@ -21,6 +21,15 @@ export function foundingHearthOffset(pod: Pick<FoundingPod, 'id' | 'entryOffset'
     x: Math.cos(snappedAngle) * FOUNDING_HEARTH_DISTANCE,
     z: Math.sin(snappedAngle) * FOUNDING_HEARTH_DISTANCE,
   };
+}
+
+export function foundingSettlementHearthOffset(
+  settlement: Pick<Settlement, 'foundingPodId'>,
+  pods: readonly Pick<FoundingPod, 'id' | 'entryOffset'>[],
+): Vec2 | undefined {
+  if (!settlement.foundingPodId) return undefined;
+  const pod = pods.find(candidate => candidate.id === settlement.foundingPodId);
+  return pod ? foundingHearthOffset(pod) : undefined;
 }
 
 function stableUnit(value: string): number {
