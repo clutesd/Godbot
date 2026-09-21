@@ -6,6 +6,7 @@ import type { Historian } from '../historian/Historian';
 import type { AudioCategory, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
+import type { PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 
 export interface CurrentObservation {
   label: string;
@@ -29,6 +30,27 @@ export interface CameraFraming {
 export interface CameraClearance {
   lens: number;
   sightline: number;
+}
+
+export interface CameraSubjectPresentation {
+  readonly x: number;
+  readonly z: number;
+  readonly footY: number;
+  readonly action?: PhysicalActionPresentation;
+}
+
+export type CameraSubjectPresentationResolver = (personId: string) => CameraSubjectPresentation | undefined;
+
+export interface InteractionCameraComposition {
+  readonly focusX: number;
+  readonly focusZ: number;
+  readonly targetX: number;
+  readonly targetZ: number;
+  readonly azimuth: number;
+  readonly distanceBoost: number;
+  readonly contactLock: number;
+  readonly anchorWeight: number;
+  readonly span: number;
 }
 
 type CameraMotion = 'hold' | 'drift' | 'truck' | 'dolly-in' | 'dolly-out' | 'crane' | 'orbit' | 'follow' | 'pullback';
@@ -111,6 +133,58 @@ export function cameraTransitionScaleFor(kind: ObservationKind | undefined): num
   if (kind === 'street-observation') return 0.58;
   if (kind === 'traveler-follow') return 0.68;
   return 1;
+}
+
+function angularDistance(a: number, b: number): number {
+  let delta = (a - b) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return Math.abs(delta);
+}
+
+/**
+ * Frames an actor and the thing they are actually interacting with as one documentary subject.
+ * Very distant work targets are capped so the camera never sacrifices the human-scale language
+ * just to keep an entire route or worksite in frame.
+ */
+export function interactionCameraComposition(
+  actor: Readonly<{ x: number; z: number }>,
+  action: PhysicalActionPresentation,
+  baseAzimuth: number,
+): InteractionCameraComposition {
+  const dx = action.interactionAnchor.x - actor.x;
+  const dz = action.interactionAnchor.z - actor.z;
+  const rawSpan = Math.hypot(dx, dz);
+  const span = Math.min(1.6, rawSpan);
+  const scale = rawSpan > 0.0001 ? span / rawSpan : 0;
+  const targetX = actor.x + dx * scale;
+  const targetZ = actor.z + dz * scale;
+  const contactLock = clamp01(action.contactStrength);
+  const anchorWeight = 0.5 + contactLock * 0.08;
+  const focusX = THREE.MathUtils.lerp(actor.x, targetX, anchorWeight);
+  const focusZ = THREE.MathUtils.lerp(actor.z, targetZ, anchorWeight);
+
+  let azimuth = baseAzimuth;
+  if (span > 0.08) {
+    // Look across the actor→object axis so both subjects separate across the frame instead of
+    // collapsing into one silhouette. Keep whichever side is closest to the already-authored shot.
+    const actionAxis = Math.atan2(targetZ - actor.z, targetX - actor.x);
+    const sideA = actionAxis + Math.PI / 2;
+    const sideB = sideA + Math.PI;
+    azimuth = angularDistance(sideA, baseAzimuth) <= angularDistance(sideB, baseAzimuth) ? sideA : sideB;
+  }
+
+  return {
+    focusX,
+    focusZ,
+    targetX,
+    targetZ,
+    azimuth,
+    distanceBoost: Math.min(0.72, span * 0.42),
+    contactLock,
+    anchorWeight,
+    span,
+  };
 }
 
 /**
@@ -230,7 +304,12 @@ export class CameraDirector {
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
 
-  constructor(private readonly camera: THREE.PerspectiveCamera, private readonly config: GodboxConfig, private readonly historian: Historian) {
+  constructor(
+    private readonly camera: THREE.PerspectiveCamera,
+    private readonly config: GodboxConfig,
+    private readonly historian: Historian,
+    private readonly subjectPresentation?: CameraSubjectPresentationResolver,
+  ) {
     this.camera.position.set(38, 48, 52);
     this.lookTarget.set(0, 0, 0);
     this.camera.lookAt(this.lookTarget);
@@ -407,22 +486,39 @@ export class CameraDirector {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
       if (person) {
         const framing = FRAMING[scene.kind];
-        const ground = elevationAt(person.position.x, person.position.z);
-        this.smoothFocus(person.position.x, ground + framing.targetHeight, person.position.z, deltaSeconds, scene.kind === 'traveler-follow' ? 1.45 : 1.75);
+        const presentation = this.subjectPresentation?.(person.id);
+        const actorX = presentation?.x ?? person.position.x;
+        const actorZ = presentation?.z ?? person.position.z;
+        const actorGround = presentation?.footY ?? elevationAt(actorX, actorZ);
+        const action = scene.kind === 'traveler-follow' ? undefined : presentation?.action;
+        const composition = action ? interactionCameraComposition({ x: actorX, z: actorZ }, action, this.shotAzimuth) : undefined;
 
-        // Personal scenes now use the same authored framing profile while tracking. Previously this
-        // branch silently replaced the close-shot profile with a 9-12 unit aerial follow.
+        const actorFocusY = actorGround + framing.targetHeight + Math.max(0, action?.platformHeight ?? 0);
+        const interactionY = composition && action
+          ? elevationAt(composition.targetX, composition.targetZ) + Math.max(0.06, action.contactHeight ?? framing.targetHeight)
+          : actorFocusY;
+        const focusX = composition?.focusX ?? actorX;
+        const focusZ = composition?.focusZ ?? actorZ;
+        const focusY = composition ? THREE.MathUtils.lerp(actorFocusY, interactionY, composition.anchorWeight) : actorFocusY;
+        this.smoothFocus(focusX, focusY, focusZ, deltaSeconds, scene.kind === 'traveler-follow' ? 1.45 : 1.9);
+
+        // Step 2: when the renderer has an authoritative presentation action, the camera photographs
+        // actor + work object as one composition. Otherwise it remains a close person-follow shot.
         const framingVariation = 0.34 + this.stableUnit(`${scene.id}:follow-framing`) * 0.36;
-        const followingDistance = this.interpolate(framing.radius, framingVariation);
+        const followingDistance = this.interpolate(framing.radius, framingVariation) + (composition?.distanceBoost ?? 0);
         const cameraHeight = this.interpolate(framing.height, framingVariation);
-        const angle = this.shotAzimuth + Math.sin(elapsedSeconds * 0.11 + this.shotAzimuth) * 0.035;
+        const contactLock = composition?.contactLock ?? 0;
+        const baseAngle = composition?.azimuth ?? this.shotAzimuth;
+        const microOrbit = Math.sin(elapsedSeconds * 0.11 + this.shotAzimuth) * 0.035 * (1 - contactLock * 0.88);
+        const angle = baseAngle + microOrbit;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
         const clearance = cameraClearanceFor(scene.kind);
+        const platformLift = Math.max(0, action?.platformHeight ?? 0) * 0.62;
         this.desiredTarget.copy(this.trackedFocus);
         this.desiredPosition.set(
           x,
-          Math.max(ground + cameraHeight, elevationAt(x, z) + clearance.lens),
+          Math.max(actorGround + platformLift + cameraHeight, elevationAt(x, z) + clearance.lens),
           z,
         );
         this.raiseForTerrain(elevationAt);
