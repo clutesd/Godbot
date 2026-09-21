@@ -12,15 +12,19 @@ describe('founding first-fire presentation', () => {
 
     survivalState(settlement).firstFire = { month: simulation.state.month, eventId: 'first-fire:test' };
     presentation.update(simulation.state, 0);
+    expect(presentation.isPerforming(settlement.id)).toBe(true);
+    expect(presentation.sample(settlement.id).flameScale).toBe(0);
+
+    presentation.update(simulation.state, 1);
     expect(presentation.sample(settlement.id)).toMatchObject({ active: true, phase: 'kindle' });
 
-    presentation.update(simulation.state, 2.4);
+    presentation.update(simulation.state, 3.2);
     const catching = presentation.sample(settlement.id);
     expect(catching.phase).toBe('catch');
     expect(catching.flameScale).toBeGreaterThan(0.2);
     expect(catching.lightGain).toBeGreaterThan(0.15);
 
-    presentation.update(simulation.state, 4.2);
+    presentation.update(simulation.state, 5);
     expect(presentation.sample(settlement.id).phase).toBe('gather');
     const hearth = { x: settlement.position.x + 2, z: settlement.position.z };
     const participants = simulation.state.people
@@ -35,7 +39,7 @@ describe('founding first-fire presentation', () => {
       expect(Math.hypot(target.x - hearth.x, target.z - hearth.z)).toBeLessThan(0.9);
     }
 
-    presentation.update(simulation.state, FIRST_FIRE_DURATION_SECONDS + 0.1);
+    presentation.update(simulation.state, FIRST_FIRE_DURATION_SECONDS + 1);
     expect(presentation.isPerforming(settlement.id)).toBe(false);
     expect(presentation.sample(settlement.id)).toEqual({
       active: false, phase: 'complete', phaseProgress: 1,
@@ -44,6 +48,28 @@ describe('founding first-fire presentation', () => {
 
     presentation.update(simulation.state, FIRST_FIRE_DURATION_SECONDS + 20);
     expect(presentation.isPerforming(settlement.id)).toBe(false);
+  });
+
+  it('queues same-tick first fires so separate camps never ignite in visual lockstep', () => {
+    const simulation = new Simulation({ seed: 'first-fire-queue', settlementCount: [2, 2] });
+    const [firstSettlement, secondSettlement] = simulation.state.settlements;
+    expect(firstSettlement).toBeDefined();
+    expect(secondSettlement).toBeDefined();
+    firstSettlement!.foundingPodId = 'pod-a';
+    secondSettlement!.foundingPodId = 'pod-b';
+    const presentation = new FoundingFirstFirePresentation(simulation.state);
+
+    survivalState(firstSettlement!).firstFire = { month: 1, eventId: 'fire-a', plannedMonth: 1, readiness: 0.9 };
+    survivalState(secondSettlement!).firstFire = { month: 1, eventId: 'fire-b', plannedMonth: 1, readiness: 0.7 };
+    presentation.update(simulation.state, 0);
+
+    presentation.update(simulation.state, 1.2);
+    const early = [presentation.sample(firstSettlement!.id), presentation.sample(secondSettlement!.id)];
+    expect(early.filter(sample => sample.flameScale > 0)).toHaveLength(1);
+
+    presentation.update(simulation.state, 4.2);
+    const later = [presentation.sample(firstSettlement!.id), presentation.sample(secondSettlement!.id)];
+    expect(later.every(sample => sample.flameScale > 0)).toBe(true);
   });
 
   it('does not replay a first fire that already existed when presentation loaded', () => {
@@ -67,9 +93,9 @@ describe('founding first-fire presentation', () => {
     const presentation = new FoundingFirstFirePresentation(simulation.state);
     survivalState(settlement).firstFire = { month: 1, eventId: 'first-fire:reduced' };
     presentation.update(simulation.state, 0);
-    presentation.update(simulation.state, 2.7);
+    presentation.update(simulation.state, 3.2);
     const first = presentation.sample(settlement.id, true);
-    presentation.update(simulation.state, 2.75);
+    presentation.update(simulation.state, 3.25);
     const second = presentation.sample(settlement.id, true);
     expect(first.phase).toBe('catch');
     expect(second.phase).toBe('catch');
