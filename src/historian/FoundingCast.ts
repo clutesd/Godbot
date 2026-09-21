@@ -219,7 +219,7 @@ function framingScene(
   const statement = {
     id: `founding-cast-framing-${arrival.id}`,
     month: state.month,
-    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow ${memory.members.length.toLocaleString()} of them. Not because they are important. Not yet. They give us lives we can recognize before we know what they become.`,
+    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow only a few. Not because they are important. Not yet. They give us lives we can recognize before we know what they become.`,
     epistemicStatus: 'derived-statistic' as const,
     sourceEventIds: [arrival.id],
     sourceEntityIds,
@@ -309,8 +309,9 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
 }
 
 /**
- * Introduces a cast member only after their landing community has received its first 1b revisit.
- * Character shots pause authoritative history; the following selection restores the previous pace.
+ * Frames the documentary cast once, then introduces each anchor only after their landing community
+ * has received its first 1b revisit. These presentation choices never alter simulation importance.
+ * Framing and character shots pause authoritative history; the following selection restores pace.
  */
 export function chooseFoundingCastScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   releaseIntroduction(historian, state);
