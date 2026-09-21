@@ -88,13 +88,17 @@ work still take precedence.
 
 Group occupancy positions are **arrival/safety anchors, not permanent mannequin slots**.
 Each local-life state derives a bounded frontage of nearby semantic positions and may step between
-them for work, inspection, household activity and real peer interaction. Market/plaza conversations
-approach a visible companion while preserving personal space; repeated routines vary which safe
-frontage point is used so group topology changes over real seconds without random wandering.
+them for work, inspection, household activity and real peer interaction. Market/plaza conversations approach a visible companion while preserving personal space. Social
+selection now prefers the reciprocal member of each deterministic conversational pod, so overlapping
+interaction windows can read as two people addressing each other rather than one actor gesturing at
+an oblivious neighbour. Local destinations also reject uninvolved visible peers inside a small
+clearance radius. Reposition and inspection targets receive centimetre-scale deterministic variation,
+so long frozen shots do not expose a finite set of exact floor markers; replay remains deterministic
+and all motion stays inside the same authoritative activity area.
 
 Persistent appearance posture is no longer applied as a whole-body sideways roll. Ambient bodies
-remain nearly upright with only a small forward posture cue; deeper lean is reserved for explicit
-articulated physical work.
+remain nearly upright with only a small forward posture cue; deeper lean is now gated by an actual
+standing physical/resource-work action rather than merely by using an articulated body representation.
 
 Local activity bases use a dead-band/hysteresis follower. Small monthly social-layout or authority
 jitter is ignored. Once drift becomes meaningful, the local frontage follows far enough to return
