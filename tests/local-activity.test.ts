@@ -369,16 +369,20 @@ describe('renderer-owned local activity', () => {
     });
     const h = harness(people);
     for (let frame = 0; frame < 20 * 60; frame++) {
+      // LocalActivityPresentation plans from the previous-frame peer snapshot so results do not
+      // depend on visible-person iteration order. Validate against that exact planning snapshot.
+      const planningPositions = new Map(people.map(p => {
+        const visual = h.visuals.get(p.id);
+        return [p.id, visual ? { x: visual.x, z: visual.z } : { ...p.position }] as const;
+      }));
       h.tick(1 / 60);
       for (const p of people) {
         const state = h.local.get(p.id);
         if (!state) continue;
         for (const other of people) {
           if (other.id === p.id || other.id === state.partnerId) continue;
-          const at = h.visuals.get(other.id) ?? other.position;
-          // Peers also move after this target was selected from the previous-frame snapshot;
-          // preserve a small tolerance while still rejecting visually overlapping floor slots.
-          expect(Math.hypot(state.destination.x - at.x, state.destination.z - at.z)).toBeGreaterThanOrEqual(0.27);
+          const at = planningPositions.get(other.id)!;
+          expect(Math.hypot(state.destination.x - at.x, state.destination.z - at.z)).toBeGreaterThanOrEqual(0.339);
         }
       }
     }
