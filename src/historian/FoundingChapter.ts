@@ -211,14 +211,13 @@ function rememberStatement(historian: Historian, scene: ObservationCandidate, st
 function overviewScene(historian: Historian, state: SimulationState, baseline: FoundingChapterBaseline): ObservationCandidate | undefined {
   const event = state.history.find(candidate => candidate.id === baseline.eventId && candidate.type === 'ARRIVAL_DAY');
   if (!event) return undefined;
-  const communityNames = baseline.communities.map(community => community.podName);
   const count = baseline.expectedCommunityCount;
   const resolvedCount = baseline.communities.length;
   const coverage = resolvedCount === count
-    ? `${count} separated landing communities`
-    : `${resolvedCount} traceable landing communities from ${count} recorded vessels`;
+    ? `${count} separated communities`
+    : `${resolvedCount} traceable communities from ${count} recorded vessels`;
   const thesis = differingStartingConditions(baseline)
-    ? 'They begin with different land, knowledge, skills, and finite supplies. This is the last moment their histories are known together. From here, we watch what those differences become.'
+    ? 'Their land, knowledge, skills, and supplies differ. This is the last moment their histories are known together. From here, we watch what those differences become.'
     : 'They begin from the same recorded conditions. This is the last moment their histories are known together. From here, we watch how their paths separate.';
   const sourceEntityIds = baseline.communities
     .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
@@ -226,7 +225,7 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   const statement = {
     id: `founding-overview-${event.id}`,
     month: state.month,
-    text: `${count} vessels placed ${baseline.population.toLocaleString()} founders across ${coverage}: ${list(communityNames)}. ${thesis}`,
+    text: `${count} vessels placed ${baseline.population.toLocaleString()} founders in ${coverage}. ${thesis}`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds,
@@ -272,16 +271,10 @@ function siteContrast(baseline: FoundingChapterBaseline, community: FoundingComm
   const strongEnough = strongest.delta >= 0.05;
   const weakEnough = weakest.delta <= -0.05;
 
-  if (strongEnough && weakEnough) {
-    return `Compared with the other landings, the site is stronger in ${strongest.label} but weaker in ${weakest.label}.`;
-  }
-  if (strongEnough) {
-    return `Its clearest physical edge over the other landings is ${strongest.label}.`;
-  }
-  if (weakEnough) {
-    return `Its clearest physical constraint beside the other landings is ${weakest.label}.`;
-  }
-  return 'The site offers no overwhelming physical advantage over the other landings.';
+  if (strongEnough && weakEnough) return `${strongest.label} is an edge; ${weakest.label} is the constraint`;
+  if (strongEnough) return `${strongest.label} is the clearest physical edge`;
+  if (weakEnough) return `${weakest.label} is the clearest physical constraint`;
+  return 'no physical condition dominates the comparison';
 }
 
 function communityOpeningText(baseline: FoundingChapterBaseline, community: FoundingCommunityBaseline): string {
@@ -293,15 +286,15 @@ function communityOpeningText(baseline: FoundingChapterBaseline, community: Foun
 
   switch (community.order % 5) {
     case 0:
-      return `${community.settlementName} begins in ${biome} terrain with ${count} founders from ${community.podName}, carrying strength in ${inheritance}. ${contrast} What matters now is what they make of that combination.`;
+      return `${count} founders bring ${inheritance} into ${biome} terrain; ${contrast}.`;
     case 1:
-      return `${community.podName}'s ${count} founders reach ${community.settlementName} with ${inheritance} as their clearest inheritance. They have landed in ${biome} terrain. ${contrast} Their history begins in that imbalance.`;
+      return `In ${biome} terrain, ${count} founders carry ${inheritance}; ${contrast}.`;
     case 2:
-      return `At ${community.settlementName}, ${count} people from ${community.podName} bring ${inheritance} into ${biome} terrain. ${contrast} Which starting condition matters most is still unknown.`;
+      return `${inheritance} arrives with ${count} founders in ${biome} terrain; ${contrast}.`;
     case 3:
-      return `${community.settlementName} starts with ${count} founders, ${inheritance}, and a ${biome} site. ${contrast} Nothing in that advantage or constraint decides the outcome.`;
+      return `${count} founders begin here with ${inheritance} in ${biome} terrain; ${contrast}.`;
     default:
-      return `${count} founders from ${community.podName} begin at ${community.settlementName}, carrying ${inheritance} into ${biome} terrain. ${contrast} This is the baseline; everything after it is consequence.`;
+      return `Here, ${count} founders pair ${inheritance} with ${biome} terrain; ${contrast}.`;
   }
 }
 
