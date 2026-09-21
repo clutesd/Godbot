@@ -58,15 +58,15 @@ export function createCosmicHeadGeometry(): THREE.BufferGeometry {
  * Sparse object-space stars fade below pixel resolution; the thin rim never fills the silhouette.
  * instanceColor owns role tint only. It must not multiply the obsidian surface itself. */
 export function createCosmicBodyMaterial(individuality = true): THREE.MeshStandardMaterial {
-  // Keep the body physically present in the world, but let its surface read as a window into
-  // something much larger. The shader is deliberately texture-free and shared by the whole crowd:
-  // two object-space star scales, layered nebula bands and a restrained Fresnel edge provide the
-  // "cosmic" read without adding draw calls or per-person materials.
+  // A physically grounded obsidian shell with a deliberately impossible interior. The entire
+  // population still shares one material; individuality is carried by the existing instanced seed.
+  // Detail self-simplifies with pixel footprint so close shots feel intricate while distant people
+  // remain clean, luminous silhouettes instead of noisy sparkles.
   const material = new THREE.MeshStandardMaterial({
-    color: '#090b13',
-    roughness: 0.58,
-    metalness: 0.2,
-    envMapIntensity: 0.72,
+    color: '#080a12',
+    roughness: 0.52,
+    metalness: 0.22,
+    envMapIntensity: 0.82,
   });
   material.name = 'godbox-cosmic-obsidian';
 
@@ -92,20 +92,37 @@ export function createCosmicBodyMaterial(individuality = true): THREE.MeshStanda
         return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
       }
 
-      float cosmicStar(vec3 p, float threshold, float size) {
+      float cosmicStarCore(vec3 p, float threshold, float size) {
         vec3 cell = floor(p);
         vec3 local = fract(p) - 0.5;
         float h = cosmicHash(cell);
         float footprint = max(length(fwidth(p)), 0.001);
-        float star = step(threshold, h)
-          * (1.0 - smoothstep(size, size + 0.055 + footprint * 0.35, length(local)));
-        // Once the character is only a few pixels tall, remove tiny stars rather than shimmer.
-        return star * (1.0 - smoothstep(0.7, 2.2, footprint));
+        float core = step(threshold, h)
+          * (1.0 - smoothstep(size, size + 0.045 + footprint * 0.32, length(local)));
+        return core * (1.0 - smoothstep(0.62, 2.0, footprint));
+      }
+
+      float cosmicStarHalo(vec3 p, float threshold) {
+        vec3 cell = floor(p);
+        vec3 local = fract(p) - 0.5;
+        float h = cosmicHash(cell);
+        float footprint = max(length(fwidth(p)), 0.001);
+        float halo = step(threshold, h)
+          * (1.0 - smoothstep(0.06, 0.34 + footprint * 0.22, length(local)));
+        return halo * (1.0 - smoothstep(0.48, 1.55, footprint));
       }`)
       .replace('#include <color_fragment>', `
-        // The body remains true obsidian. Internal colour comes from emissive layers below rather
-        // than a painted diffuse texture, which keeps the silhouette elegant in daylight.
-        diffuseColor.rgb = vec3(0.0035, 0.0045, 0.010);
+        // Nearly-black diffuse response preserves a readable solid form in daylight. The colour
+        // story is emitted from within rather than painted across the surface.
+        diffuseColor.rgb = vec3(0.0032, 0.0042, 0.0105);
+      `)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        // Subtle material variation catches grazing light on curved forms. It is intentionally
+        // low-frequency so the body reads as polished obsidian rather than plastic glitter.
+        float cosmicPolishBand = 0.5 + 0.5 * sin(
+          cosmicPoint.y * 8.0 + cosmicPoint.x * 11.0 + cosmicSeed.x * 19.0
+        );
+        roughnessFactor *= mix(1.04, 0.78, pow(cosmicPolishBand, 3.2));
       `)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 accent = vec3(0.46, 0.62, 0.96);
@@ -114,66 +131,85 @@ export function createCosmicBodyMaterial(individuality = true): THREE.MeshStanda
         #endif
 
         float night = 1.0 - cosmicDaylight;
+        float viewDistance = length(vViewPosition);
+        float distanceRead = smoothstep(8.0, 42.0, viewDistance);
 
-        // Broad, low-frequency colour clouds. Using object space makes the pattern feel embedded
-        // inside the body rather than projected onto it like clothing.
+        // Two broad fields create layered depth instead of a single procedural stripe. Their
+        // overlap is rare enough to feel like nebula structure rather than camouflage.
         float ribbonA = 0.5 + 0.5 * sin(
-          cosmicPoint.y * 13.0
-          + cosmicPoint.x * 18.0
-          + sin(cosmicPoint.z * 21.0 + cosmicSeed.x * 17.0) * 1.25
+          cosmicPoint.y * 12.0
+          + cosmicPoint.x * 17.0
+          + sin(cosmicPoint.z * 20.0 + cosmicSeed.x * 17.0) * 1.2
           + cosmicSeed.x * 31.0
         );
         float ribbonB = 0.5 + 0.5 * sin(
-          cosmicPoint.z * 17.0
+          cosmicPoint.z * 16.0
           - cosmicPoint.y * 9.0
-          + sin(cosmicPoint.x * 24.0 + cosmicSeed.x * 11.0) * 0.9
+          + sin(cosmicPoint.x * 23.0 + cosmicSeed.x * 11.0) * 0.92
           + cosmicSeed.x * 47.0
         );
-        float nebulaMask = pow(clamp(ribbonA * 0.7 + ribbonB * 0.45 - 0.32, 0.0, 1.0), 2.15);
+        float ribbonC = 0.5 + 0.5 * sin(
+          (cosmicPoint.x + cosmicPoint.z) * 9.0
+          - cosmicPoint.y * 5.0
+          + cosmicSeed.x * 63.0
+        );
 
-        vec3 deepBlue = vec3(0.012, 0.035, 0.105);
-        vec3 violet = vec3(0.105, 0.025, 0.17);
-        vec3 cyan = vec3(0.015, 0.14, 0.19);
-        vec3 nebulaColour = mix(deepBlue, violet, smoothstep(0.18, 0.82, ribbonA));
-        nebulaColour = mix(nebulaColour, cyan, smoothstep(0.58, 0.98, ribbonB) * 0.42);
-        // Role colour is a whisper inside the cosmos, not body paint.
-        nebulaColour = mix(nebulaColour, accent * 0.32, 0.12);
+        float nebulaMask = pow(
+          clamp(ribbonA * 0.62 + ribbonB * 0.38 + ribbonC * 0.18 - 0.30, 0.0, 1.0),
+          2.35
+        );
+        float nebulaCore = pow(clamp(ribbonA * ribbonB - 0.36, 0.0, 1.0), 1.7);
 
-        float nebulaEnergy = cosmicSeed.y * mix(0.68, 1.08, night);
+        vec3 deepBlue = vec3(0.010, 0.030, 0.105);
+        vec3 violet = vec3(0.105, 0.022, 0.175);
+        vec3 cyan = vec3(0.010, 0.125, 0.19);
+        vec3 nebulaColour = mix(deepBlue, violet, smoothstep(0.16, 0.84, ribbonA));
+        nebulaColour = mix(nebulaColour, cyan, smoothstep(0.56, 0.98, ribbonB) * 0.40);
+        nebulaColour = mix(nebulaColour, accent * 0.30, 0.10);
+
+        float nebulaEnergy = cosmicSeed.y * mix(0.62, 1.04, night);
         totalEmissiveRadiance += nebulaColour * nebulaMask * nebulaEnergy;
-        totalEmissiveRadiance += vec3(0.006, 0.009, 0.022) * mix(0.75, 1.35, night);
+        totalEmissiveRadiance += mix(violet, accent * 0.24, 0.28) * nebulaCore
+          * cosmicSeed.y * mix(0.16, 0.34, night);
+        totalEmissiveRadiance += vec3(0.005, 0.008, 0.021) * mix(0.78, 1.42, night);
 
-        // Two sparse star populations. The rare large stars deliberately exceed the bloom
-        // threshold so a few points read as real light while the body as a whole stays dark.
-        vec3 fieldFine = cosmicPoint * 44.0 + cosmicSeed.x * 173.0;
-        vec3 fieldHero = cosmicPoint * 23.0 + cosmicSeed.x * 311.0;
-        float fineStars = cosmicStar(fieldFine, 0.966, 0.075);
-        float heroStars = cosmicStar(fieldHero, 0.988, 0.105);
+        // Fine stars give close-up richness. Hero stars get a soft HDR halo and survive bloom as
+        // isolated points of light. Both fade with pixel footprint before they can shimmer.
+        vec3 fineField = cosmicPoint * 45.0 + cosmicSeed.x * 173.0;
+        vec3 heroField = cosmicPoint * 22.0 + cosmicSeed.x * 311.0;
+        float fineStars = cosmicStarCore(fineField, 0.966, 0.068);
+        float heroStars = cosmicStarCore(heroField, 0.987, 0.095);
+        float heroHalo = cosmicStarHalo(heroField, 0.987);
 
-        float starWarmth = cosmicHash(floor(fieldHero) + vec3(19.0, 7.0, 3.0));
-        vec3 coolStar = vec3(0.62, 0.82, 1.55);
-        vec3 warmStar = vec3(1.85, 1.32, 0.72);
-        vec3 heroColour = mix(coolStar, warmStar, smoothstep(0.58, 0.94, starWarmth));
-        float starEnergy = cosmicSeed.z * mix(0.78, 1.18, night);
-        totalEmissiveRadiance += coolStar * fineStars * 0.72 * starEnergy;
-        totalEmissiveRadiance += heroColour * heroStars * 1.72 * starEnergy;
+        float starWarmth = cosmicHash(floor(heroField) + vec3(19.0, 7.0, 3.0));
+        vec3 coolStar = vec3(0.60, 0.83, 1.58);
+        vec3 warmStar = vec3(1.90, 1.34, 0.72);
+        vec3 heroColour = mix(coolStar, warmStar, smoothstep(0.60, 0.94, starWarmth));
+        float starEnergy = cosmicSeed.z * mix(0.76, 1.20, night);
+        totalEmissiveRadiance += coolStar * fineStars * 0.70 * starEnergy;
+        totalEmissiveRadiance += heroColour * heroHalo * 0.22 * starEnergy;
+        totalEmissiveRadiance += heroColour * heroStars * 1.86 * starEnergy;
 
-        // A thin coloured edge keeps the species readable at game camera distance. It becomes
-        // slightly stronger after sunset, but never fills the interior silhouette.
-        float fresnel = pow(1.0 - abs(dot(normalize(normal), normalize(vViewPosition))), 4.6);
-        vec3 rimColour = mix(vec3(0.36, 0.48, 0.92), accent, 0.46);
-        totalEmissiveRadiance += rimColour * fresnel * mix(0.30, 0.62, night);
+        // Dual-lobe Fresnel: a razor-thin bright edge on top of a broader, much dimmer aura. The
+        // broad lobe receives a slight distance lift so tiny people remain unmistakably supernatural.
+        float facing = abs(dot(normalize(normal), normalize(vViewPosition)));
+        float broadRim = pow(1.0 - facing, 1.8);
+        float fineRim = pow(1.0 - facing, 5.2);
+        vec3 rimColour = mix(vec3(0.34, 0.49, 0.98), accent, 0.48);
+        totalEmissiveRadiance += rimColour * broadRim
+          * (mix(0.040, 0.090, night) + distanceRead * mix(0.018, 0.050, night));
+        totalEmissiveRadiance += rimColour * fineRim * mix(0.30, 0.68, night);
 
-        // A very faint inner aurora catches curved surfaces at close range and prevents the black
-        // material from reading as a flat cut-out in bright daytime scenes.
-        float aurora = pow(clamp(ribbonA - 0.68, 0.0, 1.0), 3.0)
-          * (0.45 + 0.55 * ribbonB);
-        totalEmissiveRadiance += mix(vec3(0.025, 0.055, 0.16), accent * 0.22, 0.22)
-          * aurora * mix(0.42, 0.82, night);
+        // A restrained aurora catches shoulders, skulls and limbs in close shots. It never becomes
+        // a full-body glow; the black negative space is what gives the material its visual authority.
+        float aurora = pow(clamp(ribbonA - 0.67, 0.0, 1.0), 3.1)
+          * (0.40 + 0.60 * ribbonB);
+        totalEmissiveRadiance += mix(vec3(0.022, 0.055, 0.17), accent * 0.23, 0.24)
+          * aurora * mix(0.40, 0.86, night);
       `);
   };
 
-  material.customProgramCacheKey = () => `cosmic-obsidian-v2-${individuality}`;
+  material.customProgramCacheKey = () => `cosmic-obsidian-v3-${individuality}`;
   return material;
 }
 
@@ -215,7 +251,10 @@ export class CosmicRoleAccents {
     geometry.setAttribute('cosmicStyle', this.styles);
     this.material = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: true, fog: true });
     this.material.name = 'godbox-cosmic-role-cores';
+    const daylight = { value: 1 };
+    this.material.userData['daylight'] = daylight;
     this.material.onBeforeCompile = shader => {
+      shader.uniforms['cosmicAccentDaylight'] = daylight;
       shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
         attribute vec4 cosmicStyle;
         attribute float cosmicPart;
@@ -232,6 +271,7 @@ export class CosmicRoleAccents {
         varying vec2 coreUv;
         varying float glyph;
         varying float part;
+        uniform float cosmicAccentDaylight;
       `).replace('#include <color_fragment>', `#include <color_fragment>
         if (part < 0.5) {
           vec2 p = (coreUv - 0.5) * 2.0;
@@ -249,13 +289,21 @@ export class CosmicRoleAccents {
           else if (glyph < 9.5) d = max(a.x - a.y * 0.82 - 0.13, a.y - 0.7);
           else if (glyph < 10.5) d = min(max(a.x - 0.7, abs(p.y + 0.38) - 0.17), max(abs(a.x - 0.48) - 0.16, abs(p.y - 0.05) - 0.42));
           else d = length(p * vec2(1.65, 0.92)) - 0.7;
-          float coverage = 1.0 - smoothstep(-fwidth(d), fwidth(d), d);
-          if (coverage < 0.15) discard;
-          diffuseColor.rgb *= coverage;
-        } else diffuseColor.rgb *= 0.55;
+          float aa = max(fwidth(d) * 1.25, 0.006);
+          float coverage = 1.0 - smoothstep(-aa, aa, d);
+          float halo = (1.0 - smoothstep(0.025, 0.22, max(d, 0.0))) * (1.0 - coverage);
+          float coreEnergy = mix(1.82, 1.28, cosmicAccentDaylight);
+          float haloEnergy = mix(0.24, 0.12, cosmicAccentDaylight);
+          float energy = coverage * coreEnergy + halo * haloEnergy;
+          if (energy < 0.025) discard;
+          diffuseColor.rgb *= energy;
+        } else {
+          float trimEnergy = part < 1.5 ? 0.72 : (part < 2.5 ? 0.48 : 0.84);
+          diffuseColor.rgb *= trimEnergy * mix(1.32, 0.92, cosmicAccentDaylight);
+        }
       `);
     };
-    this.material.customProgramCacheKey = () => 'cosmic-role-core-v1';
+    this.material.customProgramCacheKey = () => 'cosmic-role-core-v2';
     this.mesh = new THREE.InstancedMesh(geometry, this.material, capacity);
     this.mesh.name = 'Cosmic role cores and silhouettes';
     this.mesh.frustumCulled = false;
@@ -273,8 +321,10 @@ export class CosmicRoleAccents {
   }
 
   updateDaylight(daylight: number): void {
-    // Small luminous surfaces remain legible at night without HDR values or extra bloom.
-    this.material.color.setScalar(THREE.MathUtils.lerp(0.58, 0.88, THREE.MathUtils.clamp(daylight, 0, 1)));
+    const value = THREE.MathUtils.clamp(daylight, 0, 1);
+    (this.material.userData['daylight'] as { value: number }).value = value;
+    // Role identity stays chromatically stable across the day/night cycle; only emitted energy shifts.
+    this.material.color.setScalar(1);
   }
 
   endFrame(): void {
