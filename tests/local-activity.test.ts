@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LocalActivityPresentation, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext } from '../src/render/people/LocalActivityPresentation';
+import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import { buildSocialGroups, groupKeyFor, travelAnimationFor } from '../src/render/people/PeoplePresentation';
@@ -65,6 +65,25 @@ describe('renderer-owned local activity', () => {
     expect(points.size).toBeGreaterThan(20);
     expect(moving).toBeGreaterThan(100); expect(standing).toBeGreaterThan(moving);
     expect(JSON.stringify(p)).toBe(before);
+  });
+
+  it('keeps the arrival beat brief before beginning purposeful local activity', () => {
+    for (const id of ['arrival-a', 'arrival-b', 'arrival-c', 'arrival-d']) {
+      const p = person(id), h = harness([p]);
+      h.tick(0);
+      const initial = h.local.get(p.id)!;
+      expect(initial.action).toBe('arrive');
+      expect(initial.hold).toBeGreaterThanOrEqual(LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.min);
+      expect(initial.hold).toBeLessThanOrEqual(LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.max);
+
+      let elapsed = 0;
+      while (h.local.get(p.id)?.action === 'arrive' && elapsed < 2) {
+        h.tick(1 / 60);
+        elapsed += 1 / 60;
+      }
+      expect(h.local.get(p.id)?.action).not.toBe('arrive');
+      expect(elapsed).toBeLessThan(1.5);
+    }
   });
 
   it('replays identically independent of visible-person iteration order and offsets people in time', () => {

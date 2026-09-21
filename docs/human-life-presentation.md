@@ -20,9 +20,13 @@ does not advance history or write to people, settlements, resources or relations
 ## Implementation
 
 Each eligible visible resident keeps a small routine, a few cached safe points, a destination,
-an interaction focus and an arrival/action timer. Intent changes happen after multi-second holds;
-existing visual interpolation runs between decisions. No crowd physics or additional pathfinder
-is involved, and mesh instancing and visible-person budgets are unchanged.
+an interaction focus and an arrival/action timer. The entry beat is deliberately brief: after
+settling and orienting, a resident holds the arrival state for only 0.4–1.2 deterministic real
+seconds before beginning the first purposeful local action. The later task, conversation, ritual,
+rest and pause beats retain their longer multi-second holds so the settlement stays calm rather
+than becoming constant motion. Existing visual interpolation runs between decisions. No crowd
+physics or additional pathfinder is involved, and mesh instancing and visible-person budgets are
+unchanged.
 
 Workshop, market, plaza, civic, knowledge, industrial, shrine, home and patrol routines have distinct
 task/inspection/interaction/pause sequences. Work-area points are relative to the current grouping
@@ -77,9 +81,10 @@ same instanced body proportions as the main renderer. The scene does not call si
 
 ## Validation and remaining limitations
 
-`tests/local-activity.test.ts` covers frozen-authority motion, replay, timing offsets, authority
-immutability, interruption, safe paths/footprints, geometry invalidation, blocked-trip recovery,
-visibility cleanup, actual-displacement gait, carrying, acceleration and bounded idles. Existing
+`tests/local-activity.test.ts` covers frozen-authority motion, brief bounded arrival timing, replay,
+timing offsets, authority immutability, interruption, safe paths/footprints, geometry invalidation,
+blocked-trip recovery, visibility cleanup, actual-displacement gait, carrying, acceleration and
+bounded idles. Existing
 people/physical-action/resource/construction suites cover the retained stronger work systems.
 
 Validation for this pass:

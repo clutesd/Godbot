@@ -7,6 +7,7 @@ import type { PersonVisualState } from './PeopleVisualState';
 
 /** The single renderer-owned micro-life projection. No clock, random source or write is shared with simulation. */
 export const LOCAL_ACTIVITY_RADIUS = 2;
+export const LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS = { min: 0.4, max: 1.2 } as const;
 /** Ignore monthly/group-layout drift inside this radius so local lives do not chase jitter. */
 const LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD = 0.24;
 /** After following a meaningful shift, leave this much slack before following again. */
@@ -190,7 +191,10 @@ export class LocalActivityPresentation {
     }
     const state: LocalActivityState = { authority, revision: context.revision, seen: this.frame, base, points, focus, stationFocus: { ...focus }, structure,
       destination: base, restFacing: facing, animation: 'idle', action: 'arrive', phase: 'approach',
-      step: -1, cycle: 0, seconds: 0, hold: 1 + unit(`${person.id}:arrival-pause`) * 5 };
+      step: -1, cycle: 0, seconds: 0,
+      hold: LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.min
+        + unit(`${person.id}:arrival-pause`)
+          * (LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.max - LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.min) };
     return state;
   }
 
