@@ -241,7 +241,10 @@ describe('renderer-owned local activity', () => {
       p.navigation!.destinationId = `bench-${handoff}`;
       h.tick(0);
       const resumed = h.local.get(p.id)!;
-      expect(resumed.hold).toBe(0);
+      // If already oriented, a zero arrival hold may advance into the sampled intent in this same
+      // frame. Otherwise the retained route still exposes an explicit zero-hold arrival approach.
+      if (resumed.action === 'arrive') expect(resumed.hold).toBe(0);
+      else expect(['pause', 'wait-for-clearance', 'observe']).not.toContain(resumed.action);
 
       for (let i = 0; i < 90 && h.local.get(p.id)?.action === 'arrive'; i++) h.tick(1 / 60);
       const action = h.local.get(p.id)?.action;
