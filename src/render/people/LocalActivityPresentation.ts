@@ -86,6 +86,8 @@ export interface LocalActivityState {
   phase: 'approach' | 'orient' | 'action' | 'pause';
   step: number;
   cycle: number;
+  /** Documentary slice sequence retained across ordinary semantic hand-offs. */
+  sample: number;
   seconds: number;
   hold: number;
   partnerId?: string;
@@ -140,8 +142,13 @@ export class LocalActivityPresentation {
       state = this.create(person, context, authority);
       // "Arrive" is a first-appearance beat, not a tax on every monthly routine hand-off. If this
       // resident already had a local life before a commute/context change, the retained route still
-      // supplies the approach and the first purposeful intent begins as soon as they are oriented.
-      if (previous) state.hold = 0;
+      // supplies the approach. Once oriented, enter a deterministic *different slice* of the
+      // destination's ongoing routine instead of replaying step zero every historical sample.
+      if (previous) {
+        state.sample = previous.sample + 1;
+        state.step = sampledEntryStep(person, state.sample) - 1;
+        state.hold = 0;
+      }
       // A newly placed obstacle can invalidate a formerly safe return corridor. Stop on this
       // side of it; never blindly cut across the new building to resume the old base position.
       if (previous && context.visual && !localSegmentSafe(context.visual, state.destination, context)) {
@@ -218,7 +225,7 @@ export class LocalActivityPresentation {
     }
     const state: LocalActivityState = { authority, revision: context.revision, seen: this.frame, base, points, focus, stationFocus: { ...focus }, structure,
       destination: base, restFacing: facing, animation: 'idle', action: 'arrive', phase: 'approach',
-      step: -1, cycle: 0, seconds: 0,
+      step: -1, cycle: 0, sample: 0, seconds: 0,
       hold: LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.min
         + unit(`${person.id}:arrival-pause`)
           * (LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.max - LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS.min) };
@@ -310,6 +317,16 @@ export class LocalActivityPresentation {
   }
 }
 
+
+function sampledEntryStep(person: Person, sample: number): number {
+  const routine = ROUTINES[person.navigation!.destinationKind] ?? WORK_ROUTINE;
+  const purposeful = routine
+    .map((intent, index) => ({ intent, index }))
+    .filter(({ intent }) => intent[0] !== 'pause');
+  if (purposeful.length === 0) return 0;
+  const offset = Math.floor(unit(`${person.id}:${person.navigation!.destinationKind}:entry-slice`) * purposeful.length);
+  return purposeful[(offset + sample) % purposeful.length]!.index;
+}
 
 function hysteresisBase(current: Vec2, observed: Vec2): Vec2 {
   const dx = observed.x - current.x, dz = observed.z - current.z;

@@ -71,7 +71,11 @@ replace the current local intent on the next rendered frame. Ordinary monthly po
 corrections, waypoint churn and non-interrupting schedule-phase changes do not restart the
 micro-life routine. A sampled ordinary commute temporarily suspends the previous local routine
 instead of deleting it; the authoritative route remains visible, and the next destination phase
-does not replay the first-appearance arrival hold. Genuine in-progress travel, emergency,
+does not replay the first-appearance arrival hold. Repeated visits also do not always restart at
+routine step zero. A deterministic per-person sample sequence chooses among non-pause intents from
+that destination's existing vocabulary, so accelerated history shows different believable slices
+of ongoing work/home/social life without inventing outcomes or random wandering. Genuine
+in-progress travel, emergency,
 displacement, migration, unsafe weather, inactivity and existing farming/construction/resource
 work still take precedence.
 

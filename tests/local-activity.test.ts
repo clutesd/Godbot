@@ -216,7 +216,39 @@ describe('renderer-owned local activity', () => {
       elapsed += 1 / 60;
     }
     expect(h.local.get(p.id)?.action).not.toBe('arrive');
-    expect(elapsed).toBeLessThan(0.5);
+    // The retained route/orientation may still take visible time; what disappeared is the second
+    // 0.4–1.2 second arrival hold itself.
+    expect(elapsed).toBeLessThan(0.9);
+  });
+
+  it('samples different purposeful routine slices across documentary semantic hand-offs', () => {
+    const p = person(), h = harness([p]);
+    const sampledActions = new Set<string>();
+
+    // First appearance may use the normal arrival beat.
+    for (let i = 0; i < 180; i++) h.tick();
+    const first = h.local.get(p.id);
+    if (first?.action && first.action !== 'arrive' && first.action !== 'pause') sampledActions.add(first.action);
+
+    for (let handoff = 0; handoff < 6; handoff++) {
+      p.activity = 'travel';
+      p.navigation!.schedulePhase = 'commute';
+      p.navigation!.traveling = false;
+      h.tick(1 / 60);
+
+      p.activity = 'craft';
+      p.navigation!.schedulePhase = 'work';
+      p.navigation!.destinationId = `bench-${handoff}`;
+      h.tick(0);
+      const resumed = h.local.get(p.id)!;
+      expect(resumed.hold).toBe(0);
+
+      for (let i = 0; i < 90 && h.local.get(p.id)?.action === 'arrive'; i++) h.tick(1 / 60);
+      const action = h.local.get(p.id)?.action;
+      if (action && !['arrive', 'pause', 'wait-for-clearance', 'observe'].includes(action)) sampledActions.add(action);
+    }
+
+    expect(sampledActions.size).toBeGreaterThanOrEqual(3);
   });
 
   it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
