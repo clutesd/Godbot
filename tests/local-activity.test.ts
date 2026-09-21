@@ -130,7 +130,7 @@ describe('renderer-owned local activity', () => {
     expect(next.base.z).toBeCloseTo(p.position.z);
   });
 
-it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
+  it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
     const p = person(), h = harness([p]); h.tick(); expect(h.local.size).toBe(1);
     p.activity = activity; h.tick(0); expect(h.local.size).toBe(0);
   });

@@ -196,7 +196,8 @@ export class LocalActivityPresentation {
     state.base = anchored.base;
     state.points = anchored.points;
     state.stationFocus = anchored.stationFocus;
-    state.structure = anchored.structure;
+    if (anchored.structure) state.structure = anchored.structure;
+    else delete state.structure;
     state.revision = context.revision;
     if (!state.partnerId) {
       state.focus.x = anchored.focus.x;
