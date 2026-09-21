@@ -379,8 +379,8 @@ export class LocalActivityPresentation {
       ? state.cycle + Math.floor(unit(`${person.id}:${state.step}:reposition`) * state.points.length)
       : 0;
     const preferredPoint = (pointIndex + pointOffset) % state.points.length;
-    let point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
-    let focus: Readonly<Vec2> = state.stationFocus;
+    const point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
+    const focus: Readonly<Vec2> = state.stationFocus;
     if (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task') {
       const selected = selectSocialPartner(person, context, state);
       if (selected) {
@@ -475,7 +475,7 @@ function buildSocialEncounter(person: Person, peer: Person, relationship: Social
   const peerMemory = memoryInfluenceFor(peer);
   const strength = relationship?.strength ?? (person.householdId === peer.householdId ? 0.5 : 0.25);
   const trust = relationship?.trust ?? (person.householdId === peer.householdId ? 0.62 : 0.48);
-  let tone: SocialEncounterTone = 'casual';
+  let tone: SocialEncounterTone;
   let role: SocialEncounterRole = 'peer';
 
   const selfDistress = Math.max(selfMemory.grief, selfMemory.recentShock);
