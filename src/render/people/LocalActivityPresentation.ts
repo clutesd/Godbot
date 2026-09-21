@@ -168,6 +168,18 @@ export class LocalActivityPresentation {
       this.reanchor(person, context, state, hysteresisBase(state.base, context.base));
     }
     state.seen = this.frame;
+    // Personal space is a live constraint, not only a target-selection check. If an uninvolved
+    // resident drifts into this destination after it was chosen, step to another valid frontage
+    // point rather than waiting on a future routine transition to resolve the overlap.
+    if (!hasPeerClearance(person, state.destination, context, state.partnerId, 0.34)) {
+      const preferred = Math.abs(state.step + state.cycle + 1) % Math.max(1, state.points.length);
+      const adjusted = clearLocalPoint(person, context, state, preferred, true, state.partnerId);
+      if (Math.hypot(adjusted.x - state.destination.x, adjusted.z - state.destination.z) > 0.01) {
+        state.destination = adjusted;
+        state.seconds = 0;
+        state.phase = 'approach';
+      }
+    }
     const visual = context.visual;
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
       && Math.hypot(visual.x - state.destination.x, visual.z - state.destination.z) > 0.035) {
@@ -366,7 +378,8 @@ function hasPeerClearance(person: Person, point: Vec2, context: LocalActivityCon
   return true;
 }
 
-function clearLocalPoint(person: Person, context: LocalActivityContext, state: LocalActivityState, preferred: number, vary: boolean): Vec2 {
+function clearLocalPoint(person: Person, context: LocalActivityContext, state: LocalActivityState, preferred: number, vary: boolean,
+  ignoreId?: string): Vec2 {
   const from = context.visual ?? state.destination;
   for (let offset = 0; offset < state.points.length; offset++) {
     const index = (preferred + offset) % state.points.length;
@@ -381,7 +394,7 @@ function clearLocalPoint(person: Person, context: LocalActivityContext, state: L
       if (bounded(person, varied) && localSegmentSafe(from, varied, context)) candidate = varied;
     }
     if (bounded(person, candidate) && localSegmentSafe(from, candidate, context)
-      && hasPeerClearance(person, candidate, context, undefined, 0.34)) return candidate;
+      && hasPeerClearance(person, candidate, context, ignoreId, 0.34)) return candidate;
   }
   // Holding the current position is preferable to stepping through another resident just to keep
   // a routine moving. The next intent will retry a different semantic point.
