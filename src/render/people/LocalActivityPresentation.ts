@@ -1,4 +1,5 @@
-import type { DestinationKind, Person, Vec2 } from '../../sim/types';
+import type { DestinationKind, Person, SocialRelationship, SocialRelationshipKind, Vec2 } from '../../sim/types';
+import { memoryInfluenceFor } from '../../sim/people/PersonalMemorySystem';
 import type { AnimationState } from '../animation/AnimationController';
 import { resourceVisualUnit as unit } from '../../sim/resources/ResourceWorkPresentation';
 import { atInteraction, facingTarget } from './PhysicalActionPresentation';
@@ -31,6 +32,8 @@ export interface LocalActivityContext {
   group?: SocialGroup;
   /** Visible peers only; callers cache the index once per frame. */
   people: ReadonlyMap<string, Person>;
+  /** Authoritative social graph lookup. Presentation reads it but never mutates it. */
+  relationshipFor?(a: string, b: string): SocialRelationship | undefined;
   visualFor?(id: string): Readonly<Vec2> | undefined;
   structures: readonly ActivityStructure[];
   safeSegment(a: Vec2, b: Vec2): boolean;
@@ -74,6 +77,63 @@ const STRUCTURES: Partial<Record<DestinationKind, readonly string[]>> = {
   workshop: ['workshop'], 'civic-building': ['hall'], 'knowledge-institution': ['research', 'hall'],
   'industrial-site': ['factory', 'foundry', 'energy'], warehouse: ['warehouse', 'granary'],
 };
+
+export type SocialEncounterTone = 'warm' | 'supportive' | 'mentoring' | 'collaborative' | 'formal' | 'casual' | 'tense';
+type SocialEncounterRole = 'peer' | 'mentor' | 'learner' | 'supporter' | 'supported';
+interface SocialBeat {
+  action: string;
+  animation: AnimationState;
+  seconds: number;
+  spacing: number;
+  lateral: number;
+}
+const SOCIAL_SCRIPTS: Record<SocialEncounterTone, readonly SocialBeat[]> = {
+  warm: [
+    { action: 'warm-greeting', animation: 'converse-warm', seconds: 1.15, spacing: 0.44, lateral: 0.03 },
+    { action: 'warm-conversation', animation: 'converse-warm', seconds: 2.25, spacing: 0.45, lateral: 0.06 },
+    { action: 'linger-together', animation: 'converse-quiet', seconds: 1.65, spacing: 0.47, lateral: 0.04 },
+  ],
+  supportive: [
+    { action: 'check-in', animation: 'converse-quiet', seconds: 1.35, spacing: 0.43, lateral: 0.02 },
+    { action: 'quiet-company', animation: 'converse-quiet', seconds: 2.65, spacing: 0.44, lateral: 0.02 },
+    { action: 'reassurance', animation: 'converse-warm', seconds: 1.8, spacing: 0.45, lateral: 0.04 },
+  ],
+  mentoring: [
+    { action: 'guidance-opening', animation: 'converse-teach', seconds: 1.4, spacing: 0.5, lateral: 0.04 },
+    { action: 'guidance-exchange', animation: 'converse-teach', seconds: 2.35, spacing: 0.5, lateral: 0.06 },
+    { action: 'guidance-reflection', animation: 'converse-quiet', seconds: 1.7, spacing: 0.52, lateral: 0.04 },
+  ],
+  collaborative: [
+    { action: 'consult', animation: 'converse', seconds: 1.25, spacing: 0.5, lateral: 0.04 },
+    { action: 'exchange-ideas', animation: 'converse-teach', seconds: 2.15, spacing: 0.51, lateral: 0.07 },
+    { action: 'consider-together', animation: 'converse-quiet', seconds: 1.5, spacing: 0.53, lateral: 0.04 },
+  ],
+  formal: [
+    { action: 'formal-greeting', animation: 'converse-quiet', seconds: 1.05, spacing: 0.57, lateral: 0.02 },
+    { action: 'formal-consultation', animation: 'converse', seconds: 1.8, spacing: 0.58, lateral: 0.04 },
+    { action: 'acknowledge', animation: 'converse-quiet', seconds: 1.0, spacing: 0.6, lateral: 0.02 },
+  ],
+  casual: [
+    { action: 'greeting', animation: 'converse', seconds: 1.0, spacing: 0.52, lateral: 0.04 },
+    { action: 'brief-conversation', animation: 'converse', seconds: 1.75, spacing: 0.54, lateral: 0.06 },
+  ],
+  tense: [
+    { action: 'guarded-greeting', animation: 'converse-tense', seconds: 0.9, spacing: 0.7, lateral: 0.02 },
+    { action: 'guarded-exchange', animation: 'converse-tense', seconds: 1.35, spacing: 0.74, lateral: 0.04 },
+    { action: 'disengage', animation: 'converse-quiet', seconds: 0.8, spacing: 0.78, lateral: 0.03 },
+  ],
+};
+
+export interface SocialEncounterPresentation {
+  partnerId: string;
+  tone: SocialEncounterTone;
+  role: SocialEncounterRole;
+  relationshipKind?: SocialRelationshipKind;
+  relationshipId?: string;
+  strength: number;
+  trust: number;
+  beat: number;
+};
 export interface LocalActivityState {
   authority: string;
   revision: unknown;
@@ -95,6 +155,10 @@ export interface LocalActivityState {
   seconds: number;
   hold: number;
   partnerId?: string;
+  /** Multi-beat presentation-only social encounter derived from real relationship authority. */
+  encounter?: SocialEncounterPresentation;
+  /** Discourages immediate partner repetition when a group offers other plausible people. */
+  lastPartnerId?: string;
 }
 
 export class LocalActivityPresentation {
@@ -152,6 +216,7 @@ export class LocalActivityPresentation {
         state.sample = previous.sample + 1;
         state.step = sampledEntryStep(person, state.sample) - 1;
         state.hold = 0;
+        state.lastPartnerId = previous.lastPartnerId ?? previous.partnerId;
       }
       // A newly placed obstacle can invalidate a formerly safe return corridor. Stop on this
       // side of it; never blindly cut across the new building to resume the old base position.
@@ -197,6 +262,7 @@ export class LocalActivityPresentation {
       const peer = context.people.get(state.partnerId);
       if (!peer || !canInteract(person, peer)) {
         state.partnerId = undefined;
+        state.encounter = undefined;
         state.animation = 'idle';
         state.action = 'observe';
         state.seconds = state.hold;
@@ -207,6 +273,19 @@ export class LocalActivityPresentation {
       }
     }
     if (oriented && state.seconds >= state.hold) {
+      if (state.encounter) {
+        const peer = context.people.get(state.encounter.partnerId);
+        if (peer && canInteract(person, peer) && state.encounter.beat + 1 < SOCIAL_SCRIPTS[state.encounter.tone].length) {
+          state.encounter.beat += 1;
+          state.seconds = 0;
+          applySocialBeat(person, peer, context, state);
+          state.phase = 'approach';
+          return state;
+        }
+        state.lastPartnerId = state.encounter.partnerId;
+        state.encounter = undefined;
+        state.partnerId = undefined;
+      }
       state.step = (state.step + 1) % (ROUTINES[nav.destinationKind] ?? WORK_ROUTINE).length;
       if (state.step === 0) state.cycle++;
       state.seconds = 0;
@@ -293,6 +372,7 @@ export class LocalActivityPresentation {
     const variation = unit(`${person.id}:${state.cycle}:${state.step}:hold`);
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
     state.partnerId = undefined;
+    state.encounter = undefined;
     state.animation = 'idle';
     state.action = action;
     const pointOffset = step === 'reposition'
@@ -302,29 +382,12 @@ export class LocalActivityPresentation {
     let point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
     let focus: Readonly<Vec2> = state.stationFocus;
     if (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task') {
-      const members = context.group?.members;
-      if (members && members.length > 1) {
-        const own = members.indexOf(person.id);
-        // Prefer the reciprocal member of the deterministic two-person pod. This makes social
-        // intent legible from both sides when their interaction windows overlap, while the
-        // fallbacks keep odd groups and unavailable companions from stalling.
-        for (const peerId of socialPartnerCandidates(members, own, state.cycle)) {
-          const peer = context.people.get(peerId);
-          if (!peer || !canInteract(person, peer)) continue;
-          const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
-          const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
-          if (distance < 0.18 || distance > 2.7) continue;
-          const personalSpace = 0.42 + unit(`${person.id}:${peer.id}:social-space`) * 0.16;
-          const approach = Math.min(0.72, Math.max(0.08, distance - personalSpace));
-          const candidate = {
-            x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
-            z: state.base.z + (peerPosition.z - state.base.z) / distance * approach,
-          };
-          if (!bounded(person, candidate) || !localSegmentSafe(state.destination, candidate, context)
-            || !hasPeerClearance(person, candidate, context, peer.id, 0.34)) continue;
-          point = candidate; focus = peerPosition; state.partnerId = peer.id;
-          state.animation = 'converse'; state.action = 'conversation'; break;
-        }
+      const selected = selectSocialPartner(person, context, state);
+      if (selected) {
+        state.encounter = buildSocialEncounter(person, selected.peer, selected.relationship);
+        state.partnerId = selected.peer.id;
+        applySocialBeat(person, selected.peer, context, state);
+        return;
       }
     }
     if (step === 'task' || step === 'return') {
@@ -353,16 +416,167 @@ export class LocalActivityPresentation {
 }
 
 
-function socialPartnerCandidates(members: readonly string[], own: number, cycle: number): string[] {
-  if (own < 0 || members.length < 2) return [];
-  const result: string[] = [];
-  const reciprocal = own % 2 === 0 ? own + 1 : own - 1;
-  if (reciprocal >= 0 && reciprocal < members.length) result.push(members[reciprocal]!);
-  for (let offset = 1; offset <= Math.min(5, members.length - 1); offset++) {
-    const candidate = members[(own + offset + cycle) % members.length]!;
-    if (candidate !== members[own] && !result.includes(candidate)) result.push(candidate);
+interface SocialPartnerSelection {
+  peer: Person;
+  relationship?: SocialRelationship;
+  score: number;
+}
+
+function selectSocialPartner(person: Person, context: LocalActivityContext, state: LocalActivityState): SocialPartnerSelection | undefined {
+  const members = context.group?.members;
+  if (!members || members.length < 2) return undefined;
+  const own = members.indexOf(person.id);
+  const reciprocal = own >= 0 ? (own % 2 === 0 ? own + 1 : own - 1) : -1;
+  const currentMonth = person.bornMonth + person.ageMonths;
+  const candidates: SocialPartnerSelection[] = [];
+  for (let index = 0; index < members.length; index++) {
+    const peerId = members[index]!;
+    const peer = context.people.get(peerId);
+    if (!peer || !canInteract(person, peer)) continue;
+    const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
+    const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
+    if (distance < 0.18 || distance > 2.7) continue;
+    const relationship = context.relationshipFor?.(person.id, peer.id);
+    let score = relationshipScoreForPresentation(person, peer, relationship, currentMonth);
+    if (index === reciprocal) score += 0.14;
+    if (state.lastPartnerId === peer.id && members.length > 2) score -= 0.16;
+    score -= Math.max(0, distance - 0.8) * 0.05;
+    score += unit(`${person.id}:${peer.id}:${state.cycle}:social-choice`) * 0.025;
+    candidates.push({ peer, relationship, score });
   }
-  return result;
+  candidates.sort((a, b) => b.score - a.score || a.peer.id.localeCompare(b.peer.id));
+  return candidates[0];
+}
+
+function relationshipScoreForPresentation(person: Person, peer: Person, relationship: SocialRelationship | undefined, month: number): number {
+  const kindBase: Partial<Record<SocialRelationshipKind, number>> = {
+    family: 0.95, friend: 0.9, mentor: 0.88, 'intellectual-collaborator': 0.82,
+    'political-ally': 0.73, superior: 0.62, colleague: 0.56, neighbor: 0.46, rival: 0.16,
+  };
+  let score = 0.2 + (person.traits.sociability + peer.traits.sociability) * 0.08
+    + (person.traits.cooperation + peer.traits.cooperation) * 0.055;
+  if (relationship) {
+    const recency = Math.exp(-Math.max(0, month - relationship.lastContactMonth) / 36);
+    score += (kindBase[relationship.kind] ?? 0.3)
+      + relationship.strength * 0.42
+      + (relationship.kind === 'rival' ? 1 - relationship.trust : relationship.trust) * 0.2
+      + recency * 0.08;
+  }
+  if (person.partnerId === peer.id || peer.partnerId === person.id) score += 0.4;
+  if (person.householdId === peer.householdId) score += 0.28;
+  if (person.parents.includes(peer.id) || peer.parents.includes(person.id) || person.children.includes(peer.id) || peer.children.includes(person.id)) score += 0.35;
+  if (person.workplaceId && person.workplaceId === peer.workplaceId) score += 0.12;
+  if (person.institutionId && person.institutionId === peer.institutionId) score += 0.12;
+  return score;
+}
+
+function buildSocialEncounter(person: Person, peer: Person, relationship: SocialRelationship | undefined): SocialEncounterPresentation {
+  const selfMemory = memoryInfluenceFor(person);
+  const peerMemory = memoryInfluenceFor(peer);
+  const strength = relationship?.strength ?? (person.householdId === peer.householdId ? 0.5 : 0.25);
+  const trust = relationship?.trust ?? (person.householdId === peer.householdId ? 0.62 : 0.48);
+  let tone: SocialEncounterTone = 'casual';
+  let role: SocialEncounterRole = 'peer';
+
+  const selfDistress = Math.max(selfMemory.grief, selfMemory.recentShock);
+  const peerDistress = Math.max(peerMemory.grief, peerMemory.recentShock);
+  const closePositive = relationship?.kind !== 'rival'
+    && (relationship?.kind === 'family' || relationship?.kind === 'friend' || relationship?.kind === 'mentor'
+      || person.householdId === peer.householdId || person.partnerId === peer.id || peer.partnerId === person.id);
+  if (closePositive && Math.max(selfDistress, peerDistress) > 0.28) {
+    tone = 'supportive';
+    role = selfDistress > peerDistress + 0.08 ? 'supported'
+      : peerDistress > selfDistress + 0.08 ? 'supporter' : 'peer';
+  } else {
+    switch (relationship?.kind) {
+      case 'family':
+      case 'friend':
+        tone = 'warm'; break;
+      case 'mentor':
+        tone = 'mentoring';
+        if (relationship.teaching?.mentorId === person.id) role = 'mentor';
+        else if (relationship.teaching?.learnerId === person.id) role = 'learner';
+        else role = person.ageMonths >= peer.ageMonths ? 'mentor' : 'learner';
+        break;
+      case 'intellectual-collaborator':
+      case 'colleague':
+        tone = 'collaborative'; break;
+      case 'political-ally':
+      case 'superior':
+        tone = 'formal'; break;
+      case 'rival':
+        tone = 'tense'; break;
+      case 'neighbor':
+        tone = 'casual'; break;
+      default:
+        tone = person.householdId === peer.householdId ? 'warm'
+          : person.workplaceId && person.workplaceId === peer.workplaceId ? 'collaborative' : 'casual';
+    }
+  }
+
+  return {
+    partnerId: peer.id,
+    tone,
+    role,
+    ...(relationship ? { relationshipKind: relationship.kind, relationshipId: relationship.id } : {}),
+    strength,
+    trust,
+    beat: 0,
+  };
+}
+
+function socialActionFor(encounter: SocialEncounterPresentation, baseAction: string): string {
+  if (encounter.tone === 'supportive') {
+    if (encounter.role === 'supporter') return baseAction === 'check-in' ? 'check-in' : baseAction === 'quiet-company' ? 'offer-quiet-company' : 'offer-reassurance';
+    if (encounter.role === 'supported') return baseAction === 'check-in' ? 'receive-check-in' : baseAction === 'quiet-company' ? 'accept-quiet-company' : 'receive-reassurance';
+  }
+  if (encounter.tone === 'mentoring') {
+    if (encounter.role === 'mentor') return encounter.beat === 0 ? 'offer-guidance' : encounter.beat === 1 ? 'explain-guidance' : 'check-understanding';
+    if (encounter.role === 'learner') return encounter.beat === 0 ? 'seek-guidance' : encounter.beat === 1 ? 'listen-to-mentor' : 'consider-guidance';
+  }
+  return baseAction;
+}
+
+function applySocialBeat(person: Person, peer: Person, context: LocalActivityContext, state: LocalActivityState): void {
+  const encounter = state.encounter;
+  if (!encounter) return;
+  const script = SOCIAL_SCRIPTS[encounter.tone];
+  const beat = script[Math.min(encounter.beat, script.length - 1)]!;
+  const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
+  const from = context.visual ?? state.destination;
+  let dx = from.x - peerPosition.x;
+  let dz = from.z - peerPosition.z;
+  let distance = Math.hypot(dx, dz);
+  if (distance < 0.001) {
+    const angle = unit(`${person.id}:${peer.id}:encounter-axis`) * Math.PI * 2;
+    dx = Math.cos(angle); dz = Math.sin(angle); distance = 1;
+  }
+  dx /= distance; dz /= distance;
+  const lateralSign = unit(`${person.id}:${peer.id}:encounter-side`) < 0.5 ? -1 : 1;
+  const spacing = beat.spacing
+    + (encounter.tone === 'warm' || encounter.tone === 'supportive' ? -encounter.trust * 0.035 : 0)
+    + (encounter.tone === 'tense' ? encounter.strength * 0.05 : 0);
+  const lateralX = -dz * beat.lateral * lateralSign;
+  const lateralZ = dx * beat.lateral * lateralSign;
+  const candidate = {
+    x: peerPosition.x + dx * spacing + lateralX,
+    z: peerPosition.z + dz * spacing + lateralZ,
+  };
+  if (bounded(person, candidate) && localSegmentSafe(from, candidate, context)
+    && hasPeerClearance(person, candidate, context, peer.id, 0.34)) {
+    state.destination = candidate;
+  }
+  state.focus.x = peerPosition.x;
+  state.focus.z = peerPosition.z;
+  state.restFacing = facingTarget(state.destination, state.focus);
+  state.partnerId = peer.id;
+  state.animation = beat.animation;
+  state.action = socialActionFor(encounter, beat.action);
+  const relationalLinger = encounter.tone === 'tense'
+    ? 0.82 + encounter.strength * 0.08
+    : 0.9 + encounter.strength * 0.18 + encounter.trust * 0.14
+      + (person.traits.sociability + peer.traits.sociability) * 0.05;
+  state.hold = beat.seconds * relationalLinger * (context.far ? 1.35 : 1);
 }
 
 function hasPeerClearance(person: Person, point: Vec2, context: LocalActivityContext, ignoreId?: string, minimum = 0.3): boolean {
