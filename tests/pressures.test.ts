@@ -9,7 +9,7 @@ import { explicitLabour, settlementLabour } from '../src/sim/people/HumanCapital
 import { addMaterial } from '../src/sim/resources/Inventory';
 import { observePressure } from '../src/sim/pressures/Pressure';
 import { adaptFoodCareer, adjustFoodProduction, allocateSurvivalLabour, applyCold, beginFoodMonth, chooseFoodResponse,
-  foodNeed, foodResponseOptions, foodStorageCapacity, observeFood, resolveSurvival, survivalHealthChange, survivalMortality, survivalState } from '../src/sim/pressures/Survival';
+  foodNeed, foodResponseOptions, foodStorageCapacity, foundingFirstFirePlan, observeFood, resolveSurvival, survivalHealthChange, survivalMortality, survivalState } from '../src/sim/pressures/Survival';
 import type { Settlement, SimulationState } from '../src/sim/types';
 
 let base: Simulation;
@@ -143,6 +143,7 @@ describe('survival pressure and physical consequences', () => {
   it('records a founding camp first fire in warm weather and keeps routine hearth use resource-backed', () => {
     const { state, s, population } = fixture();
     s.foundingPodId = 'test-founding-pod';
+    s.foundedMonth = 0;
     state.weather.cells[s.cellIndex]!.temperature = 0.8;
     s.structurePlots = []; s.localMaterials = {}; s.materialEconomy = undefined;
     addMaterial(s, 'timber', 10);
@@ -154,12 +155,15 @@ describe('survival pressure and physical consequences', () => {
     expect(s.survival!.hearth!.fuelUsed).toBeGreaterThan(0);
     expect(s.localMaterials.timber).toBeLessThan(before);
     const milestone = structuredClone(s.survival!.firstFire);
-    expect(milestone).toEqual({ month: 1, eventId: expect.any(String) });
+    expect(milestone).toMatchObject({ month: 1, eventId: expect.any(String), plannedMonth: 1, readiness: expect.any(Number) });
     const event = state.history.find(e => e.id === milestone!.eventId)!;
     expect(event.type).toBe('first-fire');
     expect(event.locationId).toBe(s.id);
     expect(event.context.foundingPodId).toBe('test-founding-pod');
     expect(event.context.purpose).toBe('founding-hearth');
+    expect(event.context.plannedMonth).toBe(1);
+    expect(event.context.ignitionReadiness).toBeGreaterThanOrEqual(0);
+    expect(event.causes).toContain('site-readiness');
 
     const afterIgnition = s.localMaterials.timber!;
     state.month = 2; applyCold(state, s, population);
@@ -168,6 +172,31 @@ describe('survival pressure and physical consequences', () => {
     expect(s.localMaterials.timber).toBeLessThan(afterIgnition);
     expect(s.survival!.firstFire).toEqual(milestone);
     expect(state.history.filter(e => e.type === 'first-fire' && e.locationId === s.id)).toHaveLength(1);
+  });
+
+  it('gives founding camps different ignition windows from local readiness instead of a shared timer', () => {
+    const simulation = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
+    simulation.advanceArrival(60);
+    const founding = simulation.state.settlements.filter(settlement => settlement.foundingPodId);
+    expect(founding).toHaveLength(5);
+
+    const plans = founding.map(settlement => {
+      const population = simulation.state.people.filter(person => person.alive && person.homeId === settlement.id).length;
+      return foundingFirstFirePlan(simulation.state, settlement, population)!;
+    });
+    const plannedMonths = plans.map(plan => plan.plannedMonth);
+    expect(new Set(plannedMonths).size).toBeGreaterThan(1);
+    expect(Math.min(...plannedMonths)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...plannedMonths) - Math.min(...plannedMonths)).toBeLessThanOrEqual(2);
+    expect(plans.some(plan => plan.rank === 0)).toBe(true);
+    for (const plan of plans) {
+      expect(plan.readiness).toBeGreaterThanOrEqual(0);
+      expect(plan.readiness).toBeLessThanOrEqual(1);
+      expect(plan.drivers.coldUrgency).toBeGreaterThanOrEqual(0);
+      expect(plan.drivers.shelterNeed).toBeGreaterThanOrEqual(0);
+      expect(plan.drivers.woodland).toBeGreaterThanOrEqual(0);
+      expect(plan.drivers.fuelSecurity).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it('does not create a first-fire milestone for non-founding settlements', () => {
