@@ -286,25 +286,30 @@ export class LocalActivityPresentation {
     const pointOffset = step === 'reposition'
       ? state.cycle + Math.floor(unit(`${person.id}:${state.step}:reposition`) * state.points.length)
       : 0;
-    let point = state.points[(pointIndex + pointOffset) % state.points.length]!;
+    const preferredPoint = (pointIndex + pointOffset) % state.points.length;
+    let point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
     let focus: Readonly<Vec2> = state.stationFocus;
     if (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task') {
       const members = context.group?.members;
       if (members && members.length > 1) {
         const own = members.indexOf(person.id);
-        // Adjacent members start as pods; later cycles change the neighbour they address.
-        for (let offset = 1; offset <= Math.min(4, members.length - 1); offset++) {
-          const peer = context.people.get(members[(own + offset + state.cycle) % members.length]!);
+        // Prefer the reciprocal member of the deterministic two-person pod. This makes social
+        // intent legible from both sides when their interaction windows overlap, while the
+        // fallbacks keep odd groups and unavailable companions from stalling.
+        for (const peerId of socialPartnerCandidates(members, own, state.cycle)) {
+          const peer = context.people.get(peerId);
           if (!peer || !canInteract(person, peer)) continue;
           const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
           const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
           if (distance < 0.18 || distance > 2.7) continue;
-          // Approach a real companion while keeping conversational personal space.
           const personalSpace = 0.42 + unit(`${person.id}:${peer.id}:social-space`) * 0.16;
           const approach = Math.min(0.72, Math.max(0.08, distance - personalSpace));
-          const candidate = { x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
-            z: state.base.z + (peerPosition.z - state.base.z) / distance * approach };
-          if (!bounded(person, candidate) || !localSegmentSafe(state.destination, candidate, context)) continue;
+          const candidate = {
+            x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
+            z: state.base.z + (peerPosition.z - state.base.z) / distance * approach,
+          };
+          if (!bounded(person, candidate) || !localSegmentSafe(state.destination, candidate, context)
+            || !hasPeerClearance(person, candidate, context, peer.id, 0.3)) continue;
           point = candidate; focus = peerPosition; state.partnerId = peer.id;
           state.animation = 'converse'; state.action = 'conversation'; break;
         }
@@ -322,9 +327,12 @@ export class LocalActivityPresentation {
     if (step === 'inspect' && ['bag', 'basket', 'ledger', 'toolkit'].includes(person.appearance?.carriedItem ?? '')) {
       state.action = 'check-carried-object'; state.animation = 'carry';
     }
-    // Validate the actual connecting segment, not just the cached endpoints. No local pathfinder.
+    // Validate the actual connecting segment, not just the cached endpoints. A local target also
+    // keeps room around uninvolved visible peers; the conversation partner is the one deliberate
+    // exception and already has its own personal-space stand-off.
     const from = context.visual ?? state.destination;
-    if (bounded(person, point) && localSegmentSafe(from, point, context)) state.destination = point;
+    const peerSafe = hasPeerClearance(person, point, context, state.partnerId, 0.3);
+    if (bounded(person, point) && localSegmentSafe(from, point, context) && peerSafe) state.destination = point;
     else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
     state.restFacing = facingTarget(state.destination, focus);
     // Own the focus vector; never retain/mutate a simulation position through a peer alias.
@@ -332,6 +340,53 @@ export class LocalActivityPresentation {
   }
 }
 
+
+function socialPartnerCandidates(members: readonly string[], own: number, cycle: number): string[] {
+  if (own < 0 || members.length < 2) return [];
+  const result: string[] = [];
+  const reciprocal = own % 2 === 0 ? own + 1 : own - 1;
+  if (reciprocal >= 0 && reciprocal < members.length) result.push(members[reciprocal]!);
+  for (let offset = 1; offset <= Math.min(5, members.length - 1); offset++) {
+    const candidate = members[(own + offset + cycle) % members.length]!;
+    if (candidate !== members[own] && !result.includes(candidate)) result.push(candidate);
+  }
+  return result;
+}
+
+function hasPeerClearance(person: Person, point: Vec2, context: LocalActivityContext, ignoreId?: string, minimum = 0.3): boolean {
+  const members = context.group?.members;
+  if (!members) return true;
+  for (const id of members) {
+    if (id === person.id || id === ignoreId) continue;
+    const peer = context.people.get(id);
+    if (!peer || !peer.alive) continue;
+    const at = context.visualFor?.(id) ?? peer.position;
+    if (Math.hypot(point.x - at.x, point.z - at.z) < minimum) return false;
+  }
+  return true;
+}
+
+function clearLocalPoint(person: Person, context: LocalActivityContext, state: LocalActivityState, preferred: number, vary: boolean): Vec2 {
+  const from = context.visual ?? state.destination;
+  for (let offset = 0; offset < state.points.length; offset++) {
+    const index = (preferred + offset) % state.points.length;
+    const base = state.points[index]!;
+    let candidate = base;
+    if (vary) {
+      // A few centimetres of deterministic micro-variation keeps repeated cycles from exposing
+      // seven exact floor markers while preserving the semantic frontage and replayability.
+      const angle = unit(`${person.id}:${state.cycle}:${state.step}:${index}:angle`) * Math.PI * 2;
+      const radius = 0.035 + unit(`${person.id}:${state.cycle}:${state.step}:${index}:radius`) * 0.085;
+      const varied = { x: base.x + Math.cos(angle) * radius, z: base.z + Math.sin(angle) * radius };
+      if (bounded(person, varied) && localSegmentSafe(from, varied, context)) candidate = varied;
+    }
+    if (bounded(person, candidate) && localSegmentSafe(from, candidate, context)
+      && hasPeerClearance(person, candidate, context, undefined, 0.3)) return candidate;
+  }
+  // Holding the current position is preferable to stepping through another resident just to keep
+  // a routine moving. The next intent will retry a different semantic point.
+  return { x: state.destination.x, z: state.destination.z };
+}
 
 function activityRadius(kind: DestinationKind): number {
   if (kind === 'plaza' || kind === 'market') return 0.72;
