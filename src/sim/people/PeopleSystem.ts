@@ -463,6 +463,19 @@ export class PeopleSystem {
       traveling: true,
       crossingMode: mode,
     };
+
+    // Ordinary home/work/market movement is sub-monthly life sampled by a monthly simulation.
+    // Resolve that trip inside this authority sample, but retain the consumed route so
+    // PeopleVisualState can photograph the walk over presentation seconds. Emergency journeys
+    // remain genuinely in progress; migration uses beginMigration() and is unaffected here.
+    if (schedule.phase !== 'emergency') {
+      const sampledDestination = waypoints[waypoints.length - 1]!;
+      person.position = { ...sampledDestination };
+      person.target = { ...sampledDestination };
+      person.navigation.waypointIndex = waypoints.length;
+      person.navigation.traveling = false;
+      person.activity = schedule.activity;
+    }
   }
 
   private advanceAlongRoute(person: Person, step: number, settlement: Settlement, state: SimulationState): void {

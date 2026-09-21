@@ -148,19 +148,26 @@ describe('documentary human cadence', () => {
     const stableComparisons = residents.reduce((sum, metric) => sum + metric.stableComparisons, 0);
     const sameAuthorityResets = residents.reduce((sum, metric) => sum + metric.sameAuthorityResets, 0);
     const repeatedlyObserved = residents.filter(metric => metric.stableComparisons >= 30);
+    const diagnostics = residents.map(metric => ({
+      actions: [...metric.actions].sort(),
+      movementEpisodes: metric.movementEpisodes,
+      localMovementFrames: metric.localMovementFrames,
+      stableComparisons: metric.stableComparisons,
+      sameAuthorityResets: metric.sameAuthorityResets,
+    }));
 
     // Twenty presentation seconds at 2 months/sec spans forty real PeopleSystem updates. The
     // settlement must still show readable action variety and repeated movement instead of spending
     // the whole observation in arrival/reset states.
-    expect(residentsWithPurposefulVariety.length).toBeGreaterThanOrEqual(4);
-    expect(residentsWithRepeatedMovement.length).toBeGreaterThanOrEqual(4);
-    expect(localMovementFrames).toBeGreaterThan(20);
+    expect(residentsWithPurposefulVariety.length, JSON.stringify(diagnostics)).toBeGreaterThanOrEqual(4);
+    expect(residentsWithRepeatedMovement.length, JSON.stringify(diagnostics)).toBeGreaterThanOrEqual(4);
+    expect(localMovementFrames, JSON.stringify(diagnostics)).toBeGreaterThan(20);
 
     // Monthly churn may legitimately interrupt a routine by commute/emergency/destination change.
     // What must never happen is recreation every frame while the semantic authority is unchanged.
-    expect(stableComparisons).toBeGreaterThan(100);
-    expect(repeatedlyObserved.length).toBeGreaterThanOrEqual(4);
-    expect(sameAuthorityResets).toBeLessThanOrEqual(Math.max(1, Math.floor(stableComparisons * 0.02)));
+    expect(stableComparisons, JSON.stringify(diagnostics)).toBeGreaterThan(100);
+    expect(repeatedlyObserved.length, JSON.stringify(diagnostics)).toBeGreaterThanOrEqual(4);
+    expect(sameAuthorityResets, JSON.stringify(diagnostics)).toBeLessThanOrEqual(Math.max(1, Math.floor(stableComparisons * 0.02)));
     for (const metric of repeatedlyObserved) {
       expect(metric.sameAuthorityResets).toBeLessThanOrEqual(Math.max(1, Math.floor(metric.stableComparisons * 0.05)));
     }

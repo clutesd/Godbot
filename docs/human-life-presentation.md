@@ -29,10 +29,16 @@ alive.
 
 `PeopleSystem` therefore remains monthly authority: it records the broad destination/activity facts
 used by history. The removed `dailyPlan` / `dailyKey` projection API is not part of production
-presentation. `LocalActivityPresentation` is the sole micro-life layer and advances from renderer
-`deltaSeconds`. Its work, conversation, inspection, rest and reposition beats are documentary
-samples of ordinary life, not claims that each displayed calendar day was individually animated.
-Emergencies, travel, migration and specialized physical work still interrupt immediately.
+presentation. Ordinary within-settlement home/work/market trips are treated as sub-monthly facts:
+the monthly sample resolves the resident at that phase's destination while retaining the consumed
+route for the renderer. This prevents an ordinary walk to work from occupying several historical
+months while still letting the viewer watch that route unfold over presentation seconds. Emergency
+travel and migration remain genuinely in-progress authoritative journeys.
+
+`LocalActivityPresentation` is the sole micro-life layer and advances from renderer `deltaSeconds`.
+Its work, conversation, inspection, rest and reposition beats are documentary samples of ordinary
+life, not claims that each displayed calendar day was individually animated. Specialized physical
+work still retains its existing stronger choreography.
 
 Authoritative journey interpolation may use the observed real-time spacing between monthly
 retargets as a *catch-up ceiling* so a visible walker does not fall permanently behind history.
