@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { forestSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, forestSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 
 describe('forest-aware camera sightline scoring', () => {
@@ -43,5 +43,33 @@ describe('forest-aware camera sightline scoring', () => {
     const score = forestSightlineObstruction(world, camera, target, () => 0);
 
     expect(score).toBe(0);
+  });
+});
+
+
+describe('human-scale documentary camera framing', () => {
+  it('keeps personal scenes close enough for people and their animation to read', () => {
+    const worker = cameraFramingFor('worker-follow');
+    const discovery = cameraFramingFor('discovery-scene');
+    const street = cameraFramingFor('street-observation');
+
+    expect(worker.radius[1]).toBeLessThanOrEqual(3.8);
+    expect(worker.height[1]).toBeLessThanOrEqual(1.55);
+    expect(discovery.radius[1]).toBeLessThanOrEqual(4.1);
+    expect(discovery.height[1]).toBeLessThanOrEqual(1.8);
+    expect(street.radius[0]).toBeLessThan(5);
+    expect(street.height[0]).toBeLessThan(2);
+  });
+
+  it('allows intimate shots to stay near ground without weakening wide-shot terrain safety', () => {
+    const worker = cameraClearanceFor('worker-follow');
+    const street = cameraClearanceFor('street-observation');
+    const wide = cameraClearanceFor('world-establishing');
+
+    expect(worker.lens).toBeLessThan(1);
+    expect(worker.sightline).toBeLessThan(0.4);
+    expect(street.lens).toBeLessThan(1.2);
+    expect(wide.lens).toBe(3);
+    expect(wide.sightline).toBe(1.6);
   });
 });
