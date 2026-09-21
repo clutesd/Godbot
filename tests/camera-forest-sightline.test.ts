@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingEditorialTimingFor, foundingLandingShotProfileFor, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
@@ -58,10 +58,29 @@ describe('Arrival Day editorial pacing', () => {
     expect(foundingEditorialTimingFor('ordinary:scene')).toBeUndefined();
   });
 
-  it('keeps documentary anchors brief without changing ordinary camera timing', () => {
-    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 4.6, transitionSeconds: 1.5 });
-    expect(foundingEditorialTimingFor('founding-cast:introduction:person-1')).toEqual({ durationSeconds: 3.8, transitionSeconds: 1.1 });
+  it('keeps documentary anchors brief, then gives the silent release room to breathe', () => {
+    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 3.8, transitionSeconds: 1.3 });
+    expect(foundingEditorialTimingFor('founding-cast:introduction:0:person-1')).toEqual({ durationSeconds: 2.9, transitionSeconds: 0.9 });
+    expect(foundingEditorialTimingFor('founding-release:event-1')).toEqual({ durationSeconds: 8.8, transitionSeconds: 1.5 });
+    expect(isFoundingReleaseScene('founding-release:event-1')).toBe(true);
+    expect(isFoundingReleaseScene('ordinary:scene')).toBe(false);
     expect(foundingEditorialTimingFor(undefined)).toBeUndefined();
+  });
+
+  it('gives the four human anchors distinct close-camera compositions', () => {
+    const profiles = Array.from({ length: 4 }, (_, index) =>
+      foundingCastShotProfileFor(`founding-cast:introduction:${index}:person-${index}`)
+    );
+    expect(profiles.every(Boolean)).toBe(true);
+    expect(new Set(profiles.map(profile => profile?.role)).size).toBe(4);
+    expect(new Set(profiles.map(profile => `${profile?.radius}:${profile?.height}`)).size).toBe(4);
+    expect(profiles[0]?.role).toBe('portrait');
+    expect(profiles[1]?.role).toBe('side-profile');
+    expect(profiles[2]?.role).toBe('life-in-place');
+    expect(profiles[3]?.role).toBe('last-look');
+    expect(profiles[0]?.radius).toBeLessThan(profiles[2]?.radius ?? 0);
+    expect(profiles[3]?.distanceDelta).toBeGreaterThan(0);
+    expect(foundingCastShotProfileFor('ordinary:person')).toBeUndefined();
   });
 
   it('gives all five landing beats different visual jobs', () => {
