@@ -87,6 +87,7 @@ body { min-width: 320px; }
   font-size: 8px;
   letter-spacing: .18em;
   text-shadow: 0 1px 8px #111529;
+  transition: opacity .9s ease;
 }
 .pulse { color: rgba(255, 239, 219, .63); }
 .pulse i { display: inline-block; width: 5px; height: 5px; margin: 0 7px 1px 0; border-radius: 50%; background: #78a98a; box-shadow: 0 0 8px #78a98a; animation: pulse 2.4s ease-in-out infinite; }
@@ -177,7 +178,7 @@ body { min-width: 320px; }
 .founding-orientation .identity, .founding-orientation .chronicle { opacity: 0; }
 /* The last Arrival Day shot removes both narration and HUD: the frame opens up while time resumes. */
 .founding-release .identity, .founding-release .chronicle { opacity: 0; }
-.founding-release .runline { opacity: .28; transition: opacity .9s ease; }
+.founding-release .runline { opacity: .28; }
 .opening.ending { background: rgba(17, 21, 41, .96); }
 .opening h2 { margin: 8px 0 4px; color: #f7ead9; font: 500 clamp(30px, 4vw, 48px)/1 Georgia, "Times New Roman", serif; letter-spacing: .28em; text-indent: .28em; }
 .opening p { margin: 0 0 10px; color: rgba(255, 239, 219, .72); font: 400 13px Georgia, "Times New Roman", serif; letter-spacing: .2em; }
