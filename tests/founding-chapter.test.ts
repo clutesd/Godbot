@@ -80,6 +80,9 @@ describe('Founding Chapter 1a', () => {
     expect(grounded).toHaveLength(sceneCount);
     expect(grounded[0]?.title).toBe(`ARRIVAL DAY · THE ${baseline?.expectedCommunityCount} LANDINGS`);
     expect(grounded[0]?.event?.type).toBe('ARRIVAL_DAY');
+    expect(grounded[0]?.statement.text).toContain('This is the last moment their histories are known together.');
+    expect(grounded[0]?.statement.text).toMatch(/From here, we watch/);
+    expect(grounded[0]?.statement.text).not.toContain('permanent beginning of this record');
     expect(grounded.every(scene => historian.validateStatement(scene.statement, simulation.state))).toBe(true);
 
     for (const community of baseline?.communities ?? []) {
