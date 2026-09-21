@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingEditorialTimingFor, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
@@ -44,6 +44,24 @@ describe('forest-aware camera sightline scoring', () => {
     const score = forestSightlineObstruction(world, camera, target, () => 0);
 
     expect(score).toBe(0);
+  });
+});
+
+
+describe('Arrival Day editorial pacing', () => {
+  it('keeps the post-title orientation under forty seconds at five landings', () => {
+    const overview = foundingEditorialTimingFor('founding:overview:event-1');
+    const landing = foundingEditorialTimingFor('founding:community:pod-1');
+    expect(overview).toEqual({ durationSeconds: 9.5, transitionSeconds: 2.4 });
+    expect(landing).toEqual({ durationSeconds: 5.8, transitionSeconds: 1.8 });
+    expect(overview!.durationSeconds + landing!.durationSeconds * 5).toBeLessThan(40);
+    expect(foundingEditorialTimingFor('ordinary:scene')).toBeUndefined();
+  });
+
+  it('keeps documentary anchors brief without changing ordinary camera timing', () => {
+    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 4.6, transitionSeconds: 1.5 });
+    expect(foundingEditorialTimingFor('founding-cast:introduction:person-1')).toEqual({ durationSeconds: 3.8, transitionSeconds: 1.1 });
+    expect(foundingEditorialTimingFor(undefined)).toBeUndefined();
   });
 });
 
