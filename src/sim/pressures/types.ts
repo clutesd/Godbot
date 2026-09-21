@@ -55,6 +55,8 @@ export interface SurvivalState {
   /** Accumulated fractional months of missed full nutrition; recovery takes time. */
   deprivation: number;
   exposureDose: number;
+  /** Immutable founding milestone. Optional for archives created before first-fire tracking existed. */
+  firstFire?: { month: number; eventId: string };
   cold: { severity: number; shelterCoverage: number; fuelNeed: number; fuelUsed: number; exposure: number };
   response?: {
     kind: FoodResponse;

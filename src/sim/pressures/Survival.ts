@@ -257,6 +257,12 @@ export function applyCold(state: SimulationState, s: Settlement, population: num
   const warmth = fuelNeed > 0 ? unit(fuelUsed / fuelNeed) : 1;
   const insulation = population > 0 ? unit(shelter.protection / population) : 1;
   const exposure = severity * (1 - insulation) * (1 - warmth * 0.65);
+  if (fuelUsed > 0 && s.foundingPodId && !survival.firstFire) {
+    const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
+      { foundingPodId: s.foundingPodId, fuelUsed, fuelNeed, warmth, shelterCoverage, temperature, intensity: warmth },
+      ['founding-survival', 'fire-control', 'real-fuel-consumed'], population, 0.68);
+    survival.firstFire = { month: state.month, eventId: event.id };
+  }
   survival.cold = { severity, shelterCoverage, fuelNeed, fuelUsed, exposure };
   survival.observations.cold = observePressure(survival.observations.cold, { kind: 'cold', intensity: exposure,
     confidence: 0.95, affectedPopulation: population, location: s.position, observedMonth: state.month,

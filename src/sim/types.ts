@@ -981,6 +981,7 @@ export type HistoricalEventType =
   | 'response-attempted'
   | 'response-resolved'
   | 'adaptation-established'
+  | 'first-fire'
   | 'ARRIVAL_DAY'
   | 'world-awakening'
   | 'birth'

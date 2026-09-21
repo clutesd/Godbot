@@ -139,6 +139,49 @@ describe('survival pressure and physical consequences', () => {
     state.month++; applyCold(state, s, population);
     expect(s.survival!.cold.exposure).toBeLessThan(exposed * 0.2);
   });
+
+  it('records a founding camp first fire once and never repeats it after relighting', () => {
+    const { state, s, population } = fixture();
+    s.foundingPodId = 'test-founding-pod';
+    state.weather.cells[s.cellIndex]!.temperature = 0;
+    s.structurePlots = []; s.localMaterials = {}; s.materialEconomy = undefined;
+    addMaterial(s, 'timber', 10);
+    learn(s, 'fire-control');
+
+    state.month = 1; applyCold(state, s, population);
+    expect(s.survival!.cold.fuelUsed).toBeGreaterThan(0);
+    const milestone = structuredClone(s.survival!.firstFire);
+    expect(milestone).toEqual({ month: 1, eventId: expect.any(String) });
+    const event = state.history.find(e => e.id === milestone!.eventId)!;
+    expect(event.type).toBe('first-fire');
+    expect(event.locationId).toBe(s.id);
+    expect(event.context.foundingPodId).toBe('test-founding-pod');
+    expect(event.context.fuelUsed).toBeGreaterThan(0);
+
+    state.weather.cells[s.cellIndex]!.temperature = 0.8;
+    state.month = 2; applyCold(state, s, population);
+    expect(s.survival!.cold.fuelUsed).toBe(0);
+
+    state.weather.cells[s.cellIndex]!.temperature = 0;
+    state.month = 3; applyCold(state, s, population);
+    expect(s.survival!.cold.fuelUsed).toBeGreaterThan(0);
+    expect(s.survival!.firstFire).toEqual(milestone);
+    expect(state.history.filter(e => e.type === 'first-fire' && e.locationId === s.id)).toHaveLength(1);
+  });
+
+  it('does not create a first-fire milestone for non-founding settlements', () => {
+    const { state, s, population } = fixture();
+    delete s.foundingPodId;
+    state.weather.cells[s.cellIndex]!.temperature = 0;
+    s.structurePlots = []; s.localMaterials = {}; s.materialEconomy = undefined;
+    addMaterial(s, 'timber', 10);
+    learn(s, 'fire-control');
+
+    state.month = 1; applyCold(state, s, population);
+    expect(s.survival!.cold.fuelUsed).toBeGreaterThan(0);
+    expect(s.survival!.firstFire).toBeUndefined();
+    expect(state.history.some(e => e.type === 'first-fire' && e.locationId === s.id)).toBe(false);
+  });
 });
 
 describe('local choice, adaptation and causal evidence', () => {
