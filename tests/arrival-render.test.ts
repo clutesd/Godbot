@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
+import { FOUNDING_HEARTH_DISTANCE, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthOffset } from '../src/render/founding/FoundingCampLayout';
 import { arrivalCameraPose, arrivalCaption, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
@@ -50,6 +51,26 @@ describe('Arrival presentation contracts', () => {
       text: '23 on Arrival Day.',
     });
     expect(foundingArrivalDialogue('founding-release:event-1', 'THE FIRST DAY', 'The first day continues.')).toBeUndefined();
+  });
+
+  it('keeps founding hearths beside the vessel instead of under its footprint', () => {
+    const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
+    const spokeStep = Math.PI / 8;
+    for (const pod of s.state.arrival!.pods) {
+      const offset = foundingHearthOffset(pod);
+      const distance = Math.hypot(offset.x, offset.z);
+      expect(distance).toBeCloseTo(FOUNDING_HEARTH_DISTANCE, 8);
+      expect(distance).toBeGreaterThan(FOUNDING_VESSEL_KEEP_OUT_RADIUS + 1);
+      const spoke = Math.atan2(offset.z, offset.x) / spokeStep;
+      expect(Math.abs(spoke - Math.round(spoke))).toBeLessThan(1e-8);
+
+      // The fire is approximately perpendicular to the descent corridor, so it reads as a camp
+      // beside the landed artifact rather than something placed in its approach/egress line.
+      const approachLength = Math.hypot(pod.entryOffset.x, pod.entryOffset.z);
+      const dot = (-pod.entryOffset.x / approachLength) * (offset.x / distance)
+        + (-pod.entryOffset.z / approachLength) * (offset.z / distance);
+      expect(Math.abs(dot)).toBeLessThan(0.21);
+    }
   });
 
   it('brakes into authoritative ground and keeps camera/caption values finite', () => {

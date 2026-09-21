@@ -7,6 +7,7 @@ import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
+import { foundingHearthOffset } from './founding/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
@@ -1040,9 +1041,14 @@ export class GodboxRenderer {
       ));
     }
     if ((settlement.survival?.cold.fuelUsed ?? 0) > 0) {
-      // This hearth exists only while the monthly survival ledger records paid fuel and tending.
+      // Founding vessels occupy the civic origin. Keep the lived-in camp beside the artifact,
+      // on one of the landing site's already-validated dry spokes, rather than under its hull.
+      const foundingPod = settlement.foundingPodId ? this.state.arrival?.pods.find(pod => pod.id === settlement.foundingPodId) : undefined;
+      const hearthOffset = foundingPod ? foundingHearthOffset(foundingPod) : { x: 0, z: 1.6 };
+      const hearthWorldX = settlement.position.x + hearthOffset.x;
+      const hearthWorldZ = settlement.position.z + hearthOffset.z;
       const hearth = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.25, 6), palette.getSurfaceMaterial('glow'));
-      hearth.position.set(0, this.elevationAt(settlement.position.x, settlement.position.z + 1.6) - settlementY + 0.125, 1.6);
+      hearth.position.set(hearthOffset.x, this.elevationAt(hearthWorldX, hearthWorldZ) - settlementY + 0.125, hearthOffset.z);
       hearth.userData['survivalFire'] = true; group.add(hearth);
     }
     if (!settlement.development && eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);

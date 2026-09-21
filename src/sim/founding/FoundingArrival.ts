@@ -45,6 +45,8 @@ export interface FoundingArrivalState {
   minimumSeparation: number;
 }
 export const ARRIVAL_END_SECONDS = 46;
+/** Radius explicitly terrain-checked around every founding touchdown point. */
+export const FOUNDING_LANDING_SAFE_RADIUS = 3.2;
 export const FOUNDING_PROFILES: readonly { name: string; color: string; domains: KnowledgeDomain[]; knowledge: string[] }[] = [
   { name: 'Seed', color: '#c5a45d', domains: ['agriculture', 'biology'], knowledge: ['crop-selection', 'seasonal-observation'] },
   { name: 'Forge', color: '#679dae', domains: ['materials', 'mechanics'], knowledge: ['iron-working', 'leverage'] },
@@ -58,7 +60,7 @@ export function validLandingSite(world: WorldState, point: Vec2, walk = new Walk
   const y = surfaceHeightAt(world, point.x, point.z);
   for (let i = 0; i < 16; i++) {
     const angle = i * Math.PI / 8;
-    const edge = { x: point.x + Math.cos(angle) * 3.2, z: point.z + Math.sin(angle) * 3.2 };
+    const edge = { x: point.x + Math.cos(angle) * FOUNDING_LANDING_SAFE_RADIUS, z: point.z + Math.sin(angle) * FOUNDING_LANDING_SAFE_RADIUS };
     if (!walk.isSegmentWalkable(point, edge) || waterDepthAt(world, edge.x, edge.z) > 0.005
       || Math.abs(surfaceHeightAt(world, edge.x, edge.z) - y) > 0.85) return false;
   }
