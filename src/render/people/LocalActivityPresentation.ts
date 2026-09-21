@@ -102,6 +102,11 @@ export class LocalActivityPresentation {
 
   resolve(person: Person, context: LocalActivityContext, delta: number): LocalActivityState | undefined {
     const nav = person.navigation;
+    if (!nav) {
+      this.states.delete(person.id);
+      return undefined;
+    }
+
     // An ordinary commute is a sub-monthly documentary transition. The renderer should show the
     // consumed authoritative route, so local life yields for the shot, but the prior routine stays
     // cached. That prevents the next work/home sample from paying a brand-new arrival pause.
@@ -113,7 +118,7 @@ export class LocalActivityPresentation {
     }
 
     // Specialized physical workers and genuine in-progress/emergency travel own their workflow.
-    if (context.blocked || !person.alive || !nav || nav.traveling
+    if (context.blocked || !person.alive || nav.traveling
       || nav.schedulePhase === 'emergency' || person.displacedSinceMonth !== undefined || person.health <= 0.2
       || EXCLUSIVE_ACTIVITIES.has(person.activity)) {
       this.states.delete(person.id);
