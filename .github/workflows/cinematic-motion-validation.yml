@@ -7,6 +7,9 @@ on:
     paths:
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/CameraDirector.ts'
+      - 'src/render/GodboxRenderer.ts'
+      - 'src/render/people/PhysicalActionPresentation.ts'
+      - 'src/render/people/PeopleVisualState.ts'
       - 'tests/cinematic-presentation.test.ts'
       - 'tests/camera-forest-sightline.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
@@ -14,6 +17,9 @@ on:
     paths:
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/CameraDirector.ts'
+      - 'src/render/GodboxRenderer.ts'
+      - 'src/render/people/PhysicalActionPresentation.ts'
+      - 'src/render/people/PeopleVisualState.ts'
       - 'tests/cinematic-presentation.test.ts'
       - 'tests/camera-forest-sightline.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
