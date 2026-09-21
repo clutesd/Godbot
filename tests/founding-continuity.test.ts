@@ -80,6 +80,27 @@ describe('Founding Chapter 1b continuity', () => {
     expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
   });
 
+  it('never turns first-year continuity into another same-month carousel', () => {
+    const simulation = completedArrival('founding-continuity-month-spacing');
+    const historian = new Historian(simulation.config);
+    completeOrientation(simulation, historian);
+    expect(chooseFoundingContinuityScene(historian, simulation.state)?.id).toContain('founding-continuity:bridge');
+
+    simulation.step(1);
+    const first = chooseFoundingContinuityScene(historian, simulation.state);
+    expect(first?.id).toContain('founding-continuity:community');
+    expect(first?.statement.month).toBe(1);
+
+    // A second camera selection in the same authoritative month must fall through to ordinary history.
+    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
+
+    simulation.step(1);
+    const second = chooseFoundingContinuityScene(historian, simulation.state);
+    expect(second?.id).toContain('founding-continuity:community');
+    expect(second?.statement.month).toBe(2);
+    expect(second?.subjectId).not.toBe(first?.subjectId);
+  });
+
   it('turns authoritative resource and construction changes into meaningful narration', () => {
     const simulation = completedArrival('founding-continuity-material-change');
     const historian = new Historian(simulation.config);
