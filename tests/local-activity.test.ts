@@ -209,16 +209,15 @@ describe('renderer-owned local activity', () => {
     expect(resumed.action).toBe('arrive');
     expect(resumed.hold).toBe(0);
 
-    // Once the route approach/orientation is complete, no second arrival pause is charged.
+    // Once the wider local frontage approach/orientation is complete, no second arrival pause is
+    // charged. Step 2 deliberately permits a meaningful short walk here; this is not a teleport.
     let elapsed = 0;
-    while (h.local.get(p.id)?.action === 'arrive' && elapsed < 1) {
+    while (h.local.get(p.id)?.action === 'arrive' && elapsed < 3) {
       h.tick(1 / 60);
       elapsed += 1 / 60;
     }
     expect(h.local.get(p.id)?.action).not.toBe('arrive');
-    // The retained route/orientation may still take visible time; what disappeared is the second
-    // 0.4–1.2 second arrival hold itself.
-    expect(elapsed).toBeLessThan(0.9);
+    expect(elapsed).toBeLessThan(2.8);
   });
 
   it('samples different purposeful routine slices across documentary semantic hand-offs', () => {
