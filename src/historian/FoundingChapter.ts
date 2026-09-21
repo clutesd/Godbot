@@ -319,7 +319,7 @@ function communityScene(
     id: `founding-community-${community.podId}`,
     month: state.month,
     text: communityOpeningText(baseline, community),
-    epistemicStatus: 'recorded-fact' as const,
+    epistemicStatus: 'derived-statistic' as const,
     sourceEventIds: [event.id],
     sourceEntityIds: [community.settlementId],
     sourceArchiveIds: [],
