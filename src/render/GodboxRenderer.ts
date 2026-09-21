@@ -5,7 +5,7 @@ import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
-import { CameraDirector, type CurrentObservation } from './CameraDirector';
+import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController } from './animation/AnimationController';
@@ -272,6 +272,17 @@ export class GodboxRenderer {
       targetKind: person.navigation.destinationKind, interactionAnchor: { ...local.focus }, locomotionTarget: { ...local.destination },
       phase: local.phase, phaseProgress: Math.min(1, local.seconds / local.hold), activeTool: 'none', contactStrength: 0 };
   }
+
+  /** Camera-only snapshot of where the represented person is actually drawn this frame. */
+  private inspectCameraSubject(personId: string): CameraSubjectPresentation | undefined {
+    const visual = this.peopleVisuals.get(personId);
+    if (!visual) return undefined;
+    const action = this.inspectPhysicalAction(personId);
+    return action
+      ? { x: visual.x, z: visual.z, footY: visual.footY, action }
+      : { x: visual.x, z: visual.z, footY: visual.footY };
+  }
+
   private resourceWorkersMonth = -1;
   private resourceWorkersRevision = -1;
   private readonly skyAtmosphere: SkyAtmosphere;
@@ -327,7 +338,7 @@ export class GodboxRenderer {
     this.host.append(this.renderer.domElement);
     this.scene.background = new THREE.Color('#899b91');
     this.scene.fog = new THREE.FogExp2('#93a5a4', 0.0072);
-    this.cameraDirector = new CameraDirector(this.camera, config, historian);
+    this.cameraDirector = new CameraDirector(this.camera, config, historian, (personId) => this.inspectCameraSubject(personId));
     this.foundingPods = new FoundingPodRenderer(state);
     this.scene.add(this.foundingPods.root);
     this.observation = this.cameraDirector.observation;
