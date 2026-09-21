@@ -49,6 +49,8 @@ export class FoundingFirstFirePresentation {
   private readonly knownEventBySettlement = new Map<string, string>();
   private readonly active = new Map<string, ActiveFirstFire>();
   private nowSeconds = 0;
+  /** Prevents simultaneous same-tick milestones from reading as a synchronized scripted cue. */
+  private nextAvailableStartSeconds = 0;
 
   constructor(state: Pick<SimulationState, 'settlements'>) {
     for (const settlement of state.settlements) {
@@ -59,14 +61,27 @@ export class FoundingFirstFirePresentation {
 
   update(state: Pick<SimulationState, 'settlements' | 'people'>, elapsedSeconds: number): void {
     this.nowSeconds = Math.max(0, elapsedSeconds);
-    for (const settlement of state.settlements) {
+    const pending = state.settlements.filter(settlement => {
       const eventId = settlement.survival?.firstFire?.eventId;
-      if (!eventId || this.knownEventBySettlement.get(settlement.id) === eventId) continue;
+      return Boolean(eventId && this.knownEventBySettlement.get(settlement.id) !== eventId);
+    }).sort((a, b) => {
+      const aFire = a.survival!.firstFire!;
+      const bFire = b.survival!.firstFire!;
+      return (aFire.plannedMonth ?? aFire.month) - (bFire.plannedMonth ?? bFire.month)
+        || (bFire.readiness ?? 0) - (aFire.readiness ?? 0)
+        || stableUnit(a.id) - stableUnit(b.id);
+    });
+
+    for (const settlement of pending) {
+      const eventId = settlement.survival!.firstFire!.eventId;
       this.knownEventBySettlement.set(settlement.id, eventId);
+      const naturalDelay = 0.28 + stableUnit(`${eventId}:presentation-delay`) * 0.52;
+      const startedAt = Math.max(this.nowSeconds + naturalDelay, this.nextAvailableStartSeconds);
+      this.nextAvailableStartSeconds = startedAt + 2.8;
       this.active.set(settlement.id, {
         settlementId: settlement.id,
         eventId,
-        startedAt: this.nowSeconds,
+        startedAt,
         participants: selectParticipants(state.people, settlement.id, settlement.position),
       });
     }
@@ -82,7 +97,9 @@ export class FoundingFirstFirePresentation {
       return settled ? settledVisual() : unlitVisual();
     }
 
-    const age = Math.max(0, this.nowSeconds - performance.startedAt);
+    const rawAge = this.nowSeconds - performance.startedAt;
+    if (rawAge < 0) return unlitVisual();
+    const age = rawAge;
     if (age < 1.6) {
       const p = ease(age / 1.6);
       return {
