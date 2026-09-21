@@ -453,6 +453,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       ? foundingArrivalDialogue(view.observation.sceneId, view.observation.label, view.observation.detail)
       : undefined;
     worldElement.classList.toggle('founding-orientation', Boolean(foundingDialogue));
+    worldElement.classList.toggle('founding-release', Boolean(view.observation.sceneId?.startsWith('founding-release:')));
 
     if (view.observation.revision !== cinematicDialogueRevision) {
       cinematicDialogueRevision = view.observation.revision;
