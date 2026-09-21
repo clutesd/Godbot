@@ -4,7 +4,7 @@ import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNe
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
-import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, Vec2 } from '../sim/types';
+import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { foundingHearthOffset } from './founding/FoundingCampLayout';
@@ -209,6 +209,8 @@ export class GodboxRenderer {
   private readonly localActivities = new LocalActivityPresentation();
   private readonly localPeers = new Map<string, Person>();
   private readonly localPeerPositions = new Map<string, Vec2>();
+  private readonly socialRelationshipByPair = new Map<string, SocialRelationship>();
+  private socialRelationshipMonth = -1;
   private readonly localStructureRevisions = new WeakMap<readonly ActivityStructure[], string>();
   private socialGroups = new Map<string, SocialGroup>();
   private readonly personGround: PersonVisualGround = {
@@ -538,6 +540,7 @@ export class GodboxRenderer {
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
     this.refreshVisiblePeople();
+    this.refreshSocialRelationshipIndex();
     if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
       this.resourceWorkersMonth = this.state.month;
       this.resourceWorkersRevision = this.resourceWork.revision;
@@ -599,6 +602,7 @@ export class GodboxRenderer {
       }
       const local = this.localActivities.resolve(person, {
         base, visual: this.peopleVisuals.get(person.id), group, people: this.localPeers,
+        relationshipFor: (a, b) => this.socialRelationshipByPair.get(socialPairKey(a, b)),
         structures,
         safeSegment: (a, b) => this.resourceWork.safeSegment(a, b),
         revision: localRevision,
@@ -813,6 +817,15 @@ export class GodboxRenderer {
     }
     candidates.sort((a, b) => b.importance - a.importance || a.id.localeCompare(b.id));
     return candidates.slice(0, limit);
+  }
+
+  private refreshSocialRelationshipIndex(): void {
+    if (this.socialRelationshipMonth === this.state.month) return;
+    this.socialRelationshipMonth = this.state.month;
+    this.socialRelationshipByPair.clear();
+    for (const relationship of this.state.socialRelationships ?? []) {
+      this.socialRelationshipByPair.set(socialPairKey(relationship.a, relationship.b), relationship);
+    }
   }
 
   private refreshVisiblePeople(): void {
@@ -3378,6 +3391,10 @@ export class GodboxRenderer {
     this.postProcessing.resize(width, height);
     this.vegetation.setViewport(height, this.renderer.getPixelRatio());
   }
+}
+
+function socialPairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
 function stableHash(value: string): number {
