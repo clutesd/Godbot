@@ -85,11 +85,21 @@ describe('Founding Chapter 1a', () => {
     expect(grounded[0]?.statement.text).not.toContain('permanent beginning of this record');
     expect(grounded.every(scene => historian.validateStatement(scene.statement, simulation.state))).toBe(true);
 
+    const communityScenes = grounded.slice(1);
     for (const community of baseline?.communities ?? []) {
-      expect(grounded.some(scene => scene.subjectId === community.settlementId && scene.statement.text.includes(community.podName))).toBe(true);
-      expect(grounded.some(scene => community.knowledge.every(knowledge => scene.statement.text.includes(knowledge.replaceAll('-', ' '))))).toBe(true);
-      expect(grounded.some(scene => scene.subjectId === community.settlementId && scene.statement.text.includes(community.site.biome.replaceAll('-', ' ')))).toBe(true);
+      const scene = communityScenes.find(candidate => candidate.subjectId === community.settlementId);
+      expect(scene).toBeDefined();
+      expect(scene?.statement.text).toContain(community.podName);
+      expect(scene?.statement.text).toContain(community.site.biome.replaceAll('-', ' '));
+      expect(community.domains.some(domain => scene?.statement.text.includes(domain.replaceAll('-', ' ')))).toBe(true);
+      expect(scene?.statement.text).toMatch(/Compared with the other landings|clearest physical|no overwhelming physical advantage/);
+      expect(scene?.statement.text).not.toContain('Their inherited strengths were');
+      expect(scene?.statement.text).not.toContain('This was one of');
+      expect(scene?.statement.text.length).toBeLessThan(420);
+      expect(scene?.statement.epistemicStatus).toBe('derived-statistic');
     }
+    const closingSentences = communityScenes.map(scene => scene.statement.text.split('. ').at(-1));
+    expect(new Set(closingSentences).size).toBeGreaterThanOrEqual(Math.min(3, communityScenes.length));
 
     expect(historian.statements).toHaveLength(sceneCount);
     expect(new Set(historian.statements.map(statement => statement.id)).size).toBe(sceneCount);
