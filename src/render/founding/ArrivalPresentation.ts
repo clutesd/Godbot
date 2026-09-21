@@ -30,7 +30,14 @@ export function foundingArrivalDialogue(
   title: string,
   text: string,
 ): FoundingArrivalDialogue | undefined {
-  if (!sceneId?.startsWith('founding:')) return undefined;
+  if (!sceneId) return undefined;
+  if (sceneId.startsWith('founding-cast:framing:')) {
+    return { eyebrow: 'ARRIVAL DAY · A FEW LIVES', title, text };
+  }
+  if (sceneId.startsWith('founding-cast:introduction:')) {
+    return { eyebrow: 'ARRIVAL DAY · ONE OF THE FOUNDERS', title, text };
+  }
+  if (!sceneId.startsWith('founding:')) return undefined;
   return {
     eyebrow: sceneId.startsWith('founding:community:')
       ? 'ARRIVAL DAY · FOUNDING COMMUNITY'
