@@ -26,7 +26,7 @@ export interface CameraFraming {
   durationScale: number;
 }
 
-interface CameraClearance {
+export interface CameraClearance {
   lens: number;
   sightline: number;
 }
