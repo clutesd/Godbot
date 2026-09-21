@@ -309,7 +309,7 @@ export class LocalActivityPresentation {
             z: state.base.z + (peerPosition.z - state.base.z) / distance * approach,
           };
           if (!bounded(person, candidate) || !localSegmentSafe(state.destination, candidate, context)
-            || !hasPeerClearance(person, candidate, context, peer.id, 0.3)) continue;
+            || !hasPeerClearance(person, candidate, context, peer.id, 0.34)) continue;
           point = candidate; focus = peerPosition; state.partnerId = peer.id;
           state.animation = 'converse'; state.action = 'conversation'; break;
         }
@@ -331,7 +331,7 @@ export class LocalActivityPresentation {
     // keeps room around uninvolved visible peers; the conversation partner is the one deliberate
     // exception and already has its own personal-space stand-off.
     const from = context.visual ?? state.destination;
-    const peerSafe = hasPeerClearance(person, point, context, state.partnerId, 0.3);
+    const peerSafe = hasPeerClearance(person, point, context, state.partnerId, 0.34);
     if (bounded(person, point) && localSegmentSafe(from, point, context) && peerSafe) state.destination = point;
     else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
     state.restFacing = facingTarget(state.destination, focus);
@@ -381,7 +381,7 @@ function clearLocalPoint(person: Person, context: LocalActivityContext, state: L
       if (bounded(person, varied) && localSegmentSafe(from, varied, context)) candidate = varied;
     }
     if (bounded(person, candidate) && localSegmentSafe(from, candidate, context)
-      && hasPeerClearance(person, candidate, context, undefined, 0.3)) return candidate;
+      && hasPeerClearance(person, candidate, context, undefined, 0.34)) return candidate;
   }
   // Holding the current position is preferable to stepping through another resident just to keep
   // a routine moving. The next intent will retry a different semantic point.
