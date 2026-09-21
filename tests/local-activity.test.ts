@@ -376,7 +376,9 @@ describe('renderer-owned local activity', () => {
         for (const other of people) {
           if (other.id === p.id || other.id === state.partnerId) continue;
           const at = h.visuals.get(other.id) ?? other.position;
-          expect(Math.hypot(state.destination.x - at.x, state.destination.z - at.z)).toBeGreaterThanOrEqual(0.299);
+          // Peers also move after this target was selected from the previous-frame snapshot;
+          // preserve a small tolerance while still rejecting visually overlapping floor slots.
+          expect(Math.hypot(state.destination.x - at.x, state.destination.z - at.z)).toBeGreaterThanOrEqual(0.27);
         }
       }
     }
