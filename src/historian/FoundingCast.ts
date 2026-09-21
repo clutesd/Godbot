@@ -33,6 +33,7 @@ interface FoundingCastMemory {
   readonly members: readonly FoundingCastMember[];
   readonly introducedPersonIds: Set<string>;
   readonly normalAppearances: Map<string, number>;
+  framingShown: boolean;
   autoRunBeforeIntroduction?: boolean;
 }
 
@@ -148,6 +149,7 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
       members: foundingDocumentaryCast(state),
       introducedPersonIds: new Set(),
       normalAppearances: new Map(),
+      framingShown: false,
     };
     memories.set(historian, memory);
   }
@@ -203,6 +205,45 @@ function expertisePhrase(person: Person): string | undefined {
   return `${level} ${readable(strongest.domain)}`;
 }
 
+function framingScene(
+  historian: Historian,
+  state: SimulationState,
+  baseline: FoundingChapterBaseline,
+  memory: FoundingCastMemory,
+): ObservationCandidate | undefined {
+  const arrival = state.history.find(event => event.id === baseline.eventId && event.type === 'ARRIVAL_DAY');
+  if (!arrival || memory.members.length === 0) return undefined;
+  const sourceEntityIds = memory.members
+    .filter(member => state.people.some(person => person.id === member.personId))
+    .map(member => member.personId);
+  const statement = {
+    id: `founding-cast-framing-${arrival.id}`,
+    month: state.month,
+    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow ${memory.members.length.toLocaleString()} of them. Not because they are important. Not yet. They give us lives we can recognize before we know what they become.`,
+    epistemicStatus: 'derived-statistic' as const,
+    sourceEventIds: [arrival.id],
+    sourceEntityIds,
+    sourceArchiveIds: [],
+    claims: { entityIds: sourceEntityIds, eventType: 'ARRIVAL_DAY' as const },
+  };
+  if (!historian.validateStatement(statement, state)) return undefined;
+  if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
+  if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
+  return {
+    id: `founding-cast:framing:${arrival.id}`,
+    subjectId: 'world',
+    kind: 'historian-context',
+    position: baseline.center,
+    title: 'A FEW LIVES',
+    statement,
+    score: 0.84,
+    interest: 0.88,
+    audioCategory: 'historian',
+    breakdown: breakdown(1, 0.32),
+    event: arrival,
+  };
+}
+
 function introductionScene(
   historian: Historian,
   state: SimulationState,
@@ -214,9 +255,11 @@ function introductionScene(
   const arrival = state.history.find(event => event.id === baseline.eventId && event.type === 'ARRIVAL_DAY');
   if (!person || !settlement || !arrival) return undefined;
   const words = pronoun(person);
-  const expertise = expertisePhrase(person);
-  const activity = person.activity === 'socialize' ? 'spending time with others' : person.activity === 'rest' ? 'resting' : person.activity;
-  const text = `Of ${member.podName}'s ${baseline.communities.find(community => community.podId === member.podId)?.founderCount ?? 0} founders, ${member.name} was ${member.arrivalAgeYears} on Arrival Day. ${words.subject} now works as a ${roleLabel(person)} and is ${activity}${expertise ? `; ${words.possessive} strongest recorded skill is ${expertise}` : ''}. I will remember this name as ${member.settlementName} changes around ${person.sex === 'female' ? 'her' : 'him'}.`;
+  const strongest = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence || a.domain.localeCompare(b.domain))[0];
+  const anchorFact = strongest
+    ? `${words.subject} is currently strongest in ${readable(strongest.domain)}.`
+    : `${words.subject} now works as a ${roleLabel(person)}.`;
+  const text = `${member.name}. ${member.arrivalAgeYears} on Arrival Day. ${member.settlementName}. ${anchorFact} We will return to ${person.sex === 'female' ? 'her' : 'him'}.`;
   const statement = {
     id: `founding-cast-introduction-${member.personId}`,
     month: state.month,
@@ -235,7 +278,7 @@ function introductionScene(
     subjectId: person.id,
     kind: person.activity === 'travel' || person.activity === 'migrate' || person.activity === 'transport' ? 'traveler-follow' : 'worker-follow',
     position: person.position,
-    title: `${person.name} · ${member.podName} founder`,
+    title: `${person.name} · ${member.settlementName}`,
     statement,
     score: 0.81,
     interest: 0.78,
@@ -280,9 +323,19 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
   if (!continuity.bridgeShown) return undefined;
 
   const memory = memoryFor(historian, state);
-  for (const member of memory.members) {
-    if (memory.introducedPersonIds.has(member.personId)) continue;
-    if (!continuity.visitedSettlementIds.includes(member.settlementId)) continue;
+  const readyMembers = memory.members.filter(member =>
+    !memory.introducedPersonIds.has(member.personId)
+    && continuity.visitedSettlementIds.includes(member.settlementId)
+  );
+  if (!memory.framingShown && readyMembers.length > 0) {
+    const frame = framingScene(historian, state, baseline, memory);
+    if (frame) {
+      memory.framingShown = true;
+      holdIntroduction(historian, state, memory);
+      return frame;
+    }
+  }
+  for (const member of readyMembers) {
     memory.introducedPersonIds.add(member.personId);
     const scene = introductionScene(historian, state, baseline, member);
     if (!scene) continue;
