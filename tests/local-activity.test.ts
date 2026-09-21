@@ -3,7 +3,8 @@ import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_A
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../src/render/people/PeoplePresentation';
-import type { Activity, DestinationKind, Person, Vec2 } from '../src/sim/types';
+import type { Activity, DestinationKind, Person, SocialRelationship, SocialRelationshipKind, Vec2 } from '../src/sim/types';
+import type { MemoryPerson } from '../src/sim/people/PersonalMemorySystem';
 
 function person(id = 'resident'): Person {
   return { id, name: id, sex: 'female', bornMonth: 0, parents: [], children: [], cultureId: 'culture', energy: 1, prestige: 0,
@@ -14,6 +15,25 @@ function person(id = 'resident'): Person {
     navigation: { destinationId: 'bench', destinationKind: 'workshop', schedulePhase: 'work', traveling: false,
       waypoints: [], waypointIndex: 0, reason: 'test' } };
 }
+function relationship(a: string, b: string, kind: SocialRelationshipKind, overrides: Partial<SocialRelationship> = {}): SocialRelationship {
+  const [first, second] = a < b ? [a, b] : [b, a];
+  return {
+    id: `social-${first}-${second}`,
+    a: first,
+    b: second,
+    kind,
+    trust: 0.78,
+    strength: 0.82,
+    formedMonth: 120,
+    lastContactMonth: 358,
+    ...overrides,
+  };
+}
+function relationshipLookup(relationships: readonly SocialRelationship[]): (a: string, b: string) => SocialRelationship | undefined {
+  const byPair = new Map(relationships.map(r => [r.a < r.b ? `${r.a}|${r.b}` : `${r.b}|${r.a}`, r]));
+  return (a, b) => byPair.get(a < b ? `${a}|${b}` : `${b}|${a}`);
+}
+
 const ground = { heightAt: () => 0, isStandable: () => true };
 function harness(people = [person()], overrides: Partial<LocalActivityContext> = {}) {
   const local = new LocalActivityPresentation();
@@ -330,6 +350,120 @@ describe('renderer-owned local activity', () => {
     expect(changingPairs).toBeGreaterThanOrEqual(8);
     expect(conversationFrames).toBeGreaterThan(180);
     expect(JSON.stringify(people)).toBe(before);
+  });
+
+  it('chooses a strong real relationship over a merely convenient nearby partner', () => {
+    const a = person('a'), friend = person('friend'), nearby = person('nearby');
+    for (const p of [a, friend, nearby]) {
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'meaningful-plaza';
+      p.navigation!.schedulePhase = 'social';
+    }
+    a.position = { x: 0, z: 0 }; friend.position = { x: 0.95, z: 0.12 }; nearby.position = { x: 0.42, z: -0.1 };
+    friend.target = { ...friend.position }; nearby.target = { ...nearby.position };
+    const ties = [
+      relationship('a', 'friend', 'friend', { trust: 0.9, strength: 0.92 }),
+      relationship('a', 'nearby', 'neighbor', { trust: 0.48, strength: 0.24 }),
+    ];
+    const h = harness([a, nearby, friend], { relationshipFor: relationshipLookup(ties) });
+    let selected: string | undefined;
+    for (let frame = 0; frame < 45 * 60 && !selected; frame++) {
+      h.tick(1 / 60);
+      selected = h.local.get('a')?.partnerId;
+    }
+    expect(selected).toBe('friend');
+    expect(h.local.get('a')?.encounter?.relationshipKind).toBe('friend');
+    expect(h.local.get('a')?.encounter?.tone).toBe('warm');
+  });
+
+  it('holds a mentor relationship through several readable guidance beats instead of one generic gesture', () => {
+    const mentor = person('mentor'), learner = person('learner');
+    mentor.ageMonths = 50 * 12; learner.ageMonths = 24 * 12;
+    for (const p of [mentor, learner]) {
+      p.activity = 'study';
+      p.navigation!.destinationKind = 'knowledge-institution';
+      p.navigation!.destinationId = 'archive';
+      p.navigation!.schedulePhase = 'work';
+    }
+    learner.position.x = 0.72; learner.target = { ...learner.position };
+    const tie = relationship('mentor', 'learner', 'mentor', {
+      teaching: { mentorId: 'mentor', learnerId: 'learner', domain: 'records', progress: 0.7, lastTaughtMonth: 358 },
+    });
+    const h = harness([mentor, learner], { relationshipFor: relationshipLookup([tie]) });
+    const mentorActions = new Set<string>(), learnerActions = new Set<string>();
+    const mentorBeats = new Set<number>(), learnerBeats = new Set<number>();
+    for (let frame = 0; frame < 60 * 60; frame++) {
+      h.tick(1 / 60);
+      const m = h.local.get('mentor'), l = h.local.get('learner');
+      if (m?.encounter?.partnerId === 'learner') { mentorActions.add(m.action); mentorBeats.add(m.encounter.beat); }
+      if (l?.encounter?.partnerId === 'mentor') { learnerActions.add(l.action); learnerBeats.add(l.encounter.beat); }
+    }
+    expect([...mentorActions]).toEqual(expect.arrayContaining(['offer-guidance', 'explain-guidance', 'check-understanding']));
+    expect([...learnerActions]).toEqual(expect.arrayContaining(['seek-guidance', 'listen-to-mentor', 'consider-guidance']));
+    expect(mentorBeats.size).toBeGreaterThanOrEqual(3);
+    expect(learnerBeats.size).toBeGreaterThanOrEqual(3);
+  });
+
+  it('turns recent grief between close friends into quiet support rather than cheerful generic conversation', () => {
+    const grieving = person('grieving') as MemoryPerson, friend = person('supporter');
+    for (const p of [grieving, friend]) {
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'support-plaza';
+      p.navigation!.schedulePhase = 'social';
+    }
+    friend.position.x = 0.68; friend.target = { ...friend.position };
+    grieving.personalMemories = [{
+      id: 'memory-loss', kind: 'loss', month: 358, subjectId: 'lost-relative',
+      emotionalWeight: 0.92, valence: -1, reason: 'family-loss',
+    }];
+    const tie = relationship('grieving', 'supporter', 'friend', { trust: 0.9, strength: 0.88 });
+    const h = harness([grieving, friend], { relationshipFor: relationshipLookup([tie]) });
+    const grievingActions = new Set<string>(), supporterActions = new Set<string>();
+    let quietAnimationSeen = false;
+    for (let frame = 0; frame < 45 * 60; frame++) {
+      h.tick(1 / 60);
+      const g = h.local.get('grieving'), s = h.local.get('supporter');
+      if (g?.encounter?.partnerId === 'supporter') {
+        grievingActions.add(g.action);
+        quietAnimationSeen ||= g.animation === 'converse-quiet';
+      }
+      if (s?.encounter?.partnerId === 'grieving') supporterActions.add(s.action);
+    }
+    expect(h.local.get('grieving')?.encounter?.tone ?? 'supportive').toBe('supportive');
+    expect([...grievingActions]).toEqual(expect.arrayContaining(['receive-check-in', 'accept-quiet-company']));
+    expect([...supporterActions]).toEqual(expect.arrayContaining(['check-in', 'offer-quiet-company']));
+    expect(quietAnimationSeen).toBe(true);
+  });
+
+  it('presents a rivalry as a shorter guarded encounter with more space', () => {
+    const a = person('rival-a'), b = person('rival-b');
+    for (const p of [a, b]) {
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'rival-plaza';
+      p.navigation!.schedulePhase = 'social';
+    }
+    b.position.x = 0.8; b.target = { ...b.position };
+    const tie = relationship('rival-a', 'rival-b', 'rival', { trust: 0.18, strength: 0.9 });
+    const h = harness([a, b], { relationshipFor: relationshipLookup([tie]) });
+    let tone: string | undefined;
+    let guarded = false;
+    let minimumPlannedSeparation = Infinity;
+    for (let frame = 0; frame < 40 * 60; frame++) {
+      h.tick(1 / 60);
+      const state = h.local.get('rival-a');
+      if (state?.encounter?.partnerId === 'rival-b') {
+        tone = state.encounter.tone;
+        guarded ||= state.animation === 'converse-tense' || state.action.startsWith('guarded-');
+        const peer = h.visuals.get('rival-b') ?? b.position;
+        minimumPlannedSeparation = Math.min(minimumPlannedSeparation, Math.hypot(state.destination.x - peer.x, state.destination.z - peer.z));
+      }
+    }
+    expect(tone).toBe('tense');
+    expect(guarded).toBe(true);
+    expect(minimumPlannedSeparation).toBeGreaterThan(0.56);
   });
 
   it('prefers reciprocal social partners so conversations can read as two-sided', () => {
