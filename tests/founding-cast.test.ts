@@ -185,10 +185,11 @@ describe('Founding documentary cast 2a', () => {
     const strongest = [...(person!.expertise ?? [])].sort((a, b) => b.competence - a.competence || a.domain.localeCompare(b.domain))[0];
     if (strongest) {
       expect(scene?.statement.text).toContain(strongest.domain.replaceAll('-', ' '));
+      expect(scene?.statement.text).not.toContain('works as a');
     } else {
       expect(scene?.statement.text).toContain((person!.role ?? person!.occupation).replaceAll('-', ' '));
+      expect(scene?.statement.text).toContain('works as a');
     }
-    expect(scene?.statement.text).not.toContain('works as a');
     expect(person?.historical?.status).toBe(statusBefore);
   });
 
