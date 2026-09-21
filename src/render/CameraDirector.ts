@@ -136,6 +136,24 @@ export function cameraTransitionScaleFor(kind: ObservationKind | undefined): num
   return 1;
 }
 
+export interface FoundingEditorialTiming {
+  readonly durationSeconds: number;
+  readonly transitionSeconds: number;
+}
+
+/**
+ * Arrival Day is an authored opening montage, not an ordinary documentary rotation.
+ * Keep the descent cinematic intact, then move quickly through the post-title orientation.
+ */
+export function foundingEditorialTimingFor(sceneId: string | undefined): FoundingEditorialTiming | undefined {
+  if (!sceneId) return undefined;
+  if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 9.5, transitionSeconds: 2.4 };
+  if (sceneId.startsWith('founding:community:')) return { durationSeconds: 5.8, transitionSeconds: 1.8 };
+  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 4.6, transitionSeconds: 1.5 };
+  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 3.8, transitionSeconds: 1.1 };
+  return undefined;
+}
+
 function angularDistance(a: number, b: number): number {
   let delta = (a - b) % (Math.PI * 2);
   if (delta > Math.PI) delta -= Math.PI * 2;
@@ -360,7 +378,9 @@ export class CameraDirector {
 
     // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
     // never simulation months, so deep historical acceleration does not make the camera race.
-    const transitionSeconds = this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
+    const editorialTiming = foundingEditorialTimingFor(this.currentScene?.id);
+    const transitionSeconds = editorialTiming?.transitionSeconds
+      ?? this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
     const transitionRate = 3.15 / Math.max(0.5, transitionSeconds);
     const positionSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate);
     const targetSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate * 1.22);
@@ -388,7 +408,9 @@ export class CameraDirector {
     const baseDuration = this.config.camera.shotSeconds[0] + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
     this.currentMotion = this.motionFor(scene);
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
-    this.shotDuration = baseDuration * framing.durationScale * motionDurationScale;
+    const editorialTiming = foundingEditorialTimingFor(scene.id);
+    this.shotDuration = editorialTiming?.durationSeconds
+      ?? baseDuration * framing.durationScale * motionDurationScale;
 
     this.observation.sceneId = scene.id;
     this.observation.label = scene.title;
