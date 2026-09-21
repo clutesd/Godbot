@@ -1,117 +1,87 @@
 # Cosmic people
 
-People now share an obsidian, faceless species identity, with sparse internal stars, a restrained
-blue/violet nebula and a thin luminous rim. Role colour is confined to cores, shoulder trims,
-mantle seams, halos and the rim. No simulation files or historical/UI records were changed.
+The species silhouette follows the clean obsidian turnaround reference: an elongated faceless
+cranium, narrow jaw, continuous neck, quiet shoulders, narrow waist, compact pelvis and tapered
+limbs. The signature is a thin vertical facial seam and a circular chest/back core with a vertical
+axis. The existing role glyph sits inside that shared core; colour is concentrated in the inlays.
 
-## Architecture
+## Production assets
 
-Previously `GodboxRenderer` constructed nine instanced batches: capsule bodies, heads, arms,
-legs, tools, headwear, cargo, notable mantles and a coloured upper-torso clothing shell. The body
-parts shared a standard material. `Person.role` already supplied 34 professions/social roles;
-`appearance`, age and historical tier supplied proportions, props and prominence. Separate
-bounded `ResourceWorkerRenderer` pools replaced limbs during physical work. Campaigns used
-their own formation proxies. No individual character owned a unique body material or texture.
+`CosmicPeople.ts` generates closed elliptical-section meshes with monotone Hermite profiles and
+smooth normals. The torso has 736 triangles, head 1,056, and each complete resting arm/leg 460.
+The head carries a surface identifier so the shared body shader adds its antialiased facial seam
+without another mesh, texture, draw call or light. Its warm-white seam has a tiny central inflection.
+It follows all existing head transforms. Crown height remains 0.94 in model space, approximately
+0.300 world units for the canonical adult; simulation/world scale is unchanged.
 
-`RoleVisualProfile.ts` now provides an exhaustive `PersonRole` family table and safe unknown-role
-fallback. `CosmicPeople.ts` owns species dimensions, reusable body/head geometry, deterministic
-ID variation, the body material, and the configurable role accents. The former clothing shell
-is replaced by one `CosmicRoleAccents` batch containing front/back cores, shoulder trims, optional
-mantle seams and a halo. An instance style vector selects an analytic glyph and accessory scales.
-No texture assets or per-person materials are allocated. The obsolete garment module was removed.
+The opaque standard material uses low diffuse reflectance, 0.26 roughness and 0.12 metalness.
+One shared procedural 128-face-resolution PMREM reflection field supplies broad, controlled
+highlights. It is generated once, used by both the population and physical-work limbs, and disposed
+with the renderer. It neither changes scene lights nor adds character lights. Day/night changes
+reflection strength through the existing daylight path. There are no per-person textures/materials.
 
-The body shader extends Three's standard material, keeping lighting, shadows, fog and tone mapping.
-It uses object-space star cells and a low-frequency nebula term, not time-varying noise. Screen
-derivatives filter stars away below pixel resolution. Instance colour affects the rim, never the
-black body. Night adjustment changes shared uniforms/material brightness; there are no character
-lights, transparency sorting, HDR accent colours, or additional bloom passes.
+Sparse stars occupy two object-space fields with different view-dependent depth offsets. Derivatives
+fade them below pixel resolution. Nebula energy, ambient emission and broad Fresnel energy are
+substantially reduced. Most of the body remains nearly black. An interior-strength uniform allows
+reviewing the silhouette, reflections and luminous inlays with stars/nebulae disabled.
 
-The canonical adult crown is about **0.300 world units**, versus **0.269** previously: about **12%
-taller**. A larger initial proposal failed the smallest-building scale test and was reduced.
-Existing age and appearance proportions remain inputs. ID hashing adds height ±2.5%, build ±4%,
-star phase, nebula variation and accent brightness. Navigation, collision, destinations, animation
-clips, activity authority and movement timing remain unchanged. Cores share the torso matrix;
-the smaller head now follows the existing spine transform. Generic hand-held props use scaled
-hand offsets rather than the former fixed world-space offsets. Articulated work retains its
-existing joint/contact solver with the shared cosmic material. Campaign proxies use cosmic bodies
-and soldier cores; freight proxies use the same obsidian material.
+`CosmicRoleAccents` remains one instanced batch. The inlay copies the exact torso triangles, avoiding
+resampling intersections and broken rings at oblique views. Analytic ring, axis and glyph masks
+share that surface, with thin shoulder/back seams and restrained elder/civic coronas. The complete
+accent batch costs 988 triangles per instance. Decoration retains normal depth testing and cannot
+intercept picking. All twelve role families, colours and glyphs remain available.
 
-## Role vocabulary
+## Assembly and animation
 
-| Existing roles | Accent | Core | Silhouette |
-| --- | --- | --- | --- |
-| farmer, gatherer, hunter | leaf green `#a4cf71` | seed/oval | narrow shoulders |
-| fisher, sailor, dock-worker | cyan `#63cce2` | crescent | narrow shoulders |
-| builder, laborer, miner, craft-worker | amber `#e9b65b` | diamond | broad shoulders |
-| trader, merchant, transporter, logistics-worker | copper `#ef9062` | double bar | short mantle seams |
-| guard, soldier | vermilion `#ef6353` | chevron | strongest shoulders |
-| priest, ritual-specialist | rose `#d68ac9` | hourglass | long mantle seams |
-| administrator, manager | pale gold `#e3d487` | triangle | broad shoulders, small halo |
-| scholar, scientist, researcher | violet `#ae96ed` | vertical bar | narrow shoulders, long mantle seams |
-| factory-worker, engineer, machinist, railway-worker, energy-technician, machine-systems-specialist, space-worker | blue `#759ee7` | square | reinforced shoulders |
-| healer, medical-worker | mint `#a2e7d0` | cross | short mantle seams |
-| elder | ivory `#ede6cd` | crown | halo, mantle seams |
-| child, absent or unknown role | silver `#b2bdcc` | circle | minimal shoulders |
+`GodboxRenderer` keeps the existing instanced architecture, animation controller and work selection.
+The head anchor and visual hip pivots accommodate the new proportions. Arms inherit torso lean and
+twist at the shoulder; ordinary tools follow the actual hand transform. Headwear is a thin rear
+circlet that leaves the facial seam exposed. Resting limbs include sculpted hands and feet.
 
-Culture still influences existing props and notable mantle rim colour. Future wealth, culture,
-injury and equipment styling can be independent channels alongside role; none is inferred here.
+`ResourceWorkerRenderer` uses rounded overlapping segments, the same obsidian material/reflections,
+and torso-transformed shoulders during physical work. Small soles occupy two additional instances
+inside its existing limb batch, so no draw calls are added. Tool/contact targets, action sampling,
+work phases, carrying authority, platform elevation and animation timing are unchanged. No camera,
+navigation, occupancy, collision, AI, historian or simulation implementation is changed.
 
-## Budget and review
+## Visual review
 
-The main population retains **nine mesh batches**, with no draw-call growth per person or role.
-The existing density-dependent visible-person budget and 32-notable mantle cap remain intact.
-Cores/accessories cost 140 triangles per represented person; inactive accessory triangles collapse
-in the vertex shader. Campaigns add one core batch per company, bounded by the existing four
-campaign/two-company limit (at most eight additional draws). Working limbs reuse their existing
-batches and add no draws. Geometry/material disposal remains tied to the renderer lifetime.
+Run `npm run dev`, then open `/tests/cosmic-people-preview.html`:
 
-The standalone asset fixture measured **11 total scene draws**, including ground and shadow draws,
-at 12, 384 and 1,536 people. Submitted triangles were 7,682 / 245,762 / 983,042 respectively. This
-verifies bounded draw calls, not a universal frame-rate claim; GPU time on low-end hardware remains
-a useful follow-up measurement. Stars and analytic masks add bounded fragment work over the old
-standard material.
+- Portrait and front/side/back turnaround; selected role or the complete role lineup.
+- Documentary, street and settlement distances.
+- Day, overcast, twilight, moonlight and night; grass, dark and bright terrain.
+- Raw rendering or the production postprocessing pipeline, with an interior-off control.
+- Idle, walking, carrying, building/farming/gathering clips and production timber/mining/plant rigs.
+- Pause and quarter-second stepping for work phases.
 
-Browser review used 1600×1000 screenshots at close, normal street (roughly 9 radius / 6 height),
-and settlement overview (25 radius / 19 height), in day/night and on grass, bright and dark terrain.
-The live arrival scene was also reviewed through GODBOX's actual postprocessing at all three
-distances. No WebGL shader or JavaScript errors occurred. The colour and core cues survive normal
-street distance; black silhouettes remain distinct on bright ground, while a thin rim separates
-them at night. Fine stars disappear before they become static. At overview scale, colour is the
-remaining cue; full glyph recognition is not claimed for characters only a few pixels tall.
+`/tests/resource-work-preview.html` also uses the production geometry, reflection field and shoulder
+attachments. The live arrival scene was inspected with actual GODBOX postprocessing at close,
+normal and distant views in day/night. Review corrected oversized head proportions, neck/shoulder
+joins, clipped core inlays, bulky headwear, tool thickness and working soles. No JavaScript or WebGL
+shader errors occurred in the review captures.
 
-Walk, carry, build, gather and rest clips were inspected in the role fixture. Timber cutting,
-mining and plant gathering were inspected with the production articulated worker fixture.
-Review led to tighter shoulders, a stronger night rim, lower-profile headwear, corrected neck
-attachment during leaning and scaled prop offsets. No camera rules, terrain occlusion rules or
-depth tests were bypassed in the production renderer. Decorative cores cannot intercept raycasts.
+The all-detail fixture retained **11 scene draws** at 12, 384 and 1,536 people, including shadows.
+Submitted triangles were **99,170 / 3,173,378 / 12,693,506**. This is a deliberate geometry increase
+for close-camera quality; no per-role/per-person draw growth was introduced. Local headless browser
+frame intervals were about 15 ms at the two stress sizes, not a portable GPU performance guarantee.
+The production renderer retains its existing visible-person/detail budgets.
 
-Reproduce with `npm run dev`, then open:
-
-- `/tests/cosmic-people-preview.html` — all 12 families, three cameras, light/terrain/activity controls.
-- `/tests/cosmic-people-preview.html?population=384` (or `1536`) — asset stress scene.
-- `/tests/resource-work-preview.html` — real articulated work/contact presentation.
-
-The simplified rig still has the existing limitations: no foot IK, coarse hands, occasional crowd
-overlap and normal building/tree occlusion. Campaign figures are formation proxies without person
-IDs, so they share a fixed cosmic seed. A richer cultural/status/equipment layer and hardware GPU
-timings are sensible future additions. No simulation-scale increase is required for these visuals.
+Fine glyphs naturally collapse to core/face light at settlement distance. Full glyph recognition is
+not claimed for a person only a few pixels tall. Hands and work joints remain economical procedural
+forms, not a skinned anatomical model.
 
 ## Validation
 
-- Final focused run: **142/142 passing across nine files**, covering people construction/presentation,
-  physical actions, resource work, building scale, role fallback/palette, deterministic appearance,
-  instancing configuration, and campaign rendering without simulation mutation.
-- TypeScript and production build pass. Vite reports its existing large-bundle and ineffective
-  dynamic-import warnings. ESLint passes for every changed TypeScript file.
-- A broader run during implementation recorded **805 passes / 20 failures**. Fourteen assertion
-  failures reproduced on a clean archive of starting commit `3ee8da7` (environment extraction,
-  historian predictions, resource economy, settlement development and settlement render budgets).
-  The historian assertion required running its whole describe block to reproduce, because those
-  tests share mutable fixture state.
-  Five long-running simulation/history/knowledge tests timed out. One campaign assertion was
-  observed while the running suite overlapped edits; all three campaign tests subsequently passed,
-  including the final focused run. The broad run is **not claimed as clean**. No unrelated simulation
-  or historian fixes were folded into this visual pass.
-- Local evidence: `output/cosmic-focused-tests.json`, `output/cosmic-full-tests.json`,
-  `output/cosmic-baseline-tests.json`, `output/cosmic-baseline-historian.json`, and `output/cosmic-*.png`. Generated evidence is excluded
-  from the commit; the review fixtures are included.
+- TypeScript typecheck and production build pass (existing bundle-size/dynamic-import warnings).
+- ESLint passes with `npm run lint -- --ignore-pattern 'output/**'`. Plain `npm run lint` also enters
+  the pre-existing untracked `output/cosmic-baseline` repository and fails on conflicting TS roots;
+  that unrelated archive is preserved and excluded from the commit.
+- 172 tests pass across eleven focused files: cosmic geometry/role/material contracts, work shoulder
+  attachment, people presentation/animation, instance colours, physical actions, resource work,
+  campaign presentation, cinematic presentation, arrival rendering, local activities and assembly.
+- Geometry tests cover finite positions/normals, closed topology, triangle bounds, crown/sole
+  anchors and neck overlap. Work attachment tests verify posed shoulder endpoints without changing
+  contact behaviour.
+
+Generated screenshots and logs use the `output/obsidian-` prefix and are intentionally untracked.

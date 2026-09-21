@@ -9,7 +9,7 @@ import { beginResourceWorkMonth, recordResourceWorkAssignment, type ResourceWork
 import { resourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
 import { resourceWorkAlternateAnchor } from '../src/render/animation/ResourceWorkMotion';
 import type { Person } from '../src/sim/types';
-import { COSMIC_HEIGHT_MULTIPLIER, CosmicRoleAccents, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial } from '../src/render/people/CosmicPeople';
+import { COSMIC_HEIGHT_MULTIPLIER, CosmicRoleAccents, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, createCosmicReflectionEnvironment } from '../src/render/people/CosmicPeople';
 
 const { simulation, world, surface } = vegetationFixture('resource-work-study');
 for (const cell of world.cells) { cell.landform = 'lowland'; cell.movementCost = 1; }
@@ -32,6 +32,9 @@ const work = new ResourceWorkScene(world, 'resource-work-study');
 const sites = new ResourceSiteRenderer(world, surface, work);
 const rigs = new ResourceWorkerRenderer(); scene.add(sites.group, rigs.group);
 const cosmicMaterial = createCosmicBodyMaterial(false);
+const reflections = createCosmicReflectionEnvironment(renderer);
+cosmicMaterial.envMap = reflections.texture;
+rigs.setReflectionEnvironment(reflections.texture);
 const body = new THREE.InstancedMesh(createCosmicBodyGeometry(), cosmicMaterial, 4);
 const heads = new THREE.InstancedMesh(createCosmicHeadGeometry(), cosmicMaterial, 4);
 const accents = new CosmicRoleAccents(4); scene.add(accents.mesh);
@@ -75,8 +78,9 @@ function frame(now: number) {
     colour.set(cosmicRoleFor(role).color);
     marker.position.set(point.x, groundY + (0.44 + (0.03 - motion.crouch) * worker.blend) * personSize, point.z);
     marker.rotation.set(motion.lean * worker.blend, facing + motion.twist * worker.blend, 0); marker.scale.setScalar(personSize); marker.updateMatrix(); body.setMatrixAt(index, marker.matrix);
+    rigs.setBodyTransform(marker.matrix);
     accents.set(index, role, marker.matrix, 1); body.setColorAt(index, colour); heads.setColorAt(index, colour);
-    headAnchor.set(0, 0.4, 0).applyMatrix4(marker.matrix);
+    headAnchor.set(0, 0.425, 0).applyMatrix4(marker.matrix);
     marker.position.copy(headAnchor); marker.rotation.set(motion.lean * worker.blend, facing, 0); marker.updateMatrix(); heads.setMatrixAt(index++, marker.matrix);
     rigs.draw(worker, point.x, groundY, point.z, personSize, facing, colour);
   }

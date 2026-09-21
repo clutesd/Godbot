@@ -8,7 +8,7 @@ import type { ResourceWorkerVisual } from './ResourceWorkScene';
 import { MAX_ACTIVE_WORK_SITES } from './ResourceWorkScene';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { resourceToolHeadGeometry } from './ResourceWorkGeometry';
-import { createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
+import { createCosmicBodyMaterial, createCosmicWorkLimbGeometry, updateCosmicBodyMaterial } from '../people/CosmicPeople';
 
 const CAPACITY = MAX_ACTIVE_WORK_SITES * 4;
 
@@ -27,6 +27,9 @@ export class ResourceWorkerRenderer {
   private readonly position = new THREE.Vector3();
   private readonly scale = new THREE.Vector3();
   private readonly rotation = new THREE.Quaternion();
+  private readonly bodyTransform = new THREE.Matrix4();
+  private hasBodyTransform = false;
+  private readonly shoulder = new THREE.Vector3();
   private readonly direction = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
   private readonly colour = new THREE.Color();
@@ -44,7 +47,7 @@ export class ResourceWorkerRenderer {
     this.group.name = 'Articulated resource workers';
     this.loads = this.pool('Contact acquired material', new THREE.BoxGeometry(1, 1, 1), '#ffffff', CAPACITY);
     this.baskets = this.pool('Worker baskets', new THREE.CylinderGeometry(0.12, 0.09, 0.16, 7, 1, true), '#8b6840', CAPACITY);
-    this.limbs = this.pool('Resource worker joints', new THREE.CylinderGeometry(0.028, 0.033, 1, 5), '#ffffff', CAPACITY * 8);
+    this.limbs = this.pool('Resource worker joints', createCosmicWorkLimbGeometry(), '#ffffff', CAPACITY * 10);
     (this.limbs.material as THREE.Material).dispose();
     this.limbs.material = createCosmicBodyMaterial(false);
     this.handles = this.pool('Resource worker tool shafts', new THREE.CylinderGeometry(0.018, 0.023, 1, 6), '#765235', CAPACITY);
@@ -63,6 +66,14 @@ export class ResourceWorkerRenderer {
   }
 
   beginFrame(): void { this.count = 0; this.chipCount = 0; this.sparkCount = 0; }
+
+  setBodyTransform(matrix: THREE.Matrix4): void {
+    this.bodyTransform.copy(matrix); this.hasBodyTransform = true;
+  }
+
+  setReflectionEnvironment(texture: THREE.Texture): void {
+    (this.limbs.material as THREE.MeshStandardMaterial).envMap = texture;
+  }
 
   updateDaylight(daylight: number): void {
     updateCosmicBodyMaterial(this.limbs.material as THREE.MeshStandardMaterial, daylight);
@@ -104,16 +115,29 @@ export class ResourceWorkerRenderer {
       const hx = load ? sign * (load === 'timber' || load === 'metal' ? 0.2 : 0.1) : plant ? sign * 0.075 + m.basket * 0.32 * blend : 0;
       const hy = handY - shaftY * grip;
       const hz = handZ - shaftZ * grip - (plant ? m.basket * 0.15 * blend : 0);
-      const shoulderY = 0.64 - crouch;
+      let shoulderX = sign * 0.12, shoulderY = 0.71 - crouch, shoulderZ = 0;
+      if (this.hasBodyTransform) {
+        this.shoulder.set(sign * 0.12, 0.27, 0).applyMatrix4(this.bodyTransform);
+        const dx = (this.shoulder.x - x) / size, dz = (this.shoulder.z - z) / size;
+        shoulderX = dx * this.cos - dz * this.sin;
+        shoulderY = (this.shoulder.y - y) / size;
+        shoulderZ = dz * this.cos + dx * this.sin;
+      }
       const elbowX = sign * (0.17 + (1 - blend) * 0.06);
       const elbowY = (shoulderY + hy) * 0.5 - 0.075;
       const elbowZ = hz * 0.5 + 0.015;
-      this.segment(this.limbs, index * 8 + side * 2, sign * 0.15, shoulderY, 0, elbowX, elbowY, elbowZ, 1);
-      this.segment(this.limbs, index * 8 + side * 2 + 1, elbowX, elbowY, elbowZ, hx, hy, hz, 0.85);
-      this.segment(this.limbs, index * 8 + 4 + side * 2, sign * 0.075, 0.35 - crouch, 0, sign * 0.085, 0.18 - crouch * 0.25, crouch * 0.65, walking ? 0 : 1.13);
-      this.segment(this.limbs, index * 8 + 5 + side * 2, sign * 0.085, 0.18 - crouch * 0.25, crouch * 0.65, sign * 0.085, 0.02, sign * 0.035, walking ? 0 : 1.02);
+      this.segment(this.limbs, index * 10 + side * 2, shoulderX, shoulderY, shoulderZ, elbowX, elbowY, elbowZ, 1);
+      this.segment(this.limbs, index * 10 + side * 2 + 1, elbowX, elbowY, elbowZ, hx, hy, hz, 0.85);
+      this.segment(this.limbs, index * 10 + 4 + side * 2, sign * 0.049, 0.43 - crouch, 0, sign * 0.052, 0.22 - crouch * 0.25, crouch * 0.65, walking ? 0 : 1.13);
+      this.segment(this.limbs, index * 10 + 5 + side * 2, sign * 0.052, 0.22 - crouch * 0.25, crouch * 0.65, sign * 0.049, 0.02, sign * 0.035, walking ? 0 : 1.02);
     }
-    for (let limb = 0; limb < 8; limb++) this.limbs.setColorAt(index * 8 + limb, colour);
+    // Small integrated soles reuse the same opaque batch; the contact solver and targets stay intact.
+    for (let side = 0; side < 2; side++) {
+      const sign = side ? 1 : -1;
+      this.segment(this.limbs, index * 10 + 8 + side, sign * 0.049, 0.019, sign * 0.035 - 0.012,
+        sign * 0.049, 0.019, sign * 0.035 + 0.055, walking ? 0 : 0.72);
+    }
+    for (let limb = 0; limb < 10; limb++) this.limbs.setColorAt(index * 10 + limb, colour);
     const toolSize = plant ? 0 : 1;
     const tipY = handY + shaftY * 0.32;
     const tipZ = handZ + shaftZ * 0.32;
@@ -192,7 +216,7 @@ export class ResourceWorkerRenderer {
   }
 
   endFrame(): void {
-    this.limbs.count = this.count * 8;
+    this.limbs.count = this.count * 10;
     this.handles.count = this.count;
     this.heads.count = this.count;
     this.chips.count = this.chipCount;

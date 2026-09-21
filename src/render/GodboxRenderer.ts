@@ -12,7 +12,7 @@ import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
-import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicBodyMaterial, createCosmicReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
@@ -198,6 +198,7 @@ export class GodboxRenderer {
   /** One shared batch for role cores and lightweight silhouette accents. */
   private readonly peopleRoleAccents: THREE.InstancedMesh;
   private readonly cosmicAccents: CosmicRoleAccents;
+  private readonly cosmicReflections: THREE.WebGLRenderTarget;
   private readonly cosmicMaterial: THREE.MeshStandardMaterial;
   private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
   private readonly peopleVisuals = new PeopleVisualStateStore();
@@ -211,6 +212,8 @@ export class GodboxRenderer {
     isStandable: (x, z) => this.personStandable(x, z),
   };
   private readonly personMatrix = new THREE.Matrix4();
+  private readonly limbMatrix = new THREE.Matrix4();
+  private readonly personGripPosition = new THREE.Vector3();
   private readonly personColor = new THREE.Color();
   private readonly personDetailColor = new THREE.Color();
   private readonly partPosition = new THREE.Vector3();
@@ -386,6 +389,10 @@ export class GodboxRenderer {
     const visiblePersonBudget = visiblePersonBudgetForDensity(this.config.render.visualDensity);
     const peopleGeometry = createCosmicBodyGeometry();
     const peopleMaterial = this.cosmicMaterial = createCosmicBodyMaterial();
+    this.cosmicReflections = createCosmicReflectionEnvironment(this.renderer);
+    peopleMaterial.envMap = this.cosmicReflections.texture;
+    this.resourceWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
+    this.physicalWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
     this.people = new THREE.InstancedMesh(peopleGeometry, peopleMaterial, visiblePersonBudget);
     this.people.castShadow = true;
     this.people.frustumCulled = false;
@@ -393,10 +400,10 @@ export class GodboxRenderer {
     this.peopleRoleAccents = this.cosmicAccents.mesh;
     this.peopleRoleAccents.frustumCulled = false;
     this.peopleHeads = new THREE.InstancedMesh(createCosmicHeadGeometry(), peopleMaterial, visiblePersonBudget);
-    this.peopleArms = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 5).translate(0, -0.17, 0), peopleMaterial, visiblePersonBudget * 2);
-    this.peopleLegs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.032, 0.04, 0.36, 5).translate(0, -0.18, 0), peopleMaterial, visiblePersonBudget * 2);
-    this.peopleTools = new THREE.InstancedMesh(new THREE.BoxGeometry(0.05, 0.36, 0.05), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05 }), visiblePersonBudget);
-    this.peopleHeadwear = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.07, 0.09, 0.025, 7, 1, true), peopleMaterial, visiblePersonBudget);
+    this.peopleArms = new THREE.InstancedMesh(createCosmicArmGeometry(), peopleMaterial, visiblePersonBudget * 2);
+    this.peopleLegs = new THREE.InstancedMesh(createCosmicLegGeometry(), peopleMaterial, visiblePersonBudget * 2);
+    this.peopleTools = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.008, 0.011, 0.34, 8), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05 }), visiblePersonBudget);
+    this.peopleHeadwear = new THREE.InstancedMesh(new THREE.TorusGeometry(0.049, 0.0015, 4, 14, Math.PI).rotateX(Math.PI / 2).rotateY(Math.PI), peopleMaterial, visiblePersonBudget);
     this.peopleCargo = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), new THREE.MeshStandardMaterial({ roughness: 0.95 }), visiblePersonBudget);
     this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.15, 0.37, 7, 1, true).translate(0, -0.185, 0), peopleMaterial, NOTABLE_VISUAL_BUDGET);
     this.cosmicVariations = [this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleHeadwear, this.peopleMantles].map(bindCosmicVariation);
@@ -655,39 +662,44 @@ export class GodboxRenderer {
       this.people.setColorAt(index, this.personColor);
       // Reuse the exact torso transform: cores stay attached through crouch, twist and work lean.
       this.cosmicAccents.set(index, person.role, this.personMatrix, cosmic.brightness);
+      this.resourceWorkers.setBodyTransform(this.personMatrix);
+      this.physicalWorkers.setBodyTransform(this.personMatrix);
+      const limbScale = detailed && !articulated ? heightScale : 0.001;
+      for (let side = 0; side < 2; side++) {
+        this.partPosition.set((side ? 1 : -1) * 0.12, 0.27, 0).applyMatrix4(this.personMatrix);
+        this.partQuaternion.setFromEuler(this.partEuler.set((pose?.spineRotation ?? 0)
+          + (side ? pose?.rightShoulderRotation ?? -0.06 : pose?.leftShoulderRotation ?? -0.06),
+          facing + (pose?.pelvisRotation ?? 0), (side ? 1 : -1) * 0.025));
+        this.partScale.setScalar(limbScale);
+        this.limbMatrix.compose(this.partPosition, this.partQuaternion, this.partScale);
+        this.peopleArms.setMatrixAt(index * 2 + side, this.limbMatrix);
+        if (side) this.personGripPosition.set(0, -0.337, 0.012).applyMatrix4(this.limbMatrix);
+        this.peopleArms.setColorAt(index * 2 + side, this.personColor);
+      }
       // The smaller faceless head must follow the existing spine pose at its neck attachment.
-      this.partPosition.set(0, 0.4, 0).applyMatrix4(this.personMatrix);
+      this.partPosition.set(0, 0.425, 0).applyMatrix4(this.personMatrix);
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
         heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, facing + (pose?.headRotation ?? 0), 0);
-      this.personHeadwearPosition.set(0, 0.095, 0).applyMatrix4(this.personMatrix);
+      this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
-      const limbScale = detailed && !articulated ? heightScale : 0.001;
-      this.setLimbInstance(index * 2, display.x, footY, display.z, limbScale, heightScale, facing, -0.15 * buildScale * heightScale, 0.62, pose?.leftShoulderRotation ?? 0.1, this.peopleArms, poseLift);
-      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, limbScale, heightScale, facing, 0.15 * buildScale * heightScale, 0.62, pose?.rightShoulderRotation ?? -0.1, this.peopleArms, poseLift);
-      this.peopleArms.setColorAt(index * 2, this.personColor);
-      this.peopleArms.setColorAt(index * 2 + 1, this.personColor);
       const legScale = detailed && (!articulated || physical && !physicalStanding) ? heightScale : 0.001;
-      this.setLimbInstance(index * 2, display.x, footY, display.z, legScale, heightScale, facing, -0.07 * buildScale * heightScale, 0.36, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
-      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.07 * buildScale * heightScale, 0.36, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
+      this.setLimbInstance(index * 2, display.x, footY, display.z, legScale, heightScale, facing, -0.049 * buildScale * heightScale, 0.45, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
+      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.049 * buildScale * heightScale, 0.45, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
       this.peopleLegs.setColorAt(index * 2, this.personColor);
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
       const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
       const handSwing = pose?.rightShoulderRotation ?? -0.1;
-      const handSide = 0.15 * buildScale * heightScale;
-      const handForward = -Math.sin(handSwing) * 0.30 * heightScale;
       this.setInstanceTransform(this.peopleTools, index,
-        display.x + Math.cos(facing) * handSide + Math.sin(facing) * handForward,
-        footY + (0.72 - Math.cos(handSwing) * 0.30) * heightScale + poseLift,
-        display.z - Math.sin(facing) * handSide + Math.cos(facing) * handForward,
-        toolScale, toolScale, toolScale, handSwing, facing, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
+        this.personGripPosition.x, this.personGripPosition.y, this.personGripPosition.z,
+        toolScale, toolScale, toolScale, handSwing + (pose?.spineRotation ?? 0), facing + (pose?.pelvisRotation ?? 0), carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
 
       const headwear = tier === 'population' ? person.appearance?.headwear ?? 'none' : notableHeadwear(person);
       const hatScale = !detailed || headwear === 'none' ? 0.001 : heightScale;
-      const hatWidth = headwear === 'brim' ? 1.35 : headwear === 'helmet' ? 0.82 : 0.95;
+      const hatWidth = headwear === 'brim' ? 1.03 : headwear === 'helmet' ? 1 : 0.99;
       const hatHeight = headwear === 'cap' ? 0.52 : headwear === 'brim' ? 0.32 : 0.86;
       this.setInstanceTransform(this.peopleHeadwear, index, this.personHeadwearPosition.x, this.personHeadwearPosition.y, this.personHeadwearPosition.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, pose?.spineRotation ?? 0, facing, 0);
       this.peopleHeadwear.setColorAt(index, this.personColor);
@@ -3335,6 +3347,7 @@ export class GodboxRenderer {
     this.terrainQueries.dispose();
     this.placementContract.dispose();
     this.placementFootprints.dispose();
+    this.cosmicReflections.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
