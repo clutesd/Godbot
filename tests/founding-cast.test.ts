@@ -87,7 +87,7 @@ describe('Founding documentary cast 2a', () => {
         framingScenes += 1;
         expect(castScene.title).toBe('A FEW LIVES');
         expect(castScene.statement.text).toContain(`Arrival Day began with ${baseline.population.toLocaleString()} lives.`);
-        expect(castScene.statement.text).toContain(`We will follow ${cast.length.toLocaleString()} of them.`);
+        expect(castScene.statement.text).toContain('We will follow only a few.');
         expect(castScene.statement.text).toContain('Not because they are important. Not yet.');
         expect(historian.validateStatement(castScene.statement, simulation.state)).toBe(true);
         castScene = chooseFoundingCastScene(historian, simulation.state);
