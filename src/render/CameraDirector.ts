@@ -39,11 +39,11 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
   'settlement-approach': { radius: [15, 22], height: [12, 19], targetHeight: 1.2, durationScale: 1 },
   // Human-scale shots intentionally break from the old aerial grammar. These dimensions are in
   // world units: close people should read as subjects, not colored pixels inside a settlement.
-  'street-observation': { radius: [4.2, 6.5], height: [1.8, 3.1], targetHeight: 0.62, durationScale: 1.1 },
-  'worker-follow': { radius: [2.4, 3.8], height: [1.0, 1.55], targetHeight: 0.48, durationScale: 1.12 },
-  'traveler-follow': { radius: [5.4, 7.8], height: [2.7, 4.2], targetHeight: 0.55, durationScale: 1.08 },
+  'street-observation': { radius: [3.4, 5.4], height: [1.25, 2.0], targetHeight: 0.16, durationScale: 1.1 },
+  'worker-follow': { radius: [1.8, 2.8], height: [0.52, 0.82], targetHeight: 0.14, durationScale: 1.12 },
+  'traveler-follow': { radius: [4.2, 6.4], height: [1.8, 2.8], targetHeight: 0.18, durationScale: 1.08 },
   'institution-exterior': { radius: [10, 16], height: [8, 13], targetHeight: 1.2, durationScale: 1.24 },
-  'discovery-scene': { radius: [2.6, 4.1], height: [1.1, 1.8], targetHeight: 0.5, durationScale: 1.35 },
+  'discovery-scene': { radius: [1.9, 3.0], height: [0.58, 0.9], targetHeight: 0.14, durationScale: 1.35 },
   'battle-overview': { radius: [24, 34], height: [21, 31], targetHeight: 1, durationScale: 1.3 },
   'aftermath-pullback': { radius: [30, 42], height: [27, 39], targetHeight: 0.7, durationScale: 1.4 },
   'city-growth-timelapse': { radius: [20, 29], height: [17, 25], targetHeight: 1.4, durationScale: 1.35 },
@@ -79,7 +79,13 @@ const FOREST_AWARE_KINDS = new Set<ObservationKind>([
 ]);
 
 /** Preserve the authored angle when possible; only search nearby compositions. */
-const FOREST_AZIMUTH_OFFSETS = [0, Math.PI / 7.2, -Math.PI / 7.2, Math.PI / 3.6, -Math.PI / 3.6] as const;
+const FOREST_AZIMUTH_OFFSETS = [
+  0,
+  Math.PI / 7.2, -Math.PI / 7.2,
+  Math.PI / 3.6, -Math.PI / 3.6,
+  Math.PI / 2, -Math.PI / 2,
+  Math.PI,
+] as const;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
@@ -88,10 +94,23 @@ export function cameraFramingFor(kind: ObservationKind): CameraFraming {
 }
 
 export function cameraClearanceFor(kind: ObservationKind | undefined): CameraClearance {
-  if (kind === 'worker-follow' || kind === 'discovery-scene') return { lens: 0.82, sightline: 0.28 };
-  if (kind === 'street-observation') return { lens: 1.12, sightline: 0.38 };
-  if (kind === 'traveler-follow') return { lens: 1.7, sightline: 0.62 };
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return { lens: 0.42, sightline: 0.12 };
+  if (kind === 'street-observation') return { lens: 0.72, sightline: 0.22 };
+  if (kind === 'traveler-follow') return { lens: 1.1, sightline: 0.36 };
   return { lens: 3, sightline: 1.6 };
+}
+
+export function cameraTargetFloorFor(kind: ObservationKind | undefined): number {
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.08;
+  if (kind === 'street-observation' || kind === 'traveler-follow') return 0.12;
+  return 0.35;
+}
+
+export function cameraTransitionScaleFor(kind: ObservationKind | undefined): number {
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.44;
+  if (kind === 'street-observation') return 0.58;
+  if (kind === 'traveler-follow') return 0.68;
+  return 1;
 }
 
 /**
@@ -137,6 +156,52 @@ export function forestSightlineObstruction(
   }
 
   return obstruction / samples;
+}
+
+/**
+ * Presentation-only approximation of building occlusion for low camera positions. A candidate is
+ * penalized heavily when the lens lands inside a persistent plot, and more gently when a structure
+ * crosses the sightline below its approximate roof height. Fields are excluded because their plot
+ * footprint is traversable visual ground, not an opaque wall.
+ */
+export function structureSightlineObstruction(
+  state: SimulationState,
+  from: THREE.Vector3,
+  target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+): number {
+  const dx = target.x - from.x;
+  const dz = target.z - from.z;
+  const lengthSquared = dx * dx + dz * dz;
+  if (lengthSquared < 0.01) return 0;
+
+  let obstruction = 0;
+  for (const settlement of state.settlements) {
+    if (!settlement.alive) continue;
+    for (const plot of settlement.structurePlots ?? []) {
+      if ((plot.development?.form as string | undefined) === 'field' || plot.condition <= 0.08) continue;
+      const radius = Math.max(0.2, plot.radius + 0.18);
+
+      const cameraDistance = Math.hypot(from.x - plot.worldX, from.z - plot.worldZ);
+      if (cameraDistance < radius) obstruction += 2.5;
+
+      const projected = ((plot.worldX - from.x) * dx + (plot.worldZ - from.z) * dz) / lengthSquared;
+      if (projected <= 0.04 || projected >= 0.96) continue;
+      const nearestX = from.x + dx * projected;
+      const nearestZ = from.z + dz * projected;
+      const horizontalDistance = Math.hypot(plot.worldX - nearestX, plot.worldZ - nearestZ);
+      if (horizontalDistance >= radius) continue;
+
+      const sightY = THREE.MathUtils.lerp(from.y, target.y, projected);
+      const roofY = elevationAt(plot.worldX, plot.worldZ) + Math.max(0.45, plot.height * Math.max(0.25, plot.condition));
+      if (sightY < roofY + 0.12) {
+        const overlap = 1 - clamp01(horizontalDistance / radius);
+        const vertical = clamp01((roofY + 0.12 - sightY) / Math.max(0.35, plot.height));
+        obstruction += overlap * (0.8 + vertical * 1.5);
+      }
+    }
+  }
+  return obstruction;
 }
 
 /**
@@ -214,14 +279,18 @@ export class CameraDirector {
 
     // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
     // never simulation months, so deep historical acceleration does not make the camera race.
-    const transitionRate = 3.15 / Math.max(0.5, this.config.camera.transitionSeconds);
+    const transitionSeconds = this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
+    const transitionRate = 3.15 / Math.max(0.5, transitionSeconds);
     const positionSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate);
     const targetSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate * 1.22);
     this.camera.position.lerp(this.desiredPosition, positionSmoothing);
     this.lookTarget.lerp(this.desiredTarget, targetSmoothing);
     const clearance = cameraClearanceFor(this.currentScene?.kind);
     this.camera.position.y = Math.max(this.camera.position.y, elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens);
-    this.lookTarget.y = Math.max(this.lookTarget.y, elevationAt(this.lookTarget.x, this.lookTarget.z) + 0.35);
+    this.lookTarget.y = Math.max(
+      this.lookTarget.y,
+      elevationAt(this.lookTarget.x, this.lookTarget.z) + cameraTargetFloorFor(this.currentScene?.kind),
+    );
     this.camera.lookAt(this.lookTarget);
   }
 
@@ -260,7 +329,7 @@ export class CameraDirector {
     const radius = this.interpolate(framing.radius, 0.36 + scene.score * 0.4);
     const height = this.interpolate(framing.height, 0.42 + scene.interest * 0.32);
     this.shotBaseTarget.set(scene.position.x, ground + framing.targetHeight, scene.position.z);
-    this.shotAzimuth = this.chooseForestAwareAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
+    this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
     this.shotBasePosition.set(scene.position.x + Math.cos(this.shotAzimuth) * radius, ground + height, scene.position.z + Math.sin(this.shotAzimuth) * radius);
     this.desiredTarget.copy(this.shotBaseTarget);
     this.desiredPosition.copy(this.shotBasePosition);
@@ -268,7 +337,7 @@ export class CameraDirector {
     this.shotBasePosition.copy(this.desiredPosition);
   }
 
-  private chooseForestAwareAzimuth(
+  private chooseClearAzimuth(
     state: SimulationState,
     kind: ObservationKind,
     baseAzimuth: number,
@@ -287,10 +356,12 @@ export class CameraDirector {
       const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius;
       const clearance = cameraClearanceFor(kind);
       this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + clearance.lens), z);
-      const obstruction = forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
-      // A small composition penalty prevents needless angle changes when two views are effectively tied.
-      const compositionPenalty = Math.abs(offset) * 0.045;
-      const score = obstruction + compositionPenalty;
+      const forestObstruction = forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
+      const structureObstruction = structureSightlineObstruction(state, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
+      // Preserve the authored side when it is genuinely usable, but never prefer it over an angle
+      // that keeps a low lens out of a wall or removes a building from the subject sightline.
+      const compositionPenalty = Math.abs(offset) * 0.035;
+      const score = forestObstruction + structureObstruction + compositionPenalty;
       if (score < bestScore) {
         bestScore = score;
         bestAzimuth = azimuth;
@@ -393,7 +464,9 @@ export class CameraDirector {
     switch (motion) {
       case 'hold': {
         // Almost still, with just enough organic breathing to avoid a frozen surveillance camera.
-        const breath = Math.sin(elapsedSeconds * 0.16 + this.shotAzimuth) * 0.14;
+        // Scale the motion to the composition so intimate shots do not visibly slide sideways.
+        const breathAmplitude = Math.min(0.14, radius * 0.035);
+        const breath = Math.sin(elapsedSeconds * 0.16 + this.shotAzimuth) * breathAmplitude;
         this.desiredPosition.addScaledVector(this.workingTangent, breath);
         break;
       }
@@ -404,7 +477,8 @@ export class CameraDirector {
         break;
       }
       case 'truck': {
-        const offset = (progress - 0.5) * 5.2;
+        const maximumOffset = Math.min(2.6, radius * 0.22);
+        const offset = (progress - 0.5) * 2 * maximumOffset;
         this.desiredPosition.addScaledVector(this.workingTangent, offset);
         this.desiredTarget.addScaledVector(this.workingTangent, offset * 0.28);
         break;
