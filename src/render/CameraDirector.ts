@@ -15,6 +15,7 @@ export interface CurrentObservation {
   interest: number;
   audioCategory: AudioCategory;
   revision: number;
+  sceneId?: string;
   statement?: HistorianStatement;
   eventType?: SimulationState['history'][number]['type'];
   eventMonth?: number;
@@ -338,6 +339,7 @@ export class CameraDirector {
       this.camera.lookAt(this.lookTarget);
       this.observation.label = 'Before history';
       this.observation.detail = 'Year 0 · Month 0 · Day 0';
+      delete this.observation.sceneId;
       return;
     }
     this.shotAge += deltaSeconds;
@@ -388,6 +390,7 @@ export class CameraDirector {
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     this.shotDuration = baseDuration * framing.durationScale * motionDurationScale;
 
+    this.observation.sceneId = scene.id;
     this.observation.label = scene.title;
     this.observation.detail = scene.statement.text;
     this.observation.kind = scene.kind;

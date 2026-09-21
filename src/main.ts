@@ -21,7 +21,7 @@ import type { SimulationState } from './sim/types';
 import type { GodboxRenderer, PlacementSmokeReport } from './render/GodboxRenderer';
 import { setTransportDebugMode, transportDebugReport, type TransportDebugRecord } from './render/GodboxRendererEnhanced';
 import { WarChronicle } from './render/war/WarChronicle';
-import { arrivalCaption } from './render/founding/ArrivalPresentation';
+import { arrivalCaption, foundingArrivalDialogue } from './render/founding/ArrivalPresentation';
 import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
 
 declare global {
@@ -88,7 +88,11 @@ app.innerHTML = `
       <span class="command-prompt" aria-hidden="true">/</span>
       <input id="command-input" type="text" autocomplete="off" spellcheck="false" aria-label="Observer command" />
     </form>
-    <section class="arrival-caption" id="arrival-caption" aria-live="polite"></section>
+    <section class="arrival-caption" id="arrival-caption" aria-live="polite">
+      <span class="arrival-caption-eyebrow" id="arrival-caption-eyebrow"></span>
+      <span class="arrival-caption-heading" id="arrival-caption-heading"></span>
+      <span class="arrival-caption-text" id="arrival-caption-text"></span>
+    </section>
     <div class="opening" id="opening">
       <div class="opening-mark"></div>
       <h2 id="opening-title">GODBOX</h2>
@@ -114,6 +118,9 @@ const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
 const transportDebugLegendElement = requiredElement<HTMLElement>('#transport-debug-legend');
 const openingElement = requiredElement<HTMLElement>('#opening');
 const arrivalCaptionElement = requiredElement<HTMLElement>('#arrival-caption');
+const arrivalCaptionEyebrowElement = requiredElement<HTMLElement>('#arrival-caption-eyebrow');
+const arrivalCaptionHeadingElement = requiredElement<HTMLElement>('#arrival-caption-heading');
+const arrivalCaptionTextElement = requiredElement<HTMLElement>('#arrival-caption-text');
 const worldElement = requiredElement<HTMLElement>('.world');
 const openingTitleElement = requiredElement<HTMLElement>('#opening-title');
 const openingObservationElement = requiredElement<HTMLElement>('#opening-observation');
@@ -369,6 +376,8 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let accumulator = 0;
   let displayPopulation = representedPopulation(simulation.state);
   let lastObservationRevision = -1;
+  let cinematicDialogueRevision = -1;
+  let cinematicDialogueSeconds = 0;
   let lastArchivedMonth = simulation.state.month;
   let runEnded = false;
   let disposed = false;
@@ -419,10 +428,6 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     if (!arrivalPaused) simulation.advanceArrival(deltaSeconds);
     const arriving = !simulation.historyRunning;
     worldElement.classList.toggle('witnessing-arrival', arriving);
-    const caption = arrivalCaption(simulation.state.arrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
-    if (arrivalCaptionElement.textContent !== caption.text) arrivalCaptionElement.textContent = caption.text;
-    arrivalCaptionElement.style.opacity = String(caption.opacity);
-    arrivalCaptionElement.classList.toggle('arrival-title', caption.text === 'ARRIVAL DAY');
     if (!arrivalWasRunning && simulation.historyRunning) {
       arrivalWasRunning = true;
       audio.transitionMusicTo(audioEra(simulation.state));
@@ -443,6 +448,42 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       }
     }
     view.update(deltaSeconds, elapsedSeconds);
+
+    const foundingDialogue = !arriving
+      ? foundingArrivalDialogue(view.observation.sceneId, view.observation.label, view.observation.detail)
+      : undefined;
+    worldElement.classList.toggle('founding-orientation', Boolean(foundingDialogue));
+
+    if (view.observation.revision !== cinematicDialogueRevision) {
+      cinematicDialogueRevision = view.observation.revision;
+      cinematicDialogueSeconds = 0;
+    } else {
+      cinematicDialogueSeconds += deltaSeconds;
+    }
+
+    if (arriving) {
+      const caption = arrivalCaption(simulation.state.arrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
+      arrivalCaptionEyebrowElement.textContent = '';
+      arrivalCaptionHeadingElement.textContent = '';
+      arrivalCaptionTextElement.textContent = caption.text;
+      arrivalCaptionElement.style.opacity = String(caption.opacity);
+      arrivalCaptionElement.classList.toggle('arrival-title', caption.text === 'ARRIVAL DAY');
+      arrivalCaptionElement.classList.remove('founding-caption');
+    } else if (foundingDialogue) {
+      arrivalCaptionEyebrowElement.textContent = foundingDialogue.eyebrow;
+      arrivalCaptionHeadingElement.textContent = foundingDialogue.title;
+      arrivalCaptionTextElement.textContent = foundingDialogue.text;
+      arrivalCaptionElement.style.opacity = String(Math.min(1, cinematicDialogueSeconds / 0.7));
+      arrivalCaptionElement.classList.remove('arrival-title');
+      arrivalCaptionElement.classList.add('founding-caption');
+    } else {
+      arrivalCaptionEyebrowElement.textContent = '';
+      arrivalCaptionHeadingElement.textContent = '';
+      arrivalCaptionTextElement.textContent = '';
+      arrivalCaptionElement.style.opacity = '0';
+      arrivalCaptionElement.classList.remove('arrival-title', 'founding-caption');
+    }
+
     warChronicle.update(simulation.state, view.observation.statement?.claims.warId);
     audio.update(deltaSeconds);
     if ((!arriving || (simulation.state.arrival?.elapsedSeconds ?? 0) >= 12) && view.observation.revision !== lastObservationRevision) {

@@ -15,6 +15,31 @@ export function arrivalCaption(seconds: number): { text: string; opacity: number
   return line ? { text: line.text, opacity: Math.min(1, (seconds - line.start) / 1.2, (line.end - seconds) / 1.1) } : { text: '', opacity: 0 };
 }
 
+export interface FoundingArrivalDialogue {
+  eyebrow: string;
+  title: string;
+  text: string;
+}
+
+/**
+ * The one-time FoundingChapter remains Historian-grounded, but its Year-Zero orientation beats
+ * belong to the Arrival cinematic rather than the ordinary Watcher HUD.
+ */
+export function foundingArrivalDialogue(
+  sceneId: string | undefined,
+  title: string,
+  text: string,
+): FoundingArrivalDialogue | undefined {
+  if (!sceneId?.startsWith('founding:')) return undefined;
+  return {
+    eyebrow: sceneId.startsWith('founding:community:')
+      ? 'ARRIVAL DAY · FOUNDING COMMUNITY'
+      : 'ARRIVAL DAY · ORIENTATION',
+    title,
+    text,
+  };
+}
+
 /** Slow compositions blend through the existing camera controller, without time-based timers. */
 export function arrivalCameraPose(arrival: FoundingArrivalState): { position: THREE.Vector3; target: THREE.Vector3 } {
   const t = arrival.elapsedSeconds;

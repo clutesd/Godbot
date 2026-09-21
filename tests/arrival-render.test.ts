@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
-import { arrivalCameraPose, arrivalCaption } from '../src/render/founding/ArrivalPresentation';
+import { arrivalCameraPose, arrivalCaption, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
 describe('Arrival presentation contracts', () => {
@@ -26,6 +26,21 @@ describe('Arrival presentation contracts', () => {
     expect(scene.children).toHaveLength(0);
     expect(view.root.children).toHaveLength(0);
   }, 10000);
+  it('routes only the one-time founding chapter into Arrival Day cinematic dialogue', () => {
+    expect(foundingArrivalDialogue(undefined, 'Elsewhere', 'Ordinary history')).toBeUndefined();
+    expect(foundingArrivalDialogue('worker:someone', 'A worker', 'Ordinary history')).toBeUndefined();
+    expect(foundingArrivalDialogue('founding:overview:event-1', 'ARRIVAL DAY · THE 5 LANDINGS', 'Five communities begin.')).toEqual({
+      eyebrow: 'ARRIVAL DAY · ORIENTATION',
+      title: 'ARRIVAL DAY · THE 5 LANDINGS',
+      text: 'Five communities begin.',
+    });
+    expect(foundingArrivalDialogue('founding:community:pod-3', 'Riverhold · THIRD VESSEL', 'Riverhold began here.')).toEqual({
+      eyebrow: 'ARRIVAL DAY · FOUNDING COMMUNITY',
+      title: 'Riverhold · THIRD VESSEL',
+      text: 'Riverhold began here.',
+    });
+  });
+
   it('brakes into authoritative ground and keeps camera/caption values finite', () => {
     const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     for (const pod of s.state.arrival!.pods) {
