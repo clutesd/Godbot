@@ -50,6 +50,7 @@ export interface FoundingContinuityProgress {
 interface FoundingContinuityMemory {
   bridgeShown: boolean;
   readonly visitedSettlementIds: Set<string>;
+  lastVisitMonth?: number;
 }
 
 interface ChangeFact {
@@ -312,9 +313,10 @@ export function foundingContinuityProgress(historian: Historian, state: Simulati
 }
 
 /**
- * First-year continuity layer. The opening bridge releases time after the frozen orientation, then
- * each traceable founding community receives one grounded revisit. New continuity starts only in
- * the primary 12-month window; an already-started chapter can finish through Month 18 if interrupted.
+ * First-year continuity layer. Arrival Day now releases time through the human cast before this
+ * layer begins. Each traceable founding community receives one grounded revisit, spaced across
+ * authoritative months rather than presented as another opening carousel. New continuity starts
+ * only in the primary 12-month window; an already-started chapter can finish through Month 18.
  */
 export function chooseFoundingContinuityScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   pacedStates.delete(state);
@@ -340,10 +342,16 @@ export function chooseFoundingContinuityScene(historian: Historian, state: Simul
 
   const unvisited = baseline.communities.filter(community => !memory.visitedSettlementIds.has(community.settlementId));
   if (unvisited.length === 0) return undefined;
+
+  // Continuity is history unfolding, not a second orientation carousel. Never show two founding
+  // community revisits in the same authoritative month; let the world change between observations.
+  if (memory.lastVisitMonth !== undefined && state.month <= memory.lastVisitMonth) return undefined;
+
   for (const community of unvisited.sort((a, b) => a.order - b.order)) {
     const scene = communityScene(historian, state, baseline, community);
     if (!scene) continue;
     memory.visitedSettlementIds.add(community.settlementId);
+    memory.lastVisitMonth = state.month;
     pacedStates.add(state);
     return scene;
   }
