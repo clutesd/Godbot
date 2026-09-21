@@ -160,18 +160,22 @@ body { min-width: 320px; }
   text-wrap: balance;
 }
 .witnessing-arrival::before, .witnessing-arrival::after,
-.founding-orientation::before, .founding-orientation::after {
+.founding-orientation::before, .founding-orientation::after,
+.founding-release::before, .founding-release::after {
   content: '';
   position: absolute;
   z-index: 6;
   left: 0;
   right: 0;
-  height: 6%;
+  height: 0;
   background: #080c0c;
   pointer-events: none;
+  transition: height .9s ease;
 }
-.witnessing-arrival::before, .founding-orientation::before { top: 0; }
-.witnessing-arrival::after, .founding-orientation::after { bottom: 0; }
+.witnessing-arrival::before, .founding-orientation::before, .founding-release::before { top: 0; }
+.witnessing-arrival::after, .founding-orientation::after, .founding-release::after { bottom: 0; }
+.witnessing-arrival::before, .witnessing-arrival::after,
+.founding-orientation::before, .founding-orientation::after { height: 6%; }
 .witnessing-arrival .identity, .witnessing-arrival .population, .witnessing-arrival .chronicle .rule, .witnessing-arrival .place, .witnessing-arrival .activity, .witnessing-arrival .evidence { opacity: 0; }
 .witnessing-arrival .chronicle { bottom: 8%; }
 .witnessing-arrival .runline, .founding-orientation .runline { z-index: 8; }
