@@ -33,7 +33,7 @@ function harness(people = [person()], overrides: Partial<LocalActivityContext> =
       const v = visuals.resolve(p.id, { destination: plan?.destination ?? p.position,
         restFacing: plan?.restFacing, localMove: !!plan }, dt, ground);
       return { x: v.x, z: v.z, speed: v.speed, destination: { x: v.destinationX, z: v.destinationZ },
-        action: plan?.action, phase: plan?.phase, facing: v.facing };
+        action: plan?.action, phase: plan?.phase, facing: v.facing, partnerId: plan?.partnerId };
     });
   };
   return { local, visuals, tick };
@@ -330,6 +330,76 @@ describe('renderer-owned local activity', () => {
     expect(changingPairs).toBeGreaterThanOrEqual(8);
     expect(conversationFrames).toBeGreaterThan(180);
     expect(JSON.stringify(people)).toBe(before);
+  });
+
+  it('prefers reciprocal social partners so conversations can read as two-sided', () => {
+    const people = Array.from({ length: 4 }, (_, index) => {
+      const p = person(`pair-${index}`);
+      p.position = { x: (index - 1.5) * 0.55, z: index % 2 ? 0.25 : -0.25 };
+      p.target = { ...p.position };
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'pair-plaza';
+      p.navigation!.schedulePhase = 'social';
+      return p;
+    });
+    const h = harness(people);
+    let mutualFrames = 0;
+    for (let frame = 0; frame < 30 * 60; frame++) {
+      h.tick(1 / 60);
+      for (const p of people) {
+        const partner = h.local.get(p.id)?.partnerId;
+        if (partner && h.local.get(partner)?.partnerId === p.id) mutualFrames++;
+      }
+    }
+    expect(mutualFrames).toBeGreaterThan(90);
+  });
+
+  it('keeps local destinations clear of uninvolved peers instead of walking onto their floor slot', () => {
+    const people = Array.from({ length: 6 }, (_, index) => {
+      const p = person(`clear-${index}`);
+      const angle = index / 6 * Math.PI * 2;
+      p.position = { x: Math.cos(angle) * 0.62, z: Math.sin(angle) * 0.62 };
+      p.target = { ...p.position };
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'clear-plaza';
+      p.navigation!.schedulePhase = 'social';
+      return p;
+    });
+    const h = harness(people);
+    for (let frame = 0; frame < 20 * 60; frame++) {
+      h.tick(1 / 60);
+      for (const p of people) {
+        const state = h.local.get(p.id);
+        if (!state) continue;
+        for (const other of people) {
+          if (other.id === p.id || other.id === state.partnerId) continue;
+          const at = h.visuals.get(other.id) ?? other.position;
+          expect(Math.hypot(state.destination.x - at.x, state.destination.z - at.z)).toBeGreaterThanOrEqual(0.299);
+        }
+      }
+    }
+  });
+
+  it('varies repeated local reposition targets so long frozen shots do not reveal seven exact markers', () => {
+    const p = person('varied-local');
+    p.activity = 'patrol';
+    p.navigation!.destinationKind = 'patrol-route';
+    p.navigation!.destinationId = 'watch-route';
+    const h = harness([p]);
+    const targets = new Set<string>();
+    let lastAction = '';
+    for (let frame = 0; frame < 90 * 30; frame++) {
+      h.tick(1 / 30);
+      const state = h.local.get(p.id);
+      if (!state) continue;
+      if (state.action !== lastAction && ['patrol-point', 'survey-route'].includes(state.action)) {
+        targets.add(`${state.destination.x.toFixed(3)},${state.destination.z.toFixed(3)}`);
+      }
+      lastAction = state.action;
+    }
+    expect(targets.size).toBeGreaterThanOrEqual(6);
   });
 
   it('turns toward a real companion without ever aliasing their authority', () => {
