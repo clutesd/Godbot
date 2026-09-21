@@ -21,6 +21,13 @@ does not advance history or write to people, settlements, resources or relations
 
 ### Documentary timebase
 
+Human presentation owns an explicit `HumanLifeClock` that advances from real renderer
+`deltaSeconds` only. It has no simulation-month, displayed-day, Historian-speed or event-hold
+input. A dramatic historical slowdown or complete freeze therefore leaves ordinary visible people
+free to continue their presentation-only routines, locomotion and idle/action animation. Only a
+person's own authoritative interruption (travel, emergency, displacement, specialized physical
+work, death, etc.) may suspend that local-life choreography.
+
 Human presentation deliberately does **not** map walking or routine actions to the displayed day.
 The documentary preset's ordinary pace is 2 simulated months per real second; a literal 30-day
 month would make one simulated day last only about 0.017 real seconds. Driving footsteps, meals or

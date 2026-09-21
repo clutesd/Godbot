@@ -4,6 +4,7 @@ import { Simulation } from '../src/sim/Simulation';
 import type { Person, Vec2 } from '../src/sim/types';
 import { LocalActivityPresentation } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
+import { HumanLifeClock } from '../src/render/people/HumanLifeClock';
 import { buildSocialGroups, groupKeyFor, placeInGroup } from '../src/render/people/PeoplePresentation';
 
 const FPS = 60;
@@ -54,6 +55,7 @@ describe('documentary human cadence', () => {
 
     const local = new LocalActivityPresentation();
     const visuals = new PeopleVisualStateStore();
+    const lifeClock = new HumanLifeClock();
     const metrics = new Map<string, ResidentCadence>(selectedIds.map(id => [id, {
       actions: new Set<string>(),
       movementEpisodes: 0,
@@ -87,6 +89,7 @@ describe('documentary human cadence', () => {
         if (visual) previousPositions.set(id, { x: visual.x, z: visual.z });
       }
 
+      const life = lifeClock.advance(FRAME_SECONDS);
       local.beginFrame();
       visuals.beginFrame();
 
@@ -105,7 +108,7 @@ describe('documentary human cadence', () => {
           revision: 'documentary-cadence-flat-fixture',
           blocked: false,
           far: false,
-        }, FRAME_SECONDS);
+        }, life.deltaSeconds);
 
         const metric = metrics.get(person.id)!;
         if (before && plan && before.authority === plan.authority) {
@@ -123,7 +126,7 @@ describe('documentary human cadence', () => {
             waypoints: person.navigation.waypoints,
             waypointIndex: person.navigation.waypointIndex,
           } : {}),
-        }, FRAME_SECONDS, ground);
+        }, life.deltaSeconds, ground);
 
         const moving = visual.speed >= WALKING;
         if (moving && !metric.previousMoving) metric.movementEpisodes++;
@@ -171,5 +174,89 @@ describe('documentary human cadence', () => {
     for (const metric of repeatedlyObserved) {
       expect(metric.sameAuthorityResets).toBeLessThanOrEqual(Math.max(1, Math.floor(metric.stableComparisons * 0.05)));
     }
+  });
+
+  it('keeps human life running for twenty real seconds while historical time is completely frozen', () => {
+    const simulation = new Simulation({
+      ...GODBOX_TIME_PRESETS.documentary,
+      seed: 'frozen-history-human-life',
+      startMode: 'established',
+      startingPopulation: 72,
+      settlementCount: [2, 2] as const,
+      world: { size: 20 },
+    });
+    simulation.step(8);
+
+    const eligible = simulation.state.people
+      .filter(person => person.alive
+        && person.navigation
+        && !person.navigation.traveling
+        && person.navigation.schedulePhase !== 'emergency'
+        && !['gather', 'construct', 'farm', 'flee', 'migrate', 'shelter'].includes(person.activity))
+      .slice(0, 16);
+    expect(eligible.length).toBeGreaterThanOrEqual(6);
+
+    const before = JSON.stringify(simulation.state);
+    const frozenMonth = simulation.state.month;
+    const selectedIds = eligible.map(person => person.id);
+    const local = new LocalActivityPresentation();
+    const visuals = new PeopleVisualStateStore();
+    const lifeClock = new HumanLifeClock();
+    const actions = new Map<string, Set<string>>(selectedIds.map(id => [id, new Set<string>()]));
+    const points = new Map<string, Set<string>>(selectedIds.map(id => [id, new Set<string>()]));
+    let movingFrames = 0;
+
+    for (let frame = 0; frame < PRESENTATION_SECONDS * FPS; frame++) {
+      // Intentionally no simulation.step(): Historian/civilization time is frozen.
+      const life = lifeClock.advance(FRAME_SECONDS);
+      const peers = new Map(simulation.state.people.filter(person => person.alive).map(person => [person.id, person]));
+      const groups = buildSocialGroups(simulation.state.people.filter(person => person.alive));
+      const previousPositions = new Map<string, Vec2>();
+      for (const id of selectedIds) {
+        const visual = visuals.get(id);
+        if (visual) previousPositions.set(id, { x: visual.x, z: visual.z });
+      }
+
+      local.beginFrame();
+      visuals.beginFrame();
+      for (const person of eligible) {
+        const group = groups.get(groupKeyFor(person) ?? '');
+        const base = placeInGroup(person, group, person.position);
+        const plan = local.resolve(person, {
+          base,
+          visual: visuals.get(person.id),
+          group,
+          people: peers,
+          visualFor: id => previousPositions.get(id),
+          structures: [],
+          safeSegment: () => true,
+          revision: 'frozen-history-flat-fixture',
+          blocked: false,
+          far: false,
+        }, life.deltaSeconds);
+
+        if (purposeful(plan?.action)) actions.get(person.id)!.add(plan!.action);
+        const visual = visuals.resolve(person.id, {
+          destination: plan?.destination ?? person.position,
+          restFacing: plan?.restFacing ?? base.restFacing,
+          localMove: Boolean(plan && plan.action !== 'arrive'),
+          smoothTravel: !plan,
+        }, life.deltaSeconds, ground);
+        points.get(person.id)!.add(`${visual.x.toFixed(2)},${visual.z.toFixed(2)}`);
+        if (visual.speed >= WALKING) movingFrames++;
+      }
+      local.prune();
+      visuals.prune();
+    }
+
+    expect(lifeClock.elapsed).toBeCloseTo(PRESENTATION_SECONDS, 5);
+    expect(simulation.state.month).toBe(frozenMonth);
+    expect(JSON.stringify(simulation.state)).toBe(before);
+
+    const variedResidents = selectedIds.filter(id => actions.get(id)!.size >= 2);
+    const visiblyMobileResidents = selectedIds.filter(id => points.get(id)!.size >= 8);
+    expect(variedResidents.length).toBeGreaterThanOrEqual(3);
+    expect(visiblyMobileResidents.length).toBeGreaterThanOrEqual(3);
+    expect(movingFrames).toBeGreaterThan(120);
   });
 });

@@ -11,6 +11,7 @@ import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
+import { HumanLifeClock } from './people/HumanLifeClock';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
 import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicBodyMaterial, createCosmicReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { AssetBuilder } from './assets/AssetBuilder';
@@ -202,6 +203,8 @@ export class GodboxRenderer {
   private readonly cosmicMaterial: THREE.MeshStandardMaterial;
   private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
   private readonly peopleVisuals = new PeopleVisualStateStore();
+  /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
+  private readonly humanLifeClock = new HumanLifeClock();
   private readonly localActivities = new LocalActivityPresentation();
   private readonly localPeers = new Map<string, Person>();
   private readonly localPeerPositions = new Map<string, Vec2>();
@@ -432,6 +435,9 @@ export class GodboxRenderer {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
+    // Human life advances from renderer time even when documentary history is slowed or frozen.
+    // Keep this before all state-derived presentation work so a dramatic hold never stalls people.
+    const humanLife = this.humanLifeClock.advance(deltaSeconds);
     for (const culture of this.state.cultures) if (!this.cultureById.has(culture.id)) {
       this.cultureById.set(culture.id, culture);
       this.accentByCulture.set(culture.id, new THREE.Color(culture.style.accent));
@@ -455,7 +461,7 @@ export class GodboxRenderer {
       const dressing = entry.site.getObjectByName(`construction-worksite:${key}`);
       if (dressing) updateConstructionWorksite(dressing, paid, constructionBlockedReason(entry.settlement)?.startsWith('missing:') ?? false, this.physicalWork.materialInTransit(key));
     }
-    this.updatePeople(deltaSeconds, elapsedSeconds);
+    this.updatePeople(humanLife.deltaSeconds, humanLife.elapsedSeconds);
     this.structuralAccumulator += deltaSeconds;
     if (this.structuralAccumulator >= 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond)) {
       this.structuralAccumulator = 0;
