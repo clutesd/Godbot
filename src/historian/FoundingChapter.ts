@@ -319,7 +319,7 @@ function communityScene(
     claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: [community.settlementId] },
   };
   return rememberStatement(historian, {
-    id: `founding:community:${community.podId}`,
+    id: `founding:community:${community.order}:${community.podId}`,
     subjectId: community.settlementId,
     kind: 'settlement-approach',
     position: community.position,
