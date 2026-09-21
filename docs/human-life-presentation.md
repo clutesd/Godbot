@@ -1,0 +1,102 @@
+# Human life presentation
+
+The simulation still owns identity, occupation, activity, navigation, position and every outcome.
+`LocalActivityPresentation` is renderer-owned state for people already at their destination. It
+does not advance history or write to people, settlements, resources or relationships.
+
+## Confirmed causes
+
+- `PeopleSystem.update` returns without assigning a new destination when destination and schedule
+  phase match. Resource workers also retain their site across commute/work phase changes.
+- `PeopleVisualStateStore` completes its journey and measures zero displacement on subsequent frames.
+- `PeoplePresentation` assigns stable, deterministic group positions. Those positions had no local
+  activity clock, so ordinary occupations could stay on the same spot indefinitely.
+- `PhysicalWorkScene`, farm actions and resource-work motion already provide stronger, independently
+  timed contact/recovery/reposition sequences. They retain ownership of those workers.
+- Ordinary idle clips were largely breathing; the renderer also ignored their spine rotation.
+- Stationary navigation could explicitly request walking. Logical patrol/travel/flee/migrate could
+  also select locomotion without displacement. Animation phase offsets existed but were unused.
+
+## Implementation
+
+Each eligible visible resident keeps a small routine, a few cached safe points, a destination,
+an interaction focus and an arrival/action timer. Intent changes happen after multi-second holds;
+existing visual interpolation runs between decisions. No crowd physics or additional pathfinder
+is involved, and mesh instancing and visible-person budgets are unchanged.
+
+Workshop, market, plaza, civic, knowledge, industrial, shrine, home and patrol routines have distinct
+task/inspection/interaction/pause sequences. Work-area points are relative to the current grouping
+and nearby matching building geometry. Without a suitable building, the layer uses observation
+and pauses rather than inventing a workstation. Conversations select actual visible members of
+the same destination and face their previous-frame visual positions. Later cycles can choose a
+different neighbour. This does not create or modify a simulation relationship.
+
+Local targets stay within two world units of authoritative position. Candidate points and each
+connecting segment reuse resource-work walkability and terrain checks, plus radial clearance and
+rotated building footprints. Invalid candidates are discarded. Blocked corridors cause waiting;
+a stopped journey can retry after a pause. Geometry changes invalidate cached points, while an
+equivalent geometry rebuild preserves routine timing.
+
+Position, target, destination, schedule phase, occupation, role and household changes replace the
+current local intent on the next rendered frame. Emergency, displacement, migration, travel,
+unsafe weather, inactivity and existing farming/construction/resource work take precedence.
+State is pruned with the visible-person budget and cleared on renderer disposal.
+
+Local steps accelerate/decelerate and turn before leaving planted feet. Ordinary authoritative
+travel now eases too; specialized physical-work approach curves remain intact. Locomotion phase
+advances by measured distance and survives pauses. Gait, carrying arms, modest age variation and
+bounded idle gestures use per-person deterministic timing. Zero displacement suppresses gait,
+including residual legs from an animation transition. Replay is deterministic for the same
+authority, visibility, camera-detail tier and frame-delta sequence.
+
+## Review scene
+
+Run `npm run dev`, then open **http://localhost:5173/human-life-review.html**.
+
+The developer-only scene supplies explicit fixture authority for 36 people in twelve areas:
+home, market, plaza, field, workshop, shrine, civic, knowledge, industrial, patrol, resource and
+construction. It uses production activity/movement/animation and physical-work systems with the
+same instanced body proportions as the main renderer. The scene does not call simulation steps.
+
+1. Choose an area and leave the camera at **Normal street shot**; use **Close inspection** for limbs.
+2. Press **Hold authority for 60 seconds**. The status should continue to say **authority unchanged**
+   while residents move, work, interact, observe and pause. Construction stays at 30% paid progress;
+   farm output and the resource ledger stay constant.
+3. Enable target markers to inspect local bounds. The displayed resident action identifies its
+   phase and conversation partner when present.
+4. Press **Emergency override** to cancel routines immediately. Once emergency travel has finished,
+   stationary people should stop cycling their legs. **Restore activities** restores fixture authority.
+5. Orbit or zoom out to inspect simultaneous movement and stillness across the town.
+
+## Validation and remaining limitations
+
+`tests/local-activity.test.ts` covers frozen-authority motion, replay, timing offsets, authority
+immutability, interruption, safe paths/footprints, geometry invalidation, blocked-trip recovery,
+visibility cleanup, actual-displacement gait, carrying, acceleration and bounded idles. Existing
+people/physical-action/resource/construction suites cover the retained stronger work systems.
+
+Validation for this pass:
+
+- Final focused run: **163/163 tests passed across nine files**, including **37 new local-activity tests**.
+- After the final cadence-estimator correction, the local-activity and people suites passed again
+  (**62/62 tests**). Lint, TypeScript and production build passed; the build still warns about the
+  existing large bundle and ineffective dynamic import.
+- The broader run recorded **797 passes and 18 failures**. One failure was an obsolete assertion
+  that a stationary resource traveler should walk; that assertion was updated and the suite passed.
+  All other **17 failures**, including three timeouts, reproduced on an isolated checkout of original
+  commit `3f3fcb89`. They concern environment extraction, historian predictions/determinism, resource
+  economy, settlement development/render budgeting and simulation determinism. No simulation fixes
+  were folded into this presentation pass.
+- JSON reports: `output/human-life-focused-tests.json`, `output/human-life-full-tests.json`, and
+  `output/human-life-baseline-tests.json`.
+
+Browser visual inspection could not be completed in this session: Computer Use stopped because
+it could not verify the active Windows browser URL. The fixture is typechecked; its visual quality
+and normal-camera readability still need an on-screen review.
+
+The procedural rig has no foot IK or planted-foot solver, so compressed long journeys can still
+slide. Generic occupations share coarse work gestures and building-relative exterior points;
+there are no authored indoor desk, machine or workbench contact sockets. Head turns are limited
+by the simple head silhouette. Conversations use bounded point selection, not collision avoidance
+or mutual turn-taking, so dense groups can still overlap. Large or obstructed sites may have no
+safe local candidates and intentionally remain in stationary presentation.

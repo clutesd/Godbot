@@ -71,6 +71,11 @@ export interface CharacterAnimationState {
   blendFactor: number; // 0 (old pose) to 1 (new pose)
   playbackSpeed: number; // 0.8 to 1.2, slight variation per character
   phaseOffset: number; // 0 to 1, prevents synchronized crowds
+  humanSeconds: number;
+  stridePhase: number;
+  visualSpeed?: number;
+  ageMonths: number;
+  carrying: boolean;
 }
 
 /**
@@ -79,11 +84,12 @@ export interface CharacterAnimationState {
 export class AnimationController {
   private readonly clips: Map<AnimationState, AnimationClip>;
   private readonly characterStates: Map<string, CharacterAnimationState>;
-  private readonly random: SeededRandom;
+  private readonly seed: string;
   /** Reused so per-frame pose interpolation for hundreds of characters allocates nothing. */
   private readonly poseBuffer: AnimationPose = emptyPose();
   private readonly blendBuffer: AnimationPose = emptyPose();
   private readonly resourceBuffer: AnimationPose = emptyPose();
+  private readonly humanBuffer: AnimationPose = emptyPose();
 
   /** Resource articulation is layered onto presentation, never mapped back into Activity. */
   resourcePose(base: AnimationPose | null, motion: ResourceWorkMotion, blend: number): AnimationPose {
@@ -97,7 +103,7 @@ export class AnimationController {
   }
 
   constructor(seed: string = 'animations') {
-    this.random = new SeededRandom(seed);
+    this.seed = seed;
     this.clips = new Map();
     this.characterStates = new Map();
     this.buildAnimationLibrary();
@@ -606,9 +612,12 @@ export class AnimationController {
     initialState: AnimationState = 'idle',
   ): CharacterAnimationState {
     if (this.characterStates.has(personId)) {
-      return this.characterStates.get(personId)!;
+      const existing = this.characterStates.get(personId)!;
+      existing.occupation = occupation;
+      return existing;
     }
 
+    const random = new SeededRandom(`${this.seed}:${personId}`);
     const state: CharacterAnimationState = {
       personId,
       occupation,
@@ -618,8 +627,9 @@ export class AnimationController {
       poseFraction: 0,
       previousPose: emptyPose(),
       blendFactor: 1.0,
-      playbackSpeed: 0.9 + this.random.float() * 0.2, // ±10% variation
-      phaseOffset: this.random.float(), // 0 to 1
+      playbackSpeed: 0.9 + random.float() * 0.2,
+      phaseOffset: random.float(),
+      humanSeconds: 0, stridePhase: random.float() * Math.PI * 2, ageMonths: 360, carrying: false,
     };
 
     this.characterStates.set(personId, state);
@@ -631,12 +641,22 @@ export class AnimationController {
    * locomotion state derived from visual travel, which is authoritative over the logical activity
    * whenever the character is actually seen to move.
    */
-  updateCharacterAnimation(personId: string, deltaTime: number, newActivity: Activity, override?: AnimationState): void {
+  updateCharacterAnimation(personId: string, deltaTime: number, newActivity: Activity, override?: AnimationState,
+    visualSpeed?: number, ageMonths = 360, carrying = false): void {
     const charState = this.characterStates.get(personId);
     if (!charState) return;
 
     // Map activity to animation state
-    const newAnimState = override ?? this.activityToAnimationState(newActivity, charState.occupation);
+    let newAnimState = override ?? this.activityToAnimationState(newActivity, charState.occupation);
+    charState.visualSpeed = visualSpeed;
+    charState.ageMonths = ageMonths;
+    charState.carrying = carrying || newAnimState === 'carry';
+    charState.humanSeconds += Math.max(0, deltaTime);
+    if (visualSpeed !== undefined) {
+      if (visualSpeed < 0.05 && (newAnimState === 'walk' || newAnimState === 'run')) newAnimState = 'idle';
+      const ageStride = ageMonths < 168 ? 0.75 : ageMonths > 816 ? 0.85 : 1;
+      charState.stridePhase += Math.max(0, visualSpeed) * Math.max(0, deltaTime) / (0.18 * ageStride * charState.playbackSpeed) * Math.PI * 2;
+    }
 
     // Update animation time
     charState.elapsedTime += deltaTime;
@@ -664,7 +684,7 @@ export class AnimationController {
 
       // Cycle through poses
       const totalDuration = clip.poses.reduce((sum, p) => sum + p.duration, 0);
-      const cycleTime = (charState.elapsedTime * charState.playbackSpeed) % totalDuration;
+      const cycleTime = (charState.elapsedTime * charState.playbackSpeed + charState.phaseOffset * totalDuration) % totalDuration;
 
       let accum = 0;
       for (let i = 0; i < clip.poses.length; i++) {
@@ -691,8 +711,43 @@ export class AnimationController {
     if (!charState) return null;
     const sampled = this.samplePose(charState);
     if (!sampled) return null;
-    if (charState.blendFactor >= 1) return sampled;
-    return lerpPose(charState.previousPose, sampled, charState.blendFactor, this.blendBuffer);
+    const blended = charState.blendFactor >= 1 ? sampled
+      : lerpPose(charState.previousPose, sampled, charState.blendFactor, this.blendBuffer);
+    return charState.visualSpeed === undefined ? blended : this.humanPose(charState, blended);
+  }
+
+  private humanPose(state: CharacterAnimationState, base: AnimationPose): AnimationPose {
+    const out = copyPose(base, this.humanBuffer);
+    const speed = state.visualSpeed ?? 0;
+    const elderly = state.ageMonths > 816;
+    if (speed >= 0.05) {
+      const amplitude = Math.min(1, speed / 0.24) * (elderly ? 0.27 : 0.36);
+      const stride = Math.sin(state.stridePhase) * amplitude;
+      out.leftHipRotation = stride; out.rightHipRotation = -stride;
+      out.leftKneeRotation = Math.max(0, -stride) * 1.2;
+      out.rightKneeRotation = Math.max(0, stride) * 1.2;
+      out.leftShoulderRotation = state.carrying ? 0.42 : -stride * 0.8;
+      out.rightShoulderRotation = state.carrying ? 0.42 : stride * 0.8;
+      out.spineRotation = state.carrying ? 0.12 : elderly ? 0.06 : 0.025;
+      out.positionOffset.y = Math.abs(Math.cos(state.stridePhase)) * 0.018;
+    } else {
+      // Stop residual gait immediately, including the old pose in a transition blend.
+      if (state.currentState !== 'rest') {
+        out.leftHipRotation = 0; out.rightHipRotation = 0;
+      }
+      if (state.currentState === 'idle' || state.currentState === 'rest' || state.currentState === 'alert') {
+        const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 29;
+        // A slow, smooth gesture window with long quiet intervals, not constant fidgeting.
+        const p = (t % 13) / 13;
+        const gesture = p < 0.32 ? Math.sin(p / 0.32 * Math.PI) ** 2 : 0;
+        out.headRotation += gesture * (elderly ? 0.2 : 0.38) * Math.sin(t * 0.43);
+        out.pelvisRotation += gesture * 0.075;
+        out.spineRotation += gesture * 0.04;
+        out.rightShoulderRotation += gesture * (state.carrying ? 0.06 : 0.23);
+        out.positionOffset.y -= gesture * 0.015;
+      }
+    }
+    return out;
   }
 
   private samplePose(charState: CharacterAnimationState): AnimationPose | null {
@@ -729,15 +784,15 @@ export class AnimationController {
       case 'worship':
         return 'ritual';
       case 'patrol':
-        return 'walk';
+        return 'idle';
       case 'shelter':
         return 'rest';
       case 'flee':
-        return 'run';
+        return 'idle';
       case 'travel':
-        return 'walk';
+        return 'idle';
       case 'migrate':
-        return 'run';
+        return 'idle';
       case 'socialize':
         return 'converse';
       case 'rest':

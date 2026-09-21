@@ -130,7 +130,7 @@ describe('resource scene lifecycle and physical worker contract', () => {
     expect(JSON.stringify(worker)).toBe(before);
     expect(instanceMeshes(rig.group).every(mesh => mesh.count <= mesh.instanceMatrix.count)).toBe(true);
     worker.navigation!.traveling = true;
-    expect(travelAnimationFor(0, worker)).toBe('walk');
+    expect(travelAnimationFor(0, worker)).toBe('idle');
     expect(travelAnimationFor(0.4, worker)).toBe('walk');
     expect(resourceWorkerCanPresent(worker, site.assignment)).toBe(false);
     worker.navigation!.traveling = false;

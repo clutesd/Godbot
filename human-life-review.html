@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GODBOX human life review</title>
+<style>
+body{margin:0;background:#96a083;color:#f5ead7;font:14px system-ui}canvas{display:block}aside{position:fixed;z-index:2;top:16px;left:16px;width:260px;padding:18px;background:#182725ed;border-radius:12px}h1{font-size:19px;margin:0 0 8px}p{font-size:12px;color:#c1cdc2;line-height:1.5}select,button{background:#344c43;color:#fff;border:1px solid #718379;border-radius:5px;padding:8px;margin:3px 0}select{width:100%}label{display:block;margin-top:10px}output{display:block;margin-top:12px;color:#e7ce9c;line-height:1.5}footer{position:fixed;bottom:14px;left:16px;background:#182725dc;padding:10px;border-radius:6px;font-size:12px}.site-label{position:fixed;pointer-events:none;color:#fff4d5;background:#233c32b8;border-radius:4px;padding:3px 7px;font-size:11px;transform:translate(-50%,-50%)}a{color:#dec495}
+</style></head><body>
+<aside><h1>Human life review</h1><p>36 residents. Twelve activity areas. Production local activity, locomotion, animation, farming, resource and construction systems, with the instanced GODBOX body proportions.</p>
+<label for="focus">Camera subject</label><select id="focus"><option value="all">Whole settlement</option></select>
+<label for="distance">Camera distance</label><select id="distance"><option value="normal">Normal street shot</option><option value="close">Close inspection</option></select>
+<button id="hold">Hold authority for 60 seconds</button><button id="pause">Pause presentation</button>
+<button id="emergency">Emergency override</button><button id="restore">Restore activities</button>
+<label><input id="targets" type="checkbox"> Show local targets</label><output id="status">Preparing town…</output>
+<p id="action"></p><p><a href="/">Simulation</a> · <a href="/construction-review.html">Construction detail</a></p>
+</aside><footer>Drag to orbit · scroll to zoom · authority stays constant until an override button is pressed</footer>
+<script type="module" src="/src/dev/humanLifeReview.ts"></script></body></html>

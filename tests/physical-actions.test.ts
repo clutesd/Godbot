@@ -58,7 +58,7 @@ describe('physical authority and interruption', () => {
     expect(workInterruption(person, weather)).toBeUndefined();
     expect(workInterruption(person, weather, 0.2)).toBe('travel');
     person.navigation!.traveling = true;
-    expect(travelAnimationFor(0, person)).toBe('walk');
+    expect(travelAnimationFor(0, person)).toBe('idle');
     expect(workInterruption(person)).toBe('travel');
     person.activity = 'migrate'; expect(workInterruption(person)).toBe('migration');
     person.displacedSinceMonth = 2; expect(workInterruption(person)).toBe('displaced');

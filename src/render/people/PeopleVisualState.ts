@@ -9,8 +9,9 @@ import type { Vec2 } from '../../sim/types';
  * A person keeps a previous visual position, a visual destination, a route-aware journey polyline
  * and a bounded travel duration. Simulation months advance far faster than a person can plausibly
  * walk, so journeys are compressed rather than simulated: the goal is continuity, not temporal
- * literalism. Visual state always converges back on the authoritative position, and genuinely
- * impossible jumps snap instead of dragging a character across the world.
+ * literalism. Authoritative journeys converge on their destination; the local activity layer
+ * may then supply bounded task points. Impossible jumps snap instead of dragging a character
+ * across the world. Local steps never feed the simulation cadence estimator.
  */
 
 /** World units per second of unhurried visual travel. Sets the top of the journey-length band. */
@@ -40,6 +41,10 @@ export interface PersonVisualTarget {
   restFacing?: number;
   /** Resource workers slow through the last part of an approach before orienting to contact. */
   arrivalEase?: boolean;
+  /** Local steps do not train the simulation-month catch-up estimate. */
+  localMove?: boolean;
+  localSpeed?: number;
+  smoothTravel?: boolean;
 }
 
 export interface PersonVisualGround {
@@ -71,6 +76,8 @@ export interface PersonVisualState {
   speed: number;
   traveling: boolean;
   arrivalEase: boolean;
+  localMove: boolean;
+  smoothTravel: boolean;
   /** True on the frame the character was repositioned instead of interpolated. */
   snapped: boolean;
   /** Route-aware journey polyline, origin first and destination last. */
@@ -123,6 +130,8 @@ export class PeopleVisualStateStore {
     if (!existing) this.states.set(personId, state);
     state.lastFrame = this.frame;
     state.arrivalEase = target.arrivalEase ?? false;
+    state.localMove = target.localMove ?? false;
+    state.smoothTravel = target.smoothTravel ?? false;
     state.snapped = !existing;
     state.sinceRetarget += Math.max(0, deltaSeconds);
 
@@ -131,7 +140,7 @@ export class PeopleVisualStateStore {
       const jump = Math.hypot(target.destination.x - state.x, target.destination.z - state.z);
       if (jump > SNAP_DISTANCE) this.reset(state, target.destination, ground);
       else this.retarget(state, target);
-      state.sinceRetarget = 0;
+      if (!target.localMove) state.sinceRetarget = 0;
     }
 
     this.advance(state, deltaSeconds, target.restFacing, ground);
@@ -154,6 +163,8 @@ export class PeopleVisualStateStore {
       speed: 0,
       traveling: false,
       arrivalEase: false,
+      localMove: false,
+      smoothTravel: false,
       snapped: true,
       path: [{ x: at.x, z: at.z }],
       lastGroundX: at.x,
@@ -203,8 +214,10 @@ export class PeopleVisualStateStore {
     const observed = state.sinceRetarget > 0
       ? (state.monthSeconds > 0 ? state.monthSeconds * 0.6 + state.sinceRetarget * 0.4 : state.sinceRetarget)
       : state.monthSeconds;
-    state.monthSeconds = observed;
-    state.retargets += 1;
+    if (!target.localMove) {
+      state.monthSeconds = observed;
+      state.retargets += 1;
+    }
     const unhurried = length / VISUAL_TRAVEL_SPEED;
     // The first move has no pace sample yet; walking it out beats guessing from a single frame.
     const budget = state.retargets > 1 && observed > 0 ? Math.min(unhurried, observed) : unhurried;
@@ -214,6 +227,7 @@ export class PeopleVisualStateStore {
     state.destinationX = target.destination.x;
     state.destinationZ = target.destination.z;
     state.duration = Math.min(MAX_JOURNEY_SECONDS, Math.max(MIN_JOURNEY_SECONDS, budget)) * catchup;
+    if (target.localMove) state.duration = Math.max(0.6, length / (target.localSpeed ?? 0.3));
     state.progress = length > 0.0001 ? 0 : 1;
     state.traveling = state.progress < 1;
   }
@@ -221,9 +235,20 @@ export class PeopleVisualStateStore {
   private advance(state: PersonVisualState, deltaSeconds: number, restFacing: number | undefined, ground: PersonVisualGround): void {
     const previousX = state.x;
     const previousZ = state.z;
+    // Turn on planted feet before a short local step, then continue turning while moving.
+    if (state.localMove && state.progress === 0 && state.path.length > 1) {
+      const next = state.path[1]!;
+      state.desiredFacing = Math.atan2(next.x - state.x, next.z - state.z);
+      if (Math.cos(state.desiredFacing - state.facing) < 0.8) {
+        state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * Math.max(0, deltaSeconds));
+        state.speed = 0;
+        return;
+      }
+    }
     if (state.progress < 1 && deltaSeconds > 0) {
       state.progress = Math.min(1, state.progress + deltaSeconds / Math.max(0.0001, state.duration));
-      const point = samplePolyline(state.path, state.arrivalEase ? easedArrivalProgress(state.progress) : state.progress);
+      const point = samplePolyline(state.path, state.localMove || state.smoothTravel ? easedLocalProgress(state.progress)
+        : state.arrivalEase ? easedArrivalProgress(state.progress) : state.progress);
       state.x = point.x;
       state.z = point.z;
     }
@@ -249,6 +274,14 @@ export class PeopleVisualStateStore {
     // Keep easing after the journey ends, so a character never freezes mid-turn.
     state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * Math.max(0, deltaSeconds));
   }
+}
+
+/** Symmetric acceleration/deceleration, with a constant-speed middle half. */
+export function easedLocalProgress(progress: number): number {
+  const t = Math.max(0, Math.min(1, progress));
+  if (t < 0.25) return t * t / 0.375;
+  if (t > 0.75) return 1 - (1 - t) * (1 - t) / 0.375;
+  return (t - 0.125) / 0.75;
 }
 
 /** Integrates constant walking speed into a smooth deceleration over the final 30% of time. */

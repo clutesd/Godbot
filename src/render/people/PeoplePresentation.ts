@@ -169,9 +169,8 @@ export function humanStoryCueFor(person: Person): HumanStoryCue {
  */
 export function travelAnimationFor(speed: number, person: Person): AnimationState | undefined {
   if (speed < WALK_SPEED_THRESHOLD) {
-    if (person.navigation?.traveling) return person.activity === 'flee' ? 'run' : 'walk';
+    if (person.navigation?.traveling || ['patrol', 'travel', 'migrate', 'flee'].includes(person.activity)) return 'idle';
     if (person.activity !== 'gather') return undefined;
-    if (person.navigation?.traveling) return 'walk';
     if (person.navigation?.schedulePhase === 'emergency' || person.displacedSinceMonth !== undefined) return undefined;
     const resourceKind = resourceWorkVisualKindFromDestinationId(person.navigation?.destinationId);
     if (resourceKind === 'timber') return 'build';

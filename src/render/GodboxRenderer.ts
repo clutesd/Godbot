@@ -10,6 +10,7 @@ import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
+import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
 import { roleVisualColor } from './people/RoleVisualProfile';
 import { createRoleGarmentMaterial, updateRoleGarmentMaterial } from './people/RoleGarmentPresentation';
@@ -167,6 +168,7 @@ const SETTLEMENT_LIGHT_BUDGET = 18;
  * framing changes from ever altering apparent world-space height.
  */
 const HUMAN_WORLD_SCALE = 0.28;
+const NO_ACTIVITY_STRUCTURES: readonly ActivityStructure[] = [];
 /** Canonical adult humanoid height in world units (feet to crown) at `heightScale === 1`. */
 export const CANONICAL_ADULT_HEIGHT = HUMAN_WORLD_SCALE * 0.96;
 export const visiblePersonBudgetForDensity = (density: number): number => Math.max(48, Math.round(384 * density));
@@ -198,6 +200,10 @@ export class GodboxRenderer {
   private readonly peopleRoleGarments: THREE.InstancedMesh;
   private readonly roleGarmentMaterial: THREE.MeshBasicMaterial;
   private readonly peopleVisuals = new PeopleVisualStateStore();
+  private readonly localActivities = new LocalActivityPresentation();
+  private readonly localPeers = new Map<string, Person>();
+  private readonly localPeerPositions = new Map<string, Vec2>();
+  private readonly localStructureRevisions = new WeakMap<readonly ActivityStructure[], string>();
   private socialGroups = new Map<string, SocialGroup>();
   private readonly personGround: PersonVisualGround = {
     heightAt: (x, z) => this.elevationAt(x, z),
@@ -255,7 +261,14 @@ export class GodboxRenderer {
   /** Copy on demand: camera/debug consumers cannot modify the renderer's working records. */
   inspectPhysicalAction(personId: string): PhysicalActionPresentation | undefined {
     const action = this.actionInspections.get(personId) ?? this.physicalWork.inspect(personId);
-    return action ? { ...action, interactionAnchor: { ...action.interactionAnchor }, locomotionTarget: { ...action.locomotionTarget } } : undefined;
+    if (action) return { ...action, interactionAnchor: { ...action.interactionAnchor }, locomotionTarget: { ...action.locomotionTarget } };
+    const local = this.localActivities.get(personId);
+    const person = local ? this.localPeers.get(personId) : undefined;
+    if (!local || !person?.navigation) return undefined;
+    return { personId, actionKind: `local-${local.action}`, authoritativeActivity: person.activity,
+      sourceAuthority: 'current destination and activity (presentation only)', targetId: local.partnerId ?? person.navigation.destinationId,
+      targetKind: person.navigation.destinationKind, interactionAnchor: { ...local.focus }, locomotionTarget: { ...local.destination },
+      phase: local.phase, phaseProgress: Math.min(1, local.seconds / local.hold), activeTool: 'none', contactStrength: 0 };
   }
   private resourceWorkersMonth = -1;
   private resourceWorkersRevision = -1;
@@ -512,6 +525,15 @@ export class GodboxRenderer {
     this.actionInspections.clear();
     this.vegetation.beginResourceImpacts();
     this.peopleVisuals.beginFrame();
+    this.localActivities.beginFrame();
+    this.localPeers.clear();
+    for (const person of this.visiblePeople) if (person.alive) {
+      this.localPeers.set(person.id, person);
+      const previous = this.peopleVisuals.get(person.id) ?? person.position;
+      const snapshot = this.localPeerPositions.get(person.id);
+      if (snapshot) { snapshot.x = previous.x; snapshot.z = previous.z; }
+      else this.localPeerPositions.set(person.id, { x: previous.x, z: previous.z });
+    }
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
     this.peopleRoleGarments.count = count;
@@ -525,6 +547,15 @@ export class GodboxRenderer {
     for (let index = 0; index < count; index += 1) {
       const person = this.visiblePeople[index];
       if (!person) continue;
+      if (!person.alive) {
+        for (const mesh of [this.people, this.peopleRoleGarments, this.peopleHeads, this.peopleTools, this.peopleHeadwear, this.peopleCargo]) {
+          this.setInstanceTransform(mesh, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+        }
+        for (const mesh of [this.peopleArms, this.peopleLegs]) for (let side = 0; side < 2; side++) {
+          this.setInstanceTransform(mesh, index * 2 + side, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+        }
+        continue;
+      }
       const group = this.socialGroups.get(groupKeyFor(person) ?? '');
       const binding = this.resourceWork.workers.get(person.id);
       const settlement = this.workSettlements.get(person.homeId);
@@ -535,14 +566,33 @@ export class GodboxRenderer {
       const site = project ? this.settlementBuildingPlacements.get(person.homeId)?.find(p => p.key === project.plotId) : undefined;
       const physical = this.physicalWork.plan(person, settlement, site, this.farmFields.fields.get(person.homeId), weather,
         (a, b) => this.resourceWork.safeSegment(a, b));
+      const base = this.personDisplayTarget(person, group);
+      const structures = this.settlementBuildingPlacements.get(person.homeId) ?? NO_ACTIVITY_STRUCTURES;
+      let localRevision = this.localStructureRevisions.get(structures);
+      if (localRevision === undefined) {
+        localRevision = activityStructureSignature(structures);
+        this.localStructureRevisions.set(structures, localRevision);
+      }
+      const local = this.localActivities.resolve(person, {
+        base, visual: this.peopleVisuals.get(person.id), group, people: this.localPeers,
+        structures,
+        safeSegment: (a, b) => this.resourceWork.safeSegment(a, b),
+        revision: localRevision,
+        visualFor: (id) => this.localPeerPositions.get(id),
+        blocked: Boolean(worker || physical || interruption || person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'),
+        far: Math.hypot(this.camera.position.x - base.x, this.camera.position.z - base.z) > 35,
+      }, deltaSeconds);
       const aim = worker ? resourceWorkAlternateAnchor(worker.site.profile, worker.variation, elapsedSeconds)
-        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? this.personDisplayTarget(person, group);
+        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? local?.destination ?? base;
       const visual = this.peopleVisuals.resolve(person.id, {
         destination: aim,
+        localMove: Boolean(local && local.action !== 'arrive'),
+        smoothTravel: !worker && !physical,
+        localSpeed: (0.27 + stableUnit(`${person.id}:pace`) * 0.08) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.85 : 1),
         arrivalEase: Boolean(worker || physical),
-        ...(!worker && !physical && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
+        ...(!worker && !physical && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
-          : physical ? facingTarget(physical.action.locomotionTarget, physical.action.interactionAnchor) : ('restFacing' in aim ? aim.restFacing as number : undefined),
+          : physical ? facingTarget(physical.action.locomotionTarget, physical.action.interactionAnchor) : local?.restFacing ?? base.restFacing,
       }, deltaSeconds, this.personGround);
       const display = visual;
       const tier = visualTierFor(person);
@@ -554,7 +604,10 @@ export class GodboxRenderer {
       const travel = travelAnimationFor(visual.speed, person);
       const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
-        travel ? loaded ? 'carry' : travel : interruption || unsupportedWork ? 'idle' : physical ? 'idle' : undefined);
+        visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : travel
+          : interruption || unsupportedWork || physical ? 'idle'
+            : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
+        visual.speed, person.ageMonths, loaded || person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? ''));
       let pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
       const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
       const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
@@ -576,14 +629,14 @@ export class GodboxRenderer {
       const buildScale = person.appearance?.buildScale ?? 1;
       // The rendered terrain under the *visual* position is the only anchor: the soles sit on
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
-      const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0.035 : person.activity === 'rest' ? 0.006 : 0.014;
+      const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0 : person.activity === 'rest' ? 0.003 : 0.006;
       const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
       const footY = visual.footY + (physical?.elevation ?? 0) + (articulated ? 0 : bob);
       // Crouching and stooping lower the upper body only; the legs keep their hip pivot so the
       // feet stay on the ground instead of sinking with the pose.
       const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, articulated ? pose?.spineRotation ?? 0 : 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, pose?.spineRotation ?? 0, facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
         materialQuality: person.appearance?.materialQuality ?? 0.5,
@@ -594,7 +647,7 @@ export class GodboxRenderer {
       // documentary distance. It is geometry, not a billboard/icon, and follows the body pose.
       this.setInstanceTransform(
         this.peopleRoleGarments, index, display.x, footY + 0.53 * heightScale + poseLift, display.z,
-        heightScale * buildScale, heightScale, heightScale * buildScale, articulated ? pose?.spineRotation ?? 0 : 0,
+        heightScale * buildScale, heightScale, heightScale * buildScale, pose?.spineRotation ?? 0,
         facing + (pose?.pelvisRotation ?? 0), person.appearance?.posture ?? 0,
       );
       this.personDetailColor.copy(roleVisualColor(person.role, culture?.style.primary ?? '#d96c86', {
@@ -666,7 +719,12 @@ export class GodboxRenderer {
     this.resourceWorkers.endFrame();
     this.physicalWorkers.endFrame();
     this.physicalWork.endFrame();
-    this.peopleVisuals.prune((personId) => this.animationController.release(personId));
+    this.localActivities.prune();
+    this.peopleVisuals.prune((personId) => {
+      this.animationController.release(personId);
+      this.lastPersonGroundPosition.delete(personId);
+      this.localPeerPositions.delete(personId);
+    });
     this.people.instanceMatrix.needsUpdate = true;
     this.peopleRoleGarments.instanceMatrix.needsUpdate = true;
     this.peopleHeads.instanceMatrix.needsUpdate = true;
@@ -804,13 +862,9 @@ export class GodboxRenderer {
     }
     for (let pass = 0; pass < 3; pass += 1) {
       for (const placement of placements) {
-        const clearance = Math.max(placement.width, placement.depth) * 0.52 + 0.2;
-        const dx = position.x - placement.worldX;
-        const dz = position.z - placement.worldZ;
-        const separation = Math.hypot(dx, dz);
-        if (separation >= clearance) continue;
-        const angle = separation > 0.001 ? Math.atan2(dz, dx) : stableUnit(`${person.id}:${placement.key}`) * Math.PI * 2;
-        position = { x: placement.worldX + Math.cos(angle) * clearance, z: placement.worldZ + Math.sin(angle) * clearance };
+        const fallback = Math.hypot(position.x - placement.worldX, position.z - placement.worldZ) <= 0.001
+          ? stableUnit(`${person.id}:${placement.key}`) * Math.PI * 2 : 0;
+        position = clearActivityStructure(position, placement, fallback);
       }
     }
     if (!this.personStandable(position.x, position.z)) {
@@ -3248,6 +3302,9 @@ export class GodboxRenderer {
     this.warRenderer.dispose();
     this.weatherRenderer.dispose();
     this.peopleVisuals.clear();
+    this.localActivities.clear();
+    this.localPeers.clear();
+    this.localPeerPositions.clear();
     this.animationController.dispose();
     this.lastPersonGroundPosition.clear();
     window.removeEventListener('resize', this.resizeHandler);
