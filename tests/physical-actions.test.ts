@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { vegetationFixture, instanceMeshes } from './fixtures/vegetation';
 import type { Person, Settlement, WeatherCellState } from '../src/sim/types';
 import { atInteraction, workInterruption } from '../src/render/people/PhysicalActionPresentation';
-import { PhysicalWorkScene } from '../src/render/people/PhysicalWorkScene';
+import { PhysicalWorkScene, type WorkPlacement } from '../src/render/people/PhysicalWorkScene';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { travelAnimationFor } from '../src/render/people/PeoplePresentation';
 import { farmAnchor, farmGeometry } from '../src/shared/FarmGeometry';
@@ -35,12 +35,12 @@ function setup() {
     navigation: { destinationKind: 'field', destinationId: field.id, traveling: false, schedulePhase: 'work', reason: 'test', waypoints: [], waypointIndex: 0 } } as Person;
   return { settlement, weather, person, field };
 }
-function construction(settlement: Settlement, person: Person) {
+function construction(settlement: Settlement, person: Person): WorkPlacement {
   const response = { need: 'housing', form: 'dwelling', name: 'house', level: 1, material: 'timber', cultureId: person.cultureId,
-    style: fixture.simulation.state.cultures[0]!.style, services: { housing: 1 }, reasons: [], capabilities: [],
+    style: fixture.simulation.state.cultures[0]!.style, services: { housing: 1 }, reasons: [] as string[], capabilities: [] as string[],
     cost: { food: 0, wood: 4, minerals: 0, goods: 0, wealth: 0 }, labor: 4 } as const;
   const project = { plotId: 'plot', response, action: 'founded', startedMonth: 0, progress: 0.3,
-    spent: { food: 0, wood: 1.2, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] } as const;
+    spent: { food: 0, wood: 1.2, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] as string[] } as const;
   settlement.development = { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: 6, nextAttemptMonth: 12, revision: 1,
     project: structuredClone(project) };
   settlement.structurePlots = [{ id: 'plot', worldX: 0, worldZ: 0, width: 2, depth: 1.5, height: 1, radius: 1, condition: 1, foundedMonth: 0 }];
@@ -485,7 +485,7 @@ describe('construction workflow', () => {
     const finishing = sample(0.96);
     expect(new Set([foundation, frame, walls, roof].map(motion => JSON.stringify(motion))).size).toBe(4);
     expect(roof.handY).toBeGreaterThan(foundation.handY);
-    expect(finishing.impact).toBeLessThanOrEqual(roof.impact);
+    expect(finishing.impact).toBeLessThanOrEqual(0.55);
   });
 
   it('produces visibly distinct assembler motion for different construction materials', () => {
@@ -706,7 +706,8 @@ describe('construction workflow', () => {
     const finishing = sampleConstructionAction(person, 'plot', { phase: 'assemble', seconds: 0.7, carrying: false },
       anchors, 'timber', finishMotion, undefined, 'assembler', 3, 0.96, undefined, 'early');
     expect(finishing.actionKind).toBe('construction-finish');
-    expect(finishing.contactStrength).toBeLessThanOrEqual(active.contactStrength);
+    expect(active.actionKind).toBe('construction-assemble');
+    expect(finishing.contactStrength).toBeLessThanOrEqual(0.55);
   });
 
   it('requires an active safe project and the matching destination', () => {
@@ -785,6 +786,8 @@ describe('construction workflow', () => {
     for (let i = 0; i < 6; i++) advanceConstruction(playback, 0.1, true, false);
     expect(playback.phase).toBe('handoff'); expect(playback.carrying).toBe(true);
     for (let i = 0; i < 5; i++) advanceConstruction(playback, 0.1, true, false);
+    expect(playback.carrying).toBe(true); // A solo worker keeps the load until installation.
+    for (let i = 0; i < 18; i++) advanceConstruction(playback, 0.1, true, false);
     expect(playback.carrying).toBe(false);
   });
   it('blocks both modern material bills and legacy resource budgets without spending anything', () => {
@@ -824,7 +827,7 @@ describe('construction workflow', () => {
       const a = worker.action;
       const visual = visuals.resolve(person.id, { destination: a.locomotionTarget, restFacing: Math.atan2(a.interactionAnchor.x - a.locomotionTarget.x, a.interactionAnchor.z - a.locomotionTarget.z) }, 1 / 60, { heightAt: () => 0, isStandable: () => true });
       scene.advance(person, worker, visual, 1 / 60); phases.add(worker.action.phase);
-      if (worker.action.carriedObject) { acquired = true; expect(['pickup', 'carry', 'deliver']).toContain(worker.action.phase); }
+      if (worker.action.carriedObject) { acquired = true; expect(['pickup', 'carry', 'deliver', 'handoff', 'assemble']).toContain(worker.action.phase); }
       if (visual.traveling) expect(worker.ready).toBe(false);
       scene.endFrame();
     }

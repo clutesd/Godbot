@@ -24,6 +24,9 @@ export interface PhysicalActionPresentation {
   readonly contactStrength: number;
   /** Ephemeral evidence drawn only at real presentation contact; never simulation state. */
   readonly contactEffect?: PhysicalContactEffectKind;
+  /** Site-relative surface/platform heights for construction articulation. */
+  readonly contactHeight?: number;
+  readonly platformHeight?: number;
   readonly blockedReason?: string;
 }
 

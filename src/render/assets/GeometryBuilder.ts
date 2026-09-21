@@ -14,6 +14,15 @@ export interface Vec3 {
   z: number;
 }
 
+/** Index ranges of actual architectural pieces, retained after material batching. */
+export interface AssemblyPiece {
+  start: number;
+  count: number;
+  min: Vec3;
+  max: Vec3;
+  stage: number;
+}
+
 type LocalMap = (x: number, y: number, z: number) => Vec3;
 
 /** 0 = x, 1 = y, 2 = z. */
@@ -26,6 +35,8 @@ function dominantAxis(x: number, y: number, z: number): number {
 }
 
 export class GeometryBuilder {
+  private readonly pieces: AssemblyPiece[] = [];
+  private recordingBox = false;
   private readonly positions: number[] = [];
   private readonly normals: number[] = [];
   private readonly indices: number[] = [];
@@ -87,8 +98,10 @@ export class GeometryBuilder {
   }
 
   addQuad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
+    const start = this.indices.length;
     this.addTriangle(a, b, c);
     this.addTriangle(a, c, d);
+    if (!this.recordingBox) this.recordPiece(start);
   }
 
   /** Axis-aligned box optionally spun about Y. */
@@ -166,7 +179,9 @@ export class GeometryBuilder {
       const a = ring[index];
       const b = ring[(index + 1) % ring.length];
       if (!a || !b) continue;
+      const start = this.indices.length;
       this.addTriangle(a, apex, b);
+      this.recordPiece(start);
     }
   }
 
@@ -176,7 +191,9 @@ export class GeometryBuilder {
       const a = ring[index];
       const b = ring[(index + 1) % ring.length];
       if (!a || !b) continue;
+      const start = this.indices.length;
       this.addTriangle(a, b, center);
+      this.recordPiece(start);
     }
   }
 
@@ -188,6 +205,7 @@ export class GeometryBuilder {
       geometry.setAttribute('aSurfaceDetail', new THREE.Int8BufferAttribute(this.details, 4, true));
     }
     geometry.setIndex(this.indices);
+    geometry.userData['assemblyPieces'] = this.pieces;
     geometry.computeBoundingSphere();
     return geometry;
   }
@@ -200,6 +218,8 @@ export class GeometryBuilder {
   }
 
   private emitBox(map: LocalMap, halfX: number, halfY: number, zMin: number, zMax: number): void {
+    const start = this.indices.length;
+    this.recordingBox = true;
     const a = map(-halfX, -halfY, zMin);
     const b = map(halfX, -halfY, zMin);
     const c = map(halfX, -halfY, zMax);
@@ -214,6 +234,21 @@ export class GeometryBuilder {
     this.addQuad(b, a, e, f); // -z
     this.addQuad(c, b, f, g); // +x
     this.addQuad(a, d, h, e); // -x
+    this.recordingBox = false;
+    this.recordPiece(start);
+  }
+
+  private recordPiece(start: number): void {
+    if (this.indices.length === start) return;
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (let i = start; i < this.indices.length; i++) {
+      const v = this.indices[i]! * 3;
+      min.x = Math.min(min.x, this.positions[v]!); max.x = Math.max(max.x, this.positions[v]!);
+      min.y = Math.min(min.y, this.positions[v + 1]!); max.y = Math.max(max.y, this.positions[v + 1]!);
+      min.z = Math.min(min.z, this.positions[v + 2]!); max.z = Math.max(max.z, this.positions[v + 2]!);
+    }
+    this.pieces.push({ start, count: this.indices.length - start, min, max, stage: 0 });
   }
 }
 

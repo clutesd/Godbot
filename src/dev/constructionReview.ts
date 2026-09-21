@@ -1,0 +1,128 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Simulation } from '../sim/Simulation';
+import type { Person } from '../sim/types';
+import type { DevelopmentResponse, StructureMaterial } from '../sim/development/types';
+import { AssetBuilder } from '../render/assets/AssetBuilder';
+import { ConstructionAssembly } from '../render/construction/ConstructionAssembly';
+import { createConstructionScaffold, updateConstructionScaffold } from '../render/construction/ConstructionScaffold';
+import { createConstructionWorksite, updateConstructionWorksite } from '../render/construction/ConstructionWorksite';
+import { constructionMaterialColour } from '../render/construction/ConstructionChoreography';
+import { constructionStagePresentation } from '../render/construction/ConstructionVisualGrammar';
+import { PhysicalWorkScene, type WorkPlacement } from '../render/people/PhysicalWorkScene';
+import { PeopleVisualStateStore } from '../render/people/PeopleVisualState';
+import { ResourceWorkerRenderer } from '../render/resources/ResourceWorkerRenderer';
+import { MaterialPalette, type Era } from '../render/materials/MaterialPalette';
+
+if (!import.meta.env.DEV) throw new Error('Construction review is a development fixture.');
+const input = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const progress = input<HTMLInputElement>('progress');
+const materialSelect = input<HTMLSelectElement>('material');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setClearColor('#bcc3b4');
+document.body.append(renderer.domElement);
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight('#f1f2df', '#586147', 2.3));
+const sun = new THREE.DirectionalLight('#fff1d5', 3);
+sun.position.set(3, 6, 4); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -5; sun.shadow.camera.right = sun.shadow.camera.top = 5;
+sun.shadow.normalBias = 0.015; scene.add(sun);
+const ground = new THREE.Mesh(new THREE.BoxGeometry(12, 0.06, 12), new THREE.MeshStandardMaterial({ color: '#82906d', roughness: 1 }));
+ground.position.y = -0.04; ground.receiveShadow = true; scene.add(ground);
+const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(-0.7, 0.35, 0); camera.position.set(3.6, 2.9, 4.3); controls.update();
+const resize = () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); };
+window.addEventListener('resize', resize); resize();
+const simulation = new Simulation({ seed: 'construction-review', startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
+const templateSettlement = simulation.state.settlements[0]!;
+const templatePerson = simulation.state.people[0]!;
+const culture = simulation.state.cultures[0]!.style;
+const assetBuilder = new AssetBuilder('construction-review');
+const workerRenderer = new ResourceWorkerRenderer(); scene.add(workerRenderer.group);
+const bodyGeometry = new THREE.CylinderGeometry(0.041, 0.034, 0.09, 6);
+const headGeometry = new THREE.SphereGeometry(0.029, 8, 6);
+const skin = new THREE.MeshStandardMaterial({ color: '#c39c77' });
+let settlement = structuredClone(templateSettlement);
+let people: Person[] = [];
+let workers = new PhysicalWorkScene();
+let visuals = new PeopleVisualStateStore();
+let assembly: ConstructionAssembly;
+let scaffold: THREE.Group;
+let worksite: THREE.Group;
+let placement: WorkPlacement;
+let root = new THREE.Group();
+let bodies: THREE.Group[] = [];
+let playing = false, last = performance.now(), frames = 0, contactLatch = false;
+
+function rebuild(): void {
+  scene.remove(root);
+  root.traverse(object => { if (object instanceof THREE.Mesh && !object.geometry.userData['shared'] && object.geometry !== bodyGeometry && object.geometry !== headGeometry) object.geometry.dispose(); });
+  root = new THREE.Group(); scene.add(root);
+  const material = materialSelect.value as StructureMaterial;
+  const era: Era = material === 'metal' ? 'industrial' : material === 'ceramic' ? 'preIndustrial' : material === 'masonry' ? 'village' : 'early';
+  const role = material === 'metal' ? 'factory' : material === 'masonry' ? 'hall' : 'house';
+  const response: DevelopmentResponse = { need: material === 'metal' ? 'manufacturing' : 'housing', form: material === 'metal' ? 'workshop' : 'dwelling', name: role, level: material === 'metal' ? 3 : 2, material, cultureId: templatePerson.cultureId, style: culture, services: { housing: 2 }, reasons: [], capabilities: [], cost: { food: 0, wood: 4, minerals: 0, goods: 0, wealth: 0 }, labor: 4 };
+  const source = assetBuilder.getAsset('building', { seed: `review:${role}`, culture, era, development: response, variant: `${role}#4` }).mesh;
+  const fit = 2.4 / Number(source.userData['footprintWidth']);
+  assembly = new ConstructionAssembly(source, fit, 'review-plot', material);
+  assembly.update(Number(progress.value)); root.add(assembly.group);
+  const palette = new MaterialPalette({ culture, era });
+  scaffold = createConstructionScaffold(assembly.plan, palette, material === 'metal' ? 'metal' : 'timber'); root.add(scaffold);
+  worksite = createConstructionWorksite({ width: 2.4, depth: Number(source.userData['footprintDepth']) * fit, progress: 0, response, seedKey: 'review-plot' }, palette); root.add(worksite);
+  settlement = structuredClone(templateSettlement); settlement.alive = true;
+  settlement.resources = { food: 20, wood: 20, minerals: 20, goods: 20, wealth: 20 }; settlement.localMaterials = {};
+  settlement.structurePlots = [{ id: 'review-plot', worldX: 0, worldZ: 0, width: 2.4, depth: 2, height: 1, radius: 2, condition: 1, foundedMonth: 0 }];
+  settlement.development = { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: 0, nextAttemptMonth: 1, revision: 1,
+    project: { plotId: 'review-plot', progress: Number(progress.value), response, action: 'founded', startedMonth: 0, spent: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] } };
+  placement = { key: 'review-plot', worldX: 0, worldZ: 0, width: 2.4, depth: Number(source.userData['footprintDepth']) * fit, rotationY: 0, constructionPlan: assembly.plan };
+  people = Array.from({ length: Number(input<HTMLSelectElement>('crew').value) }, (_, i) => ({ ...structuredClone(templatePerson), id: `review-worker-${i}`, homeId: settlement.id, alive: true, health: 1, displacedSinceMonth: undefined, activity: 'construct', occupation: 'builder', role: 'builder', position: { x: 2, z: 0 }, navigation: { destinationKind: 'construction-site', destinationId: 'review-plot', traveling: false, schedulePhase: 'work', reason: 'review', waypoints: [], waypointIndex: 0 } } as Person));
+  workers = new PhysicalWorkScene(); visuals = new PeopleVisualStateStore();
+  bodies = people.map((_, i) => {
+    const body = new THREE.Group();
+    const coat = new THREE.Mesh(bodyGeometry, new THREE.MeshStandardMaterial({ color: ['#b4573a', '#345c78', '#d1a448'][i % 3] })); coat.position.y = 0.126; coat.castShadow = true;
+    const head = new THREE.Mesh(headGeometry, skin); head.position.y = 0.229; head.castShadow = true;
+    body.add(coat, head); root.add(body); return body;
+  });
+}
+materialSelect.onchange = rebuild; input('crew').onchange = rebuild;
+progress.oninput = () => { playing = false; assembly.update(Number(progress.value)); };
+document.querySelectorAll<HTMLButtonElement>('[data-progress]').forEach(button => button.onclick = () => { playing = false; progress.value = button.dataset['progress']!; assembly.update(Number(progress.value)); });
+input('play').onclick = () => { progress.value = '0'; assembly.update(0); playing = true; };
+input('pause').onclick = () => { playing = false; };
+input('distance').onchange = () => { const distance = input<HTMLSelectElement>('distance').value; const scale = distance === 'far' ? 3.6 : distance === 'medium' ? 1.8 : 1; camera.position.set(3.6 * scale, 2.9 * scale, 4.3 * scale); controls.update(); };
+rebuild();
+function frame(now: number): void {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const missing = input<HTMLInputElement>('blocked').checked, interrupted = input<HTMLInputElement>('work-blocked').checked;
+  if (playing && !missing && !interrupted) progress.value = String(Math.min(1, Number(progress.value) + dt / Number(input<HTMLSelectElement>('speed').value)));
+  const paid = Number(progress.value), project = settlement.development!.project!;
+  project.progress = paid; settlement.resources.wood = missing ? 0 : 20; project.blockedReasons = interrupted ? ['work-interrupted'] : [];
+  const contact = workers.installationContact(project.plotId);
+  assembly.update(paid, dt, contact === undefined ? undefined : contact && !contactLatch); contactLatch = contact ?? false;
+  updateConstructionScaffold(scaffold, assembly.plan, assembly.plan.progress ?? paid, dt);
+  updateConstructionWorksite(worksite, paid, missing, workers.materialInTransit(project.plotId));
+  workers.beginFrame(people, [settlement]); visuals.beginFrame(); workerRenderer.beginFrame();
+  people.forEach((person, i) => {
+    const worker = workers.plan(person, settlement, placement, undefined, undefined, () => true);
+    const body = bodies[i]!; body.visible = !!worker;
+    if (!worker) return;
+    const a = worker.action;
+    const visual = visuals.resolve(person.id, { destination: a.locomotionTarget, restFacing: Math.atan2(a.interactionAnchor.x - a.locomotionTarget.x, a.interactionAnchor.z - a.locomotionTarget.z), arrivalEase: true }, dt, { heightAt: () => 0, isStandable: () => true });
+    workers.advance(person, worker, visual, dt);
+    const y = worker.elevation ?? 0;
+    body.position.set(visual.x, y - worker.motion.crouch * 0.28 * worker.blend, visual.z); body.rotation.set(worker.motion.lean * worker.blend, visual.facing, 0);
+    const action = worker.action;
+    workerRenderer.drawPhysical(worker.motion, action.interactionAnchor, worker.ready ? action.activeTool : 'none', action.carriedObject,
+      constructionMaterialColour(worker.material), action.carriedObject ? 1 : worker.blend, visual.x, y, visual.z, 0.28, visual.facing,
+      new THREE.Color(['#b4573a', '#345c78', '#d1a448'][i % 3]), false, worker.ready, visual.traveling, action.contactEffect ?? 'none', action.contactHeight);
+  });
+  workers.endFrame(); workerRenderer.endFrame();
+  controls.update(); renderer.render(scene, camera);
+  if (frames++ % 20 === 0) input('status').textContent = `${['Foundation', 'Frame', 'Walls', 'Roof', 'Detail'][constructionStagePresentation(paid).stage]} · ${Math.round(paid * 100)}% · ${missing || interrupted ? 'paused site' : 'active'} · ${renderer.info.render.calls} draws`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);

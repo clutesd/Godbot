@@ -51,7 +51,7 @@ export function constructionStagePresentation(progress: number): ConstructionSta
   let stage: BuildStage;
   let previousStage: BuildStage | undefined;
   let start = 0;
-  let end = CONSTRUCTION_STAGE_THRESHOLDS.frame;
+  let end: number = CONSTRUCTION_STAGE_THRESHOLDS.frame;
 
   if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.detail) {
     stage = BUILD_STAGE.DETAIL;

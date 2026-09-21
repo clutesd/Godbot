@@ -443,7 +443,7 @@ function heavySettlementSignature(
     .sort()
     .join(',');
   const progress = constructionPresentationProgress(settlement);
-  const constructionPresentationStage = constructionPresentationBucket(progress);
+  const constructionPresentationStage = settlement.development?.project ? settlement.development.project.plotId : constructionPresentationBucket(progress);
   const constructionSiteState = constructionSitePresentationState(settlement);
   return [
     settlement.id,

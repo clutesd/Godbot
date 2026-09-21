@@ -72,22 +72,29 @@ export class ResourceWorkerRenderer {
   drawPhysical(m: ResourceWorkMotion, target: Readonly<Vec2>, tool: string, load: string | undefined,
     materialColour: string, blend: number, x: number, y: number, z: number, size: number, facing: number,
     colour: THREE.Color, basket = false, effects = true, walking = false,
-    contactEffect: ContactEffectMode = 'generic'): void {
+    contactEffect: ContactEffectMode = 'generic', surfaceY?: number): void {
     if (this.count >= CAPACITY) return;
     const index = this.count++;
     this.baseX = x; this.baseY = y; this.baseZ = z; this.size = size;
     this.sin = Math.sin(facing); this.cos = Math.cos(facing);
     const crouch = m.crouch * blend;
     const plant = tool === 'basket' || tool === 'none';
-    const handY = 0.4 + (m.handY - 0.4) * blend;
-    const handZ = 0.12 + (m.handZ - 0.12) * blend;
+    let handY = 0.4 + (m.handY - 0.4) * blend;
+    let handZ = 0.12 + (m.handZ - 0.12) * blend;
     const toolAngle = 1.9 + (m.toolAngle - 1.9) * blend;
     const shaftY = Math.cos(toolAngle);
     const shaftZ = Math.sin(toolAngle);
+    if (surfaceY !== undefined && !walking && blend > 0.95) {
+      const reach = Math.hypot(target.x - x, target.z - z) / size;
+      const toolLength = plant ? 0 : 0.32;
+      // Both tool tip and evidence share the exact surface. The lift is anticipation/recovery.
+      handY = (surfaceY - y) / size - shaftY * toolLength + (1 - Math.min(1, m.impact * 2)) * 0.14;
+      handZ = reach - shaftZ * toolLength;
+    }
     for (let side = 0; side < 2; side++) {
       const sign = side === 0 ? -1 : 1;
       const grip = plant ? 0 : side * 0.12;
-      const hx = plant ? sign * 0.075 + m.basket * 0.32 * blend : 0;
+      const hx = load ? sign * (load === 'timber' || load === 'metal' ? 0.2 : 0.1) : plant ? sign * 0.075 + m.basket * 0.32 * blend : 0;
       const hy = handY - shaftY * grip;
       const hz = handZ - shaftZ * grip - (plant ? m.basket * 0.15 * blend : 0);
       const shoulderY = 0.64 - crouch;
@@ -119,22 +126,22 @@ export class ResourceWorkerRenderer {
     this.position.set(x + (loadX * this.cos + loadZ * this.sin) * size,
       y + handY * size, z + (loadZ * this.cos - loadX * this.sin) * size);
     const visible = load && blend > 0.95 ? size : 0;
-    const loadShape = load === 'timber' ? [0.65, 0.1, 0.12] as const
-      : load === 'metal' ? [0.48, 0.075, 0.09] as const
-        : load === 'masonry' ? [0.2, 0.16, 0.18] as const
-          : load === 'ceramic' ? [0.24, 0.095, 0.15] as const
-            : load === 'earth' ? [0.24, 0.14, 0.2] as const
+    const loadShape = load === 'timber' ? [0.88, 0.105, 0.14] as const
+      : load === 'metal' ? [0.7, 0.055, 0.22] as const
+        : load === 'masonry' ? [0.32, 0.22, 0.25] as const
+          : load === 'ceramic' ? [0.34, 0.12, 0.22] as const
+            : load === 'earth' ? [0.21, 0.12, 0.21] as const
               : [0.16, 0.1, 0.12] as const;
     this.scale.set(visible * loadShape[0], visible * loadShape[1], visible * loadShape[2]);
     this.rotation.setFromAxisAngle(this.up, facing);
     this.matrix.compose(this.position, this.rotation, this.scale); this.loads.setMatrixAt(index, this.matrix);
     this.colour.set(materialColour); this.loads.setColorAt(index, this.colour);
-    this.position.set(x + 0.32 * this.cos * size, y + (0.35 - crouch * 0.3) * size, z - 0.32 * this.sin * size);
-    this.scale.setScalar(basket ? size : 0); this.matrix.compose(this.position, this.rotation, this.scale);
+    if (load === 'earth') this.position.y -= 0.02 * size;
+    else this.position.set(x + 0.32 * this.cos * size, y + (0.35 - crouch * 0.3) * size, z - 0.32 * this.sin * size);
+    this.scale.setScalar(load === 'earth' ? visible * 1.4 : basket ? size : 0); this.matrix.compose(this.position, this.rotation, this.scale);
     this.baskets.setMatrixAt(index, this.matrix);
     if (effects && contactEffect !== 'none' && m.impact > 0 && blend > 0.95) {
-      const contactY = contactEffect ? y + Math.max(0.05, handY * size * 0.82)
-        : y + 0.04 + Math.sin(m.impact * Math.PI / 2) * 0.025;
+      const contactY = surfaceY ?? (y + Math.max(0.05, handY * size * 0.82));
       if (contactEffect === 'metal-spark') {
         for (let spark = 0; spark < 2; spark++) {
           const sign = spark === 0 ? -1 : 1;

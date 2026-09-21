@@ -65,7 +65,7 @@ export function constructionPresentedMaterial(settlement: Settlement): Structure
   if (responseMaterial === 'earth') return 'earth';
   const supplied = project?.materialRequirements?.[0]?.options.find(id => (settlement.localMaterials[id] ?? 0) > 0.000001);
   if (supplied === 'timber' || supplied === 'lumber') return 'timber';
-  if (supplied === 'brick') return responseMaterial === 'masonry' ? 'ceramic' : responseMaterial;
+  if (supplied === 'brick') return 'ceramic';
   if (supplied === 'stone') return 'masonry';
   if (supplied === 'iron' || supplied === 'steel' || supplied === 'bronze') return 'metal';
   return responseMaterial;
@@ -140,9 +140,10 @@ export function advanceConstruction(
         : playback.phase === 'assemble' ? 1.8 : 0;
   if (playback.phase === 'pickup' && playback.seconds >= 0.9 * 0.62) playback.carrying = true;
   // Keep the load visible into the receive beat; it transfers near the middle of handoff.
-  if (playback.phase === 'handoff' && playback.seconds >= CONSTRUCTION_HANDOFF_SECONDS * 0.52) playback.carrying = false;
+  if (playback.phase === 'handoff' && !soloGeneralist && playback.seconds >= CONSTRUCTION_HANDOFF_SECONDS * 0.52) playback.carrying = false;
+  if (playback.phase === 'assemble' && playback.seconds >= 1.8 * 0.62) playback.carrying = false;
   if (playback.seconds < duration) return;
-  if (playback.phase === 'handoff') playback.carrying = false;
+  if (playback.phase === 'handoff') playback.carrying = soloGeneralist;
   playback.phase = playback.phase === 'return' ? 'pickup' : playback.phase === 'pickup' ? 'carry'
     : playback.phase === 'carry' ? 'deliver'
       : playback.phase === 'deliver' ? 'handoff'
@@ -154,14 +155,15 @@ export function advanceConstruction(
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
   anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
   crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5,
-  handoff?: ConstructionHandoffCue, era: Era = 'early'): PhysicalActionPresentation {
+  handoff?: ConstructionHandoffCue, era: Era = 'early', waitingForDelivery = false): PhysicalActionPresentation {
   const phase = playback.phase;
   const blocked = blockedReason !== undefined;
   const choreography = constructionChoreography(material, progress);
   const soloGeneralist = crewRole === 'hauler' && crewSize <= 1;
   const finishingAssembler = choreography.finishing && (crewRole === 'assembler' || soloGeneralist) && !blocked;
   const finishingCleanup = choreography.finishing && !finishingAssembler && !blocked;
-  const assembling = !blocked && !finishingCleanup && (crewRole === 'assembler' || soloGeneralist && phase === 'assemble');
+  const waiting = waitingForDelivery && !handoff && !choreography.finishing && !blocked;
+  const assembling = !blocked && !waiting && !finishingCleanup && (crewRole === 'assembler' || soloGeneralist && phase === 'assemble');
   const pickup = !blocked && !finishingCleanup && crewRole === 'hauler' && (phase === 'return' || phase === 'pickup');
   const handoffing = !blocked && !finishingCleanup && crewRole === 'hauler' && phase === 'handoff';
   const receiving = !blocked && !choreography.finishing && crewRole === 'assembler' && handoff !== undefined;
@@ -173,7 +175,7 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
           : phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
             : phase === 'inspect' ? 1.6 : 1.8;
   const p = Math.min(1, playback.seconds / duration);
-  if (blocked) applyQuietInspectionMotion(p, person.id, motion);
+  if (blocked || waiting) applyQuietInspectionMotion(p, person.id, motion);
   else if (finishingCleanup) applyCleanupMotion(p, person.id, crewRole, motion);
   else if (receiving) applyReceiveMotion(handoff.progress, motion);
   else if (handoffing) applyHandoffMotion(playback, p, motion);
@@ -188,9 +190,9 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
       : prep ? anchors.prep : pickup ? anchors.pickup : haulingToHandoff ? anchors.handoff : anchors.delivery;
   const interactionCenter = blocked ? anchors.siteCenter
     : finishingCleanup ? crewRole === 'hauler' ? anchors.materialCenter : anchors.siteCenter
-      : receiving ? anchors.handoff
+      : receiving || waiting ? anchors.handoff
         : haulingToHandoff ? anchors.delivery
-          : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.siteCenter;
+          : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.workContact ?? anchors.siteCenter;
   const presentedPhase = blocked ? 'inspect' : finishingCleanup ? 'cleanup' : receiving ? 'receive' : phase;
   return { personId: person.id,
     actionKind: blocked ? 'construction-blocked'
@@ -202,14 +204,16 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
     authoritativeActivity: person.activity,
     sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
     targetKind: receiving || haulingToHandoff ? 'handoff' : prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
-    interactionAnchor: contactSurface(locomotionTarget, interactionCenter),
+    interactionAnchor: assembling && anchors.workContact ? anchors.workContact : prep ? anchors.prepCenter : contactSurface(locomotionTarget, interactionCenter),
+    contactHeight: assembling ? anchors.contactHeight : prep ? 0.16 : undefined,
+    platformHeight: !waiting && !receiving && !blocked && (crewRole === 'assembler' || soloGeneralist && phase === 'assemble') ? anchors.platformHeight : 0,
     locomotionTarget, phase: presentedPhase, phaseProgress: receiving ? handoff.progress : p,
-    activeTool: blocked || finishingCleanup || receiving || handoffing ? 'none'
+    activeTool: blocked || waiting || finishingCleanup || receiving || handoffing ? 'none'
       : assembling && phase === 'assemble' ? choreography.assemblerTool : prep ? choreography.prepTool : 'none',
     carriedObject: blocked || finishingCleanup ? undefined
-      : receiving && handoff.progress >= 0.48 && handoff.progress < 0.88 ? handoff.material
-        : crewRole === 'hauler' && playback.carrying ? material : undefined,
-    contactStrength: blocked || finishingCleanup ? 0
+      : receiving && handoff.progress >= 0.52 ? handoff.material
+        : playback.carrying ? material : undefined,
+    contactStrength: blocked || waiting || finishingCleanup ? 0
       : receiving || handoffing ? motion.impact
         : assembling || prep || phase === 'pickup' || phase === 'deliver' ? motion.impact : 0,
     contactEffect: !blocked && !finishingCleanup && !receiving && !handoffing && (assembling || prep) && motion.impact > 0
@@ -277,7 +281,7 @@ function applyReceiveMotion(p: number, motion: ResourceWorkMotion): void {
   motion.handZ = 0.22 + receive * 0.2 - settle * 0.06;
   motion.toolAngle = 1.8;
   motion.basket = 0;
-  motion.held = p >= 0.48 && p < 0.88 ? 1 : 0;
+  motion.held = p >= 0.52 ? 1 : 0;
   motion.reposition = p > 0.88;
   motion.impact = Math.max(0, 1 - Math.abs(p - 0.52) / 0.18) * 0.26;
 }
@@ -330,18 +334,18 @@ function applyAssemblyMotion(
     motion.handY = 0.4 + stageReach - tamp * 0.18;
     motion.handZ = 0.3 + reach * 0.09;
     motion.toolAngle = 1.6;
-    motion.impact = tamp * 0.72;
+    motion.impact = Math.max(0, (tamp / effort - 0.9) / 0.1) * 0.72 * effort;
     return;
   }
 
   if (profile.assemblyMotion === 'place') {
-    motion.crouch = stageCrouch + reach * 0.07;
-    motion.lean = 0.08 + reach * 0.12;
+    motion.crouch = stageCrouch + reach * (profile.material === 'ceramic' ? 0.035 : 0.1);
+    motion.lean = 0.08 + reach * (profile.material === 'ceramic' ? 0.07 : 0.15);
     motion.twist = Math.sin(p * Math.PI * 2) * 0.09 * variation;
     motion.handY = 0.48 + stageReach - stageCrouch - reach * 0.1 + pulse * 0.05;
     motion.handZ = 0.27 + reach * 0.12;
     motion.toolAngle = 0.95 + pulse * 0.75;
-    motion.impact = pulse * (profile.material === 'ceramic' ? 0.28 : 0.62);
+    motion.impact = Math.max(0, (pulse / effort - 0.9) / 0.1) * (profile.material === 'ceramic' ? 0.28 : 0.62) * effort;
     return;
   }
 
@@ -352,7 +356,7 @@ function applyAssemblyMotion(
   motion.handY = 0.52 + stageReach + pulse * (fit ? 0.18 : 0.24);
   motion.handZ = 0.21 + reach * 0.08;
   motion.toolAngle = 0.55 + pulse * (fit ? 1.05 : 1.45);
-  motion.impact = pulse * (fit ? 0.78 : 0.9);
+  motion.impact = Math.max(0, (pulse / effort - 0.9) / 0.1) * (fit ? 0.78 : 0.9) * effort;
 }
 
 function applyPrepMotion(
@@ -379,7 +383,7 @@ function applyPrepMotion(
     motion.handY = 0.5 + stageLift + stroke * 0.16;
     motion.handZ = 0.28;
     motion.toolAngle = 0.65 + stroke * 1.4;
-    motion.impact = stroke * 0.88;
+    motion.impact = Math.max(0, (stroke / effort - 0.9) / 0.1) * 0.88 * effort;
     return;
   }
   if (profile.prepMotion === 'dress') {
@@ -389,7 +393,7 @@ function applyPrepMotion(
     motion.handY = 0.42 + stageLift + stroke * 0.12;
     motion.handZ = 0.31;
     motion.toolAngle = 0.85 + stroke * 0.95;
-    motion.impact = stroke * (profile.material === 'metal' ? 0.76 : 0.58);
+    motion.impact = Math.max(0, (stroke / effort - 0.9) / 0.1) * (profile.material === 'metal' ? 0.76 : 0.58) * effort;
     return;
   }
   if (profile.prepMotion === 'sort') {

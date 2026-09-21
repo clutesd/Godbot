@@ -113,6 +113,7 @@ export function createConstructionWorksite(
   const progress = clamp01(spec.progress);
   const material = spec.response?.material ?? 'timber';
   const finishing = constructionStagePresentation(progress).finishing;
+  if (progress >= 1) return group;
 
   addWorkPad(group, width, depth, palette);
   if (spec.materialsAvailable !== false) addMaterialStaging(group, width, depth, material, progress, palette, spec.seedKey, finishing);
@@ -120,6 +121,17 @@ export function createConstructionWorksite(
   group.userData['finishing'] = finishing;
   addSawhorses(group, width, depth, palette, finishing);
   addBoundaryMarkers(group, width, depth, palette, finishing);
+
+  let stockIndex = 0, furnitureIndex = 0;
+  for (const child of group.children) {
+    const cue = child.userData['constructionCue'];
+    child.userData['constructionBaseY'] = child.position.y;
+    child.userData['constructionBaseScale'] = child.scale.toArray();
+    if (cue === 'staged-material') child.userData['constructionRemoval'] = 0.995 - stockIndex++ * 0.05;
+    else if (cue === 'site-furniture') child.userData['constructionRemoval'] = 0.96 + furnitureIndex++ * 0.012;
+    else child.userData['constructionRemoval'] = cue === 'work-pad' ? 0.995 : 0.985;
+  }
+  updateConstructionWorksite(group, progress, spec.materialsAvailable === false);
 
   return group;
 }
@@ -190,6 +202,7 @@ function addMaterialStaging(
       beam.rotation.y = (stableUnit(`${seedKey}:beam:${index}`) - 0.5) * 0.08;
       beam.castShadow = true;
       beam.userData['constructionCue'] = 'staged-material';
+      beam.userData['constructionMaterial'] = material;
       group.add(beam);
     }
     return;
@@ -201,7 +214,7 @@ function addMaterialStaging(
       ? palette.getSurfaceMaterial('brick')
       : palette.getSurfaceMaterial('stone');
   const blockSize = Math.max(0.11, Math.min(0.18, width * 0.09));
-  const blockGeometry = new THREE.BoxGeometry(blockSize * 1.35, blockSize, blockSize);
+  const blockGeometry = new THREE.BoxGeometry(material === 'metal' ? blockSize * 3.2 : blockSize * 1.35, material === 'metal' ? blockSize * 0.35 : blockSize, blockSize);
   const count = finishing ? 3 : 6 + Math.round(remaining * 7);
   for (let index = 0; index < count; index += 1) {
     const column = index % 3;
@@ -216,6 +229,7 @@ function addMaterialStaging(
     block.rotation.y = (stableUnit(`${seedKey}:block:${index}`) - 0.5) * 0.12;
     block.castShadow = true;
     block.userData['constructionCue'] = 'staged-material';
+    block.userData['constructionMaterial'] = material;
     group.add(block);
   }
 }
@@ -228,7 +242,33 @@ function addEarthBasket(group: THREE.Group, x: number, z: number, palette: Mater
   basket.position.set(x, 0.09, z);
   basket.castShadow = true;
   basket.userData['constructionCue'] = 'staged-material';
+  basket.userData['constructionMaterial'] = 'earth';
   group.add(basket);
+  const fill = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.08, 0.12, 7), palette.getSurfaceMaterial('ground'));
+  fill.position.set(x, 0.085, z);
+  fill.userData['constructionCue'] = 'staged-material';
+  fill.userData['constructionMaterial'] = 'earth';
+  group.add(fill);
+}
+
+/** Lightweight paid-progress cleanup; no resources are consumed or invented here. */
+export function updateConstructionWorksite(group: THREE.Object3D, progress: number, missingMaterial: boolean, loadsInTransit = 0): void {
+  const paid = clamp01(progress);
+  group.visible = paid < 1;
+  let visibleStock = 0;
+  for (const child of group.children) {
+    const stock = child.userData['constructionCue'] === 'staged-material';
+    const end = Number(child.userData['constructionRemoval'] ?? 0.995);
+    // Stored pieces shrink out individually, furniture withdraws during the final paid work.
+    const amount = Math.max(0, Math.min(1, (end - paid) / (stock ? 0.04 : 0.012)));
+    const base = child.userData['constructionBaseScale'] as number[] | undefined;
+    const inTransit = stock && amount > 0 && visibleStock++ < loadsInTransit;
+    child.visible = amount > 0 && !(stock && (missingMaterial || inTransit));
+    if (base) {
+      child.scale.set(base[0]! * (stock ? 1 : amount), base[1]! * amount, base[2]! * (stock ? 1 : amount));
+      child.position.y = Number(child.userData['constructionBaseY']) * amount;
+    }
+  }
 }
 
 function addSawhorses(group: THREE.Group, width: number, depth: number, palette: MaterialPalette, finishing = false): void {
@@ -250,6 +290,7 @@ function addSawhorses(group: THREE.Group, width: number, depth: number, palette:
       right.position.z = 0.08;
       bench.add(left, right);
     }
+    bench.scale.y = 0.48;
     bench.position.set(-width * 0.28, 0, z);
     bench.userData['constructionCue'] = 'site-furniture';
     group.add(bench);

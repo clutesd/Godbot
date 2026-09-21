@@ -4,6 +4,11 @@ import type { Vec2 } from '../../sim/types';
 export type ConstructionWorkerPhase = 'return' | 'pickup' | 'carry' | 'deliver';
 
 export interface ConstructionWorkerAnchors {
+  /** Exact target member surface, in world X/Z and site-relative Y. */
+  workContact?: Vec2;
+  contactHeight?: number;
+  platformHeight?: number;
+  workZoneId?: number;
   pickup: Vec2;
   delivery: Vec2;
   /** Hauler stand point just outside delivery; assembler remains at delivery. */

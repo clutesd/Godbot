@@ -403,6 +403,7 @@ export class AssetBuilder {
       root = lod;
     }
 
+    Object.assign(root.userData, composed.group.userData);
     root.userData['buildingHeight'] = composed.height;
     root.userData['footprintWidth'] = composed.extentX;
     root.userData['footprintDepth'] = composed.extentZ;

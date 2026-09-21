@@ -287,8 +287,9 @@ describe('structure renderer and performance validation', () => {
     // The staged procedural path must not collapse unlike future buildings into one generic shell.
     expect(boundsSignature(factory[1]!)).not.toBe(boundsSignature(shrine[1]!));
     expect(boundsSignature(factory[3]!)).not.toBe(boundsSignature(shrine[3]!));
-    expect(factory.every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
-    expect(shrine.every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
+    expect(factory.slice(0, 4).every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
+    expect(factory[4]).toBeInstanceOf(THREE.LOD);
+    expect(shrine.slice(0, 4).every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
     builder.dispose();
   });
 

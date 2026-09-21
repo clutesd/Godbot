@@ -12,7 +12,8 @@
  */
 
 import * as THREE from 'three';
-import { GeometryBuilder, squareRing, type Vec3 } from './GeometryBuilder';
+import { GeometryBuilder, squareRing, type Vec3, type AssemblyPiece } from './GeometryBuilder';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BuildingGrammar, RoofFamily, WallLayer } from './BuildingGrammar';
 import { eraRank } from './BuildingGrammar';
 import type { MaterialPalette, SurfaceKey } from '../materials/MaterialPalette';
@@ -44,7 +45,7 @@ export function stageFromName(name: string | undefined): BuildStage {
 }
 
 class BuildingCanvas {
-  private readonly surfaces = new Map<SurfaceKey, GeometryBuilder>();
+  private readonly surfaces = new Map<string, { surface: SurfaceKey; stage: number; builder: GeometryBuilder }>();
 
   constructor(
     private readonly stage: number,
@@ -55,13 +56,15 @@ class BuildingCanvas {
   /** Returns a builder only if the requested part belongs to a stage already built. */
   at(surface: SurfaceKey, requiredStage: number): GeometryBuilder | undefined {
     if (requiredStage > this.stage) return undefined;
-    let builder = this.surfaces.get(surface);
-    if (!builder) {
-      builder = new GeometryBuilder();
+    const key = `${requiredStage}:${surface}`;
+    let entry = this.surfaces.get(key);
+    if (!entry) {
+      const builder = new GeometryBuilder();
       builder.setWeathering(this.wear, this.tone);
-      this.surfaces.set(surface, builder);
+      entry = { surface, stage: requiredStage, builder };
+      this.surfaces.set(key, entry);
     }
-    return builder;
+    return entry.builder;
   }
 
   /** Raise weathering for parts that age faster: soot around flues, splash at ground level. */
@@ -76,9 +79,28 @@ class BuildingCanvas {
 
   build(palette: MaterialPalette): THREE.Group {
     const group = new THREE.Group();
-    for (const [surface, builder] of this.surfaces) {
+    const batches = new Map<SurfaceKey, THREE.BufferGeometry[]>();
+    for (const { surface, stage, builder } of this.surfaces.values()) {
       if (builder.isEmpty) continue;
       const geometry = builder.build();
+      for (const piece of geometry.userData['assemblyPieces'] as AssemblyPiece[]) piece.stage = stage;
+      if (!geometry.hasAttribute('aSurfaceDetail')) geometry.setAttribute('aSurfaceDetail',
+        new THREE.Int8BufferAttribute(new Int8Array(geometry.getAttribute('position').count * 4), 4, true));
+      const batch = batches.get(surface) ?? [];
+      batch.push(geometry); batches.set(surface, batch);
+    }
+    for (const [surface, batch] of batches) {
+      const pieces: AssemblyPiece[] = [];
+      let offset = 0;
+      for (const geometry of batch) {
+        for (const piece of geometry.userData['assemblyPieces'] as AssemblyPiece[]) pieces.push({ ...piece, start: piece.start + offset });
+        offset += geometry.index!.count;
+      }
+      const merged = mergeGeometries(batch)!;
+      const geometry = mergeVertices(merged, 1e-6);
+      merged.dispose();
+      geometry.userData['assemblyPieces'] = pieces;
+      for (const source of batch) source.dispose();
       geometry.userData['shared'] = true;
       const material = palette.getSurfaceMaterial(surface);
       const mesh = new THREE.Mesh(geometry, material);
@@ -414,6 +436,9 @@ export function composeBuilding(
   const group = canvas.build(palette);
   group.userData['grammarRole'] = grammar.role;
   group.userData['grammarEra'] = grammar.era;
+  group.userData['bodyWidth'] = grammar.width;
+  group.userData['bodyDepth'] = grammar.depth;
+  group.userData['wallTop'] = wallTop;
   const bounds = new THREE.Box3().setFromObject(group);
   // Measured as reach from the origin, not raw span: forecourts and gateways sit on one side
   // only, and the reserved placement footprint is a circle centred on the origin.
@@ -475,14 +500,11 @@ function emitGroundworks(
   for (let step = 0; step < steps; step += 1) {
     const inset = (steps - 1 - step) * 0.06;
     const height = grammar.plinthHeight / steps;
-    stone?.addBox(
-      0,
-      height * (step + 0.5),
-      0,
-      grammar.width + overhang + inset * 2,
-      height,
-      grammar.depth + overhang + inset * 2,
-    );
+    const w = grammar.width + overhang + inset * 2;
+    const d = grammar.depth + overhang + inset * 2;
+    for (let x = 0; x < 4; x++) for (let z = 0; z < 4; z++) {
+      stone?.addBox((x - 1.5) * w / 4, height * (step + 0.5), (z - 1.5) * d / 4, w / 4, height, d / 4);
+    }
   }
 
   if (grammar.stairs) {
@@ -617,7 +639,7 @@ function emitBody(
   const wall = canvas.at(wallSurface, BUILD_STAGE.WALLS);
   const inset = grammar.postThickness * 0.45;
   const bodyHeight = wallTop - plinthTop;
-  wall?.addBox(0, plinthTop + bodyHeight / 2, 0, grammar.width - inset, bodyHeight, grammar.depth - inset);
+  if (wall) emitWallUnits(wall, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, bodyHeight);
 
   if (grammar.massing === 'wing') {
     wall?.addBox(halfWidth * 0.72, plinthTop + bodyHeight * 0.36, -halfDepth * 0.95, grammar.width * 0.44, bodyHeight * 0.72, grammar.depth * 0.6);
@@ -646,6 +668,54 @@ function emitBody(
   }
 
   emitOpenings(canvas, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, wallTop, postSurface);
+}
+
+/** Closed individual units give incomplete walls real edges; door/window voids survive assembly. */
+function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: number, halfD: number, base: number, height: number): void {
+  const material = grammar.development?.material;
+  const timber = material === 'timber' || !material && (grammar.wallLayer === 'thatch' || grammar.wallLayer === 'daub');
+  const metal = material === 'metal';
+  const earth = material === 'earth';
+  const rows = metal ? 3 : timber ? 2 : earth ? 5 : 8;
+  const thickness = Math.max(0.035, grammar.postThickness * (earth ? 2.4 : 1.1));
+  const doorWidth = Math.min(grammar.width * 0.3, 0.34);
+  const doorHeight = Math.min(height * 0.78, 0.6);
+  const perRow = Math.max(1, grammar.bays - 1);
+  const windowRows = grammar.windowRows;
+  const ww = Math.min(grammar.width / (perRow + 1) * 0.5, 0.2) * (grammar.openings === 'slit' ? 0.4 : 1);
+  const wh = grammar.openings === 'slit' ? Math.min(height * 0.4, 0.26) : Math.min(height * 0.3, 0.22);
+  for (const [faceIndex, face] of wallFrames(halfW, halfD).entries()) {
+    const openings: { u: number; y: number; w: number; h: number }[] = [];
+    if (faceIndex === 0) openings.push({ u: 0, y: doorHeight / 2, w: doorWidth, h: doorHeight });
+    if (grammar.openings !== 'flap') {
+      const count = faceIndex >= 2 ? Math.max(1, Math.round(perRow * grammar.depth / grammar.width)) : perRow;
+      for (let row = 0; row < windowRows; row++) for (let i = 0; i < count; i++) {
+        const u = -face.length / 2 + face.length * (i + 1) / (count + 1);
+        if (faceIndex === 0 && row === 0 && Math.abs(u) < doorWidth) continue;
+        openings.push({ u, y: height * ((row + 1) / (windowRows + 1) + 0.08), w: ww, h: wh });
+      }
+    }
+    const columns = Math.min(8, Math.max(3, Math.ceil(face.length / (metal ? 0.4 : timber ? 0.13 : earth ? 0.32 : 0.24))));
+    const ys = [0, height, ...Array.from({ length: rows - 1 }, (_, i) => height * (i + 1) / rows),
+      ...openings.flatMap(o => [o.y - o.h / 2, o.y + o.h / 2])].filter(y => y >= 0 && y <= height);
+    const levels = [...new Set(ys)].sort((a, b) => a - b);
+    for (let row = 0; row < levels.length - 1; row++) {
+      const y0 = levels[row]!, y1 = levels[row + 1]!;
+      const stagger = !timber && !metal && row % 2 ? 0.5 : 0;
+      const us = [-face.length / 2, face.length / 2,
+        ...Array.from({ length: columns }, (_, i) => -face.length / 2 + face.length * (i + stagger) / columns),
+        ...openings.filter(o => y1 > o.y - o.h / 2 && y0 < o.y + o.h / 2).flatMap(o => [o.u - o.w / 2, o.u + o.w / 2])].filter(u => Math.abs(u) <= face.length / 2);
+      const edges = [...new Set(us)].sort((a, b) => a - b);
+      for (let col = 0; col < edges.length - 1; col++) {
+        const u0 = edges[col]!, u1 = edges[col + 1]!, u = (u0 + u1) / 2, y = (y0 + y1) / 2;
+        if (u1 - u0 < 0.001 || y1 - y0 < 0.001 || openings.some(o => Math.abs(u - o.u) < o.w / 2 && Math.abs(y - o.y) < o.h / 2)) continue;
+        const p = framePoint(face, u, base + y, -thickness / 2);
+        const gap = earth ? 0 : 0.0015;
+        wall.addBox(p.x, p.y, p.z, faceIndex < 2 ? u1 - u0 - gap : thickness, y1 - y0 - gap,
+          faceIndex < 2 ? thickness : u1 - u0 - gap);
+      }
+    }
+  }
 }
 
 function emitOpenings(

@@ -44,6 +44,9 @@ import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
 import { constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
+import { ConstructionAssembly, type ConstructionAssemblyPlan } from './construction/ConstructionAssembly';
+import { createConstructionScaffold, updateConstructionScaffold } from './construction/ConstructionScaffold';
+import { updateConstructionWorksite } from './construction/ConstructionWorksite';
 import { constructionMaterialColour } from './construction/ConstructionChoreography';
 import { constructionVisibleCrewIds } from './construction/ConstructionCrewPresentation';
 import { decorateConstructionWorksite } from './construction/ConstructionWorksiteInstaller';
@@ -93,6 +96,7 @@ interface BuildingPlacement {
   /** Exact rendered active-construction footprint; presentation-only and populated while building. */
   constructionWidth?: number;
   constructionDepth?: number;
+  constructionPlan?: ConstructionAssemblyPlan;
   height: number;
   rotationY: number;
   major: boolean;
@@ -228,6 +232,7 @@ export class GodboxRenderer {
   private readonly skyZenith = new THREE.Color();
   private readonly skyHorizon = new THREE.Color();
   private readonly skyColor = new THREE.Color();
+  private readonly constructionAssemblies = new Map<string, { site: THREE.Group; assembly: ConstructionAssembly; scaffold: THREE.Group; settlement: Settlement; contact?: boolean }>();
   private readonly settlementVisuals = new Map<string, SettlementVisual>();
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
   private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number }>();
@@ -409,6 +414,17 @@ export class GodboxRenderer {
     this.updateAdvancedAtmosphere(elapsedSeconds);
     this.updateSeasonalPresentation();
     this.vegetation.updateLeaves(elapsedSeconds);
+    for (const [key, entry] of this.constructionAssemblies) {
+      const project = entry.settlement.development?.project;
+      if (!entry.site.parent || project?.plotId !== key) { this.constructionAssemblies.delete(key); continue; }
+      const paid = constructionPresentationProgress(entry.settlement);
+      const contact = this.physicalWork.installationContact(key);
+      entry.assembly.update(paid, deltaSeconds, contact === undefined ? undefined : contact && !entry.contact);
+      entry.contact = contact;
+      updateConstructionScaffold(entry.scaffold, entry.assembly.plan, entry.assembly.plan.progress ?? paid, deltaSeconds);
+      const dressing = entry.site.getObjectByName(`construction-worksite:${key}`);
+      if (dressing) updateConstructionWorksite(dressing, paid, constructionBlockedReason(entry.settlement)?.startsWith('missing:') ?? false, this.physicalWork.materialInTransit(key));
+    }
     this.updatePeople(deltaSeconds, elapsedSeconds);
     this.structuralAccumulator += deltaSeconds;
     if (this.structuralAccumulator >= 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond)) {
@@ -562,7 +578,7 @@ export class GodboxRenderer {
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
       const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0.035 : person.activity === 'rest' ? 0.006 : 0.014;
       const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
-      const footY = visual.footY + (articulated ? 0 : bob);
+      const footY = visual.footY + (physical?.elevation ?? 0) + (articulated ? 0 : bob);
       // Crouching and stooping lower the upper body only; the legs keep their hip pivot so the
       // feet stay on the ground instead of sinking with the pose.
       const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
@@ -630,7 +646,8 @@ export class GodboxRenderer {
         physical.action.actionKind === 'farm-harvest',
         physicalStanding && Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18,
         !physicalStanding, physical.action.contactEffect
-          ?? (physical.action.actionKind.startsWith('construction-') ? 'none' : 'generic'));
+          ?? (physical.action.actionKind.startsWith('construction-') ? 'none' : 'generic'),
+        physical.action.contactHeight === undefined ? undefined : visual.footY + physical.action.contactHeight);
       if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor, Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
       if (working && worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
         this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
@@ -1461,47 +1478,6 @@ export class GodboxRenderer {
   }
 
   /**
-   * Clone a shared procedural asset for one active construction site. Transparent reveal clones
-   * get private materials so fading never mutates the palette or another building.
-   */
-  private constructionShell(
-    source: THREE.Object3D,
-    fit: number,
-    cue: string,
-    opacity = 1,
-  ): THREE.Object3D {
-    const shell = source.clone(true);
-    shell.scale.setScalar(fit);
-    shell.userData['constructionCue'] = cue;
-    shell.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      object.castShadow = true;
-      object.receiveShadow = true;
-      object.userData['constructionCue'] = cue === 'future-building-shell'
-        ? 'future-building-fabric'
-        : 'previous-building-fabric';
-      if (opacity >= 0.995) return;
-      const tune = (material: THREE.Material): THREE.Material => {
-        const clone = material.clone();
-        // This fade material belongs only to the active site. Palette materials are marked shared;
-        // clear that flag on the clone so ordinary settlement teardown can dispose it.
-        clone.userData = { ...clone.userData, shared: false };
-        clone.transparent = true;
-        clone.opacity = opacity;
-        clone.depthWrite = false;
-        clone.polygonOffset = true;
-        clone.polygonOffsetFactor = -1;
-        clone.polygonOffsetUnits = -1;
-        return clone;
-      };
-      object.material = Array.isArray(object.material)
-        ? object.material.map(tune)
-        : tune(object.material);
-    });
-    return shell;
-  }
-
-  /**
    * Active construction is a partial realization of the exact future building grammar.
    * New builds reveal the canonical structure progressively; upgrades/repurposes derive their
    * target identity from the active project rather than the old fabric still occupying the plot.
@@ -1560,36 +1536,10 @@ export class GodboxRenderer {
     const developmentScale = targetPlacement.development ? 0.64 + targetPlacement.development.level * 0.12 : 1;
     const fit = Math.min(targetPlacement.width / targetWidth, targetPlacement.depth / targetDepth) * developmentScale;
 
-    // A new project starts as a marked worksite. Foundation fabric rises from paid work; later
-    // canonical stages cross-fade over the fully-built previous stage so frames/walls/roofs no
-    // longer pop into existence at one threshold.
-    if (paidProgress > 0) {
-      if (stage === BUILD_STAGE.FOUNDATION) {
-        const shell = this.constructionShell(stagedAsset.mesh, fit, 'future-building-shell');
-        shell.scale.y = fit * Math.max(0.06, presentation.phase);
-        shell.userData['constructionReveal'] = presentation.phase;
-        site.add(shell);
-      } else {
-        const eased = presentation.phase * presentation.phase * (3 - 2 * presentation.phase);
-        if (presentation.previousStage !== undefined && eased < 0.985) {
-          const previousAsset = this.assetBuilder.getAsset('building', {
-            ...baseConfig,
-            variant: `${targetPlacement.role}#${presentation.previousStage}`,
-          });
-          site.add(this.constructionShell(previousAsset.mesh, fit, 'previous-building-shell'));
-        }
-        if (eased >= 0.015) {
-          const shell = this.constructionShell(
-            stagedAsset.mesh,
-            fit,
-            'future-building-shell',
-            eased >= 0.985 ? 1 : Math.max(0.08, eased),
-          );
-          shell.userData['constructionReveal'] = eased;
-          site.add(shell);
-        }
-      }
-    }
+    const assembly = new ConstructionAssembly(targetAsset.mesh, fit, targetPlacement.key, project?.material ?? 'timber');
+    assembly.update(Math.min(paidProgress, this.constructionAssemblies.get(targetPlacement.key)?.assembly.plan.progress ?? paidProgress));
+    site.add(assembly.group);
+    placement.constructionPlan = assembly.plan;
 
     const renderedWidth = targetWidth * fit;
     const renderedDepth = targetDepth * fit;
@@ -1608,19 +1558,14 @@ export class GodboxRenderer {
     site.userData['constructionTargetHeight'] = renderedHeight;
 
     const constructionPalette = this.getPalette(cultureStyle, targetEra);
-    if (paidProgress < 1) {
-      site.add(this.createScaffold(
-        targetPlacement,
-        constructionPalette,
-        renderedWidth,
-        renderedDepth,
-        stage,
-        paidProgress,
-        targetEra,
-        renderedHeight,
-      ));
+    const scaffold = createConstructionScaffold(assembly.plan, constructionPalette,
+      constructionScaffoldSurface(targetEra, targetPlacement.role, project?.material));
+    updateConstructionScaffold(scaffold, assembly.plan, paidProgress);
+    if (paidProgress < 1) site.add(scaffold);
+    if (settlement && project) {
+      decorateConstructionWorksite(site, settlement, constructionPalette);
+      this.constructionAssemblies.set(targetPlacement.key, { site, assembly, scaffold, settlement });
     }
-    if (settlement && project) decorateConstructionWorksite(site, settlement, constructionPalette);
     return site;
   }
 
@@ -1821,7 +1766,7 @@ export class GodboxRenderer {
       infrastructure.factories,
       settlement.industry.intensity,
       settlement.urbanization,
-      constructionPresentationProgress(settlement),
+      settlement.development?.project ? 0 : constructionPresentationProgress(settlement),
       this.state.advanced.atomic.applications.energy,
       this.state.advanced.machine.capability,
       this.state.advanced.space.orbitalInfrastructure,

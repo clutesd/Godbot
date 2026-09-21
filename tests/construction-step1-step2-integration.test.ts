@@ -53,7 +53,7 @@ function setupContract(): {
   settlement.alive = true;
   settlement.resources = { food: 20, wood: 20, minerals: 20, goods: 20, wealth: 20 };
   settlement.localMaterials = {};
-  settlement.structurePlots = [];
+  settlement.structurePlots = [{ id: 'contract-plot', worldX: 0, worldZ: 0, width: 2, depth: 1.5, height: 1, radius: 1, condition: 1, foundedMonth: 0 }];
 
   const prototypePerson = fixture.simulation.state.people.find(person => person.homeId === settlement.id)
     ?? fixture.simulation.state.people[0]!;

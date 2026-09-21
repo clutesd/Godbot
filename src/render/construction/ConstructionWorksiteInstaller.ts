@@ -45,7 +45,7 @@ export function decorateConstructionWorksite(
     progress: constructionPresentationProgress(settlement),
     response: { ...project.response, material: constructionPresentedMaterial(settlement) },
     seedKey: project.plotId,
-    materialsAvailable: siteState === 'active' || siteState === 'finishing',
+    materialsAvailable: siteState !== 'blocked-material',
   }, palette);
   worksite.userData['constructionSiteState'] = siteState;
   activeSite.add(worksite);
