@@ -1,13 +1,13 @@
 import type { Person, SimulationState } from '../sim/types';
-import { foundingChapterBaseline, foundingChapterProgress, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
-import { FOUNDING_CONTINUITY_GRACE_END_MONTH, foundingContinuityProgress } from './FoundingContinuity';
+import { foundingChapterBaseline, foundingChapterProgress, releaseFoundingChapterHold, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
 import type { CandidateScoreBreakdown, ObservationCandidate } from './types';
 
 export const FOUNDING_CAST_TARGET_SIZE = 4;
-export const FOUNDING_CAST_LATEST_INTRO_MONTH = FOUNDING_CONTINUITY_GRACE_END_MONTH;
+export const FOUNDING_CAST_LATEST_INTRO_MONTH = 1;
 export const FOUNDING_CAST_MONTHS_PER_SECOND = 0.08;
+export const FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND = 0.12;
 
 export interface FoundingCastMember {
   readonly personId: string;
@@ -34,6 +34,7 @@ interface FoundingCastMemory {
   readonly introducedPersonIds: Set<string>;
   readonly normalAppearances: Map<string, number>;
   framingShown: boolean;
+  releaseShown: boolean;
   autoRunBeforeIntroduction?: boolean;
 }
 
@@ -49,6 +50,7 @@ interface AnchorCandidate {
 
 const memories = new WeakMap<Historian, FoundingCastMemory>();
 const pacedStates = new WeakSet<SimulationState>();
+const releaseStates = new WeakSet<SimulationState>();
 let pacingInstalled = false;
 let installed = false;
 
@@ -150,6 +152,7 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
       introducedPersonIds: new Set(),
       normalAppearances: new Map(),
       framingShown: false,
+      releaseShown: false,
     };
     memories.set(historian, memory);
   }
@@ -219,7 +222,7 @@ function framingScene(
   const statement = {
     id: `founding-cast-framing-${arrival.id}`,
     month: state.month,
-    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow only a few. Not because they are important. Not yet. They give us lives we can recognize before we know what they become.`,
+    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow only a few. Not because they are important. Not yet. So we can know them before we know what becomes of them.`,
     epistemicStatus: 'derived-statistic' as const,
     sourceEventIds: [arrival.id],
     sourceEntityIds,
@@ -249,6 +252,7 @@ function introductionScene(
   state: SimulationState,
   baseline: FoundingChapterBaseline,
   member: FoundingCastMember,
+  castIndex: number,
 ): ObservationCandidate | undefined {
   const person = state.people.find(candidate => candidate.id === member.personId && candidate.alive);
   const settlement = state.settlements.find(candidate => candidate.id === member.settlementId);
@@ -256,10 +260,11 @@ function introductionScene(
   if (!person || !settlement || !arrival) return undefined;
   const words = pronoun(person);
   const strongest = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence || a.domain.localeCompare(b.domain))[0];
+  const possessive = words.possessive === 'her' ? 'Her' : 'His';
   const anchorFact = strongest
-    ? `${words.subject} is currently strongest in ${readable(strongest.domain)}.`
-    : `${words.subject} now works as a ${roleLabel(person)}.`;
-  const text = `${member.name}. ${member.arrivalAgeYears} on Arrival Day. ${member.settlementName}. ${anchorFact} We will return to ${person.sex === 'female' ? 'her' : 'him'}.`;
+    ? `${possessive} strongest recorded skill is ${readable(strongest.domain)}.`
+    : `${words.subject} works as a ${roleLabel(person)}.`;
+  const text = `${member.arrivalAgeYears} on Arrival Day. ${anchorFact}`;
   const statement = {
     id: `founding-cast-introduction-${member.personId}`,
     month: state.month,
@@ -274,7 +279,7 @@ function introductionScene(
   if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return {
-    id: `founding-cast:introduction:${member.personId}`,
+    id: `founding-cast:introduction:${castIndex}:${member.personId}`,
     subjectId: person.id,
     kind: person.activity === 'travel' || person.activity === 'migrate' || person.activity === 'transport' ? 'traveler-follow' : 'worker-follow',
     position: person.position,
@@ -297,38 +302,76 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
   if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH && introduced.length === 0) {
     return { phase: 'missed', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
   }
-  if (introduced.length >= members.length) return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
-  const continuity = foundingContinuityProgress(historian, state);
-  const readyMember = members.some(member => continuity.visitedSettlementIds.includes(member.settlementId) && !introduced.includes(member.personId));
+  if (memory?.releaseShown && introduced.length >= members.length) {
+    return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
+  }
+  const founding = foundingChapterProgress(historian, state);
   return {
-    phase: readyMember ? 'introducing' : 'waiting',
+    phase: founding.phase === 'complete' ? 'introducing' : 'waiting',
     members,
     introducedPersonIds: Object.freeze(introduced),
     targetSize: members.length,
   };
 }
 
+function releaseScene(
+  historian: Historian,
+  state: SimulationState,
+  baseline: FoundingChapterBaseline,
+  memory: FoundingCastMemory,
+): ObservationCandidate | undefined {
+  const arrival = state.history.find(event => event.id === baseline.eventId && event.type === 'ARRIVAL_DAY');
+  const member = [...memory.members].reverse().find(candidate => memory.introducedPersonIds.has(candidate.personId));
+  const person = member ? state.people.find(candidate => candidate.id === member.personId && candidate.alive) : undefined;
+  const settlement = member ? state.settlements.find(candidate => candidate.id === member.settlementId) : undefined;
+  if (!arrival || !member || !person || !settlement) return undefined;
+  const statement = {
+    id: `founding-release-${arrival.id}`,
+    month: state.month,
+    text: 'The first day continues.',
+    epistemicStatus: 'recorded-fact' as const,
+    sourceEventIds: [arrival.id],
+    sourceEntityIds: [settlement.id],
+    sourceArchiveIds: [],
+    claims: { entityIds: [settlement.id], eventType: 'ARRIVAL_DAY' as const },
+  };
+  if (!historian.validateStatement(statement, state)) return undefined;
+  if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
+  if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
+  return {
+    id: `founding-release:${arrival.id}`,
+    subjectId: 'world',
+    kind: 'street-observation',
+    position: person.position,
+    title: 'THE FIRST DAY',
+    statement,
+    score: 0.86,
+    interest: 0.7,
+    audioCategory: 'settlement',
+    breakdown: breakdown(1, 0.28),
+    event: arrival,
+  };
+}
+
 /**
- * Frames the documentary cast once, then introduces each anchor only after their landing community
- * has received its first 1b revisit. These presentation choices never alter simulation importance.
- * Framing and character shots pause authoritative history; the following selection restores pace.
+ * The cast is the final authored beat of Arrival Day: framing, four concise human anchors, then
+ * a caption-free release shot. Selection changes no simulation importance. Framing and portraits
+ * pause authoritative history; the release deliberately restores time and lets ordinary life move.
  */
 export function chooseFoundingCastScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   releaseIntroduction(historian, state);
+  releaseStates.delete(state);
   const baseline = foundingChapterBaseline(state);
   if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return undefined;
   if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH) return undefined;
   const founding = foundingChapterProgress(historian, state);
-  if (founding.phase === 'ready' || founding.phase === 'orientation' || founding.phase === 'unavailable') return undefined;
-  const continuity = foundingContinuityProgress(historian, state);
-  if (!continuity.bridgeShown) return undefined;
+  if (founding.phase !== 'complete') return undefined;
 
+  // Cast presentation is the immediate handoff from the frozen founding orientation.
+  releaseFoundingChapterHold(historian, state);
   const memory = memoryFor(historian, state);
-  const readyMembers = memory.members.filter(member =>
-    !memory.introducedPersonIds.has(member.personId)
-    && continuity.visitedSettlementIds.includes(member.settlementId)
-  );
-  if (!memory.framingShown && readyMembers.length > 0) {
+
+  if (!memory.framingShown && memory.members.length > 0) {
     const frame = framingScene(historian, state, baseline, memory);
     if (frame) {
       memory.framingShown = true;
@@ -336,12 +379,24 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
       return frame;
     }
   }
-  for (const member of readyMembers) {
-    memory.introducedPersonIds.add(member.personId);
-    const scene = introductionScene(historian, state, baseline, member);
+
+  for (let castIndex = 0; castIndex < memory.members.length; castIndex += 1) {
+    const member = memory.members[castIndex]!;
+    if (memory.introducedPersonIds.has(member.personId)) continue;
+    const scene = introductionScene(historian, state, baseline, member, castIndex);
     if (!scene) continue;
+    memory.introducedPersonIds.add(member.personId);
     holdIntroduction(historian, state, memory);
     return scene;
+  }
+
+  if (!memory.releaseShown && memory.introducedPersonIds.size >= memory.members.length) {
+    const release = releaseScene(historian, state, baseline, memory);
+    if (release) {
+      memory.releaseShown = true;
+      releaseStates.add(state);
+      return release;
+    }
   }
   return undefined;
 }
@@ -394,6 +449,7 @@ export function installFoundingCastPacing(): void {
     observation: Parameters<typeof targetSpeed>[1],
   ): number {
     if (pacedStates.has(state)) return FOUNDING_CAST_MONTHS_PER_SECOND;
+    if (releaseStates.has(state)) return FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND;
     return targetSpeed.call(this, state, observation);
   };
   const tickBudget = PresentationDirector.prototype.tickBudget;
@@ -406,7 +462,7 @@ export function installFoundingCastPacing(): void {
   };
 }
 
-/** Install after the Year-One layer so pending cast introductions finish before the 1c payoff. */
+/** Installed outermost so Arrival Day resolves its human handoff before continuity or Year-One narration. */
 export function installFoundingCast(): void {
   if (installed) return;
   installed = true;
