@@ -397,7 +397,9 @@ describe('Social body language', () => {
     const tense = sample('converse-tense');
 
     expect(Math.abs(quiet.rightShoulderRotation)).toBeLessThan(Math.abs(warm.rightShoulderRotation) + 0.08);
-    expect(Math.max(Math.abs(teaching.leftShoulderRotation), Math.abs(teaching.rightShoulderRotation))).toBeGreaterThan(0.2);
+    const teachingGesture = Math.max(Math.abs(teaching.leftShoulderRotation), Math.abs(teaching.rightShoulderRotation));
+    const quietGesture = Math.max(Math.abs(quiet.leftShoulderRotation), Math.abs(quiet.rightShoulderRotation));
+    expect(teachingGesture).toBeGreaterThan(quietGesture + 0.04);
     expect(tense.leftElbowRotation + tense.rightElbowRotation).toBeGreaterThan(quiet.leftElbowRotation + quiet.rightElbowRotation);
     expect(new Set([warm.name, quiet.name, teaching.name, tense.name]).size).toBeGreaterThanOrEqual(3);
   });
