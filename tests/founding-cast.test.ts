@@ -11,10 +11,6 @@ import {
   foundingChapterBaseline,
   foundingChapterProgress,
 } from '../src/historian/FoundingChapter';
-import {
-  chooseFoundingContinuityScene,
-  foundingContinuityProgress,
-} from '../src/historian/FoundingContinuity';
 import { Historian } from '../src/historian/Historian';
 import { PresentationDirector } from '../src/historian/PresentationDirector';
 import { Simulation } from '../src/sim/Simulation';
@@ -65,132 +61,109 @@ describe('Founding documentary cast 2a', () => {
     expect(after).toEqual(before);
   });
 
-  it('frames the cast once, then introduces only people from communities already revisited', () => {
+  it('makes the cast the immediate human climax, then returns the world to motion', () => {
     const simulation = completedArrival('founding-cast-introduction');
     const historian = new Historian(simulation.config);
     completeOrientation(simulation, historian);
     const cast = foundingDocumentaryCast(simulation.state);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)?.title).toBe('THE FIRST SEASONS');
-    expect(chooseFoundingCastScene(historian, simulation.state)).toBeUndefined();
-
-    const introduced: string[] = [];
-    let framingScenes = 0;
     const baseline = foundingChapterBaseline(simulation.state);
     if (!baseline) throw new Error('Expected founding baseline');
-    for (let index = 0; index < baseline.communities.length; index += 1) {
-      simulation.step(1);
-      const communityScene = chooseFoundingContinuityScene(historian, simulation.state);
-      expect(communityScene).toBeDefined();
 
-      let castScene = chooseFoundingCastScene(historian, simulation.state);
-      if (castScene?.id.startsWith('founding-cast:framing:')) {
-        framingScenes += 1;
-        expect(castScene.title).toBe('A FEW LIVES');
-        expect(castScene.statement.text).toContain(`Arrival Day began with ${baseline.population.toLocaleString()} lives.`);
-        expect(castScene.statement.text).toContain('We will follow only a few.');
-        expect(castScene.statement.text).toContain('Not because they are important. Not yet.');
-        expect(historian.validateStatement(castScene.statement, simulation.state)).toBe(true);
-        castScene = chooseFoundingCastScene(historian, simulation.state);
-      }
-      if (!castScene) continue;
+    const framing = chooseFoundingCastScene(historian, simulation.state);
+    expect(framing?.id).toContain('founding-cast:framing:');
+    expect(framing?.title).toBe('A FEW LIVES');
+    expect(framing?.statement.text).toContain(`Arrival Day began with ${baseline.population.toLocaleString()} lives.`);
+    expect(framing?.statement.text).toContain('We will follow only a few.');
+    expect(framing?.statement.text).toContain('Not because they are important. Not yet.');
+    expect(framing?.statement.text).toContain('before we know what becomes of them');
+    expect(simulation.state.month).toBe(baseline.eventMonth);
 
-      expect(castScene.id).toContain('founding-cast:introduction:');
-      introduced.push(castScene.subjectId);
-      const member = cast.find(candidate => candidate.personId === castScene.subjectId);
-      expect(member).toBeDefined();
-      expect(foundingContinuityProgress(historian, simulation.state).visitedSettlementIds).toContain(member?.settlementId);
-      expect(castScene.statement.text).toContain(member?.name ?? '');
-      expect(castScene.statement.text).toContain(`${member?.arrivalAgeYears} on Arrival Day`);
-      expect(castScene.statement.text).toContain(member?.settlementName ?? '');
-      expect(castScene.statement.text).toContain('We will return to');
-      expect(castScene.statement.text).not.toContain('I will remember this name');
-      expect(castScene.statement.text.length).toBeLessThan(220);
-      expect(historian.validateStatement(castScene.statement, simulation.state)).toBe(true);
+    const introduced: string[] = [];
+    for (let index = 0; index < cast.length; index += 1) {
+      const scene = chooseFoundingCastScene(historian, simulation.state);
+      const member = cast[index]!;
+      expect(scene?.id).toBe(`founding-cast:introduction:${index}:${member.personId}`);
+      expect(scene?.subjectId).toBe(member.personId);
+      expect(scene?.title).toContain(member.name);
+      expect(scene?.title).toContain(member.settlementName);
+      expect(scene?.statement.text).toContain(`${member.arrivalAgeYears} on Arrival Day`);
+      expect(scene?.statement.text).not.toContain(member.name);
+      expect(scene?.statement.text).not.toContain('We will return to');
+      expect(scene?.statement.text.length).toBeLessThan(140);
+      expect(historian.validateStatement(scene!.statement, simulation.state)).toBe(true);
+      introduced.push(scene!.subjectId);
     }
 
-    expect(framingScenes).toBe(1);
     expect(introduced).toEqual(cast.map(member => member.personId));
+    expect(foundingCastProgress(historian, simulation.state).phase).toBe('introducing');
+
+    const release = chooseFoundingCastScene(historian, simulation.state);
+    expect(release?.id).toContain('founding-release:');
+    expect(release?.title).toBe('THE FIRST DAY');
+    expect(release?.statement.text).toBe('The first day continues.');
+    expect(release?.kind).toBe('street-observation');
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('complete');
   });
 
-  it('holds authoritative time for the framing and person beats, then restores the prior auto-run state', () => {
+  it('freezes portraits but lets the final silent release advance authoritative time slowly', () => {
     const simulation = completedArrival('founding-cast-pacing');
     const historian = new Historian(simulation.config);
     const originalAutoRun = simulation.config.autoRun;
     installFoundingCastPacing();
     const presentation = new PresentationDirector(simulation.config);
     completeOrientation(simulation, historian);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
 
-    let castScene = undefined as ReturnType<typeof chooseFoundingCastScene>;
-    while (!castScene) {
-      simulation.step(1);
-      expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
-      const candidate = chooseFoundingCastScene(historian, simulation.state);
-      if (candidate?.id.startsWith('founding-cast:framing:')) {
-        expect(simulation.config.autoRun).toBe(false);
-        expect(presentation.tickBudget(simulation.state)).toBe(0);
-        castScene = chooseFoundingCastScene(historian, simulation.state);
-      } else {
-        castScene = candidate;
-      }
-    }
-    expect(castScene.id).toContain('founding-cast:introduction:');
+    const framing = chooseFoundingCastScene(historian, simulation.state);
+    expect(framing?.id).toContain('founding-cast:framing:');
     expect(simulation.config.autoRun).toBe(false);
     expect(presentation.tickBudget(simulation.state)).toBe(0);
 
-    // The next cast lookup releases the person hold before any later layer proceeds.
-    chooseFoundingCastScene(historian, simulation.state);
+    const cast = foundingDocumentaryCast(simulation.state);
+    for (let index = 0; index < cast.length; index += 1) {
+      const portrait = chooseFoundingCastScene(historian, simulation.state);
+      expect(portrait?.id).toContain(`founding-cast:introduction:${index}:`);
+      expect(simulation.config.autoRun).toBe(false);
+      expect(presentation.tickBudget(simulation.state)).toBe(0);
+    }
+
+    const release = chooseFoundingCastScene(historian, simulation.state);
+    expect(release?.id).toContain('founding-release:');
     expect(simulation.config.autoRun).toBe(originalAutoRun);
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
+    expect(presentation.targetSpeed(simulation.state, {
+      kind: release!.kind,
+      interest: release!.interest,
+      eventType: release!.event?.type,
+      eventMonth: release!.event?.month,
+    })).toBeCloseTo(0.12, 5);
   });
 
-  it('uses one real current anchor fact without assigning documentary importance inside the simulation', () => {
+  it('uses one truthful anchor fact without assigning documentary importance inside the simulation', () => {
     const simulation = completedArrival('founding-cast-grounding');
     const historian = new Historian(simulation.config);
     completeOrientation(simulation, historian);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
     const cast = foundingDocumentaryCast(simulation.state);
-    const castIds = new Set(cast.map(member => member.personId));
+    const statuses = new Map(cast.map(member => [
+      member.personId,
+      simulation.state.people.find(person => person.id === member.personId)?.historical?.status,
+    ]));
 
-    let scene = undefined as ReturnType<typeof chooseFoundingCastScene>;
-    let statusBefore: string | undefined;
-    while (!scene) {
-      simulation.step(1);
-      expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
-      const statuses = new Map(cast.map(member => [
-        member.personId,
-        simulation.state.people.find(person => person.id === member.personId)?.historical?.status,
-      ]));
-      const candidate = chooseFoundingCastScene(historian, simulation.state);
-      if (candidate?.id.startsWith('founding-cast:framing:')) {
-        for (const member of cast) {
-          expect(simulation.state.people.find(person => person.id === member.personId)?.historical?.status).toBe(statuses.get(member.personId));
-        }
-        const personScene = chooseFoundingCastScene(historian, simulation.state);
-        if (personScene) {
-          statusBefore = statuses.get(personScene.subjectId);
-          scene = personScene;
-        }
-      } else if (candidate) {
-        statusBefore = statuses.get(candidate.subjectId);
-        scene = candidate;
-      }
-    }
-
+    expect(chooseFoundingCastScene(historian, simulation.state)?.id).toContain('founding-cast:framing:');
+    const scene = chooseFoundingCastScene(historian, simulation.state);
     const person = simulation.state.people.find(candidate => candidate.id === scene?.subjectId);
     expect(person).toBeDefined();
-    expect(castIds.has(person!.id)).toBe(true);
-    expect(scene?.statement.text).toContain(person!.name);
+    expect(scene?.statement.text).toContain('on Arrival Day');
     const strongest = [...(person!.expertise ?? [])].sort((a, b) => b.competence - a.competence || a.domain.localeCompare(b.domain))[0];
     if (strongest) {
       expect(scene?.statement.text).toContain(strongest.domain.replaceAll('-', ' '));
-      expect(scene?.statement.text).not.toContain('works as a');
+      expect(scene?.statement.text).toContain('strongest recorded skill');
     } else {
       expect(scene?.statement.text).toContain((person!.role ?? person!.occupation).replaceAll('-', ' '));
       expect(scene?.statement.text).toContain('works as a');
     }
-    expect(person?.historical?.status).toBe(statusBefore);
+    for (const member of cast) {
+      expect(simulation.state.people.find(candidate => candidate.id === member.personId)?.historical?.status).toBe(statuses.get(member.personId));
+    }
   });
 
   it('does nothing for a non-arrival start', () => {
