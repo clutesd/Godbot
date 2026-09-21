@@ -69,8 +69,11 @@ equivalent geometry rebuild preserves routine timing.
 Semantic authority changes such as destination, occupation, role, household or actual activity
 replace the current local intent on the next rendered frame. Ordinary monthly position/target
 corrections, waypoint churn and non-interrupting schedule-phase changes do not restart the
-micro-life routine. Emergency, displacement, migration, travel, unsafe weather, inactivity and
-existing farming/construction/resource work still take precedence.
+micro-life routine. A sampled ordinary commute temporarily suspends the previous local routine
+instead of deleting it; the authoritative route remains visible, and the next destination phase
+does not replay the first-appearance arrival hold. Genuine in-progress travel, emergency,
+displacement, migration, unsafe weather, inactivity and existing farming/construction/resource
+work still take precedence.
 
 Local activity bases use a dead-band/hysteresis follower. Small monthly social-layout or authority
 jitter is ignored. Once drift becomes meaningful, the local frontage follows far enough to return

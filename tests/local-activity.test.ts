@@ -188,6 +188,37 @@ describe('renderer-owned local activity', () => {
     expect(refollowed.action).toBe(action);
   });
 
+  it('suspends an ordinary sampled commute without destroying local-life continuity', () => {
+    const p = person(), h = harness([p]);
+    for (let i = 0; i < 360; i++) h.tick();
+    const previous = h.local.get(p.id)!;
+
+    p.activity = 'travel';
+    p.navigation!.schedulePhase = 'commute';
+    p.navigation!.traveling = false;
+    const commuting = h.tick(1 / 60)[0]!;
+    expect(commuting.action).toBeUndefined();
+    expect(h.local.get(p.id)).toBe(previous);
+
+    p.activity = 'craft';
+    p.navigation!.schedulePhase = 'work';
+    p.navigation!.destinationId = 'new-bench';
+    h.tick(0);
+    const resumed = h.local.get(p.id)!;
+    expect(resumed).not.toBe(previous);
+    expect(resumed.action).toBe('arrive');
+    expect(resumed.hold).toBe(0);
+
+    // Once the route approach/orientation is complete, no second arrival pause is charged.
+    let elapsed = 0;
+    while (h.local.get(p.id)?.action === 'arrive' && elapsed < 1) {
+      h.tick(1 / 60);
+      elapsed += 1 / 60;
+    }
+    expect(h.local.get(p.id)?.action).not.toBe('arrive');
+    expect(elapsed).toBeLessThan(0.5);
+  });
+
   it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
     const p = person(), h = harness([p]); h.tick(); expect(h.local.size).toBe(1);
     p.activity = activity; h.tick(0); expect(h.local.size).toBe(0);

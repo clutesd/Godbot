@@ -102,8 +102,18 @@ export class LocalActivityPresentation {
 
   resolve(person: Person, context: LocalActivityContext, delta: number): LocalActivityState | undefined {
     const nav = person.navigation;
-    // Specialized physical workers own their entire workflow, even when their work is blocked.
-    if (context.blocked || !person.alive || !nav || nav.traveling || nav.schedulePhase === 'commute'
+    // An ordinary commute is a sub-monthly documentary transition. The renderer should show the
+    // consumed authoritative route, so local life yields for the shot, but the prior routine stays
+    // cached. That prevents the next work/home sample from paying a brand-new arrival pause.
+    const ordinaryCommute = !nav.traveling && nav.schedulePhase === 'commute' && person.activity === 'travel';
+    if (ordinaryCommute) {
+      const suspended = this.states.get(person.id);
+      if (suspended) suspended.seen = this.frame;
+      return undefined;
+    }
+
+    // Specialized physical workers and genuine in-progress/emergency travel own their workflow.
+    if (context.blocked || !person.alive || !nav || nav.traveling
       || nav.schedulePhase === 'emergency' || person.displacedSinceMonth !== undefined || person.health <= 0.2
       || EXCLUSIVE_ACTIVITIES.has(person.activity)) {
       this.states.delete(person.id);
@@ -123,6 +133,10 @@ export class LocalActivityPresentation {
       }
       const previous = state;
       state = this.create(person, context, authority);
+      // "Arrive" is a first-appearance beat, not a tax on every monthly routine hand-off. If this
+      // resident already had a local life before a commute/context change, the retained route still
+      // supplies the approach and the first purposeful intent begins as soon as they are oriented.
+      if (previous) state.hold = 0;
       // A newly placed obstacle can invalidate a formerly safe return corridor. Stop on this
       // side of it; never blindly cut across the new building to resume the old base position.
       if (previous && context.visual && !localSegmentSafe(context.visual, state.destination, context)) {
