@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
+import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
 describe('forest-aware camera sightline scoring', () => {
   it('penalizes a low sightline through standing forest and clears when the forest is removed', () => {
@@ -132,5 +133,52 @@ describe('low-camera structure occlusion', () => {
     );
     expect(blocked).toBeGreaterThan(0.5);
     expect(clear).toBe(0);
+  });
+});
+
+
+describe('interaction-aware personal composition', () => {
+  const action = (anchorX: number, anchorZ: number, contactStrength = 0): PhysicalActionPresentation => ({
+    personId: 'worker',
+    actionKind: 'resource-mineral',
+    authoritativeActivity: 'gather',
+    sourceAuthority: 'test',
+    targetId: 'ore',
+    targetKind: 'mineral',
+    interactionAnchor: { x: anchorX, z: anchorZ },
+    locomotionTarget: { x: 0, z: 0 },
+    phase: contactStrength > 0 ? 'contact' : 'prepare-recover',
+    phaseProgress: contactStrength,
+    activeTool: 'pick',
+    contactStrength,
+  });
+
+  it('frames actor and work object together from a side-on documentary angle', () => {
+    const composition = interactionCameraComposition({ x: 0, z: 0 }, action(0.6, 0, 1), Math.PI / 2);
+
+    expect(composition.span).toBeCloseTo(0.6);
+    expect(composition.focusX).toBeGreaterThan(0.3);
+    expect(composition.focusX).toBeLessThan(0.4);
+    expect(composition.focusZ).toBeCloseTo(0);
+    expect(Math.abs(Math.cos(composition.azimuth))).toBeLessThan(0.001);
+    expect(composition.distanceBoost).toBeGreaterThan(0.2);
+    expect(composition.contactLock).toBe(1);
+  });
+
+  it('caps distant work targets so a close shot never turns back into an aerial composition', () => {
+    const composition = interactionCameraComposition({ x: 0, z: 0 }, action(10, 0), Math.PI / 2);
+
+    expect(composition.span).toBe(1.6);
+    expect(composition.targetX).toBeCloseTo(1.6);
+    expect(composition.distanceBoost).toBeLessThanOrEqual(0.72);
+    expect(composition.focusX).toBeLessThan(1);
+  });
+
+  it('keeps the authored camera side when both perpendicular views tell the action clearly', () => {
+    const positiveSide = interactionCameraComposition({ x: 0, z: 0 }, action(0.5, 0), Math.PI / 2);
+    const negativeSide = interactionCameraComposition({ x: 0, z: 0 }, action(0.5, 0), -Math.PI / 2);
+
+    expect(Math.sin(positiveSide.azimuth)).toBeGreaterThan(0.9);
+    expect(Math.sin(negativeSide.azimuth)).toBeLessThan(-0.9);
   });
 });
