@@ -19,24 +19,31 @@ export interface CurrentObservation {
   eventMonth?: number;
 }
 
-interface Framing {
+export interface CameraFraming {
   radius: readonly [number, number];
   height: readonly [number, number];
   targetHeight: number;
   durationScale: number;
 }
 
+interface CameraClearance {
+  lens: number;
+  sightline: number;
+}
+
 type CameraMotion = 'hold' | 'drift' | 'truck' | 'dolly-in' | 'dolly-out' | 'crane' | 'orbit' | 'follow' | 'pullback';
 
-const FRAMING: Record<ObservationKind, Framing> = {
+const FRAMING: Record<ObservationKind, CameraFraming> = {
   'world-establishing': { radius: [46, 62], height: [42, 58], targetHeight: 1, durationScale: 1.25 },
   'regional-travel': { radius: [22, 31], height: [19, 28], targetHeight: 0.8, durationScale: 1.15 },
   'settlement-approach': { radius: [15, 22], height: [12, 19], targetHeight: 1.2, durationScale: 1 },
-  'street-observation': { radius: [8, 13], height: [6, 10], targetHeight: 0.8, durationScale: 1.1 },
-  'worker-follow': { radius: [8, 12], height: [6, 9], targetHeight: 0.6, durationScale: 1.12 },
-  'traveler-follow': { radius: [10, 15], height: [8, 12], targetHeight: 0.7, durationScale: 1.08 },
+  // Human-scale shots intentionally break from the old aerial grammar. These dimensions are in
+  // world units: close people should read as subjects, not colored pixels inside a settlement.
+  'street-observation': { radius: [4.2, 6.5], height: [1.8, 3.1], targetHeight: 0.62, durationScale: 1.1 },
+  'worker-follow': { radius: [2.4, 3.8], height: [1.0, 1.55], targetHeight: 0.48, durationScale: 1.12 },
+  'traveler-follow': { radius: [5.4, 7.8], height: [2.7, 4.2], targetHeight: 0.55, durationScale: 1.08 },
   'institution-exterior': { radius: [10, 16], height: [8, 13], targetHeight: 1.2, durationScale: 1.24 },
-  'discovery-scene': { radius: [8, 13], height: [6, 10], targetHeight: 0.9, durationScale: 1.35 },
+  'discovery-scene': { radius: [2.6, 4.1], height: [1.1, 1.8], targetHeight: 0.5, durationScale: 1.35 },
   'battle-overview': { radius: [24, 34], height: [21, 31], targetHeight: 1, durationScale: 1.3 },
   'aftermath-pullback': { radius: [30, 42], height: [27, 39], targetHeight: 0.7, durationScale: 1.4 },
   'city-growth-timelapse': { radius: [20, 29], height: [17, 25], targetHeight: 1.4, durationScale: 1.35 },
@@ -75,6 +82,17 @@ const FOREST_AWARE_KINDS = new Set<ObservationKind>([
 const FOREST_AZIMUTH_OFFSETS = [0, Math.PI / 7.2, -Math.PI / 7.2, Math.PI / 3.6, -Math.PI / 3.6] as const;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+
+export function cameraFramingFor(kind: ObservationKind): CameraFraming {
+  return FRAMING[kind];
+}
+
+export function cameraClearanceFor(kind: ObservationKind | undefined): CameraClearance {
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return { lens: 0.82, sightline: 0.28 };
+  if (kind === 'street-observation') return { lens: 1.12, sightline: 0.38 };
+  if (kind === 'traveler-follow') return { lens: 1.7, sightline: 0.62 };
+  return { lens: 3, sightline: 1.6 };
+}
 
 /**
  * Cheap presentation-only estimate of how strongly standing forest occupies a camera sightline.
@@ -201,7 +219,8 @@ export class CameraDirector {
     const targetSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate * 1.22);
     this.camera.position.lerp(this.desiredPosition, positionSmoothing);
     this.lookTarget.lerp(this.desiredTarget, targetSmoothing);
-    this.camera.position.y = Math.max(this.camera.position.y, elevationAt(this.camera.position.x, this.camera.position.z) + 2.6);
+    const clearance = cameraClearanceFor(this.currentScene?.kind);
+    this.camera.position.y = Math.max(this.camera.position.y, elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens);
     this.lookTarget.y = Math.max(this.lookTarget.y, elevationAt(this.lookTarget.x, this.lookTarget.z) + 0.35);
     this.camera.lookAt(this.lookTarget);
   }
@@ -266,7 +285,8 @@ export class CameraDirector {
       const azimuth = baseAzimuth + offset;
       const x = this.shotBaseTarget.x + Math.cos(azimuth) * radius;
       const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius;
-      this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + 3), z);
+      const clearance = cameraClearanceFor(kind);
+      this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + clearance.lens), z);
       const obstruction = forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
       // A small composition penalty prevents needless angle changes when two views are effectively tied.
       const compositionPenalty = Math.abs(offset) * 0.045;
@@ -315,14 +335,25 @@ export class CameraDirector {
     if (scene.kind === 'worker-follow' || scene.kind === 'traveler-follow' || scene.kind === 'discovery-scene') {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
       if (person) {
+        const framing = FRAMING[scene.kind];
         const ground = elevationAt(person.position.x, person.position.z);
-        this.smoothFocus(person.position.x, ground + 0.65, person.position.z, deltaSeconds, scene.kind === 'traveler-follow' ? 1.45 : 1.75);
-        const followingDistance = scene.kind === 'traveler-follow' ? 12 : 9;
+        this.smoothFocus(person.position.x, ground + framing.targetHeight, person.position.z, deltaSeconds, scene.kind === 'traveler-follow' ? 1.45 : 1.75);
+
+        // Personal scenes now use the same authored framing profile while tracking. Previously this
+        // branch silently replaced the close-shot profile with a 9-12 unit aerial follow.
+        const framingVariation = 0.34 + this.stableUnit(`${scene.id}:follow-framing`) * 0.36;
+        const followingDistance = this.interpolate(framing.radius, framingVariation);
+        const cameraHeight = this.interpolate(framing.height, framingVariation);
         const angle = this.shotAzimuth + Math.sin(elapsedSeconds * 0.11 + this.shotAzimuth) * 0.035;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
+        const clearance = cameraClearanceFor(scene.kind);
         this.desiredTarget.copy(this.trackedFocus);
-        this.desiredPosition.set(x, Math.max(this.trackedFocus.y + 6.2, elevationAt(x, z) + 2.8), z);
+        this.desiredPosition.set(
+          x,
+          Math.max(ground + cameraHeight, elevationAt(x, z) + clearance.lens),
+          z,
+        );
         this.raiseForTerrain(elevationAt);
         return;
       }
@@ -449,15 +480,19 @@ export class CameraDirector {
    * the lens and the subject, clearing only the camera's own footprint is not enough.
    */
   private raiseForTerrain(elevationAt: (x: number, z: number) => number): void {
-    this.desiredPosition.y = Math.max(this.desiredPosition.y, elevationAt(this.desiredPosition.x, this.desiredPosition.z) + 3);
+    const clearance = cameraClearanceFor(this.currentScene?.kind);
+    this.desiredPosition.y = Math.max(
+      this.desiredPosition.y,
+      elevationAt(this.desiredPosition.x, this.desiredPosition.z) + clearance.lens,
+    );
     const samples = 8;
     for (let index = 1; index < samples; index += 1) {
       const amount = index / samples;
       const x = THREE.MathUtils.lerp(this.desiredPosition.x, this.desiredTarget.x, amount);
       const z = THREE.MathUtils.lerp(this.desiredPosition.z, this.desiredTarget.z, amount);
       const sight = THREE.MathUtils.lerp(this.desiredPosition.y, this.desiredTarget.y, amount);
-      const clearance = elevationAt(x, z) + 1.6;
-      if (clearance > sight) this.desiredPosition.y += (clearance - sight) / Math.max(0.15, 1 - amount);
+      const requiredSight = elevationAt(x, z) + clearance.sightline;
+      if (requiredSight > sight) this.desiredPosition.y += (requiredSight - sight) / Math.max(0.15, 1 - amount);
     }
   }
 
