@@ -89,6 +89,7 @@ describe('Founding Chapter 1a', () => {
     for (const community of baseline?.communities ?? []) {
       const scene = communityScenes.find(candidate => candidate.subjectId === community.settlementId);
       expect(scene).toBeDefined();
+      expect(scene?.id).toBe(`founding:community:${community.order}:${community.podId}`);
       expect(scene?.title).toContain(community.podName.toUpperCase());
       expect(scene?.statement.text).toContain(community.site.biome.replaceAll('-', ' '));
       expect(community.domains.some(domain => scene?.statement.text.includes(domain.replaceAll('-', ' ')))).toBe(true);
