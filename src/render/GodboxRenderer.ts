@@ -662,7 +662,7 @@ export class GodboxRenderer {
       // feet stay on the ground instead of sinking with the pose.
       const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
-      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(articulated));
+      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding));
       this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyTilt.pitch, facing + (pose?.pelvisRotation ?? 0), bodyTilt.roll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
