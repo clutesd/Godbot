@@ -40,8 +40,12 @@ describe('cosmic people presentation', () => {
     expect(batch.material.depthTest).toBe(true);
     expect(batch.material.vertexColors).toBe(false);
     const hits: THREE.Intersection[] = []; batch.mesh.raycast(new THREE.Raycaster(), hits); expect(hits).toEqual([]);
-    batch.updateDaylight(0); expect(batch.material.color.r).toBeCloseTo(0.58);
-    batch.updateDaylight(1); expect(batch.material.color.r).toBeCloseTo(0.88);
+    batch.updateDaylight(0);
+    expect(batch.material.userData['daylight'].value).toBe(0);
+    expect(batch.material.color.r).toBeCloseTo(1);
+    batch.updateDaylight(1);
+    expect(batch.material.userData['daylight'].value).toBe(1);
+    expect(batch.material.color.r).toBeCloseTo(1);
     batch.mesh.dispose(); batch.mesh.geometry.dispose(); batch.material.dispose();
   });
 
@@ -54,6 +58,8 @@ describe('cosmic people presentation', () => {
     expect(material.map).toBeNull();
     expect(material.emissiveMap).toBeNull();
     expect(material.transparent).toBe(false);
+    expect(material.roughness).toBeCloseTo(0.52);
+    expect(material.metalness).toBeCloseTo(0.22);
     updateCosmicBodyMaterial(material, -1); expect(material.userData['daylight'].value).toBe(0);
     updateCosmicBodyMaterial(material, 5); expect(material.userData['daylight'].value).toBe(1);
     mesh.dispose(); mesh.geometry.dispose(); material.dispose();
