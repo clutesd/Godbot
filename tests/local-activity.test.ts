@@ -289,6 +289,8 @@ describe('renderer-owned local activity', () => {
     const pairMin = new Map<string, number>();
     const pairMax = new Map<string, number>();
     let conversationFrames = 0;
+    let reciprocalFrames = 0;
+    let minimumPairDistance = Infinity;
 
     for (let frame = 0; frame < 15 * 60; frame++) {
       local.beginFrame(); visuals.beginFrame();
@@ -313,11 +315,16 @@ describe('renderer-owned local activity', () => {
         const start = origin.get(p.id)!;
         maxDisplacement.set(p.id, Math.max(maxDisplacement.get(p.id)!, Math.hypot(v.x - start.x, v.z - start.z)));
         if (plan?.partnerId) conversationFrames++;
+        if (plan?.acknowledgingId) {
+          const speaker = local.get(plan.acknowledgingId);
+          if (speaker?.partnerId === p.id) reciprocalFrames++;
+        }
       }
       for (let a = 0; a < people.length; a++) for (let b = a + 1; b < people.length; b++) {
         const va = visuals.get(people[a]!.id)!, vb = visuals.get(people[b]!.id)!;
         const key = `${a}:${b}`;
         const d = Math.hypot(va.x - vb.x, va.z - vb.z);
+        minimumPairDistance = Math.min(minimumPairDistance, d);
         pairMin.set(key, Math.min(pairMin.get(key) ?? Infinity, d));
         pairMax.set(key, Math.max(pairMax.get(key) ?? 0, d));
       }
@@ -329,7 +336,33 @@ describe('renderer-owned local activity', () => {
     expect(mobile).toBeGreaterThanOrEqual(5);
     expect(changingPairs).toBeGreaterThanOrEqual(8);
     expect(conversationFrames).toBeGreaterThan(180);
+    expect(reciprocalFrames).toBeGreaterThan(20);
+    expect(minimumPairDistance).toBeGreaterThan(0.22);
     expect(JSON.stringify(people)).toBe(before);
+  });
+
+  it('keeps simultaneous social approaches out of the shared midpoint', () => {
+    const a = person('pair-a'), b = person('pair-b');
+    a.position = { x: -0.55, z: 0 }; a.target = { ...a.position };
+    b.position = { x: 0.55, z: 0 }; b.target = { ...b.position };
+    for (const p of [a, b]) {
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'pair-plaza';
+      p.navigation!.schedulePhase = 'social';
+      p.traits.sociability = 1;
+      p.traits.cooperation = 1;
+    }
+    const h = harness([a, b]);
+    let minimum = Infinity, paired = 0;
+    for (let i = 0; i < 1200; i++) {
+      h.tick(1 / 60);
+      const va = h.visuals.get(a.id)!, vb = h.visuals.get(b.id)!;
+      minimum = Math.min(minimum, Math.hypot(va.x - vb.x, va.z - vb.z));
+      if (h.local.get(a.id)?.partnerId === b.id || h.local.get(b.id)?.partnerId === a.id) paired++;
+    }
+    expect(paired).toBeGreaterThan(30);
+    expect(minimum).toBeGreaterThan(0.24);
   });
 
   it('turns toward a real companion without ever aliasing their authority', () => {
