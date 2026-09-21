@@ -332,15 +332,19 @@ export class LocalActivityPresentation {
           const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
           const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
           if (distance < 0.18 || distance > 2.7) continue;
-          // Complementary shares keep simultaneous pair approaches out of the same midpoint.
+          // One member closes the pair distance; the other can acknowledge and listen in place.
+          // A stable pair role prevents two independently resolved agents from walking to the
+          // same midpoint. Different partners naturally change who moves over time.
           const sociability = Math.max(0, Math.min(1, person.traits.sociability));
           const personalSpace = 0.44 + (1 - sociability) * 0.1
             + unit(`${person.id}:${peer.id}:social-space`) * 0.06;
-          const gap = Math.max(0, distance - personalSpace);
-          const share = person.id < peer.id ? 0.58 : 0.42;
-          const approach = Math.min(0.68, gap * share);
-          const candidate = { x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
-            z: state.base.z + (peerPosition.z - state.base.z) / distance * approach };
+          const closesDistance = person.id < peer.id;
+          if (!closesDistance && distance > 1.35) continue;
+          const approach = closesDistance ? Math.min(0.68, Math.max(0, distance - personalSpace)) : 0;
+          const candidate = approach > 0
+            ? { x: state.base.x + (peerPosition.x - state.base.x) / distance * approach,
+              z: state.base.z + (peerPosition.z - state.base.z) / distance * approach }
+            : { x: from.x, z: from.z };
           if (!bounded(person, candidate) || !localSegmentSafe(from, candidate, context)
             || !Number.isFinite(peerRoutePenalty(person, from, candidate, context, peer.id))) continue;
           point = candidate; focus = peerPosition; state.partnerId = peer.id;
@@ -387,6 +391,7 @@ function activityRadius(kind: DestinationKind): number {
 }
 
 function socialEngagementAllowed(person: Person, kind: DestinationKind, state: LocalActivityState): boolean {
+  if (person.activity === 'socialize') return true;
   const sociability = Math.max(0, Math.min(1, person.traits.sociability));
   const cooperation = Math.max(0, Math.min(1, person.traits.cooperation));
   const socialPlace = kind === 'plaza' || kind === 'market' || kind === 'home';
@@ -398,8 +403,12 @@ function selectPeerAwarePoint(person: Person, state: LocalActivityState, context
   preferredIndex: number, from: Readonly<Vec2>): Vec2 | undefined {
   let best: Vec2 | undefined;
   let bestScore = Infinity;
+  const crowdedAtStart = hasPeerOverlap(person, from, context);
+  const egressOffset = crowdedAtStart && state.points.length > 1
+    ? 1 + Math.floor(unit(`${person.id}:peer-egress`) * (state.points.length - 1))
+    : 0;
   for (let offset = 0; offset < state.points.length; offset++) {
-    const point = state.points[(preferredIndex + offset) % state.points.length]!;
+    const point = state.points[(preferredIndex + egressOffset + offset) % state.points.length]!;
     if (!bounded(person, point) || !localSegmentSafe(from, point, context)) continue;
     const crowd = peerRoutePenalty(person, from, point, context);
     if (!Number.isFinite(crowd)) continue;
@@ -420,14 +429,34 @@ function peerRoutePenalty(person: Person, from: Readonly<Vec2>, to: Readonly<Vec
     const peer = context.people.get(id);
     if (!peer) continue;
     const at = context.visualFor?.(id) ?? peer.position;
+    const startDistance = Math.hypot(from.x - at.x, from.z - at.z);
     const endpointDistance = Math.hypot(to.x - at.x, to.z - at.z);
     const routeDistance = distanceToSegment(at, from, to);
+    // If two residents are already overlapping, blocking every route creates a permanent deadlock.
+    // Permit only routes that materially increase separation; once clear, normal corridor rules resume.
+    if (startDistance < LOCAL_PEER_HARD_CLEARANCE) {
+      if (endpointDistance <= startDistance + 0.08) return Infinity;
+      penalty += Math.max(0, (LOCAL_PEER_SOFT_CLEARANCE - endpointDistance) / LOCAL_PEER_SOFT_CLEARANCE);
+      continue;
+    }
     if (endpointDistance < LOCAL_PEER_HARD_CLEARANCE || routeDistance < LOCAL_PEER_ROUTE_CLEARANCE) return Infinity;
     if (endpointDistance < LOCAL_PEER_SOFT_CLEARANCE) {
       penalty += (LOCAL_PEER_SOFT_CLEARANCE - endpointDistance) / LOCAL_PEER_SOFT_CLEARANCE;
     }
   }
   return penalty;
+}
+
+function hasPeerOverlap(person: Person, at: Readonly<Vec2>, context: LocalActivityContext): boolean {
+  const members = context.group?.members;
+  if (!members) return false;
+  return members.some(id => {
+    if (id === person.id) return false;
+    const peer = context.people.get(id);
+    if (!peer) return false;
+    const position = context.visualFor?.(id) ?? peer.position;
+    return Math.hypot(at.x - position.x, at.z - position.z) < LOCAL_PEER_HARD_CLEARANCE;
+  });
 }
 
 function distanceToSegment(point: Readonly<Vec2>, a: Readonly<Vec2>, b: Readonly<Vec2>): number {
