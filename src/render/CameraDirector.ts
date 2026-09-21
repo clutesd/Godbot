@@ -154,6 +154,35 @@ export function foundingEditorialTimingFor(sceneId: string | undefined): Foundin
   return undefined;
 }
 
+export interface FoundingLandingShotProfile {
+  readonly order: number;
+  readonly role: 'terrain-reveal' | 'ground-approach' | 'lateral-life' | 'geographic-contrast' | 'history-handoff';
+  readonly radius: number;
+  readonly height: number;
+  readonly targetHeight: number;
+  readonly azimuthOffset: number;
+  readonly motion: CameraMotion;
+}
+
+const FOUNDING_LANDING_SHOTS: readonly FoundingLandingShotProfile[] = [
+  { order: 0, role: 'terrain-reveal', radius: 25, height: 22, targetHeight: 1.1, azimuthOffset: -0.18, motion: 'crane' },
+  { order: 1, role: 'ground-approach', radius: 12, height: 7.4, targetHeight: 0.8, azimuthOffset: 0.42, motion: 'dolly-in' },
+  { order: 2, role: 'lateral-life', radius: 10, height: 5.2, targetHeight: 0.55, azimuthOffset: -0.58, motion: 'truck' },
+  { order: 3, role: 'geographic-contrast', radius: 22, height: 25, targetHeight: 0.9, azimuthOffset: 0.76, motion: 'orbit' },
+  { order: 4, role: 'history-handoff', radius: 14, height: 9.2, targetHeight: 0.75, azimuthOffset: -0.72, motion: 'pullback' },
+];
+
+/**
+ * Five landing beats, five visual jobs. The order is documentary metadata encoded in the scene id;
+ * it never changes simulation state or implies one community matters more than another.
+ */
+export function foundingLandingShotProfileFor(sceneId: string | undefined): FoundingLandingShotProfile | undefined {
+  if (!sceneId?.startsWith('founding:community:')) return undefined;
+  const order = Number(sceneId.split(':')[2]);
+  if (!Number.isInteger(order)) return undefined;
+  return FOUNDING_LANDING_SHOTS.find(profile => profile.order === order);
+}
+
 function angularDistance(a: number, b: number): number {
   let delta = (a - b) % (Math.PI * 2);
   if (delta > Math.PI) delta -= Math.PI * 2;
@@ -405,8 +434,9 @@ export class CameraDirector {
     this.shotAge = 0;
     this.trackingInitialized = false;
     const framing = FRAMING[scene.kind];
+    const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const baseDuration = this.config.camera.shotSeconds[0] + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
-    this.currentMotion = this.motionFor(scene);
+    this.currentMotion = foundingProfile?.motion ?? this.motionFor(scene);
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
@@ -429,10 +459,11 @@ export class CameraDirector {
     this.observation.revision += 1;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
-    const baseAzimuth = this.stableAzimuth(scene.id);
-    const radius = this.interpolate(framing.radius, 0.36 + scene.score * 0.4);
-    const height = this.interpolate(framing.height, 0.42 + scene.interest * 0.32);
-    this.shotBaseTarget.set(scene.position.x, ground + framing.targetHeight, scene.position.z);
+    const baseAzimuth = this.stableAzimuth(scene.id) + (foundingProfile?.azimuthOffset ?? 0);
+    const radius = foundingProfile?.radius ?? this.interpolate(framing.radius, 0.36 + scene.score * 0.4);
+    const height = foundingProfile?.height ?? this.interpolate(framing.height, 0.42 + scene.interest * 0.32);
+    const targetHeight = foundingProfile?.targetHeight ?? framing.targetHeight;
+    this.shotBaseTarget.set(scene.position.x, ground + targetHeight, scene.position.z);
     this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
     this.shotBasePosition.set(scene.position.x + Math.cos(this.shotAzimuth) * radius, ground + height, scene.position.z + Math.sin(this.shotAzimuth) * radius);
     this.desiredTarget.copy(this.shotBaseTarget);
