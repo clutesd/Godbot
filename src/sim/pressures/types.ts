@@ -56,9 +56,18 @@ export interface SurvivalState {
   deprivation: number;
   exposureDose: number;
   /** Immutable founding milestone. Optional for archives created before first-fire tracking existed. */
-  firstFire?: { month: number; eventId: string };
-  /** Routine communal hearth fuel, distinct from additional cold-weather heating fuel. */
-  hearth?: { fuelNeed: number; fuelUsed: number };
+  firstFire?: { month: number; eventId: string; plannedMonth?: number; readiness?: number };
+  /**
+   * Routine communal hearth fuel, distinct from additional cold-weather heating fuel.
+   * The ignition plan is fixed when first evaluated so changing weather cannot rewrite history.
+   */
+  hearth?: {
+    fuelNeed: number;
+    fuelUsed: number;
+    plannedIgnitionMonth?: number;
+    ignitionReadiness?: number;
+    ignitionRank?: number;
+  };
   cold: { severity: number; shelterCoverage: number; fuelNeed: number; fuelUsed: number; exposure: number };
   response?: {
     kind: FoodResponse;
