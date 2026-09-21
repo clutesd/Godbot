@@ -26,7 +26,7 @@ describe('Arrival presentation contracts', () => {
     expect(scene.children).toHaveLength(0);
     expect(view.root.children).toHaveLength(0);
   }, 10000);
-  it('routes only the one-time founding chapter into Arrival Day cinematic dialogue', () => {
+  it('keeps the central Arrival cinematic through the human anchors, then releases it', () => {
     expect(foundingArrivalDialogue(undefined, 'Elsewhere', 'Ordinary history')).toBeUndefined();
     expect(foundingArrivalDialogue('worker:someone', 'A worker', 'Ordinary history')).toBeUndefined();
     expect(foundingArrivalDialogue('founding:overview:event-1', 'ARRIVAL DAY · THE 5 LANDINGS', 'Five communities begin.')).toEqual({
@@ -34,11 +34,22 @@ describe('Arrival presentation contracts', () => {
       title: 'ARRIVAL DAY · THE 5 LANDINGS',
       text: 'Five communities begin.',
     });
-    expect(foundingArrivalDialogue('founding:community:pod-3', 'Riverhold · THIRD VESSEL', 'Riverhold began here.')).toEqual({
+    expect(foundingArrivalDialogue('founding:community:2:pod-3', 'Riverhold · THIRD VESSEL', 'Riverhold began here.')).toEqual({
       eyebrow: 'ARRIVAL DAY · FOUNDING COMMUNITY',
       title: 'Riverhold · THIRD VESSEL',
       text: 'Riverhold began here.',
     });
+    expect(foundingArrivalDialogue('founding-cast:framing:event-1', 'A FEW LIVES', 'We will follow only a few.')).toEqual({
+      eyebrow: 'ARRIVAL DAY · A FEW LIVES',
+      title: 'A FEW LIVES',
+      text: 'We will follow only a few.',
+    });
+    expect(foundingArrivalDialogue('founding-cast:introduction:0:person-1', 'Mara · Seed', '23 on Arrival Day.')).toEqual({
+      eyebrow: 'ARRIVAL DAY · ONE OF THE FOUNDERS',
+      title: 'Mara · Seed',
+      text: '23 on Arrival Day.',
+    });
+    expect(foundingArrivalDialogue('founding-release:event-1', 'THE FIRST DAY', 'The first day continues.')).toBeUndefined();
   });
 
   it('brakes into authoritative ground and keeps camera/caption values finite', () => {
