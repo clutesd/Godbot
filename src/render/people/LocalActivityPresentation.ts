@@ -7,7 +7,10 @@ import type { PersonVisualState } from './PeopleVisualState';
 
 /** The single renderer-owned micro-life projection. No clock, random source or write is shared with simulation. */
 export const LOCAL_ACTIVITY_RADIUS = 2;
-const LOCAL_ACTIVITY_BASE_EPSILON = 0.08;
+/** Ignore monthly/group-layout drift inside this radius so local lives do not chase jitter. */
+const LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD = 0.24;
+/** After following a meaningful shift, leave this much slack before following again. */
+const LOCAL_ACTIVITY_BASE_RELEASE_RADIUS = 0.1;
 const LOCAL_ACTIVITY_REANCHOR_LIMIT = 0.9;
 export interface ActivityStructure {
   key: string; worldX: number; worldZ: number; width: number; depth: number; rotationY: number;
@@ -118,11 +121,12 @@ export class LocalActivityPresentation {
         state.action = 'wait-for-clearance';
       }
       this.states.set(person.id, state);
-    } else if (baseDrift > LOCAL_ACTIVITY_BASE_EPSILON) {
-      // Social-group reshuffles and small authoritative position corrections are common at the
-      // monthly tick. Re-anchor the physical frontage without restarting the person's action,
-      // timer or cycle, so history can advance while a believable local action finishes.
-      this.reanchor(person, context, state);
+    } else if (baseDrift > LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD) {
+      // True hysteresis: ordinary monthly/group-layout jitter is absorbed inside the dead-band.
+      // Once drift becomes meaningful, follow only far enough to re-enter the release radius.
+      // This prevents an activity frontage from oscillating every month while still letting it
+      // track a genuinely shifting workplace/social cluster without restarting the routine.
+      this.reanchor(person, context, state, hysteresisBase(state.base, context.base));
     }
     state.seen = this.frame;
     const visual = context.visual;
@@ -190,8 +194,8 @@ export class LocalActivityPresentation {
     return state;
   }
 
-  private reanchor(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
-    const anchored = this.create(person, context, state.authority);
+  private reanchor(person: Person, context: LocalActivityContext, state: LocalActivityState, base = context.base): void {
+    const anchored = this.create(person, { ...context, base: { ...base, restFacing: context.base.restFacing } }, state.authority);
     const previousDestination = { ...state.destination };
     state.base = anchored.base;
     state.points = anchored.points;
@@ -275,6 +279,14 @@ export class LocalActivityPresentation {
   }
 }
 
+
+function hysteresisBase(current: Vec2, observed: Vec2): Vec2 {
+  const dx = observed.x - current.x, dz = observed.z - current.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance <= LOCAL_ACTIVITY_BASE_RELEASE_RADIUS || distance === 0) return { ...current };
+  const follow = distance - LOCAL_ACTIVITY_BASE_RELEASE_RADIUS;
+  return { x: current.x + dx / distance * follow, z: current.z + dz / distance * follow };
+}
 
 function localActivityAuthority(person: Person): string {
   const nav = person.navigation!;

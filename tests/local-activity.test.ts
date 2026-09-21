@@ -105,14 +105,16 @@ describe('renderer-owned local activity', () => {
   });
 
 
-  it('preserves an in-progress local routine across minor monthly authority churn', () => {
+  it('preserves an in-progress local routine and absorbs small monthly base jitter', () => {
     const p = person(), h = harness([p]);
     for (let i = 0; i < 360; i++) h.tick();
     const previous = h.local.get(p.id)!;
+    const base = { ...previous.base };
     const step = previous.step, cycle = previous.cycle, seconds = previous.seconds, action = previous.action;
 
     // These values can all change as monthly authority and group placement refresh. None changes
-    // the fact that this resident is still an artisan working at the same workshop.
+    // the fact that this resident is still an artisan working at the same workshop. The 0.21-unit
+    // base drift remains inside the hysteresis band and should therefore be ignored.
     p.position.x += 0.18;
     p.position.z -= 0.11;
     p.target.x += 0.35;
@@ -126,8 +128,45 @@ describe('renderer-owned local activity', () => {
     expect(next.cycle).toBe(cycle);
     expect(next.seconds).toBe(seconds);
     expect(next.action).toBe(action);
-    expect(next.base.x).toBeCloseTo(p.position.x);
-    expect(next.base.z).toBeCloseTo(p.position.z);
+    expect(next.base).toEqual(base);
+  });
+
+  it('uses base hysteresis to follow meaningful drift without chasing each monthly correction', () => {
+    const p = person(), h = harness([p]);
+    for (let i = 0; i < 360; i++) h.tick();
+    const state = h.local.get(p.id)!;
+    const step = state.step, cycle = state.cycle, seconds = state.seconds, action = state.action;
+
+    // Cross the follow threshold. The anchor should move most of the way, but deliberately leave
+    // a 0.10-unit release gap instead of snapping to the observed group/authority base.
+    p.position.x += 0.4;
+    h.tick(0);
+    const followed = h.local.get(p.id)!;
+    expect(followed).toBe(state);
+    expect(followed.base.x).toBeCloseTo(0.3, 5);
+    expect(Math.abs(p.position.x - followed.base.x)).toBeCloseTo(0.1, 5);
+    expect(followed.step).toBe(step);
+    expect(followed.cycle).toBe(cycle);
+    expect(followed.seconds).toBe(seconds);
+    expect(followed.action).toBe(action);
+
+    // A small reverse correction stays inside the dead-band, so the anchor does not chatter back.
+    const stableBase = { ...followed.base };
+    p.position.x -= 0.12;
+    h.tick(0);
+    expect(h.local.get(p.id)).toBe(state);
+    expect(h.local.get(p.id)!.base).toEqual(stableBase);
+
+    // Accumulated movement beyond the band follows again without resetting the micro-life cycle.
+    p.position.x += 0.35;
+    h.tick(0);
+    const refollowed = h.local.get(p.id)!;
+    expect(refollowed).toBe(state);
+    expect(refollowed.base.x).toBeGreaterThan(stableBase.x);
+    expect(Math.abs(p.position.x - refollowed.base.x)).toBeCloseTo(0.1, 5);
+    expect(refollowed.step).toBe(step);
+    expect(refollowed.cycle).toBe(cycle);
+    expect(refollowed.action).toBe(action);
   });
 
   it.each(['flee', 'migrate', 'shelter', 'gather', 'construct', 'farm'] as Activity[])('yields to %s and never substitutes ambient work', activity => {
