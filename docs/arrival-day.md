@@ -21,6 +21,15 @@ The scene uses compact faceted capsules, heat shields, four landing feet, hinged
 
 The existing camera director handles arrival framing and retains its current position/look target for the handoff. Terrain clearance is sampled along the sightline. Arrival sunlight advances slowly so people remain readable, and continues from that phase afterward. Text is timed Watcher narration; this change does not generate a new voice recording.
 
+### Post-title editorial contract
+
+Arrival Day remains an authored cinematic after the title, but it no longer inherits the ordinary 14–24 second documentary shot cadence. The Year-Zero orientation uses one 9.5-second thesis shot followed by five 5.8-second landing beats. Each landing has a different camera job—terrain reveal, ground approach, lateral life, geographic contrast, then a pullback handoff—while its caption is limited to one grounded sentence.
+
+The final central narration is human rather than analytical. **A FEW LIVES** frames four deterministic founders who receive no prestige, protection or simulation importance from being watched. Their portraits are brief and deliberately different in distance and motion. The last portrait is followed by a caption-free release shot: letterbox and HUD recede, `autoRun` is restored, and history advances at 0.16 months per real second while ordinary life remains visible.
+
+The first-year continuity layer begins only after that release. Community revisits are spaced across authoritative months so the opening cannot collapse back into a second five-card carousel. From that point onward, founding context is part of normal documentary history rather than the Arrival Day cinematic.
+
+
 ## Founding reality
 
 Five deterministic sites must pass dry fine-terrain footprint checks, local slope/height variation checks, walkable exit checks and a separation of 17% of world width (minimum eight world units). Selection weights habitability, fertility, distance and biome variety. An unsupported tiny/pathological world fails explicitly instead of silently placing a pod in water.
