@@ -246,6 +246,68 @@ function allocateEstablishmentLabour(s: Settlement, summary: LabourSummary): Lab
 const FOUNDING_HEARTH_IGNITION_FUEL = 0.03;
 const FOUNDING_HEARTH_FUEL_PER_PERSON = 0.001;
 
+export interface FoundingFirstFirePlan {
+  plannedMonth: number;
+  readiness: number;
+  rank: number;
+  drivers: {
+    coldUrgency: number;
+    shelterNeed: number;
+    woodland: number;
+    fuelSecurity: number;
+  };
+}
+
+function firstFireReadiness(state: SimulationState, s: Settlement, population: number): Omit<FoundingFirstFirePlan, 'plannedMonth' | 'rank'> {
+  const cell = state.world.cells[s.cellIndex];
+  const pod = state.arrival?.pods.find(candidate => candidate.id === s.foundingPodId);
+  const temperature = state.weather.cells[s.cellIndex]?.temperature ?? cell?.temperature ?? 0.5;
+  const coldUrgency = unit((0.62 - temperature) / 0.5);
+  const shelter = shelterCapacity(s, state, population);
+  const shelterNeed = population > 0 ? unit(1 - shelter.capacity / population) : 0;
+  const woodland = unit(pod?.site?.woodland ?? cell?.wood ?? 0);
+  const fuelSecurity = unit(positive(s.localMaterials.timber ?? 0)
+    / Math.max(FOUNDING_HEARTH_IGNITION_FUEL, positive(population) * 0.04));
+  return {
+    readiness: unit(coldUrgency * 0.42 + shelterNeed * 0.28 + woodland * 0.16 + fuelSecurity * 0.14),
+    drivers: { coldUrgency, shelterNeed, woodland, fuelSecurity },
+  };
+}
+
+/**
+ * First fire is an earned settlement milestone, not a synchronized timer.
+ * Need/readiness sets the order; touchdown time breaks close calls; hash is only the final tie-break.
+ */
+export function foundingFirstFirePlan(state: SimulationState, s: Settlement, population: number): FoundingFirstFirePlan | undefined {
+  if (!s.foundingPodId) return;
+  const founding = state.settlements.filter(candidate => candidate.foundingPodId && candidate.alive);
+  const ranked = founding.map(candidate => {
+    const candidatePopulation = candidate.id === s.id
+      ? population
+      : state.people.reduce((count, person) => count + Number(person.alive && person.homeId === candidate.id), 0);
+    const score = firstFireReadiness(state, candidate, candidatePopulation);
+    const pod = state.arrival?.pods.find(item => item.id === candidate.foundingPodId);
+    return {
+      settlement: candidate,
+      ...score,
+      touchdown: pod ? pod.entrySeconds + pod.descentSeconds : Number.POSITIVE_INFINITY,
+      tie: stableFirstFireUnit(`${state.seed}:first-fire:${candidate.id}`),
+    };
+  }).sort((a, b) => b.readiness - a.readiness || a.touchdown - b.touchdown || b.tie - a.tie);
+
+  const rank = Math.max(0, ranked.findIndex(candidate => candidate.settlement.id === s.id));
+  const own = ranked[rank] ?? { ...firstFireReadiness(state, s, population), settlement: s, touchdown: 0, tie: 0 };
+  // One clearly leads; the middle pair follow; the final pair need more camp preparation.
+  // Severe cold overrides ceremony pacing because survival need is authoritative.
+  const delay = own.drivers.coldUrgency >= 0.75 ? 1 : 1 + Math.min(2, Math.ceil(rank / 2));
+  return {
+    plannedMonth: s.foundedMonth + delay,
+    readiness: own.readiness,
+    rank,
+    drivers: own.drivers,
+  };
+}
+
 /**
  * A founding camp uses fire for ordinary cooking/light before cold weather makes it life-critical.
  * Both ignition and routine use consume authoritative timber; presentation only observes this ledger.
@@ -253,28 +315,47 @@ const FOUNDING_HEARTH_FUEL_PER_PERSON = 0.001;
 function maintainFoundingHearth(state: SimulationState, s: Settlement, population: number): void {
   const survival = survivalState(s);
   if (!s.foundingPodId || capabilityPractice(s, 'fire-control', 'adopted') < 0.15 || population <= 0) {
-    if (s.foundingPodId) survival.hearth = { fuelNeed: 0, fuelUsed: 0 };
+    if (s.foundingPodId) survival.hearth = { ...survival.hearth, fuelNeed: 0, fuelUsed: 0 };
     return;
   }
 
   if (!survival.firstFire) {
+    const plan = survival.hearth?.plannedIgnitionMonth === undefined
+      ? foundingFirstFirePlan(state, s, population)
+      : {
+        plannedMonth: survival.hearth.plannedIgnitionMonth,
+        readiness: survival.hearth.ignitionReadiness ?? 0,
+        rank: survival.hearth.ignitionRank ?? 0,
+      };
+    if (!plan) return;
     const ignitionNeed = Math.min(FOUNDING_HEARTH_IGNITION_FUEL, positive(population) * 0.0015);
-    if ((s.localMaterials.timber ?? 0) < ignitionNeed) {
-      survival.hearth = { fuelNeed: ignitionNeed, fuelUsed: 0 };
-      return;
-    }
+    survival.hearth = {
+      ...survival.hearth,
+      fuelNeed: ignitionNeed,
+      fuelUsed: 0,
+      plannedIgnitionMonth: plan.plannedMonth,
+      ignitionReadiness: plan.readiness,
+      ignitionRank: plan.rank,
+    };
+    if (state.month < plan.plannedMonth || (s.localMaterials.timber ?? 0) < ignitionNeed) return;
+
     const ignitionFuel = takeMaterial(s, 'timber', ignitionNeed);
-    survival.hearth = { fuelNeed: ignitionNeed, fuelUsed: ignitionFuel };
+    survival.hearth.fuelUsed = ignitionFuel;
+    const fullPlan = foundingFirstFirePlan(state, s, population);
+    const drivers = fullPlan?.drivers;
     const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
-      { foundingPodId: s.foundingPodId, fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth', intensity: 1 },
-      ['founding-survival', 'fire-control', 'real-fuel-consumed'], population, 0.68);
-    survival.firstFire = { month: state.month, eventId: event.id };
+      { foundingPodId: s.foundingPodId, fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth',
+        plannedMonth: plan.plannedMonth, ignitionReadiness: plan.readiness, ignitionRank: plan.rank,
+        ...(drivers ? { coldUrgency: drivers.coldUrgency, shelterNeed: drivers.shelterNeed,
+          woodland: drivers.woodland, fuelSecurity: drivers.fuelSecurity } : {}), intensity: 1 },
+      ['founding-survival', 'fire-control', 'real-fuel-consumed', 'site-readiness'], population, 0.68);
+    survival.firstFire = { month: state.month, eventId: event.id, plannedMonth: plan.plannedMonth, readiness: plan.readiness };
     return;
   }
 
   const fuelNeed = positive(population) * FOUNDING_HEARTH_FUEL_PER_PERSON;
   const fuelUsed = takeMaterial(s, 'timber', fuelNeed);
-  survival.hearth = { fuelNeed, fuelUsed };
+  survival.hearth = { ...survival.hearth, fuelNeed, fuelUsed };
 }
 
 /** Cold severity uses the weather model's normalized temperature, not degrees Celsius. */
@@ -288,7 +369,9 @@ export function applyCold(state: SimulationState, s: Settlement, population: num
   const shelterCoverage = population > 0 ? unit(shelter.capacity / population) : 1;
   const fuelNeed = severity * positive(population) * 0.006;
   const tending = survival.establishment ? unit(survival.establishment.heatingLabour / Math.max(0.001, population * severity * 0.004)) : 1;
-  const fuelUsed = fuelNeed > 0 && capabilityPractice(s, 'fire-control', 'adopted') >= 0.15 ? takeMaterial(s, 'timber', fuelNeed * tending) : 0;
+  const fireEstablished = !s.foundingPodId || Boolean(survival.firstFire);
+  const fuelUsed = fuelNeed > 0 && fireEstablished && capabilityPractice(s, 'fire-control', 'adopted') >= 0.15
+    ? takeMaterial(s, 'timber', fuelNeed * tending) : 0;
   const warmth = fuelNeed > 0 ? unit(fuelUsed / fuelNeed) : 1;
   const insulation = population > 0 ? unit(shelter.protection / population) : 1;
   const exposure = severity * (1 - insulation) * (1 - warmth * 0.65);
@@ -382,4 +465,14 @@ export function adaptFoodCareer(state: SimulationState, s: Settlement, residents
     { personId: person.id, previousOccupation: previous, occupation: person.occupation, response: kind, successes: survival.experience[kind]!.successes },
     [survival.experience[kind]!.eventId!], residents.length, 0.6, [s.id, person.id]);
   return person;
+}
+
+
+function stableFirstFireUnit(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0xffffffff;
 }
