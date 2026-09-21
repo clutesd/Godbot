@@ -1,4 +1,4 @@
-import { FOUNDING_LANDING_SAFE_RADIUS, type FoundingPod } from '../sim/founding/FoundingArrival';
+import type { FoundingPod } from '../sim/founding/FoundingArrival';
 import type { Settlement, Vec2 } from '../sim/types';
 
 const LANDING_SPOKES = 16;
@@ -6,8 +6,8 @@ const LANDING_SPOKE_STEP = Math.PI * 2 / LANDING_SPOKES;
 
 /**
  * The hearth is close enough to read as part of the landing camp but remains comfortably outside
- * the vessel footprint. The full spoke out to FOUNDING_LANDING_SAFE_RADIUS was terrain-validated
- * at touchdown, so any point along this shorter spoke inherits that dry, traversable corridor.
+ * the vessel footprint. The full landing spoke was terrain-validated at touchdown,
+ * so any point along this shorter spoke inherits that dry, traversable corridor.
  */
 export const FOUNDING_VESSEL_KEEP_OUT_RADIUS = 1.3;
 export const FOUNDING_HEARTH_DISTANCE = 2.45;

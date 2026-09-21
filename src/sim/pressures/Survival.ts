@@ -259,9 +259,12 @@ function maintainFoundingHearth(state: SimulationState, s: Settlement, populatio
 
   if (!survival.firstFire) {
     const ignitionNeed = Math.min(FOUNDING_HEARTH_IGNITION_FUEL, positive(population) * 0.0015);
+    if ((s.localMaterials.timber ?? 0) < ignitionNeed) {
+      survival.hearth = { fuelNeed: ignitionNeed, fuelUsed: 0 };
+      return;
+    }
     const ignitionFuel = takeMaterial(s, 'timber', ignitionNeed);
     survival.hearth = { fuelNeed: ignitionNeed, fuelUsed: ignitionFuel };
-    if (ignitionFuel <= 0.005) return;
     const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
       { foundingPodId: s.foundingPodId, fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth', intensity: 1 },
       ['founding-survival', 'fire-control', 'real-fuel-consumed'], population, 0.68);
