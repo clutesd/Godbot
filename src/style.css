@@ -41,6 +41,7 @@ body { min-width: 320px; }
   align-items: center;
   gap: 17px;
   text-shadow: 0 2px 20px rgba(5, 8, 20, .62);
+  transition: opacity .9s ease;
 }
 
 .identity h1 { margin: 0; font: 500 clamp(24px, 2.5vw, 36px)/1 Georgia, "Times New Roman", serif; letter-spacing: .22em; }
@@ -60,6 +61,7 @@ body { min-width: 320px; }
   width: min(390px, calc(100vw - 44px));
   text-align: right;
   text-shadow: 0 2px 18px rgba(5, 8, 20, .68);
+  transition: opacity .9s ease;
 }
 
 .date { margin-bottom: 12px; color: #efb758; font-size: 10px; font-weight: 500; letter-spacing: .19em; }
@@ -173,6 +175,9 @@ body { min-width: 320px; }
 .witnessing-arrival .chronicle { bottom: 8%; }
 .witnessing-arrival .runline, .founding-orientation .runline { z-index: 8; }
 .founding-orientation .identity, .founding-orientation .chronicle { opacity: 0; }
+/* The last Arrival Day shot removes both narration and HUD: the frame opens up while time resumes. */
+.founding-release .identity, .founding-release .chronicle { opacity: 0; }
+.founding-release .runline { opacity: .28; transition: opacity .9s ease; }
 .opening.ending { background: rgba(17, 21, 41, .96); }
 .opening h2 { margin: 8px 0 4px; color: #f7ead9; font: 500 clamp(30px, 4vw, 48px)/1 Georgia, "Times New Roman", serif; letter-spacing: .28em; text-indent: .28em; }
 .opening p { margin: 0 0 10px; color: rgba(255, 239, 219, .72); font: 400 13px Georgia, "Times New Roman", serif; letter-spacing: .2em; }
