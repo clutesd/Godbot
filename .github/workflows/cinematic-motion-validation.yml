@@ -10,6 +10,11 @@ on:
       - 'src/render/GodboxRenderer.ts'
       - 'src/render/people/PhysicalActionPresentation.ts'
       - 'src/render/people/PeopleVisualState.ts'
+      - 'src/render/people/LocalActivityPresentation.ts'
+      - 'src/render/people/PeoplePresentation.ts'
+      - 'src/sim/people/PeopleSystem.ts'
+      - 'tests/local-activity.test.ts'
+      - 'tests/documentary-human-cadence.test.ts'
       - 'tests/cinematic-presentation.test.ts'
       - 'tests/camera-forest-sightline.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
@@ -20,6 +25,11 @@ on:
       - 'src/render/GodboxRenderer.ts'
       - 'src/render/people/PhysicalActionPresentation.ts'
       - 'src/render/people/PeopleVisualState.ts'
+      - 'src/render/people/LocalActivityPresentation.ts'
+      - 'src/render/people/PeoplePresentation.ts'
+      - 'src/sim/people/PeopleSystem.ts'
+      - 'tests/local-activity.test.ts'
+      - 'tests/documentary-human-cadence.test.ts'
       - 'tests/cinematic-presentation.test.ts'
       - 'tests/camera-forest-sightline.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
@@ -37,6 +47,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/historian/PresentationDirector.ts src/render/CameraDirector.ts tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts
-      - run: npx vitest run tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts tests/pacing.test.ts
+      - run: npx eslint src/historian/PresentationDirector.ts src/render/CameraDirector.ts src/render/people/LocalActivityPresentation.ts src/render/people/PeopleVisualState.ts src/sim/people/PeopleSystem.ts tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts tests/local-activity.test.ts tests/documentary-human-cadence.test.ts
+      - run: npx vitest run tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts tests/pacing.test.ts tests/local-activity.test.ts tests/documentary-human-cadence.test.ts
       - run: npm run build
