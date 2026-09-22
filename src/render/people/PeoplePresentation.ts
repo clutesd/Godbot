@@ -157,10 +157,15 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
   const offsetZ = blendedZ - simPosition.z;
   const displacement = Math.hypot(offsetX, offsetZ);
   const limit = displacement > MAX_DISPLACEMENT ? MAX_DISPLACEMENT / displacement : 1;
+  const x = simPosition.x + offsetX * limit;
+  const z = simPosition.z + offsetZ * limit;
+  const restFacing = target.podCenter
+    ? Math.atan2(target.podCenter.x - x, target.podCenter.z - z)
+    : target.restFacing;
   return {
-    x: simPosition.x + offsetX * limit,
-    z: simPosition.z + offsetZ * limit,
-    ...(target.restFacing === undefined ? {} : { restFacing: target.restFacing }),
+    x,
+    z,
+    ...(restFacing === undefined ? {} : { restFacing }),
     ...(target.podId === undefined ? {} : { podId: target.podId }),
     ...(target.podCenter === undefined ? {} : { podCenter: { ...target.podCenter } }),
     ...(target.podKind === undefined ? {} : { podKind: target.podKind }),
