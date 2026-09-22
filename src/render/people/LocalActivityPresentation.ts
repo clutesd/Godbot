@@ -662,7 +662,8 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   if (!group || !pod || pod.members.length < 3) return false;
   const adults = pod.members.filter(id => {
     const candidate = context.people.get(id);
-    return candidate && !isChildPresentationPerson(candidate) && canInteract(person, candidate);
+    return Boolean(candidate && !isChildPresentationPerson(candidate)
+      && (id === person.id || canInteract(person, candidate)));
   });
   if (adults.length < 2 || !adults.includes(person.id)) return false;
 
@@ -800,12 +801,14 @@ function applyChildPlay(person: Person, context: LocalActivityContext, state: Lo
 function childPlayMembers(person: Person, context: LocalActivityContext, pod: SocialPod | undefined): string[] {
   const local = (pod?.members ?? context.group?.members ?? []).filter(id => {
     const peer = context.people.get(id);
-    return peer && isChildPresentationPerson(peer) && peer.activity === 'socialize' && canInteract(person, peer);
+    return Boolean(peer && isChildPresentationPerson(peer) && peer.activity === 'socialize'
+      && (id === person.id || canInteract(person, peer)));
   });
   if (local.length >= 2) return local;
   return (context.group?.members ?? []).filter(id => {
     const peer = context.people.get(id);
-    return peer && isChildPresentationPerson(peer) && peer.activity === 'socialize' && canInteract(person, peer);
+    return Boolean(peer && isChildPresentationPerson(peer) && peer.activity === 'socialize'
+      && (id === person.id || canInteract(person, peer)));
   });
 }
 
