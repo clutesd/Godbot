@@ -219,6 +219,58 @@ export class VegetationRenderer {
     };
   }
 
+
+  /**
+   * Camera collision query against the same deterministic tree placements that are actually drawn.
+   * This is intentionally a lens-volume test, not a general physics system: CameraDirector uses it
+   * only to keep the viewer out of trunks/crowns while retaining its documentary composition.
+   */
+  cameraLensObstruction(position: THREE.Vector3, padding = 0.16): number {
+    const cell = cellAt(this.world, position.x, position.z);
+    if (!cell) return 0;
+
+    const reach = Math.max(1, Math.ceil((3.6 + padding) / Math.max(0.25, this.world.cellSize)));
+    let obstruction = 0;
+
+    for (let row = Math.max(0, cell.z - reach); row <= Math.min(this.world.size - 1, cell.z + reach); row += 1) {
+      for (let column = Math.max(0, cell.x - reach); column <= Math.min(this.world.size - 1, cell.x + reach); column += 1) {
+        for (const index of this.workTreesByCell.get(row * this.world.size + column) ?? []) {
+          const tree = this.placements[index];
+          const bucket = this.workTreeBuckets[index];
+          const lifecycle = this.lifecycle[index];
+          const phenotype = this.phenotypes[index];
+          if (!tree || !bucket || !lifecycle || !phenotype || lifecycle.fallen) continue;
+
+          const morphology = resolveTreeMorphology(phenotype, lifecycle);
+          const renderedHeight = Math.max(
+            0.8,
+            bucket.crownHeight * lifecycle.scale * Math.max(morphology.trunkHeight, morphology.crownHeight),
+          );
+          const localY = position.y - tree.y;
+          if (localY < -padding || localY > renderedHeight + padding) continue;
+
+          const radialDistance = Math.hypot(position.x - tree.worldX, position.z - tree.worldZ);
+          const trunkRadius = bucket.crownHeight * 0.044 * (tree.family === 'ancient' ? 1.9 : 1)
+            * lifecycle.scale * (morphology.trunkRadiusX + morphology.trunkRadiusZ) * 0.5;
+          const crownRadius = renderedHeight * 0.19
+            * Math.max(morphology.crownWidthX, morphology.crownWidthZ);
+          const trunkHit = radialDistance < trunkRadius + padding;
+          const crownHit = lifecycle.foliageVisible
+            && localY > renderedHeight * 0.12 - padding
+            && radialDistance < crownRadius + padding;
+          if (!trunkHit && !crownHit) continue;
+
+          const radius = Math.max(trunkRadius, crownHit ? crownRadius : trunkRadius) + padding;
+          const radialOverlap = 1 - clamp01(radialDistance / Math.max(0.01, radius));
+          const verticalOverlap = 1 - clamp01(Math.abs(localY - renderedHeight * 0.52) / Math.max(0.4, renderedHeight * 0.62));
+          obstruction = Math.max(obstruction, 1.5 + radialOverlap * 2.5 + verticalOverlap);
+        }
+      }
+    }
+
+    return obstruction;
+  }
+
   /**
    * Cities eat the woodland around them. When a city dies, its disturbed footprint restarts as a
    * new stand and visibly progresses through regrowth, young woodland and mature forest.

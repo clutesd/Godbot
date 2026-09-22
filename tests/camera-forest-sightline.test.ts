@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, cameraLensObstruction, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, resolveCameraSafety, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
@@ -116,6 +116,87 @@ describe('Arrival camera occlusion avoidance', () => {
   });
 });
 
+
+
+describe('unified camera safety authority', () => {
+  it('treats a persistent founding vessel as a hard lens volume and moves the camera out of it', () => {
+    const simulation = new Simulation({ seed: 'camera-vessel-volume', startingPopulation: 80 });
+    simulation.state.arrival = {
+      phase: 'HISTORY_RUNNING',
+      elapsedSeconds: 46,
+      minimumSeparation: 8,
+      pods: [{
+        id: 'camera-test-pod',
+        groupId: 'camera-test-group',
+        name: 'Camera Test',
+        color: '#ffffff',
+        position: { x: 0, z: 0 },
+        groundY: 0,
+        cellIndex: 0,
+        domains: ['navigation'],
+        knowledge: [],
+        population: 1,
+        personIds: [],
+        landed: true,
+        entrySeconds: 0,
+        descentSeconds: 1,
+        entryOffset: { x: -4, z: -4 },
+        supplies: { food: 0, goods: 0, timber: 0, stone: 0 },
+        condition: 1,
+        shelterCapacity: 1,
+      }],
+    };
+    for (const cell of simulation.state.world.cells) cell.wood = 0;
+
+    const authored = new THREE.Vector3(0, 1.1, 0);
+    const target = new THREE.Vector3(3, 0.2, 0);
+    expect(cameraLensObstruction(simulation.state, authored, () => 0)).toBeGreaterThan(2);
+
+    const resolved = resolveCameraSafety(simulation.state, authored, target, () => 0, {
+      lensClearance: 0.42,
+      sightlineClearance: 0.12,
+    });
+
+    expect(cameraLensObstruction(simulation.state, resolved.position, () => 0)).toBe(0);
+    expect(resolved.position.distanceTo(authored)).toBeGreaterThan(0.1);
+  });
+
+  it('uses renderer-owned collision knowledge when an individual tree occupies the authored lens', () => {
+    const simulation = new Simulation({ seed: 'camera-renderer-probe', startingPopulation: 80 });
+    for (const cell of simulation.state.world.cells) cell.wood = 0;
+    const authored = new THREE.Vector3(-3, 0.72, 0);
+    const target = new THREE.Vector3(0, 0.14, 0);
+    const probe = (position: THREE.Vector3): number =>
+      position.distanceTo(authored) < 0.35 ? 5 : 0;
+
+    const resolved = resolveCameraSafety(simulation.state, authored, target, () => 0, {
+      lensClearance: 0.42,
+      sightlineClearance: 0.12,
+      previousPosition: authored,
+      environmentProbe: probe,
+    });
+
+    expect(probe(resolved.position)).toBe(0);
+    expect(resolved.lensObstruction).toBe(0);
+    expect(Math.hypot(resolved.position.x - target.x, resolved.position.z - target.z)).toBeCloseTo(3, 5);
+  });
+
+  it('prefers continuity when nearby safe compositions are otherwise equivalent', () => {
+    const simulation = new Simulation({ seed: 'camera-continuity', startingPopulation: 80 });
+    for (const cell of simulation.state.world.cells) cell.wood = 0;
+    const authored = new THREE.Vector3(-3, 1, 0);
+    const target = new THREE.Vector3(0, 0.2, 0);
+    const previous = new THREE.Vector3(-2.82, 1, -1.03);
+
+    const resolved = resolveCameraSafety(simulation.state, authored, target, () => 0, {
+      previousPosition: previous,
+      environmentProbe: (position) => position.distanceTo(authored) < 0.2 ? 4 : 0,
+    });
+
+    expect(resolved.position.z).toBeLessThan(0);
+    expect(resolved.lensObstruction).toBe(0);
+  });
+});
 
 describe('Arrival Day editorial pacing', () => {
   it('keeps the post-title orientation under forty seconds at five landings', () => {

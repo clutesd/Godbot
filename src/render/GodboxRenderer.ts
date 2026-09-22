@@ -391,7 +391,14 @@ export class GodboxRenderer {
     this.host.append(this.renderer.domElement);
     this.scene.background = new THREE.Color('#899b91');
     this.scene.fog = new THREE.FogExp2('#93a5a4', 0.0072);
-    this.cameraDirector = new CameraDirector(this.camera, config, historian, (personId) => this.inspectCameraSubject(personId), () => [...this.localPeers.keys()]);
+    this.cameraDirector = new CameraDirector(
+      this.camera,
+      config,
+      historian,
+      (personId) => this.inspectCameraSubject(personId),
+      () => [...this.localPeers.keys()],
+      (position, padding) => this.vegetation.cameraLensObstruction(position, padding),
+    );
     this.foundingPods = new FoundingPodRenderer(state);
     this.scene.add(this.foundingPods.root);
     this.observation = this.cameraDirector.observation;

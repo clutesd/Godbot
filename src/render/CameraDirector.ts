@@ -6,6 +6,8 @@ import type { Historian } from '../historian/Historian';
 import type { AudioCategory, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
+import { FOUNDING_VESSEL_KEEP_OUT_RADIUS } from '../shared/FoundingCampLayout';
+import { podPosition } from '../sim/founding/FoundingArrival';
 import type { PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 
 export interface CurrentObservation {
@@ -44,6 +46,26 @@ export interface CameraSubjectPresentation {
 }
 
 export type CameraSubjectPresentationResolver = (personId: string) => CameraSubjectPresentation | undefined;
+
+/** Renderer-owned collision knowledge that simulation state cannot express precisely (for example individual tree crowns). */
+export type CameraEnvironmentProbe = (position: THREE.Vector3, padding: number) => number;
+
+export interface CameraSafetyOptions {
+  readonly lensClearance?: number;
+  readonly sightlineClearance?: number;
+  readonly previousPosition?: THREE.Vector3;
+  readonly environmentProbe?: CameraEnvironmentProbe;
+}
+
+export interface CameraSafetyResolution {
+  readonly position: THREE.Vector3;
+  readonly lensObstruction: number;
+  readonly forestObstruction: number;
+  readonly structureObstruction: number;
+  readonly vesselObstruction: number;
+  readonly angularCorrection: number;
+  readonly lift: number;
+}
 
 export interface InteractionCameraComposition {
   readonly focusX: number;
@@ -371,6 +393,185 @@ export function structureSightlineObstruction(
 }
 
 
+/** Founding vessels remain physical landmarks after touchdown and must never become camera volumes. */
+export function foundingVesselSightlineObstruction(
+  state: SimulationState,
+  from: THREE.Vector3,
+  target: THREE.Vector3,
+  padding = 0,
+): number {
+  const arrival = state.arrival;
+  if (!arrival) return 0;
+  const dx = target.x - from.x;
+  const dz = target.z - from.z;
+  const lengthSquared = dx * dx + dz * dz;
+  if (lengthSquared < 0.001) return 0;
+
+  let obstruction = 0;
+  for (const pod of arrival.pods) {
+    if (!pod.landed && arrival.elapsedSeconds < pod.entrySeconds) continue;
+    const vessel = podPosition(pod, arrival.elapsedSeconds);
+    const radius = FOUNDING_VESSEL_KEEP_OUT_RADIUS + padding;
+    const projected = ((vessel.x - from.x) * dx + (vessel.z - from.z) * dz) / lengthSquared;
+    if (projected <= 0.02 || projected >= 0.98) continue;
+    const nearestX = from.x + dx * projected;
+    const nearestZ = from.z + dz * projected;
+    const horizontalDistance = Math.hypot(vessel.x - nearestX, vessel.z - nearestZ);
+    if (horizontalDistance >= radius) continue;
+    const sightY = THREE.MathUtils.lerp(from.y, target.y, projected);
+    const verticalDistance = Math.abs(sightY - vessel.y);
+    if (verticalDistance >= 1.45 + padding) continue;
+    const horizontalOverlap = 1 - clamp01(horizontalDistance / radius);
+    const verticalOverlap = 1 - clamp01(verticalDistance / (1.45 + padding));
+    obstruction += horizontalOverlap * (0.9 + verticalOverlap * 1.8);
+  }
+  return obstruction;
+}
+
+/**
+ * Hard lens occupancy check. Unlike a sightline score, this answers the more important question:
+ * "is the viewer physically inside something right now?"
+ */
+export function cameraLensObstruction(
+  state: SimulationState,
+  position: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+  padding = 0.16,
+  environmentProbe?: CameraEnvironmentProbe,
+): number {
+  let obstruction = 0;
+
+  for (const settlement of state.settlements) {
+    if (!settlement.alive) continue;
+    for (const plot of settlement.structurePlots ?? []) {
+      if ((plot.development?.form as string | undefined) === 'field' || plot.condition <= 0.08) continue;
+      const radius = Math.max(0.2, plot.radius + padding);
+      const distance = Math.hypot(position.x - plot.worldX, position.z - plot.worldZ);
+      if (distance >= radius) continue;
+      const ground = elevationAt(plot.worldX, plot.worldZ);
+      const roof = ground + Math.max(0.45, plot.height * Math.max(0.25, plot.condition));
+      if (position.y < ground - 0.2 || position.y > roof + padding) continue;
+      obstruction = Math.max(obstruction, 2.4 + (1 - clamp01(distance / radius)) * 2.4);
+    }
+  }
+
+  const arrival = state.arrival;
+  if (arrival) {
+    for (const pod of arrival.pods) {
+      if (!pod.landed && arrival.elapsedSeconds < pod.entrySeconds) continue;
+      const vessel = podPosition(pod, arrival.elapsedSeconds);
+      const radius = FOUNDING_VESSEL_KEEP_OUT_RADIUS + padding;
+      const horizontalDistance = Math.hypot(position.x - vessel.x, position.z - vessel.z);
+      const verticalDistance = Math.abs(position.y - vessel.y);
+      if (horizontalDistance < radius && verticalDistance < 1.45 + padding) {
+        obstruction = Math.max(obstruction,
+          3 + (1 - clamp01(horizontalDistance / radius)) * 2 + (1 - clamp01(verticalDistance / (1.45 + padding))));
+      }
+    }
+  }
+
+  if (environmentProbe) {
+    obstruction = Math.max(obstruction, environmentProbe(position, padding));
+  } else {
+    // Fallback for tests/dev consumers without renderer geometry: reject only the densest local canopy.
+    const cell = cellAt(state.world, position.x, position.z);
+    if (cell && !cell.water) {
+      const standing = clamp01(cell.wood / Math.max(0.01, cell.forestCapacity ?? cell.wood));
+      const canopyTop = elevationAt(position.x, position.z) + 3.8 + standing * 2.6;
+      if (standing > 0.72 && position.y < canopyTop && position.y > elevationAt(position.x, position.z) + 0.2) {
+        obstruction = Math.max(obstruction, (standing - 0.72) * 1.8);
+      }
+    }
+  }
+
+  return obstruction;
+}
+
+/**
+ * Single final authority for a camera destination. It searches small nearby compositions first,
+ * heavily penalises physical lens collisions, and biases toward the previously safe side so a shot
+ * cannot oscillate between two equally plausible viewpoints.
+ */
+export function resolveCameraSafety(
+  state: SimulationState,
+  authoredPosition: THREE.Vector3,
+  target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+  options: CameraSafetyOptions = {},
+): CameraSafetyResolution {
+  const lensClearance = options.lensClearance ?? 0.72;
+  const sightlineClearance = options.sightlineClearance ?? 0.22;
+  const radius = Math.max(0.55, Math.hypot(authoredPosition.x - target.x, authoredPosition.z - target.z));
+  const baseAzimuth = Math.atan2(authoredPosition.z - target.z, authoredPosition.x - target.x);
+  const compact = radius < 8;
+  const offsets = compact
+    ? [0, Math.PI / 18, -Math.PI / 18, Math.PI / 9, -Math.PI / 9, Math.PI / 6, -Math.PI / 6, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, Math.PI]
+    : [0, Math.PI / 24, -Math.PI / 24, Math.PI / 12, -Math.PI / 12, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI];
+  const lifts = compact ? [0, 0.28, 0.58, 1.05, 1.8, 2.8] : [0, 0.8, 1.7, 3.2, 5.4, 8];
+  const previousAzimuth = options.previousPosition
+    ? Math.atan2(options.previousPosition.z - target.z, options.previousPosition.x - target.x)
+    : undefined;
+
+  let best: CameraSafetyResolution | undefined;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const lift of lifts) {
+    for (const offset of offsets) {
+      const angle = baseAzimuth + offset;
+      const x = target.x + Math.cos(angle) * radius;
+      const z = target.z + Math.sin(angle) * radius;
+      const position = new THREE.Vector3(
+        x,
+        Math.max(authoredPosition.y + lift, elevationAt(x, z) + lensClearance),
+        z,
+      );
+
+      const lensObstruction = cameraLensObstruction(
+        state, position, elevationAt, Math.max(0.1, lensClearance * 0.32), options.environmentProbe,
+      );
+      const forestObstruction = forestSightlineObstruction(state.world, position, target, elevationAt);
+      const structureObstruction = structureSightlineObstruction(state, position, target, elevationAt);
+      const vesselObstruction = foundingVesselSightlineObstruction(state, position, target, sightlineClearance * 0.45);
+      const actualLift = Math.max(0, position.y - authoredPosition.y);
+      const continuityPenalty = previousAzimuth === undefined ? 0 : angularDistance(angle, previousAzimuth) * 0.34;
+      const compositionPenalty = Math.abs(offset) * (compact ? 0.065 : 0.045);
+      const liftPenalty = actualLift * (compact ? 0.055 : 0.022);
+
+      const score = lensObstruction * 45
+        + structureObstruction * 11
+        + vesselObstruction * 14
+        + forestObstruction * 2.35
+        + continuityPenalty
+        + compositionPenalty
+        + liftPenalty;
+
+      if (score < bestScore) {
+        bestScore = score;
+        best = {
+          position,
+          lensObstruction,
+          forestObstruction,
+          structureObstruction,
+          vesselObstruction,
+          angularCorrection: offset,
+          lift: actualLift,
+        };
+      }
+    }
+  }
+
+  return best ?? {
+    position: authoredPosition.clone(),
+    lensObstruction: cameraLensObstruction(state, authoredPosition, elevationAt, lensClearance * 0.32, options.environmentProbe),
+    forestObstruction: forestSightlineObstruction(state.world, authoredPosition, target, elevationAt),
+    structureObstruction: structureSightlineObstruction(state, authoredPosition, target, elevationAt),
+    vesselObstruction: foundingVesselSightlineObstruction(state, authoredPosition, target, sightlineClearance * 0.45),
+    angularCorrection: 0,
+    lift: 0,
+  };
+}
+
+
 export interface FoundingSightlineResolution {
   readonly position: THREE.Vector3;
   readonly forestObstruction: number;
@@ -467,6 +668,8 @@ export class CameraDirector {
   private readonly workingDirection = new THREE.Vector3();
   private readonly workingTangent = new THREE.Vector3();
   private readonly forestCandidatePosition = new THREE.Vector3();
+  private readonly safeDesiredPosition = new THREE.Vector3();
+  private safetyInitialized = false;
   private shotAge = 0;
   private lastHumanShot = false;
   private shotDuration = 12;
@@ -485,6 +688,7 @@ export class CameraDirector {
     private readonly historian: Historian,
     private readonly subjectPresentation?: CameraSubjectPresentationResolver,
     private readonly humanSubjects?: () => readonly string[],
+    private readonly environmentProbe?: CameraEnvironmentProbe,
   ) {
     this.camera.position.set(38, 48, 52);
     this.lookTarget.set(0, 0, 0);
@@ -497,11 +701,19 @@ export class CameraDirector {
       // ArrivalPresentation still authors the shot. We only correct an obstructed lens around the
       // same target/radius so trees or founding structures cannot hide the people/action.
       const clearPose = resolveFoundingSightline(state, pose.position, pose.target, elevationAt, 8);
+      const arrivalSafety = resolveCameraSafety(state, clearPose.position, pose.target, elevationAt, {
+        lensClearance: 8,
+        sightlineClearance: 1.4,
+        previousPosition: this.safetyInitialized ? this.safeDesiredPosition : undefined,
+        environmentProbe: this.environmentProbe,
+      });
+      this.safeDesiredPosition.copy(arrivalSafety.position);
+      this.safetyInitialized = true;
       if (state.arrival.elapsedSeconds < 0.2) {
-        this.camera.position.copy(clearPose.position);
+        this.camera.position.copy(arrivalSafety.position);
         this.lookTarget.copy(pose.target);
       } else {
-        this.camera.position.lerp(clearPose.position, 1 - Math.exp(-deltaSeconds * 1.1));
+        this.camera.position.lerp(arrivalSafety.position, 1 - Math.exp(-deltaSeconds * 1.1));
         this.lookTarget.lerp(pose.target, 1 - Math.exp(-deltaSeconds * 1.3));
       }
       // Keep the lens above mature tree crowns, and the sightline above intervening ridges.
@@ -553,6 +765,19 @@ export class CameraDirector {
       if (subjects.length) this.desiredPosition.copy(resolveHumanSightline(state, this.desiredPosition, this.desiredTarget, subjects, elevationAt));
     }
 
+    // Every shot type now passes through one final safety authority. The continuity term preserves
+    // the chosen side of the subject until a real obstruction requires a correction.
+    const safetyClearance = cameraClearanceFor(this.currentScene?.kind);
+    const safe = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, {
+      lensClearance: safetyClearance.lens,
+      sightlineClearance: safetyClearance.sightline,
+      previousPosition: this.safetyInitialized ? this.safeDesiredPosition : undefined,
+      environmentProbe: this.environmentProbe,
+    });
+    this.desiredPosition.copy(safe.position);
+    this.safeDesiredPosition.copy(safe.position);
+    this.safetyInitialized = true;
+
     // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
     // never simulation months, so deep historical acceleration does not make the camera race.
     const editorialTiming = foundingEditorialTimingFor(this.currentScene?.id);
@@ -569,6 +794,24 @@ export class CameraDirector {
       this.lookTarget.y,
       elevationAt(this.lookTarget.x, this.lookTarget.z) + cameraTargetFloorFor(this.currentScene?.kind),
     );
+
+    // Destination safety alone is insufficient: interpolation between two legal shots can still
+    // cross a tree, wall or vessel. Correct only when the actual lens enters a hard volume.
+    if (cameraLensObstruction(
+      state,
+      this.camera.position,
+      elevationAt,
+      Math.max(0.1, clearance.lens * 0.32),
+      this.environmentProbe,
+    ) > 0.001) {
+      const emergency = resolveCameraSafety(state, this.camera.position, this.lookTarget, elevationAt, {
+        lensClearance: clearance.lens,
+        sightlineClearance: clearance.sightline,
+        previousPosition: this.safeDesiredPosition,
+        environmentProbe: this.environmentProbe,
+      });
+      this.camera.position.copy(emergency.position);
+    }
     this.camera.lookAt(this.lookTarget);
   }
 
@@ -601,6 +844,7 @@ export class CameraDirector {
     this.currentScene = scene;
     this.shotAge = 0;
     this.trackingInitialized = false;
+    this.safetyInitialized = false;
     const framing = FRAMING[scene.kind];
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
