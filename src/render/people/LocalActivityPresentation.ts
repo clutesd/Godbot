@@ -514,13 +514,15 @@ export class LocalActivityPresentation {
   private choose(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
     const kind = person.navigation!.destinationKind;
     const routine = routineFor(person);
-    const childPlay = routine === CHILD_PLAY_ROUTINE;
+    const childPlay = isChildPlayRoutine(routine);
     const [step, pointIndex, action, seconds] = routine[state.step]!;
     const variation = unit(`${person.id}:${state.cycle}:${state.step}:hold`);
     state.sceneSeconds = 0;
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
     state.partnerId = undefined;
     state.encounter = undefined;
+    clearPodParticipation(state);
+    clearPlayPresentation(state);
     clearAmbientAttention(state);
     clearRestChoreography(state);
     state.animation = 'idle';
@@ -531,24 +533,9 @@ export class LocalActivityPresentation {
     const preferredPoint = (pointIndex + pointOffset) % state.points.length;
     const point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
     let focus: Readonly<Vec2> = state.stationFocus;
-    if (childPlay) {
-      const playmate = selectChildPlaymate(person, context, state);
-      if (playmate) {
-        const at = context.visualFor?.(playmate.id) ?? playmate.position;
-        state.partnerId = playmate.id;
-        state.focus.x = at.x;
-        state.focus.z = at.z;
-        focus = state.focus;
-      }
-      state.animation = 'play';
-      state.action = action;
-      const from = context.visual ?? state.destination;
-      const peerSafe = hasPeerClearance(person, point, context, state.partnerId, 0.28);
-      if (bounded(person, point) && localSegmentSafe(from, point, context) && peerSafe) state.destination = point;
-      else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
-      state.restFacing = facingTarget(state.destination, focus);
-      return;
-    }
+
+    if (childPlay && applyChildPlay(person, context, state, point, this.presentationSeconds)) return;
+
     if (!state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
       const selected = selectSocialPartner(person, context, state, id => {
         const peer = this.previousStates.get(id);
@@ -561,6 +548,24 @@ export class LocalActivityPresentation {
         return;
       }
     }
+
+    // A visible pod remains one conversation even when this person is not in the exclusive pair.
+    if ((kind === 'plaza' || kind === 'market') && ['task', 'interact', 'pause'].includes(step)
+      && applyPodParticipation(person, context, state, point, this.previousStates, this.presentationSeconds)) return;
+
+    if (childPlay) {
+      state.playGame = 'parallel';
+      state.playRole = 'solo';
+      state.animation = 'play';
+      state.action = action;
+      const from = context.visual ?? state.destination;
+      if (bounded(person, point) && localSegmentSafe(from, point, context)
+        && hasPeerClearance(person, point, context, undefined, 0.28)) state.destination = point;
+      else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
+      state.restFacing = facingTarget(state.destination, state.stationFocus);
+      return;
+    }
+
     if (step === 'task' || step === 'return') {
       if (kind === 'home' && person.activity === 'rest') {
         const from = context.visual ? { x: context.visual.x, z: context.visual.z } : state.destination;
@@ -604,15 +609,11 @@ export class LocalActivityPresentation {
     if (step === 'inspect' && ['bag', 'basket', 'ledger', 'toolkit'].includes(person.appearance?.carriedItem ?? '')) {
       state.action = 'check-carried-object'; state.animation = 'carry';
     }
-    // Validate the actual connecting segment, not just the cached endpoints. A local target also
-    // keeps room around uninvolved visible peers; the conversation partner is the one deliberate
-    // exception and already has its own personal-space stand-off.
     const from = context.visual ?? state.destination;
     const peerSafe = hasPeerClearance(person, point, context, state.partnerId, 0.34);
     if (bounded(person, point) && localSegmentSafe(from, point, context) && peerSafe) state.destination = point;
     else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
     state.restFacing = facingTarget(state.destination, focus);
-    // Own the focus vector; never retain/mutate a simulation position through a peer alias.
     if (focus !== state.focus) { state.focus.x = focus.x; state.focus.z = focus.z; }
   }
 }
