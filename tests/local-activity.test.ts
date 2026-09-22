@@ -363,6 +363,39 @@ describe('renderer-owned local activity', () => {
     expect(harness([person()], { blocked: true }).tick()[0]!.action).toBeUndefined();
   });
 
+  it('briefly notices a nearby peer before resuming the current routine', () => {
+    const a = person('aware-a'), b = person('aware-b');
+    b.position = { x: 0.82, z: 0.08 };
+    b.target = { ...b.position };
+    const before = JSON.stringify([a, b]);
+    const h = harness([a, b]);
+    let noticed = false;
+    let noticeFacingError = Infinity;
+    let cleared = false;
+
+    for (let frame = 0; frame < 12 * 60; frame++) {
+      h.tick(1 / 60);
+      const state = h.local.get('aware-a');
+      const visual = h.visuals.get('aware-a');
+      const peer = h.visuals.get('aware-b');
+      if (state?.attentionId === 'aware-b' && visual && peer) {
+        noticed = true;
+        const expected = Math.atan2(peer.x - state.destination.x, peer.z - state.destination.z);
+        const error = Math.abs(Math.atan2(Math.sin(visual.facing - expected), Math.cos(visual.facing - expected)));
+        noticeFacingError = Math.min(noticeFacingError, error);
+      } else if (noticed && !state?.attentionId) {
+        cleared = true;
+        break;
+      }
+    }
+
+    expect(noticed).toBe(true);
+    expect(noticeFacingError).toBeLessThan(0.35);
+    expect(cleared).toBe(true);
+    expect(h.local.get('aware-a')?.attentionCooldown ?? 0).toBeGreaterThan(0);
+    expect(JSON.stringify([a, b])).toBe(before);
+  });
+
   it('keeps a frozen visible social cluster changing formation instead of occupying mannequin slots', () => {
     const people = Array.from({ length: 8 }, (_, index) => {
       const p = person(`social-${index}`);
