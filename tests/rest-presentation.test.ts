@@ -55,6 +55,33 @@ describe('physical rest presentation', () => {
     }
   });
 
+
+  it('honors support preference without breaking deterministic slot ownership', () => {
+    const supportedSpot = planRestSpot({
+      personId: 'elder',
+      base: { x: 3, z: -1 },
+      from: { x: 3, z: -1 },
+      structure,
+      restingIds: ['elder'],
+      safePoint: () => true,
+      safeSegment: () => true,
+      preference: 'supported',
+    });
+    const groundSpot = planRestSpot({
+      personId: 'child',
+      base: { x: 3, z: -1 },
+      from: { x: 3, z: -1 },
+      structure,
+      restingIds: ['child'],
+      safePoint: () => true,
+      safeSegment: () => true,
+      preference: 'ground',
+    });
+
+    expect(supportedSpot?.support).toBe('structure-edge');
+    expect(groundSpot?.support).toBe('ground');
+  });
+
   it('falls back to a safe ground-rest slot when structure-edge supports are inaccessible', () => {
     const spot = planRestSpot({
       personId: 'resting-person',
