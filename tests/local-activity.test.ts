@@ -422,6 +422,47 @@ describe('renderer-owned local activity', () => {
     expect(JSON.stringify([a, b])).toBe(before);
   });
 
+  it('presents free children as active play instead of miniature adult conversation', () => {
+    const children = ['child-a', 'child-b', 'child-c'].map((id, index) => {
+      const p = person(id);
+      p.ageMonths = (8 + index * 2) * 12;
+      p.occupation = 'child';
+      p.role = 'child';
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'play-plaza';
+      p.navigation!.schedulePhase = 'social';
+      const angle = index / 3 * Math.PI * 2;
+      p.position = { x: Math.cos(angle) * 0.6, z: Math.sin(angle) * 0.6 };
+      p.target = { ...p.position };
+      return p;
+    });
+    const before = JSON.stringify(children);
+    const h = harness(children);
+    const actions = new Set<string>();
+    let playFrames = 0;
+    let playmateFrames = 0;
+    let movingFrames = 0;
+
+    for (let frame = 0; frame < 18 * 60; frame++) {
+      const visuals = h.tick(1 / 60);
+      for (let index = 0; index < children.length; index++) {
+        const state = h.local.get(children[index]!.id);
+        if (state?.action?.startsWith('play-')) actions.add(state.action);
+        if (state?.animation === 'play') playFrames++;
+        if (state?.partnerId) playmateFrames++;
+        if ((visuals[index]?.speed ?? 0) > 0.05) movingFrames++;
+      }
+    }
+
+    expect(actions.size).toBeGreaterThanOrEqual(4);
+    expect([...actions]).toEqual(expect.arrayContaining(['play-hop', 'play-chase']));
+    expect(playFrames).toBeGreaterThan(120);
+    expect(playmateFrames).toBeGreaterThan(90);
+    expect(movingFrames).toBeGreaterThan(90);
+    expect(JSON.stringify(children)).toBe(before);
+  });
+
   it('keeps a frozen visible social cluster changing formation instead of occupying mannequin slots', () => {
     const people = Array.from({ length: 8 }, (_, index) => {
       const p = person(`social-${index}`);
