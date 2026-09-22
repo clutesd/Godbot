@@ -1250,8 +1250,10 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
 function updateAmbientAttention(person: Person, context: LocalActivityContext, state: LocalActivityState,
   visual: PersonVisualState | undefined, delta: number, previousStates: ReadonlyMap<string, LocalActivityState>, now: number): void {
   const dt = Math.max(0, delta);
+  const continuityMoving = Boolean(visual && state.recentSocialId && (state.recentSocialUntil ?? 0) > now
+    && visual.speed > 0.045 && visual.speed <= 0.22);
   const unsuitable = state.partnerId || state.encounter || state.rest || state.socialFocusId || state.playGame || state.yieldToId
-    || !visual || visual.traveling || visual.speed > 0.045 || state.action === 'arrive' || state.phase === 'approach';
+    || !visual || visual.traveling || visual.speed > 0.045 && !continuityMoving || state.action === 'arrive';
 
   if (state.attentionId) {
     const peer = context.people.get(state.attentionId);
@@ -1345,6 +1347,7 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
     const peerState = previousStates.get(id);
     if (!peer || !canInteract(person, peer) || peerState?.action === 'arrive') continue;
     const recent = continuityActive && state.recentSocialId === peer.id;
+    if (visual.speed > 0.045 && !recent) continue;
     const caregiver = person.children.includes(peer.id) || peer.parents.includes(person.id);
     // A caregiver may track a moving child; everyone else avoids snapping attention toward people
     // already in a locomotion beat.
