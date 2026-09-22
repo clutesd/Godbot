@@ -45,6 +45,53 @@ describe('real-time physical human contract', () => {
     expect(store.get('walker')!.x).toBeCloseTo(1.5, 3);
   });
 
+  it('never accepts a blocked destination and depenetrates when a solid appears around a resident', () => {
+    const nav = new StructureNavigation();
+    nav.set([{ worldX: 0, worldZ: 0, width: 0.9, depth: 1.1, rotationY: Math.PI / 7 }]);
+    const ground = { ...flat, safeSegment: (a: { x: number; z: number }, b: { x: number; z: number }) => nav.clear(a, b),
+      detour: (a: { x: number; z: number }, b: { x: number; z: number }) => nav.detour(a, b, (a, b) => nav.clear(a, b)) };
+    const store = new PeopleVisualStateStore();
+    store.resolve('walker', { destination: { x: -1.5, z: 0 } }, 0, ground);
+    store.beginFrame();
+    const approaching = store.resolve('walker', { destination: { x: 0, z: 0 } }, dt, ground);
+    expect(nav.clear(approaching, approaching)).toBe(true);
+    expect(Math.hypot(approaching.destinationX, approaching.destinationZ)).toBeGreaterThan(0.45);
+
+    const dynamicNav = new StructureNavigation();
+    const dynamicGround = { ...flat,
+      safeSegment: (a: { x: number; z: number }, b: { x: number; z: number }) => dynamicNav.clear(a, b),
+      detour: (a: { x: number; z: number }, b: { x: number; z: number }) => dynamicNav.detour(a, b, (a, b) => dynamicNav.clear(a, b)) };
+    const dynamic = new PeopleVisualStateStore();
+    dynamic.resolve('resident', { destination: { x: 0, z: 0 } }, 0, dynamicGround);
+    dynamicNav.set([{ worldX: 0, worldZ: 0, width: 0.8, depth: 0.8, rotationY: 0 }]);
+    dynamic.beginFrame();
+    const recovered = dynamic.resolve('resident', { destination: { x: 1.4, z: 0 } }, dt, dynamicGround);
+    expect(recovered.snapped).toBe(true);
+    expect(dynamicNav.clear(recovered, recovered)).toBe(true);
+  });
+
+  it('steers around solid objects that do not provide pathfinder detour nodes', () => {
+    const circleClear = (a: { x: number; z: number }, b: { x: number; z: number }): boolean => {
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const t = Math.max(0, Math.min(1, (-(a.x) * dx + -(a.z) * dz) / (dx * dx + dz * dz || 1)));
+      return Math.hypot(a.x + dx * t, a.z + dz * t) >= 0.34;
+    };
+    const ground = { ...flat, safeSegment: circleClear };
+    const store = new PeopleVisualStateStore();
+    store.resolve('walker', { destination: { x: -1.2, z: 0 } }, 0, ground);
+    let steered = false;
+    for (let frame = 0; frame < 1800; frame++) {
+      store.beginFrame();
+      const previous = { x: store.get('walker')!.x, z: store.get('walker')!.z };
+      const visual = store.resolve('walker', { destination: { x: 1.2, z: 0 } }, dt, ground);
+      expect(circleClear(previous, visual)).toBe(true);
+      steered ||= Math.abs(visual.z) > 0.2;
+    }
+    expect(steered).toBe(true);
+    expect(store.get('walker')!.x).toBeCloseTo(1.2, 2);
+    expect(store.get('walker')!.z).toBeCloseTo(0, 2);
+  });
+
   it('keeps actual feet on hills, rejects new water, and resumes after clearance', () => {
     let flooded = false;
     const ground = { heightAt: (x: number) => Math.sin(x) * 0.1, isStandable: (x: number) => !flooded || x < 0.7 };
