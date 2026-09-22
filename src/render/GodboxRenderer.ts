@@ -799,7 +799,11 @@ export class GodboxRenderer {
       if (physical) this.physicalWork.advance(person, physical, visual, deltaSeconds);
       const physicalStanding = physical && physical.ready && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
       const restReady = Boolean(local?.rest && local.phase === 'action' && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD);
-      const restPose = this.restPoses.resolve(person.id, local?.rest, restReady, deltaSeconds);
+      const restAttentionYaw = restReady && local
+        ? Math.atan2(Math.sin(facingTarget(visual, local.focus) - visual.facing), Math.cos(facingTarget(visual, local.focus) - visual.facing))
+        : 0;
+      const restPose = this.restPoses.resolve(person.id, restReady ? local?.rest : undefined,
+        restReady ? local?.restStage : undefined, deltaSeconds, person.ageMonths, restAttentionYaw);
       const loaded = physical?.action.carriedObject !== undefined;
       const travel = travelAnimationFor(visual.speed, person);
       const firstFireStanding = Boolean(firstFire && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
@@ -863,7 +867,9 @@ export class GodboxRenderer {
       const facing = visual.facing;
       const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated));
       const bodyPitch = bodyTilt.pitch + (restArticulated ? restPose.bodyPitch : 0);
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, facing + (pose?.pelvisRotation ?? 0), bodyTilt.roll);
+      const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + (restArticulated ? restPose.bodyYaw : 0);
+      const bodyRoll = bodyTilt.roll + (restArticulated ? restPose.bodyRoll : 0);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
       this.people.setColorAt(index, this.personColor);
@@ -885,8 +891,9 @@ export class GodboxRenderer {
       }
       // The smaller faceless head must follow the existing spine pose at its neck attachment.
       this.partPosition.set(0, 0.425, 0).applyMatrix4(this.personMatrix);
+      const headFacing = bodyFacing + (pose?.headRotation ?? 0) + (restArticulated ? restPose.headYaw : 0);
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
-        heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, facing + (pose?.headRotation ?? 0), 0);
+        heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, headFacing, 0);
       this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
       const legScale = detailed && (!articulated || physical && !physicalStanding) ? heightScale : 0.001;
@@ -895,7 +902,7 @@ export class GodboxRenderer {
       this.peopleLegs.setColorAt(index * 2, this.personColor);
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
       if (restArticulated) this.restPoses.draw(restPose, display.x, footY, display.z, heightScale, buildScale,
-        facing + (pose?.pelvisRotation ?? 0), bodyPitch, this.personColor);
+        bodyFacing, bodyPitch, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
       const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
@@ -910,7 +917,7 @@ export class GodboxRenderer {
       const hatScale = !detailed || headwear === 'none' ? 0.001 : heightScale;
       const hatWidth = headwear === 'brim' ? 1.03 : headwear === 'helmet' ? 1 : 0.99;
       const hatHeight = headwear === 'cap' ? 0.52 : headwear === 'brim' ? 0.32 : 0.86;
-      this.setInstanceTransform(this.peopleHeadwear, index, this.personHeadwearPosition.x, this.personHeadwearPosition.y, this.personHeadwearPosition.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, pose?.spineRotation ?? 0, facing, 0);
+      this.setInstanceTransform(this.peopleHeadwear, index, this.personHeadwearPosition.x, this.personHeadwearPosition.y, this.personHeadwearPosition.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, pose?.spineRotation ?? 0, headFacing, 0);
       this.peopleHeadwear.setColorAt(index, this.personColor);
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
