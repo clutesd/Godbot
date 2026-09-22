@@ -59,6 +59,15 @@ const WORK_ROUTINE: readonly Intent[] = [
   ['return', 0, 'return-to-task', 3.6], ['interact', 5, 'look-to-colleague', 3], ['pause', 3, 'pause', 2.8],
   ['reposition', 2, 'change-work-side', 1.8],
 ];
+const CHILD_PLAY_ROUTINE: readonly Intent[] = [
+  ['reposition', 4, 'play-dash', 1.0],
+  ['task', 0, 'play-hop', 1.1],
+  ['reposition', 5, 'play-circle', 1.15],
+  ['pause', 1, 'play-watch', 0.7],
+  ['reposition', 6, 'play-chase', 1.0],
+  ['task', 2, 'play-gesture', 1.15],
+  ['reposition', 3, 'play-return', 1.0],
+];
 const ROUTINES: Partial<Record<DestinationKind, readonly Intent[]>> = {
   workshop: WORK_ROUTINE,
   market: [['task', 0, 'attend-stall', 3.6], ['interact', 4, 'look-to-customer', 3.4], ['reposition', 5, 'step-aside', 1.7],
@@ -403,7 +412,7 @@ export class LocalActivityPresentation {
         state.encounter = undefined;
         state.partnerId = undefined;
       }
-      state.step = (state.step + 1) % (ROUTINES[nav.destinationKind] ?? WORK_ROUTINE).length;
+      state.step = (state.step + 1) % routineFor(person).length;
       if (state.step === 0) state.cycle++;
       state.seconds = 0;
       this.choose(person, context, state);
@@ -485,7 +494,9 @@ export class LocalActivityPresentation {
 
   private choose(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
     const kind = person.navigation!.destinationKind;
-    const [step, pointIndex, action, seconds] = (ROUTINES[kind] ?? WORK_ROUTINE)[state.step]!;
+    const routine = routineFor(person);
+    const childPlay = routine === CHILD_PLAY_ROUTINE;
+    const [step, pointIndex, action, seconds] = routine[state.step]!;
     const variation = unit(`${person.id}:${state.cycle}:${state.step}:hold`);
     state.sceneSeconds = 0;
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
@@ -500,7 +511,25 @@ export class LocalActivityPresentation {
       : 0;
     const preferredPoint = (pointIndex + pointOffset) % state.points.length;
     const point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
-    const focus: Readonly<Vec2> = state.stationFocus;
+    let focus: Readonly<Vec2> = state.stationFocus;
+    if (childPlay) {
+      const playmate = selectChildPlaymate(person, context, state);
+      if (playmate) {
+        const at = context.visualFor?.(playmate.id) ?? playmate.position;
+        state.partnerId = playmate.id;
+        state.focus.x = at.x;
+        state.focus.z = at.z;
+        focus = state.focus;
+      }
+      state.animation = 'play';
+      state.action = action;
+      const from = context.visual ?? state.destination;
+      const peerSafe = hasPeerClearance(person, point, context, state.partnerId, 0.28);
+      if (bounded(person, point) && localSegmentSafe(from, point, context) && peerSafe) state.destination = point;
+      else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
+      state.restFacing = facingTarget(state.destination, focus);
+      return;
+    }
     if (!state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
       const selected = selectSocialPartner(person, context, state, id => {
         const peer = this.previousStates.get(id);
@@ -600,6 +629,27 @@ function selectSocialPartner(person: Person, context: LocalActivityContext, stat
   }
   candidates.sort((a, b) => b.score - a.score || a.peer.id.localeCompare(b.peer.id));
   return candidates[0];
+}
+
+function selectChildPlaymate(person: Person, context: LocalActivityContext, state: LocalActivityState): Person | undefined {
+  let best: Person | undefined;
+  let bestScore = -Infinity;
+  for (const id of context.group?.members ?? []) {
+    if (id === person.id) continue;
+    const peer = context.people.get(id);
+    if (!peer || peer.ageMonths >= 15 * 12 || (peer.occupation !== 'child' && peer.role !== 'child')
+      || peer.activity !== 'socialize' || !canInteract(person, peer)) continue;
+    const at = context.visualFor?.(peer.id) ?? peer.position;
+    const distance = Math.hypot(at.x - state.base.x, at.z - state.base.z);
+    if (distance > 2.2) continue;
+    const relationship = context.relationshipFor?.(person.id, peer.id);
+    const family = person.householdId && person.householdId === peer.householdId ? 0.5 : 0;
+    const tie = relationship ? relationship.strength * 0.7 + relationship.trust * 0.3 : 0;
+    const score = family + tie - distance * 0.18
+      + unit(`${person.id}:${peer.id}:${state.cycle}:playmate`) * 0.08;
+    if (score > bestScore) { best = peer; bestScore = score; }
+  }
+  return best;
 }
 
 function relationshipScoreForPresentation(person: Person, peer: Person, relationship: SocialRelationship | undefined, month: number): number {
@@ -939,8 +989,16 @@ function activityRadius(kind: DestinationKind): number {
   return 0.5;
 }
 
+function routineFor(person: Person): readonly Intent[] {
+  const child = (person.occupation === 'child' || person.role === 'child') && person.ageMonths < 15 * 12;
+  const freeToPlay = child && person.activity === 'socialize'
+    && person.navigation?.schedulePhase !== 'emergency'
+    && (person.navigation?.destinationKind === 'plaza' || person.navigation?.destinationKind === 'market');
+  return freeToPlay ? CHILD_PLAY_ROUTINE : ROUTINES[person.navigation!.destinationKind] ?? WORK_ROUTINE;
+}
+
 function sampledEntryStep(person: Person, sample: number): number {
-  const routine = ROUTINES[person.navigation!.destinationKind] ?? WORK_ROUTINE;
+  const routine = routineFor(person);
   const purposeful = routine
     .map((intent, index) => ({ intent, index }))
     .filter(({ intent }) => intent[0] !== 'pause');
