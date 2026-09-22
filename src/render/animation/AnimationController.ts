@@ -665,23 +665,56 @@ export class AnimationController {
   }
 
   private createSpecialStateClips(): void {
-    // Rest: sitting or lying down
+    // Rest: the physical renderer owns contact/limb articulation. These poses provide only the
+    // quiet torso/head language layered over that support-aware seated body.
     const restPoses: AnimationPose[] = [
       {
-        name: 'rest-sit',
-        duration: 2.0,
+        name: 'rest-settled',
+        duration: 3.2,
+        pelvisRotation: -0.015,
+        spineRotation: 0.095,
+        headRotation: 0.035,
+        leftShoulderRotation: 0.07,
+        leftElbowRotation: 0.58,
+        rightShoulderRotation: 0.06,
+        rightElbowRotation: 0.56,
+        leftHipRotation: 0.72,
+        leftKneeRotation: 0.92,
+        rightHipRotation: 0.72,
+        rightKneeRotation: 0.92,
+        positionOffset: { x: 0, y: -0.23, z: 0 },
+      },
+      {
+        name: 'rest-weight-shift',
+        duration: 1.4,
+        pelvisRotation: 0.025,
+        spineRotation: 0.125,
+        headRotation: -0.045,
+        leftShoulderRotation: 0.1,
+        leftElbowRotation: 0.62,
+        rightShoulderRotation: 0.045,
+        rightElbowRotation: 0.54,
+        leftHipRotation: 0.74,
+        leftKneeRotation: 0.94,
+        rightHipRotation: 0.7,
+        rightKneeRotation: 0.9,
+        positionOffset: { x: 0, y: -0.235, z: 0.008 },
+      },
+      {
+        name: 'rest-upright-breath',
+        duration: 2.4,
         pelvisRotation: 0,
-        spineRotation: 0.3,
-        headRotation: 0.1,
-        leftShoulderRotation: 0,
-        leftElbowRotation: 0.4,
-        rightShoulderRotation: 0,
-        rightElbowRotation: 0.4,
-        leftHipRotation: 0.5,
-        leftKneeRotation: 0.8,
-        rightHipRotation: 0.5,
-        rightKneeRotation: 0.8,
-        positionOffset: { x: 0, y: -0.4, z: 0 },
+        spineRotation: 0.075,
+        headRotation: 0.02,
+        leftShoulderRotation: 0.055,
+        leftElbowRotation: 0.55,
+        rightShoulderRotation: 0.065,
+        rightElbowRotation: 0.57,
+        leftHipRotation: 0.71,
+        leftKneeRotation: 0.91,
+        rightHipRotation: 0.71,
+        rightKneeRotation: 0.91,
+        positionOffset: { x: 0, y: -0.225, z: -0.004 },
       },
     ];
 
@@ -910,7 +943,18 @@ export class AnimationController {
       if (state.currentState !== 'rest') {
         out.leftHipRotation = 0; out.rightHipRotation = 0;
       }
-      if (state.currentState === 'idle' || state.currentState === 'rest' || state.currentState === 'alert') {
+      if (state.currentState === 'rest') {
+        const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 31;
+        // Rest is mostly stillness. One restrained adjustment every long beat is enough to show
+        // breathing and awareness without turning sitting into another idle-fidget loop.
+        const p = (t % 17) / 17;
+        const gesture = p < 0.2 ? Math.sin(p / 0.2 * Math.PI) ** 2 : 0;
+        out.headRotation += gesture * (elderly ? 0.055 : 0.08) * Math.sin(t * 0.31);
+        out.pelvisRotation += gesture * 0.018;
+        out.spineRotation += gesture * 0.012;
+        out.rightShoulderRotation += gesture * 0.045;
+        out.positionOffset.y -= gesture * 0.003;
+      } else if (state.currentState === 'idle' || state.currentState === 'alert') {
         const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 29;
         // A slow, smooth gesture window with long quiet intervals, not constant fidgeting.
         const p = (t % 13) / 13;
