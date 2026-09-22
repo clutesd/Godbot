@@ -422,6 +422,146 @@ describe('renderer-owned local activity', () => {
     expect(JSON.stringify([a, b])).toBe(before);
   });
 
+  it('does not let child play override rest, study, travel or emergency authority', () => {
+    const resting = person('resting-child');
+    resting.ageMonths = 10 * 12;
+    resting.occupation = 'child';
+    resting.role = 'child';
+    resting.activity = 'rest';
+    resting.navigation!.destinationKind = 'home';
+    resting.navigation!.destinationId = 'child-home';
+    resting.navigation!.schedulePhase = 'home';
+    const restHarness = harness([resting]);
+    for (let frame = 0; frame < 6 * 60; frame++) {
+      restHarness.tick(1 / 60);
+      expect(restHarness.local.get(resting.id)?.action?.startsWith('play-') ?? false).toBe(false);
+    }
+
+    const studying = person('studying-child');
+    studying.ageMonths = 12 * 12;
+    studying.occupation = 'child';
+    studying.role = 'child';
+    studying.activity = 'study';
+    studying.navigation!.destinationKind = 'knowledge-institution';
+    studying.navigation!.destinationId = 'school';
+    studying.navigation!.schedulePhase = 'work';
+    const studyHarness = harness([studying]);
+    for (let frame = 0; frame < 6 * 60; frame++) {
+      studyHarness.tick(1 / 60);
+      expect(studyHarness.local.get(studying.id)?.action?.startsWith('play-') ?? false).toBe(false);
+    }
+
+    studying.navigation!.schedulePhase = 'emergency';
+    studyHarness.tick(0);
+    expect(studyHarness.local.get(studying.id)).toBeUndefined();
+  });
+
+  it('presents children as shared, unmistakable games instead of miniature adult conversation', () => {
+    const children = ['child-a', 'child-b', 'child-c'].map((id, index) => {
+      const p = person(id);
+      p.ageMonths = (8 + index * 2) * 12;
+      p.occupation = 'child';
+      p.role = 'child';
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'play-plaza';
+      p.navigation!.schedulePhase = 'social';
+      const angle = index / 3 * Math.PI * 2;
+      p.position = { x: Math.cos(angle) * 0.6, z: Math.sin(angle) * 0.6 };
+      p.target = { ...p.position };
+      p.householdId = `house-${index}`;
+      return p;
+    });
+    const before = JSON.stringify(children);
+    const h = harness(children);
+    const actions = new Set<string>();
+    const games = new Set<string>();
+    const roles = new Set<string>();
+    let playFrames = 0;
+    let sharedFocusFrames = 0;
+    let movingFrames = 0;
+    let encounterFrames = 0;
+
+    for (let frame = 0; frame < 32 * 60; frame++) {
+      const visuals = h.tick(1 / 60);
+      for (let index = 0; index < children.length; index++) {
+        const state = h.local.get(children[index]!.id);
+        if (state?.action?.startsWith('play-')) actions.add(state.action);
+        if (state?.playGame) games.add(state.playGame);
+        if (state?.playRole) roles.add(state.playRole);
+        if (state?.animation === 'play') playFrames++;
+        if (state?.socialFocusId) sharedFocusFrames++;
+        if (state?.encounter) encounterFrames++;
+        if ((visuals[index]?.speed ?? 0) > 0.05) movingFrames++;
+      }
+    }
+
+    expect(games).toEqual(new Set(['tag', 'circle', 'follow']));
+    expect([...roles]).toEqual(expect.arrayContaining(['runner', 'chaser', 'leader', 'follower', 'orbit']));
+    expect([...actions]).toEqual(expect.arrayContaining(['play-tag-run', 'play-tag-chase', 'play-circle', 'play-lead', 'play-follow']));
+    expect(playFrames).toBeGreaterThan(240);
+    expect(sharedFocusFrames).toBeGreaterThan(120);
+    expect(movingFrames).toBeGreaterThan(180);
+    expect(encounterFrames).toBe(0);
+    expect(JSON.stringify(children)).toBe(before);
+  });
+
+  it('keeps very young children in bounded parallel play rather than running tag', () => {
+    const toddler = person('toddler');
+    toddler.ageMonths = 2 * 12;
+    toddler.occupation = 'child';
+    toddler.role = 'child';
+    toddler.activity = 'socialize';
+    toddler.navigation!.destinationKind = 'plaza';
+    toddler.navigation!.destinationId = 'young-play';
+    toddler.navigation!.schedulePhase = 'social';
+    const h = harness([toddler]);
+    const games = new Set<string>();
+    let maxDistance = 0;
+
+    for (let frame = 0; frame < 12 * 60; frame++) {
+      const visual = h.tick(1 / 60)[0]!;
+      const state = h.local.get(toddler.id);
+      if (state?.playGame) games.add(state.playGame);
+      maxDistance = Math.max(maxDistance, Math.hypot(visual.x - toddler.position.x, visual.z - toddler.position.z));
+    }
+
+    expect(games).toEqual(new Set(['parallel']));
+    expect(maxDistance).toBeLessThan(0.45);
+  });
+
+  it('keeps the third member of a social pod attending to the same conversation', () => {
+    const people = ['pod-a', 'pod-b', 'pod-c'].map((id, index) => {
+      const p = person(id);
+      p.position = { x: (index - 1) * 0.48, z: index === 1 ? 0.2 : 0 };
+      p.target = { ...p.position };
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'coherent-pod';
+      p.navigation!.schedulePhase = 'social';
+      p.householdId = `pod-house-${index}`;
+      return p;
+    });
+    const h = harness(people);
+    let listenerFrames = 0;
+    let speakerFrames = 0;
+    let offPodFocus = 0;
+
+    for (let frame = 0; frame < 30 * 60; frame++) {
+      h.tick(1 / 60);
+      for (const p of people) {
+        const state = h.local.get(p.id);
+        if (state?.action === 'listen-in-pod') listenerFrames++;
+        if (state?.action === 'address-pod') speakerFrames++;
+        if (state?.socialFocusId && !people.some(peer => peer.id === state.socialFocusId)) offPodFocus++;
+      }
+    }
+
+    expect(listenerFrames).toBeGreaterThan(60);
+    expect(speakerFrames).toBeGreaterThan(20);
+    expect(offPodFocus).toBe(0);
+  });
+
   it('keeps a frozen visible social cluster changing formation instead of occupying mannequin slots', () => {
     const people = Array.from({ length: 8 }, (_, index) => {
       const p = person(`social-${index}`);
