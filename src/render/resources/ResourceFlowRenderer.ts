@@ -4,6 +4,7 @@ import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { ResourceWorkScene } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
 import { resourceProcessingPresentation, resourceStoragePresentation, storedMaterialColour } from './ResourceFlowPresentation';
+import { isMinedMaterial, mineralVisualProfile } from './MineralPresentation';
 
 export const MAX_RESOURCE_SETTLEMENTS = 32;
 const CAPACITY = MAX_RESOURCE_SETTLEMENTS * (8 * 6 + 3 * 4);
@@ -17,6 +18,8 @@ export class ResourceFlowRenderer {
   private readonly bundles: THREE.InstancedMesh;
   private readonly blocks: THREE.InstancedMesh;
   private readonly rocks: THREE.InstancedMesh;
+  private readonly shards: THREE.InstancedMesh;
+  private readonly mineralAccents: THREE.InstancedMesh;
   private readonly heat: THREE.InstancedMesh;
   private signature = '';
 
@@ -25,7 +28,13 @@ export class ResourceFlowRenderer {
     this.logs = this.pool('Stored timber', resourceLogGeometry(), true);
     this.bundles = this.pool('Stored plant materials', resourceBundleGeometry());
     this.blocks = this.pool('Storage and processing fabric', new THREE.BoxGeometry(1, 1, 1));
-    this.rocks = this.pool('Stored mineral materials', new THREE.DodecahedronGeometry(1, 0));
+    this.rocks = this.pool('Stored stone and clay', new THREE.DodecahedronGeometry(1, 0));
+    this.shards = this.pool('Stored ore and coal shards', new THREE.OctahedronGeometry(1, 0));
+    this.mineralAccents = this.pool('Stored ore mineral accents', new THREE.OctahedronGeometry(1, 0));
+    (this.shards.material as THREE.MeshStandardMaterial).roughness = 0.7;
+    (this.shards.material as THREE.MeshStandardMaterial).metalness = 0.22;
+    (this.mineralAccents.material as THREE.MeshStandardMaterial).roughness = 0.42;
+    (this.mineralAccents.material as THREE.MeshStandardMaterial).metalness = 0.48;
     this.heat = this.pool('Paid processing heat', new THREE.SphereGeometry(1, 6, 4));
     (this.heat.material as THREE.MeshStandardMaterial).emissive.set('#d8783c');
     (this.heat.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.85;
@@ -41,7 +50,7 @@ export class ResourceFlowRenderer {
       stock.map(p => [p.id, p.pieces]), processes, s.infrastructure.factories >= 0.25])]);
     if (signature === this.signature) return;
     this.signature = signature;
-    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.heat]) mesh.count = 0;
+    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.shards, this.mineralAccents, this.heat]) mesh.count = 0;
     for (const { s, stock, processes } of plans) {
       const plots = (s.structurePlots ?? []).filter(p => p.condition > 0.2 && !p.accessRestricted
         && (!p.development || p.development.status === 'active'));
@@ -59,8 +68,19 @@ export class ResourceFlowRenderer {
           const y = 0.035 + Math.floor(n / 3) * 0.065;
           if (item.id === 'timber') this.emit(this.logs, point, y, 0.3, 0.4, 0.3, '#ffffff', Math.PI / 2);
           else if (/fiber|flora|herb/.test(item.id)) this.emit(this.bundles, point, y + 0.03, 1.4, 1.4, 1.4, storedMaterialColour(item.id));
-          else if (/ore|stone|coal|clay/.test(item.id)) this.emit(this.rocks, point, y, 0.045, 0.04, 0.055, storedMaterialColour(item.id));
-          else this.emit(this.blocks, point, y, item.id === 'lumber' ? 0.3 : 0.09, 0.035, 0.065, storedMaterialColour(item.id));
+          else if (isMinedMaterial(item.id)) {
+            const profile = mineralVisualProfile(item.id);
+            const mineralMesh = profile.shard ? this.shards : this.rocks;
+            const base = 0.048;
+            this.emit(mineralMesh, point, y,
+              base * profile.scale[0], base * profile.scale[1], base * profile.scale[2],
+              profile.baseColour, (n % 2 ? 1 : -1) * profile.tilt);
+            if (profile.accentStrength > 0.2 && n < 3) {
+              this.emit(this.mineralAccents, { x: point.x + 0.018, z: point.z - 0.008 }, y + 0.028,
+                0.01 + profile.accentStrength * 0.007, 0.014 + profile.accentStrength * 0.01, 0.009,
+                profile.accentColour, n * 0.4);
+            }
+          } else this.emit(this.blocks, point, y, item.id === 'lumber' ? 0.3 : 0.09, 0.035, 0.065, storedMaterialColour(item.id));
         }
       }
       const workshop = plots.find(p => p.development?.form === 'workshop' || p.development?.form === 'works');
@@ -87,7 +107,7 @@ export class ResourceFlowRenderer {
         }
       }
     }
-    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.heat]) {
+    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.shards, this.mineralAccents, this.heat]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }

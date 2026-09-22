@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { FreightTrip } from '../../sim/transport/types';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
 import { storedMaterialColour } from './ResourceFlowPresentation';
+import { isMinedMaterial, mineralCargoGeometry, mineralVisualProfile } from './MineralPresentation';
 
 /** Attached to the existing authoritative vehicle; never advances a route or invents freight. */
 export function createResourceCargo(trip: FreightTrip): THREE.InstancedMesh | undefined {
@@ -9,11 +10,13 @@ export function createResourceCargo(trip: FreightTrip): THREE.InstancedMesh | un
   if (!id || !Number.isFinite(trip.quantity) || trip.quantity <= 0) return undefined;
   const timber = id === 'timber';
   const plant = /fiber|flora|herb/.test(id);
-  const mineral = /ore|stone|coal|clay/.test(id);
+  const mineral = isMinedMaterial(id);
+  const mineralProfile = mineral ? mineralVisualProfile(id) : undefined;
   const geometry = timber ? resourceLogGeometry() : plant ? resourceBundleGeometry()
-    : mineral ? new THREE.DodecahedronGeometry(0.1, 0) : new THREE.BoxGeometry(0.19, 0.055, 0.12);
+    : mineral ? mineralCargoGeometry(id) : new THREE.BoxGeometry(0.19, 0.055, 0.12);
   const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshStandardMaterial({
-    color: timber ? '#ffffff' : storedMaterialColour(id), vertexColors: timber, roughness: mineral ? 0.9 : 0.7,
+    color: timber ? '#ffffff' : mineralProfile?.baseColour ?? storedMaterialColour(id),
+    vertexColors: timber, roughness: mineralProfile?.roughness ?? 0.7, metalness: mineralProfile?.metalness ?? 0,
   }), 6);
   mesh.name = 'Authoritative material cargo';
   mesh.userData['resourceId'] = id;
@@ -21,8 +24,13 @@ export function createResourceCargo(trip: FreightTrip): THREE.InstancedMesh | un
   const marker = new THREE.Object3D();
   for (let i = 0; i < mesh.count; i++) {
     marker.position.set((i % 3 - 1) * 0.13, Math.floor(i / 3) * 0.1, 0);
-    marker.rotation.set(timber ? Math.PI / 2 : 0, 0, 0);
-    marker.scale.setScalar(timber ? 0.65 : plant ? 3 : 1);
+    if (mineral && mineralProfile) {
+      marker.rotation.set((i % 2 ? 1 : -1) * mineralProfile.tilt, i * 0.73, (i % 3 - 1) * 0.18);
+      marker.scale.set(mineralProfile.scale[0], mineralProfile.scale[1], mineralProfile.scale[2]).multiplyScalar(0.82);
+    } else {
+      marker.rotation.set(timber ? Math.PI / 2 : 0, 0, 0);
+      marker.scale.setScalar(timber ? 0.65 : plant ? 3 : 1);
+    }
     marker.updateMatrix(); mesh.setMatrixAt(i, marker.matrix);
   }
   const walking = trip.mode === 'walk';

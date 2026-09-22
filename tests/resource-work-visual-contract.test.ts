@@ -192,7 +192,7 @@ describe('resource scene lifecycle and physical worker contract', () => {
     expect(scene.sites.size).toBe(MAX_ACTIVE_WORK_SITES);
     const active = renderer.group.getObjectByName('Active resource work sites') as THREE.Group;
     expect(instanceMeshes(active).every(m => m.count <= m.instanceMatrix.count)).toBe(true);
-    expect(active.children).toHaveLength(10);
+    expect(active.children).toHaveLength(11);
     expect(active.userData['instanceCount']).toBeLessThan(MAX_ACTIVE_WORK_SITES * 32);
   });
 

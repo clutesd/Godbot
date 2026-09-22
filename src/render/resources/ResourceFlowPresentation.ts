@@ -2,6 +2,7 @@ import type { Settlement, WorldState } from '../../sim/types';
 import { MATERIAL_RECIPES } from '../../sim/resources/MaterialEconomy';
 import { RECIPE_CATALOG } from '../../sim/resources/catalog';
 import { resourceProcessingForWorld } from '../../sim/resources/ResourceWorkAssignments';
+import { isMinedMaterial, mineralVisualProfile } from './MineralPresentation';
 
 export const MAX_STORED_MATERIALS = 8;
 export const MAX_PROCESSING_STATIONS = 3;
@@ -37,6 +38,7 @@ export function resourceProcessingPresentation(world: WorldState, settlement: Se
 }
 
 export function storedMaterialColour(id: string): string {
+  if (isMinedMaterial(id)) return mineralVisualProfile(id).baseColour;
   if (/copper|bronze/.test(id)) return '#bd8753';
   if (/iron|steel|tin/.test(id)) return '#a2adb1';
   if (/coal|charcoal/.test(id)) return '#383833';
