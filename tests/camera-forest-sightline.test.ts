@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { cameraClearanceFor, cameraFramingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
@@ -44,6 +44,75 @@ describe('forest-aware camera sightline scoring', () => {
     const score = forestSightlineObstruction(world, camera, target, () => 0);
 
     expect(score).toBe(0);
+  });
+});
+
+
+describe('Arrival camera occlusion avoidance', () => {
+  it('leaves an already-clear authored Arrival composition unchanged', () => {
+    const simulation = new Simulation({ seed: 'arrival-clear-camera', startingPopulation: 80 });
+    for (const cell of simulation.state.world.cells) cell.wood = 0;
+    for (const settlement of simulation.state.settlements) settlement.structurePlots = [];
+    const authored = new THREE.Vector3(-10, 10, 0);
+    const target = new THREE.Vector3(0, 1, 0);
+
+    const resolved = resolveFoundingSightline(simulation.state, authored, target, () => 0, 0.72);
+
+    expect(resolved.position.x).toBeCloseTo(authored.x, 10);
+    expect(resolved.position.y).toBeCloseTo(authored.y, 10);
+    expect(resolved.position.z).toBeCloseTo(authored.z, 10);
+    expect(resolved.angularCorrection).toBe(0);
+    expect(resolved.structureObstruction).toBe(0);
+    expect(resolved.forestObstruction).toBe(0);
+  });
+
+  it('rotates around the same subject/radius when a structure blocks the authored sightline', () => {
+    const simulation = new Simulation({ seed: 'arrival-structure-camera', startingPopulation: 80 });
+    for (const cell of simulation.state.world.cells) cell.wood = 0;
+    const settlement = simulation.state.settlements.find(candidate => candidate.alive)!;
+    settlement.structurePlots = [{
+      id: 'arrival-blocker',
+      worldX: -2.6,
+      worldZ: 0,
+      width: 2.4,
+      depth: 2.4,
+      height: 5,
+      radius: 1.2,
+      condition: 1,
+      foundedMonth: 0,
+    }];
+    const authored = new THREE.Vector3(-7, 1.5, 0);
+    const target = new THREE.Vector3(0, 0.2, 0);
+    const authoredScore = structureSightlineObstruction(simulation.state, authored, target, () => 0);
+
+    const resolved = resolveFoundingSightline(simulation.state, authored, target, () => 0, 0.72);
+
+    expect(authoredScore).toBeGreaterThan(0.5);
+    expect(resolved.structureObstruction).toBeLessThan(authoredScore);
+    expect(resolved.structureObstruction).toBeLessThanOrEqual(0.001);
+    expect(resolved.angularCorrection).not.toBe(0);
+    expect(Math.hypot(resolved.position.x - target.x, resolved.position.z - target.z))
+      .toBeCloseTo(Math.hypot(authored.x - target.x, authored.z - target.z), 5);
+  });
+
+  it('raises or changes side in dense forest and never returns a worse founding sightline', () => {
+    const simulation = new Simulation({ seed: 'arrival-dense-forest-camera', startingPopulation: 80 });
+    for (const cell of simulation.state.world.cells) {
+      cell.water = false;
+      cell.biome = 'forest';
+      cell.wood = 1;
+      cell.forestCapacity = 1;
+      cell.elevation = 0;
+    }
+    const authored = new THREE.Vector3(-10, 5, 0);
+    const target = new THREE.Vector3(0, 0.8, 0);
+    const before = forestSightlineObstruction(simulation.state.world, authored, target, () => 0);
+
+    const resolved = resolveFoundingSightline(simulation.state, authored, target, () => 0, 0.72);
+
+    expect(before).toBeGreaterThan(0.1);
+    expect(resolved.forestObstruction).toBeLessThanOrEqual(before);
+    expect(resolved.lift > 0 || resolved.angularCorrection !== 0).toBe(true);
   });
 });
 

@@ -110,6 +110,17 @@ const FOREST_AZIMUTH_OFFSETS = [
   Math.PI,
 ] as const;
 
+/** Finer-grained corrections keep authored Arrival motion intact while stepping around foreground occluders. */
+const FOUNDING_SIGHTLINE_OFFSETS = [
+  0,
+  Math.PI / 12, -Math.PI / 12,
+  Math.PI / 6, -Math.PI / 6,
+  Math.PI / 4, -Math.PI / 4,
+  Math.PI / 3, -Math.PI / 3,
+  Math.PI / 2, -Math.PI / 2,
+  Math.PI,
+] as const;
+
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 export function cameraFramingFor(kind: ObservationKind): CameraFraming {
@@ -356,6 +367,88 @@ export function structureSightlineObstruction(
   return obstruction;
 }
 
+
+export interface FoundingSightlineResolution {
+  readonly position: THREE.Vector3;
+  readonly forestObstruction: number;
+  readonly structureObstruction: number;
+  readonly angularCorrection: number;
+  readonly lift: number;
+}
+
+/**
+ * Keeps authored Arrival compositions but refuses to let foreground forest/buildings own the frame.
+ * The target and horizontal camera distance never change. A clear authored line is returned exactly;
+ * when blocked, search the nearest side first and only lift the lens if every nearby side remains
+ * obstructed. This runs continuously during founding shots, so a truck/orbit cannot drift behind a
+ * tree after starting from a clear angle.
+ */
+export function resolveFoundingSightline(
+  state: SimulationState,
+  authoredPosition: THREE.Vector3,
+  target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+  lensClearance = 0.72,
+): FoundingSightlineResolution {
+  const radius = Math.hypot(authoredPosition.x - target.x, authoredPosition.z - target.z);
+  if (radius < 0.5) {
+    const position = authoredPosition.clone();
+    position.y = Math.max(position.y, elevationAt(position.x, position.z) + lensClearance);
+    return { position, forestObstruction: 0, structureObstruction: 0, angularCorrection: 0, lift: position.y - authoredPosition.y };
+  }
+
+  const baseAzimuth = Math.atan2(authoredPosition.z - target.z, authoredPosition.x - target.x);
+  const compactShot = radius < 8;
+  const liftSteps = compactShot ? [0, 0.45, 0.9, 1.6, 2.5] : [0, 1.5, 3, 5, 8] as const;
+  let best: FoundingSightlineResolution | undefined;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const lift of liftSteps) {
+    for (const offset of FOUNDING_SIGHTLINE_OFFSETS) {
+      const angle = baseAzimuth + offset;
+      const x = target.x + Math.cos(angle) * radius;
+      const z = target.z + Math.sin(angle) * radius;
+      const position = new THREE.Vector3(
+        x,
+        Math.max(authoredPosition.y + lift, elevationAt(x, z) + lensClearance),
+        z,
+      );
+      const forestObstruction = forestSightlineObstruction(state.world, position, target, elevationAt);
+      const structureObstruction = structureSightlineObstruction(state, position, target, elevationAt);
+      const actualLift = Math.max(0, position.y - authoredPosition.y);
+      const score = structureObstruction * 8
+        + forestObstruction * 2.4
+        + Math.abs(offset) * 0.055
+        + actualLift * (compactShot ? 0.07 : 0.025);
+
+      if (score < bestScore) {
+        bestScore = score;
+        best = { position, forestObstruction, structureObstruction, angularCorrection: offset, lift: actualLift };
+      }
+
+      // Buildings are a hard occluder. Forest is a softer proxy because the renderer suppresses
+      // individual trees around occupied founding clearings more precisely than world-cell wood.
+      if (structureObstruction <= 0.001 && forestObstruction <= 0.055) {
+        return { position, forestObstruction, structureObstruction, angularCorrection: offset, lift: actualLift };
+      }
+    }
+  }
+
+  return best ?? {
+    position: authoredPosition.clone(),
+    forestObstruction: forestSightlineObstruction(state.world, authoredPosition, target, elevationAt),
+    structureObstruction: structureSightlineObstruction(state, authoredPosition, target, elevationAt),
+    angularCorrection: 0,
+    lift: 0,
+  };
+}
+
+function isFoundingCameraScene(sceneId: string | undefined): boolean {
+  return Boolean(sceneId?.startsWith('founding:')
+    || sceneId?.startsWith('founding-cast:')
+    || sceneId?.startsWith('founding-release:'));
+}
+
 /**
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
@@ -396,11 +489,14 @@ export class CameraDirector {
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
     if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') {
       const pose = arrivalCameraPose(state.arrival);
+      // ArrivalPresentation still authors the shot. We only correct an obstructed lens around the
+      // same target/radius so trees or founding structures cannot hide the people/action.
+      const clearPose = resolveFoundingSightline(state, pose.position, pose.target, elevationAt, 8);
       if (state.arrival.elapsedSeconds < 0.2) {
-        this.camera.position.copy(pose.position);
+        this.camera.position.copy(clearPose.position);
         this.lookTarget.copy(pose.target);
       } else {
-        this.camera.position.lerp(pose.position, 1 - Math.exp(-deltaSeconds * 1.1));
+        this.camera.position.lerp(clearPose.position, 1 - Math.exp(-deltaSeconds * 1.1));
         this.lookTarget.lerp(pose.target, 1 - Math.exp(-deltaSeconds * 1.3));
       }
       // Keep the lens above mature tree crowns, and the sightline above intervening ridges.
@@ -434,6 +530,15 @@ export class CameraDirector {
     }
 
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
+
+    // Founding shots can move several metres after chooseClearAzimuth() picked their starting side.
+    // Re-check the live composition so truck/orbit/dolly motion never carries the lens behind a
+    // foreground tree or structure while the opening is introducing actual people.
+    if (isFoundingCameraScene(this.currentScene?.id)) {
+      const clearance = cameraClearanceFor(this.currentScene?.kind);
+      const clear = resolveFoundingSightline(state, this.desiredPosition, this.desiredTarget, elevationAt, clearance.lens);
+      this.desiredPosition.copy(clear.position);
+    }
 
     // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
     // never simulation months, so deep historical acceleration does not make the camera race.
