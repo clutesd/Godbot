@@ -377,6 +377,7 @@ export class LocalActivityPresentation {
     // Time spent walking/turning cannot consume the interaction it is approaching.
     const partnerState = state.partnerId ? this.previousStates.get(state.partnerId) : undefined;
     if (state.encounter && partnerState && !partnerState.encounter && partnerState.lastPartnerId === person.id) {
+      rememberSocial(state, state.partnerId, this.presentationSeconds, 'encounter');
       state.socialCooldown = 2; state.lastPartnerId = state.partnerId; state.encounter = undefined; state.partnerId = undefined;
       state.animation = 'idle'; state.action = 'quiet-departure'; state.seconds = 0; state.hold = 1.8;
     }
@@ -456,6 +457,7 @@ export class LocalActivityPresentation {
         }
         state.socialCooldown = 2;
         state.lastPartnerId = state.encounter.partnerId;
+        rememberSocial(state, state.encounter.partnerId, this.presentationSeconds, 'encounter');
         state.encounter = undefined;
         state.partnerId = undefined;
       }
@@ -721,6 +723,7 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   if (!peer) return false;
   const at = context.visualFor?.(peer.id) ?? peer.position;
   state.socialFocusId = peer.id;
+  rememberSocial(state, peer.id, presentationSeconds, 'pod');
   state.focus.x = at.x;
   state.focus.z = at.z;
   const from = context.visual ?? state.destination;
@@ -778,6 +781,7 @@ function applyChildPlay(person: Person, context: LocalActivityContext, state: Lo
       if (nearest) {
         const at = context.visualFor?.(nearest.id) ?? nearest.position;
         state.socialFocusId = nearest.id;
+        rememberSocial(state, nearest.id, presentationSeconds, 'play');
         state.focus.x = at.x; state.focus.z = at.z;
         const target = farthestPlayPoint(state.points, at, fallback);
         adoptPlayDestination(person, context, state, from, target, nearest.id);
@@ -789,6 +793,7 @@ function applyChildPlay(person: Person, context: LocalActivityContext, state: Lo
       state.playRole = 'chaser';
       state.action = 'play-tag-chase';
       state.socialFocusId = runner.id;
+      rememberSocial(state, runner.id, presentationSeconds, 'play');
       state.focus.x = at.x; state.focus.z = at.z;
       const target = standOffPoint(context.visual ?? state.base, at, center, 0.36,
         unit(`${person.id}:${runner.id}:${epoch}:tag-side`) < 0.5 ? -0.07 : 0.07);
@@ -817,6 +822,7 @@ function applyChildPlay(person: Person, context: LocalActivityContext, state: Lo
       state.playRole = 'follower';
       state.action = 'play-follow';
       state.socialFocusId = leader.id;
+      rememberSocial(state, leader.id, presentationSeconds, 'play');
       state.focus.x = at.x; state.focus.z = at.z;
       const target = followPoint(at, center, 0.42, own, members.length);
       adoptPlayDestination(person, context, state, from, target, leader.id);
