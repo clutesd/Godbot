@@ -1,3 +1,4 @@
+import { StructureNavigation } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNetwork';
@@ -220,6 +221,8 @@ export class GodboxRenderer {
   private readonly cosmicReflections: THREE.WebGLRenderTarget;
   private readonly cosmicMaterial: THREE.MeshStandardMaterial;
   private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
+  private readonly humanNavigation = new StructureNavigation();
+  private readonly humanStructureSources = new Map<string, readonly ActivityStructure[]>();
   private readonly peopleVisuals = new PeopleVisualStateStore();
   /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
   private readonly humanLifeClock = new HumanLifeClock();
@@ -234,6 +237,9 @@ export class GodboxRenderer {
   private readonly personGround: PersonVisualGround = {
     heightAt: (x, z) => this.elevationAt(x, z),
     isStandable: (x, z) => this.personStandable(x, z),
+    safeSegment: (a, b) => this.humanNavigation.clear(a, b),
+    detour: (a, b) => this.humanNavigation.detour(a, b,
+      (from, to) => this.humanNavigation.clear(from, to) && this.resourceWork.safeSegment(from, to)),
   };
   private readonly personMatrix = new THREE.Matrix4();
   private readonly limbMatrix = new THREE.Matrix4();
@@ -300,14 +306,32 @@ export class GodboxRenderer {
       phase: local.phase, phaseProgress: Math.min(1, local.seconds / local.hold), activeTool: 'none', contactStrength: 0 };
   }
 
+  /** Development-only diagnosis, allocated only when explicitly requested. */
+  inspectHumanPresence(personId: string): unknown {
+    if (!import.meta.env.DEV) return undefined;
+    const visual = this.peopleVisuals.get(personId), local = this.localActivities.get(personId);
+    const person = this.localPeers.get(personId);
+    if (!visual || !person) return undefined;
+    return { authoritative: { ...person.position }, visual: { x: visual.x, z: visual.z }, footY: visual.footY,
+      velocity: { x: visual.velocityX, z: visual.velocityZ }, speedLimit: visual.maxPhysicalSpeed,
+      physicalRadius: 0.075, socialRadius: 0.17, destination: { x: visual.destinationX, z: visual.destinationZ },
+      corridor: visual.path.map(p => ({ ...p })), detour: visual.path[visual.waypoint], blocked: visual.blocked,
+      anchor: local ? { ...local.base } : undefined, encounter: local?.encounter ? { ...local.encounter } : undefined,
+      action: local?.action, phase: local?.phase, cameraSubject: this.cameraDirector.current()?.subjectId };
+  }
+
   /** Camera-only snapshot of where the represented person is actually drawn this frame. */
   private inspectCameraSubject(personId: string): CameraSubjectPresentation | undefined {
     const visual = this.peopleVisuals.get(personId);
     if (!visual) return undefined;
     const action = this.inspectPhysicalAction(personId);
-    return action
-      ? { x: visual.x, z: visual.z, footY: visual.footY, action }
-      : { x: visual.x, z: visual.z, footY: visual.footY };
+    const local = this.localActivities.get(personId);
+    const encounter = local?.encounter;
+    const reciprocal = encounter && this.localActivities.get(encounter.partnerId)?.partnerId === personId;
+    return { x: visual.x, z: visual.z, footY: visual.footY, action,
+      ...(reciprocal ? { partnerId: encounter.partnerId, socialTone: encounter.tone,
+        socialMeaning: (encounter.relationshipKind ? 0.5 : 0) + encounter.strength * 0.3 + encounter.trust * 0.2 } : {}) };
+
   }
 
   private resourceWorkersMonth = -1;
@@ -366,7 +390,7 @@ export class GodboxRenderer {
     this.host.append(this.renderer.domElement);
     this.scene.background = new THREE.Color('#899b91');
     this.scene.fog = new THREE.FogExp2('#93a5a4', 0.0072);
-    this.cameraDirector = new CameraDirector(this.camera, config, historian, (personId) => this.inspectCameraSubject(personId));
+    this.cameraDirector = new CameraDirector(this.camera, config, historian, (personId) => this.inspectCameraSubject(personId), () => [...this.localPeers.keys()]);
     this.foundingPods = new FoundingPodRenderer(state);
     this.scene.add(this.foundingPods.root);
     this.observation = this.cameraDirector.observation;
@@ -562,6 +586,12 @@ export class GodboxRenderer {
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
+    if (this.humanStructureSources.size !== this.settlementBuildingPlacements.size
+      || [...this.settlementBuildingPlacements].some(([id, placements]) => this.humanStructureSources.get(id) !== placements)) {
+      this.humanStructureSources.clear();
+      for (const [id, placements] of this.settlementBuildingPlacements) this.humanStructureSources.set(id, placements);
+      this.humanNavigation.set([...this.humanStructureSources.values()].flat());
+    }
     if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
       this.resourceWorkersMonth = this.state.month;
       this.resourceWorkersRevision = this.resourceWork.revision;
@@ -646,7 +676,8 @@ export class GodboxRenderer {
         destination: aim,
         localMove: Boolean(firstFire || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
-        localSpeed: (0.27 + stableUnit(`${person.id}:pace`) * 0.08) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.85 : 1),
+        emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
+        localSpeed: ((person.activity === 'flee' ? 0.85 : local ? 0.27 : 0.38) + stableUnit(`${person.id}:pace`) * 0.08) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.85 : 1),
         arrivalEase: Boolean(worker || physical),
         ...(!worker && !physical && !firstFire && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)

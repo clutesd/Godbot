@@ -38,6 +38,9 @@ export interface CameraSubjectPresentation {
   readonly z: number;
   readonly footY: number;
   readonly action?: PhysicalActionPresentation;
+  readonly partnerId?: string;
+  readonly socialMeaning?: number;
+  readonly socialTone?: string;
 }
 
 export type CameraSubjectPresentationResolver = (personId: string) => CameraSubjectPresentation | undefined;
@@ -465,6 +468,7 @@ export class CameraDirector {
   private readonly workingTangent = new THREE.Vector3();
   private readonly forestCandidatePosition = new THREE.Vector3();
   private shotAge = 0;
+  private lastHumanShot = false;
   private shotDuration = 12;
   private currentScene?: ObservationCandidate;
   private currentMotion: CameraMotion = 'hold';
@@ -480,6 +484,7 @@ export class CameraDirector {
     private readonly config: GodboxConfig,
     private readonly historian: Historian,
     private readonly subjectPresentation?: CameraSubjectPresentationResolver,
+    private readonly humanSubjects?: () => readonly string[],
   ) {
     this.camera.position.set(38, 48, 52);
     this.lookTarget.set(0, 0, 0);
@@ -517,7 +522,7 @@ export class CameraDirector {
     }
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
-    const mayInterrupt = this.shotAge >= Math.max(6, this.config.camera.transitionSeconds * 1.1);
+    const mayInterrupt = this.shotAge >= Math.max(this.currentScene?.id.startsWith('human:') ? 12 : 6, this.config.camera.transitionSeconds * 1.1);
     if (!this.currentScene || (majorEvent && mayInterrupt)) {
       if (majorEvent) this.acknowledgedMajorEventIds.add(majorEvent.id);
       if (this.acknowledgedMajorEventIds.size > 2048) {
@@ -538,6 +543,14 @@ export class CameraDirector {
       const clearance = cameraClearanceFor(this.currentScene?.kind);
       const clear = resolveFoundingSightline(state, this.desiredPosition, this.desiredTarget, elevationAt, clearance.lens);
       this.desiredPosition.copy(clear.position);
+    }
+
+    if (this.currentScene && ['worker-follow', 'discovery-scene', 'traveler-follow'].includes(this.currentScene.kind)) {
+      const actor = this.subjectPresentation?.(this.currentScene.subjectId);
+      const partner = actor?.partnerId ? this.subjectPresentation?.(actor.partnerId) : undefined;
+      const subjects = actor ? [new THREE.Vector3(actor.x, actor.footY + 0.17, actor.z)] : [];
+      if (partner) subjects.push(new THREE.Vector3(partner.x, partner.footY + 0.17, partner.z));
+      if (subjects.length) this.desiredPosition.copy(resolveHumanSightline(state, this.desiredPosition, this.desiredTarget, subjects, elevationAt));
     }
 
     // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
@@ -564,7 +577,27 @@ export class CameraDirector {
   }
 
   private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
-    const scene = this.historian.chooseScene(state, focusEventId);
+    let scene = this.historian.chooseScene(state, focusEventId);
+    if (!focusEventId && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
+      let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
+      for (const id of this.humanSubjects?.() ?? []) {
+        const view = this.subjectPresentation?.(id);
+        if (!view?.partnerId || !view.socialMeaning || !this.subjectPresentation?.(view.partnerId)) continue;
+        const score = view.socialMeaning;
+        if (!best || score > best.score) best = { id, view, score };
+      }
+      const actor = best && state.people.find(p => p.alive && p.id === best.id);
+      const partner = best && state.people.find(p => p.alive && p.id === best.view.partnerId);
+      if (best && actor && partner) {
+        const id = `human:${actor.id}:${partner.id}`;
+        scene = { ...scene, id, subjectId: actor.id, kind: 'worker-follow',
+          position: { x: best.view.x, z: best.view.z }, title: `${actor.name} and ${partner.name}`,
+          score: best.score, interest: best.score, event: undefined,
+          statement: { id, month: state.month, text: `${actor.name} and ${partner.name} share a ${best.view.socialTone ?? 'quiet'} moment.`,
+            epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
+      }
+    }
+    this.lastHumanShot = scene.id.startsWith('human:');
     this.currentScene = scene;
     this.shotAge = 0;
     this.trackingInitialized = false;
@@ -578,6 +611,8 @@ export class CameraDirector {
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
+
+    if (scene.id.startsWith('human:')) this.shotDuration = 14;
 
     this.observation.sceneId = scene.id;
     this.observation.label = scene.title;
@@ -910,4 +945,24 @@ export class CameraDirector {
   private interpolate(range: readonly [number, number], amount: number): number {
     return THREE.MathUtils.lerp(range[0], range[1], Math.max(0, Math.min(1, amount)));
   }
+}
+
+/** Protect each person, not just the empty midpoint between their silhouettes. */
+export function resolveHumanSightline(state: SimulationState, authored: THREE.Vector3, focus: THREE.Vector3,
+  subjects: readonly THREE.Vector3[], elevationAt: (x: number, z: number) => number): THREE.Vector3 {
+  const radius = Math.hypot(authored.x - focus.x, authored.z - focus.z);
+  const base = Math.atan2(authored.z - focus.z, authored.x - focus.x);
+  let best = authored.clone(), bestScore = Infinity;
+  for (const lift of [0, 0.35, 0.7, 1.2]) for (const offset of FOUNDING_SIGHTLINE_OFFSETS) {
+    const x = focus.x + Math.cos(base + offset) * radius, z = focus.z + Math.sin(base + offset) * radius;
+    const point = new THREE.Vector3(x, Math.max(authored.y + lift, elevationAt(x, z) + 0.42), z);
+    let obstruction = 0;
+    for (const subject of subjects) obstruction = Math.max(obstruction,
+      forestSightlineObstruction(state.world, point, subject, elevationAt)
+      + structureSightlineObstruction(state, point, subject, elevationAt) * 8);
+    const score = obstruction * 10 + Math.abs(offset) * 0.025 + lift * 0.05;
+    if (score < bestScore) { best = point; bestScore = score; }
+    if (obstruction < 0.02) return point;
+  }
+  return best;
 }

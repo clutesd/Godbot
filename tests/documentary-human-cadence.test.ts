@@ -8,7 +8,7 @@ import { HumanLifeClock } from '../src/render/people/HumanLifeClock';
 import { buildSocialGroups, groupKeyFor, placeInGroup } from '../src/render/people/PeoplePresentation';
 
 const FPS = 60;
-const PRESENTATION_SECONDS = 20;
+const PRESENTATION_SECONDS = 30;
 const FRAME_SECONDS = 1 / FPS;
 const WALKING = 0.05;
 const ground = { heightAt: () => 0, isStandable: () => true };
@@ -65,6 +65,7 @@ describe('documentary human cadence', () => {
       previousMoving: false,
     }]));
 
+    let stationaryActionFrames = 0;
     let monthAccumulator = 0;
     let monthlySteps = 0;
     const totalFrames = PRESENTATION_SECONDS * FPS;
@@ -128,6 +129,8 @@ describe('documentary human cadence', () => {
           } : {}),
         }, life.deltaSeconds, ground);
 
+        expect(visual.speed).toBeLessThanOrEqual(visual.maxPhysicalSpeed + 1e-8);
+        if (plan?.phase === 'action' && purposeful(plan.action) && visual.speed < WALKING) stationaryActionFrames++;
         const moving = visual.speed >= WALKING;
         if (moving && !metric.previousMoving) metric.movementEpisodes++;
         if (moving && plan) metric.localMovementFrames++;
@@ -138,6 +141,7 @@ describe('documentary human cadence', () => {
       visuals.prune();
     }
 
+    expect(stationaryActionFrames).toBeGreaterThan(60);
     expect(monthlySteps).toBe(PRESENTATION_SECONDS * monthsPerSecond!);
     expect(observed.state.month).toBe(control.state.month);
     // Presentation is a reader: after the same authoritative monthly ticks, history/state must be
@@ -159,7 +163,7 @@ describe('documentary human cadence', () => {
       sameAuthorityResets: metric.sameAuthorityResets,
     }));
 
-    // Twenty presentation seconds at 2 months/sec spans forty real PeopleSystem updates. The
+    // Thirty presentation seconds at 2 months/sec spans sixty real PeopleSystem updates. The
     // settlement must still show readable action variety and repeated movement instead of spending
     // the whole observation in arrival/reset states.
     expect(residentsWithPurposefulVariety.length, JSON.stringify(diagnostics)).toBeGreaterThanOrEqual(4);
@@ -176,7 +180,7 @@ describe('documentary human cadence', () => {
     }
   });
 
-  it('keeps human life running for twenty real seconds while historical time is completely frozen', () => {
+  it('keeps human life running for sixty real seconds while historical time is completely frozen', () => {
     const simulation = new Simulation({
       ...GODBOX_TIME_PRESETS.documentary,
       seed: 'frozen-history-human-life',
@@ -206,7 +210,7 @@ describe('documentary human cadence', () => {
     const points = new Map<string, Set<string>>(selectedIds.map(id => [id, new Set<string>()]));
     let movingFrames = 0;
 
-    for (let frame = 0; frame < PRESENTATION_SECONDS * FPS; frame++) {
+    for (let frame = 0; frame < 60 * FPS; frame++) {
       // Intentionally no simulation.step(): Historian/civilization time is frozen.
       const life = lifeClock.advance(FRAME_SECONDS);
       const peers = new Map(simulation.state.people.filter(person => person.alive).map(person => [person.id, person]));
@@ -249,7 +253,7 @@ describe('documentary human cadence', () => {
       visuals.prune();
     }
 
-    expect(lifeClock.elapsed).toBeCloseTo(PRESENTATION_SECONDS, 5);
+    expect(lifeClock.elapsed).toBeCloseTo(60, 5);
     expect(simulation.state.month).toBe(frozenMonth);
     expect(JSON.stringify(simulation.state)).toBe(before);
 

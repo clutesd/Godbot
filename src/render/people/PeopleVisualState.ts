@@ -1,35 +1,16 @@
 import type { Vec2 } from '../../sim/types';
 
-/**
- * PeopleVisualState.ts
- *
- * Renderer-side continuity for represented people. The simulation remains the sole authority over
- * where a person *is*; this layer only decides where the character is *drawn* on the way there.
- *
- * A person keeps a previous visual position, a visual destination, a route-aware journey polyline
- * and a bounded travel duration. Simulation months advance far faster than a person can plausibly
- * walk, so journeys are compressed rather than simulated: the goal is continuity, not temporal
- * literalism. Authoritative journeys converge on their destination; the local activity layer
- * may then supply bounded task points. Impossible jumps snap instead of dragging a character
- * across the world. Local steps never feed the simulation cadence estimator.
- */
-
-/** World units per second of unhurried visual travel. Sets the top of the journey-length band. */
-const VISUAL_TRAVEL_SPEED = 0.9;
-const MIN_JOURNEY_SECONDS = 0.25;
-const MAX_JOURNEY_SECONDS = 8;
-/** Beyond this the move is a teleport, not a journey; interpolating it would mislead. */
-export const SNAP_DISTANCE = 16;
-/** Past this lag the journey is shortened so the character catches up with authoritative state. */
-const CATCHUP_DISTANCE = 6;
-/** Destination changes smaller than this are noise, not a retarget. */
-const RETARGET_EPSILON = 0.02;
-/** Radians per second. Characters turn, they do not flip. */
+/** Renderer-owned physical motion. No calendar cadence, catch-up budget or visible teleport. */
+export const HUMAN_WALK_SPEED = 0.42;
+export const HUMAN_MAX_WALK_SPEED = 0.55;
+export const HUMAN_MAX_RUN_SPEED = 0.95;
+export const HUMAN_ACCELERATION = 0.8;
+export const HUMAN_BRAKING = 1.2;
+export const HUMAN_RADIUS = 0.075;
 const TURN_RATE = 5.2;
-/** Below this visual speed a character is standing, not walking. */
+const RETARGET_EPSILON = 0.02;
 export const WALK_SPEED_THRESHOLD = 0.05;
-/** Above this visual speed the compressed journey reads as a run. */
-export const RUN_SPEED_THRESHOLD = 1.8;
+export const RUN_SPEED_THRESHOLD = 0.65;
 
 export interface PersonVisualTarget {
   /** Authoritative simulation position, already adjusted for grouping and clearance. */
@@ -41,10 +22,12 @@ export interface PersonVisualTarget {
   restFacing?: number;
   /** Resource workers slow through the last part of an approach before orienting to contact. */
   arrivalEase?: boolean;
-  /** Local steps do not train the simulation-month catch-up estimate. */
+  /** Indicates a bounded local activity step; it never changes the speed contract. */
   localMove?: boolean;
   localSpeed?: number;
   smoothTravel?: boolean;
+  /** Only explicit emergency authority may unlock running. */
+  emergency?: boolean;
 }
 
 export interface PersonVisualGround {
@@ -52,6 +35,9 @@ export interface PersonVisualGround {
   heightAt(x: number, z: number): number;
   /** Whether a visual position is dry, gentle ground a character may stand on. */
   isStandable(x: number, z: number): boolean;
+  safeSegment?(a: Vec2, b: Vec2): boolean;
+  detour?(a: Vec2, b: Vec2): Vec2[];
+
 }
 
 export interface PersonVisualState {
@@ -66,9 +52,9 @@ export interface PersonVisualState {
   originZ: number;
   destinationX: number;
   destinationZ: number;
-  /** 0..1 along the current journey polyline. */
+  /** Arrival flag (0 while navigating, 1 on arrival). */
   progress: number;
-  /** Bounded presentation duration for the current journey, in real seconds. */
+  /** Nominal physical travel time, for inspection only; never a catch-up deadline. */
   duration: number;
   /** Smoothed facing in radians, matching the direction of visual travel. */
   facing: number;
@@ -84,12 +70,12 @@ export interface PersonVisualState {
   path: Vec2[];
   lastGroundX: number;
   lastGroundZ: number;
-  /** Real seconds accumulated since the simulation last moved this person. */
-  sinceRetarget: number;
-  /** Smoothed real-time length of one simulation month, as observed for this person. */
-  monthSeconds: number;
-  /** Authoritative moves seen so far; the pace estimate is only trusted after the first. */
-  retargets: number;
+  velocityX: number;
+  velocityZ: number;
+  maxPhysicalSpeed: number;
+  waypoint: number;
+  blocked: boolean;
+  retrySeconds: number;
   /** Facing the character is easing toward, held after movement stops. */
   desiredFacing: number;
   lastFrame: number;
@@ -98,6 +84,7 @@ export interface PersonVisualState {
 export class PeopleVisualStateStore {
   private readonly states = new Map<string, PersonVisualState>();
   private frame = 0;
+  private readonly buckets = new Map<string, PersonVisualState[]>();
 
   get size(): number {
     return this.states.size;
@@ -109,6 +96,12 @@ export class PeopleVisualStateStore {
 
   beginFrame(): void {
     this.frame += 1;
+    this.buckets.clear();
+    for (const state of this.states.values()) {
+      const key = `${Math.floor(state.x)}:${Math.floor(state.z)}`;
+      const bucket = this.buckets.get(key) ?? [];
+      bucket.push({ ...state }); this.buckets.set(key, bucket);
+    }
   }
 
   /** Drops visual state for anyone not resolved during the current frame (dead or off-budget). */
@@ -121,7 +114,7 @@ export class PeopleVisualStateStore {
   }
 
   clear(): void {
-    this.states.clear();
+    this.states.clear(); this.buckets.clear();
   }
 
   resolve(personId: string, target: PersonVisualTarget, deltaSeconds: number, ground: PersonVisualGround): PersonVisualState {
@@ -133,14 +126,13 @@ export class PeopleVisualStateStore {
     state.localMove = target.localMove ?? false;
     state.smoothTravel = target.smoothTravel ?? false;
     state.snapped = !existing;
-    state.sinceRetarget += Math.max(0, deltaSeconds);
+    const cap = target.emergency ? HUMAN_MAX_RUN_SPEED : HUMAN_MAX_WALK_SPEED;
+    const requestedSpeed = target.localSpeed ?? (target.emergency ? cap : HUMAN_WALK_SPEED);
+    state.maxPhysicalSpeed = Math.min(cap, Math.max(0.1, Number.isFinite(requestedSpeed) ? requestedSpeed : HUMAN_WALK_SPEED));
 
     const moved = Math.hypot(target.destination.x - state.destinationX, target.destination.z - state.destinationZ);
     if (moved > RETARGET_EPSILON) {
-      const jump = Math.hypot(target.destination.x - state.x, target.destination.z - state.z);
-      if (jump > SNAP_DISTANCE) this.reset(state, target.destination, ground);
-      else this.retarget(state, target);
-      if (!target.localMove) state.sinceRetarget = 0;
+      this.retarget(state, target);
     }
 
     this.advance(state, deltaSeconds, target.restFacing, ground);
@@ -158,7 +150,7 @@ export class PeopleVisualStateStore {
       destinationX: at.x,
       destinationZ: at.z,
       progress: 1,
-      duration: MIN_JOURNEY_SECONDS,
+      duration: 0,
       facing: 0,
       speed: 0,
       traveling: false,
@@ -169,115 +161,107 @@ export class PeopleVisualStateStore {
       path: [{ x: at.x, z: at.z }],
       lastGroundX: at.x,
       lastGroundZ: at.z,
-      sinceRetarget: 0,
-      monthSeconds: 0,
-      retargets: 0,
+      velocityX: 0, velocityZ: 0, maxPhysicalSpeed: HUMAN_WALK_SPEED,
+      waypoint: 1, blocked: false, retrySeconds: 0,
       desiredFacing: 0,
       lastFrame: this.frame,
     };
   }
 
-  private reset(state: PersonVisualState, at: Vec2, ground: PersonVisualGround): void {
-    state.x = at.x;
-    state.z = at.z;
-    state.originX = at.x;
-    state.originZ = at.z;
-    state.destinationX = at.x;
-    state.destinationZ = at.z;
-    state.path = [{ x: at.x, z: at.z }];
-    state.progress = 1;
-    state.speed = 0;
-    state.traveling = false;
-    state.snapped = true;
-    state.footY = ground.heightAt(at.x, at.z);
-    if (ground.isStandable(at.x, at.z)) {
-      state.lastGroundX = at.x;
-      state.lastGroundZ = at.z;
-    }
-  }
-
-  /**
-   * Smoothly aims the character at a new authoritative position, starting from wherever it is
-   * currently drawn. Route waypoints the simulation already consumed become the spine of the
-   * journey, so the walk follows roads and settlement paths rather than cutting through houses.
-   *
-   * The duration is bounded by an unhurried travel speed *and* by the observed real-time length of
-   * a simulation month. GODBOX runs history at anything from 0.3 to 50 months per second; a
-   * journey that outlasts the next authoritative update would only ever fall further behind.
-   *
-   * This month estimate is only a catch-up budget for authoritative retargets. It is never treated
-   * as a human day clock. Renderer-owned local activity uses wall-clock seconds and does not train
-   * or consume this estimator.
-   */
   private retarget(state: PersonVisualState, target: PersonVisualTarget): void {
-    const from = { x: state.x, z: state.z };
-    const path = routeAwarePath(from, target.destination, target.waypoints, target.waypointIndex);
-    const length = polylineLength(path);
-    const lag = Math.hypot(target.destination.x - state.x, target.destination.z - state.z);
-    const catchup = lag > CATCHUP_DISTANCE ? Math.max(0.35, CATCHUP_DISTANCE / lag) : 1;
-    const observed = state.sinceRetarget > 0
-      ? (state.monthSeconds > 0 ? state.monthSeconds * 0.6 + state.sinceRetarget * 0.4 : state.sinceRetarget)
-      : state.monthSeconds;
-    if (!target.localMove) {
-      state.monthSeconds = observed;
-      state.retargets += 1;
-    }
-    const unhurried = length / VISUAL_TRAVEL_SPEED;
-    // The first move has no pace sample yet; walking it out beats guessing from a single frame.
-    const budget = state.retargets > 1 && observed > 0 ? Math.min(unhurried, observed) : unhurried;
-    state.path = path;
-    state.originX = from.x;
-    state.originZ = from.z;
-    state.destinationX = target.destination.x;
-    state.destinationZ = target.destination.z;
-    state.duration = Math.min(MAX_JOURNEY_SECONDS, Math.max(MIN_JOURNEY_SECONDS, budget)) * catchup;
-    if (target.localMove) state.duration = Math.max(0.6, length / (target.localSpeed ?? 0.3));
-    state.progress = length > 0.0001 ? 0 : 1;
-    state.traveling = state.progress < 1;
+    state.path = routeAwarePath(state, target.destination, target.waypoints, target.waypointIndex);
+    state.originX = state.x; state.originZ = state.z;
+    state.destinationX = target.destination.x; state.destinationZ = target.destination.z;
+    state.duration = polylineLength(state.path) / state.maxPhysicalSpeed;
+    state.progress = 0; state.waypoint = 1;
+    state.traveling = true; state.blocked = false; state.retrySeconds = 0;
   }
 
   private advance(state: PersonVisualState, deltaSeconds: number, restFacing: number | undefined, ground: PersonVisualGround): void {
-    const previousX = state.x;
-    const previousZ = state.z;
-    // Turn on planted feet before a short local step, then continue turning while moving.
-    if (state.localMove && state.progress === 0 && state.path.length > 1) {
-      const next = state.path[1]!;
-      state.desiredFacing = Math.atan2(next.x - state.x, next.z - state.z);
-      if (Math.cos(state.desiredFacing - state.facing) < 0.8) {
-        state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * Math.max(0, deltaSeconds));
-        state.speed = 0;
-        return;
+    // Tab stalls cannot become giant physical steps. Substeps validate the entire corridor.
+    const dt = Number.isFinite(deltaSeconds) ? Math.min(0.1, Math.max(0, deltaSeconds)) : 0;
+    const previousX = state.x, previousZ = state.z;
+    state.retrySeconds = Math.max(0, state.retrySeconds - dt);
+    let next = state.path[state.waypoint];
+    const distanceToNext = next ? Math.hypot(next.x - state.x, next.z - state.z) : 0;
+    const corridorEnd = next && distanceToNext > 3 ? { x: state.x + (next.x - state.x) * 3 / distanceToNext,
+      z: state.z + (next.z - state.z) * 3 / distanceToNext } : next;
+    if (corridorEnd && state.retrySeconds === 0 && !safeGroundSegment(state, corridorEnd, ground)) {
+      const route = ground.detour?.(state, corridorEnd) ?? [];
+      if (route.length) {
+        state.path.splice(state.waypoint, distanceToNext > 3 ? 0 : 1, ...route);
+        next = state.path[state.waypoint]; state.blocked = false;
+      } else {
+        state.blocked = true; state.retrySeconds = 0.8;
       }
     }
-    if (state.progress < 1 && deltaSeconds > 0) {
-      state.progress = Math.min(1, state.progress + deltaSeconds / Math.max(0.0001, state.duration));
-      const point = samplePolyline(state.path, state.localMove || state.smoothTravel ? easedLocalProgress(state.progress)
-        : state.arrivalEase ? easedArrivalProgress(state.progress) : state.progress);
-      state.x = point.x;
-      state.z = point.z;
+    if (corridorEnd && state.retrySeconds === 0 && safeGroundSegment(state, corridorEnd, ground)) state.blocked = false;
+    if (next && !state.blocked) {
+      const dx = next.x - state.x, dz = next.z - state.z, distance = Math.hypot(dx, dz);
+      state.desiredFacing = Math.atan2(dx, dz);
+      state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * dt);
+      const grade = distance > 0.001 ? (ground.heightAt(next.x, next.z) - state.footY) / distance : 0;
+      const slopeSpeed = state.maxPhysicalSpeed / (1 + Math.max(0, grade) * 0.7 + Math.max(0, -grade) * 0.3);
+      const braking = Math.sqrt(2 * HUMAN_BRAKING * distance);
+      const alignment = Math.cos(state.desiredFacing - state.facing);
+      const desiredSpeed = alignment > 0.8 ? Math.min(slopeSpeed, braking) : 0;
+      const oldSpeed = Math.hypot(state.velocityX, state.velocityZ);
+      const speed = Math.max(0, Math.min(desiredSpeed, oldSpeed + HUMAN_ACCELERATION * dt));
+      const step = Math.min(distance, speed * dt, state.maxPhysicalSpeed * dt);
+      const proposed = { x: state.x + dx / (distance || 1) * step, z: state.z + dz / (distance || 1) * step };
+      const accepted = this.avoidPeers(state, proposed, dt, ground);
+      if (safeGroundSegment(state, accepted, ground)) {
+        state.x = accepted.x; state.z = accepted.z;
+      } else { state.blocked = true; state.retrySeconds = 0; }
+      if (Math.hypot(next.x - state.x, next.z - state.z) < 0.00001) state.waypoint++;
+    } else if (restFacing !== undefined) {
+      state.desiredFacing = restFacing;
+      state.facing = turnToward(state.facing, restFacing, TURN_RATE * dt);
     }
-    state.traveling = state.progress < 1;
-
-    if (!ground.isStandable(state.x, state.z)) {
-      // Never leave a character half-submerged or pinned to a cliff: fall back to the last
-      // position the rendered terrain actually accepted.
-      state.x = state.lastGroundX;
-      state.z = state.lastGroundZ;
-    } else {
-      state.lastGroundX = state.x;
-      state.lastGroundZ = state.z;
-    }
+    state.velocityX = dt > 0 ? (state.x - previousX) / dt : 0;
+    state.velocityZ = dt > 0 ? (state.z - previousZ) / dt : 0;
+    state.speed = Math.hypot(state.velocityX, state.velocityZ);
+    state.traveling = state.waypoint < state.path.length && !state.blocked;
+    state.progress = state.waypoint >= state.path.length ? 1 : 0;
     state.footY = ground.heightAt(state.x, state.z);
-
-    const stepX = state.x - previousX;
-    const stepZ = state.z - previousZ;
-    const step = Math.hypot(stepX, stepZ);
-    state.speed = deltaSeconds > 0 ? step / deltaSeconds : 0;
-    if (state.speed > WALK_SPEED_THRESHOLD) state.desiredFacing = Math.atan2(stepX, stepZ);
-    else if (restFacing !== undefined) state.desiredFacing = restFacing;
-    // Keep easing after the journey ends, so a character never freezes mid-turn.
-    state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * Math.max(0, deltaSeconds));
+    state.lastGroundX = state.x; state.lastGroundZ = state.z;
   }
+
+  private avoidPeers(state: PersonVisualState, proposed: Vec2, dt: number, ground: PersonVisualGround): Vec2 {
+    const peers = this.nearby(state);
+    const clear = (point: Vec2) => peers.every(peer => {
+      const separation = Math.hypot(state.x - peer.x, state.z - peer.z);
+      // Pre-existing spawn overlap can unwind but cannot get worse.
+      return segmentDistance(state, point, peer) >= Math.min(HUMAN_RADIUS * 2 + peer.maxPhysicalSpeed * dt, separation) - 1e-7;
+    });
+    let threatened = false;
+    for (const peer of peers) {
+      if (state.id < peer.id && Math.hypot(peer.velocityX, peer.velocityZ) > 0.02) continue;
+      const predicted = { x: peer.x + peer.velocityX * 0.5, z: peer.z + peer.velocityZ * 0.5 };
+      const ahead = { x: state.x + (proposed.x - state.x) * 20, z: state.z + (proposed.z - state.z) * 20 };
+      if (segmentDistance(state, ahead, predicted) < 0.23) threatened = true;
+    }
+    if (!threatened && clear(proposed)) return proposed;
+    const dx = proposed.x - state.x, dz = proposed.z - state.z;
+    const length = Math.hypot(dx, dz);
+    if (length > 0) for (const angle of [0.65, 1.1, 1.5, -0.65, -1.1]) {
+      const c = Math.cos(angle), s = Math.sin(angle);
+      const point = { x: state.x + dx * c + dz * s, z: state.z - dx * s + dz * c };
+      if (Math.hypot(point.x - state.x, point.z - state.z) <= state.maxPhysicalSpeed * dt + 1e-9
+        && clear(point) && safeGroundSegment(state, point, ground)) return point;
+    }
+    return clear(proposed) ? proposed : { x: state.x, z: state.z };
+  }
+
+  private nearby(state: PersonVisualState): PersonVisualState[] {
+    const peers: PersonVisualState[] = [];
+    const bx = Math.floor(state.x), bz = Math.floor(state.z);
+    for (let x = bx - 1; x <= bx + 1; x++) for (let z = bz - 1; z <= bz + 1; z++) {
+      for (const peer of this.buckets.get(`${x}:${z}`) ?? []) if (peer.id !== state.id) peers.push(peer);
+    }
+    return peers;
+  }
+
 }
 
 /** Symmetric acceleration/deceleration, with a constant-speed middle half. */
@@ -352,4 +336,29 @@ export function turnToward(current: number, desired: number, maxStep: number): n
   if (delta < -Math.PI) delta += Math.PI * 2;
   if (maxStep <= 0) return current;
   return current + Math.max(-maxStep, Math.min(maxStep, delta));
+}
+
+/** Samples rendered grade/water; optional structure callback uses exact swept rectangles. */
+export function safeGroundSegment(a: Vec2, b: Vec2, ground: PersonVisualGround): boolean {
+  if (ground.safeSegment && !ground.safeSegment(a, b)) return false;
+  const distance = Math.hypot(b.x - a.x, b.z - a.z);
+  // Long authority routes are validated incrementally, without unbounded per-frame sampling.
+  const samples = Math.max(1, Math.ceil(Math.min(distance, 3) / 0.06));
+  const fraction = distance > 3 ? 3 / distance : 1;
+  let height = ground.heightAt(a.x, a.z);
+  for (let i = 1; i <= samples; i++) {
+    const t = i / samples * fraction;
+    const x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
+    const nextHeight = ground.heightAt(x, z);
+    if (!ground.isStandable(x, z) || !Number.isFinite(nextHeight)
+      || Math.abs(nextHeight - height) > Math.max(0.015, distance * fraction / samples * 0.84)) return false;
+    height = nextHeight;
+  }
+  return true;
+}
+
+function segmentDistance(a: Vec2, b: Vec2, p: Vec2): number {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(p.x - a.x - t * dx, p.z - a.z - t * dz);
 }

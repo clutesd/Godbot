@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PeopleVisualStateStore,
   RUN_SPEED_THRESHOLD,
-  SNAP_DISTANCE,
+  HUMAN_MAX_WALK_SPEED,
   polylineLength,
   routeAwarePath,
   samplePolyline,
@@ -76,7 +76,7 @@ describe('Visual continuity for represented people', () => {
     expect(travelled.x).toBeLessThan(4);
     expect(travelled.snapped).toBe(false);
 
-    for (let frame = 0; frame < 400; frame += 1) travelled = step(store, 'person-1', { x: 4, z: 0 }, 0.05);
+    for (let frame = 0; frame < 900; frame += 1) travelled = step(store, 'person-1', { x: 4, z: 0 }, 0.05);
     expect(travelled.x).toBeCloseTo(4, 3);
     expect(travelled.traveling).toBe(false);
   });
@@ -100,18 +100,18 @@ describe('Visual continuity for represented people', () => {
     expect(retargeted.destinationZ).toBe(6);
 
     let state = retargeted;
-    for (let frame = 0; frame < 400; frame += 1) state = step(store, 'person-1', { x: 6, z: 6 }, 0.05);
+    for (let frame = 0; frame < 900; frame += 1) state = step(store, 'person-1', { x: 6, z: 6 }, 0.05);
     expect(state.x).toBeCloseTo(6, 3);
     expect(state.z).toBeCloseTo(6, 3);
   });
 
-  it('resets rather than dragging a character across an impossible jump', () => {
+  it('keeps an absurd destination change physically bounded', () => {
     const store = new PeopleVisualStateStore();
     step(store, 'person-1', { x: 0, z: 0 }, 0.016);
-    const jumped = step(store, 'person-1', { x: SNAP_DISTANCE + 5, z: 0 }, 0.05);
-    expect(jumped.snapped).toBe(true);
-    expect(jumped.x).toBeCloseTo(SNAP_DISTANCE + 5, 5);
-    expect(jumped.traveling).toBe(false);
+    const jumped = step(store, 'person-1', { x: 200, z: 0 }, 0.05);
+    expect(jumped.snapped).toBe(false);
+    expect(jumped.x).toBeLessThanOrEqual(HUMAN_MAX_WALK_SPEED * 0.05);
+    expect(jumped.traveling).toBe(true);
   });
 
   it('anchors the feet on rendered terrain and never leaves a character in water', () => {
@@ -140,14 +140,14 @@ describe('Visual continuity for represented people', () => {
     expect(Math.abs(Math.abs(state.facing) - Math.PI)).toBeLessThan(0.2);
   });
 
-  it('compresses long journeys into bounded, legible motion', () => {
+  it('allows long journeys to take physically necessary time', () => {
     const store = new PeopleVisualStateStore();
     step(store, 'person-1', { x: 0, z: 0 }, 0.016);
     step(store, 'person-1', { x: 12, z: 0 }, 1);
     const state = store.get('person-1')!;
     expect(state.duration).toBeGreaterThan(0);
-    expect(state.duration).toBeLessThanOrEqual(8);
-    expect(12 / state.duration).toBeGreaterThan(RUN_SPEED_THRESHOLD * 0.5);
+    expect(state.duration).toBeGreaterThanOrEqual(12 / HUMAN_MAX_WALK_SPEED);
+    expect(state.speed).toBeLessThanOrEqual(HUMAN_MAX_WALK_SPEED);
   });
 
   it('drops visual state for people who stop being represented', () => {
@@ -199,7 +199,7 @@ describe('Route-aware visual travel', () => {
     step(store, 'person-1', { x: 0, z: 0 }, 0.016);
     let state = step(store, 'person-1', { x: 6, z: 6 }, 0.5, flatGround, waypoints);
     let sawCorridor = false;
-    for (let frame = 0; frame < 200 && state.traveling; frame += 1) {
+    for (let frame = 0; frame < 800 && state.traveling; frame += 1) {
       state = step(store, 'person-1', { x: 6, z: 6 }, 0.05, flatGround, waypoints);
       if (state.x < 1 && state.z > 4) sawCorridor = true;
     }

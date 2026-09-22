@@ -1,3 +1,6 @@
+import { StructureNavigation } from '../sim/people/StructureNavigation';
+import { CameraDirector, type CameraSubjectPresentation } from '../render/CameraDirector';
+import { Historian } from '../historian/Historian';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Simulation } from '../sim/Simulation';
@@ -38,7 +41,10 @@ state.settlements = [settlement]; settlement.structurePlots = [];
 settlement.resources = { food: 20, wood: 20, minerals: 20, goods: 20, wealth: 20 };
 settlement.agriculture = { month: 6, labour: 5, yieldPerWorker: 2, production: 10, irrigation: 0.6 };
 const surface = new TerrainSurface(world), groundY = surface.heightAt(0, 0);
-const ground = { heightAt: () => groundY, isStandable: () => true };
+const navigation = new StructureNavigation();
+const ground = { heightAt: () => groundY, isStandable: () => true,
+  safeSegment: (a: Vec2, b: Vec2) => navigation.clear(a, b),
+  detour: (a: Vec2, b: Vec2) => navigation.detour(a, b, (a, b) => navigation.clear(a, b)) };
 const scene = new THREE.Scene(); scene.background = new THREE.Color('#b3bfac');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(2, devicePixelRatio)); renderer.shadowMap.enabled = true;
@@ -125,6 +131,23 @@ const people: Person[] = stations.flatMap((station, index) => Array.from({ lengt
   return p;
 }));
 state.people = people; resources.bindWorkers(people);
+state.socialRelationships = stations.map((_, i) => ({ id: `review-tie-${i}`, a: `life-${i}-0`, b: `life-${i}-1`,
+  kind: i === 7 ? 'mentor' : i === 0 ? 'family' : i === 4 ? 'colleague' : 'friend',
+  strength: 0.85, trust: 0.9, formedMonth: 0, lastContactMonth: 6 }));
+navigation.set(structures);
+settlement.structurePlots.push(...structures.map(s => ({ id: s.key, worldX: s.worldX, worldZ: s.worldZ,
+  width: s.width, depth: s.depth, height: 1, radius: Math.hypot(s.width, s.depth) / 2, condition: 1, foundedMonth: 0 })));
+const cameraSubject = (id: string): CameraSubjectPresentation | undefined => {
+  const v = visuals.get(id), local = locals.get(id), encounter = local?.encounter;
+  if (!v) return undefined;
+  return { x: v.x, z: v.z, footY: v.footY,
+    ...(local ? { action: { personId: id, actionKind: local.action, authoritativeActivity: peers.get(id)!.activity,
+      sourceAuthority: 'review fixture', targetId: local.partnerId ?? id, targetKind: 'local', interactionAnchor: local.focus,
+      locomotionTarget: local.destination, phase: local.phase, phaseProgress: 0, activeTool: 'none', contactStrength: 0 } } : {}),
+    ...(encounter && locals.get(encounter.partnerId)?.partnerId === id ? { partnerId: encounter.partnerId,
+      socialMeaning: encounter.relationshipKind ? 0.9 : 0.3, socialTone: encounter.tone } : {}) };
+};
+const director = new CameraDirector(camera, simulation.config, new Historian(simulation.config), cameraSubject, () => people.map(p => p.id));
 const originalPeople = structuredClone(people), peers = new Map(people.map(p => [p.id, p]));
 let groups = buildSocialGroups(people);
 const positions = new Map<string, Vec2>();
@@ -143,10 +166,11 @@ const skin = new THREE.Color('#d3a477'), loadColour = new THREE.Color('#8b6840')
 const transform = (mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scale: number, pitch: number, yaw: number) => {
   matrix.position.set(x, y, z); matrix.rotation.set(pitch, yaw, 0); matrix.scale.setScalar(scale); matrix.updateMatrix(); mesh.setMatrixAt(index, matrix.matrix);
 };
+let calendarSeconds = 0, calendarMonth = 0;
 let elapsed = 0, previous = performance.now(), paused = false, frames = 0, emergency = false, holdStarted = performance.now(), contactLatch = false;
-const authority = () => JSON.stringify({ people, settlement, ledger: resourceWorkAssignmentsForWorld(world) });
+const authority = () => JSON.stringify({ people, settlement, relationships: state.socialRelationships, ledger: resourceWorkAssignmentsForWorld(world) });
 let heldAuthority = authority();
-element('hold').onclick = () => { holdStarted = performance.now(); heldAuthority = authority(); paused = false; element('pause').textContent = 'Pause presentation'; };
+element('hold').onclick = () => { element<HTMLSelectElement>('rate').value = '0'; holdStarted = performance.now(); heldAuthority = authority(); paused = false; element('pause').textContent = 'Pause presentation'; };
 element('pause').onclick = () => { paused = !paused; element('pause').textContent = paused ? 'Resume presentation' : 'Pause presentation'; };
 element('emergency').onclick = () => {
   emergency = true;
@@ -172,6 +196,16 @@ addEventListener('resize', resize); resize();
 const projection = new THREE.Vector3();
 function frame(now: number): void {
   const dt = paused ? 0 : Math.min(0.05, (now - previous) / 1000); previous = now; elapsed += dt;
+  const rate = Number(element<HTMLSelectElement>('rate').value);
+  calendarSeconds += dt * rate;
+  if (Math.floor(calendarSeconds) !== calendarMonth) {
+    calendarMonth = Math.floor(calendarSeconds);
+    // Curated authority snapshots stress monthly retargeting without destroying the work fixture.
+    for (const [i, p] of people.entries()) if (![3, 10, 11].includes(Math.floor(i / 3))) {
+      p.position.x = originalPeople[i]!.position.x + Math.sin(calendarMonth * 0.7 + i) * 0.25;
+    }
+    heldAuthority = authority();
+  }
   locals.beginFrame(); visuals.beginFrame(); physical.beginFrame(people, [settlement]); resourceRigs.beginFrame(); physicalRigs.beginFrame();
   for (const p of people) { const v = visuals.get(p.id) ?? p.position; const at = positions.get(p.id);
     if (at) { at.x = v.x; at.z = v.z; } else positions.set(p.id, { x: v.x, z: v.z }); }
@@ -184,6 +218,7 @@ function frame(now: number): void {
     let base = grouped;
     for (const structure of structures) base = { ...clearActivityStructure(base, structure, index), restFacing: grouped.restFacing };
     const local = locals.resolve(person, { base, group, visual: visuals.get(person.id), people: peers, visualFor: id => positions.get(id),
+      relationshipFor: (a, b) => state.socialRelationships?.find(r => r.a === a && r.b === b || r.a === b && r.b === a),
       structures, revision: 1, safeSegment: (a, b) => resources.safeSegment(a, b), blocked: !!resource || !!worker || !!workInterruption(person) }, dt);
     const destination = resource ? resourceWorkAlternateAnchor(resource.site.profile, resource.variation, elapsed) ? resource.station.alternate : resource.station.anchor
       : worker?.action.locomotionTarget ?? local?.destination ?? base;
@@ -232,7 +267,9 @@ function frame(now: number): void {
   updateConstructionScaffold(scaffold, assembly.plan, assembly.plan.progress ?? 0.3, dt);
   updateConstructionWorksite(dressing, 0.3, false, physical.materialInTransit(placement.key));
   for (const mesh of [bodies, heads, arms, legs, targets, cargo]) { mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; }
-  controls.update(); renderer.render(scene, camera);
+  if (element<HTMLInputElement>('autocamera').checked) director.update(dt, elapsed, state, ground.heightAt);
+  else controls.update();
+  renderer.render(scene, camera);
   for (const label of labels) { projection.copy(label.at).project(camera); label.node.style.left = `${(projection.x * 0.5 + 0.5) * innerWidth}px`;
     label.node.style.top = `${(-projection.y * 0.5 + 0.5) * innerHeight}px`; label.node.hidden = projection.z > 1; }
   if (frames++ % 20 === 0) {
@@ -240,6 +277,8 @@ function frame(now: number): void {
     element('status').textContent = `${held.toFixed(1)} / 60 real seconds${held >= 60 ? ' · hold complete' : ''} · ${unchanged ? 'authority unchanged' : 'AUTHORITY CHANGED'}\n${moving} moving · ${working} acting · ${people.length - moving} stationary · ${renderer.info.render.calls} draws`;
     const selected = element<HTMLSelectElement>('focus').value, tracked = people[(selected === 'all' ? 4 : Number(selected)) * 3]!;
     const action = locals.get(tracked.id), work = physical.inspect(tracked.id);
+    const v = visuals.get(tracked.id);
+    element('physics').textContent = v ? `speed ${v.speed.toFixed(3)} / ${v.maxPhysicalSpeed.toFixed(2)} u/s ? foot ${v.footY.toFixed(3)} ? ${v.blocked ? 'blocked' : 'clear'} ? waypoint ${v.waypoint}/${v.path.length} ? camera ${director.current()?.id ?? 'manual'}` : '';
     element('action').textContent = `${tracked.name}: ${action ? `${action.action} · ${action.phase}${action.partnerId ? ` · with ${peers.get(action.partnerId)?.name}` : ''}` : work ? `${work.actionKind} · ${work.phase}` : tracked.activity}`;
   }
   requestAnimationFrame(frame);

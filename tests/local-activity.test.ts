@@ -588,7 +588,7 @@ describe('renderer-owned local activity', () => {
     }
   });
 
-  it('turns before a short step, eases in and out, and does not train the month estimator', () => {
+  it('turns before a short step, eases in and out, without a month estimator', () => {
     const store = new PeopleVisualStateStore();
     store.resolve('walker', { destination: { x: 0, z: 0 } }, 0, ground);
     const target = { destination: { x: 0.6, z: 0 }, localMove: true, localSpeed: 0.3 };
@@ -599,9 +599,7 @@ describe('renderer-owned local activity', () => {
     expect(speeds[0]).toBeLessThan(Math.max(...speeds) / 4);
     expect(speeds.at(-1)).toBeLessThan(Math.max(...speeds) / 4);
     expect(store.get('walker')!.x).toBeCloseTo(0.6);
-    expect(store.get('walker')!.retargets).toBe(0);
-    expect(store.get('walker')!.monthSeconds).toBe(0);
-    expect(store.get('walker')!.sinceRetarget).toBeCloseTo(3.016);
+    expect(Math.max(...speeds)).toBeLessThanOrEqual(0.3 + 1e-8);
   });
 
   it('retries after the ground guard stops a journey instead of freezing in approach', () => {

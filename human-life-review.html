@@ -6,9 +6,11 @@ body{margin:0;background:#96a083;color:#f5ead7;font:14px system-ui}canvas{displa
 <aside><h1>Human life review</h1><p>36 residents. Twelve activity areas. Production local activity, locomotion, animation, farming, resource and construction systems, with the instanced GODBOX body proportions.</p>
 <label for="focus">Camera subject</label><select id="focus"><option value="all">Whole settlement</option></select>
 <label for="distance">Camera distance</label><select id="distance"><option value="normal">Normal street shot</option><option value="close">Close inspection</option></select>
+<label for="rate">Historical destination cadence</label><select id="rate"><option value="0">Frozen authority</option><option value="2">Documentary ? 2 months / second</option><option value="100">Accelerated ? 100 months / second</option></select>
+<label><input id="autocamera" type="checkbox"> Documentary camera</label>
 <button id="hold">Hold authority for 60 seconds</button><button id="pause">Pause presentation</button>
 <button id="emergency">Emergency override</button><button id="restore">Restore activities</button>
 <label><input id="targets" type="checkbox"> Show local targets</label><output id="status">Preparing town…</output>
-<p id="action"></p><p><a href="/">Simulation</a> · <a href="/construction-review.html">Construction detail</a></p>
+<p id="action"></p><p id="physics"></p><p><a href="/">Simulation</a> · <a href="/construction-review.html">Construction detail</a></p>
 </aside><footer>Drag to orbit · scroll to zoom · authority stays constant until an override button is pressed</footer>
 <script type="module" src="/src/dev/humanLifeReview.ts"></script></body></html>

@@ -133,6 +133,7 @@ export interface SocialEncounterPresentation {
   strength: number;
   trust: number;
   beat: number;
+  pairedOffset?: Vec2;
 };
 export interface LocalActivityState {
   authority: string;
@@ -153,6 +154,8 @@ export interface LocalActivityState {
   /** Documentary slice sequence retained across ordinary semantic hand-offs. */
   sample: number;
   seconds: number;
+  sceneSeconds?: number;
+  socialCooldown?: number;
   hold: number;
   partnerId?: string;
   /** Multi-beat presentation-only social encounter derived from real relationship authority. */
@@ -164,9 +167,14 @@ export interface LocalActivityState {
 export class LocalActivityPresentation {
   private readonly states = new Map<string, LocalActivityState>();
   private frame = 0;
+  private readonly previousStates = new Map<string, LocalActivityState>();
   get size(): number { return this.states.size; }
   get(id: string): Readonly<LocalActivityState> | undefined { return this.states.get(id); }
-  beginFrame(): void { this.frame++; }
+  beginFrame(): void {
+    this.frame++; this.previousStates.clear();
+    for (const [id, state] of this.states) this.previousStates.set(id, { ...state,
+      destination: { ...state.destination }, encounter: state.encounter ? { ...state.encounter } : undefined });
+  }
   prune(): void { for (const [id, state] of this.states) if (state.seen !== this.frame) this.states.delete(id); }
   clear(): void { this.states.clear(); }
 
@@ -201,13 +209,16 @@ export class LocalActivityPresentation {
     let state = this.states.get(person.id);
     const baseDrift = state ? Math.hypot(state.base.x - context.base.x, state.base.z - context.base.z) : Infinity;
     if (!state || state.authority !== authority || state.revision !== context.revision
-      || baseDrift > LOCAL_ACTIVITY_REANCHOR_LIMIT) {
+      || baseDrift > LOCAL_ACTIVITY_REANCHOR_LIMIT && !bounded(person, state.destination)) {
       if (!bounded(person, context.base) || !localSegmentSafe(context.base, context.base, context)) {
         this.states.delete(person.id);
         return undefined;
       }
       const previous = state;
-      state = this.create(person, context, authority);
+      const stagedBase = delta > 0 && previous?.revision === context.revision && context.visual && bounded(person, context.visual)
+        && localSegmentSafe(context.visual, context.visual, context)
+        ? { x: context.visual.x, z: context.visual.z, restFacing: context.visual.facing } : context.base;
+      state = this.create(person, { ...context, base: stagedBase }, authority);
       // "Arrive" is a first-appearance beat, not a tax on every monthly routine hand-off. If this
       // resident already had a local life before a commute/context change, the retained route still
       // supplies the approach. Once oriented, enter a deterministic *different slice* of the
@@ -233,6 +244,8 @@ export class LocalActivityPresentation {
       this.reanchor(person, context, state, hysteresisBase(state.base, context.base));
     }
     state.seen = this.frame;
+    state.sceneSeconds = (state.sceneSeconds ?? 0) + Math.max(0, delta);
+    state.socialCooldown = Math.max(0, (state.socialCooldown ?? 0) - delta);
     // Personal space is a live constraint, not only a target-selection check. If an uninvolved
     // resident drifts into this destination after it was chosen, step to another valid frontage
     // point rather than waiting on a future routine transition to resolve the overlap.
@@ -243,6 +256,22 @@ export class LocalActivityPresentation {
         state.destination = adjusted;
         state.seconds = 0;
         state.phase = 'approach';
+      }
+    }
+    // Invitations are renderer-owned and reciprocal. A resident cannot belong to two scenes.
+    if (!state.encounter && !state.socialCooldown) {
+      for (const id of context.group?.members ?? []) {
+        const invitation = this.previousStates.get(id);
+        const peer = context.people.get(id);
+        if (!peer || invitation?.encounter?.partnerId !== person.id || !canInteract(person, peer)) continue;
+        state.encounter = buildSocialEncounter(person, peer, context.relationshipFor?.(person.id, peer.id));
+        state.encounter.beat = invitation.encounter.beat;
+        state.partnerId = peer.id; state.seconds = 0;
+        applySocialBeat(person, peer, context, state);
+        // The invited listener holds their place while the initiator approaches.
+        state.destination = { x: context.visual?.x ?? state.base.x, z: context.visual?.z ?? state.base.z };
+        state.restFacing = facingTarget(state.destination, context.visualFor?.(peer.id) ?? peer.position);
+        break;
       }
     }
     const visual = context.visual;
@@ -257,7 +286,26 @@ export class LocalActivityPresentation {
     const oriented = arrived && atInteraction(visual, state.destination, visual.facing, state.restFacing, visual.speed);
     state.phase = !arrived ? 'approach' : !oriented ? 'orient' : state.action === 'pause' ? 'pause' : 'action';
     // Time spent walking/turning cannot consume the interaction it is approaching.
-    if (oriented) state.seconds += Math.max(0, delta);
+    const partnerState = state.partnerId ? this.previousStates.get(state.partnerId) : undefined;
+    if (state.encounter && partnerState && !partnerState.encounter && partnerState.lastPartnerId === person.id) {
+      state.socialCooldown = 2; state.lastPartnerId = state.partnerId; state.encounter = undefined; state.partnerId = undefined;
+      state.animation = 'idle'; state.action = 'quiet-departure'; state.seconds = 0; state.hold = 1.8;
+    }
+    if (state.encounter && ((partnerState?.partnerId && partnerState.partnerId !== person.id)
+      || (state.sceneSeconds ?? 0) > 12 && state.phase === 'approach')) {
+      state.socialCooldown = 2; state.lastPartnerId = state.partnerId; state.encounter = undefined; state.partnerId = undefined;
+      state.animation = 'idle'; state.action = 'observe'; state.seconds = state.hold;
+    }
+    const reciprocal = partnerState?.partnerId === person.id;
+    const partnerReady = reciprocal && (partnerState.phase === 'action' || partnerState.phase === 'pause');
+    if (oriented && (!state.encounter || partnerReady)) state.seconds += Math.max(0, delta);
+    if (state.encounter && reciprocal && partnerState.encounter
+      && state.encounter.beat < partnerState.encounter.beat) {
+      state.encounter.beat = Math.max(state.encounter.beat, partnerState.encounter.beat);
+      state.encounter.pairedOffset = partnerState.encounter.pairedOffset;
+      const peer = context.people.get(state.partnerId!);
+      if (peer) { state.seconds = 0; applySocialBeat(person, peer, context, state); }
+    }
     if (state.partnerId) {
       const peer = context.people.get(state.partnerId);
       if (!peer || !canInteract(person, peer)) {
@@ -272,16 +320,31 @@ export class LocalActivityPresentation {
         state.restFacing = facingTarget(state.destination, state.focus);
       }
     }
-    if (oriented && state.seconds >= state.hold) {
+    // The stable pair leader advances the shared beat; listener readiness is required.
+    const leads = !state.encounter || !reciprocal || person.id < state.partnerId!;
+    if (oriented && leads && state.seconds >= state.hold) {
       if (state.encounter) {
         const peer = context.people.get(state.encounter.partnerId);
         if (peer && canInteract(person, peer) && state.encounter.beat + 1 < SOCIAL_SCRIPTS[state.encounter.tone].length) {
           state.encounter.beat += 1;
+          if (state.encounter.beat === 2 && ['warm', 'collaborative'].includes(state.encounter.tone)) {
+            const at = context.visualFor?.(peer.id) ?? peer.position;
+            const dx = state.stationFocus.x - (state.destination.x + at.x) / 2;
+            const dz = state.stationFocus.z - (state.destination.z + at.z) / 2;
+            const length = Math.hypot(dx, dz) || 1;
+            const offset = { x: dx / length * 0.32, z: dz / length * 0.32 };
+            const a = { x: state.destination.x + offset.x, z: state.destination.z + offset.z };
+            const b = { x: at.x + offset.x, z: at.z + offset.z };
+            if (bounded(person, a) && bounded(peer, b) && localSegmentSafe(state.destination, a, context)
+              && localSegmentSafe(at, b, context) && hasPeerClearance(person, a, context, peer.id)
+              && hasPeerClearance(peer, b, context, person.id)) state.encounter.pairedOffset = offset;
+          }
           state.seconds = 0;
           applySocialBeat(person, peer, context, state);
           state.phase = 'approach';
           return state;
         }
+        state.socialCooldown = 2;
         state.lastPartnerId = state.encounter.partnerId;
         state.encounter = undefined;
         state.partnerId = undefined;
@@ -370,6 +433,7 @@ export class LocalActivityPresentation {
     const kind = person.navigation!.destinationKind;
     const [step, pointIndex, action, seconds] = (ROUTINES[kind] ?? WORK_ROUTINE)[state.step]!;
     const variation = unit(`${person.id}:${state.cycle}:${state.step}:hold`);
+    state.sceneSeconds = 0;
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
     state.partnerId = undefined;
     state.encounter = undefined;
@@ -381,8 +445,11 @@ export class LocalActivityPresentation {
     const preferredPoint = (pointIndex + pointOffset) % state.points.length;
     const point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
     const focus: Readonly<Vec2> = state.stationFocus;
-    if (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task') {
-      const selected = selectSocialPartner(person, context, state);
+    if (!state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
+      const selected = selectSocialPartner(person, context, state, id => {
+        const peer = this.previousStates.get(id);
+        return !peer?.socialCooldown && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
+      });
       if (selected) {
         state.encounter = buildSocialEncounter(person, selected.peer, selected.relationship);
         state.partnerId = selected.peer.id;
@@ -422,7 +489,7 @@ interface SocialPartnerSelection {
   score: number;
 }
 
-function selectSocialPartner(person: Person, context: LocalActivityContext, state: LocalActivityState): SocialPartnerSelection | undefined {
+function selectSocialPartner(person: Person, context: LocalActivityContext, state: LocalActivityState, available: (id: string) => boolean): SocialPartnerSelection | undefined {
   const members = context.group?.members;
   if (!members || members.length < 2) return undefined;
   const own = members.indexOf(person.id);
@@ -432,7 +499,7 @@ function selectSocialPartner(person: Person, context: LocalActivityContext, stat
   for (let index = 0; index < members.length; index++) {
     const peerId = members[index]!;
     const peer = context.people.get(peerId);
-    if (!peer || !canInteract(person, peer)) continue;
+    if (!peer || !available(peerId) || !canInteract(person, peer)) continue;
     const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
     const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
     if (distance < 0.18 || distance > 2.7) continue;
@@ -562,15 +629,21 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
     x: peerPosition.x + dx * spacing + lateralX,
     z: peerPosition.z + dz * spacing + lateralZ,
   };
-  if (bounded(person, candidate) && localSegmentSafe(from, candidate, context)
+  if (encounter.beat === 0 && bounded(person, candidate) && localSegmentSafe(from, candidate, context)
     && hasPeerClearance(person, candidate, context, peer.id, 0.34)) {
     state.destination = candidate;
+  }
+  if (encounter.pairedOffset) {
+    const paired = { x: state.destination.x + encounter.pairedOffset.x, z: state.destination.z + encounter.pairedOffset.z };
+    if (bounded(person, paired) && localSegmentSafe(from, paired, context)) state.destination = paired;
   }
   state.focus.x = peerPosition.x;
   state.focus.z = peerPosition.z;
   state.restFacing = facingTarget(state.destination, state.focus);
   state.partnerId = peer.id;
-  state.animation = beat.animation;
+  const speaking = encounter.role === 'mentor' || encounter.role === 'supporter'
+    || encounter.role === 'peer' && (person.id < peer.id) === (encounter.beat % 2 === 0);
+  state.animation = speaking ? beat.animation : 'converse-quiet';
   state.action = socialActionFor(encounter, beat.action);
   const relationalLinger = encounter.tone === 'tense'
     ? 0.82 + encounter.strength * 0.08
