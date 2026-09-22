@@ -1,21 +1,31 @@
 import * as THREE from 'three';
 import { createCosmicBodyMaterial, createCosmicWorkLimbGeometry, updateCosmicBodyMaterial } from './CosmicPeople';
 import type { RestPosture, RestSpotPresentation } from './RestPresentation';
+import {
+  REST_RISE_SECONDS,
+  REST_SETTLE_SECONDS,
+  restAttentionWindow,
+  restMotionPhase,
+  restStyleFor,
+  restTransitionSeconds,
+  type RestStage,
+  type RestStyle,
+} from './RestChoreography';
 
-export const REST_SIT_SECONDS = 0.72;
-export const REST_STAND_SECONDS = 0.58;
+export const REST_SIT_SECONDS = REST_SETTLE_SECONDS;
+export const REST_STAND_SECONDS = REST_RISE_SECONDS;
 const LIMBS_PER_PERSON = 10;
 
 interface RestPoseState {
   blend: number;
   seen: number;
+  settledSeconds: number;
+  stage?: RestStage;
+  style?: RestStyle;
   spot?: RestSpotPresentation;
 }
 
-export interface RestJointPlan {
-  blend: number;
-  bodyLift: number;
-  bodyPitch: number;
+export interface RestSidePlan {
   kneeX: number;
   kneeY: number;
   kneeZ: number;
@@ -30,16 +40,29 @@ export interface RestJointPlan {
   handZ: number;
 }
 
+export interface RestJointPlan {
+  blend: number;
+  bodyLift: number;
+  bodyPitch: number;
+  bodyYaw: number;
+  bodyRoll: number;
+  headYaw: number;
+  left: RestSidePlan;
+  right: RestSidePlan;
+}
+
 export interface RestPoseVisual extends RestJointPlan {
+  stage?: RestStage;
+  style?: RestStyle;
   spot?: RestSpotPresentation;
 }
 
 /**
  * Presentation-only articulated rest overlay.
  *
- * The ordinary population mesh stays instanced. While somebody settles into a physical rest spot,
- * this bounded overlay replaces only their rigid ambient arm/leg instances with two-part limbs and
- * grounded soles. No simulation state, navigation or activity timing is written here.
+ * Rest owns a real three-beat physical sequence: settle, sustained seated life, and rise. The
+ * ordinary population mesh stays instanced; this bounded overlay replaces only the limb silhouette
+ * while seated or transitioning. It never mutates simulation state, activity timing or navigation.
  */
 export class RestPoseRenderer {
   readonly group = new THREE.Group();
@@ -78,29 +101,52 @@ export class RestPoseRenderer {
     this.count = 0;
   }
 
-  resolve(personId: string, rest: RestSpotPresentation | undefined, ready: boolean, deltaSeconds: number): RestPoseVisual {
+  resolve(personId: string, rest: RestSpotPresentation | undefined, stage: RestStage | undefined,
+    deltaSeconds: number, ageMonths = 30 * 12, attentionYaw = 0): RestPoseVisual {
     let state = this.states.get(personId);
-    if (!state && !rest) return restJointPlan(undefined, 0);
+    if (!state && !rest) return { ...restJointPlan(undefined, 0), stage: undefined, style: undefined, spot: undefined };
     if (!state) {
-      state = { blend: 0, seen: this.frame };
+      state = { blend: 0, seen: this.frame, settledSeconds: 0 };
       this.states.set(personId, state);
     }
     state.seen = this.frame;
-    if (rest) state.spot = { ...rest, destination: { ...rest.destination } };
 
-    const target = rest && ready ? 1 : 0;
-    const duration = target > state.blend ? REST_SIT_SECONDS : REST_STAND_SECONDS;
+    if (rest) {
+      const changedSpot = state.spot?.key !== rest.key || state.spot?.posture !== rest.posture;
+      state.spot = { ...rest, destination: { ...rest.destination } };
+      state.stage = stage ?? state.stage ?? 'settling';
+      if (changedSpot || !state.style) state.style = restStyleFor(personId, rest.posture);
+    } else if (stage) {
+      state.stage = stage;
+    }
+
+    if (state.stage === 'settled') state.settledSeconds += Math.max(0, deltaSeconds);
+    else if (state.stage === 'settling') state.settledSeconds = 0;
+
+    const target = rest && state.stage !== 'rising' ? 1 : 0;
+    const transitionStage = target > state.blend ? 'settling' : 'rising';
+    const duration = restTransitionSeconds(transitionStage, ageMonths);
     const step = duration <= 0 ? 1 : Math.max(0, deltaSeconds) / duration;
     state.blend = target > state.blend
       ? Math.min(target, state.blend + step)
       : Math.max(target, state.blend - step);
-    if (!rest && state.blend <= 0.0001) {
-      delete state.spot;
-      this.states.delete(personId);
-    }
 
     const eased = smoothstep(state.blend);
-    return { ...restJointPlan(state.spot?.posture, eased), spot: state.spot };
+    const transitionProgress = state.stage === 'rising' ? 1 - state.blend : state.blend;
+    const transitionPulse = state.stage === 'settled' ? 0 : Math.sin(THREE.MathUtils.clamp(transitionProgress, 0, 1) * Math.PI);
+    const phase = restMotionPhase(personId, state.settledSeconds);
+    const breathing = state.stage === 'settled' ? Math.sin(phase) * 0.0035 : 0;
+    const attention = state.stage === 'settled'
+      ? restAttentionWindow(personId, state.settledSeconds) * THREE.MathUtils.clamp(attentionYaw, -0.62, 0.62)
+      : 0;
+    const ageLean = ageMonths >= 68 * 12 ? 0.018 : ageMonths < 14 * 12 ? -0.008 : 0;
+    const plan = restJointPlan(state.spot?.posture, eased, state.style, state.stage, transitionPulse, breathing, attention, ageLean);
+
+    if (!rest && state.blend <= 0.0001) {
+      this.states.delete(personId);
+      return { ...plan, stage: undefined, style: undefined, spot: undefined };
+    }
+    return { ...plan, stage: state.stage, style: state.style, spot: state.spot };
   }
 
   get(personId: string): Readonly<RestPoseState> | undefined {
@@ -116,30 +162,31 @@ export class RestPoseRenderer {
 
     for (let side = 0; side < 2; side++) {
       const sign = side === 0 ? -1 : 1;
-      // Match the torso's attachment point analytically. GodboxRenderer intentionally reuses its
-      // transform matrix for later body parts, so the rest rig must not depend on that mutable matrix.
+      const limb = side === 0 ? visual.left : visual.right;
+      // Match the torso attachment analytically. The production renderer reuses a scratch transform
+      // for later body parts, so rest must remain independent of mutable shared matrices.
       const shoulderX = sign * 0.12 * build;
       const shoulderY = 0.44 + visual.bodyLift + Math.cos(bodyPitch) * 0.27;
       const shoulderZ = Math.sin(bodyPitch) * 0.27;
 
       this.segment(index * LIMBS_PER_PERSON + side * 2,
         shoulderX, shoulderY, shoulderZ,
-        sign * visual.elbowX, visual.elbowY, visual.elbowZ, 0.94);
+        sign * limb.elbowX, limb.elbowY, limb.elbowZ, 0.94);
       this.segment(index * LIMBS_PER_PERSON + side * 2 + 1,
-        sign * visual.elbowX, visual.elbowY, visual.elbowZ,
-        sign * visual.handX, visual.handY, visual.handZ, 0.82);
+        sign * limb.elbowX, limb.elbowY, limb.elbowZ,
+        sign * limb.handX, limb.handY, limb.handZ, 0.82);
 
       const hipY = 0.45 + visual.bodyLift;
       this.segment(index * LIMBS_PER_PERSON + 4 + side * 2,
         sign * 0.049, hipY, 0,
-        sign * visual.kneeX, visual.kneeY, visual.kneeZ, 1.12);
+        sign * limb.kneeX, limb.kneeY, limb.kneeZ, 1.12);
       this.segment(index * LIMBS_PER_PERSON + 5 + side * 2,
-        sign * visual.kneeX, visual.kneeY, visual.kneeZ,
-        sign * visual.ankleX, visual.ankleY, visual.ankleZ, 1.0);
+        sign * limb.kneeX, limb.kneeY, limb.kneeZ,
+        sign * limb.ankleX, limb.ankleY, limb.ankleZ, 1.0);
 
       this.segment(index * LIMBS_PER_PERSON + 8 + side,
-        sign * visual.ankleX, Math.max(0.018, visual.ankleY), visual.ankleZ - 0.012,
-        sign * visual.ankleX, Math.max(0.018, visual.ankleY), visual.ankleZ + 0.058, 0.7);
+        sign * limb.ankleX, Math.max(0.018, limb.ankleY), limb.ankleZ - 0.012,
+        sign * limb.ankleX, Math.max(0.018, limb.ankleY), limb.ankleZ + 0.058, 0.7);
     }
 
     this.colour.copy(colour);
@@ -187,41 +234,106 @@ export class RestPoseRenderer {
   }
 }
 
-export function restJointPlan(posture: RestPosture | undefined, blend: number): RestJointPlan {
+export function restJointPlan(posture: RestPosture | undefined, blend: number,
+  style?: RestStyle, stage: RestStage = 'settled', transitionPulse = 0,
+  breathing = 0, attentionYaw = 0, ageLean = 0): RestJointPlan {
   const t = THREE.MathUtils.clamp(blend, 0, 1);
   const supported = posture === 'supported-sit';
+  const resolvedStyle = style ?? (supported ? 'supported-knees' : 'ground-open');
   const bodyLiftTarget = supported ? -0.225 : -0.255;
   const bodyPitchTarget = supported ? -0.035 : 0.075;
 
-  const kneeXTarget = supported ? 0.064 : 0.13;
-  const kneeYTarget = supported ? 0.105 : 0.085;
-  const kneeZTarget = supported ? 0.215 : 0.155;
-  const ankleXTarget = supported ? 0.056 : 0.095;
-  const ankleZTarget = supported ? 0.325 : 0.275;
+  const supportedSide = (): RestSidePlan => ({
+    kneeX: 0.064, kneeY: 0.105, kneeZ: 0.215,
+    ankleX: 0.056, ankleY: 0.02, ankleZ: 0.325,
+    elbowX: 0.15, elbowY: 0.315, elbowZ: 0.07,
+    handX: 0.075, handY: 0.19, handZ: 0.19,
+  });
+  const groundSide = (): RestSidePlan => ({
+    kneeX: 0.13, kneeY: 0.085, kneeZ: 0.155,
+    ankleX: 0.095, ankleY: 0.02, ankleZ: 0.275,
+    elbowX: 0.175, elbowY: 0.30, elbowZ: 0.09,
+    handX: 0.105, handY: 0.17, handZ: 0.17,
+  });
+  const left = supported ? supportedSide() : groundSide();
+  const right = supported ? supportedSide() : groundSide();
 
-  const elbowXTarget = supported ? 0.15 : 0.175;
-  const elbowYTarget = supported ? 0.315 : 0.30;
-  const elbowZTarget = supported ? 0.07 : 0.09;
-  const handXTarget = supported ? 0.075 : 0.105;
-  const handYTarget = supported ? 0.19 : 0.17;
-  const handZTarget = supported ? 0.19 : 0.17;
+  if (resolvedStyle === 'supported-brace-left') {
+    Object.assign(left, { elbowX: 0.20, elbowY: 0.245, elbowZ: -0.015, handX: 0.205, handY: 0.105, handZ: -0.045 });
+    Object.assign(right, { handX: 0.07, handY: 0.175, handZ: 0.205 });
+  } else if (resolvedStyle === 'supported-brace-right') {
+    Object.assign(right, { elbowX: 0.20, elbowY: 0.245, elbowZ: -0.015, handX: 0.205, handY: 0.105, handZ: -0.045 });
+    Object.assign(left, { handX: 0.07, handY: 0.175, handZ: 0.205 });
+  } else if (resolvedStyle === 'supported-knees') {
+    left.handY = right.handY = 0.17;
+    left.handZ = right.handZ = 0.205;
+  } else if (resolvedStyle === 'ground-side-left') {
+    Object.assign(left, { kneeX: 0.17, kneeY: 0.09, kneeZ: 0.105, ankleX: 0.145, ankleZ: 0.235, handX: 0.145, handY: 0.145, handZ: 0.11 });
+    Object.assign(right, { kneeX: 0.095, kneeZ: 0.19, ankleX: 0.075, ankleZ: 0.29, handX: 0.085, handY: 0.17, handZ: 0.19 });
+  } else if (resolvedStyle === 'ground-side-right') {
+    Object.assign(right, { kneeX: 0.17, kneeY: 0.09, kneeZ: 0.105, ankleX: 0.145, ankleZ: 0.235, handX: 0.145, handY: 0.145, handZ: 0.11 });
+    Object.assign(left, { kneeX: 0.095, kneeZ: 0.19, ankleX: 0.075, ankleZ: 0.29, handX: 0.085, handY: 0.17, handZ: 0.19 });
+  } else if (resolvedStyle === 'ground-open') {
+    left.kneeX = right.kneeX = 0.15;
+    left.handX = right.handX = 0.115;
+    left.handY = right.handY = 0.155;
+  }
+
+  const standing: RestSidePlan = {
+    kneeX: 0.052, kneeY: 0.235, kneeZ: 0.012,
+    ankleX: 0.049, ankleY: 0.02, ankleZ: 0.02,
+    elbowX: 0.12, elbowY: 0.52, elbowZ: 0,
+    handX: 0.12, handY: 0.34, handZ: 0,
+  };
+  const leftPlan = mixSide(standing, left, t);
+  const rightPlan = mixSide(standing, right, t);
+
+  // Settling reaches toward support; rising shifts both hands onto the knees/ground before the push.
+  if (stage === 'settling' && transitionPulse > 0) {
+    const braceLeft = resolvedStyle === 'supported-brace-left' || resolvedStyle === 'ground-side-left';
+    const braceRight = resolvedStyle === 'supported-brace-right' || resolvedStyle === 'ground-side-right';
+    if (braceLeft) leftPlan.handY -= 0.055 * transitionPulse;
+    if (braceRight) rightPlan.handY -= 0.055 * transitionPulse;
+  }
+  if (stage === 'rising' && transitionPulse > 0) {
+    for (const side of [leftPlan, rightPlan]) {
+      side.handY -= 0.045 * transitionPulse;
+      side.handZ += 0.035 * transitionPulse;
+      side.elbowY -= 0.02 * transitionPulse;
+    }
+  }
+
+  const breathingLift = breathing * t;
+  const transitionLean = stage === 'settling' ? 0.075 * transitionPulse
+    : stage === 'rising' ? 0.14 * transitionPulse : 0;
+  const quietRoll = stage === 'settled' ? Math.sin(attentionYaw * 2.4) * 0.008 * t : 0;
 
   return {
     blend: t,
-    bodyLift: t === 0 ? 0 : bodyLiftTarget * t,
-    bodyPitch: t === 0 ? 0 : bodyPitchTarget * t,
-    kneeX: mix(0.052, kneeXTarget, t),
-    kneeY: mix(0.235, kneeYTarget, t),
-    kneeZ: mix(0.012, kneeZTarget, t),
-    ankleX: mix(0.049, ankleXTarget, t),
-    ankleY: 0.02,
-    ankleZ: mix(0.02, ankleZTarget, t),
-    elbowX: mix(0.12, elbowXTarget, t),
-    elbowY: mix(0.52, elbowYTarget, t),
-    elbowZ: mix(0, elbowZTarget, t),
-    handX: mix(0.12, handXTarget, t),
-    handY: mix(0.34, handYTarget, t),
-    handZ: mix(0, handZTarget, t),
+    bodyLift: t === 0 ? 0 : bodyLiftTarget * t + breathingLift,
+    bodyPitch: t === 0 ? 0 : bodyPitchTarget * t + transitionLean + ageLean * t,
+    bodyYaw: attentionYaw * 0.11 * t,
+    bodyRoll: quietRoll,
+    headYaw: attentionYaw * 0.78 * t,
+    left: leftPlan,
+    right: rightPlan,
+  };
+}
+
+function mixSide(standing: RestSidePlan, target: RestSidePlan, t: number): RestSidePlan {
+  return {
+    kneeX: mix(standing.kneeX, target.kneeX, t),
+    kneeY: mix(standing.kneeY, target.kneeY, t),
+    kneeZ: mix(standing.kneeZ, target.kneeZ, t),
+    ankleX: mix(standing.ankleX, target.ankleX, t),
+    ankleY: mix(standing.ankleY, target.ankleY, t),
+    ankleZ: mix(standing.ankleZ, target.ankleZ, t),
+    elbowX: mix(standing.elbowX, target.elbowX, t),
+    elbowY: mix(standing.elbowY, target.elbowY, t),
+    elbowZ: mix(standing.elbowZ, target.elbowZ, t),
+    handX: mix(standing.handX, target.handX, t),
+    handY: mix(standing.handY, target.handY, t),
+    handZ: mix(standing.handZ, target.handZ, t),
   };
 }
 
