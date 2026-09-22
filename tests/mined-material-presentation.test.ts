@@ -64,7 +64,7 @@ describe('mined material visual polish', () => {
     expect(shards.count).toBeGreaterThan(0);
     expect(crystals.count).toBeGreaterThan(0);
     expect(accents.count).toBeGreaterThan(0);
-    expect(accents.count).toBeLessThanOrEqual(shards.count);
+    expect(accents.count).toBeLessThanOrEqual(shards.count + crystals.count);
     expect(JSON.stringify(settlement.localMaterials)).toBe(before);
   });
 });

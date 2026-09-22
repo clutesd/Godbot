@@ -63,8 +63,8 @@ export class FarmFieldRenderer {
     new THREE.MeshStandardMaterial({ color: '#3b5a50', roughness: 0.95, transparent: true, opacity: 0.72 }), MAX_FURROWS);
   private readonly stems = this.mesh('Farm crop stalks', new THREE.CylinderGeometry(0.7, 1, 1, 5),
     new THREE.MeshStandardMaterial({ color: '#789c4c', roughness: 0.92 }), MAX_PLANTS);
-  private readonly leaves = this.mesh('Farm crop leaves', new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ color: '#6f9147', roughness: 0.95 }), MAX_LEAVES);
+  private readonly leaves = this.mesh('Farm crop leaves', new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshStandardMaterial({ color: '#6f9147', roughness: 0.95, side: THREE.DoubleSide }), MAX_LEAVES);
   private readonly heads = this.mesh('Farm crop heads', new THREE.SphereGeometry(1, 5, 4),
     new THREE.MeshStandardMaterial({ color: '#c6aa5d', roughness: 0.78, emissive: '#5b481d', emissiveIntensity: 0.08 }), MAX_PLANTS);
   private readonly borders = this.mesh('Farm field borders', new THREE.BoxGeometry(1, 1, 1),
@@ -163,9 +163,9 @@ export class FarmFieldRenderer {
             if (!stubble && stalkHeight > 0.03) {
               const leafY = heightAt(x, z) + stalkHeight * 0.55 + 0.014;
               this.emit(this.leaves, counts.leaves++, x, leafY, z,
-                0.007, stalkHeight * 0.52, 0.018, palette.leaf, 0.72 + lean, turn + 0.7);
+                0.014, stalkHeight * 0.52, 1, palette.leaf, 0.72 + lean, turn + 0.7);
               this.emit(this.leaves, counts.leaves++, x, leafY + stalkHeight * 0.08, z,
-                0.007, stalkHeight * 0.44, 0.018, palette.leaf, -0.7 + lean, turn - 0.7);
+                0.014, stalkHeight * 0.44, 1, palette.leaf, -0.7 + lean, turn - 0.7);
             }
             if (headStage && stalkHeight > 0.055) {
               const headScale = 0.012 + visual.density * 0.008;
