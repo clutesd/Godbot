@@ -1,3 +1,4 @@
+import { createResourceCargo } from './resources/ResourceCargo';
 import { StructureNavigation } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
 import { transportRibbon } from './transport/TransportGeometry';
@@ -422,8 +423,9 @@ export class GodboxRenderer {
     this.resourceWork = new ResourceWorkScene(state.world, config.seed,
       (x, z) => this.personStandable(x, z),
       (assignment) => this.vegetation.resourceWorkTree(assignment),
-      (id) => { const settlement = state.settlements.find(s => s.id === id); return Boolean(settlement && eraRank(this.eraForSettlement(settlement)) >= 2); });
-    this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface, this.resourceWork);
+      undefined,
+      (id) => state.settlements.find(s => s.id === id));
+    this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface, this.resourceWork, state);
     this.scene.add(this.resourceWorkers.group, this.physicalWorkers.group, this.farmFields.group);
     this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
@@ -3223,6 +3225,7 @@ export class GodboxRenderer {
     const caravan = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.38, 0.7), new THREE.MeshStandardMaterial({ color: '#d8a849', roughness: 0.78 }));
     const canopy = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.62, 4), new THREE.MeshStandardMaterial({ color: '#31506a', roughness: 0.86 }));
+    canopy.name = 'Freight canopy';
     canopy.rotation.x = Math.PI / 2;
     canopy.position.y = 0.35;
     caravan.add(body, canopy);
@@ -3272,6 +3275,12 @@ export class GodboxRenderer {
         const origin = this.state.settlements.find(s => s.id === trip.origin);
         if (!origin) continue;
         vehicle = trip.mode === 'water' ? this.createBoat() : trip.mode === 'rail' ? this.createTrain(origin) : trip.mode === 'walk' ? this.createFreightCarrier() : this.createCaravan();
+        const cargo = createResourceCargo(trip);
+        if (cargo) {
+          vehicle.add(cargo);
+          const covering = vehicle.getObjectByName('Freight canopy') ?? vehicle.getObjectByName('Generic freight pack');
+          if (covering) covering.visible = false;
+        }
         vehicle.userData['tripId'] = trip.id;
         vehicle.userData['transportMode'] = trip.mode;
         this.caravanGroup.add(vehicle);
@@ -3290,6 +3299,7 @@ export class GodboxRenderer {
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.29, 3, 5), createCosmicBodyMaterial(false));
     body.position.y = 0.27;
     const pack = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.19, 0.13), new THREE.MeshStandardMaterial({ color: '#b59c6c' }));
+    pack.name = 'Generic freight pack';
     pack.position.set(0, 0.27, -0.11);
     carrier.add(body, pack);
     return carrier;

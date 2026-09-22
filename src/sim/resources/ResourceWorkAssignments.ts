@@ -31,6 +31,7 @@ interface MonthlyWorkSnapshot {
   assignments: ResourceWorkAssignment[];
   /** Cell-based world resources supersede the older deposit model for the same settlement/material. */
   worldAuthority: Set<string>;
+  processing: Map<string, Map<string, number>>;
 }
 
 const snapshots = new WeakMap<SimulationState, MonthlyWorkSnapshot>();
@@ -42,7 +43,7 @@ function authorityKey(settlementId: string, resourceId: string): string {
 }
 
 function freshSnapshot(month: number): MonthlyWorkSnapshot {
-  return { month, assignments: [], worldAuthority: new Set() };
+  return { month, assignments: [], worldAuthority: new Set(), processing: new Map() };
 }
 
 function snapshot(state: SimulationState): MonthlyWorkSnapshot {
@@ -115,4 +116,17 @@ export function resourceWorkAssignments(state: SimulationState): readonly Resour
 /** Read-only renderer bridge for systems that deliberately own only the WorldState. */
 export function resourceWorkAssignmentsForWorld(world: WorldState): readonly ResourceWorkAssignment[] {
   return snapshotsByWorld.get(world)?.assignments ?? [];
+}
+
+/** Observes spent processing labour/inputs, including trials. Never authorizes production. */
+export function recordResourceProcessing(state: SimulationState, settlementId: string, recipeId: string): void {
+  const ledger = snapshot(state).processing;
+  let recipes = ledger.get(settlementId);
+  if (!recipes) { recipes = new Map(); ledger.set(settlementId, recipes); }
+  recipes.set(recipeId, (recipes.get(recipeId) ?? 0) + 1);
+}
+
+export function resourceProcessingForWorld(world: WorldState, settlementId: string, month: number): ReadonlyMap<string, number> {
+  const ledger = snapshotsByWorld.get(world);
+  return ledger?.month === month ? ledger.processing.get(settlementId) ?? new Map() : new Map();
 }

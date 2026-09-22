@@ -1,6 +1,9 @@
 import { RESOURCE_BY_ID } from './catalog';
 import type { ResourceWorkAssignment } from './ResourceWorkAssignments';
-import type { Vec2 } from '../types';
+import type { Settlement, Vec2, WorldState } from '../types';
+import { mastery } from '../knowledge/KnowledgeSystem';
+import type { DepositResourceKind } from './WorldResources';
+import type { RawMaterialKind } from './MaterialEconomy';
 
 export type ResourceWorkVisualKind = 'timber' | 'mineral' | 'plant' | 'generic';
 
@@ -14,20 +17,48 @@ export interface ResourceWorkProfile {
   readonly pileCount: number;
   readonly workRadius: number;
   readonly cycleSeconds: number;
+  readonly stage: 0 | 1 | 2 | 3;
+  readonly toolColour: string;
+  readonly excavation: number;
+  readonly emphasis: number;
 }
 
 const MINERAL_COLOURS: Readonly<Record<string, string>> = {
   stone: '#918b7d', 'copper-ore': '#a67550', 'iron-ore': '#78564a',
-  coal: '#373633', clay: '#a67b60', 'uranium-ore': '#737a60',
+  coal: '#373633', clay: '#a67b60', 'uranium-ore': '#9ba868', 'tin-ore': '#a7afb0',
 };
 
 /** Documentary scale only. No amount here is stock, cargo, or future production. */
-export function resourceWorkProfile(assignment: ResourceWorkAssignment): ResourceWorkProfile {
+export function resourceWorkProfile(assignment: ResourceWorkAssignment, world?: WorldState, settlement?: Settlement): ResourceWorkProfile {
   const kind = resourceWorkVisualKind(assignment);
   const contributed = Object.values(assignment.labourByOccupation).reduce((sum, n) => sum + positive(n ?? 0), 0);
   const labour = Math.min(positive(assignment.labourUsed), contributed);
   const intensity = Math.min(1, Math.log1p(labour) / 4 * 0.65 + Math.log1p(positive(assignment.amountExtracted)) / 6 * 0.35);
+  const deposit = assignment.depositId ? world?.resourceDeposits.find(d => d.id === assignment.depositId) : undefined;
+  const cell = world?.cells[assignment.cellIndex ?? deposit?.cellIndex ?? -1];
+  const reserve = assignment.source === 'world-resource' ? cell?.naturalResources?.deposits[assignment.resourceId as DepositResourceKind] : undefined;
+  const extracted = reserve ? positive(reserve.initialReserve - reserve.reserve)
+    : positive(deposit?.extracted ?? 0);
+  const mark = cell?.modifications?.[kind === 'timber' ? 'logging' : kind === 'mineral' ? assignment.resourceId === 'stone' ? 'quarry' : 'mine' : 'farmland'];
+  // Renewable capacity deficits may exist at generation; they are not proof of exploitation.
+  const harvestExperience = kind === 'plant' ? positive(settlement?.materials?.lifetimeExtracted[assignment.resourceId as RawMaterialKind] ?? 0) : 0;
+  const established = extracted >= 8 || (mark?.intensity ?? 0) >= 0.08 || harvestExperience >= 24;
+  const practice = (id: string) => settlement ? mastery(settlement, id).practice : 0;
+  const extractionKnowledge = RESOURCE_BY_ID.get(assignment.resourceId)?.extractionKnowledge
+    ?? (kind === 'mineral' ? 'iron-working' : 'stone-composites');
+  const skilled = practice(extractionKnowledge) >= 0.3;
+  const workshops = settlement?.infrastructure.workshops ?? 0;
+  const stage = !established ? 0 : !skilled || workshops < 0.05 ? 1
+    : practice('wheel-axle') < 0.3 || workshops < 0.25 ? 2 : 3;
+  const record = settlement?.knowledge.records[extractionKnowledge];
+  const discovery = deposit?.discoveredBy[assignment.settlementId];
+  const milestone = record?.transformedMonth ?? record?.adoptedMonth;
+  const recent = (month: number | undefined) => month === undefined || month > assignment.month ? 0 : Math.max(0, 1 - (assignment.month - month) / 3);
   return {
+    stage,
+    toolColour: practice('iron-working') >= 0.34 ? '#b5bec3' : practice('metal-smelting') >= 0.3 ? '#c59055' : '#8b877c',
+    excavation: Math.min(1, reserve ? extracted / Math.max(1, reserve.initialReserve) : extracted / Math.max(1, deposit?.capacity ?? 1)),
+    emphasis: Math.max(recent(milestone), assignment.resourceId.includes('ore') ? recent(discovery) : 0),
     kind,
     tool: kind === 'timber' ? 'axe' : kind === 'mineral' ? 'pick' : kind === 'plant' ? 'basket' : 'none',
     stance: kind === 'timber' ? 'chop' : kind === 'mineral' ? 'strike' : kind === 'plant' ? 'pluck' : 'sort',
@@ -38,7 +69,7 @@ export function resourceWorkProfile(assignment: ResourceWorkAssignment): Resourc
     intensity,
     pileCount: Math.min(4, Math.max(1, Math.ceil(Math.sqrt(positive(assignment.amountExtracted))))),
     workRadius: kind === 'plant' ? 0.44 : 0.36,
-    cycleSeconds: kind === 'plant' ? 6.8 : kind === 'timber' ? 2.6 : 2.9,
+    cycleSeconds: (kind === 'plant' ? 6.8 : kind === 'timber' ? 2.6 : 2.9) * (1 - stage * 0.045),
   };
 }
 

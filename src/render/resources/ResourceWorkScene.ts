@@ -1,4 +1,4 @@
-import type { Person, Vec2, WorldState } from '../../sim/types';
+import type { Person, Settlement, Vec2, WorldState } from '../../sim/types';
 import { workInterruption } from '../people/PhysicalActionPresentation';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import { resourceWorkDestinationId } from '../../sim/people/ResourceWorkRouting';
@@ -39,6 +39,7 @@ export class ResourceWorkScene {
     private readonly standable: (x: number, z: number) => boolean = () => true,
     private readonly treeAt?: (assignment: ResourceWorkAssignment) => ResourceWorkTreeTarget | undefined,
     private readonly developedAt: (settlementId: string) => boolean = () => false,
+    readonly settlementAt: (settlementId: string) => Settlement | undefined = () => undefined,
   ) { this.walking = new WalkabilityLayer(world); }
 
   update(): void {
@@ -52,8 +53,9 @@ export class ResourceWorkScene {
     for (const assignment of assignments) {
       const key = resourceWorkSiteKey(assignment);
       if (this.sites.has(key)) continue;
-      let profile = resourceWorkProfile(assignment);
-      const developed = this.developedAt(assignment.settlementId);
+      const settlement = this.settlementAt(assignment.settlementId);
+      let profile = resourceWorkProfile(assignment, this.world, settlement);
+      const developed = settlement ? profile.stage >= 2 : this.developedAt(assignment.settlementId);
       const tree = profile.kind === 'timber' ? this.treeAt?.(assignment) : undefined;
       const source = tree ?? assignment.worldPosition;
       const origin = this.safeOrigin(source, assignment.siteId);

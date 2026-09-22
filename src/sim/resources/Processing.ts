@@ -4,6 +4,7 @@ import type { Occupation, Settlement, SimulationState } from '../types';
 import { MATERIAL_BY_ID, RECIPE_CATALOG, type RecipeDefinition } from './catalog';
 import { addMaterial, materialEconomy, storageRoom, takeMaterial } from './Inventory';
 import type { ResourceEventDraft } from './ResourceSystem';
+import { recordResourceProcessing } from './ResourceWorkAssignments';
 
 export type LabourBudget = Partial<Record<Occupation, number>>;
 export interface LabourUse {
@@ -72,6 +73,7 @@ export function processRecipes(state: SimulationState, s: Settlement, budget: La
     for (let cycle = 0; cycle < cycles; cycle++) {
       economy.labourUsed += useLabour(budget, recipe.craftOccupations, labour);
       for (const [id, quantity] of Object.entries(inputs)) takeMaterial(s, id, quantity);
+      recordResourceProcessing(state, s.id, recipe.id);
       if (recipe.energy) economy.energySupplied += recipe.energy.quantity;
       economy.recipeResearch[recipe.id] = (economy.recipeResearch[recipe.id] ?? 0) + 0.5 + practiced + s.knowledge.literacy * 0.3;
       for (const need of recipe.requiredKnowledge) {

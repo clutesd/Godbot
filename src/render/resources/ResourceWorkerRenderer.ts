@@ -80,17 +80,21 @@ export class ResourceWorkerRenderer {
   }
 
   draw(worker: ResourceWorkerVisual, x: number, y: number, z: number, size: number, facing: number, colour: THREE.Color, effects = true): void {
-    this.drawPhysical(this.motion, worker.station.target, worker.site.profile.tool,
-      worker.site.profile.kind === 'plant' && this.motion.held > 0 ? 'crop' : undefined,
+    this.drawPhysical(this.motion, worker.station.target, this.motion.held > 0 ? 'none' : worker.site.profile.tool,
+      this.motion.held > 0 ? worker.site.profile.kind === 'plant' ? 'crop'
+        : worker.site.profile.kind === 'timber' ? 'timber' : 'masonry' : undefined,
       worker.site.profile.materialColour, worker.blend, x, y, z, size, facing, colour,
-      worker.site.profile.kind === 'plant', effects);
+      worker.site.profile.kind === 'plant', effects, false,
+      worker.site.profile.kind === 'timber' ? 'timber-chip' : worker.site.profile.kind === 'mineral'
+        ? worker.site.profile.emphasis > 0 && worker.site.assignment.resourceId.includes('ore') ? 'metal-spark' : 'mineral-dust' : 'generic',
+      undefined, worker.site.profile.toolColour);
   }
 
   /** Shared instanced limbs/props, not a shared action state machine. All phases come from callers. */
   drawPhysical(m: ResourceWorkMotion, target: Readonly<Vec2>, tool: string, load: string | undefined,
     materialColour: string, blend: number, x: number, y: number, z: number, size: number, facing: number,
     colour: THREE.Color, basket = false, effects = true, walking = false,
-    contactEffect: ContactEffectMode = 'generic', surfaceY?: number): void {
+    contactEffect: ContactEffectMode = 'generic', surfaceY?: number, toolColour = '#8b877c'): void {
     if (this.count >= CAPACITY) return;
     const index = this.count++;
     this.baseX = x; this.baseY = y; this.baseZ = z; this.size = size;
@@ -147,7 +151,7 @@ export class ResourceWorkerRenderer {
       (tool === 'axe' || tool === 'hammer' ? 0.13 : 0.055) * size * toolSize, 0.075 * size * toolSize);
     this.matrix.compose(this.position, this.rotation, this.scale);
     this.heads.setMatrixAt(index, this.matrix);
-    this.colour.set('#8b877c');
+    this.colour.set(toolColour);
     this.heads.setColorAt(index, this.colour);
     // Three tiny analytic chips, only at actual contact.
     // No particle history, spawned objects, or per-frame site geometry rebuilds.

@@ -233,7 +233,11 @@ describe('Blueprints, production and consequences', () => {
     const initial = s.localMaterials['timber-frame']!;
     // Housing demand exceeds the four founding shelters.
     state.people.forEach(p => { p.homeId = s.id; });
-    for (let month = 12; month <= 48; month++) { state.month = month; advanceSettlementDevelopment(state, s, residents(state, s), 0.1); }
+    // This isolates frame payment, not feedstock scarcity: lumber processing shares the stock.
+    for (let month = 12; month <= 48; month++) {
+      state.month = month; addMaterial(s, 'timber', 20); addMaterial(s, 'plant-fiber', 1);
+      advanceSettlementDevelopment(state, s, residents(state, s), 0.1);
+    }
     expect(s.localMaterials['timber-frame']).toBeLessThan(initial);
     expect(s.structurePlots?.some(p => p.development?.material === 'timber')).toBe(true);
   });

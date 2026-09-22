@@ -9,7 +9,7 @@ export interface ResourceWorkMotion {
   toolAngle: number;
   impact: number;
   basket: number;
-  /** Gathered piece is visible only between plant contact and basket release. */
+  /** Gathered piece is visible only after contact and before the sorting/basket release. */
   held: number;
   reposition: boolean;
 }
@@ -69,5 +69,16 @@ export function sampleResourceWorkMotion(
   out.twist = rest ? Math.sin(phase * Math.PI * 2) * 0.12 : (raised * -0.28 + contact * 0.16) * (profile.kind === 'timber' ? strength : 0.45);
   out.crouch = rest ? Math.sin(phase * Math.PI) * (profile.kind === 'mineral' ? 0.17 : 0.045) : contact * 0.06;
   if (!rest && phase >= 0.65 && phase < 0.74) out.impact = Math.sin((phase - 0.65) / 0.09 * Math.PI);
+  if (rest) {
+    // Every fourth cycle sorts a loosened piece: reach, acquire, lift and place beside the face.
+    // This is documentary motion for already-recorded extraction, never another yield event.
+    const reach = smooth(phase / 0.2) * (1 - smooth((phase - 0.3) / 0.18));
+    out.handY = 0.45 - reach * 0.25;
+    out.handZ = 0.2 + reach * 0.08;
+    out.impact = phase >= 0.22 && phase < 0.3 ? Math.sin((phase - 0.22) / 0.08 * Math.PI) : 0;
+    out.held = phase >= 0.3 && phase < 0.72 ? 1 : 0;
+    out.basket = smooth((phase - 0.55) / 0.17) * (1 - smooth((phase - 0.72) / 0.16));
+    out.twist = out.basket * 0.38;
+  }
   return out;
 }

@@ -104,7 +104,7 @@ describe('ResourceSiteRenderer invalidation', () => {
     const heads = renderer.group.getObjectByName('Active resource tool heads') as THREE.InstancedMesh;
     expect(active).toBeDefined();
     expect(active.userData['activeSiteCount']).toBe(1);
-    expect(active.userData['drawPoolCount']).toBe(8);
+    expect(active.userData['drawPoolCount']).toBe(10);
     expect(active.userData['instanceCount']).toBeGreaterThanOrEqual(5);
     expect(logs.count).toBeGreaterThanOrEqual(3);
     expect(stumps.count).toBe(1);

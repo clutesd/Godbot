@@ -9,6 +9,7 @@ import { beginResourceWorkMonth, recordResourceWorkAssignment, type ResourceWork
 import { resourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
 import { resourceWorkAlternateAnchor } from '../src/render/animation/ResourceWorkMotion';
 import type { Person } from '../src/sim/types';
+import { learn } from './fixtures/settlementDevelopment';
 import { COSMIC_HEIGHT_MULTIPLIER, CosmicRoleAccents, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, createCosmicReflectionEnvironment } from '../src/render/people/CosmicPeople';
 
 const { simulation, world, surface } = vegetationFixture('resource-work-study');
@@ -28,7 +29,8 @@ light.shadow.normalBias = 0.005;
 scene.add(light, light.target, new THREE.HemisphereLight('#dce7d5', '#5f543c', 2));
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: '#8b966e', roughness: 1 }));
 floor.rotation.x = -Math.PI / 2; floor.position.y = groundY - 0.004; floor.receiveShadow = true; scene.add(floor);
-const work = new ResourceWorkScene(world, 'resource-work-study');
+const settlement = simulation.state.settlements[0]!;
+const work = new ResourceWorkScene(world, 'resource-work-study', undefined, undefined, undefined, () => settlement);
 const sites = new ResourceSiteRenderer(world, surface, work);
 const rigs = new ResourceWorkerRenderer(); scene.add(sites.group, rigs.group);
 const cosmicMaterial = createCosmicBodyMaterial(false);
@@ -45,11 +47,22 @@ const marker = new THREE.Object3D(); const colour = new THREE.Color('#af8157');
 let seconds = 0, paused = false, medium = false, previous = performance.now();
 let people: Person[] = [];
 const select = document.querySelector('select')!;
+const stageSelect = document.querySelector<HTMLSelectElement>('#stage')!;
 function setCamera() { camera.position.set(medium ? 3.8 : 1.3, groundY + (medium ? 2.9 : 1.05), medium ? 5.5 : 1.9); camera.lookAt(0.12, groundY + 0.12, 0); }
 function setWork() {
   simulation.state.month++; beginResourceWorkMonth(simulation.state);
-  const assignment: ResourceWorkAssignment = { month: simulation.state.month, source: 'world-resource', settlementId: simulation.state.settlements[0]!.id,
-    siteId: 'study-site', resourceId: select.value, worldPosition: { x: 0, z: 0 }, gatherOccupations: ['forager'], labourByOccupation: { forager: 12 }, amountExtracted: 12, labourUsed: 12 };
+  const stage = Number(stageSelect.value);
+  settlement.knowledge.records = {};
+  settlement.infrastructure.workshops = stage < 2 ? 0 : stage === 2 ? 0.1 : 0.5;
+  if (stage >= 2) learn(settlement, 'leverage', 'stone-composites', 'metal-smelting', 'iron-working');
+  if (stage === 3) learn(settlement, 'wheel-axle');
+  const depositId = 'study-deposit';
+  world.resourceDeposits = [{ id: depositId, resourceId: select.value, cellIndex: settlement.cellIndex,
+    worldX: 0, worldZ: 0, quality: 1, capacity: 100, abundance: stage ? 0.7 : 1,
+    extracted: stage ? 30 : 0, renewable: select.value === 'timber', depleted: false, overharvested: false,
+    discoveredBy: { [settlement.id]: simulation.state.month - 4 }, establishedMonth: stage ? 0 : undefined }];
+  const assignment: ResourceWorkAssignment = { month: simulation.state.month, source: 'deposit-system', settlementId: simulation.state.settlements[0]!.id,
+    siteId: 'study-site', depositId, resourceId: select.value, worldPosition: { x: 0, z: 0 }, gatherOccupations: ['forager'], labourByOccupation: { forager: 12 }, amountExtracted: 12, labourUsed: 12 };
   recordResourceWorkAssignment(simulation.state, assignment); sites.update();
   const site = [...work.sites.values()][0]!;
   people = simulation.state.people.slice(0, 4).map((person, i) => ({ ...person, homeId: assignment.settlementId, alive: true, role: 'gatherer', occupation: 'forager', activity: 'gather', health: 1,
@@ -58,6 +71,7 @@ function setWork() {
   work.bindWorkers(people);
 }
 select.addEventListener('change', setWork);
+stageSelect.addEventListener('change', setWork);
 document.querySelector('#pause')!.addEventListener('click', e => { paused = !paused; (e.target as HTMLElement).textContent = paused ? 'Play' : 'Pause'; });
 document.querySelector('#step')!.addEventListener('click', () => { paused = true; seconds += 0.25; document.querySelector('#pause')!.textContent = 'Play'; });
 document.querySelector('#camera')!.addEventListener('click', e => { medium = !medium; setCamera(); (e.target as HTMLElement).textContent = medium ? 'Close view' : 'Medium view'; });

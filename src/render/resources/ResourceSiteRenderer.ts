@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { WorldState } from '../../sim/types';
+import type { SimulationState, WorldState } from '../../sim/types';
+import { ResourceFlowRenderer } from './ResourceFlowRenderer';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { RESOURCE_BY_ID } from '../../sim/resources/catalog';
 import { resourceWorkDestinationId } from '../../sim/people/ResourceWorkRouting';
@@ -40,6 +41,8 @@ interface ActiveCounts {
   handles: number;
   heads: number;
   racks: number;
+  structures: number;
+  seams: number;
 }
 
 function mixHash(hash: number, value: number): number {
@@ -56,9 +59,12 @@ function stringHash(value: string): number {
 export class ResourceSiteRenderer {
   readonly group = new THREE.Group();
   private readonly piles: THREE.InstancedMesh;
+  private readonly discoveries: THREE.InstancedMesh;
   private readonly marker = new THREE.Object3D();
   private readonly colour = new THREE.Color();
   private readonly scars: THREE.InstancedMesh;
+  private readonly historicalStumps: THREE.InstancedMesh;
+  private readonly historicalFaces: THREE.InstancedMesh;
   private readonly trails = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#796b4f', transparent: true, opacity: 0.42 }));
   private readonly footpaths: THREE.Mesh;
   private readonly activeWork = new THREE.Group();
@@ -70,6 +76,8 @@ export class ResourceSiteRenderer {
   private readonly activeHandles: THREE.InstancedMesh;
   private readonly activeHeads: THREE.InstancedMesh;
   private readonly activeRacks: THREE.InstancedMesh;
+  private readonly structures: THREE.InstancedMesh;
+  private readonly seams: THREE.InstancedMesh;
   private readonly normal = new THREE.Vector3();
   private readonly circleNormal = new THREE.Vector3(0, 0, 1);
   private readonly abandonedColour = new THREE.Color('#68734e');
@@ -80,8 +88,9 @@ export class ResourceSiteRenderer {
   private activeWorkRevision = -1;
   private emittingSite?: ResourceWorkSite;
   private readonly workScene: ResourceWorkScene;
+  private readonly flows?: ResourceFlowRenderer;
 
-  constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, workScene?: ResourceWorkScene) {
+  constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, workScene?: ResourceWorkScene, state?: SimulationState) {
     if (workScene) this.workScene = workScene;
     else {
       this.workScene = new ResourceWorkScene(world, 'resource-work', (x, z) => {
@@ -95,8 +104,17 @@ export class ResourceSiteRenderer {
     this.piles.count = 0; this.piles.castShadow = true; this.piles.receiveShadow = true;
     this.piles.frustumCulled = false;
     this.group.add(this.piles);
+    this.discoveries = this.activeMesh('Surveyed ore glints', new THREE.OctahedronGeometry(1, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.35, metalness: 0.4,
+        emissive: '#718174', emissiveIntensity: 0.12 }), 128);
+    this.group.add(this.discoveries);
 
     this.activeWork.name = 'Active resource work sites';
+    this.structures = this.activeMesh('Resource work infrastructure', new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.88 }), MAX_ACTIVE_WORK_SITES * 24);
+    this.seams = this.activeMesh('Discovered material seams', new THREE.OctahedronGeometry(1, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.38, metalness: 0.45,
+        emissive: '#b4c9b8', emissiveIntensity: 0.18 }), MAX_ACTIVE_WORK_SITES * 4);
     this.activeLogs = this.activeMesh(
       'Active resource logs',
       resourceLogGeometry(),
@@ -154,11 +172,17 @@ export class ResourceSiteRenderer {
       this.activeHandles,
       this.activeHeads,
       this.activeRacks,
+      this.structures, this.seams,
     );
     this.group.add(this.activeWork);
 
     this.scars = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 9), new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, opacity: 0.65, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }), Math.max(1, world.cells.length));
     this.scars.count = 0; this.scars.frustumCulled = false;
+    this.historicalStumps = this.activeMesh('Persistent logging stumps', new THREE.CylinderGeometry(0.11, 0.15, 0.13, 7),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 }), 768);
+    this.historicalFaces = this.activeMesh('Persistent excavation faces', new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 }), 768);
+    this.group.add(this.historicalStumps, this.historicalFaces);
     this.trails.name = 'Resource access trails';
     this.footpaths = new THREE.Mesh(
       new THREE.BufferGeometry(),
@@ -179,9 +203,14 @@ export class ResourceSiteRenderer {
     this.footpaths.receiveShadow = true;
     this.footpaths.frustumCulled = false;
     this.group.add(this.scars, this.trails, this.footpaths);
+    if (state) {
+      this.flows = new ResourceFlowRenderer(state, surface, this.workScene);
+      this.group.add(this.flows.group);
+    }
   }
 
   update(): void {
+    this.flows?.update();
     // Presentation work is invalidated by the visual facts it consumes, not by the calendar. This
     // method is still cheap to call monthly, but ordinary month rollover no longer allocates and
     // uploads replacement geometry for every extraction/path layer.
@@ -241,6 +270,10 @@ export class ResourceSiteRenderer {
     for (const id of activeDeposits) hash = mixHash(hash, stringHash(id));
     for (let index = 0; index < this.world.resourceDeposits.length; index += 1) {
       const deposit = this.world.resourceDeposits[index]!;
+      if (deposit.resourceId.includes('ore') && Object.keys(deposit.discoveredBy).length > 0) {
+        hash = mixHash(hash, index + 1);
+        hash = mixHash(hash, deposit.depleted || deposit.abundance <= 0 ? 0 : 1);
+      }
       if (deposit.establishedMonth === undefined) continue;
       hash = mixHash(hash, index + 1);
       hash = mixHash(hash, deposit.abandonedMonth === undefined ? 0 : 1);
@@ -306,7 +339,7 @@ export class ResourceSiteRenderer {
   }
 
   private rebuildActiveResourceWork(): void {
-    const counts: ActiveCounts = { logs: 0, stumps: 0, rocks: 0, baskets: 0, bundles: 0, handles: 0, heads: 0, racks: 0 };
+    const counts: ActiveCounts = { logs: 0, stumps: 0, rocks: 0, baskets: 0, bundles: 0, handles: 0, heads: 0, racks: 0, structures: 0, seams: 0 };
     let renderedSites = 0;
     const emitted = new Set<string>();
     for (const site of this.workScene.sites.values()) {
@@ -323,6 +356,7 @@ export class ResourceSiteRenderer {
       else if (kind === 'plant') this.emitPlantWork(assignment, angle, count, counts);
       else this.emitGenericWork(assignment, angle, count, counts);
       this.emitWorkTargets(site, counts);
+      this.emitInfrastructure(site, angle, counts);
       renderedSites += 1;
     }
     this.emittingSite = undefined;
@@ -334,11 +368,52 @@ export class ResourceSiteRenderer {
     this.finishActiveMesh(this.activeHandles, counts.handles);
     this.finishActiveMesh(this.activeHeads, counts.heads);
     this.finishActiveMesh(this.activeRacks, counts.racks);
+    this.finishActiveMesh(this.structures, counts.structures);
+    this.finishActiveMesh(this.seams, counts.seams);
     this.activeWork.visible = renderedSites > 0;
     this.activeWork.userData['activeSiteCount'] = renderedSites;
     this.activeWork.userData['instanceCount'] = Object.values(counts).reduce((sum, value) => sum + value, 0);
-    this.activeWork.userData['drawPoolCount'] = 8;
+    this.activeWork.userData['drawPoolCount'] = 10;
     this.activeWork.userData['rebuildCount'] = Number(this.activeWork.userData['rebuildCount'] ?? 0) + 1;
+  }
+
+  /** Silhouettes describe the actual material and capability; they never obstruct navigation. */
+  private emitInfrastructure(site: ResourceWorkSite, angle: number, counts: ActiveCounts): void {
+    const { assignment, profile: p } = site;
+    const beam = (x: number, z: number, y: number, sx: number, sy: number, sz: number, colour = '#73563e') =>
+      this.emitInstance(this.structures, counts.structures++, assignment, angle, x, z, y, sx, sy, sz, 0, 0, 0, colour);
+    const ore = assignment.resourceId.includes('ore');
+    if (p.kind === 'mineral') {
+      // Low stepped rock faces and spoil grow only with authoritative reserve loss.
+      for (let step = 0; step < 3; step++) beam(-0.23 + step * 0.17, -0.12, 0.035 + step * 0.035,
+        0.17, 0.07 + p.excavation * 0.15, 0.4 - step * 0.06, ore ? '#514d48' : '#a19c8e');
+      if (ore) for (let i = 0; i < 3; i++) this.emitInstance(this.seams, counts.seams++, assignment, angle,
+        -0.2 + i * 0.12, -0.23, 0.11 + i * 0.03, 0.024, 0.04 + p.emphasis * 0.02, 0.018,
+        0, i, 0, p.materialColour);
+      if (p.excavation > 0.05) beam(-0.52, 0.2, 0.035, 0.3, 0.06 + p.excavation * 0.12, 0.25, '#746a59');
+    }
+    if (p.stage === 0) return;
+    if (p.kind === 'timber') {
+      // Saw trestles and a sorting bed, distinct from mine headframes and herb racks.
+      for (const x of [-0.22, 0.22]) beam(x, -0.55, 0.14, 0.06, 0.28, 0.24);
+      beam(0, -0.55, 0.29, 0.64, 0.055, 0.2, '#b58a58');
+    } else if (p.kind === 'plant') {
+      beam(0, -0.6, 0.38, 0.62, 0.025, 0.24, '#c1af76');
+      for (const x of [-0.28, 0.28]) beam(x, -0.6, 0.2, 0.035, 0.4, 0.035);
+    } else {
+      for (const x of [-0.27, 0.27]) beam(x, -0.5, 0.25, 0.065, 0.5, 0.065);
+      beam(0, -0.5, 0.51, 0.66, 0.07, 0.08);
+      if (ore) beam(0, -0.51, 0.15, 0.4, 0.28, 0.025, '#302d2a');
+    }
+    if (p.stage < 2) return;
+    // Ordered storage rails indicate practiced extraction and a real workshop capability.
+    for (const z of [-0.15, 0.3]) beam(0.64, z, 0.035, 0.38, 0.055, 0.035);
+    for (const x of [0.46, 0.82]) beam(x, 0.08, 0.13, 0.035, 0.26, 0.035);
+    if (p.stage < 3) return;
+    // Raised hoist/shelter frame requires wheel-and-axle practice as well as workshops.
+    for (const x of [-0.3, 0.3]) beam(x, -0.65, 0.38, 0.055, 0.76, 0.055, '#626a6b');
+    beam(0, -0.65, 0.77, 0.72, 0.07, 0.24, '#626a6b');
+    beam(0, -0.65, 0.5, 0.018, 0.5, 0.018, '#b9a27b');
   }
 
   private emitTimberWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
@@ -417,6 +492,7 @@ export class ResourceSiteRenderer {
       headX, localZ, headY,
       broadHead ? 0.375 : 0.3, 0.3, broadHead ? 0.21 : 0.3,
       0, 0, tilt,
+      this.emittingSite?.profile.toolColour,
     );
   }
 
@@ -493,7 +569,18 @@ export class ResourceSiteRenderer {
   private rebuildResourcePiles(): void {
     const activeDeposits = new Set(this.activeAssignments().flatMap((assignment) => assignment.depositId ? [assignment.depositId] : []));
     let index = 0;
+    this.discoveries.count = 0;
     for (const d of this.world.resourceDeposits) {
+      if (d.resourceId.includes('ore') && Object.keys(d.discoveredBy).length > 0 && !d.depleted && d.abundance > 0
+        && this.discoveries.count < this.discoveries.instanceMatrix.count
+        && this.workScene.safeSegment({ x: d.worldX, z: d.worldZ }, { x: d.worldX, z: d.worldZ })) {
+        this.marker.position.set(d.worldX, this.surface.heightAt(d.worldX, d.worldZ) + 0.075, d.worldZ);
+        this.marker.rotation.set(0, resourceVisualUnit(d.id) * Math.PI, 0.3);
+        this.marker.scale.set(0.065, 0.1, 0.045); this.marker.updateMatrix();
+        this.discoveries.setMatrixAt(this.discoveries.count, this.marker.matrix);
+        this.colour.set(d.resourceId === 'copper-ore' ? '#c29064' : d.resourceId === 'iron-ore' ? '#a78473' : '#a0b3ab');
+        this.discoveries.setColorAt(this.discoveries.count++, this.colour);
+      }
       if (d.establishedMonth === undefined || activeDeposits.has(d.id)) continue;
       const cell = this.world.cells[d.cellIndex];
       if (!cell || cell.water || cell.slope > 0.54) continue;
@@ -510,10 +597,13 @@ export class ResourceSiteRenderer {
     }
     this.piles.count = index; this.piles.instanceMatrix.needsUpdate = true;
     if (this.piles.instanceColor) this.piles.instanceColor.needsUpdate = true;
+    this.discoveries.instanceMatrix.needsUpdate = true;
+    if (this.discoveries.instanceColor) this.discoveries.instanceColor.needsUpdate = true;
   }
 
   private rebuildLandScars(): void {
     let scarIndex = 0;
+    this.historicalStumps.count = this.historicalFaces.count = 0;
     for (const cell of this.world.cells) {
       if (cell.water || !cell.modifications) continue;
       const use = cell.modifications;
@@ -521,6 +611,24 @@ export class ResourceSiteRenderer {
       if (!kind) continue;
       const mark = use[kind]!;
       if (mark.intensity < 0.01) continue;
+      if (kind === 'logging' || kind === 'quarry' || kind === 'mine') {
+        const mesh = kind === 'logging' ? this.historicalStumps : this.historicalFaces;
+        const count = Math.min(3, Math.ceil(mark.intensity * 3));
+        for (let i = 0; i < count && mesh.count < mesh.instanceMatrix.count; i++) {
+          const angle = resourceVisualUnit(`${cell.x}:${cell.z}:history:${i}`) * Math.PI * 2;
+          const x = cell.worldX + Math.cos(angle) * this.world.cellSize * 0.18;
+          const z = cell.worldZ + Math.sin(angle) * this.world.cellSize * 0.18;
+          if (!this.workScene.safeSegment({ x, z }, { x, z })) continue;
+          const strength = Math.max(0.15, mark.intensity);
+          this.marker.position.set(x, this.surface.heightAt(x, z) + 0.045 * strength, z);
+          this.marker.rotation.set(0, angle, 0);
+          this.marker.scale.set(kind === 'logging' ? 0.7 : 0.3, kind === 'logging' ? strength : 0.12 * strength, kind === 'logging' ? 0.7 : 0.25);
+          this.marker.updateMatrix(); mesh.setMatrixAt(mesh.count, this.marker.matrix);
+          this.colour.set(kind === 'logging' ? '#a27f54' : kind === 'mine' ? '#696258' : '#a09a88');
+          if (mark.abandonedMonth !== undefined) this.colour.lerp(this.abandonedColour, 1 - strength);
+          mesh.setColorAt(mesh.count++, this.colour);
+        }
+      }
       const radius = this.world.cellSize * Math.min(0.38, 0.12 + mark.intensity * 0.28);
       this.marker.position.set(cell.worldX, this.surface.heightAt(cell.worldX, cell.worldZ) + 0.035, cell.worldZ);
       this.normal.set(
@@ -539,6 +647,10 @@ export class ResourceSiteRenderer {
     this.marker.quaternion.identity();
     this.scars.count = scarIndex; this.scars.instanceMatrix.needsUpdate = true;
     if (this.scars.instanceColor) this.scars.instanceColor.needsUpdate = true;
+    for (const mesh of [this.historicalStumps, this.historicalFaces]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   private rebuildAccessTrails(): void {
