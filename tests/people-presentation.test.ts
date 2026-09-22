@@ -249,6 +249,58 @@ describe('Purposeful gatherings', () => {
     expect(distinct.size).toBe(people.length);
   });
 
+  it('forms readable three-to-four person conversational pods facing a shared centre', () => {
+    const people = Array.from({ length: 7 }, (_, index) => person({
+      id: `pod-${index}`,
+      activity: 'socialize',
+      position: { x: 0, z: 0 },
+      target: { x: 0, z: 0 },
+      navigation: {
+        destinationKind: 'plaza', destinationId: 'central-plaza', reason: 'social gathering',
+        waypoints: [], waypointIndex: 0, schedulePhase: 'social', traveling: false, crossingMode: 'walk',
+      },
+    }));
+    const group = buildSocialGroups(people).get('plaza:central-plaza')!;
+    const byId = new Map(people.map(candidate => [candidate.id, candidate]));
+    const placements = group.members.map(id => placeInGroup(byId.get(id)!, group, byId.get(id)!.position));
+    const pods = [placements.slice(0, 4), placements.slice(4, 7)];
+
+    const centres = pods.map(pod => ({
+      x: pod.reduce((sum, placement) => sum + placement.x, 0) / pod.length,
+      z: pod.reduce((sum, placement) => sum + placement.z, 0) / pod.length,
+    }));
+    for (let podIndex = 0; podIndex < pods.length; podIndex++) {
+      const centre = centres[podIndex]!;
+      for (const placement of pods[podIndex]!) {
+        const expected = Math.atan2(centre.x - placement.x, centre.z - placement.z);
+        const error = Math.abs(Math.atan2(Math.sin((placement.restFacing ?? 0) - expected), Math.cos((placement.restFacing ?? 0) - expected)));
+        expect(error).toBeLessThan(0.02);
+        const radius = Math.hypot(placement.x - centre.x, placement.z - centre.z);
+        expect(radius).toBeGreaterThan(0.2);
+        expect(radius).toBeLessThan(0.4);
+      }
+    }
+    expect(Math.hypot(centres[0]!.x - centres[1]!.x, centres[0]!.z - centres[1]!.z)).toBeGreaterThan(0.6);
+  });
+
+  it('gives child play a distinct hopping and gesturing silhouette', () => {
+    const controller = new AnimationController('child-play');
+    controller.getOrCreateCharacterState('child', 'child');
+    const heights: number[] = [];
+    const gestures: number[] = [];
+    const names = new Set<string>();
+    for (let frame = 0; frame < 90; frame++) {
+      controller.updateCharacterAnimation('child', 1 / 30, 'socialize', 'play', 0, 9 * 12);
+      const pose = controller.getCurrentPose('child')!;
+      heights.push(pose.positionOffset.y);
+      gestures.push(Math.max(Math.abs(pose.leftShoulderRotation), Math.abs(pose.rightShoulderRotation)));
+      names.add(pose.name);
+    }
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(0.04);
+    expect(Math.max(...gestures)).toBeGreaterThan(0.45);
+    expect(names.size).toBeGreaterThanOrEqual(2);
+  });
+
   it('maps visual travel onto locomotion animation rather than a stationary work loop', () => {
     const walker = person({ activity: 'craft' });
     expect(travelAnimationFor(0, walker)).toBeUndefined();
