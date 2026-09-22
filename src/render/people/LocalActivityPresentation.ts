@@ -939,6 +939,150 @@ function refreshPresentationFocus(person: Person, context: LocalActivityContext,
   state.restFacing = facingTarget(state.destination, state.focus);
 }
 
+function rememberSocial(state: LocalActivityState, peerId: string | undefined, now: number,
+  kind: NonNullable<LocalActivityState['recentSocialKind']>): void {
+  if (!peerId) return;
+  state.recentSocialId = peerId;
+  state.recentSocialKind = kind;
+  const duration = kind === 'encounter' ? RECENT_SOCIAL_ENCOUNTER_SECONDS
+    : kind === 'pod' ? RECENT_SOCIAL_POD_SECONDS
+      : kind === 'play' ? RECENT_SOCIAL_PLAY_SECONDS : RECENT_SOCIAL_PASSING_SECONDS;
+  state.recentSocialUntil = Math.max(state.recentSocialUntil ?? 0, now + duration);
+}
+
+function clearRecentSocial(state: LocalActivityState): void {
+  delete state.recentSocialId;
+  delete state.recentSocialKind;
+  delete state.recentSocialUntil;
+}
+
+function updateMutualYield(person: Person, context: LocalActivityContext, state: LocalActivityState,
+  visual: PersonVisualState | undefined, now: number, previousStates: ReadonlyMap<string, LocalActivityState>): void {
+  if (state.yieldToId) {
+    const peer = context.people.get(state.yieldToId);
+    const at = peer ? context.visualFor?.(peer.id) ?? peer.position : undefined;
+    if (!peer || !at || now >= (state.yieldUntil ?? 0)
+      || Math.hypot(at.x - (visual?.x ?? state.destination.x), at.z - (visual?.z ?? state.destination.z)) > 1.15) {
+      finishYield(state, now);
+      return;
+    }
+    state.focus.x = at.x;
+    state.focus.z = at.z;
+    state.restFacing = facingTarget(state.destination, state.focus);
+    state.seconds = 0;
+    return;
+  }
+
+  if (!visual || visual.traveling || state.rest || state.partnerId || state.encounter || state.socialFocusId || state.playGame
+    || state.attentionId || state.action === 'arrive' || state.action === 'wait-for-clearance') return;
+  const ownRemaining = Math.hypot(state.destination.x - visual.x, state.destination.z - visual.z);
+  if (ownRemaining < 0.14) return;
+
+  for (const id of context.group?.members ?? []) {
+    if (id === person.id) continue;
+    const peer = context.people.get(id);
+    const peerState = previousStates.get(id);
+    const peerAt = peer ? context.visualFor?.(id) ?? peer.position : undefined;
+    if (!peer || !peerState || !peerAt || !canInteract(person, peer) || peerState.yieldToId === person.id
+      || peerState.partnerId || peerState.encounter || peerState.playGame || peerState.rest) continue;
+    const separation = Math.hypot(peerAt.x - visual.x, peerAt.z - visual.z);
+    if (separation < 0.26 || separation > MUTUAL_YIELD_RADIUS) continue;
+    if (Math.hypot(peerState.destination.x - peerAt.x, peerState.destination.z - peerAt.z) < 0.14) continue;
+    if (!pathsConflict({ x: visual.x, z: visual.z }, state.destination, peerAt, peerState.destination, 0.28)) continue;
+    if (!shouldYieldTo(person, peer)) continue;
+
+    const dx = state.destination.x - visual.x;
+    const dz = state.destination.z - visual.z;
+    const length = Math.hypot(dx, dz) || 1;
+    const side = unit(`${person.id}:${peer.id}:yield-side`) < 0.5 ? -1 : 1;
+    const lateral = { x: -dz / length * 0.2 * side, z: dx / length * 0.2 * side };
+    const first = { x: visual.x + lateral.x, z: visual.z + lateral.z };
+    const second = { x: visual.x - lateral.x, z: visual.z - lateral.z };
+    const candidate = [first, second].find(point => bounded(person, point)
+      && localSegmentSafe({ x: visual.x, z: visual.z }, point, context)
+      && hasPeerClearance(person, point, context, peer.id, 0.25))
+      ?? { x: visual.x, z: visual.z };
+
+    state.yieldResume = {
+      destination: { ...state.destination },
+      restFacing: state.restFacing,
+      action: state.action,
+      animation: state.animation,
+      hold: state.hold,
+    };
+    state.yieldToId = peer.id;
+    state.yieldUntil = now + MUTUAL_YIELD_SECONDS;
+    state.destination = candidate;
+    state.focus.x = peerAt.x;
+    state.focus.z = peerAt.z;
+    state.restFacing = facingTarget(candidate, peerAt);
+    state.action = 'yield-pass';
+    state.animation = 'idle';
+    state.hold = 99;
+    state.seconds = 0;
+    clearAmbientAttention(state);
+    return;
+  }
+}
+
+function finishYield(state: LocalActivityState, now: number): void {
+  const peerId = state.yieldToId;
+  const resume = state.yieldResume;
+  if (resume) {
+    state.destination = { ...resume.destination };
+    state.restFacing = resume.restFacing;
+    state.action = resume.action;
+    state.animation = resume.animation;
+    state.hold = resume.hold;
+  }
+  rememberSocial(state, peerId, now, 'passing');
+  delete state.yieldToId;
+  delete state.yieldUntil;
+  delete state.yieldResume;
+  state.seconds = 0;
+}
+
+function shouldYieldTo(person: Person, peer: Person): boolean {
+  const own = passagePriority(person);
+  const other = passagePriority(peer);
+  if (Math.abs(own - other) > 0.001) return own < other;
+  return person.id > peer.id;
+}
+
+function passagePriority(person: Person): number {
+  let score = 0;
+  if (person.ageMonths < 12 * 12) score += 2.2;
+  if (person.ageMonths > 68 * 12) score += 1.7;
+  if (person.activity === 'transport' || ['basket', 'bag', 'toolkit'].includes(person.appearance?.carriedItem ?? '')) score += 1.1;
+  if (['craft', 'study', 'assist', 'trade', 'patrol'].includes(person.activity)) score += 0.3;
+  return score;
+}
+
+function pathsConflict(a: Vec2, aTarget: Vec2, b: Vec2, bTarget: Vec2, minimum: number): boolean {
+  if (segmentsIntersect(a, aTarget, b, bTarget)) return true;
+  return Math.min(
+    pointSegmentDistance(a, b, bTarget),
+    pointSegmentDistance(aTarget, b, bTarget),
+    pointSegmentDistance(b, a, aTarget),
+    pointSegmentDistance(bTarget, a, aTarget),
+  ) < minimum;
+}
+
+function segmentsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const cross = (p: Vec2, q: Vec2, r: Vec2) => (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
+  const abC = cross(a, b, c), abD = cross(a, b, d), cdA = cross(c, d, a), cdB = cross(c, d, b);
+  return (abC === 0 || abD === 0 || Math.sign(abC) !== Math.sign(abD))
+    && (cdA === 0 || cdB === 0 || Math.sign(cdA) !== Math.sign(cdB));
+}
+
+function pointSegmentDistance(point: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const lengthSq = dx * dx + dz * dz;
+  if (lengthSq < 0.000001) return Math.hypot(point.x - a.x, point.z - a.z);
+  const t = clamp(((point.x - a.x) * dx + (point.z - a.z) * dz) / lengthSq, 0, 1);
+  return Math.hypot(point.x - (a.x + dx * t), point.z - (a.z + dz * t));
+}
+
 function relationshipScoreForPresentation(person: Person, peer: Person, relationship: SocialRelationship | undefined, month: number): number {
   const kindBase: Partial<Record<SocialRelationshipKind, number>> = {
     family: 0.95, friend: 0.9, mentor: 0.88, 'intellectual-collaborator': 0.82,
