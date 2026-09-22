@@ -8,7 +8,7 @@ import { resourceWorkAssignmentsForWorld, type ResourceWorkAssignment } from '..
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
 import { MAX_ACTIVE_WORK_SITES, ResourceWorkScene, type ResourceWorkSite } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
-import { mineralVisualProfile } from './MineralPresentation';
+import { mineralVisualProfile, type MineralGeometryKind } from './MineralPresentation';
 import { movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
 const PATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
@@ -37,7 +37,11 @@ interface ActiveCounts {
   logs: number;
   stumps: number;
   rocks: number;
+  clods: number;
+  coal: number;
   shards: number;
+  crystals: number;
+  fines: number;
   baskets: number;
   bundles: number;
   handles: number;
@@ -73,7 +77,11 @@ export class ResourceSiteRenderer {
   private readonly activeLogs: THREE.InstancedMesh;
   private readonly activeStumps: THREE.InstancedMesh;
   private readonly activeRocks: THREE.InstancedMesh;
+  private readonly activeClods: THREE.InstancedMesh;
+  private readonly activeCoal: THREE.InstancedMesh;
   private readonly activeShards: THREE.InstancedMesh;
+  private readonly activeCrystals: THREE.InstancedMesh;
+  private readonly activeFines: THREE.InstancedMesh;
   private readonly activeBaskets: THREE.InstancedMesh;
   private readonly activeBundles: THREE.InstancedMesh;
   private readonly activeHandles: THREE.InstancedMesh;
@@ -136,11 +144,35 @@ export class ResourceSiteRenderer {
       new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.96, metalness: 0.03 }),
       MAX_SITE_DETAIL,
     );
+    this.activeClods = this.activeMesh(
+      'Active extracted clay clods',
+      new THREE.IcosahedronGeometry(0.22, 1),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1, metalness: 0 }),
+      MAX_SITE_DETAIL,
+    );
+    this.activeCoal = this.activeMesh(
+      'Active extracted coal',
+      new THREE.TetrahedronGeometry(0.23, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0.04 }),
+      MAX_SITE_DETAIL,
+    );
     this.activeShards = this.activeMesh(
-      'Active extracted ore and coal shards',
+      'Active extracted ore shards',
       new THREE.OctahedronGeometry(0.22, 0),
       new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.72, metalness: 0.22 }),
       MAX_SITE_DETAIL,
+    );
+    this.activeCrystals = this.activeMesh(
+      'Active extracted crystal ore',
+      new THREE.ConeGeometry(0.16, 0.38, 5),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.54, metalness: 0.2 }),
+      MAX_SITE_DETAIL,
+    );
+    this.activeFines = this.activeMesh(
+      'Active mineral fines and spoil',
+      new THREE.CylinderGeometry(0.22, 0.3, 0.045, 9),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 }),
+      MAX_ACTIVE_WORK_SITES * 2,
     );
     this.activeBaskets = this.activeMesh(
       'Active resource baskets',
@@ -176,7 +208,11 @@ export class ResourceSiteRenderer {
       this.activeLogs,
       this.activeStumps,
       this.activeRocks,
+      this.activeClods,
+      this.activeCoal,
       this.activeShards,
+      this.activeCrystals,
+      this.activeFines,
       this.activeBaskets,
       this.activeBundles,
       this.activeHandles,
@@ -349,7 +385,8 @@ export class ResourceSiteRenderer {
   }
 
   private rebuildActiveResourceWork(): void {
-    const counts: ActiveCounts = { logs: 0, stumps: 0, rocks: 0, shards: 0, baskets: 0, bundles: 0, handles: 0, heads: 0, racks: 0, structures: 0, seams: 0 };
+    const counts: ActiveCounts = { logs: 0, stumps: 0, rocks: 0, clods: 0, coal: 0, shards: 0, crystals: 0, fines: 0,
+      baskets: 0, bundles: 0, handles: 0, heads: 0, racks: 0, structures: 0, seams: 0 };
     let renderedSites = 0;
     const emitted = new Set<string>();
     for (const site of this.workScene.sites.values()) {
@@ -373,7 +410,11 @@ export class ResourceSiteRenderer {
     this.finishActiveMesh(this.activeLogs, counts.logs);
     this.finishActiveMesh(this.activeStumps, counts.stumps);
     this.finishActiveMesh(this.activeRocks, counts.rocks);
+    this.finishActiveMesh(this.activeClods, counts.clods);
+    this.finishActiveMesh(this.activeCoal, counts.coal);
     this.finishActiveMesh(this.activeShards, counts.shards);
+    this.finishActiveMesh(this.activeCrystals, counts.crystals);
+    this.finishActiveMesh(this.activeFines, counts.fines);
     this.finishActiveMesh(this.activeBaskets, counts.baskets);
     this.finishActiveMesh(this.activeBundles, counts.bundles);
     this.finishActiveMesh(this.activeHandles, counts.handles);
@@ -384,7 +425,7 @@ export class ResourceSiteRenderer {
     this.activeWork.visible = renderedSites > 0;
     this.activeWork.userData['activeSiteCount'] = renderedSites;
     this.activeWork.userData['instanceCount'] = Object.values(counts).reduce((sum, value) => sum + value, 0);
-    this.activeWork.userData['drawPoolCount'] = 11;
+    this.activeWork.userData['drawPoolCount'] = 15;
     this.activeWork.userData['rebuildCount'] = Number(this.activeWork.userData['rebuildCount'] ?? 0) + 1;
   }
 
@@ -445,19 +486,19 @@ export class ResourceSiteRenderer {
 
   private emitMineralWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
     const profile = mineralVisualProfile(assignment.resourceId);
-    const mesh = profile.shard ? this.activeShards : this.activeRocks;
+    const mesh = this.mineralMesh(profile.geometry);
     for (let index = 0; index < count + 1; index += 1) {
       const scale = 0.2 + (index % 3) * 0.085;
       const localX = 0.52 + (index % 3) * 0.105;
       const localZ = (index % 2 ? 1 : -1) * (0.065 + (index % 3) * 0.012);
       const lift = 0.032 + Math.floor(index / 3) * 0.06;
-      const meshIndex = profile.shard ? counts.shards++ : counts.rocks++;
+      const meshIndex = this.nextMineralCount(counts, profile.geometry);
       this.emitInstance(
         mesh, meshIndex, assignment, angle,
         localX, localZ, lift,
         scale * profile.scale[0], scale * profile.scale[1], scale * profile.scale[2],
         profile.tilt * (index % 2 ? 1 : -1) + index * 0.12, index * 0.67, index * 0.19,
-        profile.baseColour,
+        index % 2 ? profile.secondaryColour : profile.baseColour,
       );
       if (profile.accentStrength > 0.2 && index < 2) {
         this.emitInstance(this.seams, counts.seams++, assignment, angle,
@@ -466,6 +507,9 @@ export class ResourceSiteRenderer {
           index * 0.4, index * 0.8, profile.tilt, profile.accentColour);
       }
     }
+    // A shallow fines/spoil bed makes fresh extraction read as broken material rather than loose props.
+    this.emitInstance(this.activeFines, counts.fines++, assignment, angle, 0.63, 0, 0.016,
+      0.75 + profile.scale[0] * 0.2, 0.55, 0.62 + profile.scale[2] * 0.18, 0, 0, 0, profile.secondaryColour);
     this.emitInstance(this.activeBaskets, counts.baskets++, assignment, angle, 0.62, 0.24, 0.04, 1.15, 0.8, 1.15, 0, 0, 0);
     this.emitTool(assignment, angle, 0.05, -0.34, 0.1, -0.32, false, counts);
   }
@@ -493,6 +537,22 @@ export class ResourceSiteRenderer {
         '#8b857b',
       );
     }
+  }
+
+  private mineralMesh(kind: MineralGeometryKind): THREE.InstancedMesh {
+    if (kind === 'clod') return this.activeClods;
+    if (kind === 'coal') return this.activeCoal;
+    if (kind === 'shard') return this.activeShards;
+    if (kind === 'crystal') return this.activeCrystals;
+    return this.activeRocks;
+  }
+
+  private nextMineralCount(counts: ActiveCounts, kind: MineralGeometryKind): number {
+    if (kind === 'clod') return counts.clods++;
+    if (kind === 'coal') return counts.coal++;
+    if (kind === 'shard') return counts.shards++;
+    if (kind === 'crystal') return counts.crystals++;
+    return counts.rocks++;
   }
 
   private emitTool(
@@ -571,8 +631,8 @@ export class ResourceSiteRenderer {
         this.emitInstance(this.activeHandles, counts.handles++, assignment, 0, x + 0.06, z + 0.04, 0.018, 0.45, 0.24, 0.45, Math.PI / 2, station.facing + 0.6, 0);
       } else if (profile.kind === 'mineral') {
         const material = mineralVisualProfile(assignment.resourceId);
-        const mesh = material.shard ? this.activeShards : this.activeRocks;
-        const meshIndex = material.shard ? counts.shards++ : counts.rocks++;
+        const mesh = this.mineralMesh(material.geometry);
+        const meshIndex = this.nextMineralCount(counts, material.geometry);
         this.emitInstance(mesh, meshIndex, assignment, 0, x, z, 0.035,
           0.3 * material.scale[0], 0.32 * material.scale[1], 0.3 * material.scale[2],
           material.tilt, station.facing, 0, material.baseColour);
@@ -585,8 +645,8 @@ export class ResourceSiteRenderer {
     }
     if (profile.kind === 'mineral') {
       const material = mineralVisualProfile(assignment.resourceId);
-      const mesh = material.shard ? this.activeShards : this.activeRocks;
-      const meshIndex = material.shard ? counts.shards++ : counts.rocks++;
+      const mesh = this.mineralMesh(material.geometry);
+      const meshIndex = this.nextMineralCount(counts, material.geometry);
       this.emitInstance(mesh, meshIndex, assignment, 0, 0, 0, 0.05,
         0.7 * material.scale[0], (0.42 + profile.intensity * 0.35) * material.scale[1], 0.7 * material.scale[2],
         material.tilt, 0.3, 0, material.baseColour);

@@ -13,6 +13,7 @@ describe('mined material visual polish', () => {
     const profiles = ids.map(mineralVisualProfile);
     expect(new Set(profiles.map(profile => profile.baseColour)).size).toBe(ids.length);
     expect(new Set(profiles.map(profile => profile.kind)).size).toBe(ids.length);
+    expect(new Set(profiles.map(profile => profile.geometry)).size).toBeGreaterThanOrEqual(4);
     expect(profiles.find(profile => profile.kind === 'uranium')!.accentStrength).toBeGreaterThan(
       profiles.find(profile => profile.kind === 'iron')!.accentStrength);
     expect(profiles.find(profile => profile.kind === 'stone')!.shard).toBe(false);
@@ -51,11 +52,17 @@ describe('mined material visual polish', () => {
     const renderer = new ResourceFlowRenderer(fixture.simulation.state, fixture.surface, scene);
     renderer.update();
 
-    const rocks = renderer.group.getObjectByName('Stored stone and clay') as THREE.InstancedMesh;
-    const shards = renderer.group.getObjectByName('Stored ore and coal shards') as THREE.InstancedMesh;
+    const rocks = renderer.group.getObjectByName('Stored stone rubble') as THREE.InstancedMesh;
+    const clods = renderer.group.getObjectByName('Stored clay clods') as THREE.InstancedMesh;
+    const coal = renderer.group.getObjectByName('Stored coal fragments') as THREE.InstancedMesh;
+    const shards = renderer.group.getObjectByName('Stored ore shards') as THREE.InstancedMesh;
+    const crystals = renderer.group.getObjectByName('Stored crystal ore') as THREE.InstancedMesh;
     const accents = renderer.group.getObjectByName('Stored ore mineral accents') as THREE.InstancedMesh;
     expect(rocks.count).toBeGreaterThan(0);
+    expect(clods.count).toBeGreaterThan(0);
+    expect(coal.count).toBeGreaterThan(0);
     expect(shards.count).toBeGreaterThan(0);
+    expect(crystals.count).toBeGreaterThan(0);
     expect(accents.count).toBeGreaterThan(0);
     expect(accents.count).toBeLessThanOrEqual(shards.count);
     expect(JSON.stringify(settlement.localMaterials)).toBe(before);

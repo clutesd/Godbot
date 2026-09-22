@@ -18,7 +18,10 @@ export class ResourceFlowRenderer {
   private readonly bundles: THREE.InstancedMesh;
   private readonly blocks: THREE.InstancedMesh;
   private readonly rocks: THREE.InstancedMesh;
+  private readonly clods: THREE.InstancedMesh;
+  private readonly coal: THREE.InstancedMesh;
   private readonly shards: THREE.InstancedMesh;
+  private readonly crystals: THREE.InstancedMesh;
   private readonly mineralAccents: THREE.InstancedMesh;
   private readonly heat: THREE.InstancedMesh;
   private signature = '';
@@ -28,9 +31,17 @@ export class ResourceFlowRenderer {
     this.logs = this.pool('Stored timber', resourceLogGeometry(), true);
     this.bundles = this.pool('Stored plant materials', resourceBundleGeometry());
     this.blocks = this.pool('Storage and processing fabric', new THREE.BoxGeometry(1, 1, 1));
-    this.rocks = this.pool('Stored stone and clay', new THREE.DodecahedronGeometry(1, 0));
-    this.shards = this.pool('Stored ore and coal shards', new THREE.OctahedronGeometry(1, 0));
+    this.rocks = this.pool('Stored stone rubble', new THREE.DodecahedronGeometry(1, 0));
+    this.clods = this.pool('Stored clay clods', new THREE.IcosahedronGeometry(1, 1));
+    this.coal = this.pool('Stored coal fragments', new THREE.TetrahedronGeometry(1, 0));
+    this.shards = this.pool('Stored ore shards', new THREE.OctahedronGeometry(1, 0));
+    this.crystals = this.pool('Stored crystal ore', new THREE.ConeGeometry(0.72, 1.7, 5));
     this.mineralAccents = this.pool('Stored ore mineral accents', new THREE.OctahedronGeometry(1, 0));
+    (this.clods.material as THREE.MeshStandardMaterial).roughness = 1;
+    (this.coal.material as THREE.MeshStandardMaterial).roughness = 0.9;
+    (this.coal.material as THREE.MeshStandardMaterial).metalness = 0.04;
+    (this.crystals.material as THREE.MeshStandardMaterial).roughness = 0.54;
+    (this.crystals.material as THREE.MeshStandardMaterial).metalness = 0.2;
     (this.shards.material as THREE.MeshStandardMaterial).roughness = 0.7;
     (this.shards.material as THREE.MeshStandardMaterial).metalness = 0.22;
     (this.mineralAccents.material as THREE.MeshStandardMaterial).roughness = 0.42;
@@ -50,7 +61,7 @@ export class ResourceFlowRenderer {
       stock.map(p => [p.id, p.pieces]), processes, s.infrastructure.factories >= 0.25])]);
     if (signature === this.signature) return;
     this.signature = signature;
-    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.shards, this.mineralAccents, this.heat]) mesh.count = 0;
+    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.clods, this.coal, this.shards, this.crystals, this.mineralAccents, this.heat]) mesh.count = 0;
     for (const { s, stock, processes } of plans) {
       const plots = (s.structurePlots ?? []).filter(p => p.condition > 0.2 && !p.accessRestricted
         && (!p.development || p.development.status === 'active'));
@@ -70,11 +81,14 @@ export class ResourceFlowRenderer {
           else if (/fiber|flora|herb/.test(item.id)) this.emit(this.bundles, point, y + 0.03, 1.4, 1.4, 1.4, storedMaterialColour(item.id));
           else if (isMinedMaterial(item.id)) {
             const profile = mineralVisualProfile(item.id);
-            const mineralMesh = profile.shard ? this.shards : this.rocks;
+            const mineralMesh = profile.geometry === 'clod' ? this.clods
+              : profile.geometry === 'coal' ? this.coal
+                : profile.geometry === 'shard' ? this.shards
+                : profile.geometry === 'crystal' ? this.crystals : this.rocks;
             const base = 0.048;
             this.emit(mineralMesh, point, y,
               base * profile.scale[0], base * profile.scale[1], base * profile.scale[2],
-              profile.baseColour, (n % 2 ? 1 : -1) * profile.tilt);
+              n % 2 ? profile.secondaryColour : profile.baseColour, (n % 2 ? 1 : -1) * profile.tilt);
             if (profile.accentStrength > 0.2 && n < 3) {
               this.emit(this.mineralAccents, { x: point.x + 0.018, z: point.z - 0.008 }, y + 0.028,
                 0.01 + profile.accentStrength * 0.007, 0.014 + profile.accentStrength * 0.01, 0.009,
@@ -107,7 +121,7 @@ export class ResourceFlowRenderer {
         }
       }
     }
-    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.shards, this.mineralAccents, this.heat]) {
+    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.clods, this.coal, this.shards, this.crystals, this.mineralAccents, this.heat]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }

@@ -37,8 +37,11 @@ describe('farm field visual polish', () => {
     expect(mesh(renderer, 'Cultivated farm furrows').count).toBeGreaterThanOrEqual(4);
     expect(mesh(renderer, 'Farm field borders').count).toBeGreaterThanOrEqual(4);
     expect(mesh(renderer, 'Farm crop stalks').count).toBeGreaterThan(24);
+    expect(mesh(renderer, 'Farm crop leaves').count).toBeGreaterThan(48);
     expect(mesh(renderer, 'Farm crop heads').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Farm harvest bundles').count).toBeGreaterThan(0);
+    expect(mesh(renderer, 'Farm harvest sacks').count).toBeGreaterThan(0);
+    expect(mesh(renderer, 'Farm row marker posts').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Farm harvest baskets').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Farm irrigation and wet-soil cues').count).toBeGreaterThan(0);
   });
@@ -62,6 +65,7 @@ describe('farm field visual polish', () => {
     expect(mesh(renderer, 'Cultivated farm soil').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Cultivated farm furrows').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Farm crop stalks').count).toBe(0);
+    expect(mesh(renderer, 'Farm crop leaves').count).toBe(0);
     expect(mesh(renderer, 'Farm crop heads').count).toBe(0);
     expect(mesh(renderer, 'Farm harvest bundles').count).toBe(0);
   });

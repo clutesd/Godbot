@@ -26,7 +26,8 @@ export function createResourceCargo(trip: FreightTrip): THREE.InstancedMesh | un
     marker.position.set((i % 3 - 1) * 0.13, Math.floor(i / 3) * 0.1, 0);
     if (mineral && mineralProfile) {
       marker.rotation.set((i % 2 ? 1 : -1) * mineralProfile.tilt, i * 0.73, (i % 3 - 1) * 0.18);
-      marker.scale.set(mineralProfile.scale[0], mineralProfile.scale[1], mineralProfile.scale[2]).multiplyScalar(0.82);
+      const cargoScale = mineralProfile.geometry === 'crystal' ? 0.7 : mineralProfile.geometry === 'clod' ? 0.9 : 0.82;
+      marker.scale.set(mineralProfile.scale[0], mineralProfile.scale[1], mineralProfile.scale[2]).multiplyScalar(cargoScale);
     } else {
       marker.rotation.set(timber ? Math.PI / 2 : 0, 0, 0);
       marker.scale.setScalar(timber ? 0.65 : plant ? 3 : 1);
