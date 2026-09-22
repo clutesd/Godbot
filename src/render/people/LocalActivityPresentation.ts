@@ -836,13 +836,14 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
 
     const relationship = context.relationshipFor?.(person.id, peer.id);
     const meaningful = meaningfulAmbientRecognition(person, peer, relationship);
+    const coworkers = Boolean(person.workplaceId && person.workplaceId === peer.workplaceId);
     const yaw = Math.abs(normalizeAngle(facingTarget(visual, at) - visual.facing));
-    const cone = meaningful ? 1.75 : relationship || person.workplaceId && person.workplaceId === peer.workplaceId ? 1.25 : 0.82;
+    const cone = meaningful ? 1.75 : relationship || coworkers ? 1.25 : 0.82;
     if (yaw > cone) continue;
 
     // Unknown passers-by should mostly be visual background. Only social public spaces can produce
     // an occasional one-way glance; meaningful ties are allowed to register much more reliably.
-    if (!meaningful && !relationship && person.workplaceId !== peer.workplaceId) {
+    if (!meaningful && !relationship && !coworkers) {
       if (kind !== 'plaza' && kind !== 'market') continue;
       const [first, second] = person.id < peer.id ? [person.id, peer.id] : [peer.id, person.id];
       const observerIsFirst = unit(`${first}:${second}:ambient-observer`) < 0.5;
@@ -852,7 +853,7 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
 
     const relational = relationship
       ? relationshipScoreForPresentation(person, peer, relationship, person.bornMonth + person.ageMonths)
-      : meaningful ? 0.82 : person.workplaceId && person.workplaceId === peer.workplaceId ? 0.48 : 0.18;
+      : meaningful ? 0.82 : coworkers ? 0.48 : 0.18;
     const score = relational - distance * 0.34 - yaw * 0.22;
     if (!selected || score > selected.score + 0.001 || Math.abs(score - selected.score) <= 0.001 && peer.id < selected.peer.id) {
       selected = { peer, meaningful, score };
@@ -862,9 +863,10 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
 }
 
 function meaningfulAmbientRecognition(person: Person, peer: Person, relationship: SocialRelationship | undefined): boolean {
-  if (person.partnerId === peer.id || peer.partnerId === person.id || person.householdId === peer.householdId) return true;
+  if (person.partnerId === peer.id || peer.partnerId === person.id
+    || Boolean(person.householdId && person.householdId === peer.householdId)) return true;
   return relationship?.kind === 'family' || relationship?.kind === 'friend' || relationship?.kind === 'mentor'
-    || relationship?.kind === 'intellectual-collaborator' || relationship?.strength !== undefined && relationship.strength >= 0.72;
+    || relationship?.kind === 'intellectual-collaborator' || Boolean(relationship && relationship.strength >= 0.72);
 }
 
 function smoothAttention(value: number): number {
