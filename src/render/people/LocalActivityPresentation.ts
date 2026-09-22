@@ -699,8 +699,12 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   state.focus.x = at.x;
   state.focus.z = at.z;
   const from = context.visual ?? state.destination;
-  const target = bounded(person, point) && localSegmentSafe(from, point, context)
-    && hasPeerClearance(person, point, context, undefined, 0.34) ? point : state.base;
+  const podPoint = {
+    x: state.base.x + (point.x - state.base.x) * 0.34,
+    z: state.base.z + (point.z - state.base.z) * 0.34,
+  };
+  const target = bounded(person, podPoint) && localSegmentSafe(from, podPoint, context)
+    && hasPeerClearance(person, podPoint, context, undefined, 0.34) ? podPoint : state.base;
   state.destination = { ...target };
   state.restFacing = facingTarget(state.destination, state.focus);
   state.hold *= 1.05 + person.traits.sociability * 0.12;
