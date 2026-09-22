@@ -9,6 +9,8 @@ export interface FirstFireVisualSample {
   active: boolean;
   phase: FirstFirePhase;
   phaseProgress: number;
+  /** 0..1 reveal of the physical ash/stone hearth. It does not exist before the milestone. */
+  hearthScale: number;
   flameScale: number;
   emberScale: number;
   lightGain: number;
@@ -104,6 +106,7 @@ export class FoundingFirstFirePresentation {
       const p = ease(age / 1.6);
       return {
         active: true, phase: 'kindle', phaseProgress: p,
+        hearthScale: 0.08 + p * 0.74,
         flameScale: 0.035 + p * 0.19,
         emberScale: 0.18 + p * 0.72,
         lightGain: 0.02 + p * 0.16,
@@ -115,6 +118,7 @@ export class FoundingFirstFirePresentation {
       const flicker = reducedMotion ? 1 : 1 + Math.sin(this.nowSeconds * 12.7 + stableUnit(performance.eventId) * 8) * 0.045;
       return {
         active: true, phase: 'catch', phaseProgress: p,
+        hearthScale: 0.82 + p * 0.18,
         flameScale: (0.22 + p * 0.88) * flicker,
         emberScale: 0.9 + p * 0.1,
         lightGain: 0.18 + p * 0.98,
@@ -128,6 +132,7 @@ export class FoundingFirstFirePresentation {
         + Math.sin(this.nowSeconds * 5.7 + 1.3) * 0.025;
       return {
         active: true, phase: 'gather', phaseProgress: p,
+        hearthScale: 1,
         flameScale: (1.1 - p * 0.1) * flicker,
         emberScale: 1,
         lightGain: 1.16 - p * 0.12,
@@ -137,6 +142,7 @@ export class FoundingFirstFirePresentation {
     const p = ease((age - 7.2) / (FIRST_FIRE_DURATION_SECONDS - 7.2));
     return {
       active: true, phase: 'settle', phaseProgress: p,
+      hearthScale: 1,
       flameScale: 1,
       emberScale: 1,
       lightGain: 1.04 - p * 0.04,
@@ -201,11 +207,11 @@ function selectParticipants(people: readonly Person[], settlementId: string, set
 }
 
 function settledVisual(): FirstFireVisualSample {
-  return { active: false, phase: 'complete', phaseProgress: 1, flameScale: 1, emberScale: 1, lightGain: 1, smokeGain: 1 };
+  return { active: false, phase: 'complete', phaseProgress: 1, hearthScale: 1, flameScale: 1, emberScale: 1, lightGain: 1, smokeGain: 1 };
 }
 
 function unlitVisual(): FirstFireVisualSample {
-  return { active: false, phase: 'complete', phaseProgress: 0, flameScale: 0, emberScale: 0, lightGain: 0, smokeGain: 0 };
+  return { active: false, phase: 'complete', phaseProgress: 0, hearthScale: 0, flameScale: 0, emberScale: 0, lightGain: 0, smokeGain: 0 };
 }
 
 function ease(value: number): number {
