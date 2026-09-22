@@ -42,6 +42,11 @@ export function foundingHearthWorldPosition(
   return offset ? { x: settlement.position.x + offset.x, z: settlement.position.z + offset.z } : undefined;
 }
 
+/** A founding hearth is infrastructure only after its one-time first-fire achievement. */
+export function foundingHearthEstablished(settlement: Pick<Settlement, 'foundingPodId' | 'survival'>): boolean {
+  return !settlement.foundingPodId || Boolean(settlement.survival?.firstFire?.eventId);
+}
+
 /** Kept explicit so renderer, signatures and tests agree on what "the hearth is burning" means. */
 export function foundingHearthBurning(settlement: Pick<Settlement, 'survival'>): boolean {
   return ((settlement.survival?.hearth?.fuelUsed ?? 0) + (settlement.survival?.cold.fuelUsed ?? 0)) > 0;
