@@ -139,7 +139,7 @@ export class PeopleVisualStateStore {
 
     const moved = Math.hypot(resolvedTarget.destination.x - state.destinationX, resolvedTarget.destination.z - state.destinationZ);
     if (moved > RETARGET_EPSILON) {
-      this.retarget(state, resolvedTarget);
+      this.retarget(state, resolvedTarget, ground);
     }
 
     this.advance(state, deltaSeconds, resolvedTarget.restFacing, ground);
@@ -194,8 +194,13 @@ export class PeopleVisualStateStore {
     };
   }
 
-  private retarget(state: PersonVisualState, target: PersonVisualTarget): void {
-    state.path = routeAwarePath(state, target.destination, target.waypoints, target.waypointIndex);
+  private retarget(state: PersonVisualState, target: PersonVisualTarget, ground: PersonVisualGround): void {
+    const requestedPath = routeAwarePath(state, target.destination, target.waypoints, target.waypointIndex);
+    // Historical waypoints can become stale when a new structure/tree occupies an old corridor.
+    // Keep their documentary shape only while the waypoint itself remains valid; swept collision
+    // below still protects every connecting segment.
+    state.path = requestedPath.filter((point, index) =>
+      index === 0 || index === requestedPath.length - 1 || safeGroundSegment(point, point, ground));
     state.originX = state.x; state.originZ = state.z;
     state.destinationX = target.destination.x; state.destinationZ = target.destination.z;
     state.duration = polylineLength(state.path) / state.maxPhysicalSpeed;
