@@ -14,3 +14,5 @@ Thumbs.db
 .transport-audit.ts
 tests/architecture-preview.html
 output/resource-work/
+
+output/
