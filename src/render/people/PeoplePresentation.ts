@@ -21,8 +21,8 @@ type SocialPerson = Person & { socialAffinityIds?: string[]; socialAvoidIds?: st
 
 /** How strongly members of a gathering are drawn toward its occupancy geometry, by destination. */
 const COHESION: Partial<Record<DestinationKind, number>> = {
-  market: 0.84,
-  plaza: 0.82,
+  market: 0.89,
+  plaza: 0.91,
   shrine: 0.88,
   'construction-site': 0.78,
   'safe-area': 0.76,
@@ -138,7 +138,8 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
   const target = occupancyPlacement(group, index);
   const withdrawal = socialWithdrawalFor(person);
   const baseCohesion = COHESION[group.kind] ?? 0.3;
-  const cohesion = baseCohesion * (1 - withdrawal * (CONVERSATIONAL.has(group.kind) ? 0.34 : 0.16));
+  const podCohesion = target.podKind === 'children' ? Math.min(0.96, baseCohesion + 0.05) : baseCohesion;
+  const cohesion = podCohesion * (1 - withdrawal * (CONVERSATIONAL.has(group.kind) ? 0.34 : 0.16));
   let targetX = target.x;
   let targetZ = target.z;
   if (withdrawal > 0.05 && group.members.length > 2 && (CONVERSATIONAL.has(group.kind) || group.kind === 'shrine' || group.kind === 'home')) {
