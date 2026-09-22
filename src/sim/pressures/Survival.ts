@@ -303,7 +303,7 @@ export function foundingFirstFirePlan(state: SimulationState, s: Settlement, pop
   const ordinaryDelay = 1 + Math.min(2, Math.ceil(rank / 2));
   const delay = own.drivers.coldUrgency >= 0.75 ? Math.min(ordinaryDelay, rank === 0 ? 1 : 2) : ordinaryDelay;
   return {
-    plannedMonth: s.foundedMonth + delay,
+    plannedMonth: Math.max(state.month, s.foundedMonth + delay),
     readiness: own.readiness,
     rank,
     drivers: own.drivers,
@@ -322,12 +322,13 @@ function maintainFoundingHearth(state: SimulationState, s: Settlement, populatio
   }
 
   if (!survival.firstFire) {
-    const plan = survival.hearth?.plannedIgnitionMonth === undefined
+    const plan: FoundingFirstFirePlan | undefined = survival.hearth?.plannedIgnitionMonth === undefined
       ? foundingFirstFirePlan(state, s, population)
       : {
         plannedMonth: survival.hearth.plannedIgnitionMonth,
         readiness: survival.hearth.ignitionReadiness ?? 0,
         rank: survival.hearth.ignitionRank ?? 0,
+        drivers: survival.hearth.ignitionDrivers ?? firstFireReadiness(state, s, population).drivers,
       };
     if (!plan) return;
     const ignitionNeed = Math.min(FOUNDING_HEARTH_IGNITION_FUEL, positive(population) * 0.0015);
@@ -338,18 +339,18 @@ function maintainFoundingHearth(state: SimulationState, s: Settlement, populatio
       plannedIgnitionMonth: plan.plannedMonth,
       ignitionReadiness: plan.readiness,
       ignitionRank: plan.rank,
+      ignitionDrivers: plan.drivers,
     };
     if (state.month < plan.plannedMonth || (s.localMaterials.timber ?? 0) < ignitionNeed) return;
 
     const ignitionFuel = takeMaterial(s, 'timber', ignitionNeed);
     survival.hearth.fuelUsed = ignitionFuel;
-    const fullPlan = foundingFirstFirePlan(state, s, population);
-    const drivers = fullPlan?.drivers;
+    const drivers = plan.drivers;
     const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
       { foundingPodId: s.foundingPodId, fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth',
         plannedMonth: plan.plannedMonth, ignitionReadiness: plan.readiness, ignitionRank: plan.rank,
-        ...(drivers ? { coldUrgency: drivers.coldUrgency, shelterNeed: drivers.shelterNeed,
-          woodland: drivers.woodland, fuelSecurity: drivers.fuelSecurity } : {}), intensity: 1 },
+        coldUrgency: drivers.coldUrgency, shelterNeed: drivers.shelterNeed,
+        woodland: drivers.woodland, fuelSecurity: drivers.fuelSecurity, intensity: 1 },
       ['founding-survival', 'fire-control', 'real-fuel-consumed', 'site-readiness'], population, 0.68);
     survival.firstFire = { month: state.month, eventId: event.id, plannedMonth: plan.plannedMonth, readiness: plan.readiness };
     return;
