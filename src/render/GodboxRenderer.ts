@@ -16,6 +16,7 @@ import { AnimationController, presentationBodyTilt } from './animation/Animation
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
 import { HumanLifeClock } from './people/HumanLifeClock';
+import { RestPoseRenderer } from './people/RestPoseRenderer';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
 import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicBodyMaterial, createCosmicReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { AssetBuilder } from './assets/AssetBuilder';
@@ -295,6 +296,7 @@ export class GodboxRenderer {
   private readonly resourceWork: ResourceWorkScene;
   private readonly resourceWorkers = new ResourceWorkerRenderer();
   private readonly physicalWorkers = new ResourceWorkerRenderer();
+  private readonly restPoses: RestPoseRenderer;
   private readonly physicalWork = new PhysicalWorkScene();
   private readonly farmFields = new FarmFieldRenderer();
   private readonly actionInspections = new Map<string, PhysicalActionPresentation>();
@@ -457,6 +459,8 @@ export class GodboxRenderer {
     peopleMaterial.envMap = this.cosmicReflections.texture;
     this.resourceWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
     this.physicalWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
+    this.restPoses = new RestPoseRenderer(visiblePersonBudget);
+    this.restPoses.setReflectionEnvironment(this.cosmicReflections.texture);
     this.people = new THREE.InstancedMesh(peopleGeometry, peopleMaterial, visiblePersonBudget);
     this.people.castShadow = true;
     this.people.frustumCulled = false;
@@ -487,7 +491,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.peopleCargo.frustumCulled = false;
-    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles);
+    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles, this.restPoses.group);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -703,6 +707,7 @@ export class GodboxRenderer {
     }
     this.resourceWorkers.beginFrame();
     this.physicalWorkers.beginFrame();
+    this.restPoses.beginFrame();
     this.physicalWork.beginFrame();
     this.actionInspections.clear();
     this.vegetation.beginResourceImpacts();
@@ -793,6 +798,8 @@ export class GodboxRenderer {
       this.animationController.getOrCreateCharacterState(person.id, person.occupation);
       if (physical) this.physicalWork.advance(person, physical, visual, deltaSeconds);
       const physicalStanding = physical && physical.ready && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
+      const restReady = Boolean(local?.rest && local.phase === 'action' && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD);
+      const restPose = this.restPoses.resolve(person.id, local?.rest, restReady, deltaSeconds);
       const loaded = physical?.action.carriedObject !== undefined;
       const travel = travelAnimationFor(visual.speed, person);
       const firstFireStanding = Boolean(firstFire && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
@@ -810,7 +817,8 @@ export class GodboxRenderer {
       if (worker) this.resourceWorkers.sample(worker, elapsedSeconds, deltaSeconds, Boolean(working && oriented));
       if (working) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
       if (physicalStanding) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
-      const articulated = working || physicalStanding || physical && loaded;
+      const restArticulated = detailed && restPose.blend > 0.001;
+      const articulated = working || physicalStanding || physical && loaded || restArticulated;
       if (worker) {
         const m = this.resourceWorkers.motion;
         this.actionInspections.set(person.id, { personId: person.id, actionKind: `resource-${worker.site.profile.kind}`,
@@ -847,12 +855,15 @@ export class GodboxRenderer {
       const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0 : person.activity === 'rest' ? 0.003 : 0.006;
       const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
       const footY = visual.footY + (physical?.elevation ?? 0) + (articulated ? 0 : bob);
-      // Crouching and stooping lower the upper body only; the legs keep their hip pivot so the
-      // feet stay on the ground instead of sinking with the pose.
-      const poseLift = Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
+      // Physical rest owns its pelvis height while it blends in/out; generic animation offsets
+      // remain responsible for ordinary crouch/work. Soles stay anchored at footY.
+      const poseLift = restArticulated
+        ? restPose.bodyLift * heightScale
+        : Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
-      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding));
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyTilt.pitch, facing + (pose?.pelvisRotation ?? 0), bodyTilt.roll);
+      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated));
+      const bodyPitch = bodyTilt.pitch + (restArticulated ? restPose.bodyPitch : 0);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, facing + (pose?.pelvisRotation ?? 0), bodyTilt.roll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
       this.people.setColorAt(index, this.personColor);
@@ -883,6 +894,8 @@ export class GodboxRenderer {
       this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.049 * buildScale * heightScale, 0.45, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
       this.peopleLegs.setColorAt(index * 2, this.personColor);
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
+      if (restArticulated) this.restPoses.draw(restPose, display.x, footY, display.z, heightScale, buildScale,
+        facing + (pose?.pelvisRotation ?? 0), bodyPitch, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
       const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
@@ -934,6 +947,7 @@ export class GodboxRenderer {
     for (const variation of this.cosmicVariations) variation.needsUpdate = true;
     this.resourceWorkers.endFrame();
     this.physicalWorkers.endFrame();
+    this.restPoses.endFrame();
     this.physicalWork.endFrame();
     this.localActivities.prune();
     this.peopleVisuals.prune((personId) => {
@@ -3491,6 +3505,7 @@ export class GodboxRenderer {
     updateCosmicBodyMaterial(this.cosmicMaterial, daylight);
     this.resourceWorkers.updateDaylight(daylight);
     this.physicalWorkers.updateDaylight(daylight);
+    this.restPoses.updateDaylight(daylight);
     this.warRenderer.updateDaylight(daylight);
     const angle = phase * Math.PI * 2;
     this.sun.position.set(Math.cos(angle) * 72, Math.sin(angle) * 64, 24);
@@ -3696,6 +3711,7 @@ export class GodboxRenderer {
     this.localPeers.clear();
     this.localPeerPositions.clear();
     this.animationController.dispose();
+    this.restPoses.dispose();
     this.lastPersonGroundPosition.clear();
     window.removeEventListener('resize', this.resizeHandler);
     const geometries = new Set<THREE.BufferGeometry>();
