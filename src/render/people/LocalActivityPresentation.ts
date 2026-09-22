@@ -343,7 +343,7 @@ export class LocalActivityPresentation {
       }
     }
     // Invitations are renderer-owned and reciprocal. A resident cannot belong to two scenes.
-    if (!state.encounter && !state.socialCooldown) {
+    if (!state.encounter && !state.socialCooldown && !state.yieldToId) {
       for (const id of context.group?.members ?? []) {
         const invitation = this.previousStates.get(id);
         const peer = context.people.get(id);
@@ -1001,7 +1001,8 @@ function updateMutualYield(person: Person, context: LocalActivityContext, state:
     const peerState = previousStates.get(id);
     const peerAt = peer ? context.visualFor?.(id) ?? peer.position : undefined;
     if (!peer || !peerState || !peerAt || !canInteract(person, peer) || peerState.yieldToId === person.id
-      || peerState.partnerId || peerState.encounter || peerState.playGame || peerState.rest) continue;
+      || peerState.partnerId || peerState.encounter || peerState.playGame || peerState.rest
+      || state.recentSocialKind === 'passing' && state.recentSocialId === peer.id && (state.recentSocialUntil ?? 0) > now) continue;
     const separation = Math.hypot(peerAt.x - visual.x, peerAt.z - visual.z);
     if (separation < 0.26 || separation > MUTUAL_YIELD_RADIUS) continue;
     if (Math.hypot(peerState.destination.x - peerAt.x, peerState.destination.z - peerAt.z) < 0.14) continue;
@@ -1087,9 +1088,16 @@ function pathsConflict(a: Vec2, aTarget: Vec2, b: Vec2, bTarget: Vec2, minimum: 
 
 function segmentsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
   const cross = (p: Vec2, q: Vec2, r: Vec2) => (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
+  const onSegment = (p: Vec2, q: Vec2, r: Vec2) => q.x >= Math.min(p.x, r.x) - 0.000001
+    && q.x <= Math.max(p.x, r.x) + 0.000001 && q.z >= Math.min(p.z, r.z) - 0.000001
+    && q.z <= Math.max(p.z, r.z) + 0.000001;
   const abC = cross(a, b, c), abD = cross(a, b, d), cdA = cross(c, d, a), cdB = cross(c, d, b);
-  return (abC === 0 || abD === 0 || Math.sign(abC) !== Math.sign(abD))
-    && (cdA === 0 || cdB === 0 || Math.sign(cdA) !== Math.sign(cdB));
+  if (Math.sign(abC) !== Math.sign(abD) && Math.sign(cdA) !== Math.sign(cdB)) return true;
+  if (Math.abs(abC) < 0.000001 && onSegment(a, c, b)) return true;
+  if (Math.abs(abD) < 0.000001 && onSegment(a, d, b)) return true;
+  if (Math.abs(cdA) < 0.000001 && onSegment(c, a, d)) return true;
+  if (Math.abs(cdB) < 0.000001 && onSegment(c, b, d)) return true;
+  return false;
 }
 
 function pointSegmentDistance(point: Vec2, a: Vec2, b: Vec2): number {
