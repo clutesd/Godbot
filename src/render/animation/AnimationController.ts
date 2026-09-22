@@ -1032,6 +1032,20 @@ export class AnimationController {
         out.spineRotation += gesture * 0.012;
         out.rightShoulderRotation += gesture * 0.045;
         out.positionOffset.y -= gesture * 0.003;
+      } else if (state.currentState === 'play') {
+        // Play stays recognisable across childhood without making a toddler and a teenager move
+        // with the same exaggeration. The underlying game/locomotion owns movement; this only
+        // scales the stationary silhouette.
+        const maturity = Math.max(0, Math.min(1, (state.ageMonths - 7 * 12) / (8 * 12)));
+        const veryYoung = state.ageMonths < 3 * 12;
+        const liftScale = veryYoung ? 0.22 : 1 - maturity * 0.48;
+        const gestureScale = veryYoung ? 0.55 : 1 - maturity * 0.18;
+        out.positionOffset.y *= liftScale;
+        out.leftShoulderRotation *= gestureScale;
+        out.rightShoulderRotation *= gestureScale;
+        out.spineRotation *= veryYoung ? 0.65 : 1;
+        out.leftKneeRotation *= veryYoung ? 0.62 : 1;
+        out.rightKneeRotation *= veryYoung ? 0.62 : 1;
       } else if (state.currentState === 'idle' || state.currentState === 'alert') {
         const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 29;
         // A slow, smooth gesture window with long quiet intervals, not constant fidgeting.
