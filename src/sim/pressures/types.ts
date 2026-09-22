@@ -67,6 +67,12 @@ export interface SurvivalState {
     plannedIgnitionMonth?: number;
     ignitionReadiness?: number;
     ignitionRank?: number;
+    ignitionDrivers?: {
+      coldUrgency: number;
+      shelterNeed: number;
+      woodland: number;
+      fuelSecurity: number;
+    };
   };
   cold: { severity: number; shelterCoverage: number; fuelNeed: number; fuelUsed: number; exposure: number };
   response?: {
