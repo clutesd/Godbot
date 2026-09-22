@@ -535,7 +535,7 @@ export class LocalActivityPresentation {
       : 0;
     const preferredPoint = (pointIndex + pointOffset) % state.points.length;
     const point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
-    let focus: Readonly<Vec2> = state.stationFocus;
+    const focus: Readonly<Vec2> = state.stationFocus;
 
     if (childPlay && applyChildPlay(person, context, state, point, this.presentationSeconds)) return;
 
