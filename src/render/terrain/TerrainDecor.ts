@@ -2,13 +2,19 @@ import * as THREE from 'three';
 import { SeededRandom } from '../../sim/prng';
 import { clamp01, fbm, smoothstep } from '../../sim/terrain/noise';
 import { nearestIndex } from '../../sim/terrain/TerrainField';
-import type { WorldState } from '../../sim/types';
+import type { Vec2, WorldState } from '../../sim/types';
 import type { TerrainSurface } from './TerrainSurface';
 
 export interface DecorReport {
   boulders: number;
   scree: number;
   groundCover: number;
+}
+
+interface BoulderCollider {
+  x: number;
+  z: number;
+  radius: number;
 }
 
 /**
@@ -18,6 +24,7 @@ export interface DecorReport {
 export class TerrainDecor {
   readonly group = new THREE.Group();
   readonly report: DecorReport;
+  private readonly boulderBuckets = new Map<string, BoulderCollider[]>();
 
   constructor(world: WorldState, surface: TerrainSurface, seed: string, density: number) {
     this.group.name = 'terrain-decor';
@@ -58,6 +65,7 @@ export class TerrainDecor {
       scale.set(size * random.range(0.8, 1.3), size * random.range(0.5, 0.9), size * random.range(0.8, 1.3));
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(placed, matrix);
+      this.addBoulderCollider(worldX, worldZ, 0.34 * Math.max(scale.x, scale.z));
       colour.setHSL(0.08, 0.05, 0.54 + random.range(-0.06, 0.1)).lerp(new THREE.Color('#b3a99c'), sample.elevation * 0.4);
       mesh.setColorAt(placed, colour);
       placed += 1;
@@ -108,6 +116,42 @@ export class TerrainDecor {
   }
 
   /**
+   * Foot-level collision against the same boulders that are actually drawn. Scree and ground cover
+   * remain traversable; only substantial rock bodies become pedestrian obstacles.
+   */
+  pedestrianSegmentClear(a: Vec2, b: Vec2, padding = 0.12): boolean {
+    const margin = 0.8 + padding;
+    const minX = Math.floor((Math.min(a.x, b.x) - margin) / 4);
+    const maxX = Math.floor((Math.max(a.x, b.x) + margin) / 4);
+    const minZ = Math.floor((Math.min(a.z, b.z) - margin) / 4);
+    const maxZ = Math.floor((Math.max(a.z, b.z) + margin) / 4);
+    const seen = new Set<BoulderCollider>();
+    for (let x = minX; x <= maxX; x++) for (let z = minZ; z <= maxZ; z++) {
+      for (const boulder of this.boulderBuckets.get(`${x}:${z}`) ?? []) {
+        if (seen.has(boulder)) continue;
+        seen.add(boulder);
+        if (distanceToSegment(a, b, boulder.x, boulder.z) < boulder.radius + padding) return false;
+      }
+    }
+    return true;
+  }
+
+  private addBoulderCollider(x: number, z: number, radius: number): void {
+    // Tiny stones read as ground clutter and should not make pedestrians jitter around them.
+    if (radius < 0.075) return;
+    const collider = { x, z, radius };
+    const margin = radius + 0.14;
+    for (let bx = Math.floor((x - margin) / 4); bx <= Math.floor((x + margin) / 4); bx++) {
+      for (let bz = Math.floor((z - margin) / 4); bz <= Math.floor((z + margin) / 4); bz++) {
+        const key = `${bx}:${bz}`;
+        const bucket = this.boulderBuckets.get(key) ?? [];
+        bucket.push(collider);
+        this.boulderBuckets.set(key, bucket);
+      }
+    }
+  }
+
+  /**
    * Grass, reeds and low scrub. Density is deliberately uneven: heaviest at shorelines, riverbanks
    * and forest edges, where a hard material boundary would otherwise show. Flower colours are kept
    * out of this static layer; seasonal flowers are owned by the vegetation system.
@@ -155,4 +199,11 @@ export class TerrainDecor {
     if (placed > 0) this.group.add(mesh);
     return placed;
   }
+}
+
+
+function distanceToSegment(a: Vec2, b: Vec2, x: number, z: number): number {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(x - a.x - dx * t, z - a.z - dz * t);
 }
