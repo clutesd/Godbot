@@ -24,6 +24,11 @@ const LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD = 0.24;
 /** After following a meaningful shift, leave this much slack before following again. */
 const LOCAL_ACTIVITY_BASE_RELEASE_RADIUS = 0.1;
 const LOCAL_ACTIVITY_REANCHOR_LIMIT = 0.9;
+const SOCIAL_AWARENESS_RADIUS = 1.2;
+const SOCIAL_AWARENESS_MIN_SECONDS = 0.65;
+const SOCIAL_AWARENESS_MAX_SECONDS = 1.35;
+const SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS = 3.5;
+const SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS = 7;
 export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
 }
@@ -163,6 +168,10 @@ export interface LocalActivityState {
   seconds: number;
   sceneSeconds?: number;
   socialCooldown?: number;
+  /** Brief presentation-only notice of a nearby peer before any full social encounter. */
+  attentionId?: string;
+  attentionSeconds?: number;
+  attentionCooldown?: number;
   hold: number;
   partnerId?: string;
   /** Multi-beat presentation-only social encounter derived from real relationship authority. */
@@ -255,6 +264,7 @@ export class LocalActivityPresentation {
     state.seen = this.frame;
     state.sceneSeconds = (state.sceneSeconds ?? 0) + Math.max(0, delta);
     state.socialCooldown = Math.max(0, (state.socialCooldown ?? 0) - delta);
+    state.attentionCooldown = Math.max(0, (state.attentionCooldown ?? 0) - delta);
     // Personal space is a live constraint, not only a target-selection check. If an uninvolved
     // resident drifts into this destination after it was chosen, step to another valid frontage
     // point rather than waiting on a future routine transition to resolve the overlap.
@@ -274,6 +284,7 @@ export class LocalActivityPresentation {
         const peer = context.people.get(id);
         if (!peer || invitation?.encounter?.partnerId !== person.id || !canInteract(person, peer)) continue;
         clearRestChoreography(state);
+        clearAmbientAttention(state);
         state.encounter = buildSocialEncounter(person, peer, context.relationshipFor?.(person.id, peer.id));
         state.encounter.beat = invitation.encounter.beat;
         state.partnerId = peer.id; state.seconds = 0;
@@ -285,6 +296,7 @@ export class LocalActivityPresentation {
       }
     }
     const visual = context.visual;
+    updateAmbientAttention(person, context, state, visual, delta);
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
       && Math.hypot(visual.x - state.destination.x, visual.z - state.destination.z) > 0.035) {
       // Terrain may change between intents. PeopleVisualState stops on accepted ground; adopt
@@ -332,7 +344,7 @@ export class LocalActivityPresentation {
     }
     // The stable pair leader advances the shared beat; listener readiness is required.
     const leads = !state.encounter || !reciprocal || person.id < state.partnerId!;
-    if (oriented && leads && state.seconds >= state.hold) {
+    if (oriented && leads && state.seconds >= state.hold && !state.attentionId) {
       if (state.rest) {
         if (state.restStage === 'settling') {
           state.restStage = 'settled';
@@ -468,6 +480,7 @@ export class LocalActivityPresentation {
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
     state.partnerId = undefined;
     state.encounter = undefined;
+    clearAmbientAttention(state);
     clearRestChoreography(state);
     state.animation = 'idle';
     state.action = action;
@@ -713,6 +726,77 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
     : 0.9 + encounter.strength * 0.18 + encounter.trust * 0.14
       + (person.traits.sociability + peer.traits.sociability) * 0.05;
   state.hold = beat.seconds * relationalLinger * (context.far ? 1.35 : 1);
+}
+
+function updateAmbientAttention(person: Person, context: LocalActivityContext, state: LocalActivityState,
+  visual: PersonVisualState | undefined, delta: number): void {
+  if (state.partnerId || state.encounter || state.rest || !visual || visual.traveling || state.action === 'arrive') {
+    if (state.attentionId) clearAmbientAttention(state);
+    return;
+  }
+
+  if (state.attentionId) {
+    const peer = context.people.get(state.attentionId);
+    const at = peer ? context.visualFor?.(peer.id) ?? peer.position : undefined;
+    const valid = peer && at && canInteract(person, peer)
+      && Math.hypot(at.x - visual.x, at.z - visual.z) <= SOCIAL_AWARENESS_RADIUS * 1.2;
+    if (!valid) {
+      clearAmbientAttention(state);
+      return;
+    }
+    state.attentionSeconds = Math.max(0, (state.attentionSeconds ?? 0) - Math.max(0, delta));
+    state.focus.x = at.x;
+    state.focus.z = at.z;
+    state.restFacing = facingTarget(state.destination, at);
+    if ((state.attentionSeconds ?? 0) <= 0) {
+      const peerId = state.attentionId;
+      clearAmbientAttention(state);
+      const spread = unit(`${person.id}:${peerId}:${state.cycle}:${state.step}:attention-cooldown`);
+      state.attentionCooldown = SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS
+        + spread * (SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS - SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS);
+    }
+    return;
+  }
+
+  if ((state.attentionCooldown ?? 0) > 0 || visual.speed > 0.08) return;
+  const peer = selectAmbientAttentionPeer(person, context, visual);
+  if (!peer) return;
+  const at = context.visualFor?.(peer.id) ?? peer.position;
+  state.attentionId = peer.id;
+  const linger = unit(`${person.id}:${peer.id}:${state.cycle}:${state.step}:attention-linger`);
+  state.attentionSeconds = SOCIAL_AWARENESS_MIN_SECONDS
+    + linger * (SOCIAL_AWARENESS_MAX_SECONDS - SOCIAL_AWARENESS_MIN_SECONDS);
+  state.focus.x = at.x;
+  state.focus.z = at.z;
+  state.restFacing = facingTarget(state.destination, at);
+}
+
+function selectAmbientAttentionPeer(person: Person, context: LocalActivityContext, visual: PersonVisualState): Person | undefined {
+  let selected: Person | undefined;
+  let bestDistance = Infinity;
+  for (const id of context.group?.members ?? []) {
+    if (id === person.id) continue;
+    const peer = context.people.get(id);
+    if (!peer || !canInteract(person, peer)) continue;
+    const at = context.visualFor?.(peer.id) ?? peer.position;
+    const distance = Math.hypot(at.x - visual.x, at.z - visual.z);
+    if (distance < 0.34 || distance > SOCIAL_AWARENESS_RADIUS) continue;
+    if (distance < bestDistance - 0.001 || Math.abs(distance - bestDistance) <= 0.001 && peer.id < (selected?.id ?? '\uffff')) {
+      selected = peer;
+      bestDistance = distance;
+    }
+  }
+  return selected;
+}
+
+function clearAmbientAttention(state: LocalActivityState): void {
+  delete state.attentionId;
+  delete state.attentionSeconds;
+  if (!state.partnerId) {
+    state.focus.x = state.stationFocus.x;
+    state.focus.z = state.stationFocus.z;
+    state.restFacing = facingTarget(state.destination, state.stationFocus);
+  }
 }
 
 function hasPeerClearance(person: Person, point: Vec2, context: LocalActivityContext, ignoreId?: string, minimum = 0.3): boolean {
