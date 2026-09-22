@@ -1,5 +1,5 @@
 import { createResourceCargo } from './resources/ResourceCargo';
-import { StructureNavigation } from '../sim/people/StructureNavigation';
+import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNetwork';
@@ -10,7 +10,7 @@ import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
-import { FOUNDING_HEARTH_RESERVE_RADIUS, foundingHearthBurning, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
+import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
@@ -48,7 +48,7 @@ import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
-import { constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
+import { constructionPresentationBucket, constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
 import { ConstructionAssembly, type ConstructionAssemblyPlan } from './construction/ConstructionAssembly';
 import { createConstructionScaffold, updateConstructionScaffold } from './construction/ConstructionScaffold';
 import { updateConstructionWorksite } from './construction/ConstructionWorksite';
@@ -224,6 +224,7 @@ export class GodboxRenderer {
   private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
   private readonly humanNavigation = new StructureNavigation();
   private readonly humanStructureSources = new Map<string, readonly ActivityStructure[]>();
+  private humanObjectSignature = '';
   private readonly peopleVisuals = new PeopleVisualStateStore();
   /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
   private readonly humanLifeClock = new HumanLifeClock();
@@ -238,9 +239,13 @@ export class GodboxRenderer {
   private readonly personGround: PersonVisualGround = {
     heightAt: (x, z) => this.elevationAt(x, z),
     isStandable: (x, z) => this.personStandable(x, z),
-    safeSegment: (a, b) => this.humanNavigation.clear(a, b),
+    safeSegment: (a, b) => this.humanNavigation.clear(a, b)
+      && this.vegetation.pedestrianSegmentClear(a, b) && this.terrainDecor.pedestrianSegmentClear(a, b),
     detour: (a, b) => this.humanNavigation.detour(a, b,
-      (from, to) => this.humanNavigation.clear(from, to) && this.resourceWork.safeSegment(from, to)),
+      (from, to) => this.humanNavigation.clear(from, to)
+        && this.vegetation.pedestrianSegmentClear(from, to)
+        && this.terrainDecor.pedestrianSegmentClear(from, to) && this.resourceWork.safeSegment(from, to)),
+    nearestSafePoint: (point, identity) => this.nearestRenderableGround(point, identity),
   };
   private readonly personMatrix = new THREE.Matrix4();
   private readonly limbMatrix = new THREE.Matrix4();
@@ -277,8 +282,9 @@ export class GodboxRenderer {
   private readonly constructionAssemblies = new Map<string, { site: THREE.Group; assembly: ConstructionAssembly; scaffold: THREE.Group; settlement: Settlement; contact?: boolean }>();
   private readonly settlementVisuals = new Map<string, SettlementVisual>();
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
-  private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number }>();
-  private readonly infrastructurePlacements = new Map<string, { worldX: number; worldZ: number }>();
+  private readonly settlementSolidObstacles = new Map<string, PedestrianFootprint[]>();
+  private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number; width?: number; depth?: number }>();
+  private readonly infrastructurePlacements = new Map<string, { worldX: number; worldZ: number; radius: number }>();
   private readonly palettesByCultureEra = new Map<string, MaterialPalette>();
   private readonly terrainSurface: TerrainSurface;
   private readonly waterSystem: WaterSystem;
@@ -592,15 +598,104 @@ export class GodboxRenderer {
     this.skyAtmosphere.setMistStrength(isAutumn ? 0.62 : isWinter ? 0.5 : isSpring ? 0.44 : 0.3);
   }
 
+  /**
+   * One collision authority for everything a human should visibly walk around. Buildings use their
+   * exact rendered footprints; persistent founding artifacts and extraction cores add bounded solid
+   * footprints without changing simulation authority or turning decorative clutter into physics.
+   */
+  private refreshHumanNavigation(): void {
+    const structuresChanged = this.humanStructureSources.size !== this.settlementBuildingPlacements.size
+      || [...this.settlementBuildingPlacements].some(([id, placements]) => this.humanStructureSources.get(id) !== placements);
+    const historyRunning = this.state.arrival?.phase === 'HISTORY_RUNNING';
+    const landedPods = historyRunning ? (this.state.arrival?.pods ?? []).filter(pod => pod.landed) : [];
+    const objectSignature = [
+      this.resourceWork.revision,
+      historyRunning ? 'history' : this.state.arrival?.phase ?? 'no-arrival',
+      ...landedPods.map(pod => `${pod.id}:${pod.position.x},${pod.position.z}`),
+      ...[...this.landmarkPlacements].map(([id, placement]) =>
+        `landmark:${id}:${placement.worldX},${placement.worldZ}:${placement.width ?? 0},${placement.depth ?? 0}:${placement.rotationY}`),
+      ...[...this.infrastructurePlacements].map(([id, placement]) =>
+        `infrastructure:${id}:${placement.worldX},${placement.worldZ}:${placement.radius}`),
+      ...[...this.settlementSolidObstacles].flatMap(([id, placements]) => placements.map((placement, index) =>
+        `solid:${id}:${index}:${placement.worldX},${placement.worldZ}:${placement.width},${placement.depth}:${placement.rotationY ?? 0}`)),
+    ].join('|');
+    if (!structuresChanged && objectSignature === this.humanObjectSignature) return;
+
+    if (structuresChanged) {
+      this.humanStructureSources.clear();
+      for (const [id, placements] of this.settlementBuildingPlacements) this.humanStructureSources.set(id, placements);
+    }
+
+    const obstacles: PedestrianFootprint[] = [...this.humanStructureSources.values()].flat().map(structure => ({
+      worldX: structure.worldX, worldZ: structure.worldZ, width: structure.width, depth: structure.depth, rotationY: structure.rotationY,
+    }));
+
+    for (const placements of this.settlementSolidObstacles.values()) obstacles.push(...placements);
+
+    // Landmark and advanced-infrastructure visuals live outside ordinary structurePlots, so they
+    // must explicitly join the same pedestrian authority rather than becoming decorative ghosts.
+    for (const placement of this.landmarkPlacements.values()) {
+      if (!placement.width || !placement.depth) continue;
+      obstacles.push({
+        worldX: placement.worldX, worldZ: placement.worldZ,
+        width: placement.width, depth: placement.depth, rotationY: placement.rotationY,
+      });
+    }
+    for (const placement of this.infrastructurePlacements.values()) obstacles.push({
+      worldX: placement.worldX, worldZ: placement.worldZ,
+      width: placement.radius * 2, depth: placement.radius * 2, rotationY: 0,
+    });
+
+    // The arrival cinematic owns founder staging. Once history begins, the landed vessel is a
+    // persistent physical object rather than scenery people may cut through.
+    for (const pod of landedPods) obstacles.push({
+      worldX: pod.position.x,
+      worldZ: pod.position.z,
+      width: FOUNDING_VESSEL_KEEP_OUT_RADIUS * 2,
+      depth: FOUNDING_VESSEL_KEEP_OUT_RADIUS * 2,
+      rotationY: 0,
+    });
+
+    // Hearths remain deliberately small colliders: people can gather closely around the fire but
+    // cannot put their feet through the stone/fire core.
+    for (const settlement of this.state.settlements) {
+      const hearth = foundingHearthWorldPosition(settlement, this.state.arrival?.pods ?? []);
+      if (!hearth) continue;
+      obstacles.push({ worldX: hearth.x, worldZ: hearth.z, width: 0.24, depth: 0.24, rotationY: 0 });
+    }
+
+    // Extraction scenes own clear worker stations at workRadius. Only the solid centre is blocked,
+    // leaving the authored contact ring reachable while preventing miners/loggers from crossing the
+    // exposed face, standing tree, or material core.
+    for (const site of this.resourceWork.sites.values()) {
+      if (site.profile.kind === 'plant') continue;
+      const maxHalf = Math.max(0.04, site.profile.workRadius - 0.18);
+      const desiredHalf = site.tree ? Math.max(0.05, site.tree.radius) : site.profile.kind === 'mineral' ? 0.12 : 0.1;
+      const half = Math.min(desiredHalf, maxHalf);
+      obstacles.push({ worldX: site.origin.x, worldZ: site.origin.z, width: half * 2, depth: half * 2, rotationY: 0 });
+    }
+
+    this.humanNavigation.set(obstacles);
+    this.humanObjectSignature = objectSignature;
+  }
+
+  private registerSettlementObstacle(
+    settlementId: string,
+    worldX: number,
+    worldZ: number,
+    width: number,
+    depth: number,
+    rotationY = 0,
+  ): void {
+    const placements = this.settlementSolidObstacles.get(settlementId) ?? [];
+    placements.push({ worldX, worldZ, width, depth, rotationY });
+    this.settlementSolidObstacles.set(settlementId, placements);
+  }
+
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
-    if (this.humanStructureSources.size !== this.settlementBuildingPlacements.size
-      || [...this.settlementBuildingPlacements].some(([id, placements]) => this.humanStructureSources.get(id) !== placements)) {
-      this.humanStructureSources.clear();
-      for (const [id, placements] of this.settlementBuildingPlacements) this.humanStructureSources.set(id, placements);
-      this.humanNavigation.set([...this.humanStructureSources.values()].flat());
-    }
+    this.refreshHumanNavigation();
     if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
       this.resourceWorkersMonth = this.state.month;
       this.resourceWorkersRevision = this.resourceWork.revision;
@@ -960,6 +1055,13 @@ export class GodboxRenderer {
     return Boolean(terrain && !terrain.water && terrain.maxSlope <= 40);
   }
 
+  private personCollisionFree(x: number, z: number): boolean {
+    const point = { x, z };
+    return this.personStandable(x, z) && this.humanNavigation.clear(point)
+      && this.vegetation.pedestrianSegmentClear(point, point)
+      && this.terrainDecor.pedestrianSegmentClear(point, point);
+  }
+
   private resolvePersonRenderPosition(person: Person): Vec2 {
     const target = this.personDisplayTarget(person, undefined);
     return { x: target.x, z: target.z };
@@ -997,9 +1099,9 @@ export class GodboxRenderer {
         position = clearActivityStructure(position, placement, fallback);
       }
     }
-    if (!this.personStandable(position.x, position.z)) {
+    if (!this.personCollisionFree(position.x, position.z)) {
       const previous = this.lastPersonGroundPosition.get(person.id);
-      position = previous && this.personStandable(previous.x, previous.z)
+      position = previous && this.personCollisionFree(previous.x, previous.z)
         ? previous : this.nearestRenderableGround(person.position, person.id);
     }
     const remembered = this.lastPersonGroundPosition.get(person.id);
@@ -1016,8 +1118,7 @@ export class GodboxRenderer {
       for (let index = 0; index < 12; index += 1) {
         const angle = phase + index / 12 * Math.PI * 2;
         const candidate = { x: origin.x + Math.cos(angle) * radius, z: origin.z + Math.sin(angle) * radius };
-        const terrain = this.terrainQueries.queryTerrainAt(candidate.x, candidate.z);
-        if (terrain && !terrain.water && terrain.maxSlope <= 40) return candidate;
+        if (this.personCollisionFree(candidate.x, candidate.z)) return candidate;
       }
     }
     return origin;
@@ -1054,6 +1155,7 @@ export class GodboxRenderer {
       if (!settlement.alive && !settlement.development) {
         const visual = this.settlementVisuals.get(settlement.id);
         if (visual) visual.group.visible = false;
+        this.settlementSolidObstacles.delete(settlement.id);
         continue;
       }
       const existing = this.settlementVisuals.get(settlement.id);
@@ -1088,6 +1190,7 @@ export class GodboxRenderer {
 
   private createSettlementVisual(settlement: Settlement): SettlementVisual {
     const group = new THREE.Group();
+    this.settlementSolidObstacles.set(settlement.id, []);
     const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
     group.position.set(settlement.position.x, settlementY, settlement.position.z);
     const culture = this.dominantCulture(settlement);
@@ -1175,7 +1278,7 @@ export class GodboxRenderer {
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
     if (!settlement.development && importance >= 1 && eraRank(era) >= 2) this.addLandmark(group, settlement, cultureStyle, era, axisAngle, settlementY);
     if (!settlement.development && routeCount > 0 && eraRank(era) >= 2) this.addMarket(group, settlement, layout, culture, Math.min(4, routeCount));
-    if (politySize > 1) this.addWaystones(group, culture, Math.min(5, politySize));
+    if (politySize > 1) this.addWaystones(group, settlement, culture, Math.min(5, politySize));
     const smokeSources: SmokeSource[] = [];
     if (survivalFireActive) {
       const hearth = foundingHearthWorldPosition(settlement, this.state.arrival?.pods ?? []);
@@ -1195,7 +1298,7 @@ export class GodboxRenderer {
     }
     if (settlement.alive) this.addInfrastructure(group, settlement, culture, smokeSources);
     if (!settlement.development) {
-      this.addEraDressing(group, era, palette, visualRandom);
+      this.addEraDressing(group, settlement, era, palette, visualRandom);
       this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
     }
     if (settlement.alive) this.addHearthSmoke(placements, era, smokeSources);
@@ -1287,6 +1390,7 @@ export class GodboxRenderer {
         station.rotation.y = portal.angle + Math.PI / 2;
         station.userData['portalKind'] = portal.kind;
         group.add(station);
+        this.registerSettlementObstacle(settlement.id, worldX, worldZ, 1.55, 0.55, station.rotation.y);
         continue;
       }
       if (rank < 2) continue;
@@ -1303,6 +1407,18 @@ export class GodboxRenderer {
       gate.rotation.y = portal.angle + Math.PI / 2;
       gate.userData['portalKind'] = portal.kind;
       group.add(gate);
+      // The opening stays walkable; only the two posts are solid.
+      const c = Math.cos(gate.rotation.y), sn = Math.sin(gate.rotation.y);
+      for (const localX of [-0.36, 0.36]) {
+        this.registerSettlementObstacle(
+          settlement.id,
+          worldX + c * localX,
+          worldZ - sn * localX,
+          0.18,
+          0.18,
+          gate.rotation.y,
+        );
+      }
     }
   }
 
@@ -1494,6 +1610,8 @@ export class GodboxRenderer {
     const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
     const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
     const fit = 2.9 / Math.max(grammarWidth, grammarDepth);
+    placement.width = grammarWidth * fit;
+    placement.depth = grammarDepth * fit;
     landmark.position.set(placement.worldX - settlement.position.x, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.worldZ - settlement.position.z);
     landmark.rotation.y = placement.rotationY;
     landmark.scale.setScalar(fit);
@@ -1981,7 +2099,7 @@ export class GodboxRenderer {
       infrastructure.factories,
       settlement.industry.intensity,
       settlement.urbanization,
-      settlement.development?.project ? 0 : constructionPresentationProgress(settlement),
+      constructionPresentationBucket(constructionPresentationProgress(settlement)),
       this.state.advanced.atomic.applications.energy,
       this.state.advanced.machine.capability,
       this.state.advanced.space.orbitalInfrastructure,
@@ -2089,7 +2207,7 @@ export class GodboxRenderer {
     }
   }
 
-  private validatedInfrastructurePosition(settlement: Settlement, kind: string, desiredX: number, desiredZ: number, radius: number): { worldX: number; worldZ: number } | undefined {
+  private validatedInfrastructurePosition(settlement: Settlement, kind: string, desiredX: number, desiredZ: number, radius: number): { worldX: number; worldZ: number; radius: number } | undefined {
     const key = `${settlement.id}:infrastructure:${kind}`;
     const cached = this.infrastructurePlacements.get(key);
     if (cached) return cached;
@@ -2102,7 +2220,7 @@ export class GodboxRenderer {
       if (!validation.valid) continue;
       const registered = this.placementFootprints.registerFootprint({ kind: 'building', worldX, worldZ, radius, placedMonth: this.state.month, entityId: key, persistent: true });
       if (!registered.success) continue;
-      const placement = { worldX, worldZ };
+      const placement = { worldX, worldZ, radius };
       this.infrastructurePlacements.set(key, placement);
       return placement;
     }
@@ -2770,10 +2888,11 @@ export class GodboxRenderer {
       stall.add(table, canopy, posts, secondPost);
       stall.rotation.y = -angle + Math.PI / 2;
       group.add(stall);
+      this.registerSettlementObstacle(settlement.id, position.worldX, position.worldZ, 0.85, 0.48, stall.rotation.y);
     }
   }
 
-  private addWaystones(group: THREE.Group, culture: Culture | undefined, count: number): void {
+  private addWaystones(group: THREE.Group, settlement: Settlement, culture: Culture | undefined, count: number): void {
     const stone = new THREE.MeshStandardMaterial({ color: '#625e59', roughness: 1 });
     const accent = new THREE.MeshStandardMaterial({ color: culture?.style.accent ?? '#efb758', roughness: 0.78 });
     for (let index = 0; index < count; index += 1) {
@@ -2786,6 +2905,13 @@ export class GodboxRenderer {
       cap.position.y = 0.9;
       marker.add(pillar, cap);
       group.add(marker);
+      this.registerSettlementObstacle(
+        settlement.id,
+        settlement.position.x + marker.position.x,
+        settlement.position.z + marker.position.z,
+        0.22,
+        0.22,
+      );
     }
   }
 
@@ -2875,7 +3001,7 @@ export class GodboxRenderer {
    * fragments for pre-industrial towns, freight for industry, panel arrays for the advanced.
    * These are the background verbs of daily life the buildings alone cannot speak.
    */
-  private addEraDressing(group: THREE.Group, era: Era, palette: MaterialPalette, random: SeededRandom): void {
+  private addEraDressing(group: THREE.Group, settlement: Settlement, era: Era, palette: MaterialPalette, random: SeededRandom): void {
     const rank = eraRank(era);
     const timber = palette.getSurfaceMaterial('timber');
     const stone = palette.getSurfaceMaterial('stone');
@@ -2900,6 +3026,14 @@ export class GodboxRenderer {
         hide.position.set(x, 0.42, z);
         hide.rotation.y = yaw;
         group.add(hide);
+        this.registerSettlementObstacle(
+          settlement.id,
+          settlement.position.x + x,
+          settlement.position.z + z,
+          0.74,
+          0.12,
+          yaw,
+        );
       }
       return;
     }
@@ -2921,6 +3055,13 @@ export class GodboxRenderer {
       bar.rotation.z = Math.PI / 2;
       bar.position.set(x, 0.66, z);
       group.add(bar);
+      this.registerSettlementObstacle(
+        settlement.id,
+        settlement.position.x + x,
+        settlement.position.z + z,
+        0.56,
+        0.56,
+      );
     }
     if (rank === 3) {
       // Fragments of town wall with gate posts mark the formal edge.
@@ -2933,6 +3074,14 @@ export class GodboxRenderer {
         segment.rotation.y = -wallAngle + Math.PI / 2;
         segment.castShadow = true;
         group.add(segment);
+        this.registerSettlementObstacle(
+          settlement.id,
+          settlement.position.x + sx,
+          settlement.position.z + sz,
+          1.9,
+          0.16,
+          segment.rotation.y,
+        );
       }
     }
     if (rank >= 4) {
@@ -3004,6 +3153,14 @@ export class GodboxRenderer {
           group.add(log);
         }
       }
+      this.registerSettlementObstacle(
+        settlement.id,
+        settlement.position.x + baseX,
+        settlement.position.z + baseZ,
+        1.15,
+        0.62,
+        angle,
+      );
       for (const side of [-0.7, 0.7]) {
         const trestle = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.4, 0.34), timber);
         trestle.position.set(baseX + Math.cos(angle) * 1.4 + Math.sin(angle) * side, 0.2, baseZ + Math.sin(angle) * 1.4 + Math.cos(angle) * side);
@@ -3018,6 +3175,13 @@ export class GodboxRenderer {
       spoil.position.set(baseX, 0.31, baseZ);
       spoil.castShadow = true;
       group.add(spoil);
+      this.registerSettlementObstacle(
+        settlement.id,
+        settlement.position.x + baseX,
+        settlement.position.z + baseZ,
+        1.35,
+        1.35,
+      );
       // Head-frame scaffold over the working.
       const platformX = baseX + Math.cos(angle + 1.4) * 1.5;
       const platformZ = baseZ + Math.sin(angle + 1.4) * 1.5;
@@ -3039,6 +3203,13 @@ export class GodboxRenderer {
       kiln.position.set(baseX, 0.02, baseZ);
       kiln.castShadow = true;
       group.add(kiln);
+      this.registerSettlementObstacle(
+        settlement.id,
+        settlement.position.x + baseX,
+        settlement.position.z + baseZ,
+        0.8,
+        0.8,
+      );
       const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, 0.1), palette.getSurfaceMaterial('shadow'));
       mouth.position.set(baseX + Math.cos(angle) * 0.36, 0.12, baseZ + Math.sin(angle) * 0.36);
       mouth.rotation.y = -angle;
