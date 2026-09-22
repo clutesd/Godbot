@@ -88,6 +88,8 @@ interface SmokeSource {
   /** 0..1 plume brightness; polluted industry runs darker. */
   shade: number;
   baseStrength?: number;
+  /** Presentation-only visibility multiplier; lets queued ignition hide smoke before flame exists. */
+  presentationGain?: number;
   kind?: 'founding-hearth';
   settlementId?: string;
 }
@@ -2668,6 +2670,7 @@ export class GodboxRenderer {
       for (const source of visual.smokeSources) {
         if (source.kind !== 'founding-hearth') continue;
         source.strength = (source.baseStrength ?? 0.24) * sample.smokeGain;
+        source.presentationGain = Math.min(1, sample.smokeGain * 2.5);
       }
     }
   }
@@ -3120,7 +3123,8 @@ export class GodboxRenderer {
       const rise = 1.3 + source.strength * 2.3;
       const drift = t * t * (0.55 + source.strength * 0.4);
       const fade = Math.sin(Math.PI * Math.min(1, t * 1.12));
-      const scale = Math.max(0.001, (0.09 + (0.2 + source.strength * 0.3) * t) * fade);
+      const presentationGain = source.presentationGain ?? 1;
+      const scale = Math.max(0.001, (0.09 + (0.2 + source.strength * 0.3) * t) * fade * presentationGain);
       this.smokeMatrix.makeScale(scale, scale * 0.82, scale);
       this.smokeMatrix.setPosition(source.worldX + drift * 0.62, source.worldY + t * rise, source.worldZ + drift * 0.3);
       this.smoke.setMatrixAt(index, this.smokeMatrix);
