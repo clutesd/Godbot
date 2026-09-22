@@ -25,10 +25,14 @@ const LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD = 0.24;
 const LOCAL_ACTIVITY_BASE_RELEASE_RADIUS = 0.1;
 const LOCAL_ACTIVITY_REANCHOR_LIMIT = 0.9;
 const SOCIAL_AWARENESS_RADIUS = 1.2;
-const SOCIAL_AWARENESS_MIN_SECONDS = 0.65;
-const SOCIAL_AWARENESS_MAX_SECONDS = 1.35;
-const SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS = 3.5;
-const SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS = 7;
+const SOCIAL_AWARENESS_ACQUIRE_SECONDS = 0.28;
+const SOCIAL_AWARENESS_RELEASE_SECONDS = 0.42;
+const SOCIAL_AWARENESS_MIN_HOLD_SECONDS = 0.45;
+const SOCIAL_AWARENESS_MAX_HOLD_SECONDS = 1.05;
+const SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS = 7;
+const SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS = 16;
+const SOCIAL_AWARENESS_MAX_HEAD_YAW = 0.62;
+const SOCIAL_AWARENESS_MAX_TORSO_YAW = 0.15;
 export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
 }
@@ -170,7 +174,14 @@ export interface LocalActivityState {
   socialCooldown?: number;
   /** Brief presentation-only notice of a nearby peer before any full social encounter. */
   attentionId?: string;
+  attentionPhase?: 'acquire' | 'hold' | 'release';
   attentionSeconds?: number;
+  attentionHold?: number;
+  /** 0..1 ease value used by the renderer to layer head/torso attention without steering locomotion. */
+  attentionBlend?: number;
+  /** Signed yaw relative to locomotion facing; head leads, torso only follows for meaningful recognition. */
+  attentionHeadYaw?: number;
+  attentionTorsoYaw?: number;
   attentionCooldown?: number;
   hold: number;
   partnerId?: string;
@@ -296,7 +307,7 @@ export class LocalActivityPresentation {
       }
     }
     const visual = context.visual;
-    updateAmbientAttention(person, context, state, visual, delta);
+    updateAmbientAttention(person, context, state, visual, delta, this.previousStates);
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
       && Math.hypot(visual.x - state.destination.x, visual.z - state.destination.z) > 0.035) {
       // Terrain may change between intents. PeopleVisualState stops on accepted ground; adopt
@@ -729,74 +740,154 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
 }
 
 function updateAmbientAttention(person: Person, context: LocalActivityContext, state: LocalActivityState,
-  visual: PersonVisualState | undefined, delta: number): void {
-  if (state.partnerId || state.encounter || state.rest || !visual || visual.traveling || state.action === 'arrive') {
-    if (state.attentionId) clearAmbientAttention(state);
-    return;
-  }
+  visual: PersonVisualState | undefined, delta: number, previousStates: ReadonlyMap<string, LocalActivityState>): void {
+  const dt = Math.max(0, delta);
+  const unsuitable = state.partnerId || state.encounter || state.rest || !visual || visual.traveling
+    || visual.speed > 0.045 || state.action === 'arrive' || state.phase === 'approach';
 
   if (state.attentionId) {
     const peer = context.people.get(state.attentionId);
     const at = peer ? context.visualFor?.(peer.id) ?? peer.position : undefined;
-    const valid = peer && at && canInteract(person, peer)
-      && Math.hypot(at.x - visual.x, at.z - visual.z) <= SOCIAL_AWARENESS_RADIUS * 1.2;
-    if (!valid) {
-      clearAmbientAttention(state);
-      return;
+    const peerState = peer ? previousStates.get(peer.id) : undefined;
+    const valid = !unsuitable && peer && at && canInteract(person, peer)
+      && peerState?.phase !== 'approach' && peerState?.action !== 'arrive'
+      && Math.hypot(at.x - visual!.x, at.z - visual!.z) <= SOCIAL_AWARENESS_RADIUS * 1.15;
+
+    if (!valid && state.attentionPhase !== 'release') {
+      state.attentionPhase = 'release';
+      state.attentionSeconds = 0;
     }
-    state.attentionSeconds = Math.max(0, (state.attentionSeconds ?? 0) - Math.max(0, delta));
-    state.focus.x = at.x;
-    state.focus.z = at.z;
-    state.restFacing = facingTarget(state.destination, at);
-    if ((state.attentionSeconds ?? 0) <= 0) {
-      const peerId = state.attentionId;
-      clearAmbientAttention(state);
-      const spread = unit(`${person.id}:${peerId}:${state.cycle}:${state.step}:attention-cooldown`);
-      state.attentionCooldown = SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS
-        + spread * (SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS - SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS);
+
+    if (state.attentionPhase !== 'release' && peer && at && visual) {
+      const relationship = context.relationshipFor?.(person.id, peer.id);
+      const meaningful = meaningfulAmbientRecognition(person, peer, relationship);
+      const relativeYaw = normalizeAngle(facingTarget(visual, at) - visual.facing);
+      const maxYaw = meaningful ? SOCIAL_AWARENESS_MAX_HEAD_YAW : SOCIAL_AWARENESS_MAX_HEAD_YAW * 0.78;
+      state.attentionHeadYaw = clamp(relativeYaw, -maxYaw, maxYaw);
+      state.attentionTorsoYaw = meaningful
+        ? clamp(relativeYaw * 0.22, -SOCIAL_AWARENESS_MAX_TORSO_YAW, SOCIAL_AWARENESS_MAX_TORSO_YAW)
+        : 0;
+    }
+
+    state.attentionSeconds = (state.attentionSeconds ?? 0) + dt;
+    if (state.attentionPhase === 'acquire') {
+      state.attentionBlend = smoothAttention((state.attentionSeconds ?? 0) / SOCIAL_AWARENESS_ACQUIRE_SECONDS);
+      if ((state.attentionSeconds ?? 0) >= SOCIAL_AWARENESS_ACQUIRE_SECONDS) {
+        state.attentionPhase = 'hold';
+        state.attentionSeconds = 0;
+        state.attentionBlend = 1;
+      }
+    } else if (state.attentionPhase === 'hold') {
+      state.attentionBlend = 1;
+      if ((state.attentionSeconds ?? 0) >= (state.attentionHold ?? SOCIAL_AWARENESS_MIN_HOLD_SECONDS)) {
+        state.attentionPhase = 'release';
+        state.attentionSeconds = 0;
+      }
+    } else {
+      state.attentionBlend = 1 - smoothAttention((state.attentionSeconds ?? 0) / SOCIAL_AWARENESS_RELEASE_SECONDS);
+      if ((state.attentionSeconds ?? 0) >= SOCIAL_AWARENESS_RELEASE_SECONDS) {
+        const peerId = state.attentionId;
+        clearAmbientAttention(state);
+        const spread = unit(`${person.id}:${peerId}:${state.cycle}:${state.step}:attention-cooldown`);
+        state.attentionCooldown = SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS
+          + spread * (SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS - SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS);
+      }
     }
     return;
   }
 
-  if ((state.attentionCooldown ?? 0) > 0 || visual.speed > 0.08) return;
-  const peer = selectAmbientAttentionPeer(person, context, visual);
-  if (!peer) return;
-  const at = context.visualFor?.(peer.id) ?? peer.position;
-  state.attentionId = peer.id;
-  const linger = unit(`${person.id}:${peer.id}:${state.cycle}:${state.step}:attention-linger`);
-  state.attentionSeconds = SOCIAL_AWARENESS_MIN_SECONDS
-    + linger * (SOCIAL_AWARENESS_MAX_SECONDS - SOCIAL_AWARENESS_MIN_SECONDS);
-  state.focus.x = at.x;
-  state.focus.z = at.z;
-  state.restFacing = facingTarget(state.destination, at);
+  if (unsuitable || (state.attentionCooldown ?? 0) > 0) return;
+  const selected = selectAmbientAttentionPeer(person, context, state, visual!, previousStates);
+  if (!selected) return;
+  const at = context.visualFor?.(selected.peer.id) ?? selected.peer.position;
+  const relativeYaw = normalizeAngle(facingTarget(visual!, at) - visual!.facing);
+  state.attentionId = selected.peer.id;
+  state.attentionPhase = 'acquire';
+  state.attentionSeconds = 0;
+  const linger = unit(`${person.id}:${selected.peer.id}:${state.cycle}:${state.step}:attention-linger`);
+  state.attentionHold = SOCIAL_AWARENESS_MIN_HOLD_SECONDS
+    + linger * (SOCIAL_AWARENESS_MAX_HOLD_SECONDS - SOCIAL_AWARENESS_MIN_HOLD_SECONDS);
+  state.attentionBlend = 0;
+  const maxYaw = selected.meaningful ? SOCIAL_AWARENESS_MAX_HEAD_YAW : SOCIAL_AWARENESS_MAX_HEAD_YAW * 0.78;
+  state.attentionHeadYaw = clamp(relativeYaw, -maxYaw, maxYaw);
+  state.attentionTorsoYaw = selected.meaningful
+    ? clamp(relativeYaw * 0.22, -SOCIAL_AWARENESS_MAX_TORSO_YAW, SOCIAL_AWARENESS_MAX_TORSO_YAW)
+    : 0;
 }
 
-function selectAmbientAttentionPeer(person: Person, context: LocalActivityContext, visual: PersonVisualState): Person | undefined {
-  let selected: Person | undefined;
-  let bestDistance = Infinity;
+interface AmbientAttentionSelection {
+  peer: Person;
+  meaningful: boolean;
+  score: number;
+}
+
+function selectAmbientAttentionPeer(person: Person, context: LocalActivityContext, state: LocalActivityState,
+  visual: PersonVisualState, previousStates: ReadonlyMap<string, LocalActivityState>): AmbientAttentionSelection | undefined {
+  let selected: AmbientAttentionSelection | undefined;
+  const kind = person.navigation?.destinationKind;
   for (const id of context.group?.members ?? []) {
     if (id === person.id) continue;
     const peer = context.people.get(id);
-    if (!peer || !canInteract(person, peer)) continue;
+    const peerState = previousStates.get(id);
+    if (!peer || !canInteract(person, peer) || peerState?.phase === 'approach' || peerState?.action === 'arrive') continue;
     const at = context.visualFor?.(peer.id) ?? peer.position;
     const distance = Math.hypot(at.x - visual.x, at.z - visual.z);
-    if (distance < 0.34 || distance > SOCIAL_AWARENESS_RADIUS) continue;
-    if (distance < bestDistance - 0.001 || Math.abs(distance - bestDistance) <= 0.001 && peer.id < (selected?.id ?? '\uffff')) {
-      selected = peer;
-      bestDistance = distance;
+    if (distance < 0.38 || distance > SOCIAL_AWARENESS_RADIUS) continue;
+
+    const relationship = context.relationshipFor?.(person.id, peer.id);
+    const meaningful = meaningfulAmbientRecognition(person, peer, relationship);
+    const yaw = Math.abs(normalizeAngle(facingTarget(visual, at) - visual.facing));
+    const cone = meaningful ? 1.75 : relationship || person.workplaceId && person.workplaceId === peer.workplaceId ? 1.25 : 0.82;
+    if (yaw > cone) continue;
+
+    // Unknown passers-by should mostly be visual background. Only social public spaces can produce
+    // an occasional one-way glance; meaningful ties are allowed to register much more reliably.
+    if (!meaningful && !relationship && person.workplaceId !== peer.workplaceId) {
+      if (kind !== 'plaza' && kind !== 'market') continue;
+      const [first, second] = person.id < peer.id ? [person.id, peer.id] : [peer.id, person.id];
+      const observerIsFirst = unit(`${first}:${second}:ambient-observer`) < 0.5;
+      if ((person.id === first) !== observerIsFirst) continue;
+      if (unit(`${person.id}:${peer.id}:${state.cycle}:${state.step}:ambient-interest`) > 0.24 + person.traits.sociability * 0.18) continue;
+    }
+
+    const relational = relationship
+      ? relationshipScoreForPresentation(person, peer, relationship, person.bornMonth + person.ageMonths)
+      : meaningful ? 0.82 : person.workplaceId && person.workplaceId === peer.workplaceId ? 0.48 : 0.18;
+    const score = relational - distance * 0.34 - yaw * 0.22;
+    if (!selected || score > selected.score + 0.001 || Math.abs(score - selected.score) <= 0.001 && peer.id < selected.peer.id) {
+      selected = { peer, meaningful, score };
     }
   }
   return selected;
 }
 
+function meaningfulAmbientRecognition(person: Person, peer: Person, relationship: SocialRelationship | undefined): boolean {
+  if (person.partnerId === peer.id || peer.partnerId === person.id || person.householdId === peer.householdId) return true;
+  return relationship?.kind === 'family' || relationship?.kind === 'friend' || relationship?.kind === 'mentor'
+    || relationship?.kind === 'intellectual-collaborator' || relationship?.strength !== undefined && relationship.strength >= 0.72;
+}
+
+function smoothAttention(value: number): number {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function normalizeAngle(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function clearAmbientAttention(state: LocalActivityState): void {
   delete state.attentionId;
+  delete state.attentionPhase;
   delete state.attentionSeconds;
-  if (!state.partnerId) {
-    state.focus.x = state.stationFocus.x;
-    state.focus.z = state.stationFocus.z;
-    state.restFacing = facingTarget(state.destination, state.stationFocus);
-  }
+  delete state.attentionHold;
+  delete state.attentionBlend;
+  delete state.attentionHeadYaw;
+  delete state.attentionTorsoYaw;
 }
 
 function hasPeerClearance(person: Person, point: Vec2, context: LocalActivityContext, ignoreId?: string, minimum = 0.3): boolean {
