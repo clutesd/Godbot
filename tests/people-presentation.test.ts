@@ -9,7 +9,7 @@ import {
   turnToward,
   type PersonVisualGround,
 } from '../src/render/people/PeopleVisualState';
-import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor } from '../src/render/people/PeoplePresentation';
+import { buildSocialGroups, conversationPodFor, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor } from '../src/render/people/PeoplePresentation';
 import { AnimationController, presentationBodyTilt } from '../src/render/animation/AnimationController';
 import { HistoricalImportanceSystem } from '../src/sim/people/HistoricalImportance';
 import { NOTABLE_VISUAL_BUDGET, visiblePersonBudgetForDensity } from '../src/render/GodboxRenderer';
@@ -247,6 +247,81 @@ describe('Purposeful gatherings', () => {
     }
     const distinct = new Set(placements.map((placement) => `${placement.x.toFixed(4)}:${placement.z.toFixed(4)}`));
     expect(distinct.size).toBe(people.length);
+  });
+
+  it('forms readable three-to-four person conversational pods facing a shared centre', () => {
+    const people = Array.from({ length: 7 }, (_, index) => person({
+      id: `pod-${index}`,
+      activity: 'socialize',
+      position: { x: 0, z: 0 },
+      target: { x: 0, z: 0 },
+      navigation: {
+        destinationKind: 'plaza', destinationId: 'central-plaza', reason: 'social gathering',
+        waypoints: [], waypointIndex: 0, schedulePhase: 'social', traveling: false, crossingMode: 'walk',
+      },
+    }));
+    const group = buildSocialGroups(people).get('plaza:central-plaza')!;
+    expect(group.pods?.map(pod => pod.members.length)).toEqual([4, 3]);
+    const byId = new Map(people.map(candidate => [candidate.id, candidate]));
+    const placements = group.members.map(id => placeInGroup(byId.get(id)!, group, byId.get(id)!.position));
+
+    for (let index = 0; index < group.members.length; index++) {
+      const id = group.members[index]!;
+      const placement = placements[index]!;
+      const pod = conversationPodFor(group, id)!;
+      expect(placement.podId).toBe(pod.id);
+      expect(placement.podKind).toBe('adult');
+      expect(placement.podCenter).toBeDefined();
+      const centre = placement.podCenter!;
+      const expected = Math.atan2(centre.x - placement.x, centre.z - placement.z);
+      const error = Math.abs(Math.atan2(Math.sin((placement.restFacing ?? 0) - expected), Math.cos((placement.restFacing ?? 0) - expected)));
+      expect(error).toBeLessThan(0.08);
+      const radius = Math.hypot(placement.x - centre.x, placement.z - centre.z);
+      expect(radius).toBeGreaterThan(0.2);
+      expect(radius).toBeLessThan(0.5);
+    }
+
+    const firstCentre = placements[0]!.podCenter!;
+    const secondCentre = placements[4]!.podCenter!;
+    expect(Math.hypot(firstCentre.x - secondCentre.x, firstCentre.z - secondCentre.z)).toBeGreaterThan(0.6);
+  });
+
+  it('gives child play a distinct hopping and gesturing silhouette', () => {
+    const controller = new AnimationController('child-play');
+    controller.getOrCreateCharacterState('child', 'child');
+    const heights: number[] = [];
+    const gestures: number[] = [];
+    const names = new Set<string>();
+    for (let frame = 0; frame < 90; frame++) {
+      controller.updateCharacterAnimation('child', 1 / 30, 'socialize', 'play', 0, 9 * 12);
+      const pose = controller.getCurrentPose('child')!;
+      heights.push(pose.positionOffset.y);
+      gestures.push(Math.max(Math.abs(pose.leftShoulderRotation), Math.abs(pose.rightShoulderRotation)));
+      names.add(pose.name);
+    }
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(0.04);
+    expect(Math.max(...gestures)).toBeGreaterThan(0.45);
+    expect(names.size).toBeGreaterThanOrEqual(2);
+  });
+
+  it('scales play expression across childhood instead of animating toddlers and teenagers identically', () => {
+    const liftRange = (ageMonths: number): number => {
+      const controller = new AnimationController('age-aware-play');
+      controller.getOrCreateCharacterState('same-child', 'child');
+      const heights: number[] = [];
+      for (let frame = 0; frame < 120; frame++) {
+        controller.updateCharacterAnimation('same-child', 1 / 30, 'socialize', 'play', 0, ageMonths);
+        heights.push(controller.getCurrentPose('same-child')!.positionOffset.y);
+      }
+      return Math.max(...heights) - Math.min(...heights);
+    };
+
+    const toddler = liftRange(2 * 12);
+    const middleChild = liftRange(9 * 12);
+    const teenager = liftRange(14 * 12);
+    expect(toddler).toBeLessThan(middleChild * 0.4);
+    expect(teenager).toBeLessThan(middleChild * 0.8);
+    expect(middleChild).toBeGreaterThan(0.04);
   });
 
   it('maps visual travel onto locomotion animation rather than a stationary work loop', () => {

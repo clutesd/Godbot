@@ -21,8 +21,8 @@ type SocialPerson = Person & { socialAffinityIds?: string[]; socialAvoidIds?: st
 
 /** How strongly members of a gathering are drawn toward its occupancy geometry, by destination. */
 const COHESION: Partial<Record<DestinationKind, number>> = {
-  market: 0.84,
-  plaza: 0.82,
+  market: 0.89,
+  plaza: 0.91,
   shrine: 0.88,
   'construction-site': 0.78,
   'safe-area': 0.76,
@@ -51,6 +51,15 @@ const WORK_GRID = new Set<DestinationKind>([
 const MAX_DISPLACEMENT = 1.6;
 const GOLDEN_ANGLE = 2.39996323;
 
+export type SocialPodKind = 'adult' | 'children' | 'mixed';
+
+export interface SocialPod {
+  id: string;
+  index: number;
+  members: string[];
+  kind: SocialPodKind;
+}
+
 export interface SocialGroup {
   key: string;
   kind: DestinationKind;
@@ -58,6 +67,8 @@ export interface SocialGroup {
   centerZ: number;
   /** Deterministic social order: close ties are adjacent when possible, then stable id order. */
   members: string[];
+  /** Conversational destinations expose the same pod contract to placement and choreography. */
+  pods?: SocialPod[];
 }
 
 export interface GroupPlacement {
@@ -65,6 +76,10 @@ export interface GroupPlacement {
   z: number;
   /** Facing to hold while stationary — toward a focal point or a conversation partner. */
   restFacing?: number;
+  /** Shared conversational geometry, used by local choreography instead of rediscovering neighbours. */
+  podId?: string;
+  podCenter?: Vec2;
+  podKind?: SocialPodKind;
 }
 
 /** People who are travelling keep their own route; only settled attendants form gatherings. */
@@ -100,6 +115,9 @@ export function buildSocialGroups(people: readonly Person[]): Map<string, Social
     group.centerX /= group.members.length;
     group.centerZ /= group.members.length;
     group.members = sociallyOrderMembers(group.members, peopleById, group.kind);
+    if (CONVERSATIONAL.has(group.kind) && group.members.length >= 2) {
+      group.pods = buildConversationalPods(group, peopleById);
+    }
   }
   return groups;
 }
@@ -120,7 +138,8 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
   const target = occupancyPlacement(group, index);
   const withdrawal = socialWithdrawalFor(person);
   const baseCohesion = COHESION[group.kind] ?? 0.3;
-  const cohesion = baseCohesion * (1 - withdrawal * (CONVERSATIONAL.has(group.kind) ? 0.34 : 0.16));
+  const podCohesion = target.podKind === 'children' ? Math.min(0.96, baseCohesion + 0.05) : baseCohesion;
+  const cohesion = podCohesion * (1 - withdrawal * (CONVERSATIONAL.has(group.kind) ? 0.34 : 0.16));
   let targetX = target.x;
   let targetZ = target.z;
   if (withdrawal > 0.05 && group.members.length > 2 && (CONVERSATIONAL.has(group.kind) || group.kind === 'shrine' || group.kind === 'home')) {
@@ -138,10 +157,18 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
   const offsetZ = blendedZ - simPosition.z;
   const displacement = Math.hypot(offsetX, offsetZ);
   const limit = displacement > MAX_DISPLACEMENT ? MAX_DISPLACEMENT / displacement : 1;
+  const x = simPosition.x + offsetX * limit;
+  const z = simPosition.z + offsetZ * limit;
+  const restFacing = target.podCenter
+    ? Math.atan2(target.podCenter.x - x, target.podCenter.z - z)
+    : target.restFacing;
   return {
-    x: simPosition.x + offsetX * limit,
-    z: simPosition.z + offsetZ * limit,
-    ...(target.restFacing === undefined ? {} : { restFacing: target.restFacing }),
+    x,
+    z,
+    ...(restFacing === undefined ? {} : { restFacing }),
+    ...(target.podId === undefined ? {} : { podId: target.podId }),
+    ...(target.podCenter === undefined ? {} : { podCenter: { ...target.podCenter } }),
+    ...(target.podKind === undefined ? {} : { podKind: target.podKind }),
   };
 }
 
@@ -197,21 +224,90 @@ function occupancyPlacement(group: SocialGroup, index: number): GroupPlacement {
 }
 
 function conversationalPod(group: SocialGroup, index: number, phase: number): GroupPlacement {
-  const count = group.members.length;
-  const pod = Math.floor(index / 2);
-  const podCount = Math.ceil(count / 2);
-  const side = index % 2 === 0 ? 1 : -1;
-  const angle = phase + pod * GOLDEN_ANGLE;
-  const radius = 0.42 + Math.sqrt(podCount) * 0.24 + Math.sqrt((pod + 0.5) / Math.max(1, podCount)) * 0.35;
-  const centerX = group.centerX + Math.cos(angle) * radius;
-  const centerZ = group.centerZ + Math.sin(angle) * radius;
-  const axis = angle + Math.PI * 0.5 + (unit(`${group.key}:${pod}:axis`) - 0.5) * 0.45;
-  const separation = 0.25 + unit(`${group.key}:${pod}:gap`) * 0.08;
+  const id = group.members[index]!;
+  const pod = conversationPodFor(group, id);
+  if (!pod) return radialCluster(group, index, phase);
+  const localIndex = pod.members.indexOf(id);
+  const center = conversationPodCenter(group, pod);
+  const axis = phase + pod.index * GOLDEN_ANGLE + (unit(`${pod.id}:axis`) - 0.5) * 0.7;
+  const size = pod.members.length;
+  // Children need visible running room; adult pods stay intimate. Mixed pods sit between the two.
+  const memberRadius = pod.kind === 'children'
+    ? (size === 2 ? 0.39 : size === 3 ? 0.44 : 0.48)
+    : pod.kind === 'mixed'
+      ? (size === 2 ? 0.34 : size === 3 ? 0.38 : 0.42)
+      : (size === 2 ? 0.31 : size === 3 ? 0.34 : 0.38);
+  const memberAngle = axis + localIndex / Math.max(1, size) * Math.PI * 2;
+  const x = center.x + Math.cos(memberAngle) * memberRadius;
+  const z = center.z + Math.sin(memberAngle) * memberRadius;
   return {
-    x: centerX + Math.cos(axis) * separation * side,
-    z: centerZ + Math.sin(axis) * separation * side,
-    restFacing: Math.atan2(-Math.cos(axis) * side, -Math.sin(axis) * side),
+    x,
+    z,
+    restFacing: Math.atan2(center.x - x, center.z - z),
+    podId: pod.id,
+    podCenter: center,
+    podKind: pod.kind,
   };
+}
+
+export function conversationPodFor(group: SocialGroup | undefined, personId: string): SocialPod | undefined {
+  return group?.pods?.find(pod => pod.members.includes(personId));
+}
+
+export function conversationPodCenter(group: SocialGroup, pod: SocialPod): Vec2 {
+  const phase = unit(`${group.key}:phase`) * Math.PI * 2;
+  const podCount = Math.max(1, group.pods?.length ?? 1);
+  const angle = phase + pod.index * GOLDEN_ANGLE;
+  const centerRadius = podCount <= 1 ? 0.12
+    : 0.46 + Math.sqrt(podCount) * 0.2 + Math.sqrt((pod.index + 0.5) / podCount) * 0.22;
+  return {
+    x: group.centerX + Math.cos(angle) * centerRadius,
+    z: group.centerZ + Math.sin(angle) * centerRadius,
+  };
+}
+
+function buildConversationalPods(group: SocialGroup, peopleById: ReadonlyMap<string, SocialPerson>): SocialPod[] {
+  const sizes = conversationalPodSizes(group.members.length);
+  const pods: SocialPod[] = [];
+  let cursor = 0;
+  for (let index = 0; index < sizes.length; index++) {
+    const size = sizes[index]!;
+    const members = group.members.slice(cursor, cursor + size);
+    cursor += size;
+    const childCount = members.filter(id => isChildPerson(peopleById.get(id))).length;
+    const kind: SocialPodKind = childCount === members.length ? 'children' : childCount === 0 ? 'adult' : 'mixed';
+    pods.push({ id: `${group.key}:pod:${index}`, index, members, kind });
+  }
+  return pods;
+}
+
+function isChildPerson(person: Person | undefined): boolean {
+  return Boolean(person && person.ageMonths < 15 * 12 && (person.occupation === 'child' || person.role === 'child'));
+}
+
+/** Prefer readable 3-person pods, using pairs or fours only to avoid isolated singletons. */
+function conversationalPodSizes(count: number): number[] {
+  if (count <= 1) return [count];
+  if (count <= 4) return [count];
+  const sizes: number[] = [];
+  let remaining = count;
+  while (remaining > 0) {
+    if (remaining === 2 || remaining === 3 || remaining === 4) {
+      sizes.push(remaining);
+      break;
+    }
+    if (remaining === 5) {
+      sizes.push(3, 2);
+      break;
+    }
+    if (remaining === 7) {
+      sizes.push(4, 3);
+      break;
+    }
+    sizes.push(3);
+    remaining -= 3;
+  }
+  return sizes;
 }
 
 function audienceArc(group: SocialGroup, index: number, phase: number): GroupPlacement {
@@ -295,11 +391,13 @@ function sociallyOrderMembers(ids: readonly string[], peopleById: ReadonlyMap<st
       const aRank = aAvoided ? 1000
         : aAffinity >= 0 ? aAffinity
           : person && a?.householdId === person.householdId ? 10
-            : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
+            : person && CONVERSATIONAL.has(kind) && person.occupation === 'child' && a?.occupation === 'child' ? 18
+              : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
       const bRank = bAvoided ? 1000
         : bAffinity >= 0 ? bAffinity
           : person && b?.householdId === person.householdId ? 10
-            : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
+            : person && CONVERSATIONAL.has(kind) && person.occupation === 'child' && b?.occupation === 'child' ? 18
+              : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
       return aRank - bRank || aId.localeCompare(bId);
     });
     current = candidates[0];

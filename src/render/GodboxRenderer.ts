@@ -787,7 +787,11 @@ export class GodboxRenderer {
         localMove: Boolean(firstFire || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
-        localSpeed: ((person.activity === 'flee' ? 0.85 : local ? 0.27 : 0.38) + stableUnit(`${person.id}:pace`) * 0.08) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.85 : 1),
+        localSpeed: ((person.activity === 'flee' ? 0.85
+          : ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local?.action ?? '') ? 0.53
+            : local?.action.startsWith('play-') ? (person.ageMonths < 36 ? 0.24 : 0.44)
+              : local ? 0.27 : 0.38)
+          + stableUnit(`${person.id}:pace`) * 0.02) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.94 : 1),
         arrivalEase: Boolean(worker || physical),
         ...(!worker && !physical && !firstFire && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
@@ -807,11 +811,13 @@ export class GodboxRenderer {
         restReady ? local?.restStage : undefined, deltaSeconds, person.ageMonths, restAttentionYaw);
       const loaded = physical?.action.carriedObject !== undefined;
       const travel = travelAnimationFor(visual.speed, person);
+      const playfulRun = Boolean(local && ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local.action)
+        && visual.speed >= WALK_SPEED_THRESHOLD);
       const firstFireStanding = Boolean(firstFire && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
         && Math.hypot(visual.x - firstFire.x, visual.z - firstFire.z) < 0.08);
       const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
-        visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : travel
+        visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
           : firstFireStanding ? firstFire!.animation
             : interruption || unsupportedWork || physical ? 'idle'
               : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
@@ -866,9 +872,16 @@ export class GodboxRenderer {
         ? restPose.bodyLift * heightScale
         : Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
       const facing = visual.facing;
+      // Ambient awareness never steers locomotion. The head acquires first; only meaningful
+      // recognition produces a small delayed torso follow-through. Full-body facing remains owned
+      // by actual movement, work, rest and explicit social encounters.
+      const attentionBlend = detailed && !articulated && local?.attentionId ? local.attentionBlend ?? 0 : 0;
+      const attentionTorsoBlend = Math.max(0, Math.min(1, (attentionBlend - 0.32) / 0.68));
+      const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend;
+      const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend - attentionBodyYaw;
       const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated));
       const bodyPitch = bodyTilt.pitch + (restArticulated ? restPose.bodyPitch : 0);
-      const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + (restArticulated ? restPose.bodyYaw : 0);
+      const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
       const bodyRoll = bodyTilt.roll + (restArticulated ? restPose.bodyRoll : 0);
       this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
       const culture = this.cultureById.get(person.cultureId);
@@ -883,7 +896,7 @@ export class GodboxRenderer {
         this.partPosition.set((side ? 1 : -1) * 0.12, 0.27, 0).applyMatrix4(this.personMatrix);
         this.partQuaternion.setFromEuler(this.partEuler.set((pose?.spineRotation ?? 0)
           + (side ? pose?.rightShoulderRotation ?? -0.06 : pose?.leftShoulderRotation ?? -0.06),
-          facing + (pose?.pelvisRotation ?? 0), (side ? 1 : -1) * 0.025));
+          facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw, (side ? 1 : -1) * 0.025));
         this.partScale.setScalar(limbScale);
         this.limbMatrix.compose(this.partPosition, this.partQuaternion, this.partScale);
         this.peopleArms.setMatrixAt(index * 2 + side, this.limbMatrix);
@@ -892,7 +905,7 @@ export class GodboxRenderer {
       }
       // The smaller faceless head must follow the existing spine pose at its neck attachment.
       this.partPosition.set(0, 0.425, 0).applyMatrix4(this.personMatrix);
-      const headFacing = bodyFacing + (pose?.headRotation ?? 0) + (restArticulated ? restPose.headYaw : 0);
+      const headFacing = bodyFacing + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0);
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
         heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, headFacing, 0);
       this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
@@ -910,7 +923,7 @@ export class GodboxRenderer {
       const handSwing = pose?.rightShoulderRotation ?? -0.1;
       this.setInstanceTransform(this.peopleTools, index,
         this.personGripPosition.x, this.personGripPosition.y, this.personGripPosition.z,
-        toolScale, toolScale, toolScale, handSwing + (pose?.spineRotation ?? 0), facing + (pose?.pelvisRotation ?? 0), carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
+        toolScale, toolScale, toolScale, handSwing + (pose?.spineRotation ?? 0), facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
 

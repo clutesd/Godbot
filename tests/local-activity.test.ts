@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext } from '../src/render/people/LocalActivityPresentation';
+import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext, type LocalActivityState } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../src/render/people/PeoplePresentation';
@@ -361,6 +361,293 @@ describe('renderer-owned local activity', () => {
       const p = person(), h = harness([p]); h.tick(); interrupt(p); h.tick(0); expect(h.local.size).toBe(0);
     }
     expect(harness([person()], { blocked: true }).tick()[0]!.action).toBeUndefined();
+  });
+
+  it('uses a head-led recognition glance without steering the whole body toward a nearby friend', () => {
+    const a = person('aware-a'), b = person('aware-b');
+    b.position = { x: 0.78, z: 0.42 };
+    b.target = { ...b.position };
+    const tie = relationship('aware-a', 'aware-b', 'friend', { trust: 0.9, strength: 0.9 });
+    const before = JSON.stringify([a, b]);
+    const h = harness([a, b], { relationshipFor: relationshipLookup([tie]) });
+    let noticed = false;
+    let cleared = false;
+    let sawAcquire = false;
+    let sawHold = false;
+    let sawRelease = false;
+    let maxHeadYaw = 0;
+    let maxTorsoYaw = 0;
+    let maxBlend = 0;
+    let bodyPeerError = 0;
+    let attentionBodyFacing: number | undefined;
+    let maxBodyFacingDrift = 0;
+
+    for (let frame = 0; frame < 18 * 60; frame++) {
+      h.tick(1 / 60);
+      const state = h.local.get('aware-a');
+      const visual = h.visuals.get('aware-a');
+      const peer = h.visuals.get('aware-b');
+      if (state?.attentionId === 'aware-b' && visual && peer) {
+        noticed = true;
+        sawAcquire ||= state.attentionPhase === 'acquire';
+        sawHold ||= state.attentionPhase === 'hold';
+        sawRelease ||= state.attentionPhase === 'release';
+        maxHeadYaw = Math.max(maxHeadYaw, Math.abs(state.attentionHeadYaw ?? 0));
+        maxTorsoYaw = Math.max(maxTorsoYaw, Math.abs(state.attentionTorsoYaw ?? 0));
+        maxBlend = Math.max(maxBlend, state.attentionBlend ?? 0);
+        attentionBodyFacing ??= state.restFacing;
+        maxBodyFacingDrift = Math.max(maxBodyFacingDrift,
+          Math.abs(Math.atan2(Math.sin(state.restFacing - attentionBodyFacing), Math.cos(state.restFacing - attentionBodyFacing))));
+        const peerFacing = Math.atan2(peer.x - state.destination.x, peer.z - state.destination.z);
+        bodyPeerError = Math.max(bodyPeerError,
+          Math.abs(Math.atan2(Math.sin(state.restFacing - peerFacing), Math.cos(state.restFacing - peerFacing))));
+      } else if (noticed && !state?.attentionId) {
+        cleared = true;
+        break;
+      }
+    }
+
+    expect(noticed).toBe(true);
+    expect(sawAcquire).toBe(true);
+    expect(sawHold).toBe(true);
+    expect(sawRelease).toBe(true);
+    expect(maxBlend).toBeGreaterThan(0.95);
+    expect(maxHeadYaw).toBeGreaterThan(0.25);
+    expect(maxTorsoYaw).toBeGreaterThan(0);
+    expect(maxTorsoYaw).toBeLessThan(maxHeadYaw * 0.35);
+    expect(maxBodyFacingDrift).toBeLessThan(0.02);
+    expect(bodyPeerError).toBeGreaterThan(0.25);
+    expect(cleared).toBe(true);
+    expect(h.local.get('aware-a')?.attentionCooldown ?? 0).toBeGreaterThan(0);
+    expect(JSON.stringify([a, b])).toBe(before);
+  });
+
+  it('anticipates a crossing path, yields once, then remembers and reacquires the passer', () => {
+    const a = person('pass-a'), b = person('pass-b');
+    a.position = { x: -0.35, z: 0 }; a.target = { ...a.position };
+    b.position = { x: 0.35, z: 0 }; b.target = { ...b.position };
+    a.navigation!.destinationId = 'route-a';
+    b.navigation!.destinationId = 'route-b';
+    const before = JSON.stringify([a, b]);
+    const h = harness([a, b]);
+    h.tick(0);
+
+    const aState = h.local.get(a.id)! as LocalActivityState;
+    const bState = h.local.get(b.id)! as LocalActivityState;
+    aState.action = 'cross-path'; aState.phase = 'approach'; aState.destination = { x: 0.5, z: 0 }; aState.hold = 2; aState.socialCooldown = 99;
+    bState.action = 'cross-path'; bState.phase = 'approach'; bState.destination = { x: -0.5, z: 0 }; bState.hold = 2; bState.socialCooldown = 99;
+
+    h.tick(1 / 60);
+    expect(h.local.get(a.id)?.yieldToId).toBeUndefined();
+    expect(h.local.get(b.id)?.yieldToId).toBe(a.id);
+    expect(h.local.get(b.id)?.action).toBe('yield-pass');
+    expect(Math.abs(h.local.get(b.id)!.destination.z)).toBeGreaterThan(0.05);
+
+    for (let frame = 0; frame < 45; frame++) h.tick(1 / 60);
+    const remembered = h.local.get(b.id)! as LocalActivityState;
+    expect(remembered.yieldToId).toBeUndefined();
+    expect(remembered.recentSocialId).toBe(a.id);
+    expect(remembered.recentSocialKind).toBe('passing');
+
+    for (const p of [a, b]) {
+      const visual = h.visuals.get(p.id)!;
+      const state = h.local.get(p.id)! as LocalActivityState;
+      state.destination = { x: visual.x, z: visual.z };
+      state.action = 'pause';
+      state.phase = 'action';
+      state.hold = 5;
+      state.socialCooldown = 99;
+      state.seconds = 0;
+    }
+    let reacquired = false;
+    for (let frame = 0; frame < 90; frame++) {
+      h.tick(1 / 60);
+      if (h.local.get(b.id)?.attentionId === a.id) { reacquired = true; break; }
+    }
+    expect(reacquired).toBe(true);
+    expect(JSON.stringify([a, b])).toBe(before);
+  });
+
+  it('lets a caregiver monitor a moving child across different activity destinations', () => {
+    const caregiver = person('caregiver'), child = person('moving-child');
+    caregiver.children = [child.id];
+    caregiver.position = { x: 0, z: 0 }; caregiver.target = { ...caregiver.position };
+    caregiver.navigation!.destinationId = 'adult-work';
+    child.parents = [caregiver.id];
+    child.ageMonths = 9 * 12;
+    child.occupation = 'child';
+    child.role = 'child';
+    child.activity = 'socialize';
+    child.position = { x: 0.82, z: 0.16 }; child.target = { ...child.position };
+    child.navigation!.destinationKind = 'plaza';
+    child.navigation!.destinationId = 'child-play';
+    child.navigation!.schedulePhase = 'social';
+    const h = harness([caregiver, child]);
+    h.tick(0);
+
+    const adultState = h.local.get(caregiver.id)! as LocalActivityState;
+    const childState = h.local.get(child.id)! as LocalActivityState;
+    adultState.action = 'pause'; adultState.phase = 'action'; adultState.destination = { ...caregiver.position };
+    adultState.hold = 20; adultState.socialCooldown = 99;
+    childState.action = 'play-tag-run'; childState.phase = 'approach'; childState.playGame = 'tag';
+    childState.destination = { x: 0.82, z: 0.85 }; childState.hold = 5; childState.socialCooldown = 99;
+
+    let monitored = false;
+    for (let frame = 0; frame < 90; frame++) {
+      h.tick(1 / 60);
+      if (h.local.get(caregiver.id)?.attentionId === child.id) { monitored = true; break; }
+    }
+    expect(monitored).toBe(true);
+  });
+
+  it('does not let child play override rest, study, travel or emergency authority', () => {
+    const resting = person('resting-child');
+    resting.ageMonths = 10 * 12;
+    resting.occupation = 'child';
+    resting.role = 'child';
+    resting.activity = 'rest';
+    resting.navigation!.destinationKind = 'home';
+    resting.navigation!.destinationId = 'child-home';
+    resting.navigation!.schedulePhase = 'home';
+    const restHarness = harness([resting]);
+    for (let frame = 0; frame < 6 * 60; frame++) {
+      restHarness.tick(1 / 60);
+      expect(restHarness.local.get(resting.id)?.action?.startsWith('play-') ?? false).toBe(false);
+    }
+
+    const studying = person('studying-child');
+    studying.ageMonths = 12 * 12;
+    studying.occupation = 'child';
+    studying.role = 'child';
+    studying.activity = 'study';
+    studying.navigation!.destinationKind = 'knowledge-institution';
+    studying.navigation!.destinationId = 'school';
+    studying.navigation!.schedulePhase = 'work';
+    const studyHarness = harness([studying]);
+    for (let frame = 0; frame < 6 * 60; frame++) {
+      studyHarness.tick(1 / 60);
+      expect(studyHarness.local.get(studying.id)?.action?.startsWith('play-') ?? false).toBe(false);
+    }
+
+    studying.navigation!.schedulePhase = 'emergency';
+    studyHarness.tick(0);
+    expect(studyHarness.local.get(studying.id)).toBeUndefined();
+  });
+
+  it('presents children as shared, unmistakable games instead of miniature adult conversation', () => {
+    const children = ['child-a', 'child-b', 'child-c'].map((id, index) => {
+      const p = person(id);
+      p.ageMonths = (8 + index * 2) * 12;
+      p.occupation = 'child';
+      p.role = 'child';
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'play-plaza';
+      p.navigation!.schedulePhase = 'social';
+      const angle = index / 3 * Math.PI * 2;
+      p.position = { x: Math.cos(angle) * 0.6, z: Math.sin(angle) * 0.6 };
+      p.target = { ...p.position };
+      p.householdId = `house-${index}`;
+      return p;
+    });
+    const before = JSON.stringify(children);
+    const h = harness(children);
+    const actions = new Set<string>();
+    const games = new Set<string>();
+    const roles = new Set<string>();
+    let playFrames = 0;
+    let sharedFocusFrames = 0;
+    let movingFrames = 0;
+    let encounterFrames = 0;
+
+    for (let frame = 0; frame < 32 * 60; frame++) {
+      const visuals = h.tick(1 / 60);
+      for (let index = 0; index < children.length; index++) {
+        const state = h.local.get(children[index]!.id);
+        if (state?.action?.startsWith('play-')) actions.add(state.action);
+        if (state?.playGame) games.add(state.playGame);
+        if (state?.playRole) roles.add(state.playRole);
+        if (state?.animation === 'play') playFrames++;
+        if (state?.socialFocusId) sharedFocusFrames++;
+        if (state?.encounter) encounterFrames++;
+        if ((visuals[index]?.speed ?? 0) > 0.05) movingFrames++;
+      }
+    }
+
+    expect(games).toEqual(new Set(['tag', 'circle', 'follow']));
+    expect([...roles]).toEqual(expect.arrayContaining(['runner', 'chaser', 'leader', 'follower', 'orbit']));
+    expect([...actions]).toEqual(expect.arrayContaining(['play-tag-run', 'play-tag-chase', 'play-circle', 'play-lead', 'play-follow']));
+    expect(playFrames).toBeGreaterThan(240);
+    expect(sharedFocusFrames).toBeGreaterThan(120);
+    expect(movingFrames).toBeGreaterThan(180);
+    expect(encounterFrames).toBe(0);
+    expect(JSON.stringify(children)).toBe(before);
+  });
+
+  it('keeps very young children in bounded parallel play rather than running tag', () => {
+    const toddler = person('toddler');
+    toddler.ageMonths = 2 * 12;
+    toddler.occupation = 'child';
+    toddler.role = 'child';
+    toddler.activity = 'socialize';
+    toddler.navigation!.destinationKind = 'plaza';
+    toddler.navigation!.destinationId = 'young-play';
+    toddler.navigation!.schedulePhase = 'social';
+    const h = harness([toddler]);
+    const games = new Set<string>();
+    let maxDistance = 0;
+
+    for (let frame = 0; frame < 12 * 60; frame++) {
+      const visual = h.tick(1 / 60)[0]!;
+      const state = h.local.get(toddler.id);
+      if (state?.playGame) games.add(state.playGame);
+      maxDistance = Math.max(maxDistance, Math.hypot(visual.x - toddler.position.x, visual.z - toddler.position.z));
+    }
+
+    expect(games).toEqual(new Set(['parallel']));
+    expect(maxDistance).toBeLessThan(0.45);
+  });
+
+  it('keeps a social pod coherent while visibly rotating speakers and listener reactions', () => {
+    const people = ['pod-a', 'pod-b', 'pod-c'].map((id, index) => {
+      const p = person(id);
+      p.position = { x: (index - 1) * 0.48, z: index === 1 ? 0.2 : 0 };
+      p.target = { ...p.position };
+      p.activity = 'socialize';
+      p.navigation!.destinationKind = 'plaza';
+      p.navigation!.destinationId = 'coherent-pod';
+      p.navigation!.schedulePhase = 'social';
+      p.householdId = `pod-house-${index}`;
+      return p;
+    });
+    const h = harness(people);
+    h.tick(0);
+    for (const p of people) (h.local.get(p.id)! as LocalActivityState).socialCooldown = 999;
+
+    let listenerFrames = 0, speakerFrames = 0, reactionFrames = 0, offPodFocus = 0;
+    const speakers = new Set<string>();
+    const actions = new Set<string>();
+
+    for (let frame = 0; frame < 34 * 60; frame++) {
+      h.tick(1 / 60);
+      for (const p of people) {
+        const state = h.local.get(p.id);
+        if (!state) continue;
+        actions.add(state.action);
+        if (state.action === 'listen-in-pod') listenerFrames++;
+        if (state.action === 'address-pod') speakerFrames++;
+        if (state.action === 'react-in-pod') reactionFrames++;
+        if (state.socialRole === 'speaker') speakers.add(p.id);
+        if (state.socialFocusId && !people.some(peer => peer.id === state.socialFocusId)) offPodFocus++;
+      }
+    }
+
+    expect(listenerFrames).toBeGreaterThan(120);
+    expect(speakerFrames).toBeGreaterThan(60);
+    expect(reactionFrames).toBeGreaterThan(20);
+    expect(speakers.size).toBe(people.length);
+    expect([...actions]).toEqual(expect.arrayContaining(['take-turn', 'finish-turn', 'shift-attention', 'react-in-pod']));
+    expect(offPodFocus).toBe(0);
   });
 
   it('keeps a frozen visible social cluster changing formation instead of occupying mannequin slots', () => {

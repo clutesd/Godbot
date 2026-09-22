@@ -18,6 +18,7 @@ export type AnimationState =
   | 'gather'
   | 'build'
   | 'farm'
+  | 'play'
   | 'converse'
   | 'converse-warm'
   | 'converse-quiet'
@@ -464,6 +465,83 @@ export class AnimationController {
       isLooping: true,
       canInterruptFrom: new Set(['idle', 'gather', 'work']),
       blendDuration: 0.4,
+    });
+
+    // Play: readable child energy while stationary between short dashes. Locomotion still
+    // overrides this clip whenever the child is visibly moving.
+    const playPoses: AnimationPose[] = [
+      {
+        name: 'play-ready',
+        duration: 0.42,
+        pelvisRotation: -0.08,
+        spineRotation: 0.07,
+        headRotation: 0.14,
+        leftShoulderRotation: 0.18,
+        leftElbowRotation: 0.22,
+        rightShoulderRotation: 0.28,
+        rightElbowRotation: 0.2,
+        leftHipRotation: 0,
+        leftKneeRotation: 0.18,
+        rightHipRotation: 0,
+        rightKneeRotation: 0.18,
+        positionOffset: { x: 0, y: -0.012, z: 0 },
+      },
+      {
+        name: 'play-hop',
+        duration: 0.32,
+        pelvisRotation: 0.06,
+        spineRotation: -0.015,
+        headRotation: -0.08,
+        leftShoulderRotation: 0.62,
+        leftElbowRotation: 0.14,
+        rightShoulderRotation: 0.55,
+        rightElbowRotation: 0.16,
+        leftHipRotation: 0,
+        leftKneeRotation: 0.08,
+        rightHipRotation: 0,
+        rightKneeRotation: 0.08,
+        positionOffset: { x: 0, y: 0.055, z: 0 },
+      },
+      {
+        name: 'play-land-turn',
+        duration: 0.38,
+        pelvisRotation: 0.16,
+        spineRotation: 0.09,
+        headRotation: 0.2,
+        leftShoulderRotation: 0.34,
+        leftElbowRotation: 0.24,
+        rightShoulderRotation: 0.12,
+        rightElbowRotation: 0.26,
+        leftHipRotation: 0,
+        leftKneeRotation: 0.34,
+        rightHipRotation: 0,
+        rightKneeRotation: 0.3,
+        positionOffset: { x: 0, y: -0.018, z: 0.012 },
+      },
+      {
+        name: 'play-point-laugh',
+        duration: 0.48,
+        pelvisRotation: -0.04,
+        spineRotation: 0.045,
+        headRotation: -0.16,
+        leftShoulderRotation: 0.15,
+        leftElbowRotation: 0.2,
+        rightShoulderRotation: 0.52,
+        rightElbowRotation: 0.18,
+        leftHipRotation: 0,
+        leftKneeRotation: 0.12,
+        rightHipRotation: 0,
+        rightKneeRotation: 0.12,
+        positionOffset: { x: 0, y: 0.006, z: 0 },
+      },
+    ];
+
+    this.clips.set('play', {
+      state: 'play',
+      poses: playPoses,
+      isLooping: true,
+      canInterruptFrom: new Set(['idle', 'walk', 'run', 'converse']),
+      blendDuration: 0.22,
     });
 
     // Converse: facing another person, gesturing
@@ -954,6 +1032,20 @@ export class AnimationController {
         out.spineRotation += gesture * 0.012;
         out.rightShoulderRotation += gesture * 0.045;
         out.positionOffset.y -= gesture * 0.003;
+      } else if (state.currentState === 'play') {
+        // Play stays recognisable across childhood without making a toddler and a teenager move
+        // with the same exaggeration. The underlying game/locomotion owns movement; this only
+        // scales the stationary silhouette.
+        const maturity = Math.max(0, Math.min(1, (state.ageMonths - 7 * 12) / (8 * 12)));
+        const veryYoung = state.ageMonths < 3 * 12;
+        const liftScale = veryYoung ? 0.22 : 1 - maturity * 0.48;
+        const gestureScale = veryYoung ? 0.55 : 1 - maturity * 0.18;
+        out.positionOffset.y *= liftScale;
+        out.leftShoulderRotation *= gestureScale;
+        out.rightShoulderRotation *= gestureScale;
+        out.spineRotation *= veryYoung ? 0.65 : 1;
+        out.leftKneeRotation *= veryYoung ? 0.62 : 1;
+        out.rightKneeRotation *= veryYoung ? 0.62 : 1;
       } else if (state.currentState === 'idle' || state.currentState === 'alert') {
         const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 29;
         // A slow, smooth gesture window with long quiet intervals, not constant fidgeting.
