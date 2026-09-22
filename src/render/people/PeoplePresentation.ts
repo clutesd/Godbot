@@ -160,6 +160,9 @@ export function placeInGroup(person: Person, group: SocialGroup | undefined, sim
     x: simPosition.x + offsetX * limit,
     z: simPosition.z + offsetZ * limit,
     ...(target.restFacing === undefined ? {} : { restFacing: target.restFacing }),
+    ...(target.podId === undefined ? {} : { podId: target.podId }),
+    ...(target.podCenter === undefined ? {} : { podCenter: { ...target.podCenter } }),
+    ...(target.podKind === undefined ? {} : { podKind: target.podKind }),
   };
 }
 
