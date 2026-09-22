@@ -363,7 +363,7 @@ export class LocalActivityPresentation {
     }
     const visual = context.visual;
     refreshPresentationFocus(person, context, state);
-    updateAmbientAttention(person, context, state, visual, delta, this.previousStates);
+    updateAmbientAttention(person, context, state, visual, delta, this.previousStates, this.presentationSeconds);
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
       && Math.hypot(visual.x - state.destination.x, visual.z - state.destination.z) > 0.035) {
       // Terrain may change between intents. PeopleVisualState stops on accepted ground; adopt
@@ -1223,9 +1223,9 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
 }
 
 function updateAmbientAttention(person: Person, context: LocalActivityContext, state: LocalActivityState,
-  visual: PersonVisualState | undefined, delta: number, previousStates: ReadonlyMap<string, LocalActivityState>): void {
+  visual: PersonVisualState | undefined, delta: number, previousStates: ReadonlyMap<string, LocalActivityState>, now: number): void {
   const dt = Math.max(0, delta);
-  const unsuitable = state.partnerId || state.encounter || state.rest || state.socialFocusId || state.playGame
+  const unsuitable = state.partnerId || state.encounter || state.rest || state.socialFocusId || state.playGame || state.yieldToId
     || !visual || visual.traveling || visual.speed > 0.045 || state.action === 'arrive' || state.phase === 'approach';
 
   if (state.attentionId) {
@@ -1243,7 +1243,8 @@ function updateAmbientAttention(person: Person, context: LocalActivityContext, s
 
     if (state.attentionPhase !== 'release' && peer && at && visual) {
       const relationship = context.relationshipFor?.(person.id, peer.id);
-      const meaningful = meaningfulAmbientRecognition(person, peer, relationship);
+      const recent = state.recentSocialId === peer.id && (state.recentSocialUntil ?? 0) > now;
+      const meaningful = recent || meaningfulAmbientRecognition(person, peer, relationship);
       const relativeYaw = normalizeAngle(facingTarget(visual, at) - visual.facing);
       const maxYaw = meaningful ? SOCIAL_AWARENESS_MAX_HEAD_YAW : SOCIAL_AWARENESS_MAX_HEAD_YAW * 0.78;
       state.attentionHeadYaw = clamp(relativeYaw, -maxYaw, maxYaw);
@@ -1280,7 +1281,7 @@ function updateAmbientAttention(person: Person, context: LocalActivityContext, s
   }
 
   if (unsuitable || (state.attentionCooldown ?? 0) > 0) return;
-  const selected = selectAmbientAttentionPeer(person, context, state, visual!, previousStates);
+  const selected = selectAmbientAttentionPeer(person, context, state, visual!, previousStates, now);
   if (!selected) return;
   const at = context.visualFor?.(selected.peer.id) ?? selected.peer.position;
   const relativeYaw = normalizeAngle(facingTarget(visual!, at) - visual!.facing);
@@ -1288,8 +1289,10 @@ function updateAmbientAttention(person: Person, context: LocalActivityContext, s
   state.attentionPhase = 'acquire';
   state.attentionSeconds = 0;
   const linger = unit(`${person.id}:${selected.peer.id}:${state.cycle}:${state.step}:attention-linger`);
-  state.attentionHold = SOCIAL_AWARENESS_MIN_HOLD_SECONDS
-    + linger * (SOCIAL_AWARENESS_MAX_HOLD_SECONDS - SOCIAL_AWARENESS_MIN_HOLD_SECONDS);
+  state.attentionHold = selected.recent
+    ? 0.78 + linger * 0.52
+    : SOCIAL_AWARENESS_MIN_HOLD_SECONDS
+      + linger * (SOCIAL_AWARENESS_MAX_HOLD_SECONDS - SOCIAL_AWARENESS_MIN_HOLD_SECONDS);
   state.attentionBlend = 0;
   const maxYaw = selected.meaningful ? SOCIAL_AWARENESS_MAX_HEAD_YAW : SOCIAL_AWARENESS_MAX_HEAD_YAW * 0.78;
   state.attentionHeadYaw = clamp(relativeYaw, -maxYaw, maxYaw);
@@ -1301,31 +1304,40 @@ function updateAmbientAttention(person: Person, context: LocalActivityContext, s
 interface AmbientAttentionSelection {
   peer: Person;
   meaningful: boolean;
+  recent: boolean;
+  caregiver: boolean;
   score: number;
 }
 
 function selectAmbientAttentionPeer(person: Person, context: LocalActivityContext, state: LocalActivityState,
-  visual: PersonVisualState, previousStates: ReadonlyMap<string, LocalActivityState>): AmbientAttentionSelection | undefined {
+  visual: PersonVisualState, previousStates: ReadonlyMap<string, LocalActivityState>, now: number): AmbientAttentionSelection | undefined {
   let selected: AmbientAttentionSelection | undefined;
   const kind = person.navigation?.destinationKind;
+  const continuityActive = Boolean(state.recentSocialId && (state.recentSocialUntil ?? 0) > now);
   for (const id of context.group?.members ?? []) {
     if (id === person.id) continue;
     const peer = context.people.get(id);
     const peerState = previousStates.get(id);
-    if (!peer || !canInteract(person, peer) || peerState?.phase === 'approach' || peerState?.action === 'arrive') continue;
+    if (!peer || !canInteract(person, peer) || peerState?.action === 'arrive') continue;
+    const recent = continuityActive && state.recentSocialId === peer.id;
+    const caregiver = person.children.includes(peer.id) || peer.parents.includes(person.id);
+    // A caregiver may track a moving child; everyone else avoids snapping attention toward people
+    // already in a locomotion beat.
+    if (peerState?.phase === 'approach' && !caregiver && !recent) continue;
     const at = context.visualFor?.(peer.id) ?? peer.position;
     const distance = Math.hypot(at.x - visual.x, at.z - visual.z);
-    if (distance < 0.38 || distance > SOCIAL_AWARENESS_RADIUS) continue;
+    const radius = caregiver ? 1.7 : recent ? 1.5 : SOCIAL_AWARENESS_RADIUS;
+    if (distance < 0.38 || distance > radius) continue;
 
     const relationship = context.relationshipFor?.(person.id, peer.id);
-    const meaningful = meaningfulAmbientRecognition(person, peer, relationship);
+    const meaningful = recent || caregiver || meaningfulAmbientRecognition(person, peer, relationship);
     const coworkers = Boolean(person.workplaceId && person.workplaceId === peer.workplaceId);
     const yaw = Math.abs(normalizeAngle(facingTarget(visual, at) - visual.facing));
-    const cone = meaningful ? 1.75 : relationship || coworkers ? 1.25 : 0.82;
+    const cone = caregiver ? 2.15 : recent ? 2.0 : meaningful ? 1.75 : relationship || coworkers ? 1.25 : 0.82;
     if (yaw > cone) continue;
 
-    // Unknown passers-by should mostly be visual background. Only social public spaces can produce
-    // an occasional one-way glance; meaningful ties are allowed to register much more reliably.
+    // Unknown passers-by remain background. Social continuity, caregiving and real relationships
+    // are allowed to cut through this gate because they have an intelligible reason to matter.
     if (!meaningful && !relationship && !coworkers) {
       if (kind !== 'plaza' && kind !== 'market') continue;
       const [first, second] = person.id < peer.id ? [person.id, peer.id] : [peer.id, person.id];
@@ -1336,10 +1348,11 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
 
     const relational = relationship
       ? relationshipScoreForPresentation(person, peer, relationship, person.bornMonth + person.ageMonths)
-      : meaningful ? 0.82 : coworkers ? 0.48 : 0.18;
-    const score = relational - distance * 0.34 - yaw * 0.22;
+      : caregiver ? 1.05 : meaningful ? 0.82 : coworkers ? 0.48 : 0.18;
+    const continuity = recent ? 0.72 : continuityActive ? -0.18 : 0;
+    const score = relational + continuity + (caregiver ? 0.28 : 0) - distance * 0.34 - yaw * 0.22;
     if (!selected || score > selected.score + 0.001 || Math.abs(score - selected.score) <= 0.001 && peer.id < selected.peer.id) {
-      selected = { peer, meaningful, score };
+      selected = { peer, meaningful, recent, caregiver, score };
     }
   }
   return selected;
