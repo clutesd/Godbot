@@ -50,7 +50,6 @@ export class RestPoseRenderer {
   private readonly scale = new THREE.Vector3();
   private readonly rotation = new THREE.Quaternion();
   private readonly direction = new THREE.Vector3();
-  private readonly shoulder = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
   private readonly colour = new THREE.Color();
   private frame = 0;
@@ -105,8 +104,8 @@ export class RestPoseRenderer {
     return this.states.get(personId);
   }
 
-  draw(visual: RestPoseVisual, x: number, y: number, z: number, size: number, facing: number,
-    colour: THREE.Color, bodyMatrix: THREE.Matrix4): void {
+  draw(visual: RestPoseVisual, x: number, y: number, z: number, size: number, build: number,
+    facing: number, bodyPitch: number, colour: THREE.Color): void {
     if (visual.blend <= 0.001 || this.count >= this.capacity) return;
     const index = this.count++;
     this.baseX = x; this.baseY = y; this.baseZ = z; this.size = size;
@@ -114,12 +113,11 @@ export class RestPoseRenderer {
 
     for (let side = 0; side < 2; side++) {
       const sign = side === 0 ? -1 : 1;
-      this.shoulder.set(sign * 0.12, 0.27, 0).applyMatrix4(bodyMatrix);
-      const dx = (this.shoulder.x - x) / size;
-      const dz = (this.shoulder.z - z) / size;
-      const shoulderX = dx * this.cos - dz * this.sin;
-      const shoulderY = (this.shoulder.y - y) / size;
-      const shoulderZ = dz * this.cos + dx * this.sin;
+      // Match the torso's attachment point analytically. GodboxRenderer intentionally reuses its
+      // transform matrix for later body parts, so the rest rig must not depend on that mutable matrix.
+      const shoulderX = sign * 0.12 * build;
+      const shoulderY = 0.44 + visual.bodyLift + Math.cos(bodyPitch) * 0.27;
+      const shoulderZ = Math.sin(bodyPitch) * 0.27;
 
       this.segment(index * LIMBS_PER_PERSON + side * 2,
         shoulderX, shoulderY, shoulderZ,
