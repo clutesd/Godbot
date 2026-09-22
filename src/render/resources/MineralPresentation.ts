@@ -2,6 +2,15 @@ import * as THREE from 'three';
 
 export type MineralVisualKind = 'stone' | 'clay' | 'coal' | 'copper' | 'tin' | 'iron' | 'uranium' | 'generic';
 export type MineralGeometryKind = 'rubble' | 'clod' | 'coal' | 'shard' | 'crystal';
+export type MineralAerialPattern = 'scree' | 'terraces' | 'heap' | 'copper-bands' | 'tin-strips' | 'iron-fines' | 'crystal-cluster' | 'generic';
+
+export interface MineralAerialSignature {
+  readonly pattern: MineralAerialPattern;
+  readonly footprint: readonly [number, number];
+  readonly groundColour: string;
+  readonly accentColour: string;
+  readonly accentCount: number;
+}
 
 export interface MineralVisualProfile {
   readonly kind: MineralVisualKind;
@@ -35,7 +44,7 @@ export function mineralVisualProfile(id: string): MineralVisualProfile {
     roughness: 0.82, metalness: 0.12, shard: true, accentStrength: 0.16, tilt: 0.38,
   };
   if (/copper|bronze/.test(id)) return {
-    kind: 'copper', baseColour: '#8f654c', accentColour: '#d39a68', secondaryColour: '#6f554c', geometry: 'shard', scale: [0.95, 0.82, 1.12],
+    kind: 'copper', baseColour: '#865a44', accentColour: '#dc8d52', secondaryColour: '#5f4941', geometry: 'shard', scale: [0.95, 0.82, 1.12],
     roughness: 0.68, metalness: 0.28, shard: true, accentStrength: 0.62, tilt: 0.28,
   };
   if (/tin/.test(id)) return {
@@ -43,7 +52,7 @@ export function mineralVisualProfile(id: string): MineralVisualProfile {
     roughness: 0.6, metalness: 0.36, shard: true, accentStrength: 0.58, tilt: 0.22,
   };
   if (/iron|steel/.test(id)) return {
-    kind: 'iron', baseColour: '#735d54', accentColour: '#b58b76', secondaryColour: '#514a48', geometry: 'shard', scale: [1, 0.9, 0.96],
+    kind: 'iron', baseColour: '#6d5148', accentColour: '#a95f43', secondaryColour: '#463f3d', geometry: 'shard', scale: [1, 0.9, 0.96],
     roughness: 0.72, metalness: 0.32, shard: true, accentStrength: 0.52, tilt: 0.3,
   };
   if (/uranium/.test(id)) return {
@@ -54,6 +63,18 @@ export function mineralVisualProfile(id: string): MineralVisualProfile {
     kind: 'generic', baseColour: '#898276', accentColour: '#b8ae9c', secondaryColour: '#6f695f', geometry: 'rubble', scale: [1, 0.82, 1],
     roughness: 0.9, metalness: 0.06, shard: false, accentStrength: 0.1, tilt: 0.2,
   };
+}
+
+export function mineralAerialSignature(id: string): MineralAerialSignature {
+  const profile = mineralVisualProfile(id);
+  if (profile.kind === 'stone') return { pattern: 'scree', footprint: [1.45, 1.05], groundColour: '#777269', accentColour: '#aaa395', accentCount: 4 };
+  if (profile.kind === 'clay') return { pattern: 'terraces', footprint: [1.5, 0.9], groundColour: '#8b5842', accentColour: '#c88760', accentCount: 3 };
+  if (profile.kind === 'coal') return { pattern: 'heap', footprint: [1.35, 1.15], groundColour: '#202322', accentColour: '#555a57', accentCount: 4 };
+  if (profile.kind === 'copper') return { pattern: 'copper-bands', footprint: [1.3, 0.95], groundColour: '#57443e', accentColour: profile.accentColour, accentCount: 3 };
+  if (profile.kind === 'tin') return { pattern: 'tin-strips', footprint: [1.2, 1.0], groundColour: '#6e797e', accentColour: '#dbe2e1', accentCount: 3 };
+  if (profile.kind === 'iron') return { pattern: 'iron-fines', footprint: [1.4, 1.02], groundColour: '#4b3e3a', accentColour: profile.accentColour, accentCount: 4 };
+  if (profile.kind === 'uranium') return { pattern: 'crystal-cluster', footprint: [1.05, 0.95], groundColour: '#4f5739', accentColour: profile.accentColour, accentCount: 3 };
+  return { pattern: 'generic', footprint: [1.1, 0.9], groundColour: profile.secondaryColour, accentColour: profile.accentColour, accentCount: 2 };
 }
 
 export function isMinedMaterial(id: string): boolean {

@@ -4,7 +4,7 @@ import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { ResourceWorkScene } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
 import { resourceProcessingPresentation, resourceStoragePresentation, storedMaterialColour } from './ResourceFlowPresentation';
-import { isMinedMaterial, mineralVisualProfile } from './MineralPresentation';
+import { isMinedMaterial, mineralAerialSignature, mineralVisualProfile } from './MineralPresentation';
 
 export const MAX_RESOURCE_SETTLEMENTS = 32;
 const CAPACITY = MAX_RESOURCE_SETTLEMENTS * (8 * 6 + 3 * 4);
@@ -23,6 +23,8 @@ export class ResourceFlowRenderer {
   private readonly shards: THREE.InstancedMesh;
   private readonly crystals: THREE.InstancedMesh;
   private readonly mineralAccents: THREE.InstancedMesh;
+  private readonly mineralPads: THREE.InstancedMesh;
+  private readonly mineralMarks: THREE.InstancedMesh;
   private readonly heat: THREE.InstancedMesh;
   private signature = '';
 
@@ -37,6 +39,8 @@ export class ResourceFlowRenderer {
     this.shards = this.pool('Stored ore shards', new THREE.OctahedronGeometry(1, 0));
     this.crystals = this.pool('Stored crystal ore', new THREE.ConeGeometry(0.72, 1.7, 5));
     this.mineralAccents = this.pool('Stored ore mineral accents', new THREE.OctahedronGeometry(1, 0));
+    this.mineralPads = this.pool('Stored mineral sorting footprints', new THREE.CylinderGeometry(0.5, 0.55, 0.04, 10));
+    this.mineralMarks = this.pool('Stored mineral aerial marks', new THREE.BoxGeometry(1, 1, 1));
     (this.clods.material as THREE.MeshStandardMaterial).roughness = 1;
     (this.coal.material as THREE.MeshStandardMaterial).roughness = 0.9;
     (this.coal.material as THREE.MeshStandardMaterial).metalness = 0.04;
@@ -61,7 +65,7 @@ export class ResourceFlowRenderer {
       stock.map(p => [p.id, p.pieces]), processes, s.infrastructure.factories >= 0.25])]);
     if (signature === this.signature) return;
     this.signature = signature;
-    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.clods, this.coal, this.shards, this.crystals, this.mineralAccents, this.heat]) mesh.count = 0;
+    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.clods, this.coal, this.shards, this.crystals, this.mineralAccents, this.mineralPads, this.mineralMarks, this.heat]) mesh.count = 0;
     for (const { s, stock, processes } of plans) {
       const plots = (s.structurePlots ?? []).filter(p => p.condition > 0.2 && !p.accessRestricted
         && (!p.development || p.development.status === 'active'));
@@ -73,6 +77,15 @@ export class ResourceFlowRenderer {
         const angle = i * Math.PI / 4;
         const anchor = { x: source.x + Math.cos(angle) * radius, z: source.z + Math.sin(angle) * radius };
         if (!this.scene.safeSegment(anchor, anchor)) continue;
+        if (isMinedMaterial(item.id)) {
+          const aerial = mineralAerialSignature(item.id);
+          this.emit(this.mineralPads, anchor, 0.018, 0.34 * aerial.footprint[0], 1, 0.28 * aerial.footprint[1], aerial.groundColour, 0, angle);
+          if (aerial.pattern === 'copper-bands' || aerial.pattern === 'tin-strips' || aerial.pattern === 'iron-fines') {
+            this.emit(this.mineralMarks, anchor, 0.045, aerial.pattern === 'iron-fines' ? 0.22 : 0.32,
+              0.025, aerial.pattern === 'iron-fines' ? 0.14 : 0.055, aerial.accentColour,
+              0, angle + (aerial.pattern === 'copper-bands' ? 0.55 : 0));
+          }
+        }
         for (let n = 0; n < item.pieces; n++) {
           const point = { x: anchor.x + (n % 3 - 1) * 0.075, z: anchor.z };
           if (!this.scene.safeSegment(anchor, point)) continue;
@@ -121,7 +134,7 @@ export class ResourceFlowRenderer {
         }
       }
     }
-    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.clods, this.coal, this.shards, this.crystals, this.mineralAccents, this.heat]) {
+    for (const mesh of [this.logs, this.bundles, this.blocks, this.rocks, this.clods, this.coal, this.shards, this.crystals, this.mineralAccents, this.mineralPads, this.mineralMarks, this.heat]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
@@ -134,10 +147,11 @@ export class ResourceFlowRenderer {
     return mesh;
   }
 
-  private emit(mesh: THREE.InstancedMesh, p: Vec2, y: number, sx: number, sy: number, sz: number, colour: string, rz = 0): void {
+  private emit(mesh: THREE.InstancedMesh, p: Vec2, y: number, sx: number, sy: number, sz: number,
+    colour: string, rz = 0, ry = 0): void {
     if (mesh.count >= CAPACITY || !this.scene.safeSegment(p, p)) return;
     this.marker.position.set(p.x, this.surface.heightAt(p.x, p.z) + y, p.z);
-    this.marker.rotation.set(0, 0, rz); this.marker.scale.set(sx, sy, sz); this.marker.updateMatrix();
+    this.marker.rotation.set(0, ry, rz); this.marker.scale.set(sx, sy, sz); this.marker.updateMatrix();
     mesh.setMatrixAt(mesh.count, this.marker.matrix);
     mesh.setColorAt(mesh.count++, this.colour.set(colour));
   }

@@ -8,7 +8,7 @@ import { resourceWorkAssignmentsForWorld, type ResourceWorkAssignment } from '..
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
 import { MAX_ACTIVE_WORK_SITES, ResourceWorkScene, type ResourceWorkSite } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
-import { mineralVisualProfile, type MineralGeometryKind } from './MineralPresentation';
+import { mineralAerialSignature, mineralVisualProfile, type MineralGeometryKind } from './MineralPresentation';
 import { movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
 const PATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
@@ -32,6 +32,16 @@ const HASH_OFFSET = 2166136261;
 const HASH_PRIME = 16777619;
 /** Active work is documentary detail, not a second simulation population. */
 const MAX_SITE_DETAIL = MAX_ACTIVE_WORK_SITES * 16;
+
+interface PersistentMineralCounts {
+  pads: number;
+  rubble: number;
+  clods: number;
+  coal: number;
+  shards: number;
+  crystals: number;
+  marks: number;
+}
 
 interface ActiveCounts {
   logs: number;
@@ -65,6 +75,13 @@ function stringHash(value: string): number {
 export class ResourceSiteRenderer {
   readonly group = new THREE.Group();
   private readonly piles: THREE.InstancedMesh;
+  private readonly mineralPads: THREE.InstancedMesh;
+  private readonly persistentRubble: THREE.InstancedMesh;
+  private readonly persistentClods: THREE.InstancedMesh;
+  private readonly persistentCoal: THREE.InstancedMesh;
+  private readonly persistentShards: THREE.InstancedMesh;
+  private readonly persistentCrystals: THREE.InstancedMesh;
+  private readonly mineralMarks: THREE.InstancedMesh;
   private readonly discoveries: THREE.InstancedMesh;
   private readonly marker = new THREE.Object3D();
   private readonly colour = new THREE.Color();
@@ -111,10 +128,34 @@ export class ResourceSiteRenderer {
       });
     }
     this.group.name = 'Resource extraction sites';
+    const persistentCapacity = Math.max(1, world.resourceDeposits.length * 5);
     this.piles = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.5, 0), new THREE.MeshStandardMaterial({ roughness: 1 }), Math.max(1, world.resourceDeposits.length));
+    this.piles.name = 'Persistent timber and plant resource piles';
     this.piles.count = 0; this.piles.castShadow = true; this.piles.receiveShadow = true;
     this.piles.frustumCulled = false;
-    this.group.add(this.piles);
+    this.mineralPads = this.activeMesh('Aerial mineral site footprints',
+      new THREE.CylinderGeometry(0.5, 0.56, 0.045, 12),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 }), persistentCapacity);
+    this.persistentRubble = this.activeMesh('Persistent stone rubble',
+      new THREE.DodecahedronGeometry(0.28, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.98 }), persistentCapacity);
+    this.persistentClods = this.activeMesh('Persistent clay terraces',
+      new THREE.IcosahedronGeometry(0.27, 1),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 }), persistentCapacity);
+    this.persistentCoal = this.activeMesh('Persistent coal heaps',
+      new THREE.TetrahedronGeometry(0.3, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.92, metalness: 0.03 }), persistentCapacity);
+    this.persistentShards = this.activeMesh('Persistent metallic ore piles',
+      new THREE.OctahedronGeometry(0.29, 0),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.7, metalness: 0.2 }), persistentCapacity);
+    this.persistentCrystals = this.activeMesh('Persistent crystal ore clusters',
+      new THREE.ConeGeometry(0.2, 0.46, 5),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.54, metalness: 0.18 }), persistentCapacity);
+    this.mineralMarks = this.activeMesh('Aerial mineral sorting marks',
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.78, metalness: 0.08 }), persistentCapacity);
+    this.group.add(this.piles, this.mineralPads, this.persistentRubble, this.persistentClods,
+      this.persistentCoal, this.persistentShards, this.persistentCrystals, this.mineralMarks);
     this.discoveries = this.activeMesh('Surveyed ore glints', new THREE.OctahedronGeometry(1, 0),
       new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.35, metalness: 0.4,
         emissive: '#718174', emissiveIntensity: 0.12 }), 128);
@@ -324,6 +365,8 @@ export class ResourceSiteRenderer {
       hash = mixHash(hash, index + 1);
       hash = mixHash(hash, deposit.abandonedMonth === undefined ? 0 : 1);
       hash = mixHash(hash, deposit.depleted ? 1 : 0);
+      const extracted = deposit.extracted ?? 0;
+      hash = mixHash(hash, extracted >= 128 ? 3 : extracted >= 32 ? 2 : extracted >= 8 ? 1 : 0);
     }
     return hash;
   }
@@ -486,6 +529,7 @@ export class ResourceSiteRenderer {
 
   private emitMineralWork(assignment: ResourceWorkAssignment, angle: number, count: number, counts: ActiveCounts): void {
     const profile = mineralVisualProfile(assignment.resourceId);
+    const aerial = mineralAerialSignature(assignment.resourceId);
     const mesh = this.mineralMesh(profile.geometry);
     for (let index = 0; index < count + 1; index += 1) {
       const scale = 0.2 + (index % 3) * 0.085;
@@ -507,9 +551,23 @@ export class ResourceSiteRenderer {
           index * 0.4, index * 0.8, profile.tilt, profile.accentColour);
       }
     }
-    // A shallow fines/spoil bed makes fresh extraction read as broken material rather than loose props.
+    // The spoil/sorting footprint is deliberately large enough to survive overhead documentary shots.
     this.emitInstance(this.activeFines, counts.fines++, assignment, angle, 0.63, 0, 0.016,
-      0.75 + profile.scale[0] * 0.2, 0.55, 0.62 + profile.scale[2] * 0.18, 0, 0, 0, profile.secondaryColour);
+      aerial.footprint[0] * 0.82, 0.6, aerial.footprint[1] * 0.78, 0, 0, 0, aerial.groundColour);
+    if (aerial.pattern === 'copper-bands' || aerial.pattern === 'tin-strips'
+      || aerial.pattern === 'iron-fines' || aerial.pattern === 'terraces') {
+      for (let i = 0; i < aerial.accentCount; i++) {
+        const spread = i - (aerial.accentCount - 1) / 2;
+        const copper = aerial.pattern === 'copper-bands';
+        const iron = aerial.pattern === 'iron-fines';
+        const localX = copper ? 0.54 + spread * 0.11 : iron ? 0.58 + spread * 0.12 : 0.62;
+        const localZ = copper ? spread * 0.1 : iron ? (i % 2 ? 0.24 : -0.24) : spread * 0.13;
+        const sx = copper ? 0.58 : iron ? 0.26 : aerial.pattern === 'terraces' ? 0.7 : 0.62;
+        const sz = copper ? 0.055 : iron ? 0.15 : 0.05;
+        this.emitInstance(this.structures, counts.structures++, assignment, angle, localX, localZ, 0.03,
+          sx, 0.025, sz, 0, copper ? 0.55 : 0, 0, aerial.accentColour);
+      }
+    }
     this.emitInstance(this.activeBaskets, counts.baskets++, assignment, angle, 0.62, 0.24, 0.04, 1.15, 0.8, 1.15, 0, 0, 0);
     this.emitTool(assignment, angle, 0.05, -0.34, 0.1, -0.32, false, counts);
   }
@@ -661,6 +719,7 @@ export class ResourceSiteRenderer {
   private rebuildResourcePiles(): void {
     const activeDeposits = new Set(this.activeAssignments().flatMap((assignment) => assignment.depositId ? [assignment.depositId] : []));
     let index = 0;
+    const minerals: PersistentMineralCounts = { pads: 0, rubble: 0, clods: 0, coal: 0, shards: 0, crystals: 0, marks: 0 };
     this.discoveries.count = 0;
     for (const d of this.world.resourceDeposits) {
       if (d.resourceId.includes('ore') && Object.keys(d.discoveredBy).length > 0 && !d.depleted && d.abundance > 0
@@ -673,28 +732,162 @@ export class ResourceSiteRenderer {
         this.colour.set(mineralVisualProfile(d.resourceId).accentColour);
         this.discoveries.setColorAt(this.discoveries.count++, this.colour);
       }
-      if (d.establishedMonth === undefined || activeDeposits.has(d.id)) continue;
+      if (d.establishedMonth === undefined) continue;
       const cell = this.world.cells[d.cellIndex];
       if (!cell || cell.water || cell.slope > 0.54) continue;
       const category = RESOURCE_BY_ID.get(d.resourceId)?.category;
       const abandoned = d.abandonedMonth !== undefined || d.depleted;
+      if (category === 'mineral') {
+        this.emitPersistentMineralSite(d, abandoned, minerals);
+        continue;
+      }
+      if (activeDeposits.has(d.id)) continue;
       const height = abandoned ? 0.12 : category === 'timber' ? 0.3 : 0.5;
       this.marker.position.set(d.worldX, this.surface.heightAt(d.worldX, d.worldZ) + height * 0.4, d.worldZ);
-      this.marker.rotation.set(0, 0, 0);
-      const mineral = mineralVisualProfile(d.resourceId);
-      this.marker.scale.set(category === 'timber' ? 1.5 : category === 'mineral' ? 0.9 * mineral.scale[0] : 0.9,
-        category === 'mineral' ? height * mineral.scale[1] : height,
-        category === 'mineral' ? 0.8 * mineral.scale[2] : 0.8);
-      this.marker.rotation.set(category === 'mineral' ? mineral.tilt : 0, resourceVisualUnit(`${d.id}:pile`) * Math.PI, 0);
+      this.marker.rotation.set(0, resourceVisualUnit(`${d.id}:pile`) * Math.PI, 0);
+      this.marker.scale.set(category === 'timber' ? 1.5 : 0.9, height, 0.8);
       this.marker.updateMatrix();
       this.piles.setMatrixAt(index, this.marker.matrix);
-      this.colour.set(abandoned ? '#514b43' : category === 'timber' ? '#89623c' : category === 'plant' ? '#627b45' : mineral.baseColour);
+      this.colour.set(abandoned ? '#514b43' : category === 'timber' ? '#89623c' : '#627b45');
       this.piles.setColorAt(index++, this.colour);
     }
     this.piles.count = index; this.piles.instanceMatrix.needsUpdate = true;
     if (this.piles.instanceColor) this.piles.instanceColor.needsUpdate = true;
+    this.finishPersistentMinerals(minerals);
     this.discoveries.instanceMatrix.needsUpdate = true;
     if (this.discoveries.instanceColor) this.discoveries.instanceColor.needsUpdate = true;
+  }
+
+  /**
+   * Persistent mineral sites carry a macro signature large enough to survive settlement/infrastructure
+   * camera heights. It is documentary presentation only: resource identity, establishment and extraction
+   * tier all come from the authoritative deposit.
+   */
+  private emitPersistentMineralSite(
+    deposit: WorldState['resourceDeposits'][number],
+    abandoned: boolean,
+    counts: PersistentMineralCounts,
+  ): void {
+    const profile = mineralVisualProfile(deposit.resourceId);
+    const aerial = mineralAerialSignature(deposit.resourceId);
+    const extracted = deposit.extracted ?? 0;
+    const tier = extracted >= 128 ? 3 : extracted >= 32 ? 2 : extracted >= 8 ? 1 : 0;
+    const growth = 0.88 + tier * 0.1;
+    const angle = resourceVisualUnit(`${deposit.id}:aerial-signature`) * Math.PI * 2;
+    this.emitPersistentMineral(this.mineralPads, counts.pads++, deposit, 0, 0, 0.026,
+      aerial.footprint[0] * growth, 1, aerial.footprint[1] * growth, 0, angle, 0, aerial.groundColour, abandoned);
+
+    const positions: readonly (readonly [number, number])[] =
+      aerial.pattern === 'terraces' ? [[-0.38, -0.22], [0, 0], [0.38, 0.22]]
+      : aerial.pattern === 'heap' ? [[-0.28, -0.2], [0.18, -0.2], [-0.08, 0.2], [0.32, 0.18]]
+      : aerial.pattern === 'crystal-cluster' ? [[-0.22, -0.13], [0.2, -0.08], [0.02, 0.24]]
+      : aerial.pattern === 'scree' ? [[-0.42, -0.18], [-0.08, 0.04], [0.34, -0.08], [0.14, 0.3]]
+      : [[-0.34, -0.13], [0.02, 0.04], [0.34, 0.16]];
+    const mesh = this.persistentMineralMesh(profile.geometry);
+    for (let i = 0; i < positions.length; i++) {
+      const [lx, lz] = positions[i]!;
+      const index = this.nextPersistentMineralCount(counts, profile.geometry);
+      const size = (0.78 + (i % 3) * 0.12) * growth;
+      this.emitPersistentMineral(mesh, index, deposit, lx, lz, 0.12 + (i % 2) * 0.045,
+        size * profile.scale[0], size * profile.scale[1], size * profile.scale[2],
+        profile.tilt * (i % 2 ? 1 : -1), angle + i * 0.55, i * 0.16,
+        i % 2 ? profile.secondaryColour : profile.baseColour, abandoned);
+    }
+
+    if (aerial.pattern === 'copper-bands' || aerial.pattern === 'tin-strips' || aerial.pattern === 'iron-fines' || aerial.pattern === 'terraces') {
+      for (let i = 0; i < aerial.accentCount; i++) {
+        const spread = i - (aerial.accentCount - 1) / 2;
+        const copper = aerial.pattern === 'copper-bands';
+        const iron = aerial.pattern === 'iron-fines';
+        const localX = copper ? spread * 0.16 : iron ? spread * 0.22 : 0;
+        const localZ = copper ? spread * 0.12 : iron ? (i % 2 ? 0.34 : -0.34) : spread * 0.18;
+        const sx = copper ? 0.72 : iron ? 0.34 : aerial.pattern === 'terraces' ? 0.95 : 0.78;
+        const sz = copper ? 0.075 : iron ? 0.18 : 0.07;
+        this.emitPersistentMineral(this.mineralMarks, counts.marks++, deposit, localX, localZ, 0.055,
+          sx * growth, 0.035, sz * growth, 0, angle + (copper ? 0.55 : 0), 0,
+          aerial.accentColour, abandoned);
+      }
+    } else if (aerial.pattern === 'heap' || aerial.pattern === 'scree') {
+      for (let i = 0; i < Math.min(2, aerial.accentCount); i++) {
+        this.emitPersistentMineral(this.mineralMarks, counts.marks++, deposit,
+          (i ? 1 : -1) * 0.32, i ? 0.24 : -0.22, 0.05, 0.28, 0.03, 0.16, 0, angle + i * 0.7, 0,
+          aerial.accentColour, abandoned);
+      }
+    } else if (aerial.pattern === 'crystal-cluster') {
+      for (let i = 0; i < aerial.accentCount; i++) {
+        const theta = angle + i * Math.PI * 2 / aerial.accentCount;
+        this.emitPersistentMineral(this.mineralMarks, counts.marks++, deposit,
+          Math.cos(theta) * 0.28, Math.sin(theta) * 0.28, 0.05, 0.14, 0.035, 0.14, 0, theta, 0,
+          aerial.accentColour, abandoned);
+      }
+    }
+  }
+
+  private persistentMineralMesh(kind: MineralGeometryKind): THREE.InstancedMesh {
+    if (kind === 'clod') return this.persistentClods;
+    if (kind === 'coal') return this.persistentCoal;
+    if (kind === 'shard') return this.persistentShards;
+    if (kind === 'crystal') return this.persistentCrystals;
+    return this.persistentRubble;
+  }
+
+  private nextPersistentMineralCount(counts: PersistentMineralCounts, kind: MineralGeometryKind): number {
+    if (kind === 'clod') return counts.clods++;
+    if (kind === 'coal') return counts.coal++;
+    if (kind === 'shard') return counts.shards++;
+    if (kind === 'crystal') return counts.crystals++;
+    return counts.rubble++;
+  }
+
+  private emitPersistentMineral(
+    mesh: THREE.InstancedMesh,
+    index: number,
+    deposit: WorldState['resourceDeposits'][number],
+    localX: number,
+    localZ: number,
+    lift: number,
+    scaleX: number,
+    scaleY: number,
+    scaleZ: number,
+    rotationX: number,
+    rotationY: number,
+    rotationZ: number,
+    colour: string,
+    abandoned: boolean,
+  ): void {
+    if (index >= mesh.instanceMatrix.count) return;
+    const baseAngle = resourceVisualUnit(`${deposit.id}:aerial-signature`) * Math.PI * 2;
+    const cos = Math.cos(baseAngle), sin = Math.sin(baseAngle);
+    const x = deposit.worldX + localX * cos - localZ * sin;
+    const z = deposit.worldZ + localX * sin + localZ * cos;
+    if (!this.workScene.safeSegment({ x: deposit.worldX, z: deposit.worldZ }, { x, z })) {
+      scaleX = 0; scaleY = 0; scaleZ = 0;
+    }
+    this.marker.position.set(x, this.surface.heightAt(x, z) + lift, z);
+    this.marker.rotation.set(rotationX, rotationY, rotationZ);
+    this.marker.scale.set(scaleX, scaleY, scaleZ);
+    this.marker.updateMatrix();
+    mesh.setMatrixAt(index, this.marker.matrix);
+    this.colour.set(colour);
+    if (abandoned) this.colour.lerp(this.abandonedColour, 0.72);
+    mesh.setColorAt(index, this.colour);
+  }
+
+  private finishPersistentMinerals(counts: PersistentMineralCounts): void {
+    const entries: readonly [THREE.InstancedMesh, number][] = [
+      [this.mineralPads, counts.pads],
+      [this.persistentRubble, counts.rubble],
+      [this.persistentClods, counts.clods],
+      [this.persistentCoal, counts.coal],
+      [this.persistentShards, counts.shards],
+      [this.persistentCrystals, counts.crystals],
+      [this.mineralMarks, counts.marks],
+    ];
+    for (const [mesh, count] of entries) {
+      mesh.count = Math.min(count, mesh.instanceMatrix.count);
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   private rebuildLandScars(): void {
