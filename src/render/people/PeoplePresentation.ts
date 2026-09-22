@@ -197,21 +197,58 @@ function occupancyPlacement(group: SocialGroup, index: number): GroupPlacement {
 }
 
 function conversationalPod(group: SocialGroup, index: number, phase: number): GroupPlacement {
-  const count = group.members.length;
-  const pod = Math.floor(index / 2);
-  const podCount = Math.ceil(count / 2);
-  const side = index % 2 === 0 ? 1 : -1;
+  const sizes = conversationalPodSizes(group.members.length);
+  let pod = 0;
+  let first = 0;
+  while (pod < sizes.length - 1 && index >= first + sizes[pod]!) {
+    first += sizes[pod]!;
+    pod++;
+  }
+  const size = sizes[pod] ?? 1;
+  const localIndex = index - first;
+  const podCount = sizes.length;
   const angle = phase + pod * GOLDEN_ANGLE;
-  const radius = 0.42 + Math.sqrt(podCount) * 0.24 + Math.sqrt((pod + 0.5) / Math.max(1, podCount)) * 0.35;
-  const centerX = group.centerX + Math.cos(angle) * radius;
-  const centerZ = group.centerZ + Math.sin(angle) * radius;
-  const axis = angle + Math.PI * 0.5 + (unit(`${group.key}:${pod}:axis`) - 0.5) * 0.45;
-  const separation = 0.25 + unit(`${group.key}:${pod}:gap`) * 0.08;
+  // A single pod belongs near the gathering centre. Multiple pods separate enough that their
+  // geometry reads distinctly from above instead of collapsing into one noisy ring.
+  const centerRadius = podCount <= 1 ? 0.12
+    : 0.46 + Math.sqrt(podCount) * 0.2 + Math.sqrt((pod + 0.5) / podCount) * 0.22;
+  const centerX = group.centerX + Math.cos(angle) * centerRadius;
+  const centerZ = group.centerZ + Math.sin(angle) * centerRadius;
+  const axis = angle + (unit(`${group.key}:${pod}:axis`) - 0.5) * 0.7;
+  const memberRadius = size === 2 ? 0.31 : size === 3 ? 0.34 : 0.38;
+  const memberAngle = axis + localIndex / Math.max(1, size) * Math.PI * 2;
+  const x = centerX + Math.cos(memberAngle) * memberRadius;
+  const z = centerZ + Math.sin(memberAngle) * memberRadius;
   return {
-    x: centerX + Math.cos(axis) * separation * side,
-    z: centerZ + Math.sin(axis) * separation * side,
-    restFacing: Math.atan2(-Math.cos(axis) * side, -Math.sin(axis) * side),
+    x,
+    z,
+    restFacing: Math.atan2(centerX - x, centerZ - z),
   };
+}
+
+/** Prefer readable 3-person pods, using pairs or fours only to avoid isolated singletons. */
+function conversationalPodSizes(count: number): number[] {
+  if (count <= 1) return [count];
+  if (count <= 4) return [count];
+  const sizes: number[] = [];
+  let remaining = count;
+  while (remaining > 0) {
+    if (remaining === 2 || remaining === 3 || remaining === 4) {
+      sizes.push(remaining);
+      break;
+    }
+    if (remaining === 5) {
+      sizes.push(3, 2);
+      break;
+    }
+    if (remaining === 7) {
+      sizes.push(4, 3);
+      break;
+    }
+    sizes.push(3);
+    remaining -= 3;
+  }
+  return sizes;
 }
 
 function audienceArc(group: SocialGroup, index: number, phase: number): GroupPlacement {
