@@ -786,7 +786,8 @@ export class GodboxRenderer {
         localMove: Boolean(firstFire || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
-        localSpeed: ((person.activity === 'flee' ? 0.85 : local ? 0.27 : 0.38) + stableUnit(`${person.id}:pace`) * 0.08) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.85 : 1),
+        localSpeed: ((person.activity === 'flee' ? 0.85 : local?.action.startsWith('play-') ? 0.48 : local ? 0.27 : 0.38)
+          + stableUnit(`${person.id}:pace`) * 0.07) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.9 : 1),
         arrivalEase: Boolean(worker || physical),
         ...(!worker && !physical && !firstFire && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
