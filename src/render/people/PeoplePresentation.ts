@@ -332,11 +332,13 @@ function sociallyOrderMembers(ids: readonly string[], peopleById: ReadonlyMap<st
       const aRank = aAvoided ? 1000
         : aAffinity >= 0 ? aAffinity
           : person && a?.householdId === person.householdId ? 10
-            : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
+            : person && CONVERSATIONAL.has(kind) && person.occupation === 'child' && a?.occupation === 'child' ? 18
+              : person && isWorkDestination(kind) && a?.workplaceId === person.workplaceId ? 20 : 100;
       const bRank = bAvoided ? 1000
         : bAffinity >= 0 ? bAffinity
           : person && b?.householdId === person.householdId ? 10
-            : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
+            : person && CONVERSATIONAL.has(kind) && person.occupation === 'child' && b?.occupation === 'child' ? 18
+              : person && isWorkDestination(kind) && b?.workplaceId === person.workplaceId ? 20 : 100;
       return aRank - bRank || aId.localeCompare(bId);
     });
     current = candidates[0];
