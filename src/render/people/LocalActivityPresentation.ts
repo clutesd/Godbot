@@ -6,6 +6,7 @@ import { atInteraction, facingTarget } from './PhysicalActionPresentation';
 import type { GroupPlacement, SocialGroup } from './PeoplePresentation';
 import type { PersonVisualState } from './PeopleVisualState';
 import { planRestSpot, type RestSpotPresentation, type RestSupportFootprint } from './RestPresentation';
+import { restPreferenceFor, restTransitionSeconds, type RestStage } from './RestChoreography';
 
 /**
  * The single renderer-owned micro-life projection.
@@ -147,6 +148,10 @@ export interface LocalActivityState {
   destination: Vec2;
   /** Physical support slot reserved for an active home-rest beat. */
   rest?: RestSpotPresentation;
+  /** Explicit choreography stage keeps departure blocked until the body is standing again. */
+  restStage?: RestStage;
+  /** Documentary hold retained separately from settle/rise transition durations. */
+  restHold?: number;
   restFacing: number;
   animation: AnimationState;
   action: string;
@@ -268,7 +273,7 @@ export class LocalActivityPresentation {
         const invitation = this.previousStates.get(id);
         const peer = context.people.get(id);
         if (!peer || invitation?.encounter?.partnerId !== person.id || !canInteract(person, peer)) continue;
-        delete state.rest;
+        clearRestChoreography(state);
         state.encounter = buildSocialEncounter(person, peer, context.relationshipFor?.(person.id, peer.id));
         state.encounter.beat = invitation.encounter.beat;
         state.partnerId = peer.id; state.seconds = 0;
@@ -328,6 +333,27 @@ export class LocalActivityPresentation {
     // The stable pair leader advances the shared beat; listener readiness is required.
     const leads = !state.encounter || !reciprocal || person.id < state.partnerId!;
     if (oriented && leads && state.seconds >= state.hold) {
+      if (state.rest) {
+        if (state.restStage === 'settling') {
+          state.restStage = 'settled';
+          state.action = 'rest';
+          state.animation = 'rest';
+          state.seconds = 0;
+          state.hold = state.restHold ?? 5.5;
+          state.phase = 'action';
+          return state;
+        }
+        if (state.restStage === 'settled') {
+          state.restStage = 'rising';
+          state.action = 'rise-from-rest';
+          state.animation = 'rest';
+          state.seconds = 0;
+          state.hold = restTransitionSeconds('rising', person.ageMonths);
+          state.phase = 'action';
+          return state;
+        }
+        if (state.restStage === 'rising') clearRestChoreography(state);
+      }
       if (state.encounter) {
         const peer = context.people.get(state.encounter.partnerId);
         if (peer && canInteract(person, peer) && state.encounter.beat + 1 < SOCIAL_SCRIPTS[state.encounter.tone].length) {
@@ -442,7 +468,7 @@ export class LocalActivityPresentation {
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
     state.partnerId = undefined;
     state.encounter = undefined;
-    delete state.rest;
+    clearRestChoreography(state);
     state.animation = 'idle';
     state.action = action;
     const pointOffset = step === 'reposition'
@@ -477,15 +503,20 @@ export class LocalActivityPresentation {
             && localSegmentSafe(candidate, candidate, context)
             && hasPeerClearance(person, candidate, context, undefined, 0.3),
           safeSegment: (a, b) => localSegmentSafe(a, b, context),
+          preference: restPreferenceFor(person.id, person.ageMonths),
         });
         if (rest) {
           state.rest = rest;
+          state.restStage = 'settling';
+          state.restHold = state.hold;
+          state.hold = restTransitionSeconds('settling', person.ageMonths);
           state.animation = 'rest';
-          state.action = 'rest';
+          state.action = 'settle-into-rest';
           state.destination = { ...rest.destination };
           state.restFacing = rest.facing;
-          state.focus.x = rest.destination.x + Math.sin(rest.facing) * 0.5;
-          state.focus.z = rest.destination.z + Math.cos(rest.facing) * 0.5;
+          const attention = restingCompanionFocus(person, context, rest);
+          state.focus.x = attention.x;
+          state.focus.z = attention.z;
           return;
         }
         state.animation = 'idle';
@@ -811,4 +842,31 @@ export function clearActivityStructure(point: Vec2, building: ActivityStructure,
     x = building.worldX + c * localX + s * localZ; z = building.worldZ - s * localX + c * localZ;
   }
   return x === point.x && z === point.z ? point : { x, z };
+}
+
+
+function clearRestChoreography(state: LocalActivityState): void {
+  delete state.rest;
+  delete state.restStage;
+  delete state.restHold;
+}
+
+function restingCompanionFocus(person: Person, context: LocalActivityContext, rest: RestSpotPresentation): Vec2 {
+  let best: Vec2 | undefined;
+  let bestDistance = Infinity;
+  for (const id of context.group?.members ?? []) {
+    if (id === person.id) continue;
+    const peer = context.people.get(id);
+    if (!peer || peer.activity !== 'rest') continue;
+    const at = context.visualFor?.(id) ?? peer.position;
+    const distance = Math.hypot(at.x - rest.destination.x, at.z - rest.destination.z);
+    if (distance < bestDistance && distance <= 1.65) {
+      best = { x: at.x, z: at.z };
+      bestDistance = distance;
+    }
+  }
+  return best ?? {
+    x: rest.destination.x + Math.sin(rest.facing) * 0.5,
+    z: rest.destination.z + Math.cos(rest.facing) * 0.5,
+  };
 }
