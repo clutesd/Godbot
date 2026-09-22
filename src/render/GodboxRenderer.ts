@@ -48,7 +48,7 @@ import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
-import { constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
+import { constructionPresentationBucket, constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
 import { ConstructionAssembly, type ConstructionAssemblyPlan } from './construction/ConstructionAssembly';
 import { createConstructionScaffold, updateConstructionScaffold } from './construction/ConstructionScaffold';
 import { updateConstructionWorksite } from './construction/ConstructionWorksite';
@@ -2063,7 +2063,7 @@ export class GodboxRenderer {
       infrastructure.factories,
       settlement.industry.intensity,
       settlement.urbanization,
-      settlement.development?.project ? 0 : constructionPresentationProgress(settlement),
+      constructionPresentationBucket(constructionPresentationProgress(settlement)),
       this.state.advanced.atomic.applications.energy,
       this.state.advanced.machine.capability,
       this.state.advanced.space.orbitalInfrastructure,
