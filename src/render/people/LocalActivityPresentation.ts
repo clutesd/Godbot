@@ -332,9 +332,10 @@ export class LocalActivityPresentation {
     // Personal space is a live constraint, not only a target-selection check. If an uninvolved
     // resident drifts into this destination after it was chosen, step to another valid frontage
     // point rather than waiting on a future routine transition to resolve the overlap.
-    if (!state.rest && !hasPeerClearance(person, state.destination, context, state.partnerId, 0.34)) {
+    const clearanceIgnoreId = state.yieldToId ?? state.partnerId;
+    if (!state.rest && !hasPeerClearance(person, state.destination, context, clearanceIgnoreId, 0.34)) {
       const preferred = Math.abs(state.step + state.cycle + 1) % Math.max(1, state.points.length);
-      const adjusted = clearLocalPoint(person, context, state, preferred, true, state.partnerId);
+      const adjusted = clearLocalPoint(person, context, state, preferred, true, clearanceIgnoreId);
       if (Math.hypot(adjusted.x - state.destination.x, adjusted.z - state.destination.z) > 0.01) {
         state.destination = adjusted;
         state.seconds = 0;
