@@ -695,29 +695,45 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   });
   if (adults.length < 2 || !adults.includes(person.id)) return false;
 
+  const turnDuration = 5.4;
+  const offset = unit(`${pod.id}:speaker-phase`) * 4.8;
+  const shifted = presentationSeconds + offset;
+  const epoch = Math.floor(shifted / turnDuration);
+  const turnProgress = (shifted / turnDuration) - Math.floor(shifted / turnDuration);
+
   let speakerId = adults.find(id => {
     const previous = previousStates.get(id);
     return Boolean(previous?.encounter && previous.partnerId && pod.members.includes(previous.partnerId)
       && previous.animation !== 'converse-quiet');
   });
-  if (!speakerId) {
-    const offset = unit(`${pod.id}:speaker-phase`) * 4.8;
-    const epoch = Math.floor((presentationSeconds + offset) / 5.4);
-    speakerId = adults[((epoch % adults.length) + adults.length) % adults.length]!;
-  }
+  if (!speakerId) speakerId = adults[((epoch % adults.length) + adults.length) % adults.length]!;
+
+  const listeners = adults.filter(id => id !== speakerId);
+  const reactorIndex = listeners.length > 0
+    ? Math.floor(unit(`${pod.id}:${epoch}:reactor`) * listeners.length) % listeners.length : -1;
+  const reactorId = reactorIndex >= 0 ? listeners[reactorIndex] : undefined;
+  const reactionWindow = turnProgress >= 0.66 && turnProgress < 0.82;
 
   let focusId: string;
   if (speakerId === person.id) {
     const own = adults.indexOf(person.id);
     focusId = adults[(own + 1) % adults.length]!;
     state.socialRole = 'speaker';
-    state.animation = 'converse';
-    state.action = 'address-pod';
+    state.animation = turnProgress < 0.14 ? 'converse-quiet' : turnProgress > 0.84 ? 'converse-quiet' : 'converse';
+    state.action = turnProgress < 0.14 ? 'take-turn' : turnProgress > 0.84 ? 'finish-turn' : 'address-pod';
   } else {
     focusId = speakerId;
     state.socialRole = 'listener';
-    state.animation = 'converse-quiet';
-    state.action = 'listen-in-pod';
+    if (reactionWindow && reactorId === person.id) {
+      state.animation = 'converse-warm';
+      state.action = 'react-in-pod';
+    } else if (turnProgress < 0.14) {
+      state.animation = 'converse-quiet';
+      state.action = 'shift-attention';
+    } else {
+      state.animation = 'converse-quiet';
+      state.action = 'listen-in-pod';
+    }
   }
 
   const peer = context.people.get(focusId);
