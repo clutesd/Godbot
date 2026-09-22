@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { SeededRandom, stableHash } from '../../sim/prng';
 import { tornadoExposure } from '../../sim/weather/Tornado';
 import { cellAt } from '../../sim/world';
-import type { Settlement, TornadoState, WorldState } from '../../sim/types';
+import type { Settlement, TornadoState, Vec2, WorldState } from '../../sim/types';
 import type { ResourceWorkAssignment } from '../../sim/resources/ResourceWorkAssignments';
 import type { ResourceWorkTreeTarget } from '../resources/ResourceWorkScene';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
@@ -269,6 +269,34 @@ export class VegetationRenderer {
     }
 
     return obstruction;
+  }
+
+  /**
+   * Foot-level collision against the same deterministic trunks that are actually rendered.
+   * Crowns remain non-solid for pedestrians; fallen or cleared trees do not block movement.
+   */
+  pedestrianSegmentClear(a: Vec2, b: Vec2, padding = 0.1): boolean {
+    const midpoint = { x: (a.x + b.x) * 0.5, z: (a.z + b.z) * 0.5 };
+    const cell = cellAt(this.world, midpoint.x, midpoint.z);
+    if (!cell) return true;
+    const length = Math.hypot(b.x - a.x, b.z - a.z);
+    const reach = Math.max(1, Math.ceil((length * 0.5 + 0.7) / Math.max(0.25, this.world.cellSize)));
+    for (let row = Math.max(0, cell.z - reach); row <= Math.min(this.world.size - 1, cell.z + reach); row += 1) {
+      for (let column = Math.max(0, cell.x - reach); column <= Math.min(this.world.size - 1, cell.x + reach); column += 1) {
+        for (const index of this.workTreesByCell.get(row * this.world.size + column) ?? []) {
+          const tree = this.placements[index];
+          const lifecycle = this.lifecycle[index];
+          const phenotype = this.phenotypes[index];
+          if (!tree || !lifecycle || !phenotype || lifecycle.fallen || this.isCleared(tree)) continue;
+          const morphology = resolveTreeMorphology(phenotype, lifecycle);
+          const height = this.nearBuckets.get(bucketKey(tree.family, tree.variant))?.crownHeight ?? 1;
+          const trunkRadius = height * 0.044 * (tree.family === 'ancient' ? 1.9 : 1)
+            * lifecycle.scale * (morphology.trunkRadiusX + morphology.trunkRadiusZ) * 0.5;
+          if (distanceToGroundSegment(a, b, tree.worldX, tree.worldZ) < trunkRadius + padding) return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**
@@ -774,6 +802,12 @@ export class VegetationRenderer {
     }
     return false;
   }
+}
+
+function distanceToGroundSegment(a: Vec2, b: Vec2, x: number, z: number): number {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(x - a.x - dx * t, z - a.z - dz * t);
 }
 
 function bucketKey(family: TreeFamily, variant: number): string {
