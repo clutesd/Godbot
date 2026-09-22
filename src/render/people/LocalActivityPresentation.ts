@@ -1054,18 +1054,18 @@ function updateMutualYield(person: Person, context: LocalActivityContext, state:
   const ownRemaining = Math.hypot(state.destination.x - visual.x, state.destination.z - visual.z);
   if (ownRemaining < 0.14) return;
 
-  for (const id of context.group?.members ?? []) {
+  for (const [id, peer] of context.people) {
     if (id === person.id) continue;
-    const peer = context.people.get(id);
     const peerState = previousStates.get(id);
-    const peerAt = peer ? context.visualFor?.(id) ?? peer.position : undefined;
-    if (!peer || !peerState || !peerAt || !canInteract(person, peer) || peerState.yieldToId === person.id
-      || peerState.partnerId || peerState.encounter || peerState.playGame || peerState.rest
+    const peerAt = context.visualFor?.(id) ?? peer.position;
+    if (!canPerceive(person, peer) || peerState?.yieldToId === person.id
+      || peerState?.partnerId || peerState?.encounter || peerState?.playGame || peerState?.rest
       || state.recentSocialKind === 'passing' && state.recentSocialId === peer.id && (state.recentSocialUntil ?? 0) > now) continue;
+    const peerDestination = peerState?.destination ?? peer.target;
     const separation = Math.hypot(peerAt.x - visual.x, peerAt.z - visual.z);
     if (separation < 0.26 || separation > MUTUAL_YIELD_RADIUS) continue;
-    if (Math.hypot(peerState.destination.x - peerAt.x, peerState.destination.z - peerAt.z) < 0.14) continue;
-    if (!pathsConflict({ x: visual.x, z: visual.z }, state.destination, peerAt, peerState.destination, 0.28)) continue;
+    if (Math.hypot(peerDestination.x - peerAt.x, peerDestination.z - peerAt.z) < 0.14) continue;
+    if (!pathsConflict({ x: visual.x, z: visual.z }, state.destination, peerAt, peerDestination, 0.28)) continue;
     if (!shouldYieldTo(person, peer)) continue;
 
     const dx = state.destination.x - visual.x;
@@ -1400,11 +1400,10 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
   let selected: AmbientAttentionSelection | undefined;
   const kind = person.navigation?.destinationKind;
   const continuityActive = Boolean(state.recentSocialId && (state.recentSocialUntil ?? 0) > now);
-  for (const id of context.group?.members ?? []) {
+  for (const [id, peer] of context.people) {
     if (id === person.id) continue;
-    const peer = context.people.get(id);
     const peerState = previousStates.get(id);
-    if (!peer || !canInteract(person, peer) || peerState?.action === 'arrive') continue;
+    if (!canPerceive(person, peer) || peerState?.action === 'arrive') continue;
     const recent = continuityActive && state.recentSocialId === peer.id;
     if (visual.speed > 0.045 && !recent) continue;
     const caregiver = person.children.includes(peer.id) || peer.parents.includes(person.id);
@@ -1476,12 +1475,8 @@ function clearAmbientAttention(state: LocalActivityState): void {
 }
 
 function hasPeerClearance(person: Person, point: Vec2, context: LocalActivityContext, ignoreId?: string, minimum = 0.3): boolean {
-  const members = context.group?.members;
-  if (!members) return true;
-  for (const id of members) {
-    if (id === person.id || id === ignoreId) continue;
-    const peer = context.people.get(id);
-    if (!peer || !peer.alive) continue;
+  for (const [id, peer] of context.people) {
+    if (id === person.id || id === ignoreId || !peer.alive) continue;
     const at = context.visualFor?.(id) ?? peer.position;
     if (Math.hypot(point.x - at.x, point.z - at.z) < minimum) return false;
   }
@@ -1561,10 +1556,14 @@ function localActivityAuthority(person: Person): string {
   return `${person.homeId}|${person.householdId}|${person.occupation}|${person.role}|${person.activity}|${nav.destinationKind}|${nav.destinationId}`;
 }
 
-function canInteract(person: Person, peer: Person): boolean {
-  return peer.id !== person.id && peer.alive && peer.health > 0.2 && !peer.navigation?.traveling
+function canPerceive(person: Person, peer: Person): boolean {
+  return peer.id !== person.id && peer.alive && peer.health > 0.2
     && peer.navigation?.schedulePhase !== 'emergency' && peer.displacedSinceMonth === undefined
-    && !['flee', 'migrate', 'shelter'].includes(peer.activity)
+    && !['flee', 'migrate', 'shelter'].includes(peer.activity);
+}
+
+function canInteract(person: Person, peer: Person): boolean {
+  return canPerceive(person, peer) && !peer.navigation?.traveling
     && peer.navigation?.destinationId === person.navigation?.destinationId
     && peer.navigation?.destinationKind === person.navigation?.destinationKind;
 }
