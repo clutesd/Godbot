@@ -6,7 +6,7 @@ import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import type { PedestrianFootprint } from '../../sim/people/StructureNavigation';
 import { BattleAftermath } from './BattleAftermath';
 import { combatPose, engagementGap, figurePosition } from './CombatChoreography';
-import { BattleSpectacle } from './BattleSpectacle';
+import { BattleSpectacle, type StructuralBattleEvidence } from './BattleSpectacle';
 import { militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
 import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
 
@@ -51,6 +51,7 @@ interface CampaignVisual {
   aftermath: BattleAftermath;
   eventId?: string;
   eventMode?: unknown;
+  event?: HistoricalEvent;
   evidenceMonth: number;
   lastBattleCount: number;
   battleTime: number;
@@ -101,6 +102,11 @@ export class WarRenderer {
 
   setStructures(structures: readonly PedestrianFootprint[]): void { this.walking.setStructures(structures); }
 
+  /** Submit only identified structural facts; empty evidence clears repaired/extinguished sites. */
+  setStructuralEvidence(warId: string, evidence: readonly StructuralBattleEvidence[]): void {
+    this.visuals.get(warId)?.spectacle.setStructuralEvidence(evidence);
+  }
+
   updateDaylight(daylight: number): void {
     for (const visual of this.visuals.values()) for (const company of visual.companies) {
       updateCosmicBodyMaterial(company.body.material as THREE.MeshStandardMaterial, daylight);
@@ -129,6 +135,7 @@ export class WarRenderer {
           const candidate = this.state.history[i]!;
           if (candidate.type === 'battle' && candidate.actors.includes(war.id) && candidate.month <= this.state.month) { event = candidate; break; }
         }
+        visual.event = event;
         visual.eventId = event?.id;
         visual.eventMode = event?.context['engagementMode'];
         visual.aftermath.sync(war, this.state.history, this.state.month, elapsed, [visual.companies[0].style, visual.companies[1].style]);
@@ -137,39 +144,40 @@ export class WarRenderer {
       visual.spectacle.beginWeapons();
       const gap = engagementGap([visual.companies[0].style, visual.companies[1].style], visual.eventMode);
       const front = 0.76 + clamp(war.progress, -1, 1) * 0.08;
-      const frontPoint = campaignPoint(war.campaign.route, front, b.position);
+      const frontPoint = war.phase === 'battle' && visual.event?.location ? visual.event.location : campaignPoint(war.campaign.route, front, b.position);
       const frontBefore = campaignPoint(war.campaign.route, front - 0.006, a.position);
       const frontAfter = campaignPoint(war.campaign.route, front + 0.006, b.position);
       const frontYaw = Math.atan2(frontAfter.x - frontBefore.x, frontAfter.z - frontBefore.z);
       const separation = gap / (2 * Math.max(1, war.campaign.distance));
-      const retreat = resolved ? clamp((this.state.month - war.resolvedMonth!) / 4, 0, 1) : 0;
+      const retreat = resolved ? clamp((this.state.month - war.resolvedMonth!) / 4, 0, 1)
+        : war.phase === 'retreat' || war.phase === 'negotiation' ? clamp((elapsed - visual.battleTime) / 8, 0, 1) : 0;
       const targets = [
         war.phase === 'mobilizing' ? 0.12 : war.phase === 'marching' ? 0.12 + war.marchProgress * 0.62 : war.phase === 'retreat' || war.phase === 'negotiation' ? THREE.MathUtils.lerp(front - separation, 0.12, retreat) : front - separation,
-        war.phase === 'mobilizing' || war.phase === 'marching' ? 0.84 : war.phase === 'occupation' ? THREE.MathUtils.lerp(front + separation, 0.95, retreat) : front + separation,
+        war.phase === 'mobilizing' || war.phase === 'marching' ? 0.84 : war.phase === 'occupation' || war.phase === 'negotiation' ? THREE.MathUtils.lerp(front + separation, 0.95, retreat) : front + separation,
       ];
       if (war.campaign.battleCount !== visual.lastBattleCount) {
         visual.battleTime = elapsed;
         visual.lastBattleCount = war.campaign.battleCount;
       }
-      const battlePulse = !resolved && war.phase === 'battle' && war.campaign.blockedMonths === 0
+      const battlePulse = !resolved && visual.event?.month === this.state.month && war.phase === 'battle' && war.campaign.blockedMonths === 0
         ? clamp(1 - (elapsed - visual.battleTime) / 7, 0, 1)
         : 0;
 
       visual.companies.forEach((company, side) => {
         const target = targets[side]!;
-        company.progress = reducedMotion ? target : THREE.MathUtils.lerp(company.progress, target, 1 - Math.exp(-Math.max(0, delta) * 1.5));
+        company.progress = reducedMotion || war.phase === 'battle' && Boolean(visual.event) ? target : THREE.MathUtils.lerp(company.progress, target, 1 - Math.exp(-Math.max(0, delta) * 1.5));
         const fallback = side === 0 ? a.position : b.position;
         const center = campaignPoint(war.campaign.route, company.progress, fallback);
         const forward = campaignPoint(war.campaign.route, clamp(company.progress + (side === 0 ? 0.006 : -0.006), 0, 1), fallback);
         const engaged = war.phase === 'battle' && war.campaign.blockedMonths === 0;
         const yaw = engaged ? frontYaw + side * Math.PI : Math.atan2(forward.x - center.x, forward.z - center.z);
-        const approach = engaged ? Math.max(0, (side === 0 ? -1 : 1) * ((center.x - frontPoint.x) * Math.sin(frontYaw) + (center.z - frontPoint.z) * Math.cos(frontYaw)) - gap / 2) : 0;
+        const approach = engaged && !visual.event ? Math.max(0, (side === 0 ? -1 : 1) * ((center.x - frontPoint.x) * Math.sin(frontYaw) + (center.z - frontPoint.z) * Math.cos(frontYaw)) - gap / 2) : 0;
         const strength = side === 0 ? war.strengthA : war.strengthB;
         const count = strength <= 0 ? 0 : Math.min(MAX_FIGURES, Math.max(3, Math.ceil(Math.sqrt(strength) * 3)));
         const moving = !reducedMotion && (Math.abs(target - company.progress) > 0.002 || war.phase === 'marching') && war.campaign.blockedMonths === 0;
         let visible = 0;
         for (let i = 0; i < count; i++) {
-          if (visual.aftermath.suppress(visual.eventId, side, i, elapsed, reducedMotion)) continue;
+          if (engaged && visual.aftermath.suppress(visual.eventId, side, i, elapsed, reducedMotion)) continue;
           const rank = Math.floor(i / company.style.rankWidth);
           const slot = i % company.style.rankWidth;
           const centeredSlot = slot - (Math.min(company.style.rankWidth, count - rank * company.style.rankWidth) - 1) / 2;
@@ -183,13 +191,14 @@ export class WarRenderer {
           };
           // Never collapse blocked slots onto the centerline (which stacks whole ranks).
           if (!this.walking.isSegmentWalkable(engaged ? p : base, p)) continue;
-          const pose = combatPose(company.style, i, side, Number.isFinite(visual.battleTime) ? elapsed - visual.battleTime : 0, engaged && approach < 0.08 && battlePulse > 0 && i < company.style.rankWidth && (gap <= 0.6 || ['bow', 'rifle', 'automatic'].includes(company.style.weapon)), reducedMotion);
+          const pose = combatPose(company.style, i, side, Number.isFinite(visual.battleTime) ? elapsed - visual.battleTime : 0, engaged && approach < 0.08 && battlePulse > 0 && i < company.style.rankWidth && (gap <= 0.6 || ['bow', 'rifle', 'automatic'].includes(company.style.weapon)), reducedMotion, visual.companies[1 - side]!.style);
           const poseX = p.x + Math.sin(yaw) * pose.advance;
           const poseZ = p.z + Math.cos(yaw) * pose.advance;
-          const tip = { x: poseX + Math.sin(yaw) * 0.3, z: poseZ + Math.cos(yaw) * 0.3 };
+          const weaponExtent = pose.reach + (company.style.weapon === 'spear' ? 0.25 : 0.16);
+          const tip = { x: poseX + Math.sin(yaw) * weaponExtent, z: poseZ + Math.cos(yaw) * weaponExtent };
           if (!this.walking.isSegmentWalkable(p, tip)) continue;
           p.x = poseX; p.z = poseZ;
-          if (!this.walking.isWalkable(p) || visual.aftermath.occupies(p, visual.eventId)) continue;
+          if (!this.walking.isWalkable(p) || visual.aftermath.occupies(p, visual.eventId, elapsed, reducedMotion)) continue;
           const step = reducedMotion ? 0 : Math.sin(time * 8 + i * 1.9 + side) * (moving && !engaged ? 1 : pose.attack * 0.25);
           const ground = this.elevationAt(p.x, p.z);
           this.part(company.body, visible, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
@@ -201,14 +210,14 @@ export class WarRenderer {
           }
           for (let arm = 0; arm < 2; arm++) {
             const lateralArm = arm === 0 ? -0.05 : 0.05;
-            const armPitch = engaged ? (arm === 0 && company.style.shields ? 0.8 : 0.9 + pose.attack * 0.55) : -step * 0.4;
+            const armPitch = engaged ? (arm === 0 && company.style.shields ? 0.8 + pose.brace * 0.35 : 0.9 + pose.attack * 0.55) : -step * 0.4;
             this.part(company.arms, visible * 2 + arm, p.x + Math.cos(yaw) * lateralArm + Math.sin(yaw) * 0.025,
               ground + 0.195, p.z - Math.sin(yaw) * lateralArm + Math.cos(yaw) * 0.025, yaw, armPitch, fade);
           }
           const combatReady = engaged;
           if (company.style.shields) {
             const shieldForward = combatReady && (company.style.weapon === 'spear' || company.style.weapon === 'club' || company.style.weapon === 'bow') ? 0.08 : 0.045;
-            this.part(company.shield, visible, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - pose.attack * 0.18, fade);
+            this.part(company.shield, visible, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - pose.brace * 0.22, fade);
           }
           if (company.style.armour) this.part(company.helmet, visible, p.x, ground + 0.305 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
           const weaponForward = combatReady ? pose.reach - pose.recoil * 0.03 : 0.045;
@@ -243,7 +252,7 @@ export class WarRenderer {
         position.needsUpdate = true;
         company.standard.cloth.geometry.computeVertexNormals();
         company.camp.visible = !resolved && (war.phase === 'mobilizing' || war.phase === 'marching') && war.campaign.route.length > 1;
-        this.updateSupport(company, center, yaw, visible, moving, battlePulse, time, fade);
+        this.updateSupport(company, center, yaw, visible, moving, reducedMotion ? 0 : battlePulse, time, fade);
       });
 
       visual.route.visible = focusId === war.id && war.campaign.route.length > 1;

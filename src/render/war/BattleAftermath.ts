@@ -3,7 +3,7 @@ import type { HistoricalEvent, Vec2, War } from '../../sim/types';
 import { campaignPoint } from '../../sim/war/Campaign';
 import { createCosmicBodyGeometry, createCosmicHeadGeometry, COSMIC_HEIGHT_MULTIPLIER } from '../people/CosmicPeople';
 import type { MilitaryVisualStyle } from './MilitaryVisualLanguage';
-import { attackMoment, engagementGap, figurePosition } from './CombatChoreography';
+import { impactMoment, engagementGap, figurePosition } from './CombatChoreography';
 
 export const MAX_BATTLE_BODIES = 32;
 export const AFTERMATH_MONTHS = 12;
@@ -53,7 +53,7 @@ export function casualtyReceipts(war: War, history: readonly HistoricalEvent[], 
         const slot = (offset + sample) % 3;
         receipts.push({ id: `${war.id}:${event.id}:${side}:${slot}`, warId: war.id, eventId: event.id,
           month: event.month, side, slot, position: figurePosition(event.location, yaw, gap, styles[side], side, slot),
-          impactAt: attackMoment(styles[side === 0 ? 1 : 0], slot, side === 0 ? 1 : 0),
+          impactAt: impactMoment(styles[side === 0 ? 1 : 0], slot, side === 0 ? 1 : 0),
           yaw: yaw + side * Math.PI });
       }
     }
@@ -72,6 +72,7 @@ export class BattleAftermath {
   private readonly heads = this.pool('Fallen heads', createCosmicHeadGeometry(), '#877875', MAX_BATTLE_BODIES);
   private readonly limbs = this.pool('Fallen limbs', new THREE.BoxGeometry(0.035, 0.095, 0.035), '#554b48', MAX_BATTLE_BODIES * 4);
   private readonly kit = this.pool('Abandoned battlefield equipment', new THREE.BoxGeometry(0.03, 0.025, 0.22), '#62584a', MAX_BATTLE_BODIES);
+  private readonly groundMarks = this.pool('Battlefield disturbed ground', new THREE.CircleGeometry(0.23, 7), '#776550', MAX_BATTLE_BODIES);
   private readonly stains = this.pool('Recorded blood traces', new THREE.CircleGeometry(0.115, 7), '#682c2b', MAX_BATTLE_BODIES);
   private readonly impacts = this.pool('Casualty contact bursts', new THREE.IcosahedronGeometry(0.025, 0), '#9b3c32', MAX_BATTLE_BODIES * 3);
   private disposed = false;
@@ -89,7 +90,7 @@ export class BattleAftermath {
     for (const id of this.started.keys()) if (!ids.has(id)) this.started.delete(id);
     for (const record of next) if (!this.started.has(record.id)) {
       // Historical/reloaded remains are already at rest; only a current event gets a fall.
-      this.started.set(record.id, record.month === month ? elapsed : -Infinity);
+      this.started.set(record.id, record.month === month && war.phase === 'battle' && war.resolvedMonth === undefined ? elapsed : -Infinity);
     }
     this.receipts = next;
   }
@@ -100,9 +101,10 @@ export class BattleAftermath {
   }
 
   /** Do not stand survivors inside old remains. This is visual culling, never navigation truth. */
-  occupies(point: Vec2, currentEventId?: string): boolean {
+  occupies(point: Vec2, currentEventId?: string, elapsed = Infinity, reducedMotion = false): boolean {
     return this.receipts.some(record => {
-      if (record.eventId === currentEventId) return false;
+      if (record.eventId === currentEventId && !reducedMotion
+        && elapsed - this.started.get(record.id)! < record.impactAt + 0.32) return false;
       const x = record.position.x - Math.sin(record.yaw) * 0.16;
       const z = record.position.z - Math.cos(record.yaw) * 0.16;
       return Math.hypot(point.x - x, point.z - z) < 0.16;
@@ -155,6 +157,10 @@ export class BattleAftermath {
       this.local.scale.set(fade, fade * (0.5 + eased * 0.4), fade);
       this.local.updateMatrix();
       this.stains.setMatrixAt(count, this.local.matrix);
+      this.local.position.y = ground + 0.006;
+      this.local.scale.set(fade, fade * 0.7, fade);
+      this.local.updateMatrix();
+      this.groundMarks.setMatrixAt(count, this.local.matrix);
       if (!reducedMotion && life < 0.32) for (let j = 0; j < 3; j++) {
         this.local.position.set(p.x + Math.cos(j * 2.4) * life * 0.3, ground + 0.19 + life * 0.18, p.z + Math.sin(j * 2.4) * life * 0.3);
         this.local.rotation.set(0, j, 0);
@@ -164,10 +170,10 @@ export class BattleAftermath {
       }
       count++;
     }
-    this.bodies.count = this.heads.count = this.kit.count = this.stains.count = count;
+    this.bodies.count = this.heads.count = this.kit.count = this.stains.count = this.groundMarks.count = count;
     this.limbs.count = count * 4;
     this.impacts.count = particles;
-    for (const mesh of [this.bodies, this.heads, this.limbs, this.kit, this.stains, this.impacts]) mesh.instanceMatrix.needsUpdate = true;
+    for (const mesh of [this.bodies, this.heads, this.limbs, this.kit, this.stains, this.groundMarks, this.impacts]) mesh.instanceMatrix.needsUpdate = true;
   }
 
   private part(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scale: number): void {
@@ -192,7 +198,7 @@ export class BattleAftermath {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const mesh of [this.bodies, this.heads, this.limbs, this.kit, this.stains, this.impacts]) {
+    for (const mesh of [this.bodies, this.heads, this.limbs, this.kit, this.stains, this.groundMarks, this.impacts]) {
       mesh.dispose(); mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
     }
     this.receipts = [];

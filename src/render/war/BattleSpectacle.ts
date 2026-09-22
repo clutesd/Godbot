@@ -9,6 +9,16 @@ const MAX_FLASH = 16;
 const MAX_TRACERS = 14;
 const clamp = THREE.MathUtils.clamp;
 
+/** Only an authoritative, structure-specific event may supply these facts.
+ * Aggregate casualties or archive losses are deliberately insufficient. */
+export interface StructuralBattleEvidence {
+  readonly eventId: string;
+  readonly structureId: string;
+  readonly position: Readonly<{ x: number; z: number }>;
+  readonly damage: number;
+  readonly burning: boolean;
+}
+
 interface Airframe {
   group: THREE.Group;
   side: 0 | 1;
@@ -36,6 +46,9 @@ export class BattleSpectacle {
   private readonly tracers = new THREE.InstancedMesh(this.tracerGeometry, new THREE.MeshBasicMaterial({ color: '#ffcf85', transparent: true, opacity: 0.8, depthWrite: false }), MAX_TRACERS);
   private readonly aircraft: Airframe[] = [];
   private readonly missiles: MissileVisual[] = [];
+  private readonly structuralDebris = new THREE.InstancedMesh(this.flashGeometry, new THREE.MeshStandardMaterial({ color: '#65594a', roughness: 1 }), 24);
+  private readonly structuralFire = new THREE.InstancedMesh(this.flashGeometry, new THREE.MeshBasicMaterial({ color: '#da792e' }), 12);
+  private structuralEvidence: StructuralBattleEvidence[] = [];
   private disposed = false;
   private lastBattle = -1;
   private residueX = 0;
@@ -43,7 +56,10 @@ export class BattleSpectacle {
 
   constructor(private readonly elevationAt: (x: number, z: number) => number) {
     this.group.name = 'Capability battle spectacle';
-    for (const mesh of [this.smoke, this.flashes, this.tracers]) {
+    this.structuralDebris.name = 'Authoritative structure debris';
+    this.structuralFire.name = 'Authoritative structure fire';
+    for (const mesh of [this.smoke, this.flashes, this.tracers, this.structuralDebris, this.structuralFire]) {
+      mesh.count = 0;
       mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       this.group.add(mesh);
@@ -56,6 +72,19 @@ export class BattleSpectacle {
         this.missiles.push(missile);
         this.group.add(airframe.group, missile.group);
       }
+    }
+  }
+
+  /** Bounded replace semantics: the provider owns repair/extinguish/cleanup lifecycle. */
+  setStructuralEvidence(evidence: readonly StructuralBattleEvidence[]): void {
+    const seen = new Set<string>();
+    this.structuralEvidence = [];
+    for (const item of evidence) {
+      if (this.structuralEvidence.length === 12) break;
+      if (!item.eventId || !item.structureId || seen.has(item.structureId) || !Number.isFinite(item.damage)
+        || item.damage <= 0 || !Number.isFinite(item.position.x) || !Number.isFinite(item.position.z)) continue;
+      seen.add(item.structureId);
+      this.structuralEvidence.push({ ...item, damage: Math.min(1, item.damage), position: { ...item.position } });
     }
   }
 
@@ -100,6 +129,16 @@ export class BattleSpectacle {
     const intensity = Math.max(0, 1 - Math.max(0, elapsed - eventTime) / 15);
     const firing = active && battlePulse > 0;
     const time = reducedMotion ? 0 : elapsed;
+    this.structuralDebris.count = this.structuralFire.count = 0;
+    for (const evidence of this.structuralEvidence) {
+      const { x, z } = evidence.position;
+      const y = this.elevationAt(x, z);
+      for (let i = 0; i < 2; i++) this.part(this.structuralDebris, this.structuralDebris.count++,
+        x + (i ? 0.22 : -0.22), y + 0.04, z + 0.18, i * 2.4, 0.3, 0.08 * evidence.damage);
+      if (evidence.burning) this.part(this.structuralFire, this.structuralFire.count++, x, y + 0.18, z,
+        0, 0, (0.12 + (reducedMotion ? 0 : Math.sin(time * 5) * 0.015)) * evidence.damage);
+    }
+    this.structuralDebris.instanceMatrix.needsUpdate = this.structuralFire.instanceMatrix.needsUpdate = true;
     const styles = [militaryVisualStyle(profiles[0]), militaryVisualStyle(profiles[1])] as const;
     const smokeBudget = Math.min(MAX_SMOKE, Math.round((styles[0].smoke + styles[1].smoke) * intensity * 0.65));
 
@@ -220,6 +259,7 @@ export class BattleSpectacle {
     });
     geometries.forEach(geometry => geometry.dispose());
     materials.forEach(material => material.dispose());
+    this.structuralEvidence = [];
     this.group.clear();
   }
 }

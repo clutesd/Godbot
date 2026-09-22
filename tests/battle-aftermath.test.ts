@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { BattleAftermath, casualtyReceipts, MAX_BATTLE_BODIES, AFTERMATH_MONTHS } from '../src/render/war/BattleAftermath';
-import { combatPose, engagementGap, figurePosition } from '../src/render/war/CombatChoreography';
+import { attackMoment, attackPeriod, impactMoment, combatPose, engagementGap, figurePosition } from '../src/render/war/CombatChoreography';
 import { militaryVisualStyle } from '../src/render/war/MilitaryVisualLanguage';
 import { deriveMilitaryProfile } from '../src/sim/war/MilitaryCapability';
 import type { HistoricalEvent } from '../src/sim/types';
+import { BattleSpectacle } from '../src/render/war/BattleSpectacle';
 import { WarRenderer } from '../src/render/war/WarRenderer';
 import { warFixture } from './fixtures/war';
 
@@ -93,6 +94,66 @@ describe('casualty-backed battlefield presentation', () => {
       if (weapon === 'spear') expect(reduced.pitch).toBeGreaterThan(1);
       if (weapon === 'rifle') expect(reduced.pitch).toBeCloseTo(0);
     }
+  });
+
+  it('keeps survivors clear of the current fall only after its recorded impact', () => {
+    const { war, styles, event } = fixture();
+    war.phase = 'battle';
+    const aftermath = new BattleAftermath(() => 0);
+    aftermath.sync(war, [event], 1, 0, styles);
+    const record = aftermath.records[0]!;
+    const point = { x: record.position.x - Math.sin(record.yaw) * 0.16,
+      z: record.position.z - Math.cos(record.yaw) * 0.16 };
+    expect(aftermath.occupies(point, event.id, 0)).toBe(false);
+    expect(aftermath.occupies(point, event.id, record.impactAt + 1.3)).toBe(true);
+    aftermath.dispose();
+  });
+
+  it('aligns ranged casualty impacts with projectile arrival and keeps melee contact immediate', () => {
+    const { styles } = fixture();
+    for (const weapon of ['club', 'spear', 'bow', 'rifle', 'automatic'] as const) {
+      const style = { ...styles[0], weapon };
+      const launch = attackMoment(style, 0, 0);
+      const impact = impactMoment(style, 0, 0);
+      if (['bow', 'rifle', 'automatic'].includes(weapon)) {
+        expect(impact - launch).toBeCloseTo(attackPeriod(style) * 0.27);
+        expect(combatPose(style, 0, 0, impact - 0.00001, true, false).flight).toBeGreaterThan(0.99);
+      } else expect(impact).toBe(launch);
+    }
+  });
+
+  it('does not replay a new fall when opening a resolved battle in its resolution month', () => {
+    const { war, styles, event } = fixture();
+    war.resolvedMonth = 1;
+    const aftermath = new BattleAftermath(() => 0);
+    aftermath.sync(war, [event], 1, 100, styles);
+    aftermath.update(1, 100, false, () => true);
+    expect((aftermath.group.getObjectByName('Recorded fallen soldiers') as THREE.InstancedMesh).count).toBe(3);
+    expect((aftermath.group.getObjectByName('Casualty contact bursts') as THREE.InstancedMesh).count).toBe(0);
+    aftermath.dispose();
+  });
+
+  it('requires explicit structure evidence, bounds it, and clears repaired sites', () => {
+    const { war, a, b } = fixture();
+    const spectacle = new BattleSpectacle(() => 0);
+    const profiles = [deriveMilitaryProfile(a), deriveMilitaryProfile(b)] as const;
+    const render = () => spectacle.update(war, [a, b], profiles, 1, 1, 1, true);
+    const fire = spectacle.group.getObjectByName('Authoritative structure fire') as THREE.InstancedMesh;
+    const debris = spectacle.group.getObjectByName('Authoritative structure debris') as THREE.InstancedMesh;
+    render();
+    expect(fire.count).toBe(0);
+    spectacle.setStructuralEvidence([{ eventId: 'damage', structureId: 'intact', damage: 0, burning: true, position: { x: 0, z: 0 } }]);
+    render();
+    expect(fire.count).toBe(0);
+    spectacle.setStructuralEvidence(Array.from({ length: 100 }, (_, i) => ({ eventId: 'damage', structureId: String(i), damage: 0.5, burning: i === 0, position: { x: i, z: 0 } })));
+    render();
+    expect(fire.count).toBe(1);
+    expect(debris.count).toBe(24);
+    spectacle.setStructuralEvidence([]);
+    render();
+    expect(debris.count).toBe(0);
+    expect(fire.count).toBe(0);
+    spectacle.dispose(); spectacle.dispose();
   });
 
   it('visualizes actual resolver events without altering any simulation state across phase changes', () => {
