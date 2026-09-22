@@ -786,8 +786,11 @@ export class GodboxRenderer {
         localMove: Boolean(firstFire || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
-        localSpeed: ((person.activity === 'flee' ? 0.85 : local?.action.startsWith('play-') ? 0.48 : local ? 0.27 : 0.38)
-          + stableUnit(`${person.id}:pace`) * 0.07) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.9 : 1),
+        localSpeed: ((person.activity === 'flee' ? 0.85
+          : ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local?.action ?? '') ? 0.53
+            : local?.action.startsWith('play-') ? (person.ageMonths < 36 ? 0.24 : 0.44)
+              : local ? 0.27 : 0.38)
+          + stableUnit(`${person.id}:pace`) * 0.02) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.94 : 1),
         arrivalEase: Boolean(worker || physical),
         ...(!worker && !physical && !firstFire && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
@@ -807,11 +810,13 @@ export class GodboxRenderer {
         restReady ? local?.restStage : undefined, deltaSeconds, person.ageMonths, restAttentionYaw);
       const loaded = physical?.action.carriedObject !== undefined;
       const travel = travelAnimationFor(visual.speed, person);
+      const playfulRun = Boolean(local && ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local.action)
+        && visual.speed >= WALK_SPEED_THRESHOLD);
       const firstFireStanding = Boolean(firstFire && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
         && Math.hypot(visual.x - firstFire.x, visual.z - firstFire.z) < 0.08);
       const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
-        visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : travel
+        visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
           : firstFireStanding ? firstFire!.animation
             : interruption || unsupportedWork || physical ? 'idle'
               : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
