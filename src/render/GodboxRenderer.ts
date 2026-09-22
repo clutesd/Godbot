@@ -10,7 +10,7 @@ import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
-import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
+import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
@@ -2838,6 +2838,12 @@ export class GodboxRenderer {
   private updateFirstFirePresentationVisuals(): void {
     for (const [settlementId, visual] of this.settlementVisuals) {
       const sample = this.firstFirePresentation.sample(settlementId, this.reducedMotion.matches);
+      const infrastructure = visual.group.userData['foundingHearthInfrastructure'];
+      if (infrastructure instanceof THREE.Group) {
+        const scale = Math.max(0.001, sample.hearthScale);
+        infrastructure.visible = scale > 0.01;
+        infrastructure.scale.setScalar(scale);
+      }
       const rig = visual.group.userData['foundingHearthFlameRig'];
       if (rig instanceof THREE.Group) {
         const scale = Math.max(0.001, sample.flameScale);
@@ -2961,32 +2967,46 @@ export class GodboxRenderer {
 
     if (rank <= 1) {
       const foundingOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []);
+      const foundingHearth = Boolean(settlement.foundingPodId);
+      // A landing reserves this ground for a future communal hearth, but does not visually invent
+      // one. The ash bed and stone ring become visible only after the authoritative first-fire
+      // milestone has been recorded.
+      if (!foundingHearthEstablished(settlement)) return entries;
+
       const hearthOffset = foundingOffset ?? { x: 0, z: 0 };
       const worldX = settlement.position.x + hearthOffset.x;
       const worldZ = settlement.position.z + hearthOffset.z;
       const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
       const groundY = this.elevationAt(worldX, worldZ) - settlementY;
       const stone = palette.getSurfaceMaterial('stone');
+      const infrastructure = new THREE.Group();
+      infrastructure.position.set(hearthOffset.x, groundY, hearthOffset.z);
+      infrastructure.userData['foundingHearth'] = foundingHearth;
       const ash = new THREE.Mesh(new THREE.CircleGeometry(0.5, 18), palette.getSurfaceMaterial('shadow'));
       ash.rotation.x = -Math.PI / 2;
-      ash.position.set(hearthOffset.x, groundY + 0.012, hearthOffset.z);
-      ash.userData['foundingHearth'] = Boolean(settlement.foundingPodId);
-      group.add(ash);
+      ash.position.y = 0.012;
+      infrastructure.add(ash);
       for (let index = 0; index < 9; index += 1) {
         const angle = (index / 9) * Math.PI * 2 + random.range(-0.06, 0.06);
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.095, 0), stone);
-        rock.position.set(hearthOffset.x + Math.cos(angle) * 0.58, groundY + 0.055, hearthOffset.z + Math.sin(angle) * 0.58);
+        rock.position.set(Math.cos(angle) * 0.58, 0.055, Math.sin(angle) * 0.58);
         rock.castShadow = true;
         rock.userData['hearthStone'] = true;
-        group.add(rock);
+        infrastructure.add(rock);
       }
-      // Founding hearth infrastructure persists even when the flame is out.
-      if (settlement.foundingPodId && (!foundingOffset || !foundingHearthBurning(settlement))) return entries;
+      const initial = foundingHearth
+        ? this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches)
+        : undefined;
+      if (initial) infrastructure.scale.setScalar(Math.max(0.001, initial.hearthScale));
+      group.userData['foundingHearthInfrastructure'] = infrastructure;
+      group.add(infrastructure);
+
+      // Once earned, the physical hearth remains even if fuel later runs out.
+      if (foundingHearth && (!foundingOffset || !foundingHearthBurning(settlement))) return entries;
       const embers = new THREE.Mesh(new THREE.IcosahedronGeometry(0.15, 1), glow);
       embers.position.set(hearthOffset.x, groundY + 0.075, hearthOffset.z);
       embers.userData['hearthEmbers'] = true;
-      const initial = this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches);
-      embers.scale.setScalar(Math.max(0.001, initial.emberScale));
+      embers.scale.setScalar(Math.max(0.001, initial?.emberScale ?? 1));
       group.userData['foundingHearthEmbers'] = embers;
       group.add(embers);
       attach(hearthOffset.x, groundY + 0.62, hearthOffset.z, '#ff9448', 2.2, 0.42, 9, 'founding-hearth', settlement.id);

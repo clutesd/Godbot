@@ -150,23 +150,38 @@ describe('survival pressure and physical consequences', () => {
     learn(s, 'fire-control');
 
     const before = s.localMaterials.timber!;
-    state.month = 1; applyCold(state, s, population);
+    const plan = foundingFirstFirePlan(state, s, population)!;
+    expect(plan.plannedMonth).toBeGreaterThan(0);
+
+    // Landing/first monthly evaluation may reserve and plan the hearth, but warm camps do not
+    // receive a finished fireplace for free.
+    for (let month = 1; month < plan.plannedMonth; month++) {
+      state.month = month;
+      applyCold(state, s, population);
+      expect(s.survival!.cold.fuelUsed).toBe(0);
+      expect(s.survival!.hearth!.fuelUsed).toBe(0);
+      expect(s.survival!.firstFire).toBeUndefined();
+      expect(s.localMaterials.timber).toBe(before);
+    }
+
+    state.month = plan.plannedMonth; applyCold(state, s, population);
     expect(s.survival!.cold.fuelUsed).toBe(0);
     expect(s.survival!.hearth!.fuelUsed).toBeGreaterThan(0);
     expect(s.localMaterials.timber).toBeLessThan(before);
     const milestone = structuredClone(s.survival!.firstFire);
-    expect(milestone).toMatchObject({ month: 1, eventId: expect.any(String), plannedMonth: 1, readiness: expect.any(Number) });
+    expect(milestone).toMatchObject({ month: plan.plannedMonth, eventId: expect.any(String),
+      plannedMonth: plan.plannedMonth, readiness: expect.any(Number) });
     const event = state.history.find(e => e.id === milestone!.eventId)!;
     expect(event.type).toBe('first-fire');
     expect(event.locationId).toBe(s.id);
     expect(event.context.foundingPodId).toBe('test-founding-pod');
     expect(event.context.purpose).toBe('founding-hearth');
-    expect(event.context.plannedMonth).toBe(1);
+    expect(event.context.plannedMonth).toBe(plan.plannedMonth);
     expect(event.context.ignitionReadiness).toBeGreaterThanOrEqual(0);
     expect(event.causes).toContain('site-readiness');
 
     const afterIgnition = s.localMaterials.timber!;
-    state.month = 2; applyCold(state, s, population);
+    state.month = plan.plannedMonth + 1; applyCold(state, s, population);
     expect(s.survival!.cold.fuelUsed).toBe(0);
     expect(s.survival!.hearth!.fuelUsed).toBeGreaterThan(0);
     expect(s.localMaterials.timber).toBeLessThan(afterIgnition);
@@ -185,10 +200,13 @@ describe('survival pressure and physical consequences', () => {
       return foundingFirstFirePlan(simulation.state, settlement, population)!;
     });
     const plannedMonths = plans.map(plan => plan.plannedMonth);
-    expect(new Set(plannedMonths).size).toBeGreaterThan(1);
+    expect(new Set(plannedMonths).size).toBe(founding.length);
     expect(Math.min(...plannedMonths)).toBeGreaterThanOrEqual(1);
-    expect(Math.max(...plannedMonths) - Math.min(...plannedMonths)).toBeLessThanOrEqual(2);
-    expect(plans.some(plan => plan.rank === 0)).toBe(true);
+    const byRank = [...plans].sort((a, b) => a.rank - b.rank);
+    for (let index = 1; index < byRank.length; index++) {
+      expect(byRank[index]!.plannedMonth).toBeGreaterThan(byRank[index - 1]!.plannedMonth);
+    }
+    expect(byRank[0]!.rank).toBe(0);
     for (const plan of plans) {
       expect(plan.readiness).toBeGreaterThanOrEqual(0);
       expect(plan.readiness).toBeLessThanOrEqual(1);
