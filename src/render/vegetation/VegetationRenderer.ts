@@ -285,12 +285,14 @@ export class VegetationRenderer {
       for (let column = Math.max(0, cell.x - reach); column <= Math.min(this.world.size - 1, cell.x + reach); column += 1) {
         for (const index of this.workTreesByCell.get(row * this.world.size + column) ?? []) {
           const tree = this.placements[index];
+          const bucket = this.workTreeBuckets[index];
           const lifecycle = this.lifecycle[index];
           const phenotype = this.phenotypes[index];
-          if (!tree || !lifecycle || !phenotype || lifecycle.fallen || this.isCleared(tree)) continue;
+          // updateLod deliberately leaves cleared/capacity-culled trees without a render bucket.
+          // Collision therefore follows visible trunks exactly and does not rescan disturbance zones.
+          if (!tree || !bucket || !lifecycle || !phenotype || lifecycle.fallen) continue;
           const morphology = resolveTreeMorphology(phenotype, lifecycle);
-          const height = this.nearBuckets.get(bucketKey(tree.family, tree.variant))?.crownHeight ?? 1;
-          const trunkRadius = height * 0.044 * (tree.family === 'ancient' ? 1.9 : 1)
+          const trunkRadius = bucket.crownHeight * 0.044 * (tree.family === 'ancient' ? 1.9 : 1)
             * lifecycle.scale * (morphology.trunkRadiusX + morphology.trunkRadiusZ) * 0.5;
           if (distanceToGroundSegment(a, b, tree.worldX, tree.worldZ) < trunkRadius + padding) return false;
         }
