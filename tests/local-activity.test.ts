@@ -363,26 +363,39 @@ describe('renderer-owned local activity', () => {
     expect(harness([person()], { blocked: true }).tick()[0]!.action).toBeUndefined();
   });
 
-  it('briefly notices a nearby peer before resuming the current routine', () => {
+  it('uses a head-led recognition glance without steering the whole body toward a nearby friend', () => {
     const a = person('aware-a'), b = person('aware-b');
-    b.position = { x: 0.82, z: 0.08 };
+    b.position = { x: 0.78, z: 0.42 };
     b.target = { ...b.position };
+    const tie = relationship('aware-a', 'aware-b', 'friend', { trust: 0.9, strength: 0.9 });
     const before = JSON.stringify([a, b]);
-    const h = harness([a, b]);
+    const h = harness([a, b], { relationshipFor: relationshipLookup([tie]) });
     let noticed = false;
-    let noticeFacingError = Infinity;
     let cleared = false;
+    let sawAcquire = false;
+    let sawHold = false;
+    let sawRelease = false;
+    let maxHeadYaw = 0;
+    let maxTorsoYaw = 0;
+    let maxBlend = 0;
+    let bodyPeerError = 0;
 
-    for (let frame = 0; frame < 12 * 60; frame++) {
+    for (let frame = 0; frame < 18 * 60; frame++) {
       h.tick(1 / 60);
       const state = h.local.get('aware-a');
       const visual = h.visuals.get('aware-a');
       const peer = h.visuals.get('aware-b');
       if (state?.attentionId === 'aware-b' && visual && peer) {
         noticed = true;
-        const expected = Math.atan2(peer.x - state.destination.x, peer.z - state.destination.z);
-        const error = Math.abs(Math.atan2(Math.sin(visual.facing - expected), Math.cos(visual.facing - expected)));
-        noticeFacingError = Math.min(noticeFacingError, error);
+        sawAcquire ||= state.attentionPhase === 'acquire';
+        sawHold ||= state.attentionPhase === 'hold';
+        sawRelease ||= state.attentionPhase === 'release';
+        maxHeadYaw = Math.max(maxHeadYaw, Math.abs(state.attentionHeadYaw ?? 0));
+        maxTorsoYaw = Math.max(maxTorsoYaw, Math.abs(state.attentionTorsoYaw ?? 0));
+        maxBlend = Math.max(maxBlend, state.attentionBlend ?? 0);
+        const peerFacing = Math.atan2(peer.x - state.destination.x, peer.z - state.destination.z);
+        bodyPeerError = Math.max(bodyPeerError,
+          Math.abs(Math.atan2(Math.sin(state.restFacing - peerFacing), Math.cos(state.restFacing - peerFacing))));
       } else if (noticed && !state?.attentionId) {
         cleared = true;
         break;
@@ -390,7 +403,14 @@ describe('renderer-owned local activity', () => {
     }
 
     expect(noticed).toBe(true);
-    expect(noticeFacingError).toBeLessThan(0.35);
+    expect(sawAcquire).toBe(true);
+    expect(sawHold).toBe(true);
+    expect(sawRelease).toBe(true);
+    expect(maxBlend).toBeGreaterThan(0.95);
+    expect(maxHeadYaw).toBeGreaterThan(0.25);
+    expect(maxTorsoYaw).toBeGreaterThan(0);
+    expect(maxTorsoYaw).toBeLessThan(maxHeadYaw * 0.35);
+    expect(bodyPeerError).toBeGreaterThan(0.25);
     expect(cleared).toBe(true);
     expect(h.local.get('aware-a')?.attentionCooldown ?? 0).toBeGreaterThan(0);
     expect(JSON.stringify([a, b])).toBe(before);
