@@ -894,7 +894,8 @@ export class GodboxRenderer {
       this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.049 * buildScale * heightScale, 0.45, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
       this.peopleLegs.setColorAt(index * 2, this.personColor);
       this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
-      if (restArticulated) this.restPoses.draw(restPose, display.x, footY, display.z, heightScale, facing, this.personColor, this.personMatrix);
+      if (restArticulated) this.restPoses.draw(restPose, display.x, footY, display.z, heightScale, buildScale,
+        facing + (pose?.pelvisRotation ?? 0), bodyPitch, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
       const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
