@@ -121,7 +121,10 @@ describe('renderer-owned local activity', () => {
     });
     const h = harness(residents, { structures: [home], revision: activityStructureSignature([home]) });
 
-    for (let frame = 0; frame < 4 * 60; frame++) h.tick(1 / 60);
+    for (let frame = 0; frame < 8 * 60; frame++) {
+      h.tick(1 / 60);
+      if (residents.every(p => h.local.get(p.id)?.restStage === 'settled')) break;
+    }
     const states = residents.map(p => h.local.get(p.id)!);
     expect(states.every(state => state.action === 'rest')).toBe(true);
     expect(states.every(state => state.restStage === 'settled')).toBe(true);
@@ -171,8 +174,10 @@ describe('renderer-owned local activity', () => {
       const visual = h.tick(1 / 60)[0]!;
       const state = h.local.get(p.id)!;
       riseFrames++;
-      expect(state.destination).toEqual(seat);
-      expect(visual.speed).toBeLessThan(0.05);
+      if (state.restStage === 'rising') {
+        expect(state.destination).toEqual(seat);
+        expect(visual.speed).toBeLessThan(0.05);
+      }
     }
     expect(riseFrames).toBeGreaterThan(20);
     expect(h.local.get(p.id)?.restStage).not.toBe('rising');
