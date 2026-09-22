@@ -626,7 +626,8 @@ interface SocialPartnerSelection {
 }
 
 function selectSocialPartner(person: Person, context: LocalActivityContext, state: LocalActivityState, available: (id: string) => boolean): SocialPartnerSelection | undefined {
-  const members = context.group?.members;
+  const pod = conversationPodFor(context.group, person.id);
+  const members = pod?.members ?? context.group?.members;
   if (!members || members.length < 2) return undefined;
   const own = members.indexOf(person.id);
   const reciprocal = own >= 0 ? (own % 2 === 0 ? own + 1 : own - 1) : -1;
@@ -651,25 +652,232 @@ function selectSocialPartner(person: Person, context: LocalActivityContext, stat
   return candidates[0];
 }
 
-function selectChildPlaymate(person: Person, context: LocalActivityContext, state: LocalActivityState): Person | undefined {
-  let best: Person | undefined;
-  let bestScore = -Infinity;
-  for (const id of context.group?.members ?? []) {
-    if (id === person.id) continue;
+function applyPodParticipation(person: Person, context: LocalActivityContext, state: LocalActivityState, point: Vec2,
+  previousStates: ReadonlyMap<string, LocalActivityState>, presentationSeconds: number): boolean {
+  const group = context.group;
+  const pod = conversationPodFor(group, person.id);
+  if (!group || !pod || pod.members.length < 3) return false;
+  const adults = pod.members.filter(id => {
+    const candidate = context.people.get(id);
+    return candidate && !isChildPresentationPerson(candidate) && canInteract(person, candidate);
+  });
+  if (adults.length < 2 || !adults.includes(person.id)) return false;
+
+  let speakerId = adults.find(id => {
+    const previous = previousStates.get(id);
+    return Boolean(previous?.encounter && previous.partnerId && pod.members.includes(previous.partnerId)
+      && previous.animation !== 'converse-quiet');
+  });
+  if (!speakerId) {
+    const offset = unit(`${pod.id}:speaker-phase`) * 4.8;
+    const epoch = Math.floor((presentationSeconds + offset) / 5.4);
+    speakerId = adults[((epoch % adults.length) + adults.length) % adults.length]!;
+  }
+
+  let focusId: string;
+  if (speakerId === person.id) {
+    const own = adults.indexOf(person.id);
+    focusId = adults[(own + 1) % adults.length]!;
+    state.socialRole = 'speaker';
+    state.animation = 'converse';
+    state.action = 'address-pod';
+  } else {
+    focusId = speakerId;
+    state.socialRole = 'listener';
+    state.animation = 'converse-quiet';
+    state.action = 'listen-in-pod';
+  }
+
+  const peer = context.people.get(focusId);
+  if (!peer) return false;
+  const at = context.visualFor?.(peer.id) ?? peer.position;
+  state.socialFocusId = peer.id;
+  state.focus.x = at.x;
+  state.focus.z = at.z;
+  const from = context.visual ?? state.destination;
+  const target = bounded(person, point) && localSegmentSafe(from, point, context)
+    && hasPeerClearance(person, point, context, undefined, 0.34) ? point : state.base;
+  state.destination = { ...target };
+  state.restFacing = facingTarget(state.destination, state.focus);
+  state.hold *= 1.05 + person.traits.sociability * 0.12;
+  return true;
+}
+
+function applyChildPlay(person: Person, context: LocalActivityContext, state: LocalActivityState, fallback: Vec2,
+  presentationSeconds: number): boolean {
+  if (!isChildPresentationPerson(person) || person.activity !== 'socialize') return false;
+  const group = context.group;
+  const pod = conversationPodFor(group, person.id);
+  const members = childPlayMembers(person, context, pod);
+  const from = context.visual ?? state.destination;
+  const center = group && pod ? conversationPodCenter(group, pod)
+    : context.base.podCenter ?? state.stationFocus;
+
+  if (person.ageMonths < 3 * 12 || members.length < 2) {
+    state.playGame = 'parallel';
+    state.playRole = 'solo';
+    state.animation = 'play';
+    state.action = person.ageMonths < 3 * 12 ? state.action : 'play-solo';
+    state.focus.x = center.x;
+    state.focus.z = center.z;
+    const scale = person.ageMonths < 3 * 12 ? 0.42 : 0.72;
+    const target = { x: state.base.x + (fallback.x - state.base.x) * scale, z: state.base.z + (fallback.z - state.base.z) * scale };
+    adoptPlayDestination(person, context, state, from, target);
+    state.restFacing = facingTarget(state.destination, state.focus);
+    return true;
+  }
+
+  const phaseOffset = unit(`${pod?.id ?? group?.key ?? person.homeId}:play-phase`) * 5;
+  const epoch = Math.floor((presentationSeconds + phaseOffset) / 6.2);
+  const gameIndex = person.ageMonths < 6 * 12 ? 1 + Math.abs(epoch) % 2 : Math.abs(epoch) % 3;
+  const game = (['tag', 'circle', 'follow'] as const)[gameIndex]!;
+  state.playGame = game;
+  state.animation = 'play';
+
+  const own = members.indexOf(person.id);
+  if (game === 'tag') {
+    const runnerId = members[((epoch % members.length) + members.length) % members.length]!;
+    if (runnerId === person.id) {
+      state.playRole = 'runner';
+      state.action = 'play-tag-run';
+      const chasers = members.filter(id => id !== person.id);
+      const nearest = nearestPeer(person, chasers, context, state.base);
+      if (nearest) {
+        const at = context.visualFor?.(nearest.id) ?? nearest.position;
+        state.socialFocusId = nearest.id;
+        state.focus.x = at.x; state.focus.z = at.z;
+        const target = farthestPlayPoint(state.points, at, fallback);
+        adoptPlayDestination(person, context, state, from, target, nearest.id);
+      } else adoptPlayDestination(person, context, state, from, fallback);
+    } else {
+      const runner = context.people.get(runnerId);
+      if (!runner) return false;
+      const at = context.visualFor?.(runner.id) ?? runner.position;
+      state.playRole = 'chaser';
+      state.action = 'play-tag-chase';
+      state.socialFocusId = runner.id;
+      state.focus.x = at.x; state.focus.z = at.z;
+      const target = standOffPoint(context.visual ?? state.base, at, center, 0.36,
+        unit(`${person.id}:${runner.id}:${epoch}:tag-side`) < 0.5 ? -0.07 : 0.07);
+      adoptPlayDestination(person, context, state, from, target, runner.id);
+    }
+  } else if (game === 'circle') {
+    state.playRole = 'orbit';
+    state.action = 'play-circle';
+    const radius = pod?.kind === 'children' ? 0.52 : 0.44;
+    const angle = unit(`${pod?.id ?? group?.key}:circle-axis`) * Math.PI * 2
+      + own / members.length * Math.PI * 2 + (state.cycle + state.step * 0.35) * 0.46;
+    const target = { x: center.x + Math.cos(angle) * radius, z: center.z + Math.sin(angle) * radius };
+    state.focus.x = center.x; state.focus.z = center.z;
+    adoptPlayDestination(person, context, state, from, target);
+  } else {
+    const leaderId = members[(((epoch + 1) % members.length) + members.length) % members.length]!;
+    if (leaderId === person.id) {
+      state.playRole = 'leader';
+      state.action = 'play-lead';
+      state.focus.x = center.x; state.focus.z = center.z;
+      adoptPlayDestination(person, context, state, from, fallback);
+    } else {
+      const leader = context.people.get(leaderId);
+      if (!leader) return false;
+      const at = context.visualFor?.(leader.id) ?? leader.position;
+      state.playRole = 'follower';
+      state.action = 'play-follow';
+      state.socialFocusId = leader.id;
+      state.focus.x = at.x; state.focus.z = at.z;
+      const target = followPoint(at, center, 0.42, own, members.length);
+      adoptPlayDestination(person, context, state, from, target, leader.id);
+    }
+  }
+
+  state.restFacing = facingTarget(state.destination, state.focus);
+  return true;
+}
+
+function childPlayMembers(person: Person, context: LocalActivityContext, pod: SocialPod | undefined): string[] {
+  const local = (pod?.members ?? context.group?.members ?? []).filter(id => {
     const peer = context.people.get(id);
-    if (!peer || peer.ageMonths >= 15 * 12 || (peer.occupation !== 'child' && peer.role !== 'child')
-      || peer.activity !== 'socialize' || !canInteract(person, peer)) continue;
-    const at = context.visualFor?.(peer.id) ?? peer.position;
-    const distance = Math.hypot(at.x - state.base.x, at.z - state.base.z);
-    if (distance > 2.2) continue;
-    const relationship = context.relationshipFor?.(person.id, peer.id);
-    const family = person.householdId && person.householdId === peer.householdId ? 0.5 : 0;
-    const tie = relationship ? relationship.strength * 0.7 + relationship.trust * 0.3 : 0;
-    const score = family + tie - distance * 0.18
-      + unit(`${person.id}:${peer.id}:${state.cycle}:playmate`) * 0.08;
-    if (score > bestScore) { best = peer; bestScore = score; }
+    return peer && isChildPresentationPerson(peer) && peer.activity === 'socialize' && canInteract(person, peer);
+  });
+  if (local.length >= 2) return local;
+  return (context.group?.members ?? []).filter(id => {
+    const peer = context.people.get(id);
+    return peer && isChildPresentationPerson(peer) && peer.activity === 'socialize' && canInteract(person, peer);
+  });
+}
+
+function nearestPeer(person: Person, ids: readonly string[], context: LocalActivityContext, origin: Vec2): Person | undefined {
+  let best: Person | undefined;
+  let distance = Infinity;
+  for (const id of ids) {
+    const peer = context.people.get(id);
+    if (!peer || peer.id === person.id) continue;
+    const at = context.visualFor?.(id) ?? peer.position;
+    const d = Math.hypot(at.x - origin.x, at.z - origin.z);
+    if (d < distance) { best = peer; distance = d; }
   }
   return best;
+}
+
+function standOffPoint(own: Vec2, target: Vec2, center: Vec2, distance: number, lateral: number): Vec2 {
+  let dx = own.x - target.x, dz = own.z - target.z;
+  let length = Math.hypot(dx, dz);
+  if (length < 0.01) {
+    dx = target.x - center.x; dz = target.z - center.z; length = Math.hypot(dx, dz);
+  }
+  if (length < 0.01) { dx = 1; dz = 0; length = 1; }
+  dx /= length; dz /= length;
+  return {
+    x: target.x + dx * distance - dz * lateral,
+    z: target.z + dz * distance + dx * lateral,
+  };
+}
+
+function followPoint(leader: Vec2, center: Vec2, distance: number, index: number, count: number): Vec2 {
+  let dx = leader.x - center.x, dz = leader.z - center.z;
+  const length = Math.hypot(dx, dz) || 1;
+  dx /= length; dz /= length;
+  const lateral = (index - (count - 1) / 2) * 0.07;
+  return {
+    x: leader.x - dx * distance - dz * lateral,
+    z: leader.z - dz * distance + dx * lateral,
+  };
+}
+
+function farthestPlayPoint(points: readonly Vec2[], threat: Vec2, fallback: Vec2): Vec2 {
+  let best = fallback, bestDistance = Math.hypot(fallback.x - threat.x, fallback.z - threat.z);
+  for (const point of points) {
+    const distance = Math.hypot(point.x - threat.x, point.z - threat.z);
+    if (distance > bestDistance) { best = point; bestDistance = distance; }
+  }
+  return best;
+}
+
+function adoptPlayDestination(person: Person, context: LocalActivityContext, state: LocalActivityState, from: Vec2,
+  candidate: Vec2, ignoreId?: string): void {
+  if (bounded(person, candidate) && localSegmentSafe(from, candidate, context)
+    && hasPeerClearance(person, candidate, context, ignoreId, 0.27)) {
+    state.destination = { ...candidate };
+    return;
+  }
+  const fallback = clearLocalPoint(person, context, state,
+    Math.abs(state.step + state.cycle) % Math.max(1, state.points.length), true, ignoreId);
+  if (bounded(person, fallback) && localSegmentSafe(from, fallback, context)) state.destination = fallback;
+  else { state.animation = 'idle'; state.action = 'wait-for-clearance'; }
+}
+
+function isChildPresentationPerson(person: Person): boolean {
+  return person.ageMonths < 15 * 12 && (person.occupation === 'child' || person.role === 'child');
+}
+
+function clearPodParticipation(state: LocalActivityState): void {
+  delete state.socialFocusId;
+  delete state.socialRole;
+}
+
+function clearPlayPresentation(state: LocalActivityState): void {
+  delete state.playGame;
+  delete state.playRole;
 }
 
 function relationshipScoreForPresentation(person: Person, peer: Person, relationship: SocialRelationship | undefined, month: number): number {
