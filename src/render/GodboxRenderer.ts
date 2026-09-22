@@ -280,8 +280,8 @@ export class GodboxRenderer {
   private readonly constructionAssemblies = new Map<string, { site: THREE.Group; assembly: ConstructionAssembly; scaffold: THREE.Group; settlement: Settlement; contact?: boolean }>();
   private readonly settlementVisuals = new Map<string, SettlementVisual>();
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
-  private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number }>();
-  private readonly infrastructurePlacements = new Map<string, { worldX: number; worldZ: number }>();
+  private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number; width?: number; depth?: number }>();
+  private readonly infrastructurePlacements = new Map<string, { worldX: number; worldZ: number; radius: number }>();
   private readonly palettesByCultureEra = new Map<string, MaterialPalette>();
   private readonly terrainSurface: TerrainSurface;
   private readonly waterSystem: WaterSystem;
@@ -609,6 +609,10 @@ export class GodboxRenderer {
       this.resourceWork.revision,
       historyRunning ? 'history' : this.state.arrival?.phase ?? 'no-arrival',
       ...landedPods.map(pod => `${pod.id}:${pod.position.x},${pod.position.z}`),
+      ...[...this.landmarkPlacements].map(([id, placement]) =>
+        `landmark:${id}:${placement.worldX},${placement.worldZ}:${placement.width ?? 0},${placement.depth ?? 0}:${placement.rotationY}`),
+      ...[...this.infrastructurePlacements].map(([id, placement]) =>
+        `infrastructure:${id}:${placement.worldX},${placement.worldZ}:${placement.radius}`),
     ].join('|');
     if (!structuresChanged && objectSignature === this.humanObjectSignature) return;
 
@@ -620,6 +624,20 @@ export class GodboxRenderer {
     const obstacles: PedestrianFootprint[] = [...this.humanStructureSources.values()].flat().map(structure => ({
       worldX: structure.worldX, worldZ: structure.worldZ, width: structure.width, depth: structure.depth, rotationY: structure.rotationY,
     }));
+
+    // Landmark and advanced-infrastructure visuals live outside ordinary structurePlots, so they
+    // must explicitly join the same pedestrian authority rather than becoming decorative ghosts.
+    for (const placement of this.landmarkPlacements.values()) {
+      if (!placement.width || !placement.depth) continue;
+      obstacles.push({
+        worldX: placement.worldX, worldZ: placement.worldZ,
+        width: placement.width, depth: placement.depth, rotationY: placement.rotationY,
+      });
+    }
+    for (const placement of this.infrastructurePlacements.values()) obstacles.push({
+      worldX: placement.worldX, worldZ: placement.worldZ,
+      width: placement.radius * 2, depth: placement.radius * 2, rotationY: 0,
+    });
 
     // The arrival cinematic owns founder staging. Once history begins, the landed vessel is a
     // persistent physical object rather than scenery people may cut through.
@@ -1556,6 +1574,8 @@ export class GodboxRenderer {
     const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
     const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
     const fit = 2.9 / Math.max(grammarWidth, grammarDepth);
+    placement.width = grammarWidth * fit;
+    placement.depth = grammarDepth * fit;
     landmark.position.set(placement.worldX - settlement.position.x, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.worldZ - settlement.position.z);
     landmark.rotation.y = placement.rotationY;
     landmark.scale.setScalar(fit);
@@ -2151,7 +2171,7 @@ export class GodboxRenderer {
     }
   }
 
-  private validatedInfrastructurePosition(settlement: Settlement, kind: string, desiredX: number, desiredZ: number, radius: number): { worldX: number; worldZ: number } | undefined {
+  private validatedInfrastructurePosition(settlement: Settlement, kind: string, desiredX: number, desiredZ: number, radius: number): { worldX: number; worldZ: number; radius: number } | undefined {
     const key = `${settlement.id}:infrastructure:${kind}`;
     const cached = this.infrastructurePlacements.get(key);
     if (cached) return cached;
@@ -2164,7 +2184,7 @@ export class GodboxRenderer {
       if (!validation.valid) continue;
       const registered = this.placementFootprints.registerFootprint({ kind: 'building', worldX, worldZ, radius, placedMonth: this.state.month, entityId: key, persistent: true });
       if (!registered.success) continue;
-      const placement = { worldX, worldZ };
+      const placement = { worldX, worldZ, radius };
       this.infrastructurePlacements.set(key, placement);
       return placement;
     }
