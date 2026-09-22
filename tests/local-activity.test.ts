@@ -106,6 +106,34 @@ describe('renderer-owned local activity', () => {
     }
   });
 
+  it('binds home rest to unique physical support slots instead of generic household points', () => {
+    const home = { key: 'home-rest', worldX: 0, worldZ: 0, width: 1.2, depth: 0.8, rotationY: Math.PI / 6, role: 'house' };
+    const residents = ['rest-a', 'rest-b', 'rest-c', 'rest-d'].map((id, index) => {
+      const p = person(id);
+      const angle = index / 4 * Math.PI * 2;
+      p.activity = 'rest';
+      p.navigation!.destinationKind = 'home';
+      p.navigation!.destinationId = home.key;
+      p.navigation!.schedulePhase = 'home';
+      p.position = { x: Math.cos(angle) * 1.35, z: Math.sin(angle) * 1.35 };
+      p.target = { ...p.position };
+      return p;
+    });
+    const h = harness(residents, { structures: [home], revision: activityStructureSignature([home]) });
+
+    for (let frame = 0; frame < 4 * 60; frame++) h.tick(1 / 60);
+    const states = residents.map(p => h.local.get(p.id)!);
+    expect(states.every(state => state.action === 'rest')).toBe(true);
+    expect(states.every(state => state.rest !== undefined)).toBe(true);
+    expect(new Set(states.map(state => state.rest!.key)).size).toBe(residents.length);
+
+    for (const state of states) {
+      expect(state.destination).toEqual(state.rest!.destination);
+      expect(state.rest!.supportKey).toBe(home.key);
+      expect(localSegmentSafe(state.destination, state.destination, { structures: [home], safeSegment: () => true })).toBe(true);
+    }
+  });
+
   it('replays identically independent of visible-person iteration order and offsets people in time', () => {
     const a = person('a'), b = person('b');
     const first = harness([a, b]), replay = harness([b, a]); let different = 0;
