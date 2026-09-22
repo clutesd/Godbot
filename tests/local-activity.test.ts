@@ -124,6 +124,7 @@ describe('renderer-owned local activity', () => {
     for (let frame = 0; frame < 4 * 60; frame++) h.tick(1 / 60);
     const states = residents.map(p => h.local.get(p.id)!);
     expect(states.every(state => state.action === 'rest')).toBe(true);
+    expect(states.every(state => state.restStage === 'settled')).toBe(true);
     expect(states.every(state => state.rest !== undefined)).toBe(true);
     expect(new Set(states.map(state => state.rest!.key)).size).toBe(residents.length);
 
@@ -132,6 +133,49 @@ describe('renderer-owned local activity', () => {
       expect(state.rest!.supportKey).toBe(home.key);
       expect(localSegmentSafe(state.destination, state.destination, { structures: [home], safeSegment: () => true })).toBe(true);
     }
+  });
+
+  it('completes settle, sustained rest, and rise before allowing the next household movement', () => {
+    const home = { key: 'home-choreography', worldX: 0, worldZ: 0, width: 1.2, depth: 0.8, rotationY: 0, role: 'house' };
+    const p = person('rest-choreography');
+    p.activity = 'rest';
+    p.navigation!.destinationKind = 'home';
+    p.navigation!.destinationId = home.key;
+    p.navigation!.schedulePhase = 'home';
+    p.position = { x: 1.2, z: 0.4 };
+    p.target = { ...p.position };
+    const h = harness([p], { structures: [home], revision: activityStructureSignature([home]) });
+
+    let sawSettling = false, sawSettled = false, sawRising = false;
+    let seat: { x: number; z: number } | undefined;
+    let riseFrames = 0;
+    for (let frame = 0; frame < 20 * 60 && !sawRising; frame++) {
+      const visual = h.tick(1 / 60)[0]!;
+      const state = h.local.get(p.id);
+      if (!state?.rest) continue;
+      seat ??= { ...state.rest.destination };
+      if (state.restStage === 'settling') sawSettling = true;
+      if (state.restStage === 'settled') sawSettled = true;
+      if (state.restStage === 'rising') {
+        sawRising = true;
+        riseFrames++;
+        expect(state.destination).toEqual(seat);
+        expect(visual.speed).toBeLessThan(0.05);
+      }
+    }
+    expect(sawSettling).toBe(true);
+    expect(sawSettled).toBe(true);
+    expect(sawRising).toBe(true);
+
+    while (h.local.get(p.id)?.restStage === 'rising' && riseFrames < 180) {
+      const visual = h.tick(1 / 60)[0]!;
+      const state = h.local.get(p.id)!;
+      riseFrames++;
+      expect(state.destination).toEqual(seat);
+      expect(visual.speed).toBeLessThan(0.05);
+    }
+    expect(riseFrames).toBeGreaterThan(20);
+    expect(h.local.get(p.id)?.restStage).not.toBe('rising');
   });
 
   it('replays identically independent of visible-person iteration order and offsets people in time', () => {
