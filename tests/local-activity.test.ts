@@ -379,6 +379,8 @@ describe('renderer-owned local activity', () => {
     let maxTorsoYaw = 0;
     let maxBlend = 0;
     let bodyPeerError = 0;
+    let attentionBodyFacing: number | undefined;
+    let maxBodyFacingDrift = 0;
 
     for (let frame = 0; frame < 18 * 60; frame++) {
       h.tick(1 / 60);
@@ -393,6 +395,9 @@ describe('renderer-owned local activity', () => {
         maxHeadYaw = Math.max(maxHeadYaw, Math.abs(state.attentionHeadYaw ?? 0));
         maxTorsoYaw = Math.max(maxTorsoYaw, Math.abs(state.attentionTorsoYaw ?? 0));
         maxBlend = Math.max(maxBlend, state.attentionBlend ?? 0);
+        attentionBodyFacing ??= state.restFacing;
+        maxBodyFacingDrift = Math.max(maxBodyFacingDrift,
+          Math.abs(Math.atan2(Math.sin(state.restFacing - attentionBodyFacing), Math.cos(state.restFacing - attentionBodyFacing))));
         const peerFacing = Math.atan2(peer.x - state.destination.x, peer.z - state.destination.z);
         bodyPeerError = Math.max(bodyPeerError,
           Math.abs(Math.atan2(Math.sin(state.restFacing - peerFacing), Math.cos(state.restFacing - peerFacing))));
@@ -410,6 +415,7 @@ describe('renderer-owned local activity', () => {
     expect(maxHeadYaw).toBeGreaterThan(0.25);
     expect(maxTorsoYaw).toBeGreaterThan(0);
     expect(maxTorsoYaw).toBeLessThan(maxHeadYaw * 0.35);
+    expect(maxBodyFacingDrift).toBeLessThan(0.02);
     expect(bodyPeerError).toBeGreaterThan(0.25);
     expect(cleared).toBe(true);
     expect(h.local.get('aware-a')?.attentionCooldown ?? 0).toBeGreaterThan(0);
