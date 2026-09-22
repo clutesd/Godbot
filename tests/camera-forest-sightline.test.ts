@@ -58,7 +58,9 @@ describe('Arrival camera occlusion avoidance', () => {
 
     const resolved = resolveFoundingSightline(simulation.state, authored, target, () => 0, 0.72);
 
-    expect(resolved.position.toArray()).toEqual(authored.toArray());
+    expect(resolved.position.x).toBeCloseTo(authored.x, 10);
+    expect(resolved.position.y).toBeCloseTo(authored.y, 10);
+    expect(resolved.position.z).toBeCloseTo(authored.z, 10);
     expect(resolved.angularCorrection).toBe(0);
     expect(resolved.structureObstruction).toBe(0);
     expect(resolved.forestObstruction).toBe(0);
