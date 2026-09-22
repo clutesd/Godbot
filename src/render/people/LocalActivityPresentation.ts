@@ -323,6 +323,8 @@ export class LocalActivityPresentation {
         const peer = context.people.get(id);
         if (!peer || invitation?.encounter?.partnerId !== person.id || !canInteract(person, peer)) continue;
         clearRestChoreography(state);
+        clearPodParticipation(state);
+        clearPlayPresentation(state);
         clearAmbientAttention(state);
         state.encounter = buildSocialEncounter(person, peer, context.relationshipFor?.(person.id, peer.id));
         state.encounter.beat = invitation.encounter.beat;
@@ -335,6 +337,7 @@ export class LocalActivityPresentation {
       }
     }
     const visual = context.visual;
+    refreshPresentationFocus(person, context, state);
     updateAmbientAttention(person, context, state, visual, delta, this.previousStates);
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
       && Math.hypot(visual.x - state.destination.x, visual.z - state.destination.z) > 0.035) {
@@ -880,6 +883,24 @@ function clearPlayPresentation(state: LocalActivityState): void {
   delete state.playRole;
 }
 
+function refreshPresentationFocus(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
+  if (state.partnerId || !state.socialFocusId) return;
+  const peer = context.people.get(state.socialFocusId);
+  if (!peer || !canInteract(person, peer)) {
+    clearPodParticipation(state);
+    if (state.playGame) {
+      state.focus.x = context.base.podCenter?.x ?? state.stationFocus.x;
+      state.focus.z = context.base.podCenter?.z ?? state.stationFocus.z;
+      state.restFacing = facingTarget(state.destination, state.focus);
+    }
+    return;
+  }
+  const at = context.visualFor?.(peer.id) ?? peer.position;
+  state.focus.x = at.x;
+  state.focus.z = at.z;
+  state.restFacing = facingTarget(state.destination, state.focus);
+}
+
 function relationshipScoreForPresentation(person: Person, peer: Person, relationship: SocialRelationship | undefined, month: number): number {
   const kindBase: Partial<Record<SocialRelationshipKind, number>> = {
     family: 0.95, friend: 0.9, mentor: 0.88, 'intellectual-collaborator': 0.82,
@@ -972,6 +993,8 @@ function socialActionFor(encounter: SocialEncounterPresentation, baseAction: str
 function applySocialBeat(person: Person, peer: Person, context: LocalActivityContext, state: LocalActivityState): void {
   const encounter = state.encounter;
   if (!encounter) return;
+  clearPodParticipation(state);
+  clearPlayPresentation(state);
   const script = SOCIAL_SCRIPTS[encounter.tone];
   const beat = script[Math.min(encounter.beat, script.length - 1)]!;
   const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
@@ -1020,8 +1043,8 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
 function updateAmbientAttention(person: Person, context: LocalActivityContext, state: LocalActivityState,
   visual: PersonVisualState | undefined, delta: number, previousStates: ReadonlyMap<string, LocalActivityState>): void {
   const dt = Math.max(0, delta);
-  const unsuitable = state.partnerId || state.encounter || state.rest || !visual || visual.traveling
-    || visual.speed > 0.045 || state.action === 'arrive' || state.phase === 'approach';
+  const unsuitable = state.partnerId || state.encounter || state.rest || state.socialFocusId || state.playGame
+    || !visual || visual.traveling || visual.speed > 0.045 || state.action === 'arrive' || state.phase === 'approach';
 
   if (state.attentionId) {
     const peer = context.people.get(state.attentionId);
@@ -1218,11 +1241,16 @@ function activityRadius(kind: DestinationKind): number {
 }
 
 function routineFor(person: Person): readonly Intent[] {
-  const child = (person.occupation === 'child' || person.role === 'child') && person.ageMonths < 15 * 12;
+  const child = isChildPresentationPerson(person);
   const freeToPlay = child && person.activity === 'socialize'
     && person.navigation?.schedulePhase !== 'emergency'
     && (person.navigation?.destinationKind === 'plaza' || person.navigation?.destinationKind === 'market');
-  return freeToPlay ? CHILD_PLAY_ROUTINE : ROUTINES[person.navigation!.destinationKind] ?? WORK_ROUTINE;
+  if (!freeToPlay) return ROUTINES[person.navigation!.destinationKind] ?? WORK_ROUTINE;
+  return person.ageMonths < 3 * 12 ? YOUNG_CHILD_PLAY_ROUTINE : CHILD_PLAY_ROUTINE;
+}
+
+function isChildPlayRoutine(routine: readonly Intent[]): boolean {
+  return routine === CHILD_PLAY_ROUTINE || routine === YOUNG_CHILD_PLAY_ROUTINE;
 }
 
 function sampledEntryStep(person: Person, sample: number): number {
