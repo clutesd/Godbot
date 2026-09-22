@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext } from '../src/render/people/LocalActivityPresentation';
+import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext, type LocalActivityState } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../src/render/people/PeoplePresentation';
@@ -422,6 +422,84 @@ describe('renderer-owned local activity', () => {
     expect(JSON.stringify([a, b])).toBe(before);
   });
 
+  it('anticipates a crossing path, yields once, then remembers and reacquires the passer', () => {
+    const a = person('pass-a'), b = person('pass-b');
+    a.position = { x: -0.35, z: 0 }; a.target = { ...a.position };
+    b.position = { x: 0.35, z: 0 }; b.target = { ...b.position };
+    a.navigation!.destinationId = 'route-a';
+    b.navigation!.destinationId = 'route-b';
+    const before = JSON.stringify([a, b]);
+    const h = harness([a, b]);
+    h.tick(0);
+
+    const aState = h.local.get(a.id)! as LocalActivityState;
+    const bState = h.local.get(b.id)! as LocalActivityState;
+    aState.action = 'cross-path'; aState.phase = 'approach'; aState.destination = { x: 0.5, z: 0 }; aState.hold = 2; aState.socialCooldown = 99;
+    bState.action = 'cross-path'; bState.phase = 'approach'; bState.destination = { x: -0.5, z: 0 }; bState.hold = 2; bState.socialCooldown = 99;
+
+    h.tick(1 / 60);
+    expect(h.local.get(a.id)?.yieldToId).toBeUndefined();
+    expect(h.local.get(b.id)?.yieldToId).toBe(a.id);
+    expect(h.local.get(b.id)?.action).toBe('yield-pass');
+    expect(Math.abs(h.local.get(b.id)!.destination.z)).toBeGreaterThan(0.05);
+
+    for (let frame = 0; frame < 45; frame++) h.tick(1 / 60);
+    const remembered = h.local.get(b.id)! as LocalActivityState;
+    expect(remembered.yieldToId).toBeUndefined();
+    expect(remembered.recentSocialId).toBe(a.id);
+    expect(remembered.recentSocialKind).toBe('passing');
+
+    for (const p of [a, b]) {
+      const visual = h.visuals.get(p.id)!;
+      const state = h.local.get(p.id)! as LocalActivityState;
+      state.destination = { x: visual.x, z: visual.z };
+      state.action = 'pause';
+      state.phase = 'action';
+      state.hold = 5;
+      state.socialCooldown = 99;
+      state.seconds = 0;
+    }
+    let reacquired = false;
+    for (let frame = 0; frame < 90; frame++) {
+      h.tick(1 / 60);
+      if (h.local.get(b.id)?.attentionId === a.id) { reacquired = true; break; }
+    }
+    expect(reacquired).toBe(true);
+    expect(JSON.stringify([a, b])).toBe(before);
+  });
+
+  it('lets a caregiver monitor a moving child across different activity destinations', () => {
+    const caregiver = person('caregiver'), child = person('moving-child');
+    caregiver.children = [child.id];
+    caregiver.position = { x: 0, z: 0 }; caregiver.target = { ...caregiver.position };
+    caregiver.navigation!.destinationId = 'adult-work';
+    child.parents = [caregiver.id];
+    child.ageMonths = 9 * 12;
+    child.occupation = 'child';
+    child.role = 'child';
+    child.activity = 'socialize';
+    child.position = { x: 0.82, z: 0.16 }; child.target = { ...child.position };
+    child.navigation!.destinationKind = 'plaza';
+    child.navigation!.destinationId = 'child-play';
+    child.navigation!.schedulePhase = 'social';
+    const h = harness([caregiver, child]);
+    h.tick(0);
+
+    const adultState = h.local.get(caregiver.id)! as LocalActivityState;
+    const childState = h.local.get(child.id)! as LocalActivityState;
+    adultState.action = 'pause'; adultState.phase = 'action'; adultState.destination = { ...caregiver.position };
+    adultState.hold = 20; adultState.socialCooldown = 99;
+    childState.action = 'play-tag-run'; childState.phase = 'approach'; childState.playGame = 'tag';
+    childState.destination = { x: 0.82, z: 0.85 }; childState.hold = 5; childState.socialCooldown = 99;
+
+    let monitored = false;
+    for (let frame = 0; frame < 90; frame++) {
+      h.tick(1 / 60);
+      if (h.local.get(caregiver.id)?.attentionId === child.id) { monitored = true; break; }
+    }
+    expect(monitored).toBe(true);
+  });
+
   it('does not let child play override rest, study, travel or emergency authority', () => {
     const resting = person('resting-child');
     resting.ageMonths = 10 * 12;
@@ -530,7 +608,7 @@ describe('renderer-owned local activity', () => {
     expect(maxDistance).toBeLessThan(0.45);
   });
 
-  it('keeps the third member of a social pod attending to the same conversation', () => {
+  it('keeps a social pod coherent while visibly rotating speakers and listener reactions', () => {
     const people = ['pod-a', 'pod-b', 'pod-c'].map((id, index) => {
       const p = person(id);
       p.position = { x: (index - 1) * 0.48, z: index === 1 ? 0.2 : 0 };
@@ -543,22 +621,32 @@ describe('renderer-owned local activity', () => {
       return p;
     });
     const h = harness(people);
-    let listenerFrames = 0;
-    let speakerFrames = 0;
-    let offPodFocus = 0;
+    h.tick(0);
+    for (const p of people) (h.local.get(p.id)! as LocalActivityState).socialCooldown = 999;
 
-    for (let frame = 0; frame < 30 * 60; frame++) {
+    let listenerFrames = 0, speakerFrames = 0, reactionFrames = 0, offPodFocus = 0;
+    const speakers = new Set<string>();
+    const actions = new Set<string>();
+
+    for (let frame = 0; frame < 34 * 60; frame++) {
       h.tick(1 / 60);
       for (const p of people) {
         const state = h.local.get(p.id);
-        if (state?.action === 'listen-in-pod') listenerFrames++;
-        if (state?.action === 'address-pod') speakerFrames++;
-        if (state?.socialFocusId && !people.some(peer => peer.id === state.socialFocusId)) offPodFocus++;
+        if (!state) continue;
+        actions.add(state.action);
+        if (state.action === 'listen-in-pod') listenerFrames++;
+        if (state.action === 'address-pod') speakerFrames++;
+        if (state.action === 'react-in-pod') reactionFrames++;
+        if (state.socialRole === 'speaker') speakers.add(p.id);
+        if (state.socialFocusId && !people.some(peer => peer.id === state.socialFocusId)) offPodFocus++;
       }
     }
 
-    expect(listenerFrames).toBeGreaterThan(60);
-    expect(speakerFrames).toBeGreaterThan(20);
+    expect(listenerFrames).toBeGreaterThan(120);
+    expect(speakerFrames).toBeGreaterThan(60);
+    expect(reactionFrames).toBeGreaterThan(20);
+    expect(speakers.size).toBe(people.length);
+    expect([...actions]).toEqual(expect.arrayContaining(['take-turn', 'finish-turn', 'shift-attention', 'react-in-pod']));
     expect(offPodFocus).toBe(0);
   });
 
