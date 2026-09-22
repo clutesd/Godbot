@@ -208,8 +208,8 @@ export function restJointPlan(posture: RestPosture | undefined, blend: number): 
 
   return {
     blend: t,
-    bodyLift: bodyLiftTarget * t,
-    bodyPitch: bodyPitchTarget * t,
+    bodyLift: t === 0 ? 0 : bodyLiftTarget * t,
+    bodyPitch: t === 0 ? 0 : bodyPitchTarget * t,
     kneeX: mix(0.052, kneeXTarget, t),
     kneeY: mix(0.235, kneeYTarget, t),
     kneeZ: mix(0.012, kneeZTarget, t),
