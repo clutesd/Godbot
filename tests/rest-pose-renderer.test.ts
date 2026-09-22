@@ -88,7 +88,7 @@ describe('articulated rest pose', () => {
     expect(renderer.get('resident')?.spot?.key).toBe(supported.key);
 
     renderer.beginFrame();
-    visual = renderer.resolve('resident', undefined, undefined, 1 / 60);
+    renderer.resolve('resident', undefined, undefined, 1 / 60);
     renderer.endFrame();
     expect(renderer.get('resident')).toBeUndefined();
     renderer.dispose();
