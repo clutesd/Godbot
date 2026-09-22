@@ -680,6 +680,7 @@ export class GodboxRenderer {
     }
 
     this.humanNavigation.set(obstacles);
+    this.warRenderer.setStructures(obstacles);
     this.humanObjectSignature = objectSignature;
   }
 

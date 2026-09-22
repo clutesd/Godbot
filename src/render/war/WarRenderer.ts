@@ -1,8 +1,11 @@
 import * as THREE from 'three';
-import type { SimulationState, War } from '../../sim/types';
+import type { HistoricalEvent, SimulationState, War } from '../../sim/types';
 import { campaignPoint } from '../../sim/war/Campaign';
 import { deriveMilitaryProfile, militaryProfileForWar, type MilitaryCapabilityProfile } from '../../sim/war/MilitaryCapability';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
+import type { PedestrianFootprint } from '../../sim/people/StructureNavigation';
+import { BattleAftermath } from './BattleAftermath';
+import { combatPose, engagementGap, figurePosition } from './CombatChoreography';
 import { BattleSpectacle } from './BattleSpectacle';
 import { militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
 import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
@@ -25,6 +28,7 @@ interface Company {
   body: THREE.InstancedMesh;
   head: THREE.InstancedMesh;
   legs: THREE.InstancedMesh;
+  arms: THREE.InstancedMesh;
   shield: THREE.InstancedMesh;
   helmet: THREE.InstancedMesh;
   weapon: THREE.InstancedMesh;
@@ -44,6 +48,10 @@ interface CampaignVisual {
   profiles: [MilitaryCapabilityProfile, MilitaryCapabilityProfile];
   dust: THREE.InstancedMesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
   spectacle: BattleSpectacle;
+  aftermath: BattleAftermath;
+  eventId?: string;
+  eventMode?: unknown;
+  evidenceMonth: number;
   lastBattleCount: number;
   battleTime: number;
   route: THREE.Line;
@@ -91,6 +99,8 @@ export class WarRenderer {
     return { campaigns: this.visuals.size, figures: [...this.visuals.values()].reduce((n, v) => n + v.companies.reduce((sum, c) => sum + c.body.count, 0), 0), budget: MAX_CAMPAIGNS * MAX_FIGURES * 2 };
   }
 
+  setStructures(structures: readonly PedestrianFootprint[]): void { this.walking.setStructures(structures); }
+
   updateDaylight(daylight: number): void {
     for (const visual of this.visuals.values()) for (const company of visual.companies) {
       updateCosmicBodyMaterial(company.body.material as THREE.MeshStandardMaterial, daylight);
@@ -113,17 +123,35 @@ export class WarRenderer {
       if (!a || !b) continue;
       const resolved = war.resolvedMonth !== undefined;
       const fade = resolved ? clamp(1 - (this.state.month - war.resolvedMonth!) / 12, 0, 1) : 1;
+      if (visual.evidenceMonth !== this.state.month || visual.lastBattleCount !== war.campaign.battleCount) {
+        let event: HistoricalEvent | undefined;
+        for (let i = this.state.history.length - 1; i >= 0; i--) {
+          const candidate = this.state.history[i]!;
+          if (candidate.type === 'battle' && candidate.actors.includes(war.id) && candidate.month <= this.state.month) { event = candidate; break; }
+        }
+        visual.eventId = event?.id;
+        visual.eventMode = event?.context['engagementMode'];
+        visual.aftermath.sync(war, this.state.history, this.state.month, elapsed, [visual.companies[0].style, visual.companies[1].style]);
+        visual.evidenceMonth = this.state.month;
+      }
+      visual.spectacle.beginWeapons();
+      const gap = engagementGap([visual.companies[0].style, visual.companies[1].style], visual.eventMode);
       const front = 0.76 + clamp(war.progress, -1, 1) * 0.08;
+      const frontPoint = campaignPoint(war.campaign.route, front, b.position);
+      const frontBefore = campaignPoint(war.campaign.route, front - 0.006, a.position);
+      const frontAfter = campaignPoint(war.campaign.route, front + 0.006, b.position);
+      const frontYaw = Math.atan2(frontAfter.x - frontBefore.x, frontAfter.z - frontBefore.z);
+      const separation = gap / (2 * Math.max(1, war.campaign.distance));
       const retreat = resolved ? clamp((this.state.month - war.resolvedMonth!) / 4, 0, 1) : 0;
       const targets = [
-        war.phase === 'mobilizing' ? 0.12 : war.phase === 'marching' ? 0.12 + war.marchProgress * 0.62 : war.phase === 'retreat' || war.phase === 'negotiation' ? THREE.MathUtils.lerp(front - 0.015, 0.12, retreat) : front - 0.015,
-        war.phase === 'mobilizing' || war.phase === 'marching' ? 0.84 : war.phase === 'occupation' ? THREE.MathUtils.lerp(front + 0.015, 0.95, retreat) : front + 0.015,
+        war.phase === 'mobilizing' ? 0.12 : war.phase === 'marching' ? 0.12 + war.marchProgress * 0.62 : war.phase === 'retreat' || war.phase === 'negotiation' ? THREE.MathUtils.lerp(front - separation, 0.12, retreat) : front - separation,
+        war.phase === 'mobilizing' || war.phase === 'marching' ? 0.84 : war.phase === 'occupation' ? THREE.MathUtils.lerp(front + separation, 0.95, retreat) : front + separation,
       ];
       if (war.campaign.battleCount !== visual.lastBattleCount) {
         visual.battleTime = elapsed;
         visual.lastBattleCount = war.campaign.battleCount;
       }
-      const battlePulse = !reducedMotion && !resolved && war.phase === 'battle' && war.campaign.blockedMonths === 0
+      const battlePulse = !resolved && war.phase === 'battle' && war.campaign.blockedMonths === 0
         ? clamp(1 - (elapsed - visual.battleTime) / 7, 0, 1)
         : 0;
 
@@ -133,54 +161,73 @@ export class WarRenderer {
         const fallback = side === 0 ? a.position : b.position;
         const center = campaignPoint(war.campaign.route, company.progress, fallback);
         const forward = campaignPoint(war.campaign.route, clamp(company.progress + (side === 0 ? 0.006 : -0.006), 0, 1), fallback);
-        const yaw = Math.atan2(forward.x - center.x, forward.z - center.z) + (side === 1 ? Math.PI : 0);
+        const engaged = war.phase === 'battle' && war.campaign.blockedMonths === 0;
+        const yaw = engaged ? frontYaw + side * Math.PI : Math.atan2(forward.x - center.x, forward.z - center.z);
+        const approach = engaged ? Math.max(0, (side === 0 ? -1 : 1) * ((center.x - frontPoint.x) * Math.sin(frontYaw) + (center.z - frontPoint.z) * Math.cos(frontYaw)) - gap / 2) : 0;
         const strength = side === 0 ? war.strengthA : war.strengthB;
         const count = strength <= 0 ? 0 : Math.min(MAX_FIGURES, Math.max(3, Math.ceil(Math.sqrt(strength) * 3)));
         const moving = !reducedMotion && (Math.abs(target - company.progress) > 0.002 || war.phase === 'marching') && war.campaign.blockedMonths === 0;
         let visible = 0;
         for (let i = 0; i < count; i++) {
+          if (visual.aftermath.suppress(visual.eventId, side, i, elapsed, reducedMotion)) continue;
           const rank = Math.floor(i / company.style.rankWidth);
           const slot = i % company.style.rankWidth;
           const centeredSlot = slot - (Math.min(company.style.rankWidth, count - rank * company.style.rankWidth) - 1) / 2;
-          const formationJitter = company.style.jitter * Math.sin(i * 12.9898 + side * 31.17);
-          const lateral = centeredSlot * company.style.lateralSpacing + formationJitter;
+          const formationJitter = Math.min(0.025, company.style.jitter) * Math.sin(i * 12.9898 + side * 31.17);
+          const lateral = centeredSlot * Math.max(0.22, company.style.lateralSpacing) + formationJitter;
           const fraction = company.progress + (side === 0 ? -1 : 1) * rank * company.style.depthSpacing / Math.max(1, war.campaign.distance);
           const base = campaignPoint(war.campaign.route, fraction, fallback);
-          const p = {
+          const p = engaged ? figurePosition(frontPoint, frontYaw, gap + approach * 2, company.style, side, i) : {
             x: base.x + Math.cos(yaw) * lateral + Math.sin(i * 3.17) * company.style.jitter * 0.25,
             z: base.z - Math.sin(yaw) * lateral + Math.cos(i * 2.31) * company.style.jitter * 0.25,
           };
-          if (!this.walking.isSegmentWalkable(base, p)) { p.x = base.x; p.z = base.z; }
-          if (!this.walking.isWalkable(p)) continue;
-          const step = Math.sin(time * 8 + i * 1.9 + side) * (moving ? 1 : battlePulse * 0.3);
+          // Never collapse blocked slots onto the centerline (which stacks whole ranks).
+          if (!this.walking.isSegmentWalkable(engaged ? p : base, p)) continue;
+          const pose = combatPose(company.style, i, side, Number.isFinite(visual.battleTime) ? elapsed - visual.battleTime : 0, engaged && approach < 0.08 && battlePulse > 0 && i < company.style.rankWidth && (gap <= 0.6 || ['bow', 'rifle', 'automatic'].includes(company.style.weapon)), reducedMotion);
+          const poseX = p.x + Math.sin(yaw) * pose.advance;
+          const poseZ = p.z + Math.cos(yaw) * pose.advance;
+          const tip = { x: poseX + Math.sin(yaw) * 0.3, z: poseZ + Math.cos(yaw) * 0.3 };
+          if (!this.walking.isSegmentWalkable(p, tip)) continue;
+          p.x = poseX; p.z = poseZ;
+          if (!this.walking.isWalkable(p) || visual.aftermath.occupies(p, visual.eventId)) continue;
+          const step = reducedMotion ? 0 : Math.sin(time * 8 + i * 1.9 + side) * (moving && !engaged ? 1 : pose.attack * 0.25);
           const ground = this.elevationAt(p.x, p.z);
-          this.part(company.body, visible, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, 0, fade * COMPANY_BODY_SCALE);
+          this.part(company.body, visible, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
           company.accents.set(visible, 'soldier', this.matrix.matrix, 1);
-          this.part(company.head, visible, p.x, ground + 0.285 + Math.abs(step) * 0.012, p.z, yaw, 0, fade * COMPANY_BODY_SCALE);
+          this.part(company.head, visible, p.x + Math.sin(yaw) * pose.lean * 0.12, ground + 0.285 + Math.abs(step) * 0.012, p.z + Math.cos(yaw) * pose.lean * 0.12, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
           for (let leg = 0; leg < 2; leg++) {
             const offset = (leg === 0 ? -1 : 1) * 0.03;
             this.part(company.legs, visible * 2 + leg, p.x + Math.cos(yaw) * offset, ground + 0.052, p.z - Math.sin(yaw) * offset, yaw, step * (leg === 0 ? 0.6 : -0.6), fade);
           }
-          const combatReady = war.phase === 'battle' && war.campaign.blockedMonths === 0;
+          for (let arm = 0; arm < 2; arm++) {
+            const lateralArm = arm === 0 ? -0.05 : 0.05;
+            const armPitch = engaged ? (arm === 0 && company.style.shields ? 0.8 : 0.9 + pose.attack * 0.55) : -step * 0.4;
+            this.part(company.arms, visible * 2 + arm, p.x + Math.cos(yaw) * lateralArm + Math.sin(yaw) * 0.025,
+              ground + 0.195, p.z - Math.sin(yaw) * lateralArm + Math.cos(yaw) * 0.025, yaw, armPitch, fade);
+          }
+          const combatReady = engaged;
           if (company.style.shields) {
             const shieldForward = combatReady && (company.style.weapon === 'spear' || company.style.weapon === 'club' || company.style.weapon === 'bow') ? 0.08 : 0.045;
-            this.part(company.shield, visible, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - battlePulse * 0.15, fade);
+            this.part(company.shield, visible, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - pose.attack * 0.18, fade);
           }
           if (company.style.armour) this.part(company.helmet, visible, p.x, ground + 0.305 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
-          const weaponForward = company.style.weapon === 'rifle' || company.style.weapon === 'automatic' ? 0.075 : 0.045;
-          const weaponPitch = this.weaponPitch(company.style.weapon, combatReady, step);
+          const weaponForward = combatReady ? pose.reach - pose.recoil * 0.03 : 0.045;
+          const weaponPitch = combatReady ? pose.pitch : this.weaponPitch(company.style.weapon, false, step);
           this.part(company.weapon, visible, p.x + Math.sin(yaw) * weaponForward, ground + 0.205, p.z + Math.cos(yaw) * weaponForward, yaw, weaponPitch, fade);
+          if (engaged && pose.ranged) visual.spectacle.weaponAttack(p.x, ground + 0.205, p.z, yaw, gap, company.style.weapon, pose.flash, pose.flight, fade);
           visible++;
         }
         company.body.count = company.head.count = company.weapon.count = visible;
         company.accents.mesh.count = visible;
         company.accents.endFrame();
-        company.legs.count = visible * 2;
+        company.legs.count = company.arms.count = visible * 2;
         company.shield.count = company.style.shields ? visible : 0;
         company.helmet.count = company.style.armour ? visible : 0;
-        for (const mesh of [company.body, company.head, company.legs, company.shield, company.helmet, company.weapon]) mesh.instanceMatrix.needsUpdate = true;
+        for (const mesh of [company.body, company.head, company.legs, company.arms, company.shield, company.helmet, company.weapon]) mesh.instanceMatrix.needsUpdate = true;
 
         const bannerPoint = campaignPoint(war.campaign.route, company.progress, fallback);
+        bannerPoint.x += -Math.sin(yaw) * 0.8 + Math.cos(yaw) * 1.05;
+        bannerPoint.z += -Math.cos(yaw) * 0.8 - Math.sin(yaw) * 1.05;
         const safeBanner = this.walking.isWalkable(bannerPoint) && visible > 0;
         company.standard.pole.visible = company.standard.cloth.visible = safeBanner;
         const bannerGround = this.elevationAt(bannerPoint.x, bannerPoint.z);
@@ -202,22 +249,23 @@ export class WarRenderer {
       visual.route.visible = focusId === war.id && war.campaign.route.length > 1;
       const dustCenter = campaignPoint(war.campaign.route, front, b.position);
       const dustBudget = Math.min(14, Math.round((visual.companies[0].style.dust + visual.companies[1].style.dust) * 0.5));
-      visual.dust.count = battlePulse > 0 ? dustBudget : 0;
-      visual.dust.material.opacity = battlePulse * 0.15;
+      visual.dust.count = !reducedMotion && battlePulse > 0 ? dustBudget : 0;
+      visual.dust.material.opacity = battlePulse * 0.065;
       for (let i = 0; i < visual.dust.count; i++) {
         const life = ((elapsed - visual.battleTime) * 0.3 + i / Math.max(1, dustBudget)) % 1;
         const angle = i * 2.399;
         const p = { x: dustCenter.x + Math.cos(angle) * life * 1.5, z: dustCenter.z + Math.sin(angle) * life * 1.5 };
-        const size = (0.14 + life * 0.45) * Math.sin(life * Math.PI);
+        const size = (0.08 + life * 0.25) * Math.sin(life * Math.PI);
         this.part(visual.dust, i, p.x, this.elevationAt(p.x, p.z) + life * 0.7 + 0.15, p.z, angle, life, size);
       }
       visual.dust.instanceMatrix.needsUpdate = true;
-      visual.spectacle.update(war, [a, b], visual.profiles, elapsed, battlePulse, fade, reducedMotion);
+      visual.aftermath.update(this.state.month, elapsed, reducedMotion, (start, end) => this.walking.isSegmentWalkable(start, end));
+      visual.spectacle.update(war, [a, b], visual.profiles, elapsed, battlePulse, fade, reducedMotion, visual.battleTime);
     }
   }
 
   private weaponPitch(weapon: PrimaryWeaponVisual, combatReady: boolean, step: number): number {
-    if (weapon === 'rifle' || weapon === 'automatic') return combatReady ? Math.PI / 2 - 0.08 : Math.PI / 2 - 0.42 + step * 0.03;
+    if (weapon === 'rifle' || weapon === 'automatic') return combatReady ? 0 : -0.42 + step * 0.03;
     if (weapon === 'bow') return combatReady ? 0.2 : 0.05;
     if (weapon === 'spear') return combatReady ? 0.52 : 0.08 + step * 0.06;
     return combatReady ? 0.35 : 0.08 + step * 0.04;
@@ -232,9 +280,10 @@ export class WarRenderer {
       support.group.visible = visible > 0 && fade > 0.02;
       if (!support.group.visible) return;
       const lane = (support.index - 0.5) * 0.72;
-      const behind = support.kind === 'vehicle' ? 0.75 : 0.95;
+      const behind = Math.ceil(MAX_FIGURES / company.style.rankWidth) * Math.max(0.28, company.style.depthSpacing) + (support.kind === 'vehicle' ? 0.5 : 0.65);
       const x = center.x - forwardX * behind + lateralX * lane;
       const z = center.z - forwardZ * behind + lateralZ * lane;
+      if (!this.walking.isSegmentWalkable({ x: x - 0.35, z: z - 0.35 }, { x: x + 0.35, z: z + 0.35 })) { support.group.visible = false; return; }
       support.group.position.set(x, this.elevationAt(x, z) + (support.kind === 'vehicle' ? 0.12 : 0.1), z);
       support.group.rotation.y = yaw;
       const bob = moving ? Math.sin(time * 6 + support.index * 1.7) * 0.018 : 0;
@@ -265,7 +314,9 @@ export class WarRenderer {
       this.visuals.delete(id);
     }
     for (const war of wars) {
-      if (this.visuals.has(war.id)) continue;
+      const existing = this.visuals.get(war.id);
+      if (existing && existing.war === war && this.state.month >= this.lastMonth) continue;
+      if (existing) { this.release(existing); this.visuals.delete(war.id); }
       const attacker = this.state.settlements.find(s => s.id === war.attacker);
       const defender = this.state.settlements.find(s => s.id === war.defender);
       if (!attacker || !defender) continue;
@@ -285,9 +336,10 @@ export class WarRenderer {
       const route = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineDashedMaterial({ color: '#e6c78b', transparent: true, opacity: 0.22, dashSize: 0.3, gapSize: 0.42, depthWrite: false }));
       route.computeLineDistances();
       const spectacle = new BattleSpectacle(this.elevationAt);
-      group.add(dust, route, spectacle.group);
+      const aftermath = new BattleAftermath(this.elevationAt);
+      group.add(dust, route, spectacle.group, aftermath.group);
       this.group.add(group);
-      this.visuals.set(war.id, { group, war, companies, profiles, dust, spectacle, route, lastBattleCount: war.campaign.battleCount, battleTime: war.campaign.lastBattleMonth === this.state.month ? elapsed : -Infinity });
+      this.visuals.set(war.id, { group, war, companies, profiles, dust, spectacle, aftermath, evidenceMonth: -1, route, lastBattleCount: war.campaign.battleCount, battleTime: war.campaign.lastBattleMonth === this.state.month ? elapsed : -Infinity });
     }
   }
 
@@ -306,14 +358,15 @@ export class WarRenderer {
     const body = new THREE.InstancedMesh(this.bodyGeometry, cosmic, MAX_FIGURES);
     const head = new THREE.InstancedMesh(this.headGeometry, cosmic, MAX_FIGURES);
     const legs = new THREE.InstancedMesh(this.legGeometry, cosmic, MAX_FIGURES * 2);
+    const arms = new THREE.InstancedMesh(this.legGeometry, cosmic, MAX_FIGURES * 2);
     const accents = new CosmicRoleAccents(MAX_FIGURES);
     this.color.set(cosmicRoleFor('soldier').color);
-    for (const mesh of [body, head, legs]) for (let i = 0; i < mesh.instanceMatrix.count; i++) mesh.setColorAt(i, this.color);
+    for (const mesh of [body, head, legs, arms]) for (let i = 0; i < mesh.instanceMatrix.count; i++) mesh.setColorAt(i, this.color);
     const shield = new THREE.InstancedMesh(this.shieldGeometry, trim, MAX_FIGURES);
     const helmet = new THREE.InstancedMesh(this.helmetGeometry, metal, MAX_FIGURES);
     const weaponGeometry = this.makeWeaponGeometry(style.weapon);
     const weapon = new THREE.InstancedMesh(weaponGeometry, style.weapon === 'rifle' || style.weapon === 'automatic' ? metal : dark, MAX_FIGURES);
-    for (const mesh of [body, head, legs, shield, helmet, weapon]) {
+    for (const mesh of [body, head, legs, arms, shield, helmet, weapon]) {
       mesh.frustumCulled = false;
       mesh.castShadow = true;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -347,11 +400,11 @@ export class WarRenderer {
     const support: SupportVisual[] = [];
     for (let i = 0; i < style.artillery; i++) support.push(this.makeArtillery(i, material, dark, metal));
     for (let i = 0; i < style.vehicles; i++) support.push(this.makeVehicle(i, material, dark, metal));
-    group.add(body, head, legs, accents.mesh, shield, helmet, weapon, pole, cloth, camp, ...support.map(item => item.group));
+    group.add(body, head, legs, arms, accents.mesh, shield, helmet, weapon, pole, cloth, camp, ...support.map(item => item.group));
     const initial = war.phase === 'mobilizing' ? (side === 0 ? 0.12 : 0.84)
       : war.phase === 'marching' ? (side === 0 ? 0.12 + war.marchProgress * 0.62 : 0.84)
         : 0.76 + clamp(war.progress, -1, 1) * 0.08 + (side === 0 ? -0.015 : 0.015);
-    return { body, head, legs, accents, shield, helmet, weapon, weaponGeometry, standard: { pole, cloth, rest }, camp, support, profile, style, progress: initial };
+    return { body, head, legs, arms, accents, shield, helmet, weapon, weaponGeometry, standard: { pole, cloth, rest }, camp, support, profile, style, progress: initial };
   }
 
   private makeWeaponGeometry(weapon: PrimaryWeaponVisual): THREE.BufferGeometry {
@@ -359,7 +412,7 @@ export class WarRenderer {
     if (weapon === 'bow') return new THREE.TorusGeometry(0.11, 0.008, 4, 8, Math.PI);
     if (weapon === 'rifle') return new THREE.BoxGeometry(0.026, 0.03, 0.3);
     if (weapon === 'automatic') return new THREE.BoxGeometry(0.034, 0.036, 0.32);
-    return new THREE.BoxGeometry(0.035, 0.035, 0.24);
+    return new THREE.BoxGeometry(0.035, 0.24, 0.035);
   }
 
   private makeArtillery(index: number, material: THREE.Material, dark: THREE.Material, metal: THREE.Material): SupportVisual {
@@ -402,6 +455,10 @@ export class WarRenderer {
   }
 
   private release(visual: CampaignVisual): void {
+    // Child systems own their pools and resources. Detach before the shared-company traversal.
+    visual.group.remove(visual.spectacle.group, visual.aftermath.group);
+    visual.spectacle.dispose();
+    visual.aftermath.dispose();
     const materials = new Set<THREE.Material>();
     visual.group.traverse(object => {
       if (object instanceof THREE.InstancedMesh) object.dispose();
@@ -410,7 +467,6 @@ export class WarRenderer {
         list.forEach(material => materials.add(material));
       }
     });
-    visual.spectacle.dispose();
     materials.forEach(material => material.dispose());
     visual.companies.forEach(company => {
       company.accents.mesh.geometry.dispose();

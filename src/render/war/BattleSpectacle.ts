@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Settlement, War } from '../../sim/types';
 import type { MilitaryCapabilityProfile } from '../../sim/war/MilitaryCapability';
 import { campaignPoint } from '../../sim/war/Campaign';
-import { militaryVisualStyle } from './MilitaryVisualLanguage';
+import { militaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
 
 const MAX_SMOKE = 28;
 const MAX_FLASH = 16;
@@ -37,6 +37,9 @@ export class BattleSpectacle {
   private readonly aircraft: Airframe[] = [];
   private readonly missiles: MissileVisual[] = [];
   private disposed = false;
+  private lastBattle = -1;
+  private residueX = 0;
+  private residueZ = 0;
 
   constructor(private readonly elevationAt: (x: number, z: number) => number) {
     this.group.name = 'Capability battle spectacle';
@@ -56,6 +59,25 @@ export class BattleSpectacle {
     }
   }
 
+  beginWeapons(): void {
+    this.flashes.count = this.tracers.count = 0;
+  }
+
+  /** The same cadence/pose supplies muzzle contact and the projectile; no free-floating flashes. */
+  weaponAttack(x: number, y: number, z: number, yaw: number, distance: number, weapon: PrimaryWeaponVisual,
+    flash: boolean, flight: number, fade: number): void {
+    const dx = Math.sin(yaw), dz = Math.cos(yaw);
+    if (flash && this.flashes.count < MAX_FLASH) this.part(this.flashes, this.flashes.count++,
+      x + dx * 0.24, y, z + dz * 0.24, yaw, 0, 0.045 * fade);
+    if (flight >= 0 && this.tracers.count < MAX_TRACERS) {
+      const bow = weapon === 'bow';
+      const travel = 0.24 + Math.max(0, distance - 0.4) * flight;
+      const arc = bow ? Math.sin(flight * Math.PI) * 0.45 : 0;
+      this.part(this.tracers, this.tracers.count++, x + dx * travel, y + arc, z + dz * travel,
+        yaw, bow ? -Math.cos(flight * Math.PI) * 0.35 : 0, (bow ? 0.42 : 0.25) * fade);
+    }
+  }
+
   update(
     war: War,
     settlements: readonly [Settlement, Settlement],
@@ -64,67 +86,43 @@ export class BattleSpectacle {
     battlePulse: number,
     fade: number,
     reducedMotion: boolean,
+    eventTime = -Infinity,
   ): void {
     if (this.disposed) return;
     const frontProgress = 0.76 + clamp(war.progress, -1, 1) * 0.08;
     const front = campaignPoint(war.campaign.route, frontProgress, settlements[1].position);
     const active = war.resolvedMonth === undefined && war.phase === 'battle' && war.campaign.blockedMonths === 0;
-    const intensity = active ? Math.max(0.28, battlePulse) : 0;
+    if (this.lastBattle !== war.campaign.battleCount) {
+      this.residueX = front.x; this.residueZ = front.z;
+      this.lastBattle = war.campaign.battleCount;
+    }
+    // Absolute event-relative decay, not a last-rendered-frame timestamp.
+    const intensity = Math.max(0, 1 - Math.max(0, elapsed - eventTime) / 15);
+    const firing = active && battlePulse > 0;
     const time = reducedMotion ? 0 : elapsed;
     const styles = [militaryVisualStyle(profiles[0]), militaryVisualStyle(profiles[1])] as const;
     const smokeBudget = Math.min(MAX_SMOKE, Math.round((styles[0].smoke + styles[1].smoke) * intensity * 0.65));
-    const flashBudget = Math.min(MAX_FLASH, Math.round((styles[0].flash + styles[1].flash) * intensity * 0.55));
-    const tracerBudget = Math.min(MAX_TRACERS, Math.round((styles[0].tracer + styles[1].tracer) * intensity * 0.55));
 
     this.smoke.count = smokeBudget;
-    this.smoke.material.opacity = 0.06 + 0.19 * intensity * fade;
+    this.smoke.material.opacity = 0.15 * intensity * fade;
     for (let i = 0; i < smokeBudget; i++) {
       const life = reducedMotion ? (i + 1) / Math.max(1, smokeBudget + 1) : (time * 0.13 + i * 0.173) % 1;
       const angle = i * 2.399 + time * 0.05;
       const radius = 0.18 + life * (0.8 + (i % 4) * 0.17);
-      const x = front.x + Math.cos(angle) * radius;
-      const z = front.z + Math.sin(angle) * radius;
+      const x = this.residueX + Math.cos(angle) * radius;
+      const z = this.residueZ + Math.sin(angle) * radius;
       const y = this.elevationAt(x, z) + 0.22 + life * 1.3;
       const scale = (0.08 + life * 0.34) * Math.sin(Math.max(0.08, life) * Math.PI) * fade;
       this.part(this.smoke, i, x, y, z, angle, 0, Math.max(0.01, scale));
     }
     this.smoke.instanceMatrix.needsUpdate = true;
 
-    this.flashes.count = flashBudget;
-    for (let i = 0; i < flashBudget; i++) {
-      const side = (i % 2) as 0 | 1;
-      const phase = reducedMotion ? 0.7 : Math.sin(time * (8.4 + (i % 3)) + i * 2.71) * 0.5 + 0.5;
-      const source = campaignPoint(war.campaign.route, frontProgress + (side === 0 ? -0.012 : 0.012), settlements[side].position);
-      const angle = i * 2.13 + side * Math.PI;
-      const radius = 0.18 + (i % 5) * 0.08;
-      const x = source.x + Math.cos(angle) * radius;
-      const z = source.z + Math.sin(angle) * radius;
-      const y = this.elevationAt(x, z) + 0.22 + (i % 3) * 0.035;
-      const scale = phase > 0.72 ? (0.025 + phase * 0.055) * intensity * fade : 0.001;
-      this.part(this.flashes, i, x, y, z, angle, 0, scale);
-    }
     this.flashes.instanceMatrix.needsUpdate = true;
-
-    this.tracers.count = tracerBudget;
-    for (let i = 0; i < tracerBudget; i++) {
-      const side = (i % 2) as 0 | 1;
-      const forward = side === 0 ? 1 : -1;
-      const phase = reducedMotion ? 0.45 : (time * 1.7 + i * 0.137) % 1;
-      const source = campaignPoint(war.campaign.route, frontProgress + (side === 0 ? -0.02 : 0.02), settlements[side].position);
-      const target = campaignPoint(war.campaign.route, frontProgress + (side === 0 ? 0.018 : -0.018), settlements[side === 0 ? 1 : 0].position);
-      const x = THREE.MathUtils.lerp(source.x, target.x, phase) + Math.sin(i * 3.1) * 0.12;
-      const z = THREE.MathUtils.lerp(source.z, target.z, phase) + Math.cos(i * 2.7) * 0.12;
-      const dx = target.x - source.x;
-      const dz = target.z - source.z;
-      const yaw = Math.atan2(dx, dz) + (forward < 0 ? Math.PI : 0);
-      const y = this.elevationAt(x, z) + 0.2 + Math.sin(phase * Math.PI) * 0.28;
-      this.part(this.tracers, i, x, y, z, yaw, 0, Math.max(0.01, 0.5 * intensity * fade));
-    }
     this.tracers.instanceMatrix.needsUpdate = true;
 
     this.aircraft.forEach(airframe => {
       const count = styles[airframe.side].aircraft;
-      airframe.group.visible = active && airframe.index < count && fade > 0.02;
+      airframe.group.visible = firing && airframe.index < count && fade > 0.02;
       if (!airframe.group.visible) return;
       const sideDirection = airframe.side === 0 ? 1 : -1;
       const phase = reducedMotion ? 0.35 + airframe.index * 0.2 : (time * 0.07 + airframe.index * 0.37 + airframe.side * 0.19) % 1;
@@ -140,7 +138,7 @@ export class BattleSpectacle {
 
     this.missiles.forEach(missile => {
       const count = styles[missile.side].missiles;
-      missile.group.visible = active && missile.index < count && fade > 0.02;
+      missile.group.visible = firing && missile.index < count && fade > 0.02;
       if (!missile.group.visible) return;
       const side = missile.side;
       const launchProgress = frontProgress + (side === 0 ? -0.08 : 0.08);
@@ -212,19 +210,16 @@ export class BattleSpectacle {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const mesh of [this.smoke, this.flashes, this.tracers]) {
-      mesh.geometry.dispose();
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      materials.forEach(material => material.dispose());
-    }
-    for (const object of [...this.aircraft.map(item => item.group), ...this.missiles.map(item => item.group)]) {
-      object.traverse(child => {
-        if (!(child instanceof THREE.Mesh)) return;
-        child.geometry.dispose();
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach(material => material.dispose());
-      });
-    }
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    this.group.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child instanceof THREE.InstancedMesh) child.dispose();
+      geometries.add(child.geometry);
+      for (const material of Array.isArray(child.material) ? child.material : [child.material]) materials.add(material);
+    });
+    geometries.forEach(geometry => geometry.dispose());
+    materials.forEach(material => material.dispose());
     this.group.clear();
   }
 }

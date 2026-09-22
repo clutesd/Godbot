@@ -63,10 +63,10 @@ export function militaryVisualStyle(profile: MilitaryCapabilityProfile): Militar
     vehicles,
     aircraft,
     missiles,
-    smoke: firearms ? (profile.regime === 'modern' ? 18 : profile.regime === 'industrial' ? 22 : 14) : 8,
-    flash: firearms ? 14 : 5,
+    smoke: firearms ? (profile.regime === 'modern' ? 18 : profile.regime === 'industrial' ? 22 : 14) : 0,
+    flash: firearms ? 14 : 0,
     tracer: automatic || profile.regime === 'modern' ? 12 : rifle ? 7 : 0,
-    dust: profile.regime === 'improvised' || profile.regime === 'organized-melee' || profile.regime === 'siege' ? 14 : 7,
+    dust: profile.regime === 'improvised' || profile.regime === 'organized-melee' || profile.regime === 'siege' ? 6 : 7,
   };
 }
 
