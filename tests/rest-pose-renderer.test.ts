@@ -64,7 +64,7 @@ describe('articulated rest pose', () => {
 
   it('emits two-part arms, two-part legs and grounded soles from one bounded instanced batch', () => {
     const renderer = new RestPoseRenderer(2);
-    let visual = restJointPlan('supported-sit', 1);
+    const visual = restJointPlan('supported-sit', 1);
     const restVisual = { ...visual, spot: supported };
     renderer.beginFrame();
     renderer.resolve('resident', supported, true, REST_SIT_SECONDS);
