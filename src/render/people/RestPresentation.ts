@@ -1,5 +1,6 @@
 import type { Vec2 } from '../../sim/types';
 import type { SocialGroup } from './PeoplePresentation';
+import type { RestPreference } from './RestChoreography';
 
 /**
  * Presentation-only physical contract for rest.
@@ -41,6 +42,8 @@ export interface RestPlanningContext {
   restingIds?: readonly string[];
   safePoint(point: Vec2): boolean;
   safeSegment(a: Vec2, b: Vec2): boolean;
+  /** Age/personality presentation preference; slot ownership still remains deterministic. */
+  preference?: RestPreference;
   avoidKey?: string;
 }
 
@@ -108,7 +111,9 @@ export function planRestSpot(context: RestPlanningContext): RestSpotPresentation
 
   const owned = candidates.filter((_, index) => index % count === rank);
   const fallback = owned.length ? owned : candidates;
-  for (const spot of fallback) {
+  const ordered = [...fallback].sort((a, b) =>
+    restCandidateScore(a, context) - restCandidateScore(b, context) || a.key.localeCompare(b.key));
+  for (const spot of ordered) {
     if (spot.key === context.avoidKey) continue;
     if (!context.safePoint(spot.destination)) continue;
     if (!context.safeSegment(context.from, spot.destination)) continue;
@@ -165,4 +170,16 @@ function rotateDirection(rotationY: number, localX: number, localZ: number): Vec
 
 function copySpot(spot: RestSpotPresentation): RestSpotPresentation {
   return { ...spot, destination: { ...spot.destination } };
+}
+
+
+function restCandidateScore(spot: RestSpotPresentation, context: RestPlanningContext): number {
+  const distance = Math.hypot(spot.destination.x - context.from.x, spot.destination.z - context.from.z);
+  const preference = context.preference ?? 'mixed';
+  const supportPenalty = preference === 'supported'
+    ? spot.support === 'structure-edge' ? 0 : 2.4
+    : preference === 'ground'
+      ? spot.support === 'ground' ? 0 : 2.4
+      : spot.support === 'structure-edge' ? 0 : 0.32;
+  return supportPenalty + distance;
 }
