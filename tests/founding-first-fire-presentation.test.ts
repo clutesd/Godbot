@@ -13,7 +13,7 @@ describe('founding first-fire presentation', () => {
     survivalState(settlement).firstFire = { month: simulation.state.month, eventId: 'first-fire:test' };
     presentation.update(simulation.state, 0);
     expect(presentation.isPerforming(settlement.id)).toBe(true);
-    expect(presentation.sample(settlement.id).flameScale).toBe(0);
+    expect(presentation.sample(settlement.id)).toMatchObject({ hearthScale: 0, flameScale: 0 });
 
     presentation.update(simulation.state, 1);
     expect(presentation.sample(settlement.id)).toMatchObject({ active: true, phase: 'kindle' });
@@ -21,6 +21,7 @@ describe('founding first-fire presentation', () => {
     presentation.update(simulation.state, 3.2);
     const catching = presentation.sample(settlement.id);
     expect(catching.phase).toBe('catch');
+    expect(catching.hearthScale).toBeGreaterThan(0.8);
     expect(catching.flameScale).toBeGreaterThan(0.2);
     expect(catching.lightGain).toBeGreaterThan(0.15);
 
@@ -43,7 +44,7 @@ describe('founding first-fire presentation', () => {
     expect(presentation.isPerforming(settlement.id)).toBe(false);
     expect(presentation.sample(settlement.id)).toEqual({
       active: false, phase: 'complete', phaseProgress: 1,
-      flameScale: 1, emberScale: 1, lightGain: 1, smokeGain: 1,
+      hearthScale: 1, flameScale: 1, emberScale: 1, lightGain: 1, smokeGain: 1,
     });
 
     presentation.update(simulation.state, FIRST_FIRE_DURATION_SECONDS + 20);
@@ -82,7 +83,7 @@ describe('founding first-fire presentation', () => {
     presentation.update(simulation.state, 1);
     expect(presentation.isPerforming(settlement.id)).toBe(false);
     expect(presentation.sample(settlement.id)).toMatchObject({
-      active: false, phase: 'complete', flameScale: 1, lightGain: 1,
+      active: false, phase: 'complete', hearthScale: 1, flameScale: 1, lightGain: 1,
     });
   });
 
