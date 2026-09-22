@@ -422,6 +422,40 @@ describe('renderer-owned local activity', () => {
     expect(JSON.stringify([a, b])).toBe(before);
   });
 
+  it('does not let child play override rest, study, travel or emergency authority', () => {
+    const resting = person('resting-child');
+    resting.ageMonths = 10 * 12;
+    resting.occupation = 'child';
+    resting.role = 'child';
+    resting.activity = 'rest';
+    resting.navigation!.destinationKind = 'home';
+    resting.navigation!.destinationId = 'child-home';
+    resting.navigation!.schedulePhase = 'home';
+    const restHarness = harness([resting]);
+    for (let frame = 0; frame < 6 * 60; frame++) {
+      restHarness.tick(1 / 60);
+      expect(restHarness.local.get(resting.id)?.action?.startsWith('play-') ?? false).toBe(false);
+    }
+
+    const studying = person('studying-child');
+    studying.ageMonths = 12 * 12;
+    studying.occupation = 'child';
+    studying.role = 'child';
+    studying.activity = 'study';
+    studying.navigation!.destinationKind = 'knowledge-institution';
+    studying.navigation!.destinationId = 'school';
+    studying.navigation!.schedulePhase = 'work';
+    const studyHarness = harness([studying]);
+    for (let frame = 0; frame < 6 * 60; frame++) {
+      studyHarness.tick(1 / 60);
+      expect(studyHarness.local.get(studying.id)?.action?.startsWith('play-') ?? false).toBe(false);
+    }
+
+    studying.navigation!.schedulePhase = 'emergency';
+    studyHarness.tick(0);
+    expect(studyHarness.local.get(studying.id)).toBeUndefined();
+  });
+
   it('presents free children as active play instead of miniature adult conversation', () => {
     const children = ['child-a', 'child-b', 'child-c'].map((id, index) => {
       const p = person(id);
