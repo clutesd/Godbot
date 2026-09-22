@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
-import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthOffset, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../src/shared/FoundingCampLayout';
+import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthEstablished, foundingHearthOffset, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../src/shared/FoundingCampLayout';
 import { arrivalCameraPose, arrivalCaption, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
@@ -72,6 +72,25 @@ describe('Arrival presentation contracts', () => {
         + (-pod.entryOffset.z / approachLength) * (offset.z / distance);
       expect(Math.abs(dot)).toBeLessThan(0.21);
     }
+  });
+
+  it('reserves future hearth ground without claiming the hearth exists at touchdown', () => {
+    const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
+    s.advanceArrival(46);
+    const founding = s.state.settlements.filter(settlement => settlement.foundingPodId);
+    expect(founding).toHaveLength(5);
+    expect(founding.every(settlement => !foundingHearthEstablished(settlement))).toBe(true);
+
+    const achieved = founding[0]!;
+    achieved.survival ??= {
+      observations: {}, deprivation: 0, exposureDose: 0,
+      cold: { severity: 0, shelterCoverage: 1, fuelNeed: 0, fuelUsed: 0, exposure: 0 },
+      experience: {}, nextDecisionMonth: 0, lastConsequenceMonth: -120, lastSpecializationMonth: -120,
+      reassignedLabour: 0, lastResolvedMonth: -1,
+    };
+    achieved.survival.firstFire = { month: 2, eventId: 'first-fire:test' };
+    expect(foundingHearthEstablished(achieved)).toBe(true);
+    expect(founding.slice(1).every(settlement => !foundingHearthEstablished(settlement))).toBe(true);
   });
 
   it('resolves every founding-camp fire system to the same off-vessel hearth', () => {
