@@ -363,6 +363,7 @@ export class LocalActivityPresentation {
       }
     }
     const visual = context.visual;
+    refreshPodRhythm(person, context, state, this.previousStates, this.presentationSeconds);
     refreshPresentationFocus(person, context, state);
     updateAmbientAttention(person, context, state, visual, delta, this.previousStates, this.presentationSeconds);
     if (visual && !visual.traveling && visual.destinationX === state.destination.x && visual.destinationZ === state.destination.z
@@ -754,6 +755,64 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   state.restFacing = facingTarget(state.destination, state.focus);
   state.hold *= 1.05 + person.traits.sociability * 0.12;
   return true;
+}
+
+function refreshPodRhythm(person: Person, context: LocalActivityContext, state: LocalActivityState,
+  previousStates: ReadonlyMap<string, LocalActivityState>, presentationSeconds: number): void {
+  if (!state.socialRole || state.partnerId || state.encounter || state.playGame || state.yieldToId) return;
+  const group = context.group;
+  const pod = conversationPodFor(group, person.id);
+  if (!pod || pod.members.length < 3) return;
+  const adults = pod.members.filter(id => {
+    const candidate = context.people.get(id);
+    return Boolean(candidate && !isChildPresentationPerson(candidate)
+      && (id === person.id || canInteract(person, candidate)));
+  });
+  if (adults.length < 2 || !adults.includes(person.id)) return;
+
+  const turnDuration = 5.4;
+  const offset = unit(`${pod.id}:speaker-phase`) * 4.8;
+  const shifted = presentationSeconds + offset;
+  const epoch = Math.floor(shifted / turnDuration);
+  const turnProgress = shifted / turnDuration - Math.floor(shifted / turnDuration);
+  let speakerId = adults.find(id => {
+    const previous = previousStates.get(id);
+    return Boolean(previous?.encounter && previous.partnerId && pod.members.includes(previous.partnerId)
+      && previous.animation !== 'converse-quiet');
+  });
+  if (!speakerId) speakerId = adults[((epoch % adults.length) + adults.length) % adults.length]!;
+
+  const listeners = adults.filter(id => id !== speakerId);
+  const reactorId = listeners.length
+    ? listeners[Math.floor(unit(`${pod.id}:${epoch}:reactor`) * listeners.length) % listeners.length] : undefined;
+  const reactionWindow = turnProgress >= 0.66 && turnProgress < 0.82;
+
+  let focusId: string;
+  if (speakerId === person.id) {
+    const own = adults.indexOf(person.id);
+    focusId = adults[(own + 1) % adults.length]!;
+    state.socialRole = 'speaker';
+    state.animation = turnProgress < 0.14 ? 'converse-quiet' : turnProgress > 0.84 ? 'converse-quiet' : 'converse';
+    state.action = turnProgress < 0.14 ? 'take-turn' : turnProgress > 0.84 ? 'finish-turn' : 'address-pod';
+  } else {
+    focusId = speakerId;
+    state.socialRole = 'listener';
+    if (reactionWindow && reactorId === person.id) {
+      state.animation = 'converse-warm';
+      state.action = 'react-in-pod';
+    } else if (turnProgress < 0.14) {
+      state.animation = 'converse-quiet';
+      state.action = 'shift-attention';
+    } else {
+      state.animation = 'converse-quiet';
+      state.action = 'listen-in-pod';
+    }
+  }
+
+  const peer = context.people.get(focusId);
+  if (!peer) return;
+  state.socialFocusId = peer.id;
+  rememberSocial(state, peer.id, presentationSeconds, 'pod');
 }
 
 function applyChildPlay(person: Person, context: LocalActivityContext, state: LocalActivityState, fallback: Vec2,
