@@ -3,7 +3,7 @@ import { memoryInfluenceFor } from '../../sim/people/PersonalMemorySystem';
 import type { AnimationState } from '../animation/AnimationController';
 import { resourceVisualUnit as unit } from '../../sim/resources/ResourceWorkPresentation';
 import { atInteraction, facingTarget } from './PhysicalActionPresentation';
-import type { GroupPlacement, SocialGroup } from './PeoplePresentation';
+import { conversationPodCenter, conversationPodFor, type GroupPlacement, type SocialGroup, type SocialPod } from './PeoplePresentation';
 import type { PersonVisualState } from './PeopleVisualState';
 import { planRestSpot, type RestSpotPresentation, type RestSupportFootprint } from './RestPresentation';
 import { restPreferenceFor, restTransitionSeconds, type RestStage } from './RestChoreography';
@@ -58,6 +58,13 @@ const WORK_ROUTINE: readonly Intent[] = [
   ['task', 0, 'task', 4.5], ['inspect', 1, 'inspect-work-area', 2.6], ['reposition', 4, 'adjust-work-position', 1.8],
   ['return', 0, 'return-to-task', 3.6], ['interact', 5, 'look-to-colleague', 3], ['pause', 3, 'pause', 2.8],
   ['reposition', 2, 'change-work-side', 1.8],
+];
+const YOUNG_CHILD_PLAY_ROUTINE: readonly Intent[] = [
+  ['task', 0, 'play-explore', 1.5],
+  ['reposition', 1, 'play-toddle', 1.2],
+  ['pause', 0, 'play-watch', 1.0],
+  ['task', 2, 'play-reach', 1.35],
+  ['reposition', 3, 'play-return', 1.2],
 ];
 const CHILD_PLAY_ROUTINE: readonly Intent[] = [
   ['reposition', 4, 'play-dash', 1.0],
@@ -198,11 +205,19 @@ export interface LocalActivityState {
   encounter?: SocialEncounterPresentation;
   /** Discourages immediate partner repetition when a group offers other plausible people. */
   lastPartnerId?: string;
+  /** Pod attention that is neither a generic glance nor an exclusive two-person encounter. */
+  socialFocusId?: string;
+  socialRole?: 'speaker' | 'listener';
+  /** Shared child-game presentation state. Never mutates simulation activity or relationships. */
+  playGame?: 'parallel' | 'tag' | 'circle' | 'follow';
+  playRole?: 'solo' | 'runner' | 'chaser' | 'leader' | 'follower' | 'orbit';
 }
 
 export class LocalActivityPresentation {
   private readonly states = new Map<string, LocalActivityState>();
   private frame = 0;
+  private presentationSeconds = 0;
+  private clockFrame = -1;
   private readonly previousStates = new Map<string, LocalActivityState>();
   get size(): number { return this.states.size; }
   get(id: string): Readonly<LocalActivityState> | undefined { return this.states.get(id); }
@@ -214,9 +229,13 @@ export class LocalActivityPresentation {
       encounter: state.encounter ? { ...state.encounter } : undefined });
   }
   prune(): void { for (const [id, state] of this.states) if (state.seen !== this.frame) this.states.delete(id); }
-  clear(): void { this.states.clear(); }
+  clear(): void { this.states.clear(); this.presentationSeconds = 0; this.clockFrame = -1; }
 
   resolve(person: Person, context: LocalActivityContext, delta: number): LocalActivityState | undefined {
+    if (this.clockFrame !== this.frame) {
+      this.presentationSeconds += Math.max(0, delta);
+      this.clockFrame = this.frame;
+    }
     const nav = person.navigation;
     if (!nav) {
       this.states.delete(person.id);
