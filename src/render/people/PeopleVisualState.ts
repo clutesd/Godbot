@@ -37,6 +37,8 @@ export interface PersonVisualGround {
   isStandable(x: number, z: number): boolean;
   safeSegment?(a: Vec2, b: Vec2): boolean;
   detour?(a: Vec2, b: Vec2): Vec2[];
+  /** Optional world-aware recovery used only when a requested/current point is already blocked. */
+  nearestSafePoint?(point: Vec2, identity: string): Vec2 | undefined;
 
 }
 
@@ -119,24 +121,48 @@ export class PeopleVisualStateStore {
 
   resolve(personId: string, target: PersonVisualTarget, deltaSeconds: number, ground: PersonVisualGround): PersonVisualState {
     const existing = this.states.get(personId);
-    const state = existing ?? this.spawn(personId, target.destination, ground);
+    const recovered = existing ? this.depenetrate(existing, personId, ground) : false;
+    const safeDestination = nearestSafeVisualPoint(target.destination, `${personId}:destination`, ground)
+      ?? (existing && safeGroundSegment(existing, existing, ground) ? { x: existing.x, z: existing.z } : target.destination);
+    const resolvedTarget = safeDestination.x === target.destination.x && safeDestination.z === target.destination.z
+      ? target : { ...target, destination: safeDestination };
+    const state = existing ?? this.spawn(personId, resolvedTarget.destination, ground);
     if (!existing) this.states.set(personId, state);
     state.lastFrame = this.frame;
-    state.arrivalEase = target.arrivalEase ?? false;
-    state.localMove = target.localMove ?? false;
-    state.smoothTravel = target.smoothTravel ?? false;
-    state.snapped = !existing;
-    const cap = target.emergency ? HUMAN_MAX_RUN_SPEED : HUMAN_MAX_WALK_SPEED;
-    const requestedSpeed = target.localSpeed ?? (target.emergency ? cap : HUMAN_WALK_SPEED);
+    state.arrivalEase = resolvedTarget.arrivalEase ?? false;
+    state.localMove = resolvedTarget.localMove ?? false;
+    state.smoothTravel = resolvedTarget.smoothTravel ?? false;
+    state.snapped = !existing || recovered;
+    const cap = resolvedTarget.emergency ? HUMAN_MAX_RUN_SPEED : HUMAN_MAX_WALK_SPEED;
+    const requestedSpeed = resolvedTarget.localSpeed ?? (resolvedTarget.emergency ? cap : HUMAN_WALK_SPEED);
     state.maxPhysicalSpeed = Math.min(cap, Math.max(0.1, Number.isFinite(requestedSpeed) ? requestedSpeed : HUMAN_WALK_SPEED));
 
-    const moved = Math.hypot(target.destination.x - state.destinationX, target.destination.z - state.destinationZ);
+    const moved = Math.hypot(resolvedTarget.destination.x - state.destinationX, resolvedTarget.destination.z - state.destinationZ);
     if (moved > RETARGET_EPSILON) {
-      this.retarget(state, target);
+      this.retarget(state, resolvedTarget);
     }
 
-    this.advance(state, deltaSeconds, target.restFacing, ground);
+    this.advance(state, deltaSeconds, resolvedTarget.restFacing, ground);
     return state;
+  }
+
+  private depenetrate(state: PersonVisualState, personId: string, ground: PersonVisualGround): boolean {
+    if (safeGroundSegment(state, state, ground)) return false;
+    const recovered = nearestSafeVisualPoint({ x: state.x, z: state.z }, `${personId}:depenetrate`, ground);
+    if (!recovered) {
+      state.blocked = true;
+      state.velocityX = 0; state.velocityZ = 0; state.speed = 0;
+      return false;
+    }
+    state.x = recovered.x; state.z = recovered.z;
+    state.footY = ground.heightAt(recovered.x, recovered.z);
+    state.originX = recovered.x; state.originZ = recovered.z;
+    state.destinationX = recovered.x; state.destinationZ = recovered.z;
+    state.path = [{ ...recovered }];
+    state.waypoint = 1; state.progress = 1; state.traveling = false; state.blocked = false; state.retrySeconds = 0;
+    state.velocityX = 0; state.velocityZ = 0; state.speed = 0;
+    state.lastGroundX = recovered.x; state.lastGroundZ = recovered.z;
+    return true;
   }
 
   private spawn(personId: string, at: Vec2, ground: PersonVisualGround): PersonVisualState {
@@ -192,7 +218,13 @@ export class PeopleVisualStateStore {
         state.path.splice(state.waypoint, distanceToNext > 3 ? 0 : 1, ...route);
         next = state.path[state.waypoint]; state.blocked = false;
       } else {
-        state.blocked = true; state.retrySeconds = 0.8;
+        const bypass = this.localBypass(state, corridorEnd, ground);
+        if (bypass) {
+          state.path.splice(state.waypoint, 0, bypass);
+          next = state.path[state.waypoint]; state.blocked = false;
+        } else {
+          state.blocked = true; state.retrySeconds = 0.8;
+        }
       }
     }
     if (corridorEnd && state.retrySeconds === 0 && safeGroundSegment(state, corridorEnd, ground)) state.blocked = false;
@@ -251,6 +283,31 @@ export class PeopleVisualStateStore {
         && clear(point) && safeGroundSegment(state, point, ground)) return point;
     }
     return clear(proposed) ? proposed : { x: state.x, z: state.z };
+  }
+
+  /** Short deterministic steering fallback for solid objects that do not own pathfinder nodes. */
+  private localBypass(state: PersonVisualState, end: Vec2, ground: PersonVisualGround): Vec2 | undefined {
+    const dx = end.x - state.x, dz = end.z - state.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 0.08) return undefined;
+    const ux = dx / distance, uz = dz / distance;
+    const px = -uz, pz = ux;
+    const preferred = stableVisualHash(state.id) % 2 === 0 ? 1 : -1;
+    let fallback: Vec2 | undefined;
+    for (const sign of [preferred, -preferred]) {
+      for (const lateral of [0.2, 0.34, 0.5]) {
+        for (const forward of [0.16, 0.28, 0.42]) {
+          const candidate = {
+            x: state.x + ux * Math.min(forward, distance * 0.5) + px * lateral * sign,
+            z: state.z + uz * Math.min(forward, distance * 0.5) + pz * lateral * sign,
+          };
+          if (!safeGroundSegment(state, candidate, ground)) continue;
+          if (safeGroundSegment(candidate, end, ground)) return candidate;
+          fallback ??= candidate;
+        }
+      }
+    }
+    return fallback;
   }
 
   private nearby(state: PersonVisualState): PersonVisualState[] {
@@ -338,6 +395,28 @@ export function turnToward(current: number, desired: number, maxStep: number): n
   return current + Math.max(-maxStep, Math.min(maxStep, delta));
 }
 
+/**
+ * Resolves a blocked target without ever drawing a segment through the blocker. The renderer may
+ * provide a world-aware query; the deterministic ring fallback keeps the contract usable in tests
+ * and small presentation scenes that only expose segment predicates.
+ */
+export function nearestSafeVisualPoint(point: Vec2, identity: string, ground: PersonVisualGround): Vec2 | undefined {
+  if (safeGroundSegment(point, point, ground)) return { ...point };
+  const delegated = ground.nearestSafePoint?.(point, identity);
+  if (delegated && safeGroundSegment(delegated, delegated, ground)) return { ...delegated };
+  const phase = stableVisualHash(identity) / 0xffffffff * Math.PI * 2;
+  const step = 0.12;
+  for (let radius = step; radius <= 4; radius += step) {
+    const samples = Math.max(12, Math.ceil(Math.PI * 2 * radius / 0.18));
+    for (let index = 0; index < samples; index++) {
+      const angle = phase + index / samples * Math.PI * 2;
+      const candidate = { x: point.x + Math.cos(angle) * radius, z: point.z + Math.sin(angle) * radius };
+      if (safeGroundSegment(candidate, candidate, ground)) return candidate;
+    }
+  }
+  return undefined;
+}
+
 /** Samples rendered grade/water; optional structure callback uses exact swept rectangles. */
 export function safeGroundSegment(a: Vec2, b: Vec2, ground: PersonVisualGround): boolean {
   if (ground.safeSegment && !ground.safeSegment(a, b)) return false;
@@ -355,6 +434,15 @@ export function safeGroundSegment(a: Vec2, b: Vec2, ground: PersonVisualGround):
     height = nextHeight;
   }
   return true;
+}
+
+function stableVisualHash(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function segmentDistance(a: Vec2, b: Vec2, p: Vec2): number {
