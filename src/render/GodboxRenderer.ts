@@ -1,5 +1,5 @@
 import { createResourceCargo } from './resources/ResourceCargo';
-import { StructureNavigation } from '../sim/people/StructureNavigation';
+import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNetwork';
@@ -10,7 +10,7 @@ import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
-import { FOUNDING_HEARTH_RESERVE_RADIUS, foundingHearthBurning, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
+import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
@@ -224,6 +224,7 @@ export class GodboxRenderer {
   private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
   private readonly humanNavigation = new StructureNavigation();
   private readonly humanStructureSources = new Map<string, readonly ActivityStructure[]>();
+  private humanObjectSignature = '';
   private readonly peopleVisuals = new PeopleVisualStateStore();
   /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
   private readonly humanLifeClock = new HumanLifeClock();
@@ -241,6 +242,7 @@ export class GodboxRenderer {
     safeSegment: (a, b) => this.humanNavigation.clear(a, b),
     detour: (a, b) => this.humanNavigation.detour(a, b,
       (from, to) => this.humanNavigation.clear(from, to) && this.resourceWork.safeSegment(from, to)),
+    nearestSafePoint: (point, identity) => this.nearestRenderableGround(point, identity),
   };
   private readonly personMatrix = new THREE.Matrix4();
   private readonly limbMatrix = new THREE.Matrix4();
@@ -592,15 +594,69 @@ export class GodboxRenderer {
     this.skyAtmosphere.setMistStrength(isAutumn ? 0.62 : isWinter ? 0.5 : isSpring ? 0.44 : 0.3);
   }
 
+  /**
+   * One collision authority for everything a human should visibly walk around. Buildings use their
+   * exact rendered footprints; persistent founding artifacts and extraction cores add bounded solid
+   * footprints without changing simulation authority or turning decorative clutter into physics.
+   */
+  private refreshHumanNavigation(): void {
+    const structuresChanged = this.humanStructureSources.size !== this.settlementBuildingPlacements.size
+      || [...this.settlementBuildingPlacements].some(([id, placements]) => this.humanStructureSources.get(id) !== placements);
+    const historyRunning = this.state.arrival?.phase === 'HISTORY_RUNNING';
+    const landedPods = historyRunning ? (this.state.arrival?.pods ?? []).filter(pod => pod.landed) : [];
+    const objectSignature = [
+      this.resourceWork.revision,
+      historyRunning ? 'history' : this.state.arrival?.phase ?? 'no-arrival',
+      ...landedPods.map(pod => `${pod.id}:${pod.position.x},${pod.position.z}`),
+    ].join('|');
+    if (!structuresChanged && objectSignature === this.humanObjectSignature) return;
+
+    if (structuresChanged) {
+      this.humanStructureSources.clear();
+      for (const [id, placements] of this.settlementBuildingPlacements) this.humanStructureSources.set(id, placements);
+    }
+
+    const obstacles: PedestrianFootprint[] = [...this.humanStructureSources.values()].flat().map(structure => ({
+      worldX: structure.worldX, worldZ: structure.worldZ, width: structure.width, depth: structure.depth, rotationY: structure.rotationY,
+    }));
+
+    // The arrival cinematic owns founder staging. Once history begins, the landed vessel is a
+    // persistent physical object rather than scenery people may cut through.
+    for (const pod of landedPods) obstacles.push({
+      worldX: pod.position.x,
+      worldZ: pod.position.z,
+      width: FOUNDING_VESSEL_KEEP_OUT_RADIUS * 2,
+      depth: FOUNDING_VESSEL_KEEP_OUT_RADIUS * 2,
+      rotationY: 0,
+    });
+
+    // Hearths remain deliberately small colliders: people can gather closely around the fire but
+    // cannot put their feet through the stone/fire core.
+    for (const settlement of this.state.settlements) {
+      const hearth = foundingHearthWorldPosition(settlement, this.state.arrival?.pods ?? []);
+      if (!hearth) continue;
+      obstacles.push({ worldX: hearth.x, worldZ: hearth.z, width: 0.24, depth: 0.24, rotationY: 0 });
+    }
+
+    // Extraction scenes own clear worker stations at workRadius. Only the solid centre is blocked,
+    // leaving the authored contact ring reachable while preventing miners/loggers from crossing the
+    // exposed face, standing tree, or material core.
+    for (const site of this.resourceWork.sites.values()) {
+      if (site.profile.kind === 'plant') continue;
+      const maxHalf = Math.max(0.04, site.profile.workRadius - 0.18);
+      const desiredHalf = site.tree ? Math.max(0.05, site.tree.radius) : site.profile.kind === 'mineral' ? 0.12 : 0.1;
+      const half = Math.min(desiredHalf, maxHalf);
+      obstacles.push({ worldX: site.origin.x, worldZ: site.origin.z, width: half * 2, depth: half * 2, rotationY: 0 });
+    }
+
+    this.humanNavigation.set(obstacles);
+    this.humanObjectSignature = objectSignature;
+  }
+
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
-    if (this.humanStructureSources.size !== this.settlementBuildingPlacements.size
-      || [...this.settlementBuildingPlacements].some(([id, placements]) => this.humanStructureSources.get(id) !== placements)) {
-      this.humanStructureSources.clear();
-      for (const [id, placements] of this.settlementBuildingPlacements) this.humanStructureSources.set(id, placements);
-      this.humanNavigation.set([...this.humanStructureSources.values()].flat());
-    }
+    this.refreshHumanNavigation();
     if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
       this.resourceWorkersMonth = this.state.month;
       this.resourceWorkersRevision = this.resourceWork.revision;
@@ -960,6 +1016,10 @@ export class GodboxRenderer {
     return Boolean(terrain && !terrain.water && terrain.maxSlope <= 40);
   }
 
+  private personCollisionFree(x: number, z: number): boolean {
+    return this.personStandable(x, z) && this.humanNavigation.clear({ x, z });
+  }
+
   private resolvePersonRenderPosition(person: Person): Vec2 {
     const target = this.personDisplayTarget(person, undefined);
     return { x: target.x, z: target.z };
@@ -997,9 +1057,9 @@ export class GodboxRenderer {
         position = clearActivityStructure(position, placement, fallback);
       }
     }
-    if (!this.personStandable(position.x, position.z)) {
+    if (!this.personCollisionFree(position.x, position.z)) {
       const previous = this.lastPersonGroundPosition.get(person.id);
-      position = previous && this.personStandable(previous.x, previous.z)
+      position = previous && this.personCollisionFree(previous.x, previous.z)
         ? previous : this.nearestRenderableGround(person.position, person.id);
     }
     const remembered = this.lastPersonGroundPosition.get(person.id);
@@ -1016,8 +1076,7 @@ export class GodboxRenderer {
       for (let index = 0; index < 12; index += 1) {
         const angle = phase + index / 12 * Math.PI * 2;
         const candidate = { x: origin.x + Math.cos(angle) * radius, z: origin.z + Math.sin(angle) * radius };
-        const terrain = this.terrainQueries.queryTerrainAt(candidate.x, candidate.z);
-        if (terrain && !terrain.water && terrain.maxSlope <= 40) return candidate;
+        if (this.personCollisionFree(candidate.x, candidate.z)) return candidate;
       }
     }
     return origin;
