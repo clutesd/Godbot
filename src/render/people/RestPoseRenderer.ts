@@ -94,7 +94,10 @@ export class RestPoseRenderer {
     state.blend = target > state.blend
       ? Math.min(target, state.blend + step)
       : Math.max(target, state.blend - step);
-    if (!rest && state.blend <= 0.0001) delete state.spot;
+    if (!rest && state.blend <= 0.0001) {
+      delete state.spot;
+      this.states.delete(personId);
+    }
 
     const eased = smoothstep(state.blend);
     return { ...restJointPlan(state.spot?.posture, eased), spot: state.spot };
