@@ -239,9 +239,10 @@ export class GodboxRenderer {
   private readonly personGround: PersonVisualGround = {
     heightAt: (x, z) => this.elevationAt(x, z),
     isStandable: (x, z) => this.personStandable(x, z),
-    safeSegment: (a, b) => this.humanNavigation.clear(a, b),
+    safeSegment: (a, b) => this.humanNavigation.clear(a, b) && this.vegetation.pedestrianSegmentClear(a, b),
     detour: (a, b) => this.humanNavigation.detour(a, b,
-      (from, to) => this.humanNavigation.clear(from, to) && this.resourceWork.safeSegment(from, to)),
+      (from, to) => this.humanNavigation.clear(from, to)
+        && this.vegetation.pedestrianSegmentClear(from, to) && this.resourceWork.safeSegment(from, to)),
     nearestSafePoint: (point, identity) => this.nearestRenderableGround(point, identity),
   };
   private readonly personMatrix = new THREE.Matrix4();
@@ -1017,7 +1018,9 @@ export class GodboxRenderer {
   }
 
   private personCollisionFree(x: number, z: number): boolean {
-    return this.personStandable(x, z) && this.humanNavigation.clear({ x, z });
+    const point = { x, z };
+    return this.personStandable(x, z) && this.humanNavigation.clear(point)
+      && this.vegetation.pedestrianSegmentClear(point, point);
   }
 
   private resolvePersonRenderPosition(person: Person): Vec2 {
