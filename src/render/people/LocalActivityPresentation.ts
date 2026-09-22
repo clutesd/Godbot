@@ -5,6 +5,7 @@ import { resourceVisualUnit as unit } from '../../sim/resources/ResourceWorkPres
 import { atInteraction, facingTarget } from './PhysicalActionPresentation';
 import type { GroupPlacement, SocialGroup } from './PeoplePresentation';
 import type { PersonVisualState } from './PeopleVisualState';
+import { planRestSpot, type RestSpotPresentation, type RestSupportFootprint } from './RestPresentation';
 
 /**
  * The single renderer-owned micro-life projection.
@@ -22,8 +23,7 @@ const LOCAL_ACTIVITY_BASE_FOLLOW_THRESHOLD = 0.24;
 /** After following a meaningful shift, leave this much slack before following again. */
 const LOCAL_ACTIVITY_BASE_RELEASE_RADIUS = 0.1;
 const LOCAL_ACTIVITY_REANCHOR_LIMIT = 0.9;
-export interface ActivityStructure {
-  key: string; worldX: number; worldZ: number; width: number; depth: number; rotationY: number;
+export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
 }
 export interface LocalActivityContext {
@@ -145,6 +145,8 @@ export interface LocalActivityState {
   stationFocus: Vec2;
   structure?: ActivityStructure;
   destination: Vec2;
+  /** Physical support slot reserved for an active home-rest beat. */
+  rest?: RestSpotPresentation;
   restFacing: number;
   animation: AnimationState;
   action: string;
@@ -173,7 +175,9 @@ export class LocalActivityPresentation {
   beginFrame(): void {
     this.frame++; this.previousStates.clear();
     for (const [id, state] of this.states) this.previousStates.set(id, { ...state,
-      destination: { ...state.destination }, encounter: state.encounter ? { ...state.encounter } : undefined });
+      destination: { ...state.destination },
+      rest: state.rest ? { ...state.rest, destination: { ...state.rest.destination } } : undefined,
+      encounter: state.encounter ? { ...state.encounter } : undefined });
   }
   prune(): void { for (const [id, state] of this.states) if (state.seen !== this.frame) this.states.delete(id); }
   clear(): void { this.states.clear(); }
@@ -249,7 +253,7 @@ export class LocalActivityPresentation {
     // Personal space is a live constraint, not only a target-selection check. If an uninvolved
     // resident drifts into this destination after it was chosen, step to another valid frontage
     // point rather than waiting on a future routine transition to resolve the overlap.
-    if (!hasPeerClearance(person, state.destination, context, state.partnerId, 0.34)) {
+    if (!state.rest && !hasPeerClearance(person, state.destination, context, state.partnerId, 0.34)) {
       const preferred = Math.abs(state.step + state.cycle + 1) % Math.max(1, state.points.length);
       const adjusted = clearLocalPoint(person, context, state, preferred, true, state.partnerId);
       if (Math.hypot(adjusted.x - state.destination.x, adjusted.z - state.destination.z) > 0.01) {
@@ -264,6 +268,7 @@ export class LocalActivityPresentation {
         const invitation = this.previousStates.get(id);
         const peer = context.people.get(id);
         if (!peer || invitation?.encounter?.partnerId !== person.id || !canInteract(person, peer)) continue;
+        delete state.rest;
         state.encounter = buildSocialEncounter(person, peer, context.relationshipFor?.(person.id, peer.id));
         state.encounter.beat = invitation.encounter.beat;
         state.partnerId = peer.id; state.seconds = 0;
@@ -437,6 +442,7 @@ export class LocalActivityPresentation {
     state.hold = seconds * (0.8 + variation * 0.7) * (context.far ? 1.5 : 1);
     state.partnerId = undefined;
     state.encounter = undefined;
+    delete state.rest;
     state.animation = 'idle';
     state.action = action;
     const pointOffset = step === 'reposition'
@@ -458,7 +464,33 @@ export class LocalActivityPresentation {
       }
     }
     if (step === 'task' || step === 'return') {
-      if (kind === 'home' && person.activity === 'rest') { state.animation = 'rest'; state.action = 'rest'; }
+      if (kind === 'home' && person.activity === 'rest') {
+        const from = context.visual ? { x: context.visual.x, z: context.visual.z } : state.destination;
+        const rest = planRestSpot({
+          personId: person.id,
+          base: state.base,
+          from,
+          group: context.group,
+          structure: state.structure,
+          restingIds: context.group?.members.filter(id => context.people.get(id)?.activity === 'rest'),
+          safePoint: candidate => bounded(person, candidate)
+            && localSegmentSafe(candidate, candidate, context)
+            && hasPeerClearance(person, candidate, context, undefined, 0.3),
+          safeSegment: (a, b) => localSegmentSafe(a, b, context),
+        });
+        if (rest) {
+          state.rest = rest;
+          state.animation = 'rest';
+          state.action = 'rest';
+          state.destination = { ...rest.destination };
+          state.restFacing = rest.facing;
+          state.focus.x = rest.destination.x + Math.sin(rest.facing) * 0.5;
+          state.focus.z = rest.destination.z + Math.cos(rest.facing) * 0.5;
+          return;
+        }
+        state.animation = 'idle';
+        state.action = 'wait-for-rest-place';
+      }
       else if (kind === 'shrine' && person.activity === 'worship') { state.animation = 'ritual'; state.action = 'ritual'; }
       else if (state.structure && ['craft', 'study', 'assist'].includes(person.activity)) {
         state.animation = 'work'; state.action = person.activity === 'study' ? 'study'
