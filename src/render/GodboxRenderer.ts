@@ -10,7 +10,7 @@ import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
-import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
+import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
@@ -2971,7 +2971,7 @@ export class GodboxRenderer {
       // A landing reserves this ground for a future communal hearth, but does not visually invent
       // one. The ash bed and stone ring become visible only after the authoritative first-fire
       // milestone has been recorded.
-      if (foundingHearth && !settlement.survival?.firstFire) return entries;
+      if (!foundingHearthEstablished(settlement)) return entries;
 
       const hearthOffset = foundingOffset ?? { x: 0, z: 0 };
       const worldX = settlement.position.x + hearthOffset.x;
