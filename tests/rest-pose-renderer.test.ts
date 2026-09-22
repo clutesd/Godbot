@@ -89,6 +89,11 @@ describe('articulated rest pose', () => {
   it('keeps the rest animation quiet while preserving readable seated posture values', () => {
     const controller = new AnimationController('rest-test');
     controller.getOrCreateCharacterState('resident', 'elder');
+    // The first frames deliberately interpolate from standing; validate the settled rest language.
+    for (let frame = 0; frame < 60; frame++) {
+      controller.updateCharacterAnimation('resident', 1 / 60, 'rest', 'rest', 0, 840);
+      controller.getCurrentPose('resident');
+    }
     const head: number[] = [];
     for (let frame = 0; frame < 20 * 60; frame++) {
       controller.updateCharacterAnimation('resident', 1 / 60, 'rest', 'rest', 0, 840);
