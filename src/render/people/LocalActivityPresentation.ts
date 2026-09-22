@@ -33,6 +33,12 @@ const SOCIAL_AWARENESS_COOLDOWN_MIN_SECONDS = 7;
 const SOCIAL_AWARENESS_COOLDOWN_MAX_SECONDS = 16;
 const SOCIAL_AWARENESS_MAX_HEAD_YAW = 0.62;
 const SOCIAL_AWARENESS_MAX_TORSO_YAW = 0.15;
+const RECENT_SOCIAL_ENCOUNTER_SECONDS = 16;
+const RECENT_SOCIAL_POD_SECONDS = 10;
+const RECENT_SOCIAL_PLAY_SECONDS = 12;
+const RECENT_SOCIAL_PASSING_SECONDS = 5;
+const MUTUAL_YIELD_RADIUS = 0.95;
+const MUTUAL_YIELD_SECONDS = 0.58;
 export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
 }
@@ -211,6 +217,20 @@ export interface LocalActivityState {
   /** Shared child-game presentation state. Never mutates simulation activity or relationships. */
   playGame?: 'parallel' | 'tag' | 'circle' | 'follow';
   playRole?: 'solo' | 'runner' | 'chaser' | 'leader' | 'follower' | 'orbit';
+  /** Short presentation-side continuity: who mattered in the immediately preceding social moment. */
+  recentSocialId?: string;
+  recentSocialKind?: 'encounter' | 'pod' | 'play' | 'passing';
+  recentSocialUntil?: number;
+  /** One-way anticipation overlay used to yield before paths collide; never changes simulation authority. */
+  yieldToId?: string;
+  yieldUntil?: number;
+  yieldResume?: {
+    destination: Vec2;
+    restFacing: number;
+    action: string;
+    animation: AnimationState;
+    hold: number;
+  };
 }
 
 export class LocalActivityPresentation {
@@ -285,6 +305,9 @@ export class LocalActivityPresentation {
         state.step = sampledEntryStep(person, state.sample) - 1;
         state.hold = 0;
         state.lastPartnerId = previous.lastPartnerId ?? previous.partnerId;
+        state.recentSocialId = previous.recentSocialId ?? previous.partnerId;
+        state.recentSocialKind = previous.recentSocialKind ?? (previous.partnerId ? 'encounter' : undefined);
+        state.recentSocialUntil = previous.recentSocialUntil;
       }
       // A newly placed obstacle can invalidate a formerly safe return corridor. Stop on this
       // side of it; never blindly cut across the new building to resume the old base position.
@@ -304,6 +327,8 @@ export class LocalActivityPresentation {
     state.sceneSeconds = (state.sceneSeconds ?? 0) + Math.max(0, delta);
     state.socialCooldown = Math.max(0, (state.socialCooldown ?? 0) - delta);
     state.attentionCooldown = Math.max(0, (state.attentionCooldown ?? 0) - delta);
+    if ((state.recentSocialUntil ?? 0) <= this.presentationSeconds) clearRecentSocial(state);
+    updateMutualYield(person, context, state, context.visual, this.presentationSeconds, this.previousStates);
     // Personal space is a live constraint, not only a target-selection check. If an uninvolved
     // resident drifts into this destination after it was chosen, step to another valid frontage
     // point rather than waiting on a future routine transition to resolve the overlap.
