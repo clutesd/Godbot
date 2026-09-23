@@ -35,6 +35,35 @@ describe('cinematic motion', () => {
     expect(changed).toBe(true);
   });
 
+
+  it('keeps exact Arrival camera probing out of the display-frequency hot path', () => {
+    const sim = new Simulation({ seed: 'arrival-camera-budget', startMode: 'arrival', world: { size: 20 } });
+    const historian = new Historian(sim.config);
+    const camera = new PerspectiveCamera();
+    let probes = 0;
+    const director = new CameraDirector(
+      camera,
+      sim.config,
+      historian,
+      undefined,
+      undefined,
+      () => { probes += 1; return 0; },
+    );
+    const arrival = sim.state.arrival;
+    if (!arrival) throw new Error('Expected Arrival state');
+    arrival.phase = 'ARRIVAL_SEQUENCE';
+
+    for (let frame = 0; frame < 120; frame++) {
+      arrival.elapsedSeconds = 20 + frame / 60;
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+    }
+
+    // A 60 Hz full silhouette/corridor survey would produce tens of thousands more probes.
+    // The exact survey should run at ~4 Hz, with only one lens-volume probe on ordinary frames.
+    expect(probes).toBeGreaterThan(120);
+    expect(probes).toBeLessThan(15000);
+  });
+
   it('settles identically at 30, 60 and 144 Hz without overshooting', () => {
     const results = [30, 60, 144].map(fps => {
       const position = new Vector3(), velocity = new Vector3(), target = new Vector3(10, 5, -8);
