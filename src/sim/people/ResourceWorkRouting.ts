@@ -1,4 +1,4 @@
-import type { DestinationKind, Occupation, Person, SimulationState, Vec2 } from '../types';
+import type { DestinationKind, Person, SimulationState, Vec2 } from '../types';
 import {
   resourceWorkAssignments,
   resourceWorkRevision,
