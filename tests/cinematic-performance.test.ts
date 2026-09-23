@@ -37,7 +37,7 @@ describe('cinematic motion', () => {
 
 
   it('keeps exact Arrival camera probing out of the display-frequency hot path', () => {
-    const sim = new Simulation({ seed: 'arrival-camera-budget', startMode: 'arrival', world: { size: 20 } });
+    const sim = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     const historian = new Historian(sim.config);
     const camera = new PerspectiveCamera();
     let probes = 0;
