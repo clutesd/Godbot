@@ -827,7 +827,12 @@ export class CameraDirector {
       delete this.observation.sceneId;
       return;
     }
-    this.arrivalAnchorId = undefined;
+    if (this.arrivalAnchorId !== undefined) {
+      this.arrivalAnchorId = undefined;
+      this.recoveryOffset = undefined;
+      this.visibility.reset();
+      this.safetyInitialized = false;
+    }
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
     const mayInterrupt = this.shotAge >= Math.max(this.currentScene?.id.startsWith('human:') ? 12 : 6, this.config.camera.transitionSeconds * 1.1);
