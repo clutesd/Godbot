@@ -181,6 +181,14 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     baseEfficiency: 0.55, failureRisk: 0.22,
   },
   {
+    id: 'pottery-vessels', name: 'Fired pottery vessels',
+    description: 'Shaping, drying, and firing clay into durable household, storage, and ceremonial vessels.',
+    requiredKnowledge: [{ id: 'pottery-firing', minPractice: 0.18 }],
+    inputs: { clay: 2, timber: 0.6 }, outputs: { pottery: 1.6 },
+    craftOccupations: ['artisan'], baseEfficiency: 0.68, failureRisk: 0.18,
+    labour: 0.65, researchWork: 1.2, unlocks: ['pottery-yard'],
+  },
+  {
     id: 'timber-framing', name: 'Timber framing', description: 'Seasoned and joined structural timber.',
     requiredKnowledge: [{ id: 'stone-composites', minPractice: 0.18 }], inputs: { timber: 3 }, outputs: { 'timber-frame': 2 },
     craftOccupations: ['builder'], baseEfficiency: 0.8, failureRisk: 0.05, labour: 0.8, researchWork: 1.5, unlocks: ['carpentry'],
@@ -198,9 +206,12 @@ export const RECIPE_BY_ID = new Map(RECIPE_CATALOG.map((definition) => [definiti
 export interface MaterialDefinition { id: string; name: string; spoilage: number; fuelHeat?: number }
 export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
   ...RESOURCE_CATALOG.map(r => ({ id: r.id, name: r.name, spoilage: r.category === 'plant' ? 0.015 : 0, fuelHeat: r.id === 'timber' ? 0.35 : undefined })),
+  // Clay is still supplied by the supplemental legacy deposit pass, but generic recipes may consume it.
+  { id: 'clay', name: 'Clay', spoilage: 0 },
   { id: 'charcoal', name: 'Charcoal', spoilage: 0, fuelHeat: 0.8 },
   { id: 'herbal-remedy', name: 'Herbal remedies', spoilage: 0.01 },
   { id: 'bronze', name: 'Bronze', spoilage: 0 }, { id: 'iron-tools', name: 'Forged iron', spoilage: 0 },
+  { id: 'pottery', name: 'Fired pottery', spoilage: 0.004 },
   { id: 'timber-frame', name: 'Timber frames', spoilage: 0 }, { id: 'dressed-stone', name: 'Dressed stone', spoilage: 0 },
   { id: 'ash', name: 'Wood ash', spoilage: 0.05 }, { id: 'slag', name: 'Slag', spoilage: 0.02 },
 ];

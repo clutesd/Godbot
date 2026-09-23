@@ -237,6 +237,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
       sponsor = institution(c, 'craft-circle'); form = 'workshop'; names = ['craft workshop', 'specialist workshop', 'powered manufactory'];
       if (s.knownRecipes.includes('iron-tools') && ((s.localMaterials['iron-ore'] ?? 0) > 0 || (s.localMaterials['iron-tools'] ?? 0) > 0)) names[0] = 'iron furnace and smithy';
       else if (s.knownRecipes.includes('bronze-ingot') && (s.localMaterials.bronze ?? 0) > 0) names[0] = 'bronze foundry';
+      else if (s.knownRecipes.includes('pottery-vessels') && ((s.localMaterials.pottery ?? 0) > 0 || (s.localMaterials.clay ?? 0) > 0)) names[0] = 'pottery workshop and kiln';
       else if (s.knownRecipes.includes('timber-framing') && s.resources.wood > 6) names[0] = 'carpenter workshop';
       if (sponsor && knows('precision-tools')) maxLevel = 2;
       if (maxLevel === 2 && knows('mechanical-power', 0.45) && knows('precision-manufacturing', 0.4) && c.artisans >= 8 && s.resources.wood > 12 && Math.max(s.infrastructure.roads, s.infrastructure.ports) > 0.2) maxLevel = 3;
