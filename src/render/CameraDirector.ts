@@ -757,6 +757,9 @@ export class CameraDirector {
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
   private arrivalActive = false;
+  private arrivalSafetySeconds = 0;
+  private arrivalSafetyInitialized = false;
+  private readonly arrivalSafetyOffset = new THREE.Vector3();
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -786,19 +789,42 @@ export class CameraDirector {
         target.z + Math.sin(azimuth) * focus.radius,
       );
       const before = this.camera.position.clone();
-      const safety = resolveCameraSafety(state, authored, this.desiredTarget, elevationAt, {
-        lensClearance: 0.72,
-        sightlineClearance: 0.22,
-        previousPosition: before,
-        environmentProbe: this.environmentProbe,
-      });
-      this.desiredPosition.copy(safety.position);
+
+      // Exact forest/silhouette safety is intentionally a low-frequency survey during Arrival.
+      // The world is nearly static here while the authored target moves every frame; running the
+      // full 9-ray corridor search at display frequency turns camera safety into the frame budget.
+      // Cache only the correction from the authored pose, then let the spring interpolate smoothly.
+      this.arrivalSafetySeconds -= deltaSeconds;
+      if (!this.arrivalSafetyInitialized || this.arrivalSafetySeconds <= 0) {
+        const safety = resolveCameraSafety(state, authored, this.desiredTarget, elevationAt, {
+          lensClearance: 0.72,
+          sightlineClearance: 0.22,
+          // Do not ask the survey to validate a long swept route. The real lens advances only a
+          // small spring step each frame and is guarded below against entering rendered geometry.
+          environmentProbe: this.environmentProbe,
+        });
+        if (safety.valid) {
+          this.arrivalSafetyOffset.copy(safety.position).sub(authored);
+          this.arrivalSafetyInitialized = true;
+        }
+        this.arrivalSafetySeconds = 0.25;
+      }
+      this.desiredPosition.copy(authored).add(this.arrivalSafetyOffset);
 
       advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, focus.transitionSeconds);
       advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, focus.transitionSeconds / 1.14);
       this.arrivalActive = true;
 
-      this.enforceVisibility(before, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 }, true);
+      // Per-frame Arrival safety is deliberately cheap: one exact lens-volume probe plus terrain
+      // clearance. If the next spring step would enter geometry, reject that step and force an
+      // immediate full survey on the next frame instead of performing thousands of ray probes now.
+      const lensBlocked = cameraLensObstruction(state, this.camera.position, elevationAt, 0.12, this.environmentProbe) > 0.001;
+      const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + 0.72;
+      if (lensBlocked || this.camera.position.y < lensFloor) {
+        this.camera.position.copy(before);
+        this.positionVelocity.multiplyScalar(0.2);
+        this.arrivalSafetySeconds = 0;
+      }
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
         : focus.beat === 'handoff' ? 'Arrival Day'
@@ -814,6 +840,9 @@ export class CameraDirector {
       // Preserve the final wide-shot pose as the starting point for the Historian handoff. Reset
       // transient recovery state, but do not mark the camera unsafe or force a first-frame snap.
       this.arrivalActive = false;
+      this.arrivalSafetySeconds = 0;
+      this.arrivalSafetyInitialized = false;
+      this.arrivalSafetyOffset.set(0, 0, 0);
       this.recoveryOffset = undefined;
       this.visibility.reset();
       this.safetyInitialized = true;
