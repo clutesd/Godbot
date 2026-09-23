@@ -924,12 +924,24 @@ function emitRoof(
   if (grammar.roofFamily === 'lean-slope') {
     const front = wallTop;
     const back = wallTop + grammar.depth * grammar.roofPitch;
-    roof.addBeam(
-      { x: 0, y: front, z: halfDepth * (1 + grammar.eaveOverhang) },
-      { x: 0, y: back, z: -halfDepth * (1 + grammar.eaveOverhang) },
-      grammar.width * (1 + grammar.eaveOverhang),
-      0.03,
-    );
+    const frontZ = halfDepth * (1 + grammar.eaveOverhang);
+    const backZ = -halfDepth * (1 + grammar.eaveOverhang);
+    const courses = 4;
+    for (let index = 0; index < courses; index += 1) {
+      const v0 = Math.max(0, index / courses - 0.035);
+      const v1 = Math.min(1, (index + 1) / courses + 0.055);
+      roof.addBeam(
+        { x: 0, y: THREE.MathUtils.lerp(front, back, v0), z: THREE.MathUtils.lerp(frontZ, backZ, v0) },
+        { x: 0, y: THREE.MathUtils.lerp(front, back, v1), z: THREE.MathUtils.lerp(frontZ, backZ, v1) },
+        grammar.width * (1 + grammar.eaveOverhang),
+        0.018 + index * 0.0015,
+      );
+      if (index < courses - 1) {
+        const v = (index + 1) / courses;
+        timber?.addBox(0, THREE.MathUtils.lerp(front, back, v) + 0.008, THREE.MathUtils.lerp(frontZ, backZ, v),
+          grammar.width * (1 + grammar.eaveOverhang * 0.72), grammar.postThickness * 0.34, grammar.postThickness * 0.42);
+      }
+    }
     return back;
   }
 
