@@ -791,28 +791,31 @@ export class CameraDirector {
         target.z + Math.sin(azimuth) * framing.radius,
       );
       const before = this.camera.position.clone();
+      const changedAnchor = this.arrivalAnchorId !== focus.anchorId;
+      const shouldCut = changedAnchor && this.arrivalAnchorId !== undefined;
       const safety = resolveCameraSafety(state, authored, this.desiredTarget, elevationAt, {
         lensClearance: 0.72,
         sightlineClearance: 0.22,
-        previousPosition: before,
+        previousPosition: shouldCut ? undefined : before,
         environmentProbe: this.environmentProbe,
       });
       this.desiredPosition.copy(safety.position);
 
-      const changedAnchor = this.arrivalAnchorId !== focus.anchorId;
-      if (changedAnchor && this.arrivalAnchorId !== undefined) {
+      let visibilityStart = before;
+      if (shouldCut) {
         // Editorial cuts are preferable to dragging the lens across the whole world between landings.
         this.camera.position.copy(this.desiredPosition);
         this.lookTarget.copy(this.desiredTarget);
         this.positionVelocity.set(0, 0, 0);
         this.targetVelocity.set(0, 0, 0);
+        visibilityStart = this.camera.position.clone();
       } else {
         advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, framing.transition);
         advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, framing.transition / 1.18);
       }
       this.arrivalAnchorId = focus.anchorId;
 
-      this.enforceVisibility(before, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 });
+      this.enforceVisibility(visibilityStart, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 });
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
         : focus.beat === 'handoff' ? 'Arrival Day'
