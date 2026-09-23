@@ -202,7 +202,7 @@ describe('unified camera safety authority', () => {
 
 describe('Arrival camera frame budget', () => {
   it('does not run exact forest/silhouette surveys at display frequency', () => {
-    const simulation = new Simulation({ seed: 'arrival-camera-budget', startMode: 'arrival', world: { size: 20 } });
+    const simulation = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     const historian = new Historian(simulation.config);
     const camera = new THREE.PerspectiveCamera();
     let probes = 0;
