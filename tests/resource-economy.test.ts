@@ -149,6 +149,22 @@ describe('Ecology and research', () => {
 });
 
 describe('Blueprints, production and consequences', () => {
+  it('turns physical clay into a learned, renewable pottery craft stock', () => {
+    const { state, s } = fixture();
+    learn(s, 'pottery-firing');
+    addMaterial(s, 'clay', 24, 0.72);
+    addMaterial(s, 'timber', 18, 0.6);
+    expect(recipeRequirementsMet(s, RECIPE_BY_ID.get('pottery-vessels')!, state)).toBe(true);
+    for (let month = 1; month <= 8; month++) {
+      state.month = month;
+      processRecipes(state, s, { artisan: 4 }, new SeededRandom(`pottery:${month}`));
+    }
+    expect(s.knownRecipes).toContain('pottery-vessels');
+    expect(s.localMaterials.pottery ?? 0).toBeGreaterThan(0);
+    expect(s.localMaterials.clay ?? 0).toBeLessThan(24);
+    expect(materialEconomy(s).quality.pottery).toBeGreaterThan(0);
+  });
+
   it('supports institution and industry requirements for later specialized recipes', () => {
     const { state, s } = fixture(); learn(s, 'metal-smelting'); s.infrastructure.workshops = 0.8;
     const blueprint = { ...RECIPE_BY_ID.get('bronze-ingot')!, minIndustrialIntensity: 0.8, requiredInstitutions: ['knowledge-keepers' as const] };
