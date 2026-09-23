@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cameraClearanceFor, cameraFramingFor, cameraLensObstruction, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, resolveCameraSafety, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { CameraDirector, cameraClearanceFor, cameraFramingFor, cameraLensObstruction, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, resolveCameraSafety, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
+import { Historian } from '../src/historian/Historian';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
 
 describe('forest-aware camera sightline scoring', () => {
@@ -196,6 +197,34 @@ describe('unified camera safety authority', () => {
 
     expect(resolved.position.z).toBeLessThan(0);
     expect(resolved.lensObstruction).toBe(0);
+  });
+});
+
+describe('Arrival camera frame budget', () => {
+  it('does not run exact forest/silhouette surveys at display frequency', () => {
+    const simulation = new Simulation({ seed: 'arrival-camera-budget', startMode: 'arrival', world: { size: 20 } });
+    const historian = new Historian(simulation.config);
+    const camera = new THREE.PerspectiveCamera();
+    let probes = 0;
+    const director = new CameraDirector(
+      camera,
+      simulation.config,
+      historian,
+      undefined,
+      undefined,
+      () => { probes += 1; return 0; },
+    );
+    const arrival = simulation.state.arrival;
+    if (!arrival) throw new Error('Expected Arrival state');
+    arrival.phase = 'ARRIVAL_SEQUENCE';
+
+    for (let frame = 0; frame < 120; frame++) {
+      arrival.elapsedSeconds = 20 + frame / 60;
+      director.update(1 / 60, frame / 60, simulation.state, () => 0);
+    }
+
+    expect(probes).toBeGreaterThan(120);
+    expect(probes).toBeLessThan(15000);
   });
 });
 
