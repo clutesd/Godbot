@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
 import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthEstablished, foundingHearthOffset, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../src/shared/FoundingCampLayout';
-import { arrivalCameraPose, arrivalCaption, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
+import { arrivalCaption, arrivalSequenceFocus, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
 describe('Arrival presentation contracts', () => {
@@ -36,17 +36,13 @@ describe('Arrival presentation contracts', () => {
       text: 'Five communities begin.',
     });
     expect(foundingArrivalDialogue('founding:community:2:pod-3', 'Riverhold · THIRD VESSEL', 'Riverhold began here.')).toEqual({
-      eyebrow: 'ARRIVAL DAY · FOUNDING COMMUNITY',
+      eyebrow: 'ARRIVAL DAY · CONTRAST',
       title: 'Riverhold · THIRD VESSEL',
       text: 'Riverhold began here.',
     });
-    expect(foundingArrivalDialogue('founding-cast:framing:event-1', 'A FEW LIVES', 'We will follow only a few.')).toEqual({
-      eyebrow: 'ARRIVAL DAY · A FEW LIVES',
-      title: 'A FEW LIVES',
-      text: 'We will follow only a few.',
-    });
+    expect(foundingArrivalDialogue('founding-cast:framing:event-1', 'A FEW LIVES', 'We will follow only a few.')).toBeUndefined();
     expect(foundingArrivalDialogue('founding-cast:introduction:0:person-1', 'Mara · Seed', '23 on Arrival Day.')).toEqual({
-      eyebrow: 'ARRIVAL DAY · ONE OF THE FOUNDERS',
+      eyebrow: 'ARRIVAL DAY · A FOUNDER',
       title: 'Mara · Seed',
       text: '23 on Arrival Day.',
     });
@@ -107,7 +103,7 @@ describe('Arrival presentation contracts', () => {
     if (settlement) expect(foundingHearthWorldPosition(settlement, s.state.arrival!.pods)).toBeDefined();
   });
 
-  it('brakes into authoritative ground and keeps camera/caption values finite', () => {
+  it('brakes into authoritative ground and keeps focus/caption values finite', () => {
     const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     for (const pod of s.state.arrival!.pods) {
       const finish = podTouchdown(pod);
@@ -119,8 +115,9 @@ describe('Arrival presentation contracts', () => {
     expect(new Set(s.state.arrival!.pods.map(p => p.entrySeconds)).size).toBe(5);
     for (let second = 0; second <= 46; second++) {
       s.state.arrival!.elapsedSeconds = second;
-      const pose = arrivalCameraPose(s.state.arrival!);
-      expect([...pose.position.toArray(), ...pose.target.toArray()].every(Number.isFinite)).toBe(true);
+      const focus = arrivalSequenceFocus(s.state.arrival!);
+      expect([focus.target.x, focus.target.y, focus.target.z].every(Number.isFinite)).toBe(true);
+      expect(['pristine', 'descent', 'touchdown', 'handoff']).toContain(focus.beat);
       const caption = arrivalCaption(second);
       expect(caption.opacity).toBeGreaterThanOrEqual(0);
       expect(caption.opacity).toBeLessThanOrEqual(1);
