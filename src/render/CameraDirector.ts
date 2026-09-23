@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { advanceCameraSpring } from './CameraSpring';
 import { arrivalCameraPose } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
@@ -55,9 +56,14 @@ export interface CameraSafetyOptions {
   readonly sightlineClearance?: number;
   readonly previousPosition?: THREE.Vector3;
   readonly environmentProbe?: CameraEnvironmentProbe;
+  readonly subjects?: readonly THREE.Vector3[];
 }
 
 export interface CameraSafetyResolution {
+  readonly valid: boolean;
+  readonly requiresCut: boolean;
+  readonly subjectVisibility: number;
+  readonly pathSafety: number;
   readonly position: THREE.Vector3;
   readonly lensObstruction: number;
   readonly forestObstruction: number;
@@ -429,7 +435,7 @@ export function foundingVesselSightlineObstruction(
 }
 
 /**
- * Hard lens occupancy check. Unlike a sightline score, this answers the more important question:
+ * Hard lens occupancy check, independent of the equally necessary subject visibility check:
  * "is the viewer physically inside something right now?"
  */
 export function cameraLensObstruction(
@@ -487,88 +493,153 @@ export function cameraLensObstruction(
   return obstruction;
 }
 
-/**
- * Single final authority for a camera destination. It searches small nearby compositions first,
- * heavily penalises physical lens collisions, and biases toward the previously safe side so a shot
- * cannot oscillate between two equally plausible viewpoints.
+/** Nine rays cover the subject silhouette; one empty gap cannot make a crown readable.
+ * Probe spacing plus padding covers the segment between samples, including short foreground rays.
+ * Renderer placements take precedence over the coarse forest-cell fallback.
  */
-export function resolveCameraSafety(
-  state: SimulationState,
-  authoredPosition: THREE.Vector3,
-  target: THREE.Vector3,
-  elevationAt: (x: number, z: number) => number,
-  options: CameraSafetyOptions = {},
-): CameraSafetyResolution {
-  const lensClearance = options.lensClearance ?? 0.72;
-  const sightlineClearance = options.sightlineClearance ?? 0.22;
-  const radius = Math.max(0.55, Math.hypot(authoredPosition.x - target.x, authoredPosition.z - target.z));
-  const baseAzimuth = Math.atan2(authoredPosition.z - target.z, authoredPosition.x - target.x);
-  const compact = radius < 8;
-  const offsets = compact
-    ? [0, Math.PI / 18, -Math.PI / 18, Math.PI / 9, -Math.PI / 9, Math.PI / 6, -Math.PI / 6, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, Math.PI]
-    : [0, Math.PI / 24, -Math.PI / 24, Math.PI / 12, -Math.PI / 12, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI];
-  const lifts = compact ? [0, 0.28, 0.58, 1.05, 1.8, 2.8] : [0, 0.8, 1.7, 3.2, 5.4, 8];
-  const previousAzimuth = options.previousPosition
-    ? Math.atan2(options.previousPosition.z - target.z, options.previousPosition.x - target.x)
-    : undefined;
+export function cameraSubjectVisibility(
+  state: SimulationState, from: THREE.Vector3, target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number, probe?: CameraEnvironmentProbe,
+  halfWidth = 0.16,
+): number {
+  if (!probe) return 1 - clamp01(forestSightlineObstruction(state.world, from, target, elevationAt));
+  const right = new THREE.Vector3(target.z - from.z, 0, from.x - target.x).normalize();
+  const end = new THREE.Vector3(), point = new THREE.Vector3();
+  let visible = 0;
+  for (const horizontal of [-1, 0, 1]) for (const vertical of [-1, 0, 1]) {
+    end.copy(target).addScaledVector(right, horizontal * halfWidth);
+    end.y += vertical * halfWidth * 0.65;
+    const distance = from.distanceTo(end);
+    const steps = Math.max(2, Math.ceil(distance / 0.24));
+    let blocked = false;
+    for (let i = 1; i < steps; i++) {
+      point.lerpVectors(from, end, i / steps);
+      if (probe(point, 0.12) > 0.001) { blocked = true; break; }
+    }
+    if (!blocked) visible++;
+  }
+  return visible / 9;
+}
 
-  let best: CameraSafetyResolution | undefined;
-  let bestScore = Number.POSITIVE_INFINITY;
+export interface CameraShotValidity {
+  readonly lensSafety: number;
+  readonly subjectVisibility: number;
+  readonly structureVisibility: number;
+  readonly terrainClearance: number;
+  readonly compositionQuality: number;
+  readonly score: number;
+  readonly valid: boolean;
+}
 
-  for (const lift of lifts) {
-    for (const offset of offsets) {
-      const angle = baseAzimuth + offset;
-      const x = target.x + Math.cos(angle) * radius;
-      const z = target.z + Math.sin(angle) * radius;
-      const position = new THREE.Vector3(
-        x,
-        Math.max(authoredPosition.y + lift, elevationAt(x, z) + lensClearance),
-        z,
-      );
-
-      const lensObstruction = cameraLensObstruction(
-        state, position, elevationAt, Math.max(0.1, lensClearance * 0.32), options.environmentProbe,
-      );
-      const forestObstruction = forestSightlineObstruction(state.world, position, target, elevationAt);
-      const structureObstruction = structureSightlineObstruction(state, position, target, elevationAt);
-      const vesselObstruction = foundingVesselSightlineObstruction(state, position, target, sightlineClearance * 0.45);
-      const actualLift = Math.max(0, position.y - authoredPosition.y);
-      const continuityPenalty = previousAzimuth === undefined ? 0 : angularDistance(angle, previousAzimuth) * 0.34;
-      const compositionPenalty = Math.abs(offset) * (compact ? 0.065 : 0.045);
-      const liftPenalty = actualLift * (compact ? 0.055 : 0.022);
-
-      const score = lensObstruction * 45
-        + structureObstruction * 11
-        + vesselObstruction * 14
-        + forestObstruction * 2.35
-        + continuityPenalty
-        + compositionPenalty
-        + liftPenalty;
-
-      if (score < bestScore) {
-        bestScore = score;
-        best = {
-          position,
-          lensObstruction,
-          forestObstruction,
-          structureObstruction,
-          vesselObstruction,
-          angularCorrection: offset,
-          lift: actualLift,
-        };
-      }
+export function cameraShotValidity(
+  state: SimulationState, position: THREE.Vector3, target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number, options: CameraSafetyOptions = {},
+): CameraShotValidity {
+  const lensSafety = cameraLensObstruction(state, position, elevationAt, 0.12, options.environmentProbe) <= 0.001 ? 1 : 0;
+  const subjects = options.subjects?.length ? options.subjects : [target];
+  const width = options.subjects?.length ? 0.12 : Math.min(1.2, Math.max(0.16, position.distanceTo(target) * 0.035));
+  let subjectVisibility = 1, structureVisibility = 1, terrainClearance = 1;
+  for (const subject of subjects) {
+    subjectVisibility = Math.min(subjectVisibility, cameraSubjectVisibility(state, position, subject, elevationAt, options.environmentProbe, width));
+    structureVisibility = Math.min(structureVisibility, 1 - clamp01(
+      structureSightlineObstruction(state, position, subject, elevationAt)
+      + foundingVesselSightlineObstruction(state, position, subject)));
+    const steps = Math.max(2, Math.ceil(position.distanceTo(subject) / 0.5));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      if (THREE.MathUtils.lerp(position.y, subject.y, t) < elevationAt(
+        THREE.MathUtils.lerp(position.x, subject.x, t), THREE.MathUtils.lerp(position.z, subject.z, t)) + 0.03) terrainClearance = 0;
     }
   }
+  if (position.y < elevationAt(position.x, position.z) + (options.lensClearance ?? 0.42) - 0.001) terrainClearance = 0;
+  const compositionQuality = 1 - clamp01(Math.max(0, position.y - target.y) / Math.max(1, position.distanceTo(target))) * 0.35;
+  const score = Math.min(lensSafety, subjectVisibility, structureVisibility, terrainClearance) * compositionQuality;
+  return { lensSafety, subjectVisibility, structureVisibility, terrainClearance, compositionQuality, score,
+    valid: lensSafety === 1 && subjectVisibility >= 0.67 && structureVisibility >= 0.65 && terrainClearance === 1 };
+}
 
-  return best ?? {
-    position: authoredPosition.clone(),
-    lensObstruction: cameraLensObstruction(state, authoredPosition, elevationAt, lensClearance * 0.32, options.environmentProbe),
-    forestObstruction: forestSightlineObstruction(state.world, authoredPosition, target, elevationAt),
-    structureObstruction: structureSightlineObstruction(state, authoredPosition, target, elevationAt),
-    vesselObstruction: foundingVesselSightlineObstruction(state, authoredPosition, target, sightlineClearance * 0.45),
-    angularCorrection: 0,
-    lift: 0,
+/** Validate the swept lens AND subject sightlines along the actual proposed translation. */
+export function cameraVisibilityCorridor(
+  state: SimulationState, from: THREE.Vector3, to: THREE.Vector3, target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number, options: CameraSafetyOptions = {},
+): boolean {
+  const steps = Math.max(1, Math.ceil(from.distanceTo(to) / 0.24));
+  const point = new THREE.Vector3();
+  for (let i = 0; i <= steps; i++) {
+    point.lerpVectors(from, to, i / steps);
+    if (!cameraShotValidity(state, point, target, elevationAt, options).valid) return false;
+  }
+  return true;
+}
+
+/** Hard validity precedes composition cost. Search at cinematic height before any crane escape. */
+export function resolveCameraSafety(
+  state: SimulationState, authoredPosition: THREE.Vector3, target: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number, options: CameraSafetyOptions = {},
+): CameraSafetyResolution {
+  const radius = Math.max(0.55, Math.hypot(authoredPosition.x - target.x, authoredPosition.z - target.z));
+  const base = Math.atan2(authoredPosition.z - target.z, authoredPosition.x - target.x);
+  const previous = options.previousPosition;
+  const right = new THREE.Vector3(-Math.sin(base), 0, Math.cos(base));
+  let best: CameraSafetyResolution | undefined, bestScore = Infinity;
+  let cut: CameraSafetyResolution | undefined;
+  const evaluate = (position: THREE.Vector3): CameraSafetyResolution => {
+    const validity = cameraShotValidity(state, position, target, elevationAt, options);
+    const continuous = validity.valid && (!previous || cameraVisibilityCorridor(state, previous, position, target, elevationAt, options));
+    const result: CameraSafetyResolution = {
+      position, valid: validity.valid, requiresCut: !continuous, pathSafety: continuous ? 1 : 0,
+      subjectVisibility: validity.subjectVisibility,
+      lensObstruction: 1 - validity.lensSafety,
+      forestObstruction: 1 - validity.subjectVisibility,
+      structureObstruction: 1 - validity.structureVisibility,
+      vesselObstruction: foundingVesselSightlineObstruction(state, position, target),
+      angularCorrection: angularDistance(Math.atan2(position.z - target.z, position.x - target.x), base),
+      lift: Math.max(0, position.y - authoredPosition.y),
+    };
+    const score = (1 - validity.score) * 100 + position.distanceTo(previous ?? authoredPosition) * 0.1;
+    if (score < bestScore) { bestScore = score; best = result; }
+    if (validity.valid && !cut) cut = result;
+    return result;
   };
+  const authored = evaluate(authoredPosition.clone());
+  if (authored.valid && !authored.requiresCut) return authored;
+  const stages: THREE.Vector3[][] = [];
+  stages.push([0.35, -0.35, 0.7, -0.7, 1.2, -1.2].map(slide => authoredPosition.clone().addScaledVector(right, slide)));
+  const offsets = [Math.PI / 18, -Math.PI / 18, Math.PI / 9, -Math.PI / 9, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI / 2, -Math.PI / 2, Math.PI];
+  const ring = (scale: number, lift: number): THREE.Vector3[] => [0, ...offsets].map(offset => {
+    const x = target.x + Math.cos(base + offset) * radius * scale;
+    const z = target.z + Math.sin(base + offset) * radius * scale;
+    return new THREE.Vector3(x, Math.max(authoredPosition.y + lift, elevationAt(x, z) + (options.lensClearance ?? 0.42)), z);
+  });
+  stages.push(ring(1, 0), [...ring(0.82, 0), ...ring(1.18, 0)], ring(1, 0.35), ring(1, 0.8));
+  // A cut to a low valid composition is preferable to flying above the canopy.
+  for (const stage of stages) {
+    if (previous) stage.sort((a, b) => a.distanceToSquared(previous) - b.distanceToSquared(previous));
+    for (const point of stage) {
+      const candidate = evaluate(point);
+      if (candidate.valid && !candidate.requiresCut) return candidate;
+    }
+    if (cut) return cut;
+  }
+  for (const lift of [1.5, 3, 6, 12, 24]) for (const point of ring(0.82, lift)) {
+    const candidate = evaluate(point);
+    if (candidate.valid) return candidate;
+  }
+  // Explicit failure: callers must not mistake the least obstructed candidate for a valid shot.
+  return best!;
+}
+
+/** Wall-clock hysteresis: tolerate edge branches, never seconds of majority occlusion. */
+export class CameraVisibilityHysteresis {
+  score = 1;
+  private failedSeconds = 0;
+  update(validity: CameraShotValidity, deltaSeconds: number, pathSafety = 1): boolean {
+    const dt = Math.max(0, deltaSeconds);
+    this.score += (Math.min(validity.score, pathSafety) - this.score) * (1 - Math.exp(-dt * 8));
+    this.failedSeconds = validity.valid ? 0 : this.failedSeconds + dt;
+    return validity.lensSafety === 0 || validity.terrainClearance === 0 || this.failedSeconds >= 0.25;
+  }
+  reset(): void { this.score = 1; this.failedSeconds = 0; }
 }
 
 
@@ -662,14 +733,18 @@ export class CameraDirector {
   private readonly desiredPosition = new THREE.Vector3();
   private readonly desiredTarget = new THREE.Vector3();
   private readonly lookTarget = new THREE.Vector3();
+  private readonly positionVelocity = new THREE.Vector3();
+  private readonly targetVelocity = new THREE.Vector3();
+  private routeCheckSeconds = 0;
   private readonly shotBasePosition = new THREE.Vector3();
   private readonly shotBaseTarget = new THREE.Vector3();
   private readonly trackedFocus = new THREE.Vector3();
   private readonly workingDirection = new THREE.Vector3();
   private readonly workingTangent = new THREE.Vector3();
   private readonly forestCandidatePosition = new THREE.Vector3();
-  private readonly safeDesiredPosition = new THREE.Vector3();
   private safetyInitialized = false;
+  private readonly visibility = new CameraVisibilityHysteresis();
+  private recoveryOffset?: THREE.Vector3;
   private shotAge = 0;
   private lastHumanShot = false;
   private shotDuration = 12;
@@ -698,34 +773,12 @@ export class CameraDirector {
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
     if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') {
       const pose = arrivalCameraPose(state.arrival);
-      // ArrivalPresentation still authors the shot. We only correct an obstructed lens around the
-      // same target/radius so trees or founding structures cannot hide the people/action.
-      const clearPose = resolveFoundingSightline(state, pose.position, pose.target, elevationAt, 8);
-      const arrivalSafety = resolveCameraSafety(state, clearPose.position, pose.target, elevationAt, {
-        lensClearance: 8,
-        sightlineClearance: 1.4,
-        previousPosition: this.safetyInitialized ? this.safeDesiredPosition : undefined,
-        environmentProbe: this.environmentProbe,
-      });
-      this.safeDesiredPosition.copy(arrivalSafety.position);
-      this.safetyInitialized = true;
-      if (state.arrival.elapsedSeconds < 0.2) {
-        this.camera.position.copy(arrivalSafety.position);
-        this.lookTarget.copy(pose.target);
-      } else {
-        this.camera.position.lerp(arrivalSafety.position, 1 - Math.exp(-deltaSeconds * 1.1));
-        this.lookTarget.lerp(pose.target, 1 - Math.exp(-deltaSeconds * 1.3));
-      }
-      // Keep the lens above mature tree crowns, and the sightline above intervening ridges.
-      this.camera.position.y = Math.max(this.camera.position.y, elevationAt(this.camera.position.x, this.camera.position.z) + 8);
-      for (let i = 1; i < 12; i++) {
-        const f = i / 12;
-        const x = THREE.MathUtils.lerp(this.camera.position.x, this.lookTarget.x, f);
-        const z = THREE.MathUtils.lerp(this.camera.position.z, this.lookTarget.z, f);
-        const y = THREE.MathUtils.lerp(this.camera.position.y, this.lookTarget.y, f);
-        const clearance = elevationAt(x, z) + 1.4 - y;
-        if (clearance > 0) this.camera.position.y += clearance / (1 - f);
-      }
+      const before = this.camera.position.clone();
+      this.desiredPosition.copy(pose.position);
+      this.desiredTarget.copy(pose.target);
+      this.camera.position.lerp(pose.position, 1 - Math.exp(-deltaSeconds * 1.1));
+      this.lookTarget.lerp(pose.target, 1 - Math.exp(-deltaSeconds * 1.3));
+      this.enforceVisibility(before, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 });
       this.camera.lookAt(this.lookTarget);
       this.observation.label = 'Before history';
       this.observation.detail = 'Year 0 · Month 0 · Day 0';
@@ -748,71 +801,91 @@ export class CameraDirector {
 
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
 
-    // Founding shots can move several metres after chooseClearAzimuth() picked their starting side.
-    // Re-check the live composition so truck/orbit/dolly motion never carries the lens behind a
-    // foreground tree or structure while the opening is introducing actual people.
-    if (isFoundingCameraScene(this.currentScene?.id)) {
-      const clearance = cameraClearanceFor(this.currentScene?.kind);
-      const clear = resolveFoundingSightline(state, this.desiredPosition, this.desiredTarget, elevationAt, clearance.lens);
-      this.desiredPosition.copy(clear.position);
-    }
+    const before = this.camera.position.clone();
+    if (this.recoveryOffset) this.desiredPosition.copy(this.desiredTarget).add(this.recoveryOffset);
 
-    if (this.currentScene && ['worker-follow', 'discovery-scene', 'traveler-follow'].includes(this.currentScene.kind)) {
-      const actor = this.subjectPresentation?.(this.currentScene.subjectId);
-      const partner = actor?.partnerId ? this.subjectPresentation?.(actor.partnerId) : undefined;
-      const subjects = actor ? [new THREE.Vector3(actor.x, actor.footY + 0.17, actor.z)] : [];
-      if (partner) subjects.push(new THREE.Vector3(partner.x, partner.footY + 0.17, partner.z));
-      if (subjects.length) this.desiredPosition.copy(resolveHumanSightline(state, this.desiredPosition, this.desiredTarget, subjects, elevationAt));
-    }
-
-    // Every shot type now passes through one final safety authority. The continuity term preserves
-    // the chosen side of the subject until a real obstruction requires a correction.
-    const safetyClearance = cameraClearanceFor(this.currentScene?.kind);
-    const safe = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, {
-      lensClearance: safetyClearance.lens,
-      sightlineClearance: safetyClearance.sightline,
-      previousPosition: this.safetyInitialized ? this.safeDesiredPosition : undefined,
-      environmentProbe: this.environmentProbe,
-    });
-    this.desiredPosition.copy(safe.position);
-    this.safeDesiredPosition.copy(safe.position);
-    this.safetyInitialized = true;
-
-    // Critically damped-feeling exponential smoothing. Camera movement is tied to wall-clock time,
-    // never simulation months, so deep historical acceleration does not make the camera race.
+    // Preserve velocity across shots: a new composition eases into motion instead of kicking
+    // immediately to the maximum speed of a first-order lerp.
     const editorialTiming = foundingEditorialTimingFor(this.currentScene?.id);
     const transitionSeconds = editorialTiming?.transitionSeconds
       ?? this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
-    const transitionRate = 3.15 / Math.max(0.5, transitionSeconds);
-    const positionSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate);
-    const targetSmoothing = 1 - Math.exp(-deltaSeconds * transitionRate * 1.22);
-    this.camera.position.lerp(this.desiredPosition, positionSmoothing);
-    this.lookTarget.lerp(this.desiredTarget, targetSmoothing);
+    advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, transitionSeconds);
+    advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, transitionSeconds / 1.22);
     const clearance = cameraClearanceFor(this.currentScene?.kind);
-    this.camera.position.y = Math.max(this.camera.position.y, elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens);
-    this.lookTarget.y = Math.max(
-      this.lookTarget.y,
-      elevationAt(this.lookTarget.x, this.lookTarget.z) + cameraTargetFloorFor(this.currentScene?.kind),
-    );
-
-    // Destination safety alone is insufficient: interpolation between two legal shots can still
-    // cross a tree, wall or vessel. Correct only when the actual lens enters a hard volume.
-    if (cameraLensObstruction(
-      state,
-      this.camera.position,
-      elevationAt,
-      Math.max(0.1, clearance.lens * 0.32),
-      this.environmentProbe,
-    ) > 0.001) {
-      const emergency = resolveCameraSafety(state, this.camera.position, this.lookTarget, elevationAt, {
-        lensClearance: clearance.lens,
-        sightlineClearance: clearance.sightline,
-        previousPosition: this.safeDesiredPosition,
-        environmentProbe: this.environmentProbe,
-      });
-      this.camera.position.copy(emergency.position);
+    const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens;
+    if (this.camera.position.y < lensFloor) {
+      this.camera.position.y = lensFloor;
+      this.positionVelocity.y = Math.max(0, this.positionVelocity.y);
     }
+    const targetFloor = elevationAt(this.lookTarget.x, this.lookTarget.z) + cameraTargetFloorFor(this.currentScene?.kind);
+    if (this.lookTarget.y < targetFloor) {
+      this.lookTarget.y = targetFloor;
+      this.targetVelocity.y = Math.max(0, this.targetVelocity.y);
+    }
+
+    this.enforceVisibility(before, deltaSeconds, state, elevationAt, clearance);
     this.camera.lookAt(this.lookTarget);
+  }
+
+  private enforceVisibility(
+    before: THREE.Vector3, deltaSeconds: number, state: SimulationState,
+    elevationAt: (x: number, z: number) => number, clearance: CameraClearance,
+  ): void {
+    const subjects: THREE.Vector3[] = [];
+    if (this.currentScene && ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(this.currentScene.kind)) {
+      const actor = this.subjectPresentation?.(this.currentScene.subjectId);
+      if (actor) {
+        subjects.push(new THREE.Vector3(actor.x, actor.footY + 0.17, actor.z));
+        const partner = actor.partnerId ? this.subjectPresentation?.(actor.partnerId) : undefined;
+        if (partner) subjects.push(new THREE.Vector3(partner.x, partner.footY + 0.17, partner.z));
+        if (actor.action) subjects.push(new THREE.Vector3(actor.action.interactionAnchor.x,
+          elevationAt(actor.action.interactionAnchor.x, actor.action.interactionAnchor.z) + (actor.action.contactHeight ?? 0.14), actor.action.interactionAnchor.z));
+      }
+    }
+    const options: CameraSafetyOptions = { lensClearance: clearance.lens, sightlineClearance: clearance.sightline,
+      environmentProbe: this.environmentProbe, subjects, previousPosition: before };
+    const validity = cameraShotValidity(state, this.camera.position, this.desiredTarget, elevationAt, options);
+    const corridor = cameraVisibilityCorridor(state, before, this.camera.position, this.desiredTarget, elevationAt, options);
+    const failed = this.visibility.update(validity, deltaSeconds, corridor ? 1 : 0);
+    const beforeValid = corridor || cameraShotValidity(state, before, this.desiredTarget, elevationAt, options).valid;
+    if (!corridor && beforeValid) {
+      this.camera.position.copy(before);
+      this.positionVelocity.set(0, 0, 0);
+    }
+    // The actual swept move remains checked every frame. The much longer destination survey
+    // needs only four checks a second; repeating it at display frequency multiplies ray work.
+    this.routeCheckSeconds -= deltaSeconds;
+    let route = corridor;
+    if (corridor && this.routeCheckSeconds <= 0) {
+      route = cameraVisibilityCorridor(state, this.camera.position, this.desiredPosition, this.desiredTarget, elevationAt, options);
+      this.routeCheckSeconds = 0.25;
+    }
+    if (failed || (!route && beforeValid) || !this.safetyInitialized) {
+      const safe = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, options);
+      if (safe.valid) {
+        if (safe.position.distanceTo(this.desiredPosition) > 0.001) {
+          this.recoveryOffset = safe.position.clone().sub(this.desiredTarget);
+        }
+        if (safe.requiresCut || !this.safetyInitialized) {
+          this.camera.position.copy(safe.position);
+          this.lookTarget.copy(this.desiredTarget);
+          this.positionVelocity.set(0, 0, 0);
+          this.targetVelocity.set(0, 0, 0);
+        } else {
+          const next = before.clone().lerp(safe.position, 1 - Math.exp(-deltaSeconds * 4));
+          if (cameraVisibilityCorridor(state, before, next, this.desiredTarget, elevationAt, options)) this.camera.position.copy(next);
+          this.positionVelocity.set(0, 0, 0);
+        }
+        this.safetyInitialized = true;
+      } else {
+        // No readable composition exists for this subject: request another documentary shot.
+        // Never advance along a known blocked route or label a least-bad view as safe.
+        this.camera.position.copy(before);
+        this.positionVelocity.set(0, 0, 0);
+        this.shotAge = this.shotDuration;
+        this.recoveryOffset = undefined;
+      }
+    }
   }
 
   current(): ObservationCandidate | undefined {
@@ -844,7 +917,9 @@ export class CameraDirector {
     this.currentScene = scene;
     this.shotAge = 0;
     this.trackingInitialized = false;
-    this.safetyInitialized = false;
+    this.routeCheckSeconds = 0;
+    this.recoveryOffset = undefined;
+    this.visibility.reset();
     const framing = FRAMING[scene.kind];
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
@@ -897,7 +972,8 @@ export class CameraDirector {
     ground: number,
     elevationAt: (x: number, z: number) => number,
   ): number {
-    if (!FOREST_AWARE_KINDS.has(kind)) return baseAzimuth;
+    // The final corridor authority uses actual placements; do not pre-rotate from forest cells.
+    if (this.environmentProbe || !FOREST_AWARE_KINDS.has(kind)) return baseAzimuth;
 
     let bestAzimuth = baseAzimuth;
     let bestScore = Number.POSITIVE_INFINITY;

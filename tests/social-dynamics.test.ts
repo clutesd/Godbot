@@ -311,3 +311,25 @@ describe('Socially structured crowd presentation', () => {
     expect(Math.max(...placements.map((placement) => Math.hypot(placement.x, placement.z)))).toBeGreaterThan(0.6);
   });
 });
+
+
+describe('local conversational membership', () => {
+  it('does not pair distant attendees just because they share a destination', () => {
+    const people = [person('a'), person('b', { position: { x: 0.6, z: 0 } }),
+      person('c', { position: { x: 12, z: 0 } }), person('d', { position: { x: 12.6, z: 0 } })];
+    const group = [...buildSocialGroups(people).values()][0]!;
+    expect(group.pods!.map(pod => pod.members)).toEqual([['a', 'b'], ['c', 'd']]);
+    const distant = placeInGroup(people[2]!, group, people[2]!.position);
+    expect(distant.podCenter!.x).toBeGreaterThan(11);
+  });
+
+  it('checks avoidance against the entire pod and excludes dead attendees', () => {
+    const a = person('a') as Person & { socialAvoidIds: string[] };
+    a.socialAvoidIds = ['c'];
+    const people = [a, person('b'), person('c'), person('dead', { alive: false })];
+    const group = [...buildSocialGroups(people).values()][0]!;
+    expect(group.members).not.toContain('dead');
+    expect(group.pods!.some(pod => pod.members.includes('a') && pod.members.includes('c'))).toBe(false);
+    expect(buildSocialGroups([...people].reverse())).toEqual(buildSocialGroups(people));
+  });
+});

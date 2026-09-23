@@ -127,8 +127,8 @@ const SOCIAL_SCRIPTS: Record<SocialEncounterTone, readonly SocialBeat[]> = {
   ],
   supportive: [
     { action: 'check-in', animation: 'converse-quiet', seconds: 1.35, spacing: 0.43, lateral: 0.02 },
-    { action: 'quiet-company', animation: 'converse-quiet', seconds: 2.65, spacing: 0.44, lateral: 0.02 },
-    { action: 'reassurance', animation: 'converse-warm', seconds: 1.8, spacing: 0.45, lateral: 0.04 },
+    { action: 'quiet-company', animation: 'converse-quiet', seconds: 5.8, spacing: 0.52, lateral: 0.02 },
+    { action: 'reassurance', animation: 'converse-warm', seconds: 3.2, spacing: 0.52, lateral: 0.04 },
   ],
   mentoring: [
     { action: 'guidance-opening', animation: 'converse-teach', seconds: 1.4, spacing: 0.5, lateral: 0.04 },
@@ -343,7 +343,7 @@ export class LocalActivityPresentation {
       }
     }
     // Invitations are renderer-owned and reciprocal. A resident cannot belong to two scenes.
-    if (!state.encounter && !state.socialCooldown && !state.yieldToId) {
+    if (!state.encounter && !state.socialCooldown && !state.yieldToId && !state.rest) {
       for (const id of context.group?.members ?? []) {
         const invitation = this.previousStates.get(id);
         const peer = context.people.get(id);
@@ -384,7 +384,7 @@ export class LocalActivityPresentation {
       state.animation = 'idle'; state.action = 'quiet-departure'; state.seconds = 0; state.hold = 1.8;
     }
     if (state.encounter && ((partnerState?.partnerId && partnerState.partnerId !== person.id)
-      || (state.sceneSeconds ?? 0) > 12 && state.phase === 'approach')) {
+      || (state.sceneSeconds ?? 0) > 12 && (state.phase === 'approach' || !partnerState?.encounter))) {
       state.socialCooldown = 2; state.lastPartnerId = state.partnerId; state.encounter = undefined; state.partnerId = undefined;
       state.animation = 'idle'; state.action = 'observe'; state.seconds = state.hold;
     }
@@ -566,12 +566,23 @@ export class LocalActivityPresentation {
     const point = clearLocalPoint(person, context, state, preferredPoint, step === 'reposition' || step === 'inspect');
     const focus: Readonly<Vec2> = state.stationFocus;
 
+    const memory = memoryInfluenceFor(person);
+    const distress = Math.max(memory.grief, memory.recentShock);
+    if (!childPlay && distress > 0.3 && ['pause', 'inspect'].includes(step)) {
+      state.animation = 'reflect';
+      state.action = 'quiet-reflection';
+      state.destination = { ...(context.visual ?? state.destination) };
+      state.restFacing = context.visual?.facing ?? state.restFacing;
+      state.hold *= 1.4 + distress;
+      return;
+    }
+
     if (childPlay && applyChildPlay(person, context, state, point, this.presentationSeconds)) return;
 
     if (!state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
       const selected = selectSocialPartner(person, context, state, id => {
         const peer = this.previousStates.get(id);
-        return !peer?.socialCooldown && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
+        return !peer?.socialCooldown && !peer?.rest && !peer?.yieldToId && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
       });
       if (selected) {
         state.encounter = buildSocialEncounter(person, selected.peer, selected.relationship);
@@ -617,7 +628,7 @@ export class LocalActivityPresentation {
         if (rest) {
           state.rest = rest;
           state.restStage = 'settling';
-          state.restHold = state.hold;
+          state.restHold = state.hold * (1.45 + (1 - person.energy) * 1.8 + (person.ageMonths >= 62 * 12 ? 0.45 : 0));
           state.hold = restTransitionSeconds('settling', person.ageMonths);
           state.animation = 'rest';
           state.action = 'settle-into-rest';
@@ -672,7 +683,13 @@ function selectSocialPartner(person: Person, context: LocalActivityContext, stat
     const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
     const distance = Math.hypot(peerPosition.x - state.base.x, peerPosition.z - state.base.z);
     if (distance < 0.18 || distance > 2.7) continue;
+    if (!localSegmentSafe(context.visual ?? state.base, peerPosition, context)) continue;
     const relationship = context.relationshipFor?.(person.id, peer.id);
+    if ((person as Person & { socialAvoidIds?: string[] }).socialAvoidIds?.includes(peer.id) || (peer as Person & { socialAvoidIds?: string[] }).socialAvoidIds?.includes(person.id)) continue;
+    const memory = memoryInfluenceFor(person);
+    const distress = Math.max(memory.grief, memory.recentShock);
+    if (distress > 0.45 && relationship?.kind !== 'friend' && relationship?.kind !== 'family'
+      && person.householdId !== peer.householdId) continue;
     let score = relationshipScoreForPresentation(person, peer, relationship, currentMonth);
     if (index === reciprocal) score += 0.14;
     if (state.lastPartnerId === peer.id && members.length > 2) score -= 0.16;
@@ -682,6 +699,34 @@ function selectSocialPartner(person: Person, context: LocalActivityContext, stat
   }
   candidates.sort((a, b) => b.score - a.score || a.peer.id.localeCompare(b.peer.id));
   return candidates[0];
+}
+
+/** Shared, irregular turns: deterministic across frame order and simulation speed. */
+export function conversationTurn(key: string, seconds: number): { epoch: number; progress: number } {
+  const durations = Array.from({ length: 6 }, (_, i) => 3.8 + unit(`${key}:${i}:turn-length`) * 4.4);
+  const cycle = durations.reduce((a, b) => a + b, 0);
+  const time = Math.max(0, seconds) + unit(`${key}:speaker-phase`) * cycle;
+  const round = Math.floor(time / cycle);
+  let remaining = time - round * cycle;
+  for (let i = 0; i < durations.length; i++) {
+    if (remaining < durations[i]! || i === durations.length - 1) {
+      return { epoch: round * durations.length + i, progress: remaining / durations[i]! };
+    }
+    remaining -= durations[i]!;
+  }
+  return { epoch: 0, progress: 0 };
+}
+
+function conversationSpeaker(ids: string[], people: ReadonlyMap<string, Person>, epoch: number, key: string): string {
+  // Rotate the opportunity to speak; withdrawn residents can quietly pass their turn.
+  for (let offset = 0; offset < ids.length; offset++) {
+    const id = ids[(epoch + offset) % ids.length]!;
+    const person = people.get(id)!;
+    const memory = memoryInfluenceFor(person);
+    const willingness = 0.55 + person.traits.sociability * 0.4 - Math.max(memory.grief, memory.recentShock) * 0.5;
+    if (unit(`${key}:${epoch}:${id}:take-turn`) < willingness) return id;
+  }
+  return ids[epoch % ids.length]!;
 }
 
 function applyPodParticipation(person: Person, context: LocalActivityContext, state: LocalActivityState, point: Vec2,
@@ -696,18 +741,14 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   });
   if (adults.length < 2 || !adults.includes(person.id)) return false;
 
-  const turnDuration = 5.4;
-  const offset = unit(`${pod.id}:speaker-phase`) * 4.8;
-  const shifted = presentationSeconds + offset;
-  const epoch = Math.floor(shifted / turnDuration);
-  const turnProgress = (shifted / turnDuration) - Math.floor(shifted / turnDuration);
+  const { epoch, progress: turnProgress } = conversationTurn(pod.id, presentationSeconds);
 
   let speakerId = adults.find(id => {
     const previous = previousStates.get(id);
     return Boolean(previous?.encounter && previous.partnerId && pod.members.includes(previous.partnerId)
       && previous.animation !== 'converse-quiet');
   });
-  if (!speakerId) speakerId = adults[((epoch % adults.length) + adults.length) % adults.length]!;
+  if (!speakerId) speakerId = conversationSpeaker(adults, context.people, epoch, pod.id);
 
   const listeners = adults.filter(id => id !== speakerId);
   const reactorIndex = listeners.length > 0
@@ -718,7 +759,7 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
   let focusId: string;
   if (speakerId === person.id) {
     const own = adults.indexOf(person.id);
-    focusId = adults[(own + 1) % adults.length]!;
+    focusId = adults[(own + 1 + Math.floor(turnProgress * (adults.length - 1))) % adults.length]!;
     state.socialRole = 'speaker';
     state.animation = turnProgress < 0.14 ? 'converse-quiet' : turnProgress > 0.84 ? 'converse-quiet' : 'converse';
     state.action = turnProgress < 0.14 ? 'take-turn' : turnProgress > 0.84 ? 'finish-turn' : 'address-pod';
@@ -726,7 +767,7 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
     focusId = speakerId;
     state.socialRole = 'listener';
     if (reactionWindow && reactorId === person.id) {
-      state.animation = 'converse-warm';
+      state.animation = memoryInfluenceFor(person).grief > 0.3 ? 'converse-quiet' : 'converse-warm';
       state.action = 'react-in-pod';
     } else if (turnProgress < 0.14) {
       state.animation = 'converse-quiet';
@@ -770,17 +811,13 @@ function refreshPodRhythm(person: Person, context: LocalActivityContext, state: 
   });
   if (adults.length < 2 || !adults.includes(person.id)) return;
 
-  const turnDuration = 5.4;
-  const offset = unit(`${pod.id}:speaker-phase`) * 4.8;
-  const shifted = presentationSeconds + offset;
-  const epoch = Math.floor(shifted / turnDuration);
-  const turnProgress = shifted / turnDuration - Math.floor(shifted / turnDuration);
+  const { epoch, progress: turnProgress } = conversationTurn(pod.id, presentationSeconds);
   let speakerId = adults.find(id => {
     const previous = previousStates.get(id);
     return Boolean(previous?.encounter && previous.partnerId && pod.members.includes(previous.partnerId)
       && previous.animation !== 'converse-quiet');
   });
-  if (!speakerId) speakerId = adults[((epoch % adults.length) + adults.length) % adults.length]!;
+  if (!speakerId) speakerId = conversationSpeaker(adults, context.people, epoch, pod.id);
 
   const listeners = adults.filter(id => id !== speakerId);
   const reactorId = listeners.length
@@ -790,7 +827,7 @@ function refreshPodRhythm(person: Person, context: LocalActivityContext, state: 
   let focusId: string;
   if (speakerId === person.id) {
     const own = adults.indexOf(person.id);
-    focusId = adults[(own + 1) % adults.length]!;
+    focusId = adults[(own + 1 + Math.floor(turnProgress * (adults.length - 1))) % adults.length]!;
     state.socialRole = 'speaker';
     state.animation = turnProgress < 0.14 ? 'converse-quiet' : turnProgress > 0.84 ? 'converse-quiet' : 'converse';
     state.action = turnProgress < 0.14 ? 'take-turn' : turnProgress > 0.84 ? 'finish-turn' : 'address-pod';
@@ -798,7 +835,7 @@ function refreshPodRhythm(person: Person, context: LocalActivityContext, state: 
     focusId = speakerId;
     state.socialRole = 'listener';
     if (reactionWindow && reactorId === person.id) {
-      state.animation = 'converse-warm';
+      state.animation = memoryInfluenceFor(person).grief > 0.3 ? 'converse-quiet' : 'converse-warm';
       state.action = 'react-in-pod';
     } else if (turnProgress < 0.14) {
       state.animation = 'converse-quiet';
@@ -1297,7 +1334,7 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
   state.partnerId = peer.id;
   const speaking = encounter.role === 'mentor' || encounter.role === 'supporter'
     || encounter.role === 'peer' && (person.id < peer.id) === (encounter.beat % 2 === 0);
-  state.animation = speaking ? beat.animation : 'converse-quiet';
+  state.animation = encounter.role === 'supported' && encounter.beat === 1 ? 'reflect' : speaking ? beat.animation : 'converse-quiet';
   state.action = socialActionFor(encounter, beat.action);
   const relationalLinger = encounter.tone === 'tense'
     ? 0.82 + encounter.strength * 0.08

@@ -10,6 +10,7 @@ import { SeededRandom } from '../../sim/prng';
 import type { ResourceWorkMotion } from './ResourceWorkMotion';
 
 export type AnimationState = 
+  | 'reflect'
   | 'idle'
   | 'walk'
   | 'run'
@@ -667,6 +668,24 @@ export class AnimationController {
       isLooping: true,
       canInterruptFrom: new Set(socialStates),
       blendDuration: 0.38,
+    });
+
+    this.clips.set('reflect', {
+      state: 'reflect',
+      poses: [0, 1, 2].map(index => ({
+        name: ['lower-gaze', 'quiet-breath', 'recover-composure'][index]!,
+        duration: [2.8, 3.6, 1.9][index]!,
+        pelvisRotation: 0, spineRotation: index === 2 ? 0.055 : 0.12,
+        headRotation: index === 1 ? -0.025 : 0.025,
+        leftShoulderRotation: 0.08, leftElbowRotation: 0.2,
+        rightShoulderRotation: 0.06, rightElbowRotation: 0.18,
+        leftHipRotation: 0, leftKneeRotation: 0.04,
+        rightHipRotation: 0, rightKneeRotation: 0.04,
+        positionOffset: { x: 0, y: index === 1 ? -0.004 : 0, z: 0 },
+      })),
+      isLooping: true,
+      canInterruptFrom: new Set<AnimationState>(['idle', ...socialStates]),
+      blendDuration: 0.85,
     });
 
     this.clips.set('converse-teach', {

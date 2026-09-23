@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { BattleAftermath, casualtyReceipts, MAX_BATTLE_BODIES, AFTERMATH_MONTHS } from '../src/render/war/BattleAftermath';
 import { attackMoment, attackPeriod, impactMoment, combatPose, engagementGap, figurePosition } from '../src/render/war/CombatChoreography';
 import { militaryVisualStyle } from '../src/render/war/MilitaryVisualLanguage';
@@ -50,7 +50,7 @@ describe('casualty-backed battlefield presentation', () => {
     const aftermath = new BattleAftermath(() => 0);
     aftermath.sync(war, [event], 1, 0, styles);
     aftermath.update(1, 0.1, true, () => true);
-    const bodies = aftermath.group.getObjectByName('Recorded fallen soldiers') as THREE.InstancedMesh;
+    const bodies = aftermath.group.getObjectByName('Recorded blood traces') as THREE.InstancedMesh;
     const first = bodies.instanceMatrix.array.slice();
     aftermath.update(1, 20, true, () => true);
     expect(bodies.instanceMatrix.array).toEqual(first);
@@ -128,7 +128,8 @@ describe('casualty-backed battlefield presentation', () => {
     const aftermath = new BattleAftermath(() => 0);
     aftermath.sync(war, [event], 1, 100, styles);
     aftermath.update(1, 100, false, () => true);
-    expect((aftermath.group.getObjectByName('Recorded fallen soldiers') as THREE.InstancedMesh).count).toBe(3);
+    expect(aftermath.visibleCasualties).toHaveLength(3);
+    expect(aftermath.visibleCasualties.every(frame => frame.motion.phase === 'corpse')).toBe(true);
     expect((aftermath.group.getObjectByName('Casualty contact bursts') as THREE.InstancedMesh).count).toBe(0);
     aftermath.dispose();
   });
@@ -165,7 +166,9 @@ describe('casualty-backed battlefield presentation', () => {
     for (const time of [0, 0.2, 0.8, 1.5, 9, 20]) renderer.update(0.016, time, f.war.id);
     renderer.update(0.1, 25, f.war.id, true);
     expect(JSON.stringify(f.state)).toBe(before);
-    expect((renderer.group.getObjectByName('Recorded fallen soldiers') as THREE.InstancedMesh).count).toBeGreaterThan(0);
+    expect((renderer.group.getObjectByName('Recorded blood traces') as THREE.InstancedMesh).count).toBeGreaterThan(0);
+    expect(renderer.group.getObjectByName('Recorded fallen soldiers')).toBeUndefined();
+    expect(renderer.report.figures).toBeLessThanOrEqual(renderer.report.budget);
     renderer.dispose(); renderer.dispose();
   });
 });

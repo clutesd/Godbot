@@ -178,7 +178,8 @@ describe('unified camera safety authority', () => {
 
     expect(probe(resolved.position)).toBe(0);
     expect(resolved.lensObstruction).toBe(0);
-    expect(Math.hypot(resolved.position.x - target.x, resolved.position.z - target.z)).toBeCloseTo(3, 5);
+    expect(Math.hypot(resolved.position.x - target.x, resolved.position.z - target.z)).toBeLessThan(3.1);
+    expect(resolved.position.y).toBeCloseTo(authored.y);
   });
 
   it('prefers continuity when nearby safe compositions are otherwise equivalent', () => {

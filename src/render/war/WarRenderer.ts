@@ -4,8 +4,9 @@ import { campaignPoint } from '../../sim/war/Campaign';
 import { deriveMilitaryProfile, militaryProfileForWar, type MilitaryCapabilityProfile } from '../../sim/war/MilitaryCapability';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import type { PedestrianFootprint } from '../../sim/people/StructureNavigation';
-import { BattleAftermath } from './BattleAftermath';
+import { BattleAftermath, MAX_BATTLE_BODIES } from './BattleAftermath';
 import { combatPose, engagementGap, figurePosition } from './CombatChoreography';
+import { createCombatExchanges, exchangeFigurePose, formationCount, MAX_FORMATION_FIGURES, type CombatExchangePlan, type WeaponPose } from './CombatExchanges';
 import { BattleSpectacle, type StructuralBattleEvidence } from './BattleSpectacle';
 import { militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
 import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
@@ -52,6 +53,7 @@ interface CampaignVisual {
   eventId?: string;
   eventMode?: unknown;
   event?: HistoricalEvent;
+  exchanges?: CombatExchangePlan;
   evidenceMonth: number;
   lastBattleCount: number;
   battleTime: number;
@@ -59,7 +61,8 @@ interface CampaignVisual {
 }
 
 const MAX_CAMPAIGNS = 4;
-const MAX_FIGURES = 20;
+const MAX_FIGURES = MAX_FORMATION_FIGURES;
+const COMPANY_CAPACITY = MAX_FIGURES + MAX_BATTLE_BODIES;
 const COMPANY_BODY_SCALE = 0.28 * COSMIC_HEIGHT_MULTIPLIER;
 const clamp = THREE.MathUtils.clamp;
 
@@ -86,6 +89,9 @@ export class WarRenderer {
   private readonly vehicleBodyGeometry = new THREE.BoxGeometry(0.44, 0.15, 0.64);
   private readonly vehicleCabGeometry = new THREE.BoxGeometry(0.3, 0.15, 0.26);
   private readonly matrix = new THREE.Object3D();
+  private readonly figureRoot = new THREE.Matrix4();
+  private readonly figureInverse = new THREE.Matrix4();
+  private falling = false;
   private readonly color = new THREE.Color();
   private lastMonth = -1;
   private lastFocus?: string;
@@ -97,7 +103,7 @@ export class WarRenderer {
   }
 
   get report(): { campaigns: number; figures: number; budget: number } {
-    return { campaigns: this.visuals.size, figures: [...this.visuals.values()].reduce((n, v) => n + v.companies.reduce((sum, c) => sum + c.body.count, 0), 0), budget: MAX_CAMPAIGNS * MAX_FIGURES * 2 };
+    return { campaigns: this.visuals.size, figures: [...this.visuals.values()].reduce((n, v) => n + v.companies.reduce((sum, c) => sum + c.body.count, 0), 0), budget: MAX_CAMPAIGNS * (MAX_FIGURES * 2 + MAX_BATTLE_BODIES) };
   }
 
   setStructures(structures: readonly PedestrianFootprint[]): void { this.walking.setStructures(structures); }
@@ -138,6 +144,15 @@ export class WarRenderer {
         visual.event = event;
         visual.eventId = event?.id;
         visual.eventMode = event?.context['engagementMode'];
+        if (event?.location) {
+          const progress = Number(event.context['progress']);
+          const eventFront = 0.76 + (Number.isFinite(progress) ? clamp(progress, -1, 1) : 0) * 0.08;
+          const before = campaignPoint(war.campaign.route, eventFront - 0.006, event.location);
+          const after = campaignPoint(war.campaign.route, eventFront + 0.006, event.location);
+          const styles = [visual.companies[0].style, visual.companies[1].style] as const;
+          visual.exchanges = createCombatExchanges(event.id, event.location, Math.atan2(after.x - before.x, after.z - before.z),
+            engagementGap(styles, visual.eventMode), styles, [formationCount(war.campaign.initialStrengthA), formationCount(war.campaign.initialStrengthB)]);
+        } else visual.exchanges = undefined;
         visual.aftermath.sync(war, this.state.history, this.state.month, elapsed, [visual.companies[0].style, visual.companies[1].style]);
         visual.evidenceMonth = this.state.month;
       }
@@ -163,6 +178,8 @@ export class WarRenderer {
         ? clamp(1 - (elapsed - visual.battleTime) / 7, 0, 1)
         : 0;
 
+      visual.aftermath.update(this.state.month, elapsed, reducedMotion, (start, end) => this.walking.isSegmentWalkable(start, end));
+      const eventTime = Number.isFinite(visual.battleTime) ? elapsed - visual.battleTime : 0;
       visual.companies.forEach((company, side) => {
         const target = targets[side]!;
         company.progress = reducedMotion || war.phase === 'battle' && Boolean(visual.event) ? target : THREE.MathUtils.lerp(company.progress, target, 1 - Math.exp(-Math.max(0, delta) * 1.5));
@@ -173,7 +190,7 @@ export class WarRenderer {
         const yaw = engaged ? frontYaw + side * Math.PI : Math.atan2(forward.x - center.x, forward.z - center.z);
         const approach = engaged && !visual.event ? Math.max(0, (side === 0 ? -1 : 1) * ((center.x - frontPoint.x) * Math.sin(frontYaw) + (center.z - frontPoint.z) * Math.cos(frontYaw)) - gap / 2) : 0;
         const strength = side === 0 ? war.strengthA : war.strengthB;
-        const count = strength <= 0 ? 0 : Math.min(MAX_FIGURES, Math.max(3, Math.ceil(Math.sqrt(strength) * 3)));
+        const count = engaged && visual.exchanges ? visual.exchanges.counts[side]! : formationCount(strength);
         const moving = !reducedMotion && (Math.abs(target - company.progress) > 0.002 || war.phase === 'marching') && war.campaign.blockedMonths === 0;
         let visible = 0;
         for (let i = 0; i < count; i++) {
@@ -185,46 +202,58 @@ export class WarRenderer {
           const lateral = centeredSlot * Math.max(0.22, company.style.lateralSpacing) + formationJitter;
           const fraction = company.progress + (side === 0 ? -1 : 1) * rank * company.style.depthSpacing / Math.max(1, war.campaign.distance);
           const base = campaignPoint(war.campaign.route, fraction, fallback);
-          const p = engaged ? figurePosition(frontPoint, frontYaw, gap + approach * 2, company.style, side, i) : {
+          let p = engaged ? figurePosition(frontPoint, frontYaw, gap + approach * 2, company.style, side, i) : {
             x: base.x + Math.cos(yaw) * lateral + Math.sin(i * 3.17) * company.style.jitter * 0.25,
             z: base.z - Math.sin(yaw) * lateral + Math.cos(i * 2.31) * company.style.jitter * 0.25,
           };
           // Never collapse blocked slots onto the centerline (which stacks whole ranks).
           if (!this.walking.isSegmentWalkable(engaged ? p : base, p)) continue;
-          const pose = combatPose(company.style, i, side, Number.isFinite(visual.battleTime) ? elapsed - visual.battleTime : 0, engaged && approach < 0.08 && battlePulse > 0 && i < company.style.rankWidth && (gap <= 0.6 || ['bow', 'rifle', 'automatic'].includes(company.style.weapon)), reducedMotion, visual.companies[1 - side]!.style);
-          const poseX = p.x + Math.sin(yaw) * pose.advance;
-          const poseZ = p.z + Math.cos(yaw) * pose.advance;
+          let figureYaw = yaw;
+          let pose = combatPose(company.style, i, side, 0, false, reducedMotion);
+          let targetDistance = gap;
+          if (engaged && visual.exchanges) {
+            const exchange = visual.exchanges.exchanges.find(item => item.slots[side] === i);
+            const targetDeath = exchange ? visual.aftermath.impactTime(visual.exchanges.eventId, 1 - side, exchange.slots[1 - side]!) : undefined;
+            const frame = exchangeFigurePose(visual.exchanges, side, i, eventTime,
+              battlePulse > 0 && (targetDeath === undefined || eventTime <= targetDeath), reducedMotion);
+            p = frame.position; figureYaw = frame.yaw; pose = frame.pose; targetDistance = frame.targetDistance;
+          }
+          const poseX = p.x;
+          const poseZ = p.z;
           const weaponExtent = pose.reach + (company.style.weapon === 'spear' ? 0.25 : 0.16);
-          const tip = { x: poseX + Math.sin(yaw) * weaponExtent, z: poseZ + Math.cos(yaw) * weaponExtent };
+          const tip = { x: poseX + Math.sin(figureYaw) * weaponExtent, z: poseZ + Math.cos(figureYaw) * weaponExtent };
           if (!this.walking.isSegmentWalkable(p, tip)) continue;
           p.x = poseX; p.z = poseZ;
           if (!this.walking.isWalkable(p) || visual.aftermath.occupies(p, visual.eventId, elapsed, reducedMotion)) continue;
-          const step = reducedMotion ? 0 : Math.sin(time * 8 + i * 1.9 + side) * (moving && !engaged ? 1 : pose.attack * 0.25);
+          const step = reducedMotion ? 0 : Math.sin(time * 8 + i * 1.9 + side) * (moving && !engaged ? 1 : 0);
           const ground = this.elevationAt(p.x, p.z);
-          this.part(company.body, visible, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
-          company.accents.set(visible, 'soldier', this.matrix.matrix, 1);
-          this.part(company.head, visible, p.x + Math.sin(yaw) * pose.lean * 0.12, ground + 0.285 + Math.abs(step) * 0.012, p.z + Math.cos(yaw) * pose.lean * 0.12, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
-          for (let leg = 0; leg < 2; leg++) {
-            const offset = (leg === 0 ? -1 : 1) * 0.03;
-            this.part(company.legs, visible * 2 + leg, p.x + Math.cos(yaw) * offset, ground + 0.052, p.z - Math.sin(yaw) * offset, yaw, step * (leg === 0 ? 0.6 : -0.6), fade);
-          }
-          for (let arm = 0; arm < 2; arm++) {
-            const lateralArm = arm === 0 ? -0.05 : 0.05;
-            const armPitch = engaged ? (arm === 0 && company.style.shields ? 0.8 + pose.brace * 0.35 : 0.9 + pose.attack * 0.55) : -step * 0.4;
-            this.part(company.arms, visible * 2 + arm, p.x + Math.cos(yaw) * lateralArm + Math.sin(yaw) * 0.025,
-              ground + 0.195, p.z - Math.sin(yaw) * lateralArm + Math.cos(yaw) * 0.025, yaw, armPitch, fade);
-          }
-          const combatReady = engaged;
-          if (company.style.shields) {
-            const shieldForward = combatReady && (company.style.weapon === 'spear' || company.style.weapon === 'club' || company.style.weapon === 'bow') ? 0.08 : 0.045;
-            this.part(company.shield, visible, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - pose.brace * 0.22, fade);
-          }
-          if (company.style.armour) this.part(company.helmet, visible, p.x, ground + 0.305 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
-          const weaponForward = combatReady ? pose.reach - pose.recoil * 0.03 : 0.045;
-          const weaponPitch = combatReady ? pose.pitch : this.weaponPitch(company.style.weapon, false, step);
-          this.part(company.weapon, visible, p.x + Math.sin(yaw) * weaponForward, ground + 0.205, p.z + Math.cos(yaw) * weaponForward, yaw, weaponPitch, fade);
-          if (engaged && pose.ranged) visual.spectacle.weaponAttack(p.x, ground + 0.205, p.z, yaw, gap, company.style.weapon, pose.flash, pose.flight, fade);
+          this.soldier(company, visible, p, ground, figureYaw, pose, step, fade, engaged);
+          if (engaged && pose.ranged) visual.spectacle.weaponAttack(p.x, ground + 0.205, p.z, figureYaw, targetDistance, company.style.weapon, pose.flash, pose.flight, fade);
           visible++;
+        }
+        const living = visible;
+        for (const frame of visual.aftermath.visibleCasualties) {
+          const { record, motion } = frame;
+          if (record.side !== side) continue;
+          const yaw = record.yaw;
+          const p = record.position;
+          // Pivot the original articulated soldier around its feet. At life=0 this is identity,
+          // including equipment, appearance, body lean and arm pose from the analytic hit frame.
+          this.matrix.position.set(p.x, frame.ground, p.z);
+          this.matrix.rotation.set(0, yaw, 0); this.matrix.scale.setScalar(1); this.matrix.updateMatrix();
+          this.figureInverse.copy(this.matrix.matrix).invert();
+          this.matrix.position.x -= Math.sin(yaw) * motion.retreat;
+          this.matrix.position.z -= Math.cos(yaw) * motion.retreat;
+          this.matrix.position.y += motion.fall * 0.025;
+          this.matrix.rotation.set(motion.pitch, yaw, 0, 'YXZ'); this.matrix.updateMatrix();
+          this.figureRoot.multiplyMatrices(this.matrix.matrix, this.figureInverse);
+          this.falling = true;
+          const pose = { ...record.figure.pose, lean: record.figure.pose.lean * (1 - motion.settle) - motion.reaction,
+            attack: record.figure.pose.attack * (1 - motion.settle), brace: record.figure.pose.brace * (1 - motion.settle),
+            reach: THREE.MathUtils.lerp(record.figure.pose.reach, 0.03, motion.settle),
+            pitch: THREE.MathUtils.lerp(record.figure.pose.pitch, ['rifle', 'automatic'].includes(company.style.weapon) ? Math.PI / 2 : 0, motion.settle), recoil: record.figure.pose.recoil * (1 - motion.settle) };
+          this.soldier(company, visible++, p, frame.ground, yaw, pose, 0, frame.fade, true, motion.settle);
+          this.falling = false;
         }
         company.body.count = company.head.count = company.weapon.count = visible;
         company.accents.mesh.count = visible;
@@ -237,7 +266,7 @@ export class WarRenderer {
         const bannerPoint = campaignPoint(war.campaign.route, company.progress, fallback);
         bannerPoint.x += -Math.sin(yaw) * 0.8 + Math.cos(yaw) * 1.05;
         bannerPoint.z += -Math.cos(yaw) * 0.8 - Math.sin(yaw) * 1.05;
-        const safeBanner = this.walking.isWalkable(bannerPoint) && visible > 0;
+        const safeBanner = this.walking.isWalkable(bannerPoint) && living > 0;
         company.standard.pole.visible = company.standard.cloth.visible = safeBanner;
         const bannerGround = this.elevationAt(bannerPoint.x, bannerPoint.z);
         company.standard.pole.position.set(bannerPoint.x, bannerGround + 0.75, bannerPoint.z);
@@ -252,7 +281,7 @@ export class WarRenderer {
         position.needsUpdate = true;
         company.standard.cloth.geometry.computeVertexNormals();
         company.camp.visible = !resolved && (war.phase === 'mobilizing' || war.phase === 'marching') && war.campaign.route.length > 1;
-        this.updateSupport(company, center, yaw, visible, moving, reducedMotion ? 0 : battlePulse, time, fade);
+        this.updateSupport(company, center, yaw, living, moving, reducedMotion ? 0 : battlePulse, time, fade);
       });
 
       visual.route.visible = focusId === war.id && war.campaign.route.length > 1;
@@ -268,9 +297,35 @@ export class WarRenderer {
         this.part(visual.dust, i, p.x, this.elevationAt(p.x, p.z) + life * 0.7 + 0.15, p.z, angle, life, size);
       }
       visual.dust.instanceMatrix.needsUpdate = true;
-      visual.aftermath.update(this.state.month, elapsed, reducedMotion, (start, end) => this.walking.isSegmentWalkable(start, end));
       visual.spectacle.update(war, [a, b], visual.profiles, elapsed, battlePulse, fade, reducedMotion, visual.battleTime);
     }
+  }
+
+  private soldier(company: Company, index: number, p: { x: number; z: number }, ground: number, yaw: number,
+    pose: WeaponPose, step: number, fade: number, engaged: boolean, settle = 0): void {
+    this.part(company.body, index, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
+    company.accents.set(index, 'soldier', this.matrix.matrix, 1);
+    this.part(company.head, index, p.x + Math.sin(yaw) * pose.lean * 0.12, ground + 0.285 + Math.abs(step) * 0.012, p.z + Math.cos(yaw) * pose.lean * 0.12, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
+    for (let leg = 0; leg < 2; leg++) {
+      const offset = (leg === 0 ? -1 : 1) * 0.03;
+      this.part(company.legs, index * 2 + leg, p.x + Math.cos(yaw) * offset, ground + 0.052, p.z - Math.sin(yaw) * offset, yaw, step * (leg === 0 ? 0.6 : -0.6), fade);
+    }
+    for (let arm = 0; arm < 2; arm++) {
+      const lateralArm = arm === 0 ? -0.05 : 0.05;
+      const armForward = 0.025 * (1 - settle);
+      const armPitch = engaged ? (arm === 0 && company.style.shields ? 0.8 + pose.brace * 0.35 : 0.9 + pose.attack * 0.55) : -step * 0.4;
+      this.part(company.arms, index * 2 + arm, p.x + Math.cos(yaw) * lateralArm + Math.sin(yaw) * armForward,
+        ground + 0.195, p.z - Math.sin(yaw) * lateralArm + Math.cos(yaw) * armForward, yaw, armPitch * (1 - settle), fade);
+    }
+    const combatReady = engaged;
+    if (company.style.shields) {
+      const shieldForward = combatReady && (company.style.weapon === 'spear' || company.style.weapon === 'club' || company.style.weapon === 'bow') ? 0.08 : 0.045;
+      this.part(company.shield, index, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - pose.brace * 0.22, fade);
+    }
+    if (company.style.armour) this.part(company.helmet, index, p.x, ground + 0.305 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
+    const weaponForward = combatReady ? pose.reach - pose.recoil * 0.03 : 0.045;
+    const weaponPitch = combatReady ? pose.pitch : this.weaponPitch(company.style.weapon, false, step);
+    this.part(company.weapon, index, p.x + Math.sin(yaw) * weaponForward, ground + 0.205, p.z + Math.cos(yaw) * weaponForward, yaw, weaponPitch, fade);
   }
 
   private weaponPitch(weapon: PrimaryWeaponVisual, combatReady: boolean, step: number): number {
@@ -309,6 +364,7 @@ export class WarRenderer {
     this.matrix.rotation.set(pitch, yaw, 0, 'YXZ');
     this.matrix.scale.setScalar(scale);
     this.matrix.updateMatrix();
+    if (this.falling) this.matrix.matrix.premultiply(this.figureRoot);
     mesh.setMatrixAt(i, this.matrix.matrix);
   }
 
@@ -364,17 +420,19 @@ export class WarRenderer {
     const trim = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.75, metalness: style.armour ? 0.12 : 0 });
     const dark = new THREE.MeshStandardMaterial({ color: '#433b35', roughness: 1 });
     const metal = new THREE.MeshStandardMaterial({ color: '#5b5e5b', roughness: 0.66, metalness: 0.18 });
-    const body = new THREE.InstancedMesh(this.bodyGeometry, cosmic, MAX_FIGURES);
-    const head = new THREE.InstancedMesh(this.headGeometry, cosmic, MAX_FIGURES);
-    const legs = new THREE.InstancedMesh(this.legGeometry, cosmic, MAX_FIGURES * 2);
-    const arms = new THREE.InstancedMesh(this.legGeometry, cosmic, MAX_FIGURES * 2);
-    const accents = new CosmicRoleAccents(MAX_FIGURES);
+    const body = new THREE.InstancedMesh(this.bodyGeometry, cosmic, COMPANY_CAPACITY);
+    body.name = `Campaign soldiers ${side}`;
+    const head = new THREE.InstancedMesh(this.headGeometry, cosmic, COMPANY_CAPACITY);
+    const legs = new THREE.InstancedMesh(this.legGeometry, cosmic, COMPANY_CAPACITY * 2);
+    const arms = new THREE.InstancedMesh(this.legGeometry, cosmic, COMPANY_CAPACITY * 2);
+    const accents = new CosmicRoleAccents(COMPANY_CAPACITY);
     this.color.set(cosmicRoleFor('soldier').color);
     for (const mesh of [body, head, legs, arms]) for (let i = 0; i < mesh.instanceMatrix.count; i++) mesh.setColorAt(i, this.color);
-    const shield = new THREE.InstancedMesh(this.shieldGeometry, trim, MAX_FIGURES);
-    const helmet = new THREE.InstancedMesh(this.helmetGeometry, metal, MAX_FIGURES);
+    const shield = new THREE.InstancedMesh(this.shieldGeometry, trim, COMPANY_CAPACITY);
+    const helmet = new THREE.InstancedMesh(this.helmetGeometry, metal, COMPANY_CAPACITY);
     const weaponGeometry = this.makeWeaponGeometry(style.weapon);
-    const weapon = new THREE.InstancedMesh(weaponGeometry, style.weapon === 'rifle' || style.weapon === 'automatic' ? metal : dark, MAX_FIGURES);
+    const weapon = new THREE.InstancedMesh(weaponGeometry, style.weapon === 'rifle' || style.weapon === 'automatic' ? metal : dark, COMPANY_CAPACITY);
+    weapon.name = `Campaign weapons ${side}`;
     for (const mesh of [body, head, legs, arms, shield, helmet, weapon]) {
       mesh.frustumCulled = false;
       mesh.castShadow = true;

@@ -95,6 +95,7 @@ export class VegetationRenderer {
   private readonly recoveryZones = new Map<string, RecoveryZone>();
   private readonly managedSettlementIds = new Set<string>();
   private readonly lifecycle: ResolvedTreeLifecycle[];
+  private readonly cameraMorphology = new WeakMap<ResolvedTreeLifecycle, TreeMorphology>();
   private readonly flowers: FlowerField;
   private readonly birds: AmbientBirds;
   private readonly luminousFlora?: BioluminescentFlora;
@@ -222,8 +223,8 @@ export class VegetationRenderer {
 
   /**
    * Camera collision query against the same deterministic tree placements that are actually drawn.
-   * This is intentionally a lens-volume test, not a general physics system: CameraDirector uses it
-   * only to keep the viewer out of trunks/crowns while retaining its documentary composition.
+   * CameraDirector samples this volume along both swept lens paths and subject-silhouette rays.
+   * Crown bounds are conservative; gaps between foliage triangles do not count as readable views.
    */
   cameraLensObstruction(position: THREE.Vector3, padding = 0.16): number {
     const cell = cellAt(this.world, position.x, position.z);
@@ -241,7 +242,13 @@ export class VegetationRenderer {
           const phenotype = this.phenotypes[index];
           if (!tree || !bucket || !lifecycle || !phenotype || lifecycle.fallen) continue;
 
-          const morphology = resolveTreeMorphology(phenotype, lifecycle);
+          // Lifecycles are replaced when ecology changes. Reuse their immutable morphology
+          // across the thousands of lens/silhouette probes made during a camera survey.
+          let morphology = this.cameraMorphology.get(lifecycle);
+          if (!morphology) {
+            morphology = resolveTreeMorphology(phenotype, lifecycle);
+            this.cameraMorphology.set(lifecycle, morphology);
+          }
           const renderedHeight = Math.max(
             0.8,
             bucket.crownHeight * lifecycle.scale * Math.max(morphology.trunkHeight, morphology.crownHeight),

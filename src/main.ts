@@ -421,6 +421,11 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   await persist();
 
   const frame = (now: number): void => {
+    if (document.hidden) {
+      lastTime = now;
+      rafId = window.requestAnimationFrame(frame);
+      return;
+    }
     const deltaSeconds = Math.min(0.1, Math.max(0, (now - lastTime) / 1000));
     lastTime = now;
     elapsedSeconds += deltaSeconds;
@@ -441,10 +446,14 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       // Adaptive tick budget: quiet deep time runs wide steps; wars, migrations, and
       // transformations get fine steps. Simulation rules stay independent of render FPS.
       const tickBudget = presentation.tickBudget(simulation.state);
+      const tickDeadline = performance.now() + 4;
       while (accumulator >= tickDuration && ticks < tickBudget) {
         simulation.step();
         accumulator -= tickDuration;
         ticks += 1;
+        // A tick is atomic, but a backlog must yield to the camera and renderer. Keep the
+        // remaining accumulated time so history is neither skipped nor reordered.
+        if (performance.now() >= tickDeadline) break;
       }
     }
     view.update(deltaSeconds, elapsedSeconds);
@@ -509,7 +518,10 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     rafId = window.requestAnimationFrame(frame);
   };
 
-  const persistWhenHidden = (): void => { if (document.visibilityState === 'hidden' && !runEnded) void persist(); };
+  const persistWhenHidden = (): void => {
+    lastTime = performance.now();
+    if (document.visibilityState === 'hidden' && !runEnded) void persist();
+  };
   const persistBeforeUnload = (): void => {
     if (!runEnded) {
       void persist();

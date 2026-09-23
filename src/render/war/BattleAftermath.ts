@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import type { HistoricalEvent, Vec2, War } from '../../sim/types';
 import { campaignPoint } from '../../sim/war/Campaign';
-import { createCosmicBodyGeometry, createCosmicHeadGeometry, COSMIC_HEIGHT_MULTIPLIER } from '../people/CosmicPeople';
 import type { MilitaryVisualStyle } from './MilitaryVisualLanguage';
-import { impactMoment, engagementGap, figurePosition } from './CombatChoreography';
+import { engagementGap } from './CombatChoreography';
+import { createCombatExchanges, exchangeFigurePose, exchangeImpactAt, formationCount, presentationHash, type CombatFigurePose } from './CombatExchanges';
 
 export const MAX_BATTLE_BODIES = 32;
 export const AFTERMATH_MONTHS = 12;
@@ -20,12 +20,29 @@ export interface CasualtyReceipt {
   readonly position: Vec2;
   readonly yaw: number;
   readonly impactAt: number;
+  readonly figure: CombatFigurePose;
 }
 
-function hash(text: string): number {
-  let value = 2166136261;
-  for (let i = 0; i < text.length; i++) value = Math.imul(value ^ text.charCodeAt(i), 16777619);
-  return value >>> 0;
+/** Shared by the original company meshes from the instant of impact through permanent rest. */
+export function casualtyLifecycle(life: number, reducedMotion: boolean) {
+  const t = reducedMotion ? Infinity : Math.max(0, life);
+  const fall = Math.min(1, Math.max(0, (t - 0.38) / 0.95));
+  const eased = fall * fall * (3 - 2 * fall);
+  const stagger = Math.min(1, t / 0.38);
+  return {
+    phase: t < 0.12 ? 'hit' : t < 0.38 ? 'stagger' : t < 1.33 ? 'fall' : 'corpse',
+    fall: eased, pitch: -eased * Math.PI / 2,
+    retreat: stagger * 0.035,
+    reaction: Math.sin(Math.min(1, t / 0.38) * Math.PI) * 0.18,
+    settle: Math.min(1, t / 0.6),
+  } as const;
+}
+export interface CasualtyFrame {
+  record: CasualtyReceipt;
+  life: number;
+  fade: number;
+  ground: number;
+  motion: ReturnType<typeof casualtyLifecycle>;
 }
 
 export function casualtyReceipts(war: War, history: readonly HistoricalEvent[], month: number,
@@ -44,18 +61,32 @@ export function casualtyReceipts(war: War, history: readonly HistoricalEvent[], 
     const after = campaignPoint(war.campaign.route, front + 0.006, event.location);
     const yaw = Math.atan2(after.x - before.x, after.z - before.z);
     const gap = engagementGap(styles, event.context['engagementMode']);
-    for (const side of [0, 1] as const) {
+    // Frozen mobilization counts also define the event's visible formation. Current strengths
+    // are deliberately excluded: later attrition/reinforcement must not reshuffle old remains.
+    const counts = [formationCount(war.campaign.initialStrengthA), formationCount(war.campaign.initialStrengthB)] as const;
+    const plan = createCombatExchanges(event.id, event.location, yaw, gap, styles, counts);
+    const selected = ([0, 1] as const).map(side => {
       const losses = event.context[side === 0 ? 'casualtiesA' : 'casualtiesB'];
-      if (typeof losses !== 'number' || !Number.isFinite(losses) || losses < 1) continue;
-      const count = Math.min(3, Math.floor(losses));
-      const offset = hash(`${war.id}:${event.id}:${side}`) % 3;
-      for (let sample = 0; sample < count && receipts.length < MAX_BATTLE_BODIES; sample++) {
-        const slot = (offset + sample) % 3;
-        receipts.push({ id: `${war.id}:${event.id}:${side}:${slot}`, warId: war.id, eventId: event.id,
-          month: event.month, side, slot, position: figurePosition(event.location, yaw, gap, styles[side], side, slot),
-          impactAt: impactMoment(styles[side === 0 ? 1 : 0], slot, side === 0 ? 1 : 0),
-          yaw: yaw + side * Math.PI });
-      }
+      if (typeof losses !== 'number' || !Number.isFinite(losses) || losses < 1) return [];
+      const count = Math.min(counts[side], 8, Math.floor(losses), 1 + Math.floor(Math.log2(losses)));
+      // Hash-ranked sampling without replacement across every visible rank/lateral slot.
+      return Array.from({ length: counts[side] }, (_, slot) => slot)
+        .sort((a, b) => presentationHash(`${war.id}:${event.id}:${side}:${a}`) - presentationHash(`${war.id}:${event.id}:${side}:${b}`) || a - b)
+        .slice(0, count);
+    });
+    // Interleave sides so a nearly-full global pool cannot systematically erase one side.
+    for (let sample = 0; sample < Math.max(selected[0]!.length, selected[1]!.length); sample++) for (const side of [0, 1] as const) {
+      const slot = selected[side]![sample];
+      if (slot === undefined || receipts.length >= MAX_BATTLE_BODIES) continue;
+      const exchange = plan.exchanges.find(item => item.slots[side] === slot);
+      // Rear-rank aggregate losses do not invent a melee attacker reaching through other soldiers.
+      const impactAt = exchange ? exchangeImpactAt(plan, exchange, side) : 0.6 + presentationHash(`${event.id}:${side}:${slot}:impact`) % 2000 / 1000;
+      const opposite = (1 - side) as 0 | 1;
+      const partnerFell = exchange && selected[opposite]!.includes(exchange.slots[opposite])
+        && exchangeImpactAt(plan, exchange, opposite) < impactAt;
+      const figure = exchangeFigurePose(plan, side, slot, impactAt, !partnerFell, false);
+      receipts.push({ id: `${war.id}:${event.id}:${side}:${slot}`, warId: war.id, eventId: event.id,
+        month: event.month, side, slot, position: figure.position, impactAt, yaw: figure.yaw, figure });
     }
   }
   return receipts;
@@ -65,12 +96,8 @@ export class BattleAftermath {
   readonly group = new THREE.Group();
   private receipts: CasualtyReceipt[] = [];
   private readonly started = new Map<string, number>();
-  private readonly root = new THREE.Object3D();
   private readonly local = new THREE.Object3D();
-  private readonly matrix = new THREE.Matrix4();
-  private readonly bodies = this.pool('Recorded fallen soldiers', createCosmicBodyGeometry(), '#655258', MAX_BATTLE_BODIES);
-  private readonly heads = this.pool('Fallen heads', createCosmicHeadGeometry(), '#877875', MAX_BATTLE_BODIES);
-  private readonly limbs = this.pool('Fallen limbs', new THREE.BoxGeometry(0.035, 0.095, 0.035), '#554b48', MAX_BATTLE_BODIES * 4);
+  private frames: CasualtyFrame[] = [];
   private readonly kit = this.pool('Abandoned battlefield equipment', new THREE.BoxGeometry(0.03, 0.025, 0.22), '#62584a', MAX_BATTLE_BODIES);
   private readonly groundMarks = this.pool('Battlefield disturbed ground', new THREE.CircleGeometry(0.23, 7), '#776550', MAX_BATTLE_BODIES);
   private readonly stains = this.pool('Recorded blood traces', new THREE.CircleGeometry(0.115, 7), '#682c2b', MAX_BATTLE_BODIES);
@@ -82,6 +109,11 @@ export class BattleAftermath {
   }
 
   get records(): readonly CasualtyReceipt[] { return this.receipts; }
+  get visibleCasualties(): readonly CasualtyFrame[] { return this.frames; }
+
+  impactTime(eventId: string, side: number, slot: number): number | undefined {
+    return this.receipts.find(record => record.eventId === eventId && record.side === side && record.slot === slot)?.impactAt;
+  }
 
   sync(war: War, history: readonly HistoricalEvent[], month: number, elapsed: number,
     styles: readonly [MilitaryVisualStyle, MilitaryVisualStyle]): void {
@@ -96,7 +128,7 @@ export class BattleAftermath {
   }
 
   suppress(eventId: string | undefined, side: number, slot: number, elapsed: number, reducedMotion: boolean): boolean {
-    return this.receipts.some(record => record.eventId === eventId && record.side === side && record.slot === slot
+    return this.frames.some(({ record }) => record.eventId === eventId && record.side === side && record.slot === slot
       && (reducedMotion || elapsed - this.started.get(record.id)! >= record.impactAt));
   }
 
@@ -113,6 +145,7 @@ export class BattleAftermath {
 
   update(month: number, elapsed: number, reducedMotion: boolean, clear: (a: Vec2, b: Vec2) => boolean): void {
     if (this.disposed) return;
+    this.frames.length = 0;
     let count = 0;
     let particles = 0;
     for (let index = 0; index < this.receipts.length; index++) {
@@ -129,24 +162,14 @@ export class BattleAftermath {
       const fade = Math.min(1, Math.max(0, (AFTERMATH_MONTHS - age) / 4));
       const life = reducedMotion ? 10 : elapsed - this.started.get(record.id)! - record.impactAt;
       if (life < 0) continue;
-      const fall = Math.min(1, Math.max(0, (life - 0.32) / 0.9));
-      const eased = fall * fall * (3 - 2 * fall);
+      const motion = casualtyLifecycle(life, reducedMotion);
+      const eased = motion.fall;
       const p = record.position;
       // Fall backwards into the casualty's own half of the battlefield; protect the entire body.
-      const end = { x: p.x - Math.sin(record.yaw) * 0.34, z: p.z - Math.cos(record.yaw) * 0.34 };
+      const end = { x: p.x - Math.sin(record.yaw) * 0.52, z: p.z - Math.cos(record.yaw) * 0.52 };
       if (!clear(p, end) || fade <= 0) continue;
       const ground = Math.max(this.elevationAt(p.x, p.z), this.elevationAt(end.x, end.z));
-      this.root.position.set(p.x, ground + 0.025, p.z);
-      this.root.rotation.set(-eased * Math.PI / 2, record.yaw, life < 0.32 ? Math.sin(life * 24) * 0.12 : 0, 'YXZ');
-      this.root.scale.setScalar(fade);
-      this.root.updateMatrix();
-      const bodyScale = 0.28 * COSMIC_HEIGHT_MULTIPLIER;
-      this.part(this.bodies, count, 0, 0.16, 0, bodyScale);
-      this.part(this.heads, count, 0, 0.285, 0, bodyScale);
-      this.part(this.limbs, count * 4, -0.03, 0.052, 0, 1);
-      this.part(this.limbs, count * 4 + 1, 0.03, 0.052, 0, 1);
-      this.part(this.limbs, count * 4 + 2, -0.055, 0.195, 0, 1);
-      this.part(this.limbs, count * 4 + 3, 0.055, 0.195, 0, 1);
+      this.frames.push({ record, life, fade, ground: this.elevationAt(p.x, p.z) + (ground - this.elevationAt(p.x, p.z)) * motion.fall, motion });
       this.local.position.set(p.x + Math.cos(record.yaw) * 0.09, ground + 0.02, p.z - Math.sin(record.yaw) * 0.09);
       this.local.rotation.set(0, record.yaw + 0.4, 0);
       this.local.scale.setScalar(fade * eased);
@@ -170,19 +193,9 @@ export class BattleAftermath {
       }
       count++;
     }
-    this.bodies.count = this.heads.count = this.kit.count = this.stains.count = this.groundMarks.count = count;
-    this.limbs.count = count * 4;
+    this.kit.count = this.stains.count = this.groundMarks.count = count;
     this.impacts.count = particles;
-    for (const mesh of [this.bodies, this.heads, this.limbs, this.kit, this.stains, this.groundMarks, this.impacts]) mesh.instanceMatrix.needsUpdate = true;
-  }
-
-  private part(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scale: number): void {
-    this.local.position.set(x, y, z);
-    this.local.rotation.set(0, 0, 0);
-    this.local.scale.setScalar(scale);
-    this.local.updateMatrix();
-    this.matrix.multiplyMatrices(this.root.matrix, this.local.matrix);
-    mesh.setMatrixAt(index, this.matrix);
+    for (const mesh of [this.kit, this.stains, this.groundMarks, this.impacts]) mesh.instanceMatrix.needsUpdate = true;
   }
 
   private pool(name: string, geometry: THREE.BufferGeometry, color: string, capacity: number): THREE.InstancedMesh {
@@ -198,10 +211,11 @@ export class BattleAftermath {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const mesh of [this.bodies, this.heads, this.limbs, this.kit, this.stains, this.groundMarks, this.impacts]) {
+    for (const mesh of [this.kit, this.stains, this.groundMarks, this.impacts]) {
       mesh.dispose(); mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
     }
     this.receipts = [];
+    this.frames = [];
     this.started.clear();
     this.group.clear();
   }

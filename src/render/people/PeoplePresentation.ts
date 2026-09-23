@@ -58,6 +58,7 @@ export interface SocialPod {
   index: number;
   members: string[];
   kind: SocialPodKind;
+  center?: Vec2;
 }
 
 export interface SocialGroup {
@@ -85,7 +86,7 @@ export interface GroupPlacement {
 /** People who are travelling keep their own route; only settled attendants form gatherings. */
 export function groupKeyFor(person: Person): string | undefined {
   const navigation = person.navigation;
-  if (!navigation || navigation.traveling) return undefined;
+  if (!person.alive || !navigation || navigation.traveling || navigation.schedulePhase === 'emergency') return undefined;
   if (COHESION[navigation.destinationKind] === undefined) return undefined;
   return `${navigation.destinationKind}:${navigation.destinationId}`;
 }
@@ -255,6 +256,7 @@ export function conversationPodFor(group: SocialGroup | undefined, personId: str
 }
 
 export function conversationPodCenter(group: SocialGroup, pod: SocialPod): Vec2 {
+  if (pod.center) return { ...pod.center };
   const phase = unit(`${group.key}:phase`) * Math.PI * 2;
   const podCount = Math.max(1, group.pods?.length ?? 1);
   const angle = phase + pod.index * GOLDEN_ANGLE;
@@ -267,16 +269,45 @@ export function conversationPodCenter(group: SocialGroup, pod: SocialPod): Vec2 
 }
 
 function buildConversationalPods(group: SocialGroup, peopleById: ReadonlyMap<string, SocialPerson>): SocialPod[] {
-  const sizes = conversationalPodSizes(group.members.length);
+  const remaining = new Set(group.members);
   const pods: SocialPod[] = [];
-  let cursor = 0;
-  for (let index = 0; index < sizes.length; index++) {
-    const size = sizes[index]!;
-    const members = group.members.slice(cursor, cursor + size);
-    cursor += size;
+  while (remaining.size) {
+    const seed = remaining.values().next().value!;
+    const members = [seed];
+    remaining.delete(seed);
+    const desired = conversationalPodSizes(remaining.size + 1)[0]!;
+    while (members.length < desired && remaining.size) {
+      const candidates = [...remaining].filter(id => members.every(member => {
+        const a = peopleById.get(member)!, b = peopleById.get(id)!;
+        return Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z) <= 2.4
+          && !a.socialAvoidIds?.includes(id) && !b.socialAvoidIds?.includes(member);
+      }));
+      const score = (id: string) => members.reduce((sum, member) => {
+        const a = peopleById.get(member)!, b = peopleById.get(id)!;
+        return sum + (a.socialAffinityIds?.includes(id) || b.socialAffinityIds?.includes(member) ? 5 : 0)
+          + (a.householdId === b.householdId ? 2 : 0)
+          + (isChildPerson(a) === isChildPerson(b) ? 1 : 0)
+          - Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
+      }, 0);
+      candidates.sort((a, b) => score(b) - score(a) || a.localeCompare(b));
+      if (!candidates.length) break;
+      members.push(candidates[0]!); remaining.delete(candidates[0]!);
+    }
     const childCount = members.filter(id => isChildPerson(peopleById.get(id))).length;
     const kind: SocialPodKind = childCount === members.length ? 'children' : childCount === 0 ? 'adult' : 'mixed';
-    pods.push({ id: `${group.key}:pod:${index}`, index, members, kind });
+    const center = members.reduce((at, id) => {
+      const position = peopleById.get(id)!.position;
+      return { x: at.x + position.x / members.length, z: at.z + position.z / members.length };
+    }, { x: 0, z: 0 });
+    pods.push({ id: `${group.key}:pod:${seed}`, index: pods.length, members, kind, center });
+  }
+  // Co-located arrivals still need separate conversational space.
+  for (const pod of pods) {
+    if (pods.some(other => other !== pod && Math.hypot(other.center!.x - pod.center!.x, other.center!.z - pod.center!.z) < 0.6)) {
+      const angle = unit(`${pod.id}:space`) * Math.PI * 2;
+      pod.center!.x += Math.cos(angle) * 0.55;
+      pod.center!.z += Math.sin(angle) * 0.55;
+    }
   }
   return pods;
 }

@@ -1,0 +1,96 @@
+import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
+import { CameraDirector, CameraVisibilityHysteresis, cameraShotValidity, cameraSubjectVisibility, cameraVisibilityCorridor, resolveCameraSafety } from '../src/render/CameraDirector';
+import { Simulation } from '../src/sim/Simulation';
+import { Historian } from '../src/historian/Historian';
+
+const ground = (): number => 0;
+function scene() {
+  const sim = new Simulation({ seed: 'visibility-corridor', startMode: 'established', startingPopulation: 40, settlementCount: [2, 2], world: { size: 20 } });
+  sim.state.arrival = undefined;
+  sim.state.history = [];
+  for (const cell of sim.state.world.cells) cell.wood = 0;
+  for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+  return sim;
+}
+const subject = new THREE.Vector3(0, 0.17, 0);
+const authored = new THREE.Vector3(3, 0.8, 0);
+const crown = (p: THREE.Vector3): number => Math.abs(p.x - 1.5) < 0.3 && Math.abs(p.z) < 0.3 && p.y < 2 ? 4 : 0;
+
+describe('continuous documentary visibility', () => {
+  it('rejects an outside lens when rendered foliage hides its subject and recovers without climbing', () => {
+    const sim = scene();
+    expect(crown(authored)).toBe(0);
+    expect(cameraSubjectVisibility(sim.state, authored, subject, ground, crown)).toBe(0);
+    const safe = resolveCameraSafety(sim.state, authored, subject, ground, { environmentProbe: crown, previousPosition: authored });
+    expect(safe.valid).toBe(true);
+    expect(safe.subjectVisibility).toBeGreaterThanOrEqual(0.67);
+    expect(safe.requiresCut).toBe(true);
+    expect(safe.position.y).toBe(authored.y);
+  });
+
+  it('does not accept a tiny central foliage gap or skip a close foreground crown', () => {
+    const sim = scene();
+    const close = new THREE.Vector3(1, 0.8, 0);
+    const gap = (p: THREE.Vector3): number => p.x > 0.3 && p.x < 0.8 && Math.abs(p.z) > 0.008 ? 4 : 0;
+    expect(cameraSubjectVisibility(sim.state, close, subject, ground, gap)).toBeLessThan(0.5);
+  });
+
+  it('rejects travel between clear endpoints when the intermediate subject sightline is blocked', () => {
+    const sim = scene();
+    const a = new THREE.Vector3(3, 0.8, -2), b = new THREE.Vector3(3, 0.8, 2);
+    const options = { environmentProbe: crown };
+    expect(cameraShotValidity(sim.state, a, subject, ground, options).valid).toBe(true);
+    expect(cameraShotValidity(sim.state, b, subject, ground, options).valid).toBe(true);
+    expect(cameraVisibilityCorridor(sim.state, a, b, subject, ground, options)).toBe(false);
+  });
+
+  it('allows brief occlusion, resets after recovery, and fails within a quarter second', () => {
+    const sim = scene(), hysteresis = new CameraVisibilityHysteresis();
+    const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
+    const clear = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: () => 0 });
+    expect(hysteresis.update(blocked, 0.1)).toBe(false);
+    expect(hysteresis.update(clear, 0.1)).toBe(false);
+    expect(hysteresis.update(blocked, 0.15)).toBe(false);
+    expect(hysteresis.update(blocked, 0.1)).toBe(true);
+    expect(hysteresis.score).toBeLessThan(0.5);
+  });
+
+  it('protects each subject rather than only the empty midpoint', () => {
+    const sim = scene();
+    const person = new THREE.Vector3(0, 0.17, 1);
+    const probe = (p: THREE.Vector3): number => Math.abs(p.x - 1.5) < 0.3 && Math.abs(p.z - 0.5) < 0.25 ? 4 : 0;
+    expect(cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: probe }).valid).toBe(true);
+    expect(cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: probe, subjects: [subject, person] }).valid).toBe(false);
+  });
+
+  it('bounds actual rendered-camera occlusion and retains the recovered side during narration', () => {
+    const sim = scene(), historian = new Historian(sim.config);
+    const person = sim.state.people[0]!;
+    vi.spyOn(historian, 'chooseScene').mockReturnValue({ ...historian.chooseScene(sim.state),
+      id: 'founding-cast:introduction:0:test', kind: 'worker-follow', subjectId: person.id, position: { x: 0, z: 0 } });
+    const obstacle = new THREE.Vector3(1000, 0, 1000);
+    const probe = (p: THREE.Vector3): number => Math.hypot(p.x - obstacle.x, p.z - obstacle.z) < 0.35 && p.y < 2 ? 4 : 0;
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 200);
+    const director = new CameraDirector(camera, sim.config, historian, () => ({ x: 0, z: 0, footY: 0 }), undefined, probe);
+    director.update(1 / 30, 0, sim.state, ground);
+    obstacle.copy(camera.position).lerp(subject, 0.5);
+    let consecutive = 0, worst = 0;
+    const recovered: THREE.Vector3[] = [];
+    for (let frame = 1; frame < 75; frame++) {
+      director.update(1 / 30, frame / 30, sim.state, ground);
+      const visible = cameraSubjectVisibility(sim.state, camera.position, subject, ground, probe);
+      consecutive = visible < 0.5 ? consecutive + 1 : 0;
+      worst = Math.max(worst, consecutive);
+      if (frame > 20) recovered.push(camera.position.clone());
+    }
+    expect(worst).toBeLessThanOrEqual(8);
+    expect(recovered.every(p => p.y < 1.2)).toBe(true);
+    expect(recovered.every(p => p.distanceTo(recovered[0]!) < 0.1)).toBe(true);
+  });
+
+  it('reports failure explicitly when every candidate is inside vegetation', () => {
+    const sim = scene();
+    expect(resolveCameraSafety(sim.state, authored, subject, ground, { environmentProbe: () => 4 }).valid).toBe(false);
+  });
+});

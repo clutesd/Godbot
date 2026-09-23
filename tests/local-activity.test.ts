@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext, type LocalActivityState } from '../src/render/people/LocalActivityPresentation';
+import { conversationTurn, LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext, type LocalActivityState } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../src/render/people/PeoplePresentation';
@@ -1015,5 +1015,55 @@ describe('displacement-driven human animation', () => {
       expect(pose.leftHipRotation).toBe(0);
     }
     expect(Math.max(...samples) - Math.min(...samples)).toBeGreaterThan(0.05);
+  });
+});
+
+
+describe('natural social continuity', () => {
+  it('uses variable shared turn lengths without skipping or reversing turns', () => {
+    let previous = conversationTurn('gathering', 0);
+    const boundaries: number[] = [];
+    for (let t = 0.05; t < 100; t += 0.05) {
+      const next = conversationTurn('gathering', t);
+      expect(next.epoch - previous.epoch).toBeGreaterThanOrEqual(0);
+      expect(next.epoch - previous.epoch).toBeLessThanOrEqual(1);
+      expect(next.progress).toBeGreaterThanOrEqual(0);
+      expect(next.progress).toBeLessThan(1);
+      if (next.epoch !== previous.epoch) boundaries.push(t);
+      previous = next;
+    }
+    const lengths = boundaries.slice(1).map((t, i) => t - boundaries[i]!);
+    expect(Math.max(...lengths) - Math.min(...lengths)).toBeGreaterThan(1);
+  });
+
+  it('lets an exhausted resident finish sitting and rising without accepting an invitation mid-pose', () => {
+    const a = person('a'), b = person('b');
+    for (const p of [a, b]) { p.activity = 'rest'; p.navigation!.destinationKind = 'home'; }
+    a.energy = 0.1; b.position.x = 0.7;
+    const h = harness([a, b]);
+    let seatedFrames = 0, risingSeen = false;
+    for (let i = 0; i < 2400; i++) {
+      h.tick();
+      const state = h.local.get(a.id)!;
+      if (state.rest) expect(state.encounter).toBeUndefined();
+      if (state.restStage === 'settled') seatedFrames++;
+      if (state.restStage === 'rising') risingSeen = true;
+    }
+    expect(seatedFrames).toBeGreaterThan(300);
+    expect(risingSeen).toBe(true);
+  });
+
+  it('gives bereavement quiet reflection without inventing or changing memories', () => {
+    const p = person('bereaved') as MemoryPerson;
+    p.personalMemories = [{ id: 'loss', kind: 'loss', month: 359, emotionalWeight: 1, valence: -1, reason: 'family-loss' }];
+    const before = JSON.stringify(p);
+    const h = harness([p]);
+    let reflected = false;
+    for (let i = 0; i < 1800; i++) {
+      h.tick();
+      reflected ||= h.local.get(p.id)?.animation === 'reflect';
+    }
+    expect(reflected).toBe(true);
+    expect(JSON.stringify(p)).toBe(before);
   });
 });

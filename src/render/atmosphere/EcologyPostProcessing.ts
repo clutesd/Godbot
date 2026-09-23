@@ -25,6 +25,7 @@ import {
  */
 export class EcologyPostProcessing {
   private readonly composer?: EffectComposer;
+  private pixelRatio: number;
   private readonly aerialPerspective?: ShaderPass;
   private readonly ssao?: SSAOPass;
   private readonly bloom?: UnrealBloomPass;
@@ -38,6 +39,7 @@ export class EcologyPostProcessing {
 
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
     private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
+    this.pixelRatio = renderer.getPixelRatio();
     this.environmentFrame = new EnvironmentFrameRig(renderer, scene);
     this.directionalAtmosphere = new DirectionalAtmosphereRig(scene);
     this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
@@ -80,6 +82,11 @@ export class EcologyPostProcessing {
   }
 
   resize(width: number, height: number): void {
+    // EffectComposer retains its own ratio; keep depth, colour and atmospheric targets aligned.
+    if (this.composer && this.pixelRatio !== this.renderer.getPixelRatio()) {
+      this.pixelRatio = this.renderer.getPixelRatio();
+      this.composer.setPixelRatio(this.pixelRatio);
+    }
     this.composer?.setSize(width, height);
     if (this.ssao) {
       const aoScale = this.renderer.getPixelRatio() * 0.65;

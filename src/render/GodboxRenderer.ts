@@ -1,6 +1,7 @@
 import { createResourceCargo } from './resources/ResourceCargo';
 import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
+import { AdaptiveResolution } from './AdaptiveResolution';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNetwork';
 import type { GodboxConfig } from '../config';
@@ -374,6 +375,7 @@ export class GodboxRenderer {
   private lastCatastropheHistoryLength = -1;
   private lastCatastropheMonth = -1;
   private width = 1;
+  private readonly adaptiveResolution = new AdaptiveResolution();
   private height = 1;
   private readonly resizeHandler = (): void => this.resize();
 
@@ -500,6 +502,7 @@ export class GodboxRenderer {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
+    if (this.adaptiveResolution.sample(deltaSeconds)) this.resize();
     // Human life advances from renderer time even when documentary history is slowed or frozen.
     // Keep this before all state-derived presentation work so a dramatic hold never stalls people.
     const humanLife = this.humanLifeClock.advance(deltaSeconds);
@@ -541,7 +544,6 @@ export class GodboxRenderer {
     this.updateSmoke(elapsedSeconds);
     this.waterSystem.update(elapsedSeconds);
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
-    this.skyAtmosphere.followCamera(this.camera);
     this.vegetationLodAccumulator += deltaSeconds;
     if (this.vegetationLodAccumulator >= VEGETATION_LOD_INTERVAL_SECONDS) {
       this.vegetationLodAccumulator = 0;
@@ -551,6 +553,7 @@ export class GodboxRenderer {
       this.vegetation.updateLod(this.camera.position);
     }
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    this.skyAtmosphere.followCamera(this.camera);
     this.foundingPods.update(this.camera);
     this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
@@ -3779,11 +3782,13 @@ export class GodboxRenderer {
     const rect = this.host.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
-    if (width === this.width && height === this.height) return;
+    const pixelRatio = Math.min(window.devicePixelRatio, this.config.render.maxPixelRatio) * this.adaptiveResolution.scale;
+    if (width === this.width && height === this.height && Math.abs(this.renderer.getPixelRatio() - pixelRatio) < 0.001) return;
     this.width = width;
     this.height = height;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(pixelRatio);
     this.renderer.setSize(width, height, false);
     this.postProcessing.resize(width, height);
     this.vegetation.setViewport(height, this.renderer.getPixelRatio());
