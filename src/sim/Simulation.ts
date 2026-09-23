@@ -556,16 +556,29 @@ export class Simulation {
     const limit = this.config.simulation.historyLimit;
     let excess = this.state.history.length - limit;
     if (excess <= 0) return;
-    const kept: HistoricalEvent[] = [];
-    for (const event of this.state.history) {
+
+    // Compact in place first. Routine events are by far the common retention case, so avoid
+    // allocating several ~50k-entry arrays every time history crosses the cap.
+    let write = 0;
+    for (let read = 0; read < this.state.history.length; read += 1) {
+      const event = this.state.history[read]!;
       if (excess > 0 && event.significance < 0.3) {
         excess -= 1;
         continue;
       }
-      kept.push(event);
+      this.state.history[write++] = event;
     }
-    const anchors = kept.filter(e => e.type === 'ARRIVAL_DAY');
-    const ordinary = kept.filter(e => e.type !== 'ARRIVAL_DAY');
+    this.state.history.length = write;
+    if (this.state.history.length <= limit) return;
+
+    // Rare fallback: if significance alone could not get under the hard cap, preserve permanent
+    // Arrival Day anchors and the same most-recent ordinary events as the previous implementation.
+    const anchors: HistoricalEvent[] = [];
+    const ordinary: HistoricalEvent[] = [];
+    for (const event of this.state.history) {
+      if (event.type === 'ARRIVAL_DAY') anchors.push(event);
+      else ordinary.push(event);
+    }
     this.state.history = [...anchors, ...ordinary.slice(-Math.max(1, limit - anchors.length))];
   }
 
