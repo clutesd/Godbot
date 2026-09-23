@@ -3,6 +3,7 @@ import { createResourceCargo } from './resources/ResourceCargo';
 import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
 import { AdaptiveResolution } from './AdaptiveResolution';
+import { RenderMaintenanceScheduler, type RenderMaintenanceTask } from './RenderMaintenanceScheduler';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNetwork';
 import type { GodboxConfig } from '../config';
@@ -351,7 +352,7 @@ export class GodboxRenderer {
   private readonly skyAtmosphere: SkyAtmosphere;
   private readonly ecology: EcologyField;
   private readonly postProcessing: EcologyPostProcessing;
-  private vegetationLodAccumulator = 0;
+  private readonly maintenance = new RenderMaintenanceScheduler();
   private arrivalRenderBudgetActive = false;
   private readonly arrivalVegetationCamera = new THREE.Vector3();
   private readonly routePlacementReports = new Map<string, RoutePlacementReport>();
@@ -373,7 +374,6 @@ export class GodboxRenderer {
   private lastSettlementSignature = '';
   private bannerHistoryIndexLength = -1;
   private readonly bannerHistoryByEntity = new Map<string, SimulationState['history']>();
-  private structuralAccumulator = 0;
   private lastVisualSeason = -1;
   private latestCatastrophe?: SimulationState['history'][number];
   private lastCatastropheHistoryLength = -1;
@@ -513,10 +513,9 @@ export class GodboxRenderer {
       this.arrivalRenderBudgetActive = renderPolicy.active;
       this.setHumanPresentationVisible(!renderPolicy.active);
       if (!renderPolicy.active) {
-        // The first history frame catches presentation state up immediately after the deliberately
-        // frozen prologue instead of waiting for the next structural/LOD interval.
-        this.structuralAccumulator = 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond);
-        this.vegetationLodAccumulator = VEGETATION_LOD_INTERVAL_SECONDS;
+        // Catch presentation state up after the deliberately frozen prologue, but still release
+        // only one heavy maintenance job per render frame so history never starts with a hitch.
+        this.maintenance.requestCatchUp();
       }
     }
 
@@ -539,7 +538,7 @@ export class GodboxRenderer {
     if (renderPolicy.refreshWorldPresentation) {
       this.updateSettlementBanners(elapsedSeconds);
       this.updateAdvancedAtmosphere(elapsedSeconds);
-      this.updateSeasonalPresentation();
+      if (this.state.month !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
       for (const [key, entry] of this.constructionAssemblies) {
         const project = entry.settlement.development?.project;
         if (!entry.site.parent || project?.plotId !== key) { this.constructionAssemblies.delete(key); continue; }
@@ -556,14 +555,6 @@ export class GodboxRenderer {
     if (renderPolicy.animateHumans) this.updatePeople(humanLife.deltaSeconds, humanLife.elapsedSeconds);
 
     if (renderPolicy.refreshWorldPresentation) {
-      this.structuralAccumulator += deltaSeconds;
-      if (this.structuralAccumulator >= 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond)) {
-        this.structuralAccumulator = 0;
-        this.waterSystem.syncHydrology();
-        this.syncSettlements();
-        this.syncRoutes();
-        this.transitionTimeline.pruneCompleted();
-      }
       this.updateFirstFirePresentationVisuals();
       this.updateCaravans();
       this.updateSmoke(elapsedSeconds);
@@ -575,15 +566,14 @@ export class GodboxRenderer {
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
     this.vegetation.updateLeaves(elapsedSeconds);
 
-    if (renderPolicy.refreshVegetationLod) {
-      this.vegetationLodAccumulator += deltaSeconds;
-      if (this.vegetationLodAccumulator >= VEGETATION_LOD_INTERVAL_SECONDS) {
-        this.vegetationLodAccumulator = 0;
-        this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
-        this.vegetation.setDisturbance(this.state.settlements, foundingCampGroundArtifacts(this.state));
-        this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
-        this.vegetation.updateLod(this.camera.position);
-      }
+    if (renderPolicy.refreshWorldPresentation || renderPolicy.refreshVegetationLod) {
+      this.maintenance.advance(
+        deltaSeconds,
+        this.config.render.structuralUpdatesPerSecond,
+        VEGETATION_LOD_INTERVAL_SECONDS,
+      );
+      const maintenanceTask = this.maintenance.next();
+      if (maintenanceTask) this.runMaintenanceTask(maintenanceTask);
     }
 
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
@@ -600,6 +590,32 @@ export class GodboxRenderer {
       this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
     }
     this.postProcessing.render(this.ecology.night.value);
+  }
+
+  private runMaintenanceTask(task: RenderMaintenanceTask): void {
+    switch (task) {
+      case 'hydrology':
+        this.waterSystem.syncHydrology();
+        return;
+      case 'settlements':
+        this.syncSettlements();
+        return;
+      case 'routes':
+        this.syncRoutes();
+        return;
+      case 'timeline':
+        this.transitionTimeline.pruneCompleted();
+        return;
+      case 'vegetation':
+        this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
+        this.vegetation.setDisturbance(this.state.settlements, foundingCampGroundArtifacts(this.state));
+        this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
+        this.vegetation.updateLod(this.camera.position);
+        return;
+      case 'seasonal':
+        this.updateSeasonalPresentation();
+        return;
+    }
   }
 
   private setHumanPresentationVisible(visible: boolean): void {

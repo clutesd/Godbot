@@ -5,6 +5,7 @@ import '../src/render/GodboxRendererEnhanced';
 import { Simulation } from '../src/sim/Simulation';
 import type { Settlement } from '../src/sim/types';
 import type { DevelopmentResponse } from '../src/sim/development/types';
+import { RenderMaintenanceScheduler } from '../src/render/RenderMaintenanceScheduler';
 
 interface SettlementVisualState {
   group: THREE.Group;
@@ -126,6 +127,59 @@ function attachActiveProject(
   settlement.targetBuildings = settlement.buildings + 1;
 }
 
+
+
+describe('renderer maintenance scheduling', () => {
+  it('dephases structural and vegetation maintenance so only one heavy job is released per frame', () => {
+    const scheduler = new RenderMaintenanceScheduler();
+    scheduler.advance(0.25, 4, 0.4);
+
+    const released = [
+      scheduler.next(),
+      scheduler.next(),
+      scheduler.next(),
+      scheduler.next(),
+      scheduler.next(),
+    ];
+    expect(released.slice(0, 4)).toEqual(['hydrology', 'settlements', 'routes', 'timeline']);
+    expect(released[4]).toBeUndefined();
+
+    scheduler.advance(0.15, 4, 0.4);
+    expect(scheduler.next()).toBe('vegetation');
+    expect(scheduler.next()).toBeUndefined();
+  });
+
+  it('deduplicates overdue work instead of building an unbounded maintenance backlog', () => {
+    const scheduler = new RenderMaintenanceScheduler();
+    scheduler.advance(2, 4, 0.4);
+    expect(scheduler.pendingCount).toBe(5);
+
+    const tasks = Array.from({ length: 5 }, () => scheduler.next());
+    expect(new Set(tasks).size).toBe(5);
+    expect(scheduler.pendingCount).toBe(0);
+  });
+
+  it('lets a newly authoritative month request visual reconciliation without batching it with other work', () => {
+    const scheduler = new RenderMaintenanceScheduler();
+    scheduler.advance(0.25, 4, 0.4);
+    scheduler.request('seasonal', true);
+
+    expect(scheduler.next()).toBe('seasonal');
+    expect(scheduler.next()).toBe('hydrology');
+    expect(scheduler.pendingCount).toBe(3);
+  });
+
+  it('spreads a post-Arrival catch-up cycle across frames', () => {
+    const scheduler = new RenderMaintenanceScheduler();
+    scheduler.requestCatchUp();
+    expect(scheduler.pendingCount).toBe(5);
+
+    expect(scheduler.next()).toBe('hydrology');
+    expect(scheduler.pendingCount).toBe(4);
+    expect(scheduler.next()).toBe('settlements');
+    expect(scheduler.pendingCount).toBe(3);
+  });
+});
 
 describe('construction site presentation state', () => {
   it('classifies active, finishing, material-blocked and work-blocked sites from live authority', async () => {
