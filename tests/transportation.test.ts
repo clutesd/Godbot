@@ -104,7 +104,7 @@ describe('Geography-aware transportation', () => {
     setFloodedAt(world, first[Math.floor(first.length / 2)]!, true);
     const revised = walking.route(start, end);
     expect(check.mock.calls.length).toBeGreaterThan(3);
-    expect(revised).not.toEqual([]);
+    expect(revised).not.toEqual(first);
     check.mockRestore();
   });
 
