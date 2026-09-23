@@ -16,6 +16,7 @@ import {
   type RunArchiveRecord,
 } from './historian/RunArchive';
 import { Simulation } from './sim/Simulation';
+import { InteractiveTickBudget } from './sim/InteractiveTickBudget';
 import { representedPopulation } from './sim/advanced/AdvancedCivilizationSystem';
 import type { SimulationState } from './sim/types';
 import type { GodboxRenderer, PlacementSmokeReport } from './render/GodboxRenderer';
@@ -386,6 +387,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let lastTime = performance.now();
   let elapsedSeconds = 0;
   let accumulator = 0;
+  const interactiveTickBudget = new InteractiveTickBudget(4);
   let displayPopulation = representedPopulation(simulation.state);
   let lastObservationRevision = -1;
   let cinematicDialogueRevision = -1;
@@ -455,16 +457,18 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     if (simulation.config.autoRun && !runEnded && !wasArriving && !arrivalPaused) {
       accumulator += deltaSeconds;
       let ticks = 0;
-      // Adaptive tick budget: quiet deep time runs wide steps; wars, migrations, and
-      // transformations get fine steps. Simulation rules stay independent of render FPS.
+      // Quiet deep time may have backlog, but another atomic month only starts when its recent
+      // cost is expected to fit the remaining main-thread budget. Backlog stays in the accumulator:
+      // history is never skipped or reordered merely to catch up with wall-clock time.
       const tickBudget = presentation.tickBudget(simulation.state);
-      const tickDeadline = performance.now() + 4;
+      const tickDeadline = interactiveTickBudget.deadline(performance.now());
       while (accumulator >= tickDuration && ticks < tickBudget) {
+        const beforeTick = performance.now();
+        if (!interactiveTickBudget.canStart(beforeTick, tickDeadline, ticks)) break;
         simulation.step();
+        interactiveTickBudget.observe(performance.now() - beforeTick);
         accumulator -= tickDuration;
         ticks += 1;
-        // A tick is atomic, but a backlog must yield to the camera and renderer. Keep the
-        // remaining accumulated time so history is neither skipped nor reordered.
         if (performance.now() >= tickDeadline) break;
       }
     }
