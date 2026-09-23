@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { vegetationFixture } from './fixtures/vegetation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 

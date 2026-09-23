@@ -99,9 +99,11 @@ describe('Historian grounding', () => {
 
 describe('Presentation independence', () => {
   it('changes viewing speed without changing deterministic history', () => {
-    const config = { seed: 'presentation-is-read-only', startingPopulation: 240 };
+    // Preserve the 80-year comparison with a bounded multi-settlement world.
+    const config = { seed: 'presentation-is-read-only', startingPopulation: 120, simulation: { populationSoftCap: 240 }, world: { size: 24 }, settlementCount: [3, 3] as const };
     const observed = new Simulation(config);
     const control = new Simulation(config);
+    expect(observed.state.settlements.length).toBeGreaterThan(1);
     const historian = new Historian(observed.config);
     const presentation = new PresentationDirector(observed.config);
     observed.step(80 * 12);
@@ -133,9 +135,10 @@ describe('Presentation independence', () => {
   });
 
   it('keeps authoritative history identical across documentary and accelerated presentation presets', () => {
-    const seed = 'presentation-presets-read-only';
-    const documentary = new Simulation({ ...timePresetConfig('documentary'), seed });
-    const accelerated = new Simulation({ ...timePresetConfig('accelerated-experiment'), seed });
+    const fixture = { seed: 'presentation-presets-read-only', startingPopulation: 120, simulation: { populationSoftCap: 240 }, world: { size: 24 }, settlementCount: [3, 3] as const };
+    const documentary = new Simulation({ ...timePresetConfig('documentary'), ...fixture });
+    const accelerated = new Simulation({ ...timePresetConfig('accelerated-experiment'), ...fixture });
+    expect(documentary.state.settlements.length).toBeGreaterThan(1);
     const years = 60;
     documentary.step(years * 12);
     accelerated.step(years * 12);

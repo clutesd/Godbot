@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { vegetationFixture } from './fixtures/vegetation';
 import { createResourceCargo } from '../src/render/resources/ResourceCargo';
 import { ResourceFlowRenderer } from '../src/render/resources/ResourceFlowRenderer';

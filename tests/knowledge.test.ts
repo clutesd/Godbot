@@ -269,11 +269,18 @@ describe('Causal knowledge', () => {
 
   it('keeps discovery histories reproducible while allowing other seeds to diverge', () => {
     const run = (seed: string): unknown[] => {
-      const simulation = new Simulation({ seed, startingPopulation: 240 });
+      // Keep the century-long history while bounding terrain and population cost on CI.
+      const simulation = new Simulation({ seed, startingPopulation: 120, simulation: { populationSoftCap: 240 }, world: { size: 24 }, settlementCount: [3, 3] });
+      expect(simulation.state.settlements.length).toBeGreaterThan(1);
       simulation.step(100 * 12);
       return simulation.state.history.filter((event) => event.type === 'discovery' || event.type === 'knowledge-lost' || event.type === 'knowledge-rediscovered').map((event) => [event.month, event.type, event.locationId, event.context.knowledge]);
     };
-    expect(run('reproducible-knowledge')).toEqual(run('reproducible-knowledge'));
-    expect(run('reproducible-knowledge')).not.toEqual(run('different-knowledge'));
+    const first = run('reproducible-knowledge');
+    const replay = run('reproducible-knowledge');
+    const different = run('different-knowledge');
+    expect(first.length).toBeGreaterThan(0);
+    expect(different.length).toBeGreaterThan(0);
+    expect(first).toEqual(replay);
+    expect(first).not.toEqual(different);
   }, 180_000);
 });
