@@ -136,6 +136,36 @@ describe('Building composition', () => {
     }
   });
 
+  it('gives starter structures visibly assembled vernacular fabric without extra material batches', () => {
+    for (const [era, role] of [['primitive', 'shelter'], ['primitive', 'lean-to'], ['early', 'house']] as const) {
+      const palette = new MaterialPalette({ culture: CULTURE, era });
+      const grammar = resolveBuildingGrammar(profile(), era, role, `starter:${era}:${role}`);
+      const { group } = composeBuilding(grammar, palette, `starter:${era}:${role}`, BUILD_STAGE.DETAIL);
+      expect(group.userData['vernacularFabric']).toBe(true);
+      const timber = group.getObjectByName('timber') as THREE.Mesh | undefined;
+      expect(timber, `${era}:${role} timber fabric`).toBeDefined();
+      expect((timber!.geometry.userData['assemblyPieces'] as unknown[]).length).toBeGreaterThan(18);
+      palette.dispose();
+    }
+
+    const palette = new MaterialPalette({ culture: CULTURE, era: 'village' });
+    const mature = composeBuilding(resolveBuildingGrammar(profile(), 'village', 'house', 'mature-house'),
+      palette, 'mature-house', BUILD_STAGE.DETAIL).group;
+    expect(mature.userData['vernacularFabric']).toBe(false);
+    palette.dispose();
+  });
+
+  it('gives early thatch enough constructed roof detail to read above gameplay distance', () => {
+    const palette = new MaterialPalette({ culture: CULTURE, era: 'early' });
+    const grammar = resolveBuildingGrammar(profile(), 'early', 'house', 'starter-thatch');
+    const { group } = composeBuilding(grammar, palette, 'starter-thatch', BUILD_STAGE.DETAIL);
+    const roof = group.getObjectByName('roof-thatch') as THREE.Mesh | undefined;
+    expect(roof).toBeDefined();
+    const pieces = roof!.geometry.userData['assemblyPieces'] as unknown[];
+    expect(pieces.length).toBeGreaterThan(55);
+    palette.dispose();
+  });
+
   it('draws each structure in a small number of merged surfaces', () => {
     const palette = new MaterialPalette({ culture: CULTURE, era: 'advanced' });
     const grammar = resolveBuildingGrammar(profile(), 'advanced', 'research', 'plot-6');
