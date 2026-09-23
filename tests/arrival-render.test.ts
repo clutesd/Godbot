@@ -35,11 +35,6 @@ describe('Arrival presentation contracts', () => {
       title: 'ARRIVAL DAY · THE 5 LANDINGS',
       text: 'Five communities begin.',
     });
-    expect(foundingArrivalDialogue('founding:community:2:pod-3', 'Riverhold · THIRD VESSEL', 'Riverhold began here.')).toEqual({
-      eyebrow: 'ARRIVAL DAY · CONTRAST',
-      title: 'Riverhold · THIRD VESSEL',
-      text: 'Riverhold began here.',
-    });
     expect(foundingArrivalDialogue('founding-cast:framing:event-1', 'A FEW LIVES', 'We will follow only a few.')).toBeUndefined();
     expect(foundingArrivalDialogue('founding-cast:introduction:0:person-1', 'Mara · Seed', '23 on Arrival Day.')).toEqual({
       eyebrow: 'ARRIVAL DAY · A FOUNDER',
@@ -103,7 +98,7 @@ describe('Arrival presentation contracts', () => {
     if (settlement) expect(foundingHearthWorldPosition(settlement, s.state.arrival!.pods)).toBeDefined();
   });
 
-  it('brakes into authoritative ground and keeps focus/caption values finite', () => {
+  it('brakes into authoritative ground and keeps the authored opening continuous', () => {
     const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     for (const pod of s.state.arrival!.pods) {
       const finish = podTouchdown(pod);
@@ -113,14 +108,27 @@ describe('Arrival presentation contracts', () => {
       expect(podPosition(pod, finish + 5)).toEqual(podPosition(pod, finish));
     }
     expect(new Set(s.state.arrival!.pods.map(p => p.entrySeconds)).size).toBe(5);
-    for (let second = 0; second <= 46; second++) {
+    let previous = arrivalSequenceFocus(s.state.arrival!);
+    for (let step = 0; step <= 460; step += 1) {
+      const second = step / 10;
       s.state.arrival!.elapsedSeconds = second;
       const focus = arrivalSequenceFocus(s.state.arrival!);
-      expect([focus.target.x, focus.target.y, focus.target.z].every(Number.isFinite)).toBe(true);
+      expect([focus.target.x, focus.target.y, focus.target.z, focus.radius, focus.height, focus.transitionSeconds, focus.azimuthOffset]
+        .every(Number.isFinite)).toBe(true);
       expect(['pristine', 'descent', 'touchdown', 'handoff']).toContain(focus.beat);
+      if (step > 0) {
+        expect(Math.hypot(
+          focus.target.x - previous.target.x,
+          focus.target.y - previous.target.y,
+          focus.target.z - previous.target.z,
+        )).toBeLessThan(4);
+        expect(Math.abs(focus.radius - previous.radius)).toBeLessThan(2);
+        expect(Math.abs(focus.height - previous.height)).toBeLessThan(2);
+      }
       const caption = arrivalCaption(second);
       expect(caption.opacity).toBeGreaterThanOrEqual(0);
       expect(caption.opacity).toBeLessThanOrEqual(1);
+      previous = focus;
     }
   });
 });

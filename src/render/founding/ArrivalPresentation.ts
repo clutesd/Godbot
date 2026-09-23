@@ -1,15 +1,15 @@
 import { podPosition, podTouchdown, type FoundingArrivalState } from '../../sim/founding/FoundingArrival';
 
 export const WATCHER_LINES = [
-  { start: 2.5, end: 7.5, text: 'Before them, only the world.' },
-  { start: 11.5, end: 16.5, text: 'Five vessels entered the sky.' },
-  { start: 27, end: 34, text: 'Five landings. Five beginnings.' },
-  { start: 41.5, end: 45.5, text: 'ARRIVAL DAY' },
+  { start: 2.5, end: 8.5, text: 'Before them, only the world.' },
+  { start: 13.5, end: 19.5, text: 'Five vessels entered the sky.' },
+  { start: 29, end: 36.5, text: 'Five landings. Five beginnings.' },
+  { start: 41, end: 45.5, text: 'ARRIVAL DAY' },
 ] as const;
 
 export function arrivalCaption(seconds: number): { text: string; opacity: number } {
   const line = WATCHER_LINES.find(l => seconds >= l.start && seconds <= l.end);
-  return line ? { text: line.text, opacity: Math.min(1, (seconds - line.start) / 1.05, (line.end - seconds) / 0.9) } : { text: '', opacity: 0 };
+  return line ? { text: line.text, opacity: Math.min(1, (seconds - line.start) / 1.35, (line.end - seconds) / 1.15) } : { text: '', opacity: 0 };
 }
 
 export interface FoundingArrivalDialogue {
@@ -33,9 +33,7 @@ export function foundingArrivalDialogue(
   }
   if (!sceneId.startsWith('founding:')) return undefined;
   return {
-    eyebrow: sceneId.startsWith('founding:community:')
-      ? 'ARRIVAL DAY · CONTRAST'
-      : 'ARRIVAL DAY · ORIENTATION',
+    eyebrow: 'ARRIVAL DAY · ORIENTATION',
     title,
     text,
   };
@@ -45,55 +43,109 @@ export type ArrivalSequenceBeat = 'pristine' | 'descent' | 'touchdown' | 'handof
 
 export interface ArrivalSequenceFocus {
   readonly beat: ArrivalSequenceBeat;
-  readonly anchorId: string;
   readonly target: Readonly<{ x: number; y: number; z: number }>;
+  readonly radius: number;
+  readonly height: number;
+  readonly transitionSeconds: number;
+  readonly azimuthOffset: number;
 }
 
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const smoothstep = (value: number): number => {
+  const t = clamp01(value);
+  return t * t * (3 - 2 * t);
+};
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+const mixPoint = (
+  a: Readonly<{ x: number; y: number; z: number }>,
+  b: Readonly<{ x: number; y: number; z: number }>,
+  amount: number,
+): { x: number; y: number; z: number } => ({
+  x: lerp(a.x, b.x, amount),
+  y: lerp(a.y, b.y, amount),
+  z: lerp(a.z, b.z, amount),
+});
+
 /**
- * The opening no longer owns a bespoke camera spline. It only tells CameraDirector what matters
- * right now; the normal camera spring and safety authority decide how to photograph it.
+ * Arrival is one continuous camera idea: establish the untouched world, discover one vessel,
+ * stay with it through touchdown, then gradually widen until all five landings belong to one frame.
+ * No beat requires an editorial teleport; CameraDirector can keep screen direction and momentum.
  */
 export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequenceFocus {
   const t = arrival.elapsedSeconds;
+  const count = Math.max(1, arrival.pods.length);
   const center = arrival.pods.reduce(
     (sum, pod) => ({
-      x: sum.x + pod.position.x / Math.max(1, arrival.pods.length),
-      y: sum.y + pod.groundY / Math.max(1, arrival.pods.length),
-      z: sum.z + pod.position.z / Math.max(1, arrival.pods.length),
+      x: sum.x + pod.position.x / count,
+      y: sum.y + pod.groundY / count,
+      z: sum.z + pod.position.z / count,
     }),
     { x: 0, y: 0, z: 0 },
   );
+  const worldTarget = { x: center.x, y: center.y + 1.6, z: center.z };
+  const hero = arrival.pods[0];
 
-  if (t < 11.5) {
+  if (!hero || t < 12.5) {
     return {
       beat: 'pristine',
-      anchorId: 'world',
-      target: { x: center.x, y: center.y + 1.4, z: center.z },
+      target: worldTarget,
+      radius: 52,
+      height: 37,
+      transitionSeconds: 4.2,
+      azimuthOffset: -0.04,
     };
   }
 
-  // Deliberately resist covering all five vessels. Two representative descents read as an event;
-  // five rapid subject changes read as a camera demo.
-  const active = t < 24.5 ? arrival.pods[0] : t < 35 ? arrival.pods.at(-1) : undefined;
+  const heroPosition = podPosition(hero, t);
+  const touchdown = podTouchdown(hero);
+  const heroTarget = {
+    x: heroPosition.x,
+    y: t < touchdown ? heroPosition.y : hero.groundY + 1.05,
+    z: heroPosition.z,
+  };
 
-  if (active) {
-    const position = podPosition(active, t);
-    const touchdown = podTouchdown(active);
-    const descending = t < touchdown;
+  if (t < 16.5) {
+    const reveal = smoothstep((t - 12.5) / 4);
     return {
-      beat: descending ? 'descent' : 'touchdown',
-      anchorId: active.id,
-      target: {
-        x: position.x,
-        y: descending ? position.y : active.groundY + 1.05,
-        z: position.z,
-      },
+      beat: 'descent',
+      target: mixPoint(worldTarget, heroTarget, reveal),
+      radius: lerp(52, 22, reveal),
+      height: lerp(37, 12, reveal),
+      transitionSeconds: 3.8,
+      azimuthOffset: lerp(-0.04, 0.03, reveal),
     };
   }
 
+  if (t < touchdown) {
+    const descent = smoothstep((t - 16.5) / Math.max(0.1, touchdown - 16.5));
+    return {
+      beat: 'descent',
+      target: heroTarget,
+      radius: lerp(22, 15.5, descent),
+      height: lerp(12, 7.8, descent),
+      transitionSeconds: 3.1,
+      azimuthOffset: lerp(0.03, 0.075, descent),
+    };
+  }
+
+  if (t < 29.5) {
+    return {
+      beat: 'touchdown',
+      target: heroTarget,
+      radius: 14.5,
+      height: 7.2,
+      transitionSeconds: 3,
+      azimuthOffset: 0.075,
+    };
+  }
+
+  const widen = smoothstep((t - 29.5) / 10);
   return {
     beat: 'handoff',
-    anchorId: 'landings',
-    target: { x: center.x, y: center.y + 0.9, z: center.z },
+    target: mixPoint({ x: hero.position.x, y: hero.groundY + 1.05, z: hero.position.z }, worldTarget, widen),
+    radius: lerp(14.5, 54, widen),
+    height: lerp(7.2, 32, widen),
+    transitionSeconds: lerp(3.1, 4.6, widen),
+    azimuthOffset: lerp(0.075, 0.02, widen),
   };
 }

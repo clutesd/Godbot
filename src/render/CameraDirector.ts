@@ -184,16 +184,16 @@ export interface FoundingEditorialTiming {
 }
 
 /**
- * Arrival Day is an authored opening montage, not an ordinary documentary rotation.
- * Keep the descent cinematic intact, then move quickly through the post-title orientation.
+ * Arrival Day should breathe like one film sequence, not a highlight reel. Opening documentary
+ * shots therefore hold long enough for the spring to settle before the next editorial decision.
  */
 export function foundingEditorialTimingFor(sceneId: string | undefined): FoundingEditorialTiming | undefined {
   if (!sceneId) return undefined;
-  if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 5.6, transitionSeconds: 1.6 };
-  if (sceneId.startsWith('founding:community:')) return { durationSeconds: 4.4, transitionSeconds: 1.15 };
-  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 3.2, transitionSeconds: 1.05 };
-  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 3.8, transitionSeconds: 0.95 };
-  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 4.8, transitionSeconds: 1.1 };
+  if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 7.8, transitionSeconds: 3.2 };
+  if (sceneId.startsWith('founding:community:')) return { durationSeconds: 6.6, transitionSeconds: 2.8 };
+  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 6, transitionSeconds: 2.6 };
+  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 6.2, transitionSeconds: 2.6 };
+  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 7.8, transitionSeconds: 3.2 };
   return undefined;
 }
 
@@ -756,7 +756,7 @@ export class CameraDirector {
   private latestMajorEvent?: SimulationState['history'][number];
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
-  private arrivalAnchorId?: string;
+  private arrivalActive = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -777,45 +777,28 @@ export class CameraDirector {
       const target = focus.target;
       this.desiredTarget.set(target.x, target.y, target.z);
 
-      const framing = focus.beat === 'pristine'
-        ? { radius: 48, height: 36, transition: 2.6 }
-        : focus.beat === 'descent'
-          ? { radius: 16, height: 8.5, transition: 1.55 }
-          : focus.beat === 'touchdown'
-            ? { radius: 10, height: 5.2, transition: 1.25 }
-            : { radius: 25, height: 16, transition: 2.2 };
-      const azimuth = this.stableAzimuth(`arrival:${focus.anchorId}`);
+      // Keep one screen direction for the whole prologue. Composition evolves continuously around
+      // the subject instead of cutting to a new arbitrary side whenever the editorial beat changes.
+      const azimuth = this.stableAzimuth('arrival:master') + focus.azimuthOffset;
       const authored = new THREE.Vector3(
-        target.x + Math.cos(azimuth) * framing.radius,
-        target.y + framing.height,
-        target.z + Math.sin(azimuth) * framing.radius,
+        target.x + Math.cos(azimuth) * focus.radius,
+        target.y + focus.height,
+        target.z + Math.sin(azimuth) * focus.radius,
       );
       const before = this.camera.position.clone();
-      const changedAnchor = this.arrivalAnchorId !== focus.anchorId;
-      const shouldCut = changedAnchor && this.arrivalAnchorId !== undefined;
       const safety = resolveCameraSafety(state, authored, this.desiredTarget, elevationAt, {
         lensClearance: 0.72,
         sightlineClearance: 0.22,
-        previousPosition: shouldCut ? undefined : before,
+        previousPosition: before,
         environmentProbe: this.environmentProbe,
       });
       this.desiredPosition.copy(safety.position);
 
-      let visibilityStart = before;
-      if (shouldCut) {
-        // Editorial cuts are preferable to dragging the lens across the whole world between landings.
-        this.camera.position.copy(this.desiredPosition);
-        this.lookTarget.copy(this.desiredTarget);
-        this.positionVelocity.set(0, 0, 0);
-        this.targetVelocity.set(0, 0, 0);
-        visibilityStart = this.camera.position.clone();
-      } else {
-        advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, framing.transition);
-        advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, framing.transition / 1.18);
-      }
-      this.arrivalAnchorId = focus.anchorId;
+      advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, focus.transitionSeconds);
+      advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, focus.transitionSeconds / 1.14);
+      this.arrivalActive = true;
 
-      this.enforceVisibility(visibilityStart, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 });
+      this.enforceVisibility(before, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 }, true);
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
         : focus.beat === 'handoff' ? 'Arrival Day'
@@ -827,11 +810,15 @@ export class CameraDirector {
       delete this.observation.sceneId;
       return;
     }
-    if (this.arrivalAnchorId !== undefined) {
-      this.arrivalAnchorId = undefined;
+    if (this.arrivalActive) {
+      // Preserve the final wide-shot pose as the starting point for the Historian handoff. Reset
+      // transient recovery state, but do not mark the camera unsafe or force a first-frame snap.
+      this.arrivalActive = false;
       this.recoveryOffset = undefined;
       this.visibility.reset();
-      this.safetyInitialized = false;
+      this.safetyInitialized = true;
+      this.positionVelocity.multiplyScalar(0.55);
+      this.targetVelocity.multiplyScalar(0.55);
     }
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
@@ -878,6 +865,7 @@ export class CameraDirector {
   private enforceVisibility(
     before: THREE.Vector3, deltaSeconds: number, state: SimulationState,
     elevationAt: (x: number, z: number) => number, clearance: CameraClearance,
+    preferContinuity = false,
   ): void {
     const subjects: THREE.Vector3[] = [];
     if (this.currentScene && ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(this.currentScene.kind)) {
@@ -914,7 +902,12 @@ export class CameraDirector {
         if (safe.position.distanceTo(this.desiredPosition) > 0.001) {
           this.recoveryOffset = safe.position.clone().sub(this.desiredTarget);
         }
-        if (safe.requiresCut || !this.safetyInitialized) {
+        if (safe.requiresCut && preferContinuity && this.safetyInitialized) {
+          // During the authored prologue, an unsafe swept route should pause the move rather than
+          // turn into a visible teleport. The next frames keep searching for a continuous route.
+          this.camera.position.copy(before);
+          this.positionVelocity.multiplyScalar(0.2);
+        } else if (safe.requiresCut || !this.safetyInitialized) {
           this.camera.position.copy(safe.position);
           this.lookTarget.copy(this.desiredTarget);
           this.positionVelocity.set(0, 0, 0);
@@ -972,8 +965,9 @@ export class CameraDirector {
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
     const releaseScene = isFoundingReleaseScene(scene.id);
+    const openingOverview = scene.id.startsWith('founding:overview:');
     const baseDuration = this.config.camera.shotSeconds[0] + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
-    this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : this.motionFor(scene));
+    this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : openingOverview ? 'drift' : this.motionFor(scene));
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
@@ -998,7 +992,10 @@ export class CameraDirector {
     this.observation.revision += 1;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
-    const baseAzimuth = this.stableAzimuth(scene.id) + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
+    // The first Historian shot inherits Arrival's screen direction so the title resolves into the
+    // documentary instead of visibly starting a second camera system.
+    const baseAzimuth = (openingOverview ? this.stableAzimuth('arrival:master') + 0.02 : this.stableAzimuth(scene.id))
+      + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
     const radius = foundingProfile?.radius ?? castProfile?.radius ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
     const height = foundingProfile?.height ?? castProfile?.height ?? (releaseScene ? 3.4 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
     const targetHeight = foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight);
