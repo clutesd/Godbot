@@ -44,6 +44,33 @@ describe('Arrival presentation contracts', () => {
     expect(foundingArrivalDialogue('founding-release:event-1', 'THE FIRST DAY', 'The first day continues.')).toBeUndefined();
   });
 
+
+  it('does not rewrite inactive pod trails before entry or after their visible window', () => {
+    const s = new Simulation({ seed: 'arrival-trail-budget', startMode: 'arrival' });
+    const view = new FoundingPodRenderer(s.state);
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(35, 40, 50);
+    const trails = view.root.children.filter((object): object is THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> =>
+      object instanceof THREE.Mesh && object.geometry.getAttribute('position')?.count === 128);
+    expect(trails).toHaveLength(10);
+
+    view.update(camera);
+    expect(trails.every(trail => (trail.geometry.getAttribute('position') as THREE.BufferAttribute).version === 0)).toBe(true);
+
+    const first = s.state.arrival!.pods[0]!;
+    s.state.arrival!.elapsedSeconds = first.entrySeconds + 0.1;
+    view.update(camera);
+    const versionsAfterEntry = trails.map(trail => (trail.geometry.getAttribute('position') as THREE.BufferAttribute).version);
+    expect(versionsAfterEntry.filter(version => version > 0)).toHaveLength(2);
+
+    s.state.arrival!.elapsedSeconds = podTouchdown(first) + 5;
+    view.update(camera);
+    const versionsAfterRetirement = trails.map(trail => (trail.geometry.getAttribute('position') as THREE.BufferAttribute).version);
+    expect(versionsAfterRetirement[0]).toBe(versionsAfterEntry[0]);
+    expect(versionsAfterRetirement[1]).toBe(versionsAfterEntry[1]);
+    view.dispose();
+  });
+
   it('keeps founding hearths beside the vessel instead of under its footprint', () => {
     const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     const spokeStep = Math.PI / 8;
