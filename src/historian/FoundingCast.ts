@@ -4,7 +4,7 @@ import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
 import type { CandidateScoreBreakdown, ObservationCandidate } from './types';
 
-export const FOUNDING_CAST_TARGET_SIZE = 4;
+export const FOUNDING_CAST_TARGET_SIZE = 2;
 export const FOUNDING_CAST_LATEST_INTRO_MONTH = 1;
 export const FOUNDING_CAST_MONTHS_PER_SECOND = 0.08;
 export const FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND = 0.16;
@@ -33,7 +33,6 @@ interface FoundingCastMemory {
   readonly members: readonly FoundingCastMember[];
   readonly introducedPersonIds: Set<string>;
   readonly normalAppearances: Map<string, number>;
-  framingShown: boolean;
   releaseShown: boolean;
   autoRunBeforeIntroduction?: boolean;
 }
@@ -151,7 +150,6 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
       members: foundingDocumentaryCast(state),
       introducedPersonIds: new Set(),
       normalAppearances: new Map(),
-      framingShown: false,
       releaseShown: false,
     };
     memories.set(historian, memory);
@@ -206,45 +204,6 @@ function expertisePhrase(person: Person): string | undefined {
   if (!strongest) return undefined;
   const level = strongest.competence >= 0.7 ? 'highly experienced in' : strongest.competence >= 0.4 ? 'practised in' : 'developing expertise in';
   return `${level} ${readable(strongest.domain)}`;
-}
-
-function framingScene(
-  historian: Historian,
-  state: SimulationState,
-  baseline: FoundingChapterBaseline,
-  memory: FoundingCastMemory,
-): ObservationCandidate | undefined {
-  const arrival = state.history.find(event => event.id === baseline.eventId && event.type === 'ARRIVAL_DAY');
-  if (!arrival || memory.members.length === 0) return undefined;
-  const sourceEntityIds = memory.members
-    .filter(member => state.people.some(person => person.id === member.personId))
-    .map(member => member.personId);
-  const statement = {
-    id: `founding-cast-framing-${arrival.id}`,
-    month: state.month,
-    text: `Arrival Day began with ${baseline.population.toLocaleString()} lives. We will follow only a few. Not because they are important. Because we do not yet know who will be.`,
-    epistemicStatus: 'derived-statistic' as const,
-    sourceEventIds: [arrival.id],
-    sourceEntityIds,
-    sourceArchiveIds: [],
-    claims: { entityIds: sourceEntityIds, eventType: 'ARRIVAL_DAY' as const },
-  };
-  if (!historian.validateStatement(statement, state)) return undefined;
-  if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
-  if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
-  return {
-    id: `founding-cast:framing:${arrival.id}`,
-    subjectId: 'world',
-    kind: 'historian-context',
-    position: baseline.center,
-    title: 'A FEW LIVES',
-    statement,
-    score: 0.84,
-    interest: 0.88,
-    audioCategory: 'historian',
-    breakdown: breakdown(1, 0.32),
-    event: arrival,
-  };
 }
 
 function introductionScene(
@@ -354,9 +313,9 @@ function releaseScene(
 }
 
 /**
- * The cast is the final authored beat of Arrival Day: framing, four concise human anchors, then
- * a caption-free release shot. Selection changes no simulation importance. Framing and portraits
- * pause authoritative history; the release deliberately restores time and lets ordinary life move.
+ * The cast is the final authored beat of Arrival Day: two concise human anchors, then a
+ * caption-free release shot. Selection changes no simulation importance. Portraits pause
+ * authoritative history; the release restores time and lets ordinary life move.
  */
 export function chooseFoundingCastScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   releaseIntroduction(historian, state);
@@ -370,15 +329,6 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
   // Cast presentation is the immediate handoff from the frozen founding orientation.
   releaseFoundingChapterHold(historian, state);
   const memory = memoryFor(historian, state);
-
-  if (!memory.framingShown && memory.members.length > 0) {
-    const frame = framingScene(historian, state, baseline, memory);
-    if (frame) {
-      memory.framingShown = true;
-      holdIntroduction(historian, state, memory);
-      return frame;
-    }
-  }
 
   for (let castIndex = 0; castIndex < memory.members.length; castIndex += 1) {
     const member = memory.members[castIndex]!;

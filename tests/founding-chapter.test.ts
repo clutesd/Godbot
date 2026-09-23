@@ -4,6 +4,7 @@ import {
   FOUNDING_CHAPTER_MONTHS_PER_SECOND,
   foundingChapterBaseline,
   foundingChapterProgress,
+  foundingOrientationCommunities,
   installFoundingChapterPacing,
 } from '../src/historian/FoundingChapter';
 import { Historian } from '../src/historian/Historian';
@@ -66,13 +67,14 @@ describe('Founding Chapter 1a', () => {
     expect(community?.site.woodland).not.toBe(cell.wood);
   });
 
-  it('hands Arrival Day into one grounded overview and every traceable founding community', () => {
+  it('hands Arrival Day into one grounded overview and two contrasting founding communities', () => {
     const simulation = completedArrival('founding-chapter-sequence');
     const historian = new Historian(simulation.config);
     const baseline = foundingChapterBaseline(simulation.state);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('ready');
 
-    const sceneCount = (baseline?.communities.length ?? 0) + 1;
+    const orientationCommunities = baseline ? foundingOrientationCommunities(baseline) : [];
+    const sceneCount = orientationCommunities.length + 1;
     const scenes = Array.from({ length: sceneCount }, () => chooseFoundingChapterScene(historian, simulation.state));
 
     expect(scenes.every(Boolean)).toBe(true);
@@ -86,7 +88,9 @@ describe('Founding Chapter 1a', () => {
     expect(grounded.every(scene => historian.validateStatement(scene.statement, simulation.state))).toBe(true);
 
     const communityScenes = grounded.slice(1);
-    for (const community of baseline?.communities ?? []) {
+    expect(communityScenes).toHaveLength(Math.min(2, baseline?.communities.length ?? 0));
+    expect(new Set(communityScenes.map(scene => scene.subjectId)).size).toBe(communityScenes.length);
+    for (const community of orientationCommunities) {
       const scene = communityScenes.find(candidate => candidate.subjectId === community.settlementId);
       expect(scene).toBeDefined();
       expect(scene?.id).toBe(`founding:community:${community.order}:${community.podId}`);
@@ -131,7 +135,7 @@ describe('Founding Chapter 1a', () => {
     const historian = new Historian(simulation.config);
     const baseline = foundingChapterBaseline(simulation.state);
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
-    const missing = baseline?.communities[0];
+    const missing = baseline ? foundingOrientationCommunities(baseline)[0] : undefined;
     if (!missing) throw new Error('Expected a founding community');
     const index = simulation.state.settlements.findIndex(candidate => candidate.id === missing.settlementId);
     if (index < 0) throw new Error('Expected the founding settlement in authoritative state');
@@ -143,7 +147,7 @@ describe('Founding Chapter 1a', () => {
     const next = chooseFoundingChapterScene(historian, simulation.state);
     expect(next).toBeDefined();
     expect(next?.subjectId).not.toBe(missing.settlementId);
-    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('orientation');
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
   });
 
   it('requests the slowest supported documentary cadence while Arrival Day context is on screen', () => {

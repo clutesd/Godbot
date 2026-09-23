@@ -124,6 +124,42 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
   return new Set(signatures).size > 1;
 }
 
+function foundingCommunityContrast(a: FoundingCommunityBaseline, b: FoundingCommunityBaseline): number {
+  const siteDistance = Math.abs(a.site.fertility - b.site.fertility)
+    + Math.abs(a.site.woodland - b.site.woodland)
+    + Math.abs(a.site.waterAccess - b.site.waterAccess)
+    + Math.abs(a.site.habitability - b.site.habitability);
+  const domains = new Set([...a.domains, ...b.domains]);
+  const sharedDomains = a.domains.filter(domain => b.domains.includes(domain)).length;
+  const domainContrast = 1 - sharedDomains / Math.max(1, domains.size);
+  return siteDistance
+    + (a.site.biome === b.site.biome ? 0 : 0.4)
+    + (a.site.landform === b.site.landform ? 0 : 0.22)
+    + domainContrast * 0.45;
+}
+
+/**
+ * Arrival orientation no longer tours every settlement. It shows the two most different starting
+ * conditions, which demonstrates the premise without turning the opening into a checklist.
+ */
+export function foundingOrientationCommunities(baseline: FoundingChapterBaseline): readonly FoundingCommunityBaseline[] {
+  if (baseline.communities.length <= 2) return baseline.communities;
+  let best: readonly [FoundingCommunityBaseline, FoundingCommunityBaseline] | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let a = 0; a < baseline.communities.length; a += 1) {
+    for (let b = a + 1; b < baseline.communities.length; b += 1) {
+      const first = baseline.communities[a]!;
+      const second = baseline.communities[b]!;
+      const score = foundingCommunityContrast(first, second);
+      if (score > bestScore) {
+        bestScore = score;
+        best = [first, second];
+      }
+    }
+  }
+  return Object.freeze([...(best ?? baseline.communities.slice(0, 2))].sort((a, b) => a.order - b.order));
+}
+
 function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
   return (historian as unknown as HistorianConfigAccess).config;
 }
@@ -337,11 +373,11 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
   const baseline = foundingChapterBaseline(state);
   if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
   const memory = memories.get(historian);
-  const totalBeats = baseline.communities.length + 1;
+  const totalBeats = foundingOrientationCommunities(baseline).length + 1;
   if (memory) return {
     phase: memory.complete ? 'complete' : 'orientation',
     nextBeat: memory.nextBeat,
-    totalBeats: memory.baseline.communities.length + 1,
+    totalBeats: foundingOrientationCommunities(memory.baseline).length + 1,
     startedMonth: memory.startedMonth,
     baseline: memory.baseline,
   };
@@ -351,7 +387,7 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
 
 /**
  * Returns the next grounded scene in the one-time post-arrival orientation sequence.
- * Beat 0 establishes the whole founding event; the remaining beats introduce traceable communities.
+ * Beat 0 establishes the event; two contrasting communities then make the premise concrete.
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') {
@@ -379,13 +415,14 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
     return undefined;
   }
 
-  const totalBeats = memory.baseline.communities.length + 1;
+  const orientationCommunities = foundingOrientationCommunities(memory.baseline);
+  const totalBeats = orientationCommunities.length + 1;
   while (memory.nextBeat < totalBeats) {
     const beat = memory.nextBeat;
     memory.nextBeat += 1;
     const scene = beat === 0
       ? overviewScene(historian, state, memory.baseline)
-      : communityScene(historian, state, memory.baseline, memory.baseline.communities[beat - 1]!);
+      : communityScene(historian, state, memory.baseline, orientationCommunities[beat - 1]!);
     if (scene) {
       if (memory.nextBeat >= totalBeats) memory.complete = true;
       holdFoundingChapter(historian, state, memory);

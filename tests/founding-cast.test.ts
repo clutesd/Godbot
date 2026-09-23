@@ -69,13 +69,7 @@ describe('Founding documentary cast 2a', () => {
     const baseline = foundingChapterBaseline(simulation.state);
     if (!baseline) throw new Error('Expected founding baseline');
 
-    const framing = chooseFoundingCastScene(historian, simulation.state);
-    expect(framing?.id).toContain('founding-cast:framing:');
-    expect(framing?.title).toBe('A FEW LIVES');
-    expect(framing?.statement.text).toContain(`Arrival Day began with ${baseline.population.toLocaleString()} lives.`);
-    expect(framing?.statement.text).toContain('We will follow only a few.');
-    expect(framing?.statement.text).toContain('Not because they are important.');
-    expect(framing?.statement.text).toContain('we do not yet know who will be');
+    expect(cast).toHaveLength(2);
     expect(simulation.state.month).toBe(baseline.eventMonth);
 
     const introduced: string[] = [];
@@ -113,11 +107,6 @@ describe('Founding documentary cast 2a', () => {
     const presentation = new PresentationDirector(simulation.config);
     completeOrientation(simulation, historian);
 
-    const framing = chooseFoundingCastScene(historian, simulation.state);
-    expect(framing?.id).toContain('founding-cast:framing:');
-    expect(simulation.config.autoRun).toBe(false);
-    expect(presentation.tickBudget(simulation.state)).toBe(0);
-
     const cast = foundingDocumentaryCast(simulation.state);
     for (let index = 0; index < cast.length; index += 1) {
       const portrait = chooseFoundingCastScene(historian, simulation.state);
@@ -148,7 +137,6 @@ describe('Founding documentary cast 2a', () => {
       simulation.state.people.find(person => person.id === member.personId)?.historical?.status,
     ]));
 
-    expect(chooseFoundingCastScene(historian, simulation.state)?.id).toContain('founding-cast:framing:');
     const scene = chooseFoundingCastScene(historian, simulation.state);
     const person = simulation.state.people.find(candidate => candidate.id === scene?.subjectId);
     expect(person).toBeDefined();
