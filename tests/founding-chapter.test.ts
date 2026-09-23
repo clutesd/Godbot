@@ -147,7 +147,7 @@ describe('Founding Chapter 1a', () => {
     const next = chooseFoundingChapterScene(historian, simulation.state);
     expect(next).toBeDefined();
     expect(next?.subjectId).not.toBe(missing.settlementId);
-    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('orientation');
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
   });
 
   it('requests the slowest supported documentary cadence while Arrival Day context is on screen', () => {
