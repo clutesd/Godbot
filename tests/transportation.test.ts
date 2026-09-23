@@ -87,6 +87,27 @@ describe('Geography-aware transportation', () => {
     check.mockRestore();
   });
 
+  it('reuses cached pedestrian detours without revalidating every segment until topology changes', () => {
+    const world = testWorld('lake');
+    const walking = new WalkabilityLayer(world);
+    const start = point(3, 6);
+    const end = point(9, 6);
+    const first = walking.route(start, end);
+    expect(first.length).toBeGreaterThan(1);
+
+    const check = vi.spyOn(walking, 'isSegmentWalkable');
+    const cached = walking.route(start, end);
+    expect(cached).toEqual(first);
+    expect(check.mock.calls.length).toBeLessThanOrEqual(3);
+
+    world.environmentRevision!++;
+    setFloodedAt(world, first[Math.floor(first.length / 2)]!, true);
+    const revised = walking.route(start, end);
+    expect(check.mock.calls.length).toBeGreaterThan(3);
+    expect(revised).not.toEqual([]);
+    check.mockRestore();
+  });
+
   it('reuses bounded ground searches until barriers change without exposing cached points', () => {
     const world = testWorld('lake');
     const walking = new WalkabilityLayer(world);
