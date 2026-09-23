@@ -3,7 +3,8 @@ export type RenderMaintenanceTask =
   | 'settlements'
   | 'routes'
   | 'timeline'
-  | 'vegetation';
+  | 'vegetation'
+  | 'seasonal';
 
 /**
  * Expensive presentation maintenance is frequency-bound but not frame-bound. This scheduler keeps
@@ -55,9 +56,14 @@ export class RenderMaintenanceScheduler {
 
   get pendingCount(): number { return this.pending.length; }
 
-  private enqueue(task: RenderMaintenanceTask): void {
+  request(task: RenderMaintenanceTask, priority = false): void {
     if (this.queued.has(task)) return;
     this.queued.add(task);
-    this.pending.push(task);
+    if (priority) this.pending.unshift(task);
+    else this.pending.push(task);
+  }
+
+  private enqueue(task: RenderMaintenanceTask): void {
+    this.request(task);
   }
 }
