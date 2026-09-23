@@ -200,19 +200,21 @@ describe('unified camera safety authority', () => {
 });
 
 describe('Arrival Day editorial pacing', () => {
-  it('keeps the post-title orientation under forty seconds at five landings', () => {
+  it('gives the post-title handoff enough time to settle without becoming another long montage', () => {
     const overview = foundingEditorialTimingFor('founding:overview:event-1');
-    const landing = foundingEditorialTimingFor('founding:community:pod-1');
-    expect(overview).toEqual({ durationSeconds: 5.6, transitionSeconds: 1.6 });
-    expect(landing).toEqual({ durationSeconds: 4.4, transitionSeconds: 1.15 });
-    expect(overview!.durationSeconds + landing!.durationSeconds * 2).toBeLessThan(16);
+    const portrait = foundingEditorialTimingFor('founding-cast:introduction:0:person-1');
+    const release = foundingEditorialTimingFor('founding-release:event-1');
+    expect(overview).toEqual({ durationSeconds: 7.8, transitionSeconds: 3.2 });
+    expect(portrait).toEqual({ durationSeconds: 6.2, transitionSeconds: 2.6 });
+    expect(release).toEqual({ durationSeconds: 7.8, transitionSeconds: 3.2 });
+    expect(overview!.durationSeconds + portrait!.durationSeconds * 2 + release!.durationSeconds).toBeLessThan(30);
     expect(foundingEditorialTimingFor('ordinary:scene')).toBeUndefined();
   });
 
-  it('keeps documentary anchors brief, then gives the silent release room to breathe', () => {
-    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 3.2, transitionSeconds: 1.05 });
-    expect(foundingEditorialTimingFor('founding-cast:introduction:0:person-1')).toEqual({ durationSeconds: 3.8, transitionSeconds: 0.95 });
-    expect(foundingEditorialTimingFor('founding-release:event-1')).toEqual({ durationSeconds: 4.8, transitionSeconds: 1.1 });
+  it('lets documentary anchors settle, then gives the silent release room to breathe', () => {
+    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 6, transitionSeconds: 2.6 });
+    expect(foundingEditorialTimingFor('founding-cast:introduction:0:person-1')).toEqual({ durationSeconds: 6.2, transitionSeconds: 2.6 });
+    expect(foundingEditorialTimingFor('founding-release:event-1')).toEqual({ durationSeconds: 7.8, transitionSeconds: 3.2 });
     expect(isFoundingReleaseScene('founding-release:event-1')).toBe(true);
     expect(isFoundingReleaseScene('ordinary:scene')).toBe(false);
     expect(foundingEditorialTimingFor(undefined)).toBeUndefined();
