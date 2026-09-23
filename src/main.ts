@@ -17,6 +17,7 @@ import {
 } from './historian/RunArchive';
 import { Simulation } from './sim/Simulation';
 import { InteractiveTickBudget } from './sim/InteractiveTickBudget';
+import { FramePacingProfiler } from './render/FramePacingProfiler';
 import { representedPopulation } from './sim/advanced/AdvancedCivilizationSystem';
 import type { SimulationState } from './sim/types';
 import type { GodboxRenderer, PlacementSmokeReport } from './render/GodboxRenderer';
@@ -37,6 +38,7 @@ declare global {
       pacing: PresentationTelemetry;
       tick: ReturnType<Simulation['tickPerformance']>;
       scheduler: { estimatedTickMs: number; estimatedFrameMs: number; pendingTicks: number; openingWarmupMs: number };
+      frame: ReturnType<FramePacingProfiler['snapshot']>;
     };
     __godboxResetPerformance?: () => void;
     __godboxRestart?: (seed?: string) => Promise<void>;
@@ -393,6 +395,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     };
   }
   const presentation = new PresentationDirector(simulation.config);
+  const framePacing = new FramePacingProfiler();
   window.__godboxPacing = () => presentation.telemetry();
   if (import.meta.env.DEV) {
     simulation.setTickProfiling(true);
@@ -407,8 +410,12 @@ async function beginObservation(seedOverride?: string): Promise<void> {
         pendingTicks: Number(pendingTickBacklog.toFixed(2)),
         openingWarmupMs: Number(openingWarmupMs.toFixed(2)),
       },
+      frame: framePacing.snapshot(),
     });
-    window.__godboxResetPerformance = () => simulation.resetTickProfiling();
+    window.__godboxResetPerformance = () => {
+      simulation.resetTickProfiling();
+      framePacing.reset();
+    };
   }
   const audio = new AudioDirector(simulation.config);
   activeAudio = audio;
@@ -571,7 +578,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const extinct = observedPopulation === 0 || simulation.state.advanced.outcome.classification === 'EXTINCT';
     const atHorizon = simulation.state.month >= simulation.config.experiment.runYears * 12;
     if (!runEnded && !arriving && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
-    interactiveTickBudget.observeFrame(Math.max(0, performance.now() - frameStartedAt - tickWorkMs));
+    const completedFrameMs = performance.now() - frameStartedAt;
+    framePacing.observe(completedFrameMs, arriving);
+    interactiveTickBudget.observeFrame(Math.max(0, completedFrameMs - tickWorkMs));
     rafId = window.requestAnimationFrame(frame);
   };
 
