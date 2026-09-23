@@ -1,0 +1,35 @@
+name: Simulation tick stability
+
+on:
+  pull_request:
+    paths:
+      - 'src/main.ts'
+      - 'src/sim/Simulation.ts'
+      - 'src/sim/TickProfiler.ts'
+      - 'src/sim/InteractiveTickBudget.ts'
+      - 'src/sim/people/WalkabilityLayer.ts'
+      - 'src/sim/people/ResourceWorkRouting.ts'
+      - 'src/sim/resources/ResourceWorkAssignments.ts'
+      - 'tests/tick-performance.test.ts'
+      - 'tests/interactive-tick-budget.test.ts'
+      - 'tests/history-retention-performance.test.ts'
+      - 'tests/resource-work-routing-performance.test.ts'
+      - 'tests/transportation.test.ts'
+      - '.github/workflows/tick-stability-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx eslint src/main.ts src/sim/Simulation.ts src/sim/TickProfiler.ts src/sim/InteractiveTickBudget.ts src/sim/people/WalkabilityLayer.ts src/sim/people/ResourceWorkRouting.ts src/sim/resources/ResourceWorkAssignments.ts tests/tick-performance.test.ts tests/interactive-tick-budget.test.ts tests/history-retention-performance.test.ts tests/resource-work-routing-performance.test.ts tests/transportation.test.ts
+      - run: npx vitest run tests/tick-performance.test.ts tests/interactive-tick-budget.test.ts tests/history-retention-performance.test.ts tests/resource-work-routing-performance.test.ts tests/transportation.test.ts
+      - run: npm run build

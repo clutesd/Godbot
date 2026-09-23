@@ -28,6 +28,7 @@ export interface ResourceWorkAssignment {
 
 interface MonthlyWorkSnapshot {
   month: number;
+  revision: number;
   assignments: ResourceWorkAssignment[];
   /** Cell-based world resources supersede the older deposit model for the same settlement/material. */
   worldAuthority: Set<string>;
@@ -43,7 +44,7 @@ function authorityKey(settlementId: string, resourceId: string): string {
 }
 
 function freshSnapshot(month: number): MonthlyWorkSnapshot {
-  return { month, assignments: [], worldAuthority: new Set(), processing: new Map() };
+  return { month, revision: 0, assignments: [], worldAuthority: new Set(), processing: new Map() };
 }
 
 function snapshot(state: SimulationState): MonthlyWorkSnapshot {
@@ -106,11 +107,17 @@ export function recordResourceWorkAssignment(state: SimulationState, assignment:
       ? Object.freeze(assignment.accessPaths.map((leg) => Object.freeze(leg.map(copyPoint))))
       : undefined,
   }));
+  current.revision += 1;
 }
 
 /** Current-month work only. Advancing `state.month` automatically exposes a fresh empty snapshot. */
 export function resourceWorkAssignments(state: SimulationState): readonly ResourceWorkAssignment[] {
   return snapshot(state).assignments;
+}
+
+/** Monotonic within a month; lets documentary routing cache without serializing the full ledger per person. */
+export function resourceWorkRevision(state: SimulationState): number {
+  return snapshot(state).revision;
 }
 
 /** Read-only renderer bridge for systems that deliberately own only the WorldState. */

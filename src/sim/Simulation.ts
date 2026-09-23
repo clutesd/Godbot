@@ -45,6 +45,7 @@ import type {
   WorldCell,
 } from './types';
 import { cellAt, generateWorld, strategicSettlementCells } from './world';
+import { TickProfiler, type TickPerformanceSnapshot } from './TickProfiler';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const distance = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.z - b.z);
@@ -191,6 +192,7 @@ export class Simulation {
   private transportationSystem!: TransportationSystem;
   private resourceSystem!: ResourceSystem;
   private readonly widespreadAdoptions = new Set<string>();
+  private readonly tickProfiler = new TickProfiler();
   private readonly baseOverrides: GodboxConfigInput;
 
   constructor(overrides: GodboxConfigInput = {}) {
@@ -277,6 +279,11 @@ export class Simulation {
   }
 
   get historyRunning(): boolean { return !this.state.arrival || this.state.arrival.phase === 'HISTORY_RUNNING'; }
+
+  /** Diagnostic-only timing. Enabling this never changes simulation rules, order, pacing, or random draws. */
+  setTickProfiling(enabled: boolean): void { this.tickProfiler.setEnabled(enabled); }
+  resetTickProfiling(): void { this.tickProfiler.reset(); }
+  tickPerformance(): TickPerformanceSnapshot { return this.tickProfiler.snapshot(); }
 
   /** Camera time cannot advance months; even direct step() calls respect this gate. */
   advanceArrival(seconds: number): void {
@@ -399,10 +406,17 @@ export class Simulation {
   }
 
   private stepMonth(): void {
+    const tickStarted = this.tickProfiler.start();
     this.state.month += 1;
+    const annual = this.state.month % 12 === 0;
+
+    let phaseStarted = this.tickProfiler.start();
     this.weatherSystem.advanceMonth();
     this.state.weather = this.weatherSystem.state;
     syncStructurePlots(this.state);
+    this.tickProfiler.record('weather', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     for (const event of applyFloodConsequences(this.state)) this.addEvent(event);
     for (const event of advanceStructureFires(this.state, this.config.seed)) this.addEvent(event);
     for (const tornado of this.state.weather.tornadoes) {
@@ -411,6 +425,9 @@ export class Simulation {
       }
     }
     this.rebuildLookupIndexes();
+    this.tickProfiler.record('environment', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     // Observe locally and choose before the shared monthly labour allocation is frozen.
     const survivalCities = new Map(this.state.advanced.cities.map(city => [city.settlementId, city]));
     const survivalPopulation = (s: Settlement): number => this.state.advanced.scale === 'modern-statistical'
@@ -429,52 +446,120 @@ export class Simulation {
       this.applyKnowledgeEvents(planEstablishment(this.state, settlement, residents));
     }
     beginLabourMonth(this.state, this.peopleBySettlement);
+    this.tickProfiler.record('survival-planning', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
+    this.tickProfiler.record('resources', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     this.runEconomy();
-    if (this.state.month % 12 === 0) {
+    if (annual) {
       for (const settlement of this.state.settlements.filter(s => !s.alive && s.development)) {
         for (const event of advanceSettlementDevelopment(this.state, settlement, [], 0)) this.addEvent(event);
       }
     }
+    this.tickProfiler.record('economy', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     this.knowledgeSystem.advanceMonth(this.state);
+    this.tickProfiler.record('knowledge-month', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     this.transportationSystem.advanceMonth();
     this.runTrade();
+    this.tickProfiler.record('transport-trade', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     for (const settlement of this.livingSettlements()) {
       applyCold(this.state, settlement, survivalPopulation(settlement));
       resolveSurvival(this.state, settlement, survivalPopulation(settlement), this.dominantCulture(settlement));
     }
-    if (this.state.month % 12 === 0) this.formPartnerships();
+    this.tickProfiler.record('survival-resolution', phaseStarted);
+
+    if (annual) {
+      phaseStarted = this.tickProfiler.start();
+      this.formPartnerships();
+      this.tickProfiler.record('annual-partnerships', phaseStarted);
+    }
+
+    phaseStarted = this.tickProfiler.start();
     advanceHumanCapital(this.state);
     this.runPeople();
+    this.tickProfiler.record('people', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     this.runWars();
-    if (this.state.month % 3 === 0) this.runMigration();
-    if (this.state.month % 12 === 0) {
+    this.tickProfiler.record('wars', phaseStarted);
+
+    if (this.state.month % 3 === 0) {
+      phaseStarted = this.tickProfiler.start();
+      this.runMigration();
+      this.tickProfiler.record('migration', phaseStarted);
+    }
+
+    if (annual) {
+      phaseStarted = this.tickProfiler.start();
       this.runDiplomacy();
+      this.tickProfiler.record('annual-diplomacy', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runInstitutions();
+      this.tickProfiler.record('annual-institutions', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runPolitics();
+      this.tickProfiler.record('annual-politics', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.applyKnowledgeEvents(this.knowledgeSystem.advanceYear(this.state));
       this.assessWidespreadAdoption();
+      this.tickProfiler.record('knowledge-year', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runCulture();
+      this.tickProfiler.record('annual-culture', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runSettlementChange();
+      this.tickProfiler.record('settlement-change', phaseStarted);
     }
+
+    phaseStarted = this.tickProfiler.start();
     this.state.people = this.state.people.filter((person) => person.alive);
     this.maintainModernRepresentatives();
     this.rebuildLookupIndexes();
     this.recomputeCultureShares();
+    this.tickProfiler.record('bookkeeping', phaseStarted);
+
+    phaseStarted = this.tickProfiler.start();
     this.applyAdvancedEvents(this.advancedSystem.advanceMonth(this.state));
-    if (this.state.month % 12 === 0) {
+    this.tickProfiler.record('advanced-month', phaseStarted);
+
+    if (annual) {
+      phaseStarted = this.tickProfiler.start();
       this.applyAdvancedEvents(this.advancedSystem.advanceYear(this.state));
       this.state.people = this.state.people.filter((person) => person.alive);
       this.maintainModernRepresentatives();
       this.rebuildLookupIndexes();
       this.recomputeCultureShares();
+      this.tickProfiler.record('advanced-year', phaseStarted);
     }
+
+    phaseStarted = this.tickProfiler.start();
     this.state.stats.peakPopulation = Math.max(this.state.stats.peakPopulation, this.population);
     for (const settlement of this.state.settlements) reconcileBulkStocks(settlement);
     this.importanceSystem.ingest(this.state);
     this.state.notableFigures = this.importanceSystem.roster(this.state.people);
     invalidateLabour(this.state);
-    if (this.state.history.length > this.config.simulation.historyLimit) this.trimHistory();
+    this.tickProfiler.record('bookkeeping', phaseStarted);
+
+    if (this.state.history.length > this.config.simulation.historyLimit) {
+      phaseStarted = this.tickProfiler.start();
+      this.trimHistory();
+      this.tickProfiler.record('history-trim', phaseStarted);
+    }
+    this.tickProfiler.finish(this.state.month, annual, tickStarted);
   }
 
   /**
@@ -486,17 +571,43 @@ export class Simulation {
     const limit = this.config.simulation.historyLimit;
     let excess = this.state.history.length - limit;
     if (excess <= 0) return;
-    const kept: HistoricalEvent[] = [];
-    for (const event of this.state.history) {
+
+    // Compact in place first. Routine events are by far the common retention case, so avoid
+    // allocating several ~50k-entry arrays every time history crosses the cap.
+    let write = 0;
+    for (let read = 0; read < this.state.history.length; read += 1) {
+      const event = this.state.history[read]!;
       if (excess > 0 && event.significance < 0.3) {
         excess -= 1;
         continue;
       }
-      kept.push(event);
+      this.state.history[write++] = event;
     }
-    const anchors = kept.filter(e => e.type === 'ARRIVAL_DAY');
-    const ordinary = kept.filter(e => e.type !== 'ARRIVAL_DAY');
-    this.state.history = [...anchors, ...ordinary.slice(-Math.max(1, limit - anchors.length))];
+    this.state.history.length = write;
+
+    // Preserve the previous stable partition exactly. In normal runs Arrival Day is already the
+    // first retained event, so this scan allocates nothing; only malformed/imported ordering needs
+    // the fallback arrays.
+    let sawOrdinary = false;
+    let anchorOutOfPlace = false;
+    for (const event of this.state.history) {
+      if (event.type === 'ARRIVAL_DAY') {
+        if (sawOrdinary) { anchorOutOfPlace = true; break; }
+      } else sawOrdinary = true;
+    }
+    if (this.state.history.length <= limit && !anchorOutOfPlace) return;
+
+    // Rare fallback: significance could not get under the hard cap, or an imported anchor appeared
+    // after ordinary history. Preserve permanent anchors and the same most-recent ordinary events.
+    const anchors: HistoricalEvent[] = [];
+    const ordinary: HistoricalEvent[] = [];
+    for (const event of this.state.history) {
+      if (event.type === 'ARRIVAL_DAY') anchors.push(event);
+      else ordinary.push(event);
+    }
+    this.state.history = this.state.history.length <= limit
+      ? [...anchors, ...ordinary]
+      : [...anchors, ...ordinary.slice(-Math.max(1, limit - anchors.length))];
   }
 
   /**

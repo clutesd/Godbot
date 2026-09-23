@@ -23,11 +23,10 @@ export class WalkabilityLayer {
   readonly structures = new StructureNavigation();
   setStructures(structures: readonly PedestrianFootprint[]): void {
     if (!this.structures.set(structures)) return;
-    this.routeCache.clear(); this.failedRouteRevisions.clear(); this.groundCache.clear();
+    this.routeCache.clear(); this.groundCache.clear();
     this.gridEdges.clear(); this.components.fill(0); this.nextComponent = 1; this.gridRevision++;
   }
-  private readonly routeCache = new Map<string, Vec2[]>();
-  private readonly failedRouteRevisions = new Map<string, number>();
+  private readonly routeCache = new Map<string, { revision: number; points: Vec2[] }>();
   private readonly gridEdges = new Map<number, boolean>();
   private readonly groundCache = new Map<string, { point: Vec2; regions: number[]; revisions: number[] }>();
   private readonly regionWidth: number;
@@ -245,15 +244,15 @@ export class WalkabilityLayer {
     if (!startCell || !endCell || !this.isWalkableCell(startCell) || !this.isWalkableCell(endCell)) return [];
     const cacheKey = `${startCell.x},${startCell.z}>${endCell.x},${endCell.z}`;
     const cached = this.routeCache.get(cacheKey);
-    if (cached && cached.length > 0 && this.routeIsValid(cached)) return this.attachExactEnd(cached, end);
-    if (cached?.length === 0 && this.failedRouteRevisions.get(cacheKey) === this.gridRevision) return [];
+    if (cached?.revision === this.gridRevision) {
+      if (cached.points.length === 0) return [];
+      return this.attachExactEnd(cached.points, end);
+    }
     if (this.routeCache.size > 2048) {
       this.routeCache.clear();
-      this.failedRouteRevisions.clear();
     }
     if (!this.connected(startCell, endCell)) {
-      this.routeCache.set(cacheKey, []);
-      this.failedRouteRevisions.set(cacheKey, this.gridRevision);
+      this.routeCache.set(cacheKey, { revision: this.gridRevision, points: [] });
       return [];
     }
 
@@ -274,7 +273,7 @@ export class WalkabilityLayer {
       if (closed.has(currentKey) || currentEntry.score !== estimate.get(currentKey)) continue;
       if (currentKey === endKey) {
         const route = this.reconstruct(cameFrom, points, currentKey);
-        this.routeCache.set(cacheKey, route);
+        this.routeCache.set(cacheKey, { revision: this.gridRevision, points: route });
         return this.attachExactEnd(route, end);
       }
       closed.add(currentKey);
@@ -300,8 +299,7 @@ export class WalkabilityLayer {
         open.push(neighborKey, score);
       }
     }
-    this.routeCache.set(cacheKey, []);
-    this.failedRouteRevisions.set(cacheKey, this.gridRevision);
+    this.routeCache.set(cacheKey, { revision: this.gridRevision, points: [] });
     return [];
   }
 
