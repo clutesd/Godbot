@@ -90,6 +90,11 @@ describe('Historian grounding', () => {
     relation.hostility = 1;
     relation.territorialTension = 1;
     relation.grievances = 1;
+    // Earlier candidate-generation tests may already have recorded this exact relation. Make this
+    // assertion about fresh inference creation rather than depending on cross-test prediction state.
+    for (const prediction of historian.predictions) {
+      if (prediction.subjectIds.includes(relation.id)) prediction.resolved = true;
+    }
     const inference = historian.candidates(simulation.state).find((candidate) => candidate.statement.epistemicStatus === 'probabilistic-inference');
     expect(inference).toBeDefined();
     expect(inference && historian.validateStatement(inference.statement, simulation.state)).toBe(true);
