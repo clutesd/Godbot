@@ -52,6 +52,18 @@ function requiredElement<T extends Element>(selector: string): T {
   return element;
 }
 
+function setTextIfChanged(element: Element, text: string): void {
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function setClassIfChanged(element: Element, name: string, enabled: boolean): void {
+  if (element.classList.contains(name) !== enabled) element.classList.toggle(name, enabled);
+}
+
+function setOpacityIfChanged(element: HTMLElement, opacity: string): void {
+  if (element.style.opacity !== opacity) element.style.opacity = opacity;
+}
+
 const app = requiredElement<HTMLDivElement>('#app');
 
 app.innerHTML = `
@@ -460,7 +472,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const wasArriving = !simulation.historyRunning;
     if (!arrivalPaused) simulation.advanceArrival(deltaSeconds);
     const arriving = !simulation.historyRunning;
-    worldElement.classList.toggle('witnessing-arrival', arriving);
+    setClassIfChanged(worldElement, 'witnessing-arrival', arriving);
     if (!arrivalWasRunning && simulation.historyRunning) {
       arrivalWasRunning = true;
       audio.transitionMusicTo(audioEra(simulation.state));
@@ -494,8 +506,8 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const foundingDialogue = !arriving
       ? foundingArrivalDialogue(view.observation.sceneId, view.observation.label, view.observation.detail)
       : undefined;
-    worldElement.classList.toggle('founding-orientation', Boolean(foundingDialogue));
-    worldElement.classList.toggle('founding-release', Boolean(view.observation.sceneId?.startsWith('founding-release:')));
+    setClassIfChanged(worldElement, 'founding-orientation', Boolean(foundingDialogue));
+    setClassIfChanged(worldElement, 'founding-release', Boolean(view.observation.sceneId?.startsWith('founding-release:')));
 
     if (view.observation.revision !== cinematicDialogueRevision) {
       cinematicDialogueRevision = view.observation.revision;
@@ -506,25 +518,26 @@ async function beginObservation(seedOverride?: string): Promise<void> {
 
     if (arriving) {
       const caption = arrivalCaption(simulation.state.arrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
-      arrivalCaptionEyebrowElement.textContent = '';
-      arrivalCaptionHeadingElement.textContent = '';
-      arrivalCaptionTextElement.textContent = caption.text;
-      arrivalCaptionElement.style.opacity = String(caption.opacity);
-      arrivalCaptionElement.classList.toggle('arrival-title', caption.text === 'ARRIVAL DAY');
-      arrivalCaptionElement.classList.remove('founding-caption');
+      setTextIfChanged(arrivalCaptionEyebrowElement, '');
+      setTextIfChanged(arrivalCaptionHeadingElement, '');
+      setTextIfChanged(arrivalCaptionTextElement, caption.text);
+      setOpacityIfChanged(arrivalCaptionElement, String(caption.opacity));
+      setClassIfChanged(arrivalCaptionElement, 'arrival-title', caption.text === 'ARRIVAL DAY');
+      setClassIfChanged(arrivalCaptionElement, 'founding-caption', false);
     } else if (foundingDialogue) {
-      arrivalCaptionEyebrowElement.textContent = foundingDialogue.eyebrow;
-      arrivalCaptionHeadingElement.textContent = foundingDialogue.title;
-      arrivalCaptionTextElement.textContent = foundingDialogue.text;
-      arrivalCaptionElement.style.opacity = String(Math.min(1, cinematicDialogueSeconds / 0.7));
-      arrivalCaptionElement.classList.remove('arrival-title');
-      arrivalCaptionElement.classList.add('founding-caption');
+      setTextIfChanged(arrivalCaptionEyebrowElement, foundingDialogue.eyebrow);
+      setTextIfChanged(arrivalCaptionHeadingElement, foundingDialogue.title);
+      setTextIfChanged(arrivalCaptionTextElement, foundingDialogue.text);
+      setOpacityIfChanged(arrivalCaptionElement, String(Math.min(1, cinematicDialogueSeconds / 0.7)));
+      setClassIfChanged(arrivalCaptionElement, 'arrival-title', false);
+      setClassIfChanged(arrivalCaptionElement, 'founding-caption', true);
     } else {
-      arrivalCaptionEyebrowElement.textContent = '';
-      arrivalCaptionHeadingElement.textContent = '';
-      arrivalCaptionTextElement.textContent = '';
-      arrivalCaptionElement.style.opacity = '0';
-      arrivalCaptionElement.classList.remove('arrival-title', 'founding-caption');
+      setTextIfChanged(arrivalCaptionEyebrowElement, '');
+      setTextIfChanged(arrivalCaptionHeadingElement, '');
+      setTextIfChanged(arrivalCaptionTextElement, '');
+      setOpacityIfChanged(arrivalCaptionElement, '0');
+      setClassIfChanged(arrivalCaptionElement, 'arrival-title', false);
+      setClassIfChanged(arrivalCaptionElement, 'founding-caption', false);
     }
 
     warChronicle.update(simulation.state, view.observation.statement?.claims.warId);
@@ -539,11 +552,13 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     displayPopulation += (observedPopulation - displayPopulation) * Math.min(1, deltaSeconds * 4);
     const month = simulation.state.month % 12;
     const day = arriving || simulation.state.month === 0 && accumulator === 0 ? 0 : Math.min(30, Math.floor(accumulator / tickDuration * 30) + 1);
-    dateElement.textContent = `YEAR ${simulation.year.toLocaleString()} · ${inferredEra(simulation.state)} · ${monthNames[month] ?? 'SPRING'} · DAY ${day}`;
-    if (arriving) dateElement.textContent = 'YEAR 0 · MONTH 0 · DAY 0';
-    populationElement.textContent = Math.round(displayPopulation).toLocaleString();
-    placeElement.textContent = view.observation.label;
-    activityElement.textContent = view.observation.detail;
+    const dateText = arriving
+      ? 'YEAR 0 · MONTH 0 · DAY 0'
+      : `YEAR ${simulation.year.toLocaleString()} · ${inferredEra(simulation.state)} · ${monthNames[month] ?? 'SPRING'} · DAY ${day}`;
+    setTextIfChanged(dateElement, dateText);
+    setTextIfChanged(populationElement, Math.round(displayPopulation).toLocaleString());
+    setTextIfChanged(placeElement, view.observation.label);
+    setTextIfChanged(activityElement, view.observation.detail);
     if (simulation.state.month - lastArchivedMonth >= 120) void persist();
     const extinct = observedPopulation === 0 || simulation.state.advanced.outcome.classification === 'EXTINCT';
     const atHorizon = simulation.state.month >= simulation.config.experiment.runYears * 12;
