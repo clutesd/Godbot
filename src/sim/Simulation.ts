@@ -569,17 +569,30 @@ export class Simulation {
       this.state.history[write++] = event;
     }
     this.state.history.length = write;
-    if (this.state.history.length <= limit) return;
 
-    // Rare fallback: if significance alone could not get under the hard cap, preserve permanent
-    // Arrival Day anchors and the same most-recent ordinary events as the previous implementation.
+    // Preserve the previous stable partition exactly. In normal runs Arrival Day is already the
+    // first retained event, so this scan allocates nothing; only malformed/imported ordering needs
+    // the fallback arrays.
+    let sawOrdinary = false;
+    let anchorOutOfPlace = false;
+    for (const event of this.state.history) {
+      if (event.type === 'ARRIVAL_DAY') {
+        if (sawOrdinary) { anchorOutOfPlace = true; break; }
+      } else sawOrdinary = true;
+    }
+    if (this.state.history.length <= limit && !anchorOutOfPlace) return;
+
+    // Rare fallback: significance could not get under the hard cap, or an imported anchor appeared
+    // after ordinary history. Preserve permanent anchors and the same most-recent ordinary events.
     const anchors: HistoricalEvent[] = [];
     const ordinary: HistoricalEvent[] = [];
     for (const event of this.state.history) {
       if (event.type === 'ARRIVAL_DAY') anchors.push(event);
       else ordinary.push(event);
     }
-    this.state.history = [...anchors, ...ordinary.slice(-Math.max(1, limit - anchors.length))];
+    this.state.history = this.state.history.length <= limit
+      ? [...anchors, ...ordinary]
+      : [...anchors, ...ordinary.slice(-Math.max(1, limit - anchors.length))];
   }
 
   /**
