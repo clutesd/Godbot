@@ -31,7 +31,13 @@ declare global {
     __godboxPlacementReport?: () => PlacementSmokeReport;
     __godboxDebugAdvance?: (months: number) => { month: number; year: number; placement: PlacementSmokeReport };
     __godboxPacing?: () => PresentationTelemetry;
-    __godboxPerformance?: () => { month: number; year: number; pacing: PresentationTelemetry; tick: ReturnType<Simulation['tickPerformance']> };
+    __godboxPerformance?: () => {
+      month: number;
+      year: number;
+      pacing: PresentationTelemetry;
+      tick: ReturnType<Simulation['tickPerformance']>;
+      scheduler: { estimatedTickMs: number; pendingTicks: number };
+    };
     __godboxResetPerformance?: () => void;
     __godboxRestart?: (seed?: string) => Promise<void>;
     __godboxArrival?: { state: SimulationState; advance: (seconds: number) => void; pause: (paused: boolean) => void };
@@ -376,6 +382,10 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       year: simulation.year,
       pacing: presentation.telemetry(),
       tick: simulation.tickPerformance(),
+      scheduler: {
+        estimatedTickMs: Number(interactiveTickBudget.estimatedTickMs.toFixed(3)),
+        pendingTicks: Number(pendingTickBacklog.toFixed(2)),
+      },
     });
     window.__godboxResetPerformance = () => simulation.resetTickProfiling();
   }
@@ -387,6 +397,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let lastTime = performance.now();
   let elapsedSeconds = 0;
   let accumulator = 0;
+  let pendingTickBacklog = 0;
   const interactiveTickBudget = new InteractiveTickBudget(4);
   let displayPopulation = representedPopulation(simulation.state);
   let lastObservationRevision = -1;
@@ -472,6 +483,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
         if (performance.now() >= tickDeadline) break;
       }
     }
+    pendingTickBacklog = tickDuration > 0 ? accumulator / tickDuration : 0;
     view.update(deltaSeconds, elapsedSeconds);
 
     const foundingDialogue = !arriving
