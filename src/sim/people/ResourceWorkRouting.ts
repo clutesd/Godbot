@@ -1,6 +1,7 @@
 import type { DestinationKind, Occupation, Person, SimulationState, Vec2 } from '../types';
 import {
   resourceWorkAssignments,
+  resourceWorkRevision,
   type ResourceWorkAssignment,
 } from '../resources/ResourceWorkAssignments';
 import {
@@ -20,7 +21,7 @@ const COMMITTED_ROLES = new Set(['soldier', 'guard']);
 interface RoutingSnapshot {
   month: number;
   seed: string;
-  signature: string;
+  revision: number;
   byPerson: Map<string, ResourceWorkAssignment>;
 }
 
@@ -92,24 +93,14 @@ export function resourceWorkPreferredWaypoints(assignment: ResourceWorkAssignmen
   return points;
 }
 
-function labourSignature(assignment: ResourceWorkAssignment): string {
-  return (Object.entries(assignment.labourByOccupation) as Array<[Occupation, number | undefined]>)
-    .filter(([, amount]) => (amount ?? 0) > 0)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([occupation, amount]) => `${occupation}:${amount!.toFixed(4)}`)
-    .join(',');
-}
-
 function routingSnapshot(state: SimulationState, seed: string): RoutingSnapshot {
-  const assignments = resourceWorkAssignments(state);
-  const signature = assignments
-    .map((assignment) => `${assignment.settlementId}:${assignment.siteId}:${assignment.resourceId}:${assignment.amountExtracted.toFixed(4)}:${assignment.labourUsed.toFixed(4)}:${labourSignature(assignment)}`)
-    .join('|');
+  const revision = resourceWorkRevision(state);
   const cached = routingSnapshots.get(state);
-  if (cached?.month === state.month && cached.seed === seed && cached.signature === signature) return cached;
+  if (cached?.month === state.month && cached.seed === seed && cached.revision === revision) return cached;
 
+  const assignments = resourceWorkAssignments(state);
   const byPerson = allocateRepresentatives(state, assignments, seed);
-  const next = { month: state.month, seed, signature, byPerson };
+  const next = { month: state.month, seed, revision, byPerson };
   routingSnapshots.set(state, next);
   return next;
 }
