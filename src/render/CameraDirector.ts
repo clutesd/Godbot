@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
-import { arrivalCameraPose } from './founding/ArrivalPresentation';
+import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
@@ -189,11 +189,11 @@ export interface FoundingEditorialTiming {
  */
 export function foundingEditorialTimingFor(sceneId: string | undefined): FoundingEditorialTiming | undefined {
   if (!sceneId) return undefined;
-  if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 9.5, transitionSeconds: 2.4 };
-  if (sceneId.startsWith('founding:community:')) return { durationSeconds: 5.8, transitionSeconds: 1.8 };
-  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 4.6, transitionSeconds: 1.3 };
-  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 2.9, transitionSeconds: 0.9 };
-  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 7.2, transitionSeconds: 1.35 };
+  if (sceneId.startsWith('founding:overview:')) return { durationSeconds: 5.6, transitionSeconds: 1.6 };
+  if (sceneId.startsWith('founding:community:')) return { durationSeconds: 4.4, transitionSeconds: 1.15 };
+  if (sceneId.startsWith('founding-cast:framing:')) return { durationSeconds: 3.2, transitionSeconds: 1.05 };
+  if (sceneId.startsWith('founding-cast:introduction:')) return { durationSeconds: 3.8, transitionSeconds: 0.95 };
+  if (sceneId.startsWith('founding-release:')) return { durationSeconds: 4.8, transitionSeconds: 1.1 };
   return undefined;
 }
 
@@ -756,6 +756,7 @@ export class CameraDirector {
   private latestMajorEvent?: SimulationState['history'][number];
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
+  private arrivalAnchorId?: string;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -772,19 +773,58 @@ export class CameraDirector {
 
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
     if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') {
-      const pose = arrivalCameraPose(state.arrival);
+      const focus = arrivalSequenceFocus(state.arrival);
+      const target = focus.target;
+      this.desiredTarget.set(target.x, target.y, target.z);
+
+      const framing = focus.beat === 'pristine'
+        ? { radius: 48, height: 36, transition: 2.6 }
+        : focus.beat === 'descent'
+          ? { radius: 16, height: 8.5, transition: 1.55 }
+          : focus.beat === 'touchdown'
+            ? { radius: 10, height: 5.2, transition: 1.25 }
+            : { radius: 25, height: 16, transition: 2.2 };
+      const azimuth = this.stableAzimuth(`arrival:${focus.anchorId}`);
+      const authored = new THREE.Vector3(
+        target.x + Math.cos(azimuth) * framing.radius,
+        target.y + framing.height,
+        target.z + Math.sin(azimuth) * framing.radius,
+      );
       const before = this.camera.position.clone();
-      this.desiredPosition.copy(pose.position);
-      this.desiredTarget.copy(pose.target);
-      this.camera.position.lerp(pose.position, 1 - Math.exp(-deltaSeconds * 1.1));
-      this.lookTarget.lerp(pose.target, 1 - Math.exp(-deltaSeconds * 1.3));
+      const safety = resolveCameraSafety(state, authored, this.desiredTarget, elevationAt, {
+        lensClearance: 0.72,
+        sightlineClearance: 0.22,
+        previousPosition: before,
+        environmentProbe: this.environmentProbe,
+      });
+      this.desiredPosition.copy(safety.position);
+
+      const changedAnchor = this.arrivalAnchorId !== focus.anchorId;
+      if (changedAnchor && this.arrivalAnchorId !== undefined) {
+        // Editorial cuts are preferable to dragging the lens across the whole world between landings.
+        this.camera.position.copy(this.desiredPosition);
+        this.lookTarget.copy(this.desiredTarget);
+        this.positionVelocity.set(0, 0, 0);
+        this.targetVelocity.set(0, 0, 0);
+      } else {
+        advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, framing.transition);
+        advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, framing.transition / 1.18);
+      }
+      this.arrivalAnchorId = focus.anchorId;
+
       this.enforceVisibility(before, deltaSeconds, state, elevationAt, { lens: 0.72, sightline: 0.22 });
       this.camera.lookAt(this.lookTarget);
-      this.observation.label = 'Before history';
-      this.observation.detail = 'Year 0 · Month 0 · Day 0';
+      this.observation.label = focus.beat === 'pristine' ? 'Before history'
+        : focus.beat === 'handoff' ? 'Arrival Day'
+          : 'The landings';
+      this.observation.detail = focus.beat === 'pristine'
+        ? 'Year 0 · Month 0 · Day 0'
+        : focus.beat === 'handoff' ? 'Five communities begin here.'
+          : 'Five vessels cross into the world.';
       delete this.observation.sceneId;
       return;
     }
+    this.arrivalAnchorId = undefined;
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
     const mayInterrupt = this.shotAge >= Math.max(this.currentScene?.id.startsWith('human:') ? 12 : 6, this.config.camera.transitionSeconds * 1.1);
