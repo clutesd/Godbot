@@ -505,6 +505,36 @@ export class GodboxRenderer {
     window.addEventListener('resize', this.resizeHandler);
   }
 
+  /**
+   * Compile and render-warm the full visual stack while the opening overlay still owns the screen.
+   * First-use shader compilation, shadow variants and post-processing programs must never occur
+   * during the authored Arrival camera move.
+   */
+  async warmUpOpening(): Promise<number> {
+    const startedAt = performance.now();
+    this.cameraDirector.update(0, 0, this.state, (x, z) => this.elevationAt(x, z));
+    this.skyAtmosphere.followCamera(this.camera);
+
+    const visibility: Array<readonly [THREE.Object3D, boolean]> = [];
+    this.scene.traverse(object => {
+      visibility.push([object, object.visible] as const);
+      object.visible = true;
+    });
+
+    try {
+      await this.renderer.compileAsync(this.scene, this.camera);
+      // A real hidden render also warms shadow-depth variants plus every EffectComposer pass,
+      // which renderer.compileAsync(scene, camera) does not own.
+      this.postProcessing.render(this.ecology.night.value);
+    } finally {
+      for (const [object, wasVisible] of visibility) object.visible = wasVisible;
+      this.renderer.setRenderTarget(null);
+      this.renderer.info.reset();
+    }
+
+    return performance.now() - startedAt;
+  }
+
   update(deltaSeconds: number, elapsedSeconds: number): void {
     if (this.adaptiveResolution.sample(deltaSeconds)) this.resize();
 
