@@ -4,9 +4,41 @@ import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
 import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthEstablished, foundingHearthOffset, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../src/shared/FoundingCampLayout';
 import { arrivalCaption, arrivalSequenceFocus, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
+import { arrivalRenderPolicy, arrivalVegetationAnchor } from '../src/render/founding/ArrivalRenderBudget';
 import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
 describe('Arrival presentation contracts', () => {
+  it('keeps the authored prologue on a lightweight render budget until history begins', () => {
+    const simulation = new Simulation({ seed: 'arrival-render-budget', startMode: 'arrival' });
+    const arrival = simulation.state.arrival;
+    if (!arrival) throw new Error('Expected Arrival state');
+
+    const opening = arrivalRenderPolicy(simulation.state);
+    expect(opening).toEqual({
+      active: true,
+      animateHumans: false,
+      refreshWorldPresentation: false,
+      refreshVegetationLod: false,
+      updateAmbientWorldEffects: false,
+    });
+
+    const anchor = arrivalVegetationAnchor(simulation.state);
+    expect(anchor).toEqual({
+      x: arrival.pods[0]?.position.x,
+      z: arrival.pods[0]?.position.z,
+    });
+
+    arrival.phase = 'HISTORY_RUNNING';
+    expect(arrivalRenderPolicy(simulation.state)).toEqual({
+      active: false,
+      animateHumans: true,
+      refreshWorldPresentation: true,
+      refreshVegetationLod: true,
+      updateAmbientWorldEffects: true,
+    });
+    expect(arrivalVegetationAnchor(simulation.state)).toBeUndefined();
+  });
+
   it('bounds effect buffers and retires them leaving five persistent hulls', () => {
     const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
     const scene = new THREE.Scene();
