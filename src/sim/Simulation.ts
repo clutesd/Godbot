@@ -480,7 +480,7 @@ export class Simulation {
     if (annual) {
       phaseStarted = this.tickProfiler.start();
       this.formPartnerships();
-      this.tickProfiler.record('annual-society', phaseStarted);
+      this.tickProfiler.record('annual-partnerships', phaseStarted);
     }
 
     phaseStarted = this.tickProfiler.start();
@@ -501,13 +501,28 @@ export class Simulation {
     if (annual) {
       phaseStarted = this.tickProfiler.start();
       this.runDiplomacy();
+      this.tickProfiler.record('annual-diplomacy', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runInstitutions();
+      this.tickProfiler.record('annual-institutions', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runPolitics();
+      this.tickProfiler.record('annual-politics', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.applyKnowledgeEvents(this.knowledgeSystem.advanceYear(this.state));
       this.assessWidespreadAdoption();
+      this.tickProfiler.record('knowledge-year', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runCulture();
+      this.tickProfiler.record('annual-culture', phaseStarted);
+
+      phaseStarted = this.tickProfiler.start();
       this.runSettlementChange();
-      this.tickProfiler.record('annual-society', phaseStarted);
+      this.tickProfiler.record('settlement-change', phaseStarted);
     }
 
     phaseStarted = this.tickProfiler.start();
