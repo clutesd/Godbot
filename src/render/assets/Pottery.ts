@@ -7,12 +7,13 @@ import { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
 import type { BannerIdentity } from '../style/BannerIdentity';
 
 export type Vessel = 'bowl' | 'cooking-pot' | 'storage-jar' | 'jug' | 'ritual';
+export type PotteryFinish = 'greenware' | 'fired' | 'prestige';
 export const MAX_POTTERY = 24;
 export interface PotteryAnchor {
   key: string; localX: number; localZ: number; width: number; depth: number;
   rotationY: number; role: string; development?: DevelopmentResponse;
 }
-export interface PotteryPlacement { vessel: Vessel; x: number; z: number; rotation: number }
+export interface PotteryPlacement { vessel: Vessel; x: number; z: number; rotation: number; finish?: PotteryFinish }
 /** Quantized visual refinement, never an era unlock or a material transaction. */
 export function potteryTier(settlement: Settlement): 0 | 1 | 2 | 3 {
   const practice = practical(settlement, 'pottery-firing');
@@ -34,6 +35,7 @@ export function planPottery(settlement: Settlement, anchors: readonly PotteryAnc
   if (!tier) return [];
   const result: PotteryPlacement[] = [];
   let prestige = false;
+  const activeCraft = settlement.knownRecipes.includes('pottery-vessels') || (settlement.localMaterials.pottery ?? 0) > 0;
   // Stable plot order survives changes to input iteration order; cap work/output for large cities.
   for (const anchor of [...anchors].sort((a, b) => a.key.localeCompare(b.key))) {
     const form = anchor.development?.form;
@@ -48,8 +50,11 @@ export function planPottery(settlement: Settlement, anchors: readonly PotteryAnc
     for (let i = 0; i < vessels.length && result.length < MAX_POTTERY; i++) {
       const dx = anchor.width / 2 + 0.4;
       const dz = (i - (vessels.length - 1) / 2) * 0.6;
-      const placement = { vessel: vessels[i]!, x: anchor.localX + Math.cos(anchor.rotationY) * dx + Math.sin(anchor.rotationY) * dz,
-        z: anchor.localZ - Math.sin(anchor.rotationY) * dx + Math.cos(anchor.rotationY) * dz, rotation: anchor.rotationY };
+      const vessel = vessels[i]!;
+      const finish: PotteryFinish = vessel === 'ritual' ? 'prestige'
+        : workshop && activeCraft && (tier === 1 || i < 2) ? 'greenware' : 'fired';
+      const placement: PotteryPlacement = { vessel, x: anchor.localX + Math.cos(anchor.rotationY) * dx + Math.sin(anchor.rotationY) * dz,
+        z: anchor.localZ - Math.sin(anchor.rotationY) * dx + Math.cos(anchor.rotationY) * dz, rotation: anchor.rotationY, finish };
       const obstructed = blockers.some(building => {
         const dx = placement.x - building.localX, dz = placement.z - building.localZ;
         const x = Math.cos(building.rotationY) * dx - Math.sin(building.rotationY) * dz;
@@ -77,11 +82,13 @@ export function createPottery(placements: readonly PotteryPlacement[], style: Po
   const group = new THREE.Group();
   group.name = 'cultural-pottery';
   if (!tier || !placements.length) return group;
-  const templates = new Map<Vessel, THREE.BufferGeometry>();
+  const templates = new Map<string, THREE.BufferGeometry>();
   const pieces: THREE.BufferGeometry[] = [];
   for (const placement of placements.slice(0, MAX_POTTERY)) {
-    let template = templates.get(placement.vessel);
-    if (!template) { template = vesselGeometry(placement.vessel, style, tier); templates.set(placement.vessel, template); }
+    const finish = placement.finish ?? 'fired';
+    const templateKey = `${placement.vessel}:${finish}`;
+    let template = templates.get(templateKey);
+    if (!template) { template = vesselGeometry(placement.vessel, style, tier, finish); templates.set(templateKey, template); }
     const geometry = template.clone();
     geometry.rotateY(placement.rotation);
     geometry.translate(placement.x, ground(placement.x, placement.z) + 0.025, placement.z);
@@ -94,13 +101,18 @@ export function createPottery(placements: readonly PotteryPlacement[], style: Po
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true; mesh.receiveShadow = true;
   mesh.userData['vesselCount'] = Math.min(MAX_POTTERY, placements.length);
+  mesh.userData['greenwareCount'] = placements.slice(0, MAX_POTTERY).filter(p => p.finish === 'greenware').length;
+  mesh.userData['finishedCount'] = placements.slice(0, MAX_POTTERY).filter(p => (p.finish ?? 'fired') !== 'greenware').length;
   group.add(mesh);
   return group;
 }
 
-function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number): THREE.BufferGeometry {
+function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finish: PotteryFinish): THREE.BufferGeometry {
   const pieces: THREE.BufferGeometry[] = [];
-  const clay = new THREE.Color('#b77b53').lerp(new THREE.Color(style.primary), tier === 1 ? 0.1 : 0.28);
+  const greenware = finish === 'greenware';
+  const prestige = finish === 'prestige';
+  const clay = new THREE.Color(greenware ? '#bc8767' : '#b77b53')
+    .lerp(new THREE.Color(style.primary), greenware ? 0.04 : prestige ? 0.36 : tier === 1 ? 0.1 : 0.28);
   const add = (geometry: THREE.BufferGeometry, colour: THREE.ColorRepresentation) => {
     const flat = geometry.index ? geometry.toNonIndexed() : geometry;
     if (flat !== geometry) geometry.dispose();
@@ -135,7 +147,8 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number): THRE
     const g = new THREE.TorusGeometry(r, tube, 4, tier === 1 ? 7 : 12);
     g.rotateX(Math.PI / 2); g.translate(0, y, 0); add(g, colour);
   };
-  ring(lip.x - 0.01, lip.y, tier === 3 ? 0.022 : 0.016, tier === 1 ? '#77523e' : style.accent);
+  ring(lip.x - 0.01, lip.y, tier === 3 ? 0.022 : 0.016,
+    greenware ? '#916249' : tier === 1 ? '#77523e' : style.accent);
   const shoulder = profile[profile.length - (vessel === 'bowl' ? 1 : 2)]!;
   const radiusAt = (y: number): number => {
     for (let i = 1; i < profile.length; i++) {
@@ -151,9 +164,15 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number): THRE
     });
     add(new THREE.LatheGeometry(points, 12), colour);
   };
-  if (tier >= 2) {
+  if (tier >= 2 && !greenware) {
     band(lip.y * 0.78, 0.045, style.primary);
     if (tier === 3) band(lip.y * 0.78 - 0.04, 0.016, style.accent);
+    if (vessel === 'cooking-pot') band(0.055, 0.04, '#57443a');
+  }
+  if (!greenware && vessel === 'storage-jar' && tier >= 2) {
+    const lid = new THREE.CylinderGeometry(lip.x * 0.78, lip.x * 0.9, 0.028, tier === 3 ? 12 : 9);
+    lid.translate(0, lip.y + 0.016, 0);
+    add(lid, clay.clone().multiplyScalar(0.86));
   }
   // Project thick runic strokes onto the vessel wall, so they cannot disappear inside its belly.
   const stroke = (x1: number, y1: number, x2: number, y2: number, angle: number, colour: string) => {
@@ -178,7 +197,7 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number): THRE
     crossweave: [[-0.035, -0.03, 0.035, 0.03], [-0.035, 0.03, 0.035, -0.03]],
     wave: [[-0.04, -0.015, -0.01, 0.02], [-0.01, 0.02, 0.04, -0.015]],
   };
-  const strokes = tier === 1 ? 3 : 6;
+  const strokes = greenware ? 0 : tier === 1 ? 3 : prestige ? 8 : 6;
   const markY = lip.y * 0.53;
   for (let i = 0; i < strokes; i++) {
     const angle = i / strokes * Math.PI * 2;
@@ -191,10 +210,10 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number): THRE
       const g = new THREE.TorusGeometry(vessel === 'jug' ? 0.105 : 0.075, 0.024, 4, 8);
       g.scale(0.72, vessel === 'jug' ? 1.35 : 0.8, 1);
       g.translate(side * (vessel === 'jug' ? Math.max(...profile.map(p => p.x)) : shoulder.x), lip.y * 0.62, 0);
-      add(g, tier === 3 ? style.primary : clay);
+      add(g, !greenware && tier === 3 ? style.primary : clay);
     }
   }
-  if (tier === 3) {
+  if (tier === 3 && !greenware) {
     // Culture's architectural symbol becomes a bold maker's seal on both visible faces.
     const shapes: Record<PotteryStyle['motif'], number[]> = {
       'sun-step': [0, Math.PI / 2, Math.PI / 4, -Math.PI / 4],
@@ -207,6 +226,11 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number): THRE
       stroke(x - dx, markY - dy, x + dx, markY + dy, face, style.accent);
     }
     for (let i = 0; i < style.marks; i++) ring(profile[0]!.x + 0.008, 0.025 + i * 0.022, 0.008, style.secondary);
+    if (vessel === 'ritual') {
+      const foot = new THREE.CylinderGeometry(profile[0]!.x * 0.82, profile[0]!.x, 0.04, 12);
+      foot.translate(0, 0.02, 0);
+      add(foot, style.secondary);
+    }
   }
   const merged = mergeGeometries(pieces)!;
   pieces.forEach(piece => piece.dispose());
