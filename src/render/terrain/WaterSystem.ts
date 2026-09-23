@@ -79,6 +79,7 @@ export class WaterSystem {
   constructor(private readonly world: WorldState, surface: TerrainSurface, private readonly seed: string, ecology?: EcologyField, waterComplexity: 0 | 1 | 2 = 2) {
     const span = Math.max(world.size * world.cellSize * 6, 720);
     this.group.name = 'water';
+    this.group.userData['materialRevision'] = 0;
 
     const oceanMaterial = createOceanMaterial();
     this.ocean = new THREE.Mesh(new THREE.PlaneGeometry(span, span, 96, 96), oceanMaterial);
@@ -197,6 +198,7 @@ export class WaterSystem {
     this.rapidBase = rapidFoam?.base ?? new Float32Array(0);
     if (this.rapids) this.group.add(this.rapids);
     this.report.rapidSites = rapidFoam?.sites ?? 0;
+    this.group.userData['materialRevision'] = (this.group.userData['materialRevision'] as number ?? 0) + 1;
   }
 
   setSeasonalTint(colour: THREE.Color): void {
