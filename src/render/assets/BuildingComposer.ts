@@ -684,7 +684,7 @@ function emitVernacularFabric(
     stone?.addBox(x, 0.018, z, t * 2.2, 0.036, t * 1.8);
   }
 
-  if (grammar.roofFamily !== 'hide-cone') {
+  if (grammar.roofFamily !== 'hide-cone' && (grammar.postStyle === 'poles' || grammar.postStyle === 'timber')) {
     // Knee braces stop early timber frames reading like orthogonal scaffolds.
     for (const z of [halfDepth, -halfDepth]) {
       for (const side of [-1, 1]) {
