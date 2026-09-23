@@ -965,8 +965,9 @@ export class CameraDirector {
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
     const releaseScene = isFoundingReleaseScene(scene.id);
+    const openingOverview = scene.id.startsWith('founding:overview:');
     const baseDuration = this.config.camera.shotSeconds[0] + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
-    this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : this.motionFor(scene));
+    this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : openingOverview ? 'drift' : this.motionFor(scene));
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
@@ -991,7 +992,10 @@ export class CameraDirector {
     this.observation.revision += 1;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
-    const baseAzimuth = this.stableAzimuth(scene.id) + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
+    // The first Historian shot inherits Arrival's screen direction so the title resolves into the
+    // documentary instead of visibly starting a second camera system.
+    const baseAzimuth = (openingOverview ? this.stableAzimuth('arrival:master') + 0.02 : this.stableAzimuth(scene.id))
+      + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
     const radius = foundingProfile?.radius ?? castProfile?.radius ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
     const height = foundingProfile?.height ?? castProfile?.height ?? (releaseScene ? 3.4 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
     const targetHeight = foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight);
