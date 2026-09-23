@@ -72,10 +72,9 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
     };
   }
 
-  const active = [...arrival.pods]
-    .filter(pod => t >= pod.entrySeconds - 0.65 && t <= podTouchdown(pod) + 2.1)
-    .sort((a, b) => Math.abs(podTouchdown(a) - t) - Math.abs(podTouchdown(b) - t)
-      || a.entrySeconds - b.entrySeconds)[0];
+  // Deliberately resist covering all five vessels. Two representative descents read as an event;
+  // five rapid subject changes read as a camera demo.
+  const active = t < 24.5 ? arrival.pods[0] : t < 35 ? arrival.pods.at(-1) : undefined;
 
   if (active) {
     const position = podPosition(active, t);
