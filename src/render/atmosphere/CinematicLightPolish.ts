@@ -88,6 +88,7 @@ const WATER_BASELINE_KEY = 'godboxCinematicWaterBaseline';
 export class CinematicMaterialPolish {
   private readonly waterMaterials: WaterMaterialRecord[] = [];
   private waterSignature = '';
+  private waterMaterialRevision = -1;
   private readonly smokeMaterials: SmokeMaterialRecord[] = [];
   private readonly cloudMaterial?: THREE.PointsMaterial;
   private readonly cloudBaseColor = new THREE.Color('#eef2f2');
@@ -157,6 +158,9 @@ export class CinematicMaterialPolish {
 
   private refreshWaterMaterials(force = false): void {
     const waterGroup = this.scene.getObjectByName('water');
+    const revision = Number(waterGroup?.userData['materialRevision'] ?? 0);
+    if (!force && revision === this.waterMaterialRevision) return;
+    this.waterMaterialRevision = revision;
     const live: THREE.MeshPhysicalMaterial[] = [];
     waterGroup?.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
