@@ -6,6 +6,7 @@ import { WAR_CAUSES, WAR_CHAPTERS } from '../../historian/WarStory';
 export class WarChronicle {
   private readonly root = document.createElement('aside');
   private readonly fields = new Map<string, HTMLElement>();
+  private lastRequestKey = '';
   private lastSignature = '';
 
   constructor(host: HTMLElement) {
@@ -36,6 +37,11 @@ export class WarChronicle {
   }
 
   update(state: SimulationState, warId?: string): void {
+    // War authority changes on simulation months, while the renderer calls this every RAF. Avoid
+    // repeated array scans and DOM/class writes when neither the month nor observed war changed.
+    const requestKey = `${warId ?? ''}:${state.month}:${state.wars.length}:${state.settlements.length}`;
+    if (requestKey === this.lastRequestKey) return;
+    this.lastRequestKey = requestKey;
     const war = warId ? state.wars.find(w => w.id === warId) : undefined;
     const a = war ? state.settlements.find(s => s.id === war.attacker) : undefined;
     const b = war ? state.settlements.find(s => s.id === war.defender) : undefined;
