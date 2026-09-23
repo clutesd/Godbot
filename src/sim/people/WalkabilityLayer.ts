@@ -23,11 +23,10 @@ export class WalkabilityLayer {
   readonly structures = new StructureNavigation();
   setStructures(structures: readonly PedestrianFootprint[]): void {
     if (!this.structures.set(structures)) return;
-    this.routeCache.clear(); this.failedRouteRevisions.clear(); this.groundCache.clear();
+    this.routeCache.clear(); this.groundCache.clear();
     this.gridEdges.clear(); this.components.fill(0); this.nextComponent = 1; this.gridRevision++;
   }
   private readonly routeCache = new Map<string, { revision: number; points: Vec2[] }>();
-  private readonly failedRouteRevisions = new Map<string, number>();
   private readonly gridEdges = new Map<number, boolean>();
   private readonly groundCache = new Map<string, { point: Vec2; regions: number[]; revisions: number[] }>();
   private readonly regionWidth: number;
@@ -251,11 +250,9 @@ export class WalkabilityLayer {
     }
     if (this.routeCache.size > 2048) {
       this.routeCache.clear();
-      this.failedRouteRevisions.clear();
     }
     if (!this.connected(startCell, endCell)) {
       this.routeCache.set(cacheKey, { revision: this.gridRevision, points: [] });
-      this.failedRouteRevisions.set(cacheKey, this.gridRevision);
       return [];
     }
 
@@ -303,7 +300,6 @@ export class WalkabilityLayer {
       }
     }
     this.routeCache.set(cacheKey, { revision: this.gridRevision, points: [] });
-    this.failedRouteRevisions.set(cacheKey, this.gridRevision);
     return [];
   }
 
