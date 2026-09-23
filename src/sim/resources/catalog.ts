@@ -206,6 +206,8 @@ export const RECIPE_BY_ID = new Map(RECIPE_CATALOG.map((definition) => [definiti
 export interface MaterialDefinition { id: string; name: string; spoilage: number; fuelHeat?: number }
 export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
   ...RESOURCE_CATALOG.map(r => ({ id: r.id, name: r.name, spoilage: r.category === 'plant' ? 0.015 : 0, fuelHeat: r.id === 'timber' ? 0.35 : undefined })),
+  // Clay is still supplied by the supplemental legacy deposit pass, but generic recipes may consume it.
+  { id: 'clay', name: 'Clay', spoilage: 0 },
   { id: 'charcoal', name: 'Charcoal', spoilage: 0, fuelHeat: 0.8 },
   { id: 'herbal-remedy', name: 'Herbal remedies', spoilage: 0.01 },
   { id: 'bronze', name: 'Bronze', spoilage: 0 }, { id: 'iron-tools', name: 'Forged iron', spoilage: 0 },
