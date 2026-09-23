@@ -4,7 +4,6 @@ import {
   FOUNDING_CHAPTER_MONTHS_PER_SECOND,
   foundingChapterBaseline,
   foundingChapterProgress,
-  foundingOrientationCommunities,
   installFoundingChapterPacing,
 } from '../src/historian/FoundingChapter';
 import { Historian } from '../src/historian/Historian';
@@ -67,59 +66,36 @@ describe('Founding Chapter 1a', () => {
     expect(community?.site.woodland).not.toBe(cell.wood);
   });
 
-  it('hands Arrival Day into one grounded overview and two contrasting founding communities', () => {
+  it('hands Arrival Day into one grounded overview, then gets out of the way', () => {
     const simulation = completedArrival('founding-chapter-sequence');
     const historian = new Historian(simulation.config);
     const baseline = foundingChapterBaseline(simulation.state);
-    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('ready');
+    const ready = foundingChapterProgress(historian, simulation.state);
+    expect(ready.phase).toBe('ready');
+    expect(ready.totalBeats).toBe(1);
 
-    const orientationCommunities = baseline ? foundingOrientationCommunities(baseline) : [];
-    const sceneCount = orientationCommunities.length + 1;
-    const scenes = Array.from({ length: sceneCount }, () => chooseFoundingChapterScene(historian, simulation.state));
+    const scene = chooseFoundingChapterScene(historian, simulation.state);
+    expect(scene).toBeDefined();
+    expect(scene?.title).toBe(`ARRIVAL DAY · THE ${baseline?.expectedCommunityCount} LANDINGS`);
+    expect(scene?.event?.type).toBe('ARRIVAL_DAY');
+    expect(scene?.statement.text).toContain('This is the last moment their histories are known together.');
+    expect(scene?.statement.text).toMatch(/From here, we watch/);
+    expect(scene?.statement.text).not.toContain('permanent beginning of this record');
+    expect(scene && historian.validateStatement(scene.statement, simulation.state)).toBe(true);
 
-    expect(scenes.every(Boolean)).toBe(true);
-    const grounded = scenes.filter((scene): scene is NonNullable<typeof scene> => Boolean(scene));
-    expect(grounded).toHaveLength(sceneCount);
-    expect(grounded[0]?.title).toBe(`ARRIVAL DAY · THE ${baseline?.expectedCommunityCount} LANDINGS`);
-    expect(grounded[0]?.event?.type).toBe('ARRIVAL_DAY');
-    expect(grounded[0]?.statement.text).toContain('This is the last moment their histories are known together.');
-    expect(grounded[0]?.statement.text).toMatch(/From here, we watch/);
-    expect(grounded[0]?.statement.text).not.toContain('permanent beginning of this record');
-    expect(grounded.every(scene => historian.validateStatement(scene.statement, simulation.state))).toBe(true);
-
-    const communityScenes = grounded.slice(1);
-    expect(communityScenes).toHaveLength(Math.min(2, baseline?.communities.length ?? 0));
-    expect(new Set(communityScenes.map(scene => scene.subjectId)).size).toBe(communityScenes.length);
-    for (const community of orientationCommunities) {
-      const scene = communityScenes.find(candidate => candidate.subjectId === community.settlementId);
-      expect(scene).toBeDefined();
-      expect(scene?.id).toBe(`founding:community:${community.order}:${community.podId}`);
-      expect(scene?.title).toContain(community.podName.toUpperCase());
-      expect(scene?.statement.text).toContain(community.site.biome.replaceAll('-', ' '));
-      expect(community.domains.some(domain => scene?.statement.text.includes(domain.replaceAll('-', ' ')))).toBe(true);
-      expect(scene?.statement.text).toMatch(/edge|constraint|no physical condition dominates/);
-      expect(scene?.statement.text).not.toContain('Their inherited strengths were');
-      expect(scene?.statement.text).not.toContain('This was one of');
-      expect(scene?.statement.text.length).toBeLessThan(220);
-      expect(scene?.statement.text.split('.').filter(Boolean)).toHaveLength(1);
-      expect(scene?.statement.epistemicStatus).toBe('derived-statistic');
-    }
-    expect(new Set(communityScenes.map(scene => scene.statement.text.split(';')[0])).size)
-      .toBeGreaterThanOrEqual(Math.min(3, communityScenes.length));
-
-    expect(historian.statements).toHaveLength(sceneCount);
-    expect(new Set(historian.statements.map(statement => statement.id)).size).toBe(sceneCount);
+    expect(historian.statements).toHaveLength(1);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('continues an orientation that started at Month 0 even after simulated time advances', () => {
+  it('does not replay the Month-Zero overview after authoritative time advances', () => {
     const simulation = completedArrival('founding-chapter-continuity');
     const historian = new Historian(simulation.config);
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
     simulation.step(6);
-    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('orientation');
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
+    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
   });
 
   it('does not begin the Year-Zero orientation on a newly created Historian after Month 0', () => {
@@ -130,12 +106,11 @@ describe('Founding Chapter 1a', () => {
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('skips an invalid community beat without discarding the rest of the opening chapter', () => {
+  it('keeps the single overview grounded even if one founding settlement is unavailable', () => {
     const simulation = completedArrival('founding-chapter-degraded');
     const historian = new Historian(simulation.config);
     const baseline = foundingChapterBaseline(simulation.state);
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
-    const missing = baseline ? foundingOrientationCommunities(baseline)[0] : undefined;
+    const missing = baseline?.communities[0];
     if (!missing) throw new Error('Expected a founding community');
     const index = simulation.state.settlements.findIndex(candidate => candidate.id === missing.settlementId);
     if (index < 0) throw new Error('Expected the founding settlement in authoritative state');
@@ -144,9 +119,10 @@ describe('Founding Chapter 1a', () => {
     const reconstructed = foundingChapterBaseline(simulation.state);
     expect(reconstructed?.communities.some(community => community.settlementId === missing.settlementId)).toBe(true);
 
-    const next = chooseFoundingChapterScene(historian, simulation.state);
-    expect(next).toBeDefined();
-    expect(next?.subjectId).not.toBe(missing.settlementId);
+    const overview = chooseFoundingChapterScene(historian, simulation.state);
+    expect(overview).toBeDefined();
+    expect(overview?.id).toContain('founding:overview:');
+    expect(overview && historian.validateStatement(overview.statement, simulation.state)).toBe(true);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
   });
 
