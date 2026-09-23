@@ -89,7 +89,9 @@ export class EcologyPostProcessing {
     }
     this.composer?.setSize(width, height);
     if (this.ssao) {
-      const aoScale = this.renderer.getPixelRatio() * 0.65;
+      // Ambient occlusion carries fine terrain, foliage and character contact detail. Keep it at
+      // the renderer's full configured pixel ratio so the final image never becomes grainy.
+      const aoScale = this.renderer.getPixelRatio();
       this.ssao.setSize(Math.max(2, Math.round(width * aoScale)), Math.max(2, Math.round(height * aoScale)));
     }
     const scale = this.renderer.getPixelRatio() * (this.quality === 1 ? 0.5 : 1);

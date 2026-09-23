@@ -80,12 +80,13 @@ describe('resolution pacing', () => {
     expect(resolution.scale).toBe(1);
   });
 
-  it('bounds sustained-load relief and restores quality gradually after recovery', () => {
+  it('never trades image resolution for sustained-load relief', () => {
     const resolution = new AdaptiveResolution();
-    expect(run(resolution, 60, 30)).toBe(5);
-    expect(resolution.scale).toBe(0.75);
-    expect(run(resolution, 4, 60)).toBe(0);
-    expect(run(resolution, 60, 60)).toBe(5);
+    expect(run(resolution, 60, 30)).toBe(0);
+    expect(resolution.scale).toBe(1);
+    expect(run(resolution, 60, 20)).toBe(0);
+    expect(resolution.scale).toBe(1);
+    expect(run(resolution, 60, 60)).toBe(0);
     expect(resolution.scale).toBe(1);
   });
 });
