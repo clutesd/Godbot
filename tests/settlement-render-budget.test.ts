@@ -159,6 +159,16 @@ describe('renderer maintenance scheduling', () => {
     expect(scheduler.pendingCount).toBe(0);
   });
 
+  it('lets a newly authoritative month request visual reconciliation without batching it with other work', () => {
+    const scheduler = new RenderMaintenanceScheduler();
+    scheduler.advance(0.25, 4, 0.4);
+    scheduler.request('seasonal', true);
+
+    expect(scheduler.next()).toBe('seasonal');
+    expect(scheduler.next()).toBe('hydrology');
+    expect(scheduler.pendingCount).toBe(3);
+  });
+
   it('spreads a post-Arrival catch-up cycle across frames', () => {
     const scheduler = new RenderMaintenanceScheduler();
     scheduler.requestCatchUp();
