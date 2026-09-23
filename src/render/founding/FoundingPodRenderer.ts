@@ -119,6 +119,7 @@ export class FoundingPodRenderer {
       for (let layer = 0; layer < v.trails.length; layer++) {
         const trail = v.trails[layer]!;
         trail.visible = t >= v.pod.entrySeconds && age < 4.5;
+        if (!trail.visible) continue;
         trail.material.opacity = (layer ? 0.13 : 0.9) * (1 - THREE.MathUtils.smoothstep(age, 0, 4.5));
         const positions = trail.geometry.getAttribute('position') as THREE.BufferAttribute;
         const headTime = Math.min(t, podTouchdown(v.pod));
