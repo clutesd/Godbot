@@ -62,6 +62,27 @@ describe('Building grammar', () => {
     }
   });
 
+  it('carries cultural roof language into early vernacular silhouettes without later materials', () => {
+    const styles: CultureStyle[] = [
+      { ...CULTURE, symbol: 'mountain-knot', pattern: 'terrace' },
+      { ...CULTURE, symbol: 'river-eye', pattern: 'wave' },
+      { ...CULTURE, symbol: 'woven-moon', pattern: 'diamond' },
+      { ...CULTURE, symbol: 'sun-step', pattern: 'chevron' },
+    ];
+    const roofs = styles.map((style, index) =>
+      resolveBuildingGrammar(CultureStyleProfileFactory.createFromCulture(`early-${index}`, style),
+        'early', 'house', `early-roof-${index}`).roofFamily);
+    expect(new Set(roofs).size).toBeGreaterThanOrEqual(3);
+    for (let index = 0; index < styles.length; index += 1) {
+      const palette = new MaterialPalette({ culture: styles[index]!, era: 'early' });
+      const grammar = resolveBuildingGrammar(CultureStyleProfileFactory.createFromCulture(`early-${index}`, styles[index]!),
+        'early', 'house', `early-roof-${index}`);
+      const { group } = composeBuilding(grammar, palette, `early-roof-${index}`, BUILD_STAGE.DETAIL);
+      expect(group.getObjectByName('roof-thatch')).toBeDefined();
+      palette.dispose();
+    }
+  });
+
   it('carries the culture lineage into industrial and advanced structures', () => {
     const source = profile();
     for (const era of ['industrial', 'advanced'] as Era[]) {
