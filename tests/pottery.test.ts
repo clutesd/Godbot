@@ -47,10 +47,13 @@ describe('cultural pottery presentation', () => {
 
   it('places a readable vessel set at practical sites and only one mature prestige vessel', () => {
     const { settlement } = fixture(); learn(settlement, 'pottery-firing');
+    settlement.knownRecipes.push('pottery-vessels'); settlement.localMaterials.pottery = 4;
     const anchors = [anchor('a', 'house'), anchor('b', 'granary'), anchor('c', 'workshop'), anchor('d', 'market')];
     const plan = planPottery(settlement, anchors);
     expect(new Set(plan.map(p => p.vessel))).toEqual(new Set(['bowl', 'cooking-pot', 'storage-jar', 'jug', 'ritual']));
     expect(plan.filter(p => p.vessel === 'ritual')).toHaveLength(1);
+    expect(plan.filter(p => p.finish === 'greenware')).toHaveLength(2);
+    expect(plan.find(p => p.vessel === 'ritual')?.finish).toBe('prestige');
     expect(plan.every(p => p.x > 1.24)).toBe(true);
     expect(planPottery(settlement, ['shrine', 'hall', 'gate-tower', 'factory', 'research'].map(role => anchor(role, role)))).toEqual([]);
     settlement.knowledge.records['pottery-firing']!.practice = 0.3;
@@ -83,6 +86,7 @@ describe('cultural pottery presentation', () => {
 
   it('renders deterministic finite hollow geometry in one draw call without mutating simulation state', () => {
     const { sim, settlement, culture, identity } = fixture(); learn(settlement, 'pottery-firing');
+    settlement.knownRecipes.push('pottery-vessels'); settlement.localMaterials.pottery = 3;
     const before = JSON.stringify(sim.state);
     const style = potteryStyle(culture.id, culture.style, identity);
     const plan = planPottery(settlement, [anchor('a'), anchor('b', 'workshop'), anchor('c', 'granary')]);
@@ -90,6 +94,8 @@ describe('cultural pottery presentation', () => {
     expect(group.children).toHaveLength(1);
     const mesh = group.children[0] as THREE.Mesh;
     const repeat = createPottery(plan, style, 3, () => 0.4).children[0] as THREE.Mesh;
+    expect(mesh.userData['greenwareCount']).toBeGreaterThan(0);
+    expect(mesh.userData['finishedCount']).toBeGreaterThan(0);
     expect(mesh.geometry.getAttribute('position').array).toEqual(repeat.geometry.getAttribute('position').array);
     expect(Array.from(mesh.geometry.getAttribute('position').array).every(Number.isFinite)).toBe(true);
     mesh.geometry.computeBoundingBox();
