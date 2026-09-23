@@ -67,8 +67,8 @@ let pacingInstalled = false;
 let chapterInstalled = false;
 
 /**
- * A defensive expiry only. Normal 1a playback is frozen at Month 0, so the six opening beats
- * finish before authoritative monthly history begins. Resumed observations never replay them.
+ * A defensive expiry only. Normal 1a playback is frozen at Month 0 while the single orientation
+ * beat plays before authoritative monthly history begins. Resumed observations never replay it.
  */
 export const FOUNDING_CHAPTER_LATEST_MONTH = 18;
 
@@ -87,15 +87,6 @@ const scoreBreakdown = (continuity: number) => ({
   continuity,
   repetitionPenalty: 0,
 });
-
-const readable = (value: string): string => value.replaceAll('-', ' ');
-
-function list(values: readonly string[]): string {
-  if (values.length === 0) return 'no named inheritance';
-  if (values.length === 1) return values[0] ?? '';
-  if (values.length === 2) return `${values[0]} and ${values[1]}`;
-  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
-}
 
 function center(points: readonly Readonly<Vec2>[]): Vec2 {
   if (points.length === 0) return { x: 0, z: 0 };
@@ -122,42 +113,6 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
     waterAccess: community.site.waterAccess,
   }));
   return new Set(signatures).size > 1;
-}
-
-function foundingCommunityContrast(a: FoundingCommunityBaseline, b: FoundingCommunityBaseline): number {
-  const siteDistance = Math.abs(a.site.fertility - b.site.fertility)
-    + Math.abs(a.site.woodland - b.site.woodland)
-    + Math.abs(a.site.waterAccess - b.site.waterAccess)
-    + Math.abs(a.site.habitability - b.site.habitability);
-  const domains = new Set([...a.domains, ...b.domains]);
-  const sharedDomains = a.domains.filter(domain => b.domains.includes(domain)).length;
-  const domainContrast = 1 - sharedDomains / Math.max(1, domains.size);
-  return siteDistance
-    + (a.site.biome === b.site.biome ? 0 : 0.4)
-    + (a.site.landform === b.site.landform ? 0 : 0.22)
-    + domainContrast * 0.45;
-}
-
-/**
- * Arrival orientation no longer tours every settlement. It shows the two most different starting
- * conditions, which demonstrates the premise without turning the opening into a checklist.
- */
-export function foundingOrientationCommunities(baseline: FoundingChapterBaseline): readonly FoundingCommunityBaseline[] {
-  if (baseline.communities.length <= 2) return baseline.communities;
-  let best: readonly [FoundingCommunityBaseline, FoundingCommunityBaseline] | undefined;
-  let bestScore = Number.NEGATIVE_INFINITY;
-  for (let a = 0; a < baseline.communities.length; a += 1) {
-    for (let b = a + 1; b < baseline.communities.length; b += 1) {
-      const first = baseline.communities[a]!;
-      const second = baseline.communities[b]!;
-      const score = foundingCommunityContrast(first, second);
-      if (score > bestScore) {
-        bestScore = score;
-        best = [first, second];
-      }
-    }
-  }
-  return Object.freeze([...(best ?? baseline.communities.slice(0, 2))].sort((a, b) => a.order - b.order));
 }
 
 function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
@@ -283,101 +238,15 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   }, state);
 }
 
-type FoundingSiteSignalKey = 'fertility' | 'woodland' | 'waterAccess' | 'habitability';
-
-const foundingSiteSignals: readonly { key: FoundingSiteSignalKey; label: string }[] = [
-  { key: 'fertility', label: 'fertility' },
-  { key: 'woodland', label: 'woodland' },
-  { key: 'waterAccess', label: 'water access' },
-  { key: 'habitability', label: 'overall habitability' },
-];
-
-function siteContrast(baseline: FoundingChapterBaseline, community: FoundingCommunityBaseline): string {
-  const signals = foundingSiteSignals.map(signal => {
-    const peers = baseline.communities.map(candidate => candidate.site[signal.key]);
-    const mean = peers.reduce((sum, value) => sum + value, 0) / Math.max(1, peers.length);
-    return {
-      ...signal,
-      delta: community.site[signal.key] - mean,
-    };
-  }).sort((a, b) => b.delta - a.delta);
-
-  const strongest = signals[0]!;
-  const weakest = signals.at(-1)!;
-  const strongEnough = strongest.delta >= 0.05;
-  const weakEnough = weakest.delta <= -0.05;
-
-  if (strongEnough && weakEnough) return `${strongest.label} is an edge; ${weakest.label} is the constraint`;
-  if (strongEnough) return `${strongest.label} is the clearest physical edge`;
-  if (weakEnough) return `${weakest.label} is the clearest physical constraint`;
-  return 'no physical condition dominates the comparison';
-}
-
-function communityOpeningText(baseline: FoundingChapterBaseline, community: FoundingCommunityBaseline): string {
-  const domains = community.domains.map(readable);
-  const inheritance = list(domains.slice(0, 2));
-  const biome = readable(community.site.biome);
-  const contrast = siteContrast(baseline, community);
-  const count = community.founderCount.toLocaleString();
-
-  switch (community.order % 5) {
-    case 0:
-      return `${count} founders bring ${inheritance} into ${biome} terrain; ${contrast}.`;
-    case 1:
-      return `In ${biome} terrain, ${count} founders carry ${inheritance}; ${contrast}.`;
-    case 2:
-      return `${inheritance} arrives with ${count} founders in ${biome} terrain; ${contrast}.`;
-    case 3:
-      return `${count} founders begin here with ${inheritance} in ${biome} terrain; ${contrast}.`;
-    default:
-      return `Here, ${count} founders pair ${inheritance} with ${biome} terrain; ${contrast}.`;
-  }
-}
-
-function communityScene(
-  historian: Historian,
-  state: SimulationState,
-  baseline: FoundingChapterBaseline,
-  community: FoundingCommunityBaseline,
-): ObservationCandidate | undefined {
-  const event = state.history.find(candidate => candidate.id === baseline.eventId && candidate.type === 'ARRIVAL_DAY');
-  const settlement = state.settlements.find(candidate => candidate.id === community.settlementId);
-  if (!event || !settlement) return undefined;
-
-  const statement = {
-    id: `founding-community-${community.podId}`,
-    month: state.month,
-    text: communityOpeningText(baseline, community),
-    epistemicStatus: 'derived-statistic' as const,
-    sourceEventIds: [event.id],
-    sourceEntityIds: [community.settlementId],
-    sourceArchiveIds: [],
-    claims: { eventType: 'ARRIVAL_DAY' as const, entityIds: [community.settlementId] },
-  };
-  return rememberStatement(historian, {
-    id: `founding:community:${community.order}:${community.podId}`,
-    subjectId: community.settlementId,
-    kind: 'settlement-approach',
-    position: community.position,
-    title: `${community.settlementName} · ${community.podName.toUpperCase()}`,
-    statement,
-    score: 0.78,
-    interest: 0.82,
-    audioCategory: 'settlement',
-    breakdown: scoreBreakdown(0.72),
-    event,
-  }, state);
-}
-
 export function foundingChapterProgress(historian: Historian, state: SimulationState): FoundingChapterProgress {
   const baseline = foundingChapterBaseline(state);
   if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
   const memory = memories.get(historian);
-  const totalBeats = foundingOrientationCommunities(baseline).length + 1;
+  const totalBeats = 1;
   if (memory) return {
     phase: memory.complete ? 'complete' : 'orientation',
     nextBeat: memory.nextBeat,
-    totalBeats: foundingOrientationCommunities(memory.baseline).length + 1,
+    totalBeats: 1,
     startedMonth: memory.startedMonth,
     baseline: memory.baseline,
   };
@@ -386,8 +255,8 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
 }
 
 /**
- * Returns the next grounded scene in the one-time post-arrival orientation sequence.
- * Beat 0 establishes the event; two contrasting communities then make the premise concrete.
+ * Returns the one grounded post-arrival orientation shot. The landings themselves already carried
+ * the geography; this beat states the premise once, then hands directly to human-scale history.
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') {
@@ -415,22 +284,14 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
     return undefined;
   }
 
-  const orientationCommunities = foundingOrientationCommunities(memory.baseline);
-  const totalBeats = orientationCommunities.length + 1;
-  while (memory.nextBeat < totalBeats) {
-    const beat = memory.nextBeat;
-    memory.nextBeat += 1;
-    const scene = beat === 0
-      ? overviewScene(historian, state, memory.baseline)
-      : communityScene(historian, state, memory.baseline, orientationCommunities[beat - 1]!);
-    if (scene) {
-      if (memory.nextBeat >= totalBeats) memory.complete = true;
-      holdFoundingChapter(historian, state, memory);
-      return scene;
-    }
+  memory.nextBeat = 1;
+  memory.complete = true;
+  const scene = overviewScene(historian, state, memory.baseline);
+  if (scene) {
+    holdFoundingChapter(historian, state, memory);
+    return scene;
   }
 
-  memory.complete = true;
   releaseFoundingChapterHold(historian, state);
   return undefined;
 }
