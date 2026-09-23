@@ -218,9 +218,9 @@ function roofShellShape(family: RoofFamily): {
 } {
   switch (family) {
     case 'hide-cone':
-      return { ridgeXRatio: 0.06, ridgeZRatio: 0.06, segmentsPerSide: 3, rings: 3 };
+      return { ridgeXRatio: 0.06, ridgeZRatio: 0.06, segmentsPerSide: 5, rings: 4 };
     case 'thatch-hip':
-      return { ridgeXRatio: 0.3, ridgeZRatio: 0.06, segmentsPerSide: 3, rings: 3 };
+      return { ridgeXRatio: 0.3, ridgeZRatio: 0.06, segmentsPerSide: 5, rings: 4 };
     case 'tile-hip':
       return { ridgeXRatio: 0.28, ridgeZRatio: 0.05, segmentsPerSide: 4, rings: 4 };
     case 'tile-gable':
@@ -427,6 +427,7 @@ export function composeBuilding(
   emitGroundworks(canvas, grammar, halfWidth, halfDepth);
   emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
   emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface);
+  emitVernacularFabric(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
   const roofTop = emitRoof(canvas, grammar, halfWidth, halfDepth, wallTop, roofSurface, wallSurface, postSurface, random);
   const crownTop = emitCrown(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, roofSurface, wallSurface, postSurface);
   emitFrontage(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofSurface, wallSurface, postSurface);
@@ -439,6 +440,8 @@ export function composeBuilding(
   group.userData['bodyWidth'] = grammar.width;
   group.userData['bodyDepth'] = grammar.depth;
   group.userData['wallTop'] = wallTop;
+  group.userData['vernacularFabric'] = (rank <= 1 || grammar.development?.level === 1)
+    && ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);
   const bounds = new THREE.Box3().setFromObject(group);
   // Measured as reach from the origin, not raw span: forecourts and gateways sit on one side
   // only, and the reserved placement footprint is a circle centred on the origin.
@@ -547,27 +550,34 @@ function emitFrame(
   }
 
   if (grammar.roofFamily === 'hide-cone') {
-    // Conical shelters are pure pole structures: a lashed tripod plus a ring of rafters.
+    // Conical shelters read as assembled pole structures rather than a smooth tent shell:
+    // structural poles, a low perimeter lash and a bound crown all remain visible.
     const apex = { x: 0, y: plinthTop + grammar.wallHeight + grammar.width * grammar.roofPitch, z: 0 };
-    const poles = Math.max(5, grammar.bays * 5);
+    const poles = Math.max(8, grammar.bays * 6);
+    const bases: Vec3[] = [];
     for (let index = 0; index < poles; index += 1) {
       const angle = (index / poles) * Math.PI * 2;
-      posts?.addBeam(
-        { x: Math.cos(angle) * halfWidth, y: 0, z: Math.sin(angle) * halfDepth },
-        apex,
-        thickness * 0.7,
-        thickness * 0.7,
-      );
+      const base = { x: Math.cos(angle) * halfWidth, y: 0.018, z: Math.sin(angle) * halfDepth };
+      bases.push(base);
+      posts?.addBeam(base, apex, thickness * 0.72, thickness * 0.72);
+    }
+    for (let index = 0; index < bases.length; index += 1) {
+      posts?.addBeam(bases[index]!, bases[(index + 1) % bases.length]!, thickness * 0.38, thickness * 0.34);
+    }
+    for (let band = 0; band < 2; band += 1) {
+      posts?.addBox(0, apex.y - thickness * (1.4 + band * 0.75), 0,
+        thickness * (4.5 - band * 0.8), thickness * 0.42, thickness * (4.5 - band * 0.8));
     }
     return;
   }
 
   if (grammar.roofFamily === 'lean-slope') {
+    const front = plinthTop + grammar.wallHeight;
     const back = plinthTop + grammar.wallHeight + grammar.depth * grammar.roofPitch;
     for (const side of [-1, 1]) {
       posts?.addBeam(
         { x: side * halfWidth, y: 0, z: halfDepth },
-        { x: side * halfWidth, y: plinthTop + grammar.wallHeight, z: halfDepth },
+        { x: side * halfWidth, y: front, z: halfDepth },
         thickness,
         thickness,
       );
@@ -577,7 +587,21 @@ function emitFrame(
         thickness,
         thickness,
       );
+      posts?.addBeam(
+        { x: side * halfWidth, y: front, z: halfDepth },
+        { x: side * halfWidth, y: back, z: -halfDepth },
+        thickness * 0.62,
+        thickness * 0.58,
+      );
+      posts?.addBeam(
+        { x: side * halfWidth, y: front * 0.28, z: halfDepth },
+        { x: side * halfWidth * 0.42, y: front * 0.72, z: halfDepth },
+        thickness * 0.5,
+        thickness * 0.46,
+      );
     }
+    posts?.addBox(0, front, halfDepth, grammar.width + thickness * 1.8, thickness * 0.85, thickness);
+    posts?.addBox(0, back, -halfDepth, grammar.width + thickness * 1.8, thickness * 0.85, thickness);
     return;
   }
 
@@ -624,6 +648,76 @@ function emitFrame(
       );
     }
   }
+}
+
+/**
+ * Low-tier buildings carry visible evidence of how they were assembled. These braces, wattles,
+ * foundation stones and lashings are deliberately structural rather than ornamental: they keep
+ * the first shelters and level-one dwellings from reading as primitive boxes while reusing the
+ * existing material batches and footprint.
+ */
+function emitVernacularFabric(
+  canvas: BuildingCanvas,
+  grammar: BuildingGrammar,
+  halfWidth: number,
+  halfDepth: number,
+  plinthTop: number,
+  wallTop: number,
+  postSurface: SurfaceKey,
+): void {
+  const lowTier = eraRank(grammar.era) <= 1 || grammar.development?.level === 1;
+  const domestic = ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);
+  if (!lowTier || !domestic) return;
+
+  const timber = canvas.at(postSurface, BUILD_STAGE.FRAME);
+  const detailTimber = canvas.at('timber', BUILD_STAGE.WALLS);
+  const stone = canvas.at('stone', BUILD_STAGE.FOUNDATION);
+  const shadow = canvas.at('shadow', BUILD_STAGE.WALLS);
+  const height = wallTop - plinthTop;
+  const t = Math.max(0.018, grammar.postThickness * 0.48);
+
+  // Corner footings and mid-wall pads make the building visibly meet uneven ground.
+  for (const [x, z] of [
+    [-halfWidth, -halfDepth], [halfWidth, -halfDepth], [-halfWidth, halfDepth], [halfWidth, halfDepth],
+    [0, -halfDepth], [0, halfDepth],
+  ] as const) {
+    stone?.addBox(x, 0.018, z, t * 2.2, 0.036, t * 1.8);
+  }
+
+  if (grammar.roofFamily !== 'hide-cone') {
+    // Knee braces stop early timber frames reading like orthogonal scaffolds.
+    for (const z of [halfDepth, -halfDepth]) {
+      for (const side of [-1, 1]) {
+        timber?.addBeam(
+          { x: side * halfWidth, y: plinthTop + height * 0.22, z },
+          { x: side * halfWidth * 0.48, y: plinthTop + height * 0.78, z },
+          t,
+          t * 0.82,
+        );
+      }
+    }
+  }
+
+  if (grammar.wallLayer === 'daub' || grammar.wallLayer === 'thatch' || grammar.wallLayer === 'hide') {
+    // Sparse exposed laths imply wattle beneath daub/hide without turning every wall into a grid.
+    const yLevels = [0.3, 0.57, 0.82];
+    for (const yRatio of yLevels) {
+      const y = plinthTop + height * yRatio;
+      detailTimber?.addBox(0, y, halfDepth + t * 0.18, grammar.width * 0.82, t * 0.42, t * 0.4);
+      detailTimber?.addBox(0, y, -halfDepth - t * 0.18, grammar.width * 0.82, t * 0.42, t * 0.4);
+    }
+  }
+
+  // Deep, irregular-looking entrance reveal: a small lintel hood and threshold shadow.
+  const doorWidth = Math.min(grammar.width * 0.3, 0.34);
+  const doorHeight = Math.min(height * 0.78, 0.6);
+  detailTimber?.addBeam(
+    { x: -doorWidth * 0.68, y: plinthTop + doorHeight + t * 0.7, z: halfDepth + t * 0.7 },
+    { x: doorWidth * 0.68, y: plinthTop + doorHeight + t * 0.55, z: halfDepth + t * 1.3 },
+    t * 0.9,
+    t * 0.7,
+  );
+  shadow?.addBox(0, plinthTop + 0.02, halfDepth + t * 1.2, doorWidth * 1.35, 0.035, t * 2.4);
 }
 
 function emitBody(
@@ -929,6 +1023,25 @@ function emitRoof(
 
   // Ridge beam plus motif finials at both ends — the crowning cultural signature.
   const ridgeHalf = halfWidth * Math.pow(0.76, grammar.roofTiers - 1) * shape.ridgeXRatio;
+  if (roofSurface === 'roof-thatch') {
+    // A bound ridge and broken eave fringe give thatch real thickness and hand-laid rhythm.
+    roof.addBox(0, topY + grammar.postThickness * 0.34, 0,
+      Math.max(ridgeHalf * 2.15, grammar.width * 0.22), grammar.postThickness * 0.78, grammar.postThickness * 1.9);
+    const fringe = Math.max(5, Math.min(11, grammar.bays * 3 + 2));
+    for (const zSide of [-1, 1]) {
+      for (let index = 0; index < fringe; index += 1) {
+        const x = -halfWidth * 0.92 + (halfWidth * 1.84 * (index + 0.5)) / fringe;
+        const stagger = index % 3 === 0 ? 0.02 : index % 3 === 1 ? -0.008 : 0.008;
+        roof.addBeam(
+          { x, y: wallTop - grammar.postThickness * 0.16 + stagger, z: zSide * halfDepth * (1 + grammar.eaveOverhang * 0.82) },
+          { x: x + (index % 2 ? 0.006 : -0.006), y: wallTop - grammar.postThickness * 0.72 + stagger,
+            z: zSide * halfDepth * (1 + grammar.eaveOverhang * 1.08) },
+          grammar.postThickness * 0.48,
+          grammar.postThickness * 0.28,
+        );
+      }
+    }
+  }
   timber?.addBox(0, topY + grammar.postThickness * 0.5, 0, Math.max(ridgeHalf * 2, grammar.width * 0.16), grammar.postThickness * 1.1, grammar.postThickness * 1.4);
   if (grammar.ridgeFinials) {
     for (const side of [-1, 1]) {
