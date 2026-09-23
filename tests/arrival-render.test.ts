@@ -77,10 +77,10 @@ describe('Arrival presentation contracts', () => {
   });
 
 
-  it('does not rewrite inactive pod trails before entry or after their visible window', () => {
+  it('updates Arrival effects only when active and camera-relevant', () => {
     const s = new Simulation({ seed: 'arrival-trail-budget', startMode: 'arrival' });
     const view = new FoundingPodRenderer(s.state);
-    const camera = new THREE.PerspectiveCamera();
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
     camera.position.set(35, 40, 50);
     const trails = view.root.children.filter((object): object is THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> =>
       object instanceof THREE.Mesh && object.geometry.getAttribute('position')?.count === 128);
@@ -91,6 +91,16 @@ describe('Arrival presentation contracts', () => {
 
     const first = s.state.arrival!.pods[0]!;
     s.state.arrival!.elapsedSeconds = first.entrySeconds + 0.1;
+
+    // Active but outside the camera frustum: no buffer uploads and no transparent overdraw.
+    camera.lookAt(1000, 40, 1000);
+    camera.updateMatrixWorld(true);
+    view.update(camera);
+    expect(trails.every(trail => (trail.geometry.getAttribute('position') as THREE.BufferAttribute).version === 0)).toBe(true);
+
+    const current = podPosition(first, s.state.arrival!.elapsedSeconds);
+    camera.lookAt(current.x, current.y, current.z);
+    camera.updateMatrixWorld(true);
     view.update(camera);
     const versionsAfterEntry = trails.map(trail => (trail.geometry.getAttribute('position') as THREE.BufferAttribute).version);
     expect(versionsAfterEntry.filter(version => version > 0)).toHaveLength(2);
