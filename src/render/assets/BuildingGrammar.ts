@@ -219,7 +219,16 @@ function roofFamilyFor(profile: CultureStyleProfile, era: Era, role: BuildingRol
   }
   if (role === 'factory' || role === 'foundry') return 'saw-tooth';
   if (role === 'energy' || role === 'research') return 'canopy-shell';
-  if (era === 'early') return 'thatch-hip';
+  if (era === 'early') {
+    // Early structures already inherit a culture's roof silhouette; the material system still
+    // renders these families in thatch, so this changes shape rather than granting later materials.
+    switch (profile.roofLanguage) {
+      case 'layered-asian': return 'tile-layered';
+      case 'gable-geometric': return 'tile-gable';
+      case 'dome-organic': return 'shell-dome';
+      case 'pyramid-stepped': return 'thatch-hip';
+    }
+  }
   switch (profile.roofLanguage) {
     case 'layered-asian':
       return 'tile-layered';
@@ -693,8 +702,15 @@ export function resolveBuildingGrammar(
     grammar.forecourt = development.level > 1 && ceremonial;
     grammar.enclosure = development.form === 'tower' ? 'court' : development.level > 1 && ceremonial ? 'court' : 'none';
     if (development.material === 'earth' || development.material === 'timber') {
-      grammar.roofFamily = profile.roofLanguage === 'dome-organic' && development.material === 'earth' ? 'shell-dome' : 'thatch-hip';
-      grammar.roofPitch = profile.roofLanguage === 'pyramid-stepped' ? 0.8 : 0.48;
+      // Level-one vernacular buildings keep cultural roof language while remaining materially
+      // primitive. The composer maps every early family below to thatch rather than tile.
+      grammar.roofFamily = profile.roofLanguage === 'layered-asian' ? 'tile-layered'
+        : profile.roofLanguage === 'gable-geometric' ? 'tile-gable'
+          : profile.roofLanguage === 'dome-organic' && development.material === 'earth' ? 'shell-dome'
+            : 'thatch-hip';
+      grammar.roofPitch = profile.roofLanguage === 'pyramid-stepped' ? 0.72
+        : profile.roofLanguage === 'gable-geometric' ? 0.54
+          : profile.roofLanguage === 'dome-organic' ? 0.44 : 0.48;
     }
     grammar.vents = development.form === 'works' ? grammar.vents : 0;
     grammar.emissive = development.need === 'energy' && development.level === 3 ? 0.85 : 0.25;
