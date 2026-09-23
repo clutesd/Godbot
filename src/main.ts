@@ -30,6 +30,8 @@ declare global {
     __godboxPlacementReport?: () => PlacementSmokeReport;
     __godboxDebugAdvance?: (months: number) => { month: number; year: number; placement: PlacementSmokeReport };
     __godboxPacing?: () => PresentationTelemetry;
+    __godboxPerformance?: () => { month: number; year: number; pacing: PresentationTelemetry; tick: ReturnType<Simulation['tickPerformance']> };
+    __godboxResetPerformance?: () => void;
     __godboxRestart?: (seed?: string) => Promise<void>;
     __godboxArrival?: { state: SimulationState; advance: (seconds: number) => void; pause: (paused: boolean) => void };
     __godboxTransportDebug?: (enabled?: boolean) => boolean;
@@ -366,6 +368,16 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   }
   const presentation = new PresentationDirector(simulation.config);
   window.__godboxPacing = () => presentation.telemetry();
+  if (import.meta.env.DEV) {
+    simulation.setTickProfiling(true);
+    window.__godboxPerformance = () => ({
+      month: simulation.state.month,
+      year: simulation.year,
+      pacing: presentation.telemetry(),
+      tick: simulation.tickPerformance(),
+    });
+    window.__godboxResetPerformance = () => simulation.resetTickProfiling();
+  }
   const audio = new AudioDirector(simulation.config);
   activeAudio = audio;
   audio.setMuted(audioMuted);
