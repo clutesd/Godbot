@@ -1,3 +1,4 @@
+import { createPottery, planPottery, potteryStyle, potteryTier, type PotteryAnchor } from './assets/Pottery';
 import { createResourceCargo } from './resources/ResourceCargo';
 import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
 import * as THREE from 'three';
@@ -1339,6 +1340,19 @@ export class GodboxRenderer {
       this.addEraDressing(group, settlement, era, palette, visualRandom);
       this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
     }
+    const potteryAnchors: PotteryAnchor[] = placements.filter(placement =>
+      this.constructionStageFor(placement.key) === BUILD_STAGE.DETAIL
+      && placement.key !== activeSite?.key
+      && (settlement.structurePlots?.find(plot => plot.id === placement.key)?.condition ?? 1) >= 0.85);
+    if (!settlement.development && settlement.specialization === 'craft' && eraRank(era) >= 1) {
+      const angle = this.random.fork(`${settlement.id}:specialization`).range(0, Math.PI * 2);
+      const radius = 5 + eraRank(era) * 0.5;
+      potteryAnchors.push({ key: `${settlement.id}:kiln`, localX: Math.cos(angle) * radius,
+        localZ: Math.sin(angle) * radius, width: 0.8, depth: 0.8, rotationY: 0, role: 'workshop' });
+    }
+    const pottery = planPottery(settlement, potteryAnchors, reservedPlacements);
+    group.add(createPottery(pottery, potteryStyle(culture?.id ?? 'fallback', cultureStyle, bannerIdentity),
+      potteryTier(settlement), (x, z) => this.elevationAt(settlement.position.x + x, settlement.position.z + z) - settlementY));
     if (settlement.alive) this.addHearthSmoke(placements, era, smokeSources);
     const lights = settlement.alive ? this.addSettlementLighting(group, settlement, era, palette, visualRandom) : [];
     group.userData['settlementId'] = settlement.id;
@@ -2121,6 +2135,7 @@ export class GodboxRenderer {
   }
 
   private developmentSignature(settlement: Settlement): string {
+    const culture = this.dominantCulture(settlement);
     const infrastructure = settlement.infrastructure;
     const stops = Object.values(this.state.transportation.stops)
       .filter(stop => stop.settlementId === settlement.id && stop.status === 'complete')
@@ -2145,6 +2160,11 @@ export class GodboxRenderer {
     // Categorical state belongs directly in the signature; only continuous numeric state is
     // quantized. Keeping these domains separate also prevents string/undefined arithmetic.
     return [
+      potteryTier(settlement),
+      culture?.id ?? '',
+      culture?.style.symbol ?? '',
+      culture?.style.pattern ?? '',
+      settlement.specialization,
       settlement.development?.revision ?? 0,
       constructionBlockedReason(settlement) ?? '',
       this.eraForSettlement(settlement),
@@ -3255,7 +3275,7 @@ export class GodboxRenderer {
       const ore = new THREE.Mesh(new THREE.DodecahedronGeometry(0.16, 0), new THREE.MeshStandardMaterial({ color: '#8a6a45', roughness: 0.7, metalness: 0.3 }));
       ore.position.set(baseX + 0.7, 0.12, baseZ + 0.4);
       group.add(ore);
-    } else if (settlement.specialization === 'craft') {
+    } else if (settlement.specialization === 'craft' && potteryTier(settlement) > 0) {
       // A beehive kiln with live smoke and a goods yard of pots.
       const kiln = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 7, 0, Math.PI * 2, 0, Math.PI / 2), stone);
       kiln.position.set(baseX, 0.02, baseZ);
@@ -3280,13 +3300,6 @@ export class GodboxRenderer {
           strength: 0.45,
           shade: 0.78,
         });
-      }
-      const clay = new THREE.MeshStandardMaterial({ color: '#9d6b3d', roughness: 0.85 });
-      for (let index = 0; index < 4; index += 1) {
-        const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.05, 0.16, 8), clay);
-        pot.position.set(baseX + Math.cos(angle + 2 + index * 0.5) * 0.85, 0.08, baseZ + Math.sin(angle + 2 + index * 0.5) * 0.85);
-        pot.castShadow = true;
-        group.add(pot);
       }
     }
 
