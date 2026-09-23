@@ -36,7 +36,7 @@ declare global {
       year: number;
       pacing: PresentationTelemetry;
       tick: ReturnType<Simulation['tickPerformance']>;
-      scheduler: { estimatedTickMs: number; estimatedFrameMs: number; pendingTicks: number };
+      scheduler: { estimatedTickMs: number; estimatedFrameMs: number; pendingTicks: number; openingWarmupMs: number };
     };
     __godboxResetPerformance?: () => void;
     __godboxRestart?: (seed?: string) => Promise<void>;
@@ -367,6 +367,13 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
+  openingStatusElement.textContent = 'Preparing the observation…';
+  const openingWarmupMs = await view.warmUpOpening();
+  // Give the browser two quiet presentation frames after compilation/texture uploads. Arrival time
+  // has not started yet, so these frames absorb driver/layout settling instead of becoming hitches.
+  await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
+  await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
+  openingStatusElement.textContent = 'History is the protagonist.';
   warChronicle.update(simulation.state);
   window.__godboxRenderer = view;
   window.__godboxPlacementReport = () => view.getPlacementSmokeReport();
@@ -398,6 +405,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
         estimatedTickMs: Number(interactiveTickBudget.estimatedTickMs.toFixed(3)),
         estimatedFrameMs: Number(interactiveTickBudget.estimatedFrameMs.toFixed(3)),
         pendingTicks: Number(pendingTickBacklog.toFixed(2)),
+        openingWarmupMs: Number(openingWarmupMs.toFixed(2)),
       },
     });
     window.__godboxResetPerformance = () => simulation.resetTickProfiling();
