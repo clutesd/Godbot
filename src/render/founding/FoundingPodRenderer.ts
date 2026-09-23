@@ -21,6 +21,10 @@ export class FoundingPodRenderer {
   private readonly direction = new THREE.Vector3();
   private readonly side = new THREE.Vector3();
   private readonly eye = new THREE.Vector3();
+  private readonly projectionView = new THREE.Matrix4();
+  private readonly frustum = new THREE.Frustum();
+  private readonly effectSphere = new THREE.Sphere();
+  private readonly trailTail = new THREE.Vector3();
   private readonly hullMaterial = new THREE.MeshStandardMaterial({ color: '#aaa79b', roughness: 0.78, metalness: 0.35 });
   private readonly shieldMaterial = new THREE.MeshStandardMaterial({ color: '#302f2b', roughness: 0.95, metalness: 0.15 });
   private readonly hullGeometry = new THREE.CylinderGeometry(0.48, 0.92, 1.65, 8);
@@ -105,6 +109,9 @@ export class FoundingPodRenderer {
   update(camera: THREE.Camera): void {
     const arrival = this.state.arrival;
     if (!arrival || this.effectsRetired) return;
+    camera.updateMatrixWorld();
+    this.projectionView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projectionView);
     const t = arrival.elapsedSeconds;
     for (const v of this.visuals) {
       const p = podPosition(v.pod, t);
@@ -116,13 +123,19 @@ export class FoundingPodRenderer {
       v.hull.position.y -= settling * Math.sin(Math.max(0, age) * 16) * 0.045;
       v.hatch.rotation.x = -THREE.MathUtils.smoothstep(age, 0.8, 2.8) * 1.8;
       v.light.opacity = age < 0 ? 0.9 : Math.max(0.12, Math.exp(-age * 0.6));
+      const headTime = Math.min(t, podTouchdown(v.pod));
+      const tailTime = Math.max(v.pod.entrySeconds, headTime - 5.5);
+      const tail = podPosition(v.pod, tailTime);
+      this.trailTail.set(tail.x, tail.y, tail.z);
+      this.effectSphere.center.copy(v.hull.position).add(this.trailTail).multiplyScalar(0.5);
+      this.effectSphere.radius = v.hull.position.distanceTo(this.trailTail) * 0.5 + 2.5;
+      const trailInView = this.frustum.intersectsSphere(this.effectSphere);
       for (let layer = 0; layer < v.trails.length; layer++) {
         const trail = v.trails[layer]!;
-        trail.visible = t >= v.pod.entrySeconds && age < 4.5;
+        trail.visible = t >= v.pod.entrySeconds && age < 4.5 && trailInView;
         if (!trail.visible) continue;
         trail.material.opacity = (layer ? 0.13 : 0.9) * (1 - THREE.MathUtils.smoothstep(age, 0, 4.5));
         const positions = trail.geometry.getAttribute('position') as THREE.BufferAttribute;
-        const headTime = Math.min(t, podTouchdown(v.pod));
         for (let i = 0; i < TRAIL_SAMPLES; i++) {
           const time = Math.max(v.pod.entrySeconds, headTime - i / (TRAIL_SAMPLES - 1) * 5.5);
           const a = podPosition(v.pod, time);
@@ -138,7 +151,10 @@ export class FoundingPodRenderer {
         }
         positions.needsUpdate = true;
       }
-      v.dust.visible = age >= 0 && age < 6;
+      this.effectSphere.center.set(v.pod.position.x, v.pod.groundY + 1.4, v.pod.position.z);
+      this.effectSphere.radius = 7;
+      const dustInView = this.frustum.intersectsSphere(this.effectSphere);
+      v.dust.visible = age >= 0 && age < 6 && dustInView;
       v.dust.material.uniforms['opacity']!.value = age < 0 ? 0 : Math.max(0, 0.35 * (1 - age / 6));
       if (v.dust.visible) {
         const positions = v.dust.geometry.getAttribute('position') as THREE.BufferAttribute;

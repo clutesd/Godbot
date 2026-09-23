@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { InteractiveTickBudget } from '../src/sim/InteractiveTickBudget';
+import { FramePacingProfiler } from '../src/render/FramePacingProfiler';
 
 describe('interactive tick budget', () => {
   it('always permits the first due atomic tick and defers catch-up that is unlikely to fit', () => {
@@ -46,5 +47,29 @@ describe('interactive tick budget', () => {
     budget.observe(0.5);
     expect(budget.estimatedTickMs).toBeLessThan(afterSpike);
     expect(budget.estimatedTickMs).toBeGreaterThan(0.5);
+  });
+});
+
+
+describe('frame pacing profiler', () => {
+  it('reports rolling frame percentiles and isolates Arrival hitches', () => {
+    const profiler = new FramePacingProfiler(60);
+    for (let frame = 0; frame < 50; frame++) profiler.observe(8 + frame * 0.05, frame < 30);
+    profiler.observe(24, true);
+    profiler.observe(40, true);
+
+    const snapshot = profiler.snapshot();
+    expect(snapshot.sampleCount).toBe(52);
+    expect(snapshot.p50Ms).toBeGreaterThanOrEqual(8);
+    expect(snapshot.p95Ms).toBeLessThan(20);
+    expect(snapshot.maxMs).toBe(40);
+    expect(snapshot.hitches20Ms).toBe(2);
+    expect(snapshot.hitches33Ms).toBe(1);
+    expect(snapshot.arrival.frames).toBe(32);
+    expect(snapshot.arrival.hitches20Ms).toBe(2);
+    expect(snapshot.arrival.hitches33Ms).toBe(1);
+
+    profiler.reset();
+    expect(profiler.snapshot().sampleCount).toBe(0);
   });
 });
