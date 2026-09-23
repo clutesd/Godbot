@@ -538,7 +538,7 @@ export class GodboxRenderer {
     if (renderPolicy.refreshWorldPresentation) {
       this.updateSettlementBanners(elapsedSeconds);
       this.updateAdvancedAtmosphere(elapsedSeconds);
-      this.updateSeasonalPresentation();
+      if (this.state.month !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
       for (const [key, entry] of this.constructionAssemblies) {
         const project = entry.settlement.development?.project;
         if (!entry.site.parent || project?.plotId !== key) { this.constructionAssemblies.delete(key); continue; }
@@ -611,6 +611,9 @@ export class GodboxRenderer {
         this.vegetation.setDisturbance(this.state.settlements, foundingCampGroundArtifacts(this.state));
         this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
         this.vegetation.updateLod(this.camera.position);
+        return;
+      case 'seasonal':
+        this.updateSeasonalPresentation();
         return;
     }
   }
