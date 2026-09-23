@@ -10,7 +10,13 @@ export type TickPhase =
   | 'people'
   | 'wars'
   | 'migration'
-  | 'annual-society'
+  | 'annual-partnerships'
+  | 'annual-diplomacy'
+  | 'annual-institutions'
+  | 'annual-politics'
+  | 'knowledge-year'
+  | 'annual-culture'
+  | 'settlement-change'
   | 'advanced-month'
   | 'advanced-year'
   | 'bookkeeping'
@@ -106,8 +112,9 @@ export class TickProfiler {
     const phases: Partial<Record<TickPhase, TickPhaseStats>> = {};
     const phaseNames: TickPhase[] = [
       'weather', 'environment', 'survival-planning', 'resources', 'economy', 'knowledge-month',
-      'transport-trade', 'survival-resolution', 'people', 'wars', 'migration', 'annual-society',
-      'advanced-month', 'advanced-year', 'bookkeeping', 'history-trim',
+      'transport-trade', 'survival-resolution', 'people', 'wars', 'migration', 'annual-partnerships',
+      'annual-diplomacy', 'annual-institutions', 'annual-politics', 'knowledge-year', 'annual-culture',
+      'settlement-change', 'advanced-month', 'advanced-year', 'bookkeeping', 'history-trim',
     ];
     for (const phase of phaseNames) {
       const values = this.samples.map((sample) => sample.phases[phase]).filter((value): value is number => value !== undefined);
