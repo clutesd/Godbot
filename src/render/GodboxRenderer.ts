@@ -11,6 +11,7 @@ import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
+import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
@@ -351,6 +352,8 @@ export class GodboxRenderer {
   private readonly ecology: EcologyField;
   private readonly postProcessing: EcologyPostProcessing;
   private vegetationLodAccumulator = 0;
+  private arrivalRenderBudgetActive = false;
+  private readonly arrivalVegetationCamera = new THREE.Vector3();
   private readonly routePlacementReports = new Map<string, RoutePlacementReport>();
   private readonly routeGroup = new THREE.Group();
   private readonly caravanGroup = new THREE.Group();
@@ -504,59 +507,92 @@ export class GodboxRenderer {
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
     if (this.adaptiveResolution.sample(deltaSeconds)) this.resize();
-    // Human life advances from renderer time even when documentary history is slowed or frozen.
-    // Keep this before all state-derived presentation work so a dramatic hold never stalls people.
+
+    const renderPolicy = arrivalRenderPolicy(this.state);
+    if (renderPolicy.active !== this.arrivalRenderBudgetActive) {
+      this.arrivalRenderBudgetActive = renderPolicy.active;
+      this.setHumanPresentationVisible(!renderPolicy.active);
+      if (!renderPolicy.active) {
+        // The first history frame catches presentation state up immediately after the deliberately
+        // frozen prologue instead of waiting for the next structural/LOD interval.
+        this.structuralAccumulator = 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond);
+        this.vegetationLodAccumulator = VEGETATION_LOD_INTERVAL_SECONDS;
+      }
+    }
+
+    // Human presentation time still advances during Arrival so history does not inherit a giant
+    // first-frame delta. The expensive character/choreography pass itself is intentionally frozen.
     const humanLife = this.humanLifeClock.advance(deltaSeconds);
-    this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds);
+    if (renderPolicy.updateAmbientWorldEffects) {
+      this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds);
+    }
     for (const culture of this.state.cultures) if (!this.cultureById.has(culture.id)) {
       this.cultureById.set(culture.id, culture);
       this.accentByCulture.set(culture.id, new THREE.Color(culture.style.accent));
     }
     this.transitionTimeline.updateTime(deltaSeconds);
+
     // Hold a readable daylight composition during the opening, then resume from that phase.
     if (this.state.arrival) this.arrivalLightingSeconds += deltaSeconds * (this.state.arrival.phase === 'HISTORY_RUNNING' ? 1 : 0.035);
     this.updateDayNight(this.state.arrival ? this.arrivalLightingSeconds : elapsedSeconds);
-    this.updateSettlementBanners(elapsedSeconds);
-    this.updateAdvancedAtmosphere(elapsedSeconds);
-    this.updateSeasonalPresentation();
-    this.vegetation.updateLeaves(elapsedSeconds);
-    for (const [key, entry] of this.constructionAssemblies) {
-      const project = entry.settlement.development?.project;
-      if (!entry.site.parent || project?.plotId !== key) { this.constructionAssemblies.delete(key); continue; }
-      const paid = constructionPresentationProgress(entry.settlement);
-      const contact = this.physicalWork.installationContact(key);
-      entry.assembly.update(paid, deltaSeconds, contact === undefined ? undefined : contact && !entry.contact);
-      entry.contact = contact;
-      updateConstructionScaffold(entry.scaffold, entry.assembly.plan, entry.assembly.plan.progress ?? paid, deltaSeconds);
-      const dressing = entry.site.getObjectByName(`construction-worksite:${key}`);
-      if (dressing) updateConstructionWorksite(dressing, paid, constructionBlockedReason(entry.settlement)?.startsWith('missing:') ?? false, this.physicalWork.materialInTransit(key));
+
+    if (renderPolicy.refreshWorldPresentation) {
+      this.updateSettlementBanners(elapsedSeconds);
+      this.updateAdvancedAtmosphere(elapsedSeconds);
+      this.updateSeasonalPresentation();
+      for (const [key, entry] of this.constructionAssemblies) {
+        const project = entry.settlement.development?.project;
+        if (!entry.site.parent || project?.plotId !== key) { this.constructionAssemblies.delete(key); continue; }
+        const paid = constructionPresentationProgress(entry.settlement);
+        const contact = this.physicalWork.installationContact(key);
+        entry.assembly.update(paid, deltaSeconds, contact === undefined ? undefined : contact && !entry.contact);
+        entry.contact = contact;
+        updateConstructionScaffold(entry.scaffold, entry.assembly.plan, entry.assembly.plan.progress ?? paid, deltaSeconds);
+        const dressing = entry.site.getObjectByName(`construction-worksite:${key}`);
+        if (dressing) updateConstructionWorksite(dressing, paid, constructionBlockedReason(entry.settlement)?.startsWith('missing:') ?? false, this.physicalWork.materialInTransit(key));
+      }
     }
-    this.updatePeople(humanLife.deltaSeconds, humanLife.elapsedSeconds);
-    this.structuralAccumulator += deltaSeconds;
-    if (this.structuralAccumulator >= 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond)) {
-      this.structuralAccumulator = 0;
-      this.waterSystem.syncHydrology();
-      this.syncSettlements();
-      this.syncRoutes();
-      this.transitionTimeline.pruneCompleted();
+
+    if (renderPolicy.animateHumans) this.updatePeople(humanLife.deltaSeconds, humanLife.elapsedSeconds);
+
+    if (renderPolicy.refreshWorldPresentation) {
+      this.structuralAccumulator += deltaSeconds;
+      if (this.structuralAccumulator >= 1 / Math.max(1, this.config.render.structuralUpdatesPerSecond)) {
+        this.structuralAccumulator = 0;
+        this.waterSystem.syncHydrology();
+        this.syncSettlements();
+        this.syncRoutes();
+        this.transitionTimeline.pruneCompleted();
+      }
+      this.updateFirstFirePresentationVisuals();
+      this.updateCaravans();
+      this.updateSmoke(elapsedSeconds);
     }
-    this.updateFirstFirePresentationVisuals();
-    this.updateCaravans();
-    this.updateSmoke(elapsedSeconds);
+
+    // Water, sky and lightweight vegetation motion remain live throughout the prologue. These are
+    // visible atmospheric cues, unlike settlement/human bookkeeping that cannot change yet.
     this.waterSystem.update(elapsedSeconds);
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
-    this.vegetationLodAccumulator += deltaSeconds;
-    if (this.vegetationLodAccumulator >= VEGETATION_LOD_INTERVAL_SECONDS) {
-      this.vegetationLodAccumulator = 0;
-      this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
-      this.vegetation.setDisturbance(this.state.settlements, foundingCampGroundArtifacts(this.state));
-      this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
-      this.vegetation.updateLod(this.camera.position);
+    this.vegetation.updateLeaves(elapsedSeconds);
+
+    if (renderPolicy.refreshVegetationLod) {
+      this.vegetationLodAccumulator += deltaSeconds;
+      if (this.vegetationLodAccumulator >= VEGETATION_LOD_INTERVAL_SECONDS) {
+        this.vegetationLodAccumulator = 0;
+        this.vegetation.setEcologyYear(Math.floor(this.state.month / 12));
+        this.vegetation.setDisturbance(this.state.settlements, foundingCampGroundArtifacts(this.state));
+        this.ecology.sync(this.state.settlements, this.state.month, this.state.advanced.environment.ecologicalPressure);
+        this.vegetation.updateLod(this.camera.position);
+      }
     }
+
     this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
     this.skyAtmosphere.followCamera(this.camera);
     this.foundingPods.update(this.camera);
-    this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
+
+    if (renderPolicy.updateAmbientWorldEffects) {
+      this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
+    }
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
     const blizzard = this.weatherRenderer.report.blizzard;
     if (this.scene.fog instanceof THREE.FogExp2) {
@@ -564,6 +600,23 @@ export class GodboxRenderer {
       this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
     }
     this.postProcessing.render(this.ecology.night.value);
+  }
+
+  private setHumanPresentationVisible(visible: boolean): void {
+    for (const mesh of [
+      this.people,
+      this.peopleRoleAccents,
+      this.peopleHeads,
+      this.peopleArms,
+      this.peopleLegs,
+      this.peopleTools,
+      this.peopleHeadwear,
+      this.peopleCargo,
+      this.peopleMantles,
+    ]) mesh.visible = visible;
+    this.resourceWorkers.group.visible = visible;
+    this.physicalWorkers.group.visible = visible;
+    this.restPoses.group.visible = visible;
   }
 
   private setupLights(): void {
@@ -596,7 +649,15 @@ export class GodboxRenderer {
     this.farmFields.update(this.state, (x, z) => this.elevationAt(x, z), (x, z) => this.personStandable(x, z));
     this.workSettlements.clear();
     for (const settlement of this.state.settlements) this.workSettlements.set(settlement.id, settlement);
-    if (force) this.vegetation.updateLod(this.camera.position);
+    if (force) {
+      const arrivalAnchor = arrivalVegetationAnchor(this.state);
+      if (arrivalAnchor) {
+        this.arrivalVegetationCamera.set(arrivalAnchor.x, this.camera.position.y, arrivalAnchor.z);
+        this.vegetation.updateLod(this.arrivalVegetationCamera);
+      } else {
+        this.vegetation.updateLod(this.camera.position);
+      }
+    }
     const isSpring = season >= 1 && season <= 3;
     const isAutumn = season >= 7 && season <= 9;
     const isWinter = season >= 10 || season === 0;
