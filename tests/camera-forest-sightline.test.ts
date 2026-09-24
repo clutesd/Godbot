@@ -309,7 +309,8 @@ describe('human-scale documentary camera framing', () => {
     expect(worker.sightline).toBeLessThan(0.2);
     expect(street.lens).toBeLessThan(0.8);
     expect(cameraTargetFloorFor('worker-follow')).toBeLessThan(0.1);
-    expect(cameraTransitionScaleFor('worker-follow')).toBeLessThan(0.5);
+    expect(cameraTransitionScaleFor('worker-follow')).toBeGreaterThan(0.7);
+    expect(cameraTransitionScaleFor('worker-follow')).toBeLessThan(0.9);
     expect(wide.lens).toBe(3);
     expect(wide.sightline).toBe(1.6);
     expect(cameraTransitionScaleFor('world-establishing')).toBe(1);
