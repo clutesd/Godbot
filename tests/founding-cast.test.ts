@@ -99,7 +99,7 @@ describe('Founding documentary cast 2a', () => {
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('complete');
   });
 
-  it('freezes portraits but lets the final silent release advance authoritative time slowly', () => {
+  it('keeps portraits cinematic while authoritative history continues underneath', () => {
     const simulation = completedArrival('founding-cast-pacing');
     const historian = new Historian(simulation.config);
     const originalAutoRun = simulation.config.autoRun;
@@ -111,8 +111,14 @@ describe('Founding documentary cast 2a', () => {
     for (let index = 0; index < cast.length; index += 1) {
       const portrait = chooseFoundingCastScene(historian, simulation.state);
       expect(portrait?.id).toContain(`founding-cast:introduction:${index}:`);
-      expect(simulation.config.autoRun).toBe(false);
-      expect(presentation.tickBudget(simulation.state)).toBe(0);
+      expect(simulation.config.autoRun).toBe(originalAutoRun);
+      expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
+      expect(presentation.targetSpeed(simulation.state, {
+        kind: portrait!.kind,
+        interest: portrait!.interest,
+        eventType: portrait!.event?.type,
+        eventMonth: portrait!.event?.month,
+      })).toBeCloseTo(0.08, 5);
     }
 
     const release = chooseFoundingCastScene(historian, simulation.state);
