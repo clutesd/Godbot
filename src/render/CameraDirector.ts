@@ -755,6 +755,18 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
  */
+export interface CameraFlightTelemetry {
+  readonly active: boolean;
+  readonly phase?: 'depart' | 'cruise' | 'approach';
+  readonly destinationSceneId?: string;
+  readonly distance: number;
+  readonly horizontalDistance: number;
+  readonly speed: number;
+  readonly acceleration: number;
+  readonly gazeErrorDegrees: number;
+  readonly cruiseHeight?: number;
+}
+
 interface CameraFlightState {
   readonly originPosition: THREE.Vector3;
   readonly destinationPosition: THREE.Vector3;
@@ -1022,6 +1034,47 @@ export class CameraDirector {
     // may not be one yet; returning undefined is preferable to pretending the remote destination has
     // already been reached.
     return this.flight ? this.acquiredScene : this.currentScene;
+  }
+
+  flightTelemetry(): CameraFlightTelemetry {
+    const flight = this.flight;
+    if (!flight) {
+      return {
+        active: false,
+        distance: 0,
+        horizontalDistance: 0,
+        speed: this.positionVelocity.length(),
+        acceleration: this.flightAcceleration.length(),
+        gazeErrorDegrees: 0,
+      };
+    }
+
+    this.workingDirection.copy(this.lookTarget).sub(this.camera.position);
+    this.workingTangent.copy(flight.destinationTarget).sub(this.camera.position);
+    let gazeErrorDegrees = 0;
+    if (this.workingDirection.lengthSq() > 1e-8 && this.workingTangent.lengthSq() > 1e-8) {
+      const dot = THREE.MathUtils.clamp(
+        this.workingDirection.normalize().dot(this.workingTangent.normalize()),
+        -1,
+        1,
+      );
+      gazeErrorDegrees = THREE.MathUtils.radToDeg(Math.acos(dot));
+    }
+
+    return {
+      active: true,
+      phase: flight.phase,
+      destinationSceneId: this.currentScene?.id,
+      distance: this.camera.position.distanceTo(flight.destinationPosition),
+      horizontalDistance: Math.hypot(
+        this.camera.position.x - flight.destinationPosition.x,
+        this.camera.position.z - flight.destinationPosition.z,
+      ),
+      speed: this.positionVelocity.length(),
+      acceleration: this.flightAcceleration.length(),
+      gazeErrorDegrees,
+      cruiseHeight: flight.cruiseHeight,
+    };
   }
 
   private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
