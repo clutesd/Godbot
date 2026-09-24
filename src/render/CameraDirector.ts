@@ -246,16 +246,17 @@ export function cameraFlightProfileFor(kind: ObservationKind | undefined, distan
   if (isPersonalCameraKind(kind)) {
     return {
       limits: {
-        maxSpeed: THREE.MathUtils.clamp(2.6 + d * 0.045, 2.8, 5.6),
-        maxAcceleration: d > 32 ? 1.4 : d > 14 ? 1.15 : 0.9,
-        maxJerk: d > 24 ? 3.4 : 3,
-        responseSeconds: 0.62,
+        maxSpeed: THREE.MathUtils.clamp(3.1 + d * 0.055, 3.2, 5.8),
+        maxAcceleration: d > 32 ? 1.45 : d > 14 ? 1.25 : 1.05,
+        maxJerk: d > 24 ? 4 : 3.6,
+        responseSeconds: 0.55,
       },
-      gazeLimits: { maxSpeed: 5.2, maxAcceleration: 2.4, maxJerk: 7.5, responseSeconds: 0.52 },
+      gazeLimits: { maxSpeed: 5.4, maxAcceleration: 2.6, maxJerk: 8, responseSeconds: 0.48 },
       cruiseClearance: 2.4 + Math.min(3.2, d * 0.045),
       destinationLift: 1.2,
       approachFraction: 0.74,
-      minApproachRadius: 7,
+      // Nearby personal moves should glide directly into the subject, not climb into a mini cruise.
+      minApproachRadius: 14,
       maxApproachRadius: 30,
     };
   }
