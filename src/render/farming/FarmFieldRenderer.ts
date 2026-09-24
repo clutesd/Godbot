@@ -125,9 +125,13 @@ export class FarmFieldRenderer {
       if (candidates.length === 0 || counts.fields >= MAX_FIELDS) continue;
       const baseVisual = farmPresentationState(settlement, state.month, state.weather.cells[settlement.cellIndex]);
       const primary = farmGeometry(settlement);
+      const productiveFieldCount = Math.max(1, candidates.filter(field => field.workable).length);
       for (const field of candidates) {
         if (counts.fields >= MAX_FIELDS) break;
-        const visual = presentationForField(baseVisual, field);
+        const sharedVisual = field.workable && field.source === 'plot' && productiveFieldCount > 1
+          ? { ...baseVisual, output: baseVisual.output / productiveFieldCount }
+          : baseVisual;
+        const visual = presentationForField(sharedVisual, field);
         // Physical field plots persist even when damaged or temporarily unsafe. Only the synthetic
         // fallback bed is rejected when the selected ground is not currently standable.
         if (field.source === 'fallback' && !standable(field.center.x, field.center.z)
@@ -148,13 +152,15 @@ export class FarmFieldRenderer {
       // rectangular beams laid across the landscape.
       const rowSpacing = field.depth / ROWS;
       const rowHalfWidth = rowSpacing * 0.27;
+      const maintained = field.workable || field.source === 'fallback';
       for (let row = 0; row < ROWS; row++) {
+        if (!maintained && field.status === 'ruin' && row % 2 === 1) continue;
         const localZ = (row - 1.5) * rowSpacing;
         const start = farmPoint(field, -field.width * 0.47, localZ);
         const end = farmPoint(field, field.width * 0.47, localZ);
         surfaces.furrows.addRibbon(
           start.x, start.z, end.x, end.z,
-          rowHalfWidth * 2, RIBBON_SEGMENTS, 0.011, 0.034, palette.ridge, heightAt,
+          rowHalfWidth * 2, RIBBON_SEGMENTS, maintained ? 0.011 : 0.007, maintained ? 0.034 : 0.017, palette.ridge, heightAt,
         );
       }
       for (let gap = 0; gap <= ROWS; gap++) {
@@ -178,10 +184,12 @@ export class FarmFieldRenderer {
       const southA = farmPoint(field, -halfW - edge, halfD), southB = farmPoint(field, halfW + edge, halfD);
       const westA = farmPoint(field, -halfW, -halfD), westB = farmPoint(field, -halfW, halfD);
       const eastA = farmPoint(field, halfW, -halfD), eastB = farmPoint(field, halfW, halfD);
-      surfaces.borders.addRibbon(northA.x, northA.z, northB.x, northB.z, edge * 2, RIBBON_SEGMENTS, 0.01, 0.045, palette.border, heightAt);
-      surfaces.borders.addRibbon(southA.x, southA.z, southB.x, southB.z, edge * 2, RIBBON_SEGMENTS, 0.01, 0.045, palette.border, heightAt);
-      surfaces.borders.addRibbon(westA.x, westA.z, westB.x, westB.z, edge * 2, RIBBON_SEGMENTS, 0.01, 0.045, palette.border, heightAt);
-      surfaces.borders.addRibbon(eastA.x, eastA.z, eastB.x, eastB.z, edge * 2, RIBBON_SEGMENTS, 0.01, 0.045, palette.border, heightAt);
+      const bermEdge = maintained ? 0.01 : 0.007;
+      const bermCrown = maintained ? 0.045 : field.status === 'ruin' ? 0.018 : 0.028;
+      surfaces.borders.addRibbon(northA.x, northA.z, northB.x, northB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
+      surfaces.borders.addRibbon(southA.x, southA.z, southB.x, southB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
+      surfaces.borders.addRibbon(westA.x, westA.z, westB.x, westB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
+      surfaces.borders.addRibbon(eastA.x, eastA.z, eastB.x, eastB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
 
       // Four small corner markers help cultivated land read as intentionally managed without
       // inventing fences, ownership or infrastructure in simulation state.
