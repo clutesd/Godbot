@@ -1244,9 +1244,6 @@ export class CameraDirector {
     this.shotDuration = editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
     if (scene.id.startsWith('human:')) this.shotDuration = 18;
-    else if (!isFoundingCameraScene(scene.id) && isPersonalCameraKind(scene.kind)) {
-      this.shotDuration = Math.max(this.shotDuration, 15.5);
-    }
 
     const ground = elevationAt(scene.position.x, scene.position.z);
     this.shotBaseTarget.set(scene.position.x, ground + (foundingProfile?.targetHeight
