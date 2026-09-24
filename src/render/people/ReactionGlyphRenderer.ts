@@ -34,6 +34,7 @@ const GLYPHS: readonly ReactionGlyph[] = ['🥺', '❤️', '🪵', '🔥', '�
 const MIN_GLOBAL_GAP_SECONDS = 1.35;
 const MIN_PERSON_COOLDOWN_SECONDS = 18;
 const PERSON_COOLDOWN_SPAN_SECONDS = 22;
+const MIN_SOURCE_COOLDOWN_SECONDS = 16;
 
 export function reactionGlyphCueFor(evidence: ReactionGlyphEvidence): ReactionGlyphCue | undefined {
   const { person, local, firstFire } = evidence;
@@ -51,7 +52,7 @@ export function reactionGlyphCueFor(evidence: ReactionGlyphEvidence): ReactionGl
         glyph: '🥺',
         reason: 'support',
         priority: 0.96,
-        sourceKey: `support:${encounter.relationshipId ?? encounter.partnerId}:${local.action}`,
+        sourceKey: `support:${encounter.relationshipId ?? encounter.partnerId}`,
       };
     }
     if (encounter.tone === 'warm' && local.action === 'small-shared-laugh') {
@@ -84,7 +85,7 @@ export function reactionGlyphCueFor(evidence: ReactionGlyphEvidence): ReactionGl
   }
 
   if (evidence.resourceKind === 'timber' && person.activity === 'gather') {
-    return { glyph: '🪵', reason: 'timber-work', priority: 0.56, sourceKey: `timber:${person.id}` };
+    return { glyph: '🪵', reason: 'timber-work', priority: 0.56, sourceKey: `timber:${person.navigation.destinationId ?? person.id}` };
   }
 
   return undefined;
@@ -127,6 +128,7 @@ export class ReactionGlyphRenderer {
   private readonly proposals: Proposal[] = [];
   private readonly active: ActiveGlyph[] = [];
   private readonly lastShownAt = new Map<string, number>();
+  private readonly lastSourceShownAt = new Map<string, number>();
   private readonly seed: string;
   private frame = 0;
   private nowSeconds = 0;
@@ -208,7 +210,8 @@ export class ReactionGlyphRenderer {
       if (activePeople.has(proposal.personId)) return false;
       const cooldown = MIN_PERSON_COOLDOWN_SECONDS
         + stableUnit(`${this.seed}:${proposal.personId}:reaction-cooldown`) * PERSON_COOLDOWN_SPAN_SECONDS;
-      return this.nowSeconds - (this.lastShownAt.get(proposal.personId) ?? -Infinity) >= cooldown;
+      return this.nowSeconds - (this.lastShownAt.get(proposal.personId) ?? -Infinity) >= cooldown
+        && this.nowSeconds - (this.lastSourceShownAt.get(proposal.cue.sourceKey) ?? -Infinity) >= MIN_SOURCE_COOLDOWN_SECONDS;
     });
     if (!eligible.length) return;
 
@@ -222,6 +225,7 @@ export class ReactionGlyphRenderer {
     const duration = 1.05 + stableUnit(`${this.seed}:${chosen.personId}:${chosen.cue.sourceKey}:duration`) * 0.42;
     this.active.push({ personId: chosen.personId, cue: chosen.cue, startedAt: this.nowSeconds, duration, slot: freeSlot });
     this.lastShownAt.set(chosen.personId, this.nowSeconds);
+    this.lastSourceShownAt.set(chosen.cue.sourceKey, this.nowSeconds);
     this.nextGlobalSpawn = this.nowSeconds + MIN_GLOBAL_GAP_SECONDS
       + stableUnit(`${this.seed}:${chosen.cue.sourceKey}:global-gap`) * 0.55;
     this.updateActive();
@@ -232,6 +236,7 @@ export class ReactionGlyphRenderer {
     this.proposals.length = 0;
     this.anchors.clear();
     this.lastShownAt.clear();
+    this.lastSourceShownAt.clear();
     this.nextGlobalSpawn = 0;
     for (const slot of this.slots) {
       slot.sprite.visible = false;
@@ -267,9 +272,12 @@ export class ReactionGlyphRenderer {
       const pulse = this.reducedMotion ? 1 : 0.94 + Math.sin(Math.min(1, t / 0.22) * Math.PI) * 0.08;
       const worldScale = Math.max(0.115, Math.min(0.18, anchor.scale * 0.52)) * pulse;
 
-      slot.material.map = this.textures.get(active.cue.glyph)!;
+      const texture = this.textures.get(active.cue.glyph)!;
+      if (slot.material.map !== texture) {
+        slot.material.map = texture;
+        slot.material.needsUpdate = true;
+      }
       slot.material.opacity = Math.max(0, Math.min(1, envelope * 0.94));
-      slot.material.needsUpdate = true;
       slot.sprite.position.set(anchor.x, anchor.y + 0.085 + rise, anchor.z);
       slot.sprite.scale.set(worldScale * 1.18, worldScale, 1);
       slot.sprite.visible = !this.seriousShot && slot.material.opacity > 0.01;
