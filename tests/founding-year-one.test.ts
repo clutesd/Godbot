@@ -21,7 +21,7 @@ import { Simulation } from '../src/sim/Simulation';
 function completedArrival(seed: string): Simulation {
   // Year-One narrative tests should not fail because a small procedural fixture cannot place five pods.
   const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
-  simulation.advanceArrival(60);
+  simulation.advanceArrival(80);
   expect(simulation.historyRunning).toBe(true);
   return simulation;
 }
