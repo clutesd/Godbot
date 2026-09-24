@@ -928,6 +928,7 @@ export class CameraDirector {
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
   private arrivalActive = false;
+  private foundingPresentationDone = false;
   private arrivalSafetySeconds = 0;
   private arrivalSafetyInitialized = false;
   private readonly arrivalSafetyOffset = new THREE.Vector3();
@@ -1171,6 +1172,10 @@ export class CameraDirector {
     // may not be one yet; returning undefined is preferable to pretending the remote destination has
     // already been reached.
     return this.flight ? this.acquiredScene : this.currentScene;
+  }
+
+  foundingPresentationComplete(): boolean {
+    return this.foundingPresentationDone;
   }
 
   flightTelemetry(): CameraFlightTelemetry {
@@ -1517,6 +1522,7 @@ export class CameraDirector {
   private releaseFoundingOverlayForTransit(): void {
     // The authored founding card has finished. Do not leave its narration pinned to the screen
     // while the camera physically travels to the next scene.
+    if (this.observation.sceneId?.startsWith('founding-release:')) this.foundingPresentationDone = true;
     delete this.observation.sceneId;
     delete this.observation.statement;
     this.observation.label = 'The first day';
@@ -1532,6 +1538,8 @@ export class CameraDirector {
   private abandonCurrentFlight(): void {
     // A camera route is presentation, never simulation authority. If a route cannot be completed
     // safely, keep the last valid physical frame and move on rather than trapping the documentary.
+    // If the unreachable destination was the final release shot, the opening must still terminate.
+    if (this.currentScene?.id.startsWith('founding-release:')) this.foundingPresentationDone = true;
     this.flight = undefined;
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
