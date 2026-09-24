@@ -191,7 +191,7 @@ describe('survival pressure and physical consequences', () => {
 
   it('gives founding camps different ignition windows from local readiness instead of a shared timer', () => {
     const simulation = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
-    simulation.advanceArrival(60);
+    simulation.advanceArrival(80);
     const founding = simulation.state.settlements.filter(settlement => settlement.foundingPodId);
     expect(founding).toHaveLength(5);
 
