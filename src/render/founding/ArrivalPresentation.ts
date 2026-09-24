@@ -4,7 +4,7 @@ export const WATCHER_LINES = [
   { start: 2.5, end: 8.5, text: 'Before them, only the world.' },
   { start: 13.5, end: 19.5, text: 'Five vessels entered the sky.' },
   { start: 34, end: 40, text: 'Five landings. Five beginnings.' },
-  { start: 66, end: 71, text: 'ARRIVAL DAY' },
+  { start: 72, end: 77, text: 'ARRIVAL DAY' },
 ] as const;
 
 export function arrivalCaption(seconds: number): { text: string; opacity: number } {
@@ -50,6 +50,8 @@ export interface ArrivalSequenceFocus {
   readonly azimuthOffset: number;
   readonly fov: number;
   readonly siteIndex?: number;
+  /** Optional authored lens position for human-scale site photography. */
+  readonly cameraPosition?: Readonly<{ x: number; y: number; z: number }>;
 }
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -67,6 +69,38 @@ const mixPoint = (
   y: lerp(a.y, b.y, amount),
   z: lerp(a.z, b.z, amount),
 });
+
+interface FoundingSiteComposition {
+  readonly target: Readonly<{ x: number; y: number; z: number }>;
+  readonly stagingCamera: Readonly<{ x: number; y: number; z: number }>;
+  readonly closeCamera: Readonly<{ x: number; y: number; z: number }>;
+}
+
+/**
+ * Founder emergence is authoritative and deliberately staged south of each hatch. Photograph that
+ * actual gathering ring instead of guessing at an arbitrary point around the vessel. Close lenses
+ * stay inside the terrain-checked landing footprint; only the inter-site staging pose sits farther
+ * out and higher.
+ */
+function foundingSiteComposition(
+  pod: FoundingArrivalState['pods'][number],
+  siteIndex: number,
+): FoundingSiteComposition {
+  const side = siteIndex % 2 === 0 ? 1 : -1;
+  return {
+    target: { x: pod.position.x, y: pod.groundY + 0.24, z: pod.position.z - 1.6 },
+    closeCamera: {
+      x: pod.position.x + side * 1.45,
+      y: pod.groundY + 0.92,
+      z: pod.position.z - 2.68,
+    },
+    stagingCamera: {
+      x: pod.position.x + side * 3.2,
+      y: pod.groundY + 3.2,
+      z: pod.position.z - 5.2,
+    },
+  };
+}
 
 /**
  * Arrival is an authored short film rather than a surveillance pass. It establishes the untouched
@@ -153,55 +187,99 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
   }
 
   const siteStart = 30;
-  const siteSeconds = 7;
+  const siteSeconds = 8;
   const siteCount = arrival.pods.length;
   const siteEnd = siteStart + siteSeconds * siteCount;
   if (siteCount && t < siteEnd) {
     const rawIndex = Math.floor((t - siteStart) / siteSeconds);
     const siteIndex = Math.min(siteCount - 1, Math.max(0, rawIndex));
     const pod = arrival.pods[siteIndex]!;
-    const previous = siteIndex === 0 ? hero : arrival.pods[siteIndex - 1]!;
+    const composition = foundingSiteComposition(pod, siteIndex);
     const local = clamp01((t - siteStart - siteIndex * siteSeconds) / siteSeconds);
-    const transferEnd = 0.4;
-    const transfer = smoothstep(local / transferEnd);
-    const linger = smoothstep((local - transferEnd) / (1 - transferEnd));
 
-    // Aim just outside the hull where the founder ring emerges. This lets vessel and people share
-    // the frame without placing the bronze artifact directly between the lens and its inhabitants.
-    const pathLength = Math.max(0.001, Math.hypot(pod.entryOffset.x, pod.entryOffset.z));
-    const side = siteIndex % 2 === 0 ? 1 : -1;
-    const sideX = -pod.entryOffset.z / pathLength * side;
-    const sideZ = pod.entryOffset.x / pathLength * side;
-    const siteTarget = {
-      x: pod.position.x + sideX * 1.35,
-      y: pod.groundY + 0.2,
-      z: pod.position.z + sideZ * 1.35,
-    };
-
-    const previousPathLength = Math.max(0.001, Math.hypot(previous.entryOffset.x, previous.entryOffset.z));
-    const previousSide = (siteIndex - 1) % 2 === 0 ? 1 : -1;
-    const previousTarget = siteIndex === 0
-      ? { x: hero.position.x, y: hero.groundY + 0.28, z: hero.position.z }
-      : {
-          x: previous.position.x - previous.entryOffset.z / previousPathLength * previousSide * 1.35,
-          y: previous.groundY + 0.2,
-          z: previous.position.z + previous.entryOffset.x / previousPathLength * previousSide * 1.35,
+    // Site zero is already under the lens after touchdown, so it gets an especially long first
+    // look. Later sites use a three-part film grammar: shallow scenic transit, deliberate descent,
+    // then a true hold where the camera stops moving and lets the founders read.
+    if (siteIndex === 0) {
+      const approachEnd = 0.34;
+      if (local < approachEnd) {
+        const approach = smoothstep(local / approachEnd);
+        return {
+          beat: 'site-flythrough',
+          target: composition.target,
+          cameraPosition: mixPoint(composition.stagingCamera, composition.closeCamera, approach),
+          radius: lerp(4.8, 1.85, approach),
+          height: lerp(3.2, 0.92, approach),
+          transitionSeconds: 1.8,
+          azimuthOffset: 0,
+          fov: lerp(34, 31, approach),
+          siteIndex,
         };
+      }
+      return {
+        beat: 'site-flythrough',
+        target: composition.target,
+        cameraPosition: composition.closeCamera,
+        radius: 1.85,
+        height: 0.92,
+        transitionSeconds: 1.2,
+        azimuthOffset: 0,
+        fov: 31,
+        siteIndex,
+      };
+    }
 
-    const siteAzimuth = [0.2, -0.22, 0.29, -0.18, 0.24][siteIndex] ?? 0.16;
+    const previous = foundingSiteComposition(arrival.pods[siteIndex - 1]!, siteIndex - 1);
+    const transitEnd = 0.34;
+    const approachEnd = 0.68;
+
+    if (local < transitEnd) {
+      const transit = smoothstep(local / transitEnd);
+      const transitCamera = mixPoint(previous.closeCamera, composition.stagingCamera, transit);
+      // A shallow crane arc clears ordinary terrain/foliage without ever becoming an aerial reset.
+      transitCamera.y += Math.sin(transit * Math.PI) * 3.8;
+      return {
+        beat: 'site-flythrough',
+        target: mixPoint(previous.target, composition.target, transit),
+        cameraPosition: transitCamera,
+        radius: lerp(1.85, 5.1, transit),
+        height: transitCamera.y - lerp(previous.target.y, composition.target.y, transit),
+        transitionSeconds: 1.7,
+        azimuthOffset: 0,
+        fov: lerp(31, 35, Math.sin(transit * Math.PI)),
+        siteIndex,
+      };
+    }
+
+    if (local < approachEnd) {
+      const approach = smoothstep((local - transitEnd) / (approachEnd - transitEnd));
+      return {
+        beat: 'site-flythrough',
+        target: composition.target,
+        cameraPosition: mixPoint(composition.stagingCamera, composition.closeCamera, approach),
+        radius: lerp(5.1, 1.85, approach),
+        height: lerp(3.2, 0.92, approach),
+        transitionSeconds: 1.8,
+        azimuthOffset: 0,
+        fov: lerp(34, 31, approach),
+        siteIndex,
+      };
+    }
+
     return {
       beat: 'site-flythrough',
-      target: mixPoint(previousTarget, siteTarget, transfer),
-      radius: local < transferEnd ? lerp(6.2, 6.8, transfer) : lerp(6.8, 4.15, linger),
-      height: local < transferEnd ? lerp(1.85, 2.3, transfer) : lerp(2.3, 1.05, linger),
-      transitionSeconds: local < transferEnd ? 3.4 : 4.1,
-      azimuthOffset: siteAzimuth + (linger - 0.5) * 0.1,
-      fov: local < transferEnd ? lerp(32, 34, transfer) : lerp(34, 30.5, linger),
+      target: composition.target,
+      cameraPosition: composition.closeCamera,
+      radius: 1.85,
+      height: 0.92,
+      transitionSeconds: 1.2,
+      azimuthOffset: 0,
+      fov: 31,
       siteIndex,
     };
   }
 
-  const handoff = smoothstep((t - siteEnd) / Math.max(0.1, 72 - siteEnd));
+  const handoff = smoothstep((t - siteEnd) / Math.max(0.1, 78 - siteEnd));
   const last = arrival.pods[siteCount - 1] ?? hero;
   const lastTarget = { x: last.position.x, y: last.groundY + 0.3, z: last.position.z };
   return {
