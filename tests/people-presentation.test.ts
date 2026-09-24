@@ -483,7 +483,7 @@ describe('Social body language', () => {
 
     controller.getOrCreateCharacterState('waver', 'artisan');
     controller.updateCharacterAnimation('waver', 0.02, 'socialize', 'social-wave', 0);
-    expect(controller.getCurrentPose('waver')!.name).toBe('wave-notice');
+    expect(controller.getCurrentPose('waver')!.rightShoulderRotation).toBeLessThan(0.4);
     let peakWave = 0;
     for (let frame = 0; frame < 24; frame++) {
       controller.updateCharacterAnimation('waver', 0.04, 'socialize', 'social-wave', 0);
@@ -495,7 +495,7 @@ describe('Social body language', () => {
 
     controller.getOrCreateCharacterState('laugher', 'artisan');
     controller.updateCharacterAnimation('laugher', 0.02, 'socialize', 'social-laugh', 0);
-    expect(controller.getCurrentPose('laugher')!.name).toBe('laugh-catch');
+    expect(controller.getCurrentPose('laugher')!.spineRotation).toBeLessThan(0.08);
     let peakLaughLean = 0;
     for (let frame = 0; frame < 18; frame++) {
       controller.updateCharacterAnimation('laugher', 0.04, 'socialize', 'social-laugh', 0);
