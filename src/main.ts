@@ -490,12 +490,15 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     setClassIfChanged(worldElement, 'witnessing-arrival', arriving);
     if (!arrivalWasRunning && simulation.historyRunning) {
       arrivalWasRunning = true;
+      // Arrival pause is a prologue-only control. Never let a paused preview strand the
+      // authoritative simulation at Month 0 after Arrival has completed.
+      arrivalPaused = false;
       audio.transitionMusicTo(audioEra(simulation.state));
       void persist();
     }
     const monthsPerSecond = presentation.update(deltaSeconds, simulation.state, view.observation);
     const tickDuration = 1 / Math.max(0.1, monthsPerSecond);
-    if (simulation.config.autoRun && !runEnded && !wasArriving && !arrivalPaused) {
+    if (simulation.config.autoRun && !runEnded && !wasArriving) {
       accumulator += deltaSeconds;
       let ticks = 0;
       // Quiet deep time may have backlog, but another atomic month only starts when its recent
