@@ -932,6 +932,16 @@ export class CameraDirector {
       const target = focus.target;
       this.desiredTarget.set(target.x, target.y, target.z);
 
+      // Arrival uses lens language as part of the shot design: wider for geography, narrower when
+      // founders become the subject. Ease focal length continuously so it feels like a camera
+      // operator riding the lens rather than a digital zoom cut.
+      const fovBlend = 1 - Math.exp(-deltaSeconds * 1.15);
+      const nextFov = THREE.MathUtils.lerp(this.camera.fov, focus.fov, fovBlend);
+      if (Math.abs(nextFov - this.camera.fov) > 0.001) {
+        this.camera.fov = nextFov;
+        this.camera.updateProjectionMatrix();
+      }
+
       // Keep one screen direction for the whole prologue. Composition evolves continuously around
       // the subject instead of cutting to a new arbitrary side whenever the editorial beat changes.
       const azimuth = this.stableAzimuth('arrival:master') + focus.azimuthOffset;
@@ -979,12 +989,15 @@ export class CameraDirector {
       }
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
-        : focus.beat === 'handoff' ? 'Arrival Day'
-          : 'The landings';
+        : focus.beat === 'site-flythrough' ? 'The first camps'
+          : focus.beat === 'handoff' ? 'Arrival Day'
+            : 'The landings';
       this.observation.detail = focus.beat === 'pristine'
         ? 'Year 0 · Month 0 · Day 0'
-        : focus.beat === 'handoff' ? 'Five communities begin here.'
-          : 'Five vessels cross into the world.';
+        : focus.beat === 'site-flythrough'
+          ? `Landing ${(focus.siteIndex ?? 0) + 1} · founders emerge beside the vessel.`
+          : focus.beat === 'handoff' ? 'Five communities begin here.'
+            : 'Five vessels cross into the world.';
       delete this.observation.sceneId;
       return;
     }
