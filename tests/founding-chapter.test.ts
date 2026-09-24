@@ -13,7 +13,8 @@ import { Simulation } from '../src/sim/Simulation';
 function completedArrival(seed: string): Simulation {
   const simulation = new Simulation({ seed, startMode: 'arrival' });
   simulation.advanceArrival(80);
-  expect(simulation.historyRunning).toBe(true);
+  expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+  expect(simulation.historyRunning).toBe(false);
   expect(simulation.state.history.some(event => event.type === 'ARRIVAL_DAY')).toBe(true);
   return simulation;
 }
@@ -93,6 +94,7 @@ describe('Founding Chapter 1a', () => {
     const historian = new Historian(simulation.config);
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
+    expect(simulation.beginHistory()).toBe(true);
     simulation.step(6);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
@@ -100,6 +102,7 @@ describe('Founding Chapter 1a', () => {
 
   it('does not begin the Year-Zero orientation on a newly created Historian after Month 0', () => {
     const simulation = completedArrival('founding-chapter-resume');
+    expect(simulation.beginHistory()).toBe(true);
     simulation.step(1);
     const historian = new Historian(simulation.config);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('missed-opening');
