@@ -1,27 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { Person } from '../src/sim/types';
 import type { LocalActivityState } from '../src/render/people/LocalActivityPresentation';
-import { REACTION_GLYPH_BUDGET, reactionGlyphCueFor } from '../src/render/people/ReactionGlyphRenderer';
+import { REACTION_GLYPH_BUDGET, reactionGlyphCueFor, type ReactionGlyphEvidence } from '../src/render/people/ReactionGlyphRenderer';
 
-function person(id = 'a'): Person {
+function person(id = 'a'): ReactionGlyphEvidence['person'] {
   return {
     id,
-    name: id,
-    alive: true,
-    bornMonth: 0,
-    ageMonths: 30 * 12,
-    health: 1,
-    energy: 1,
-    morale: 1,
-    cultureId: 'culture',
-    homeId: 'settlement',
     activity: 'socialize',
-    occupation: 'artisan',
-    role: 'artisan',
-    position: { x: 0, z: 0 },
-    target: { x: 0, z: 0 },
-    traits: { openness: 0.5, conscientiousness: 0.5, extraversion: 0.5, agreeableness: 0.5, neuroticism: 0.5, sociability: 0.5, curiosity: 0.5, ambition: 0.5, resilience: 0.5 },
-    appearance: { heightScale: 1, buildScale: 1, posture: 0, carriedItem: 'none', headwear: 'none' },
     navigation: {
       destinationKind: 'plaza',
       destinationId: 'plaza',
@@ -31,7 +15,7 @@ function person(id = 'a'): Person {
       waypoints: [],
       waypointIndex: 0,
     },
-  } as Person;
+  };
 }
 
 function local(overrides: Partial<LocalActivityState>): LocalActivityState {
