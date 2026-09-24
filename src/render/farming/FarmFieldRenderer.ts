@@ -235,20 +235,20 @@ export class FarmFieldRenderer {
         && (visual.stage === 'mature' || visual.stage === 'harvest' || visual.stage === 'stubble');
       if (harvestEvidence) {
         const pieces = Math.min(5, Math.max(1, Math.ceil(Math.log2(1 + visual.output))));
-        const edgeZ = field.center.z + halfD + 0.16;
+        const edgeLocalZ = halfD + 0.16;
         for (let piece = 0; piece < pieces; piece++) {
-          const x = field.center.x + (piece - (pieces - 1) / 2) * 0.13;
-          const y = heightAt(x, edgeZ) + 0.06;
-          this.emit(this.bundles, counts.bundles++, x, y, edgeZ, 0.95, 0.95, 0.95, palette.head,
-            piece % 2 ? 0.16 : -0.13, resourceVisualUnit(`${settlement.id}:sheaf:${piece}`) * Math.PI);
+          const point = farmPoint(field, (piece - (pieces - 1) / 2) * 0.13, edgeLocalZ);
+          const y = heightAt(point.x, point.z) + 0.06;
+          this.emit(this.bundles, counts.bundles++, point.x, y, point.z, 0.95, 0.95, 0.95, palette.head,
+            piece % 2 ? 0.16 : -0.13, resourceVisualUnit(`${field.id}:sheaf:${piece}`) * Math.PI);
         }
         if (visual.harvestable) {
-          const x = field.center.x + Math.min(halfW * 0.72, 0.42);
-          this.emit(this.baskets, counts.baskets++, x, heightAt(x, edgeZ) + 0.055, edgeZ, 1, 1, 1, '#8d6942');
+          const basket = farmPoint(field, Math.min(halfW * 0.72, 0.42), edgeLocalZ);
+          this.emit(this.baskets, counts.baskets++, basket.x, heightAt(basket.x, basket.z) + 0.055, basket.z, 1, 1, 1, '#8d6942');
           const sackCount = Math.min(2, Math.max(1, Math.ceil(Math.log2(1 + visual.output) / 3)));
           for (let sack = 0; sack < sackCount; sack++) {
-            const sx = field.center.x - Math.min(halfW * 0.7, 0.38) + sack * 0.14;
-            this.emit(this.sacks, counts.sacks++, sx, heightAt(sx, edgeZ) + 0.075, edgeZ,
+            const point = farmPoint(field, -Math.min(halfW * 0.7, 0.38) + sack * 0.14, edgeLocalZ);
+            this.emit(this.sacks, counts.sacks++, point.x, heightAt(point.x, point.z) + 0.075, point.z,
               0.9, 0.9, 0.9, '#a88a5f', (sack ? 1 : -1) * 0.06);
           }
         }
@@ -326,6 +326,7 @@ class DrapedSurfaceBatch {
     centerZ: number,
     width: number,
     depth: number,
+    rotationY: number,
     segmentsX: number,
     segmentsZ: number,
     lift: number,
@@ -334,12 +335,15 @@ class DrapedSurfaceBatch {
   ): void {
     const base = this.vertexCount;
     const rgb = this.colour.set(colour);
+    const cosine = Math.cos(rotationY), sine = Math.sin(rotationY);
     for (let zIndex = 0; zIndex <= segmentsZ; zIndex++) {
       const v = zIndex / segmentsZ;
-      const z = centerZ + (v - 0.5) * depth;
+      const localZ = (v - 0.5) * depth;
       for (let xIndex = 0; xIndex <= segmentsX; xIndex++) {
         const u = xIndex / segmentsX;
-        const x = centerX + (u - 0.5) * width;
+        const localX = (u - 0.5) * width;
+        const x = centerX + localX * cosine + localZ * sine;
+        const z = centerZ - localX * sine + localZ * cosine;
         this.vertex(x, heightAt(x, z) + lift, z, rgb);
       }
     }
