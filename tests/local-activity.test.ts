@@ -739,6 +739,17 @@ describe('renderer-owned local activity', () => {
     expect(selected).toBe('friend');
     expect(h.local.get('a')?.encounter?.relationshipKind).toBe('friend');
     expect(h.local.get('a')?.encounter?.tone).toBe('warm');
+
+    const microgestures = new Set<string>();
+    for (let frame = 0; frame < 12 * 60; frame++) {
+      h.tick(1 / 60);
+      for (const id of ['a', 'friend']) {
+        const state = h.local.get(id);
+        if (state?.encounter) microgestures.add(state.animation);
+      }
+    }
+    expect(microgestures).toContain('social-wave');
+    expect(microgestures).toContain('social-laugh');
   });
 
   it('holds a mentor relationship through several readable guidance beats instead of one generic gesture', () => {
