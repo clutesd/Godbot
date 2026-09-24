@@ -795,7 +795,10 @@ function applyPodParticipation(person: Person, context: LocalActivityContext, st
     z: state.base.z + (point.z - state.base.z) * 0.34,
   };
   const target = bounded(person, podPoint) && localSegmentSafe(from, podPoint, context)
-    && hasPeerClearance(person, podPoint, context, undefined, 0.34) ? podPoint : state.base;
+    && hasPeerClearance(person, podPoint, context, undefined, 0.34)
+    ? podPoint
+    : clearLocalPoint(person, context, state,
+      Math.abs(state.step + state.cycle + 1) % Math.max(1, state.points.length), true);
   state.destination = { ...target };
   state.restFacing = facingTarget(state.destination, state.focus);
   state.hold *= 1.05 + person.traits.sociability * 0.12;
