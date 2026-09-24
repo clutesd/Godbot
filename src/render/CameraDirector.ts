@@ -848,6 +848,11 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
     || sceneId?.startsWith('founding-release:'));
 }
 
+function isFoundingOverlayScene(sceneId: string | undefined): boolean {
+  return Boolean(sceneId?.startsWith('founding:overview:')
+    || sceneId?.startsWith('founding-cast:introduction:'));
+}
+
 /**
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
@@ -865,6 +870,10 @@ export interface CameraFlightTelemetry {
   readonly acceleration: number;
   readonly gazeErrorDegrees: number;
   readonly cruiseHeight?: number;
+  readonly elapsedSeconds?: number;
+  readonly maxSeconds?: number;
+  readonly stalledSeconds?: number;
+  readonly obstructionRetries?: number;
 }
 
 interface CameraFlightState {
@@ -875,8 +884,14 @@ interface CameraFlightState {
   readonly limits: CameraFlightLimits;
   readonly gazeLimits: CameraFlightLimits;
   readonly approachRadius: number;
+  readonly maxSeconds: number;
+  readonly maximumCruiseHeight: number;
   phase: 'depart' | 'cruise' | 'approach';
   cruiseHeight: number;
+  elapsedSeconds: number;
+  bestDistance: number;
+  stalledSeconds: number;
+  obstructionRetries: number;
 }
 
 export class CameraDirector {
@@ -1198,6 +1213,10 @@ export class CameraDirector {
       acceleration: this.flightAcceleration.length(),
       gazeErrorDegrees,
       cruiseHeight: flight.cruiseHeight,
+      elapsedSeconds: flight.elapsedSeconds,
+      maxSeconds: flight.maxSeconds,
+      stalledSeconds: flight.stalledSeconds,
+      obstructionRetries: flight.obstructionRetries,
     };
   }
 
@@ -1306,6 +1325,9 @@ export class CameraDirector {
       this.acquireCurrentScene();
       return;
     }
+    if (this.acquiredScene && this.acquiredScene.id !== scene.id && isFoundingOverlayScene(this.acquiredScene.id)) {
+      this.releaseFoundingOverlayForTransit();
+    }
     this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
   }
 
@@ -1320,6 +1342,17 @@ export class CameraDirector {
     );
     const distance = this.camera.position.distanceTo(destinationPosition);
     const profile = cameraFlightProfileFor(this.currentScene?.kind, distance);
+    const cruiseHeight = this.flightCruiseHeight(
+      destinationPosition,
+      elevationAt,
+      profile.cruiseClearance,
+      profile.destinationLift,
+    );
+    const maxSeconds = THREE.MathUtils.clamp(
+      9 + distance / Math.max(1, profile.limits.maxSpeed) * 2.4,
+      14,
+      38,
+    );
     this.flight = {
       originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
@@ -1332,13 +1365,14 @@ export class CameraDirector {
         profile.minApproachRadius,
         profile.maxApproachRadius,
       ),
+      maxSeconds,
+      maximumCruiseHeight: cruiseHeight + 8,
       phase: horizontalDistance > profile.minApproachRadius ? 'depart' : 'approach',
-      cruiseHeight: this.flightCruiseHeight(
-        destinationPosition,
-        elevationAt,
-        profile.cruiseClearance,
-        profile.destinationLift,
-      ),
+      cruiseHeight,
+      elapsedSeconds: 0,
+      bestDistance: Math.max(0.001, distance),
+      stalledSeconds: 0,
+      obstructionRetries: 0,
     };
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
@@ -1374,6 +1408,7 @@ export class CameraDirector {
   ): void {
     const flight = this.flight;
     if (!flight || !this.currentScene) return;
+    flight.elapsedSeconds += deltaSeconds;
 
     const horizontalDistance = Math.hypot(
       flight.destinationPosition.x - this.camera.position.x,
@@ -1439,8 +1474,25 @@ export class CameraDirector {
       this.camera.position.copy(before);
       this.positionVelocity.multiplyScalar(0.2);
       this.flightAcceleration.set(0, 0, 0);
-      flight.cruiseHeight += 1.4;
+      flight.obstructionRetries += 1;
+      flight.cruiseHeight = Math.min(flight.maximumCruiseHeight, flight.cruiseHeight + 1.4);
       flight.phase = 'depart';
+    }
+
+    const remainingDistance = this.camera.position.distanceTo(flight.destinationPosition);
+    if (remainingDistance < flight.bestDistance - 0.06) {
+      flight.bestDistance = remainingDistance;
+      flight.stalledSeconds = 0;
+    } else {
+      flight.stalledSeconds += deltaSeconds;
+    }
+
+    const routeExhausted = flight.elapsedSeconds >= flight.maxSeconds
+      || flight.stalledSeconds >= 6
+      || (flight.obstructionRetries >= 6 && flight.cruiseHeight >= flight.maximumCruiseHeight - 0.01);
+    if (routeExhausted) {
+      this.abandonCurrentFlight();
+      return;
     }
 
     this.camera.lookAt(this.lookTarget);
@@ -1459,6 +1511,38 @@ export class CameraDirector {
       this.targetVelocity.multiplyScalar(0.72);
       this.acquireCurrentScene();
     }
+  }
+
+  private releaseFoundingOverlayForTransit(): void {
+    // The authored founding card has finished. Do not leave its narration pinned to the screen
+    // while the camera physically travels to the next scene.
+    delete this.observation.sceneId;
+    delete this.observation.statement;
+    this.observation.label = 'The first day';
+    this.observation.detail = 'History continues beyond the landings.';
+    this.observation.kind = 'regional-travel';
+    this.observation.interest = 0.56;
+    this.observation.audioCategory = 'settlement';
+    this.observation.eventType = 'ARRIVAL_DAY';
+    this.observation.eventMonth = 0;
+    this.observation.revision += 1;
+  }
+
+  private abandonCurrentFlight(): void {
+    // A camera route is presentation, never simulation authority. If a route cannot be completed
+    // safely, keep the last valid physical frame and move on rather than trapping the documentary.
+    this.flight = undefined;
+    this.flightAcceleration.set(0, 0, 0);
+    this.gazeFlightAcceleration.set(0, 0, 0);
+    this.positionVelocity.multiplyScalar(0.18);
+    this.targetVelocity.multiplyScalar(0.35);
+    this.currentScene = this.acquiredScene;
+    this.lastHumanShot = Boolean(this.acquiredScene?.id.startsWith('human:'));
+    this.shotAge = Number.POSITIVE_INFINITY;
+    this.trackingInitialized = false;
+    this.routeCheckSeconds = 0;
+    this.recoveryOffset = undefined;
+    this.visibility.reset();
   }
 
   private acquireCurrentScene(): void {
