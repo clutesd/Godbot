@@ -21,6 +21,8 @@ export type AnimationState =
   | 'farm'
   | 'play'
   | 'converse'
+  | 'social-wave'
+  | 'social-laugh'
   | 'converse-warm'
   | 'converse-quiet'
   | 'converse-teach'
@@ -605,7 +607,88 @@ export class AnimationController {
       blendDuration: 0.4,
     });
 
-    const socialStates: AnimationState[] = ['converse', 'converse-warm', 'converse-quiet', 'converse-teach', 'converse-tense'];
+    const socialStates: AnimationState[] = ['converse', 'social-wave', 'social-laugh', 'converse-warm', 'converse-quiet', 'converse-teach', 'converse-tense'];
+
+    this.clips.set('social-wave', {
+      state: 'social-wave',
+      poses: [
+        {
+          name: 'wave-notice',
+          duration: 0.18,
+          pelvisRotation: 0.01, spineRotation: 0.025, headRotation: 0.06,
+          leftShoulderRotation: 0.06, leftElbowRotation: 0.15,
+          rightShoulderRotation: 0.24, rightElbowRotation: 0.42,
+          leftHipRotation: 0, leftKneeRotation: 0.05, rightHipRotation: 0, rightKneeRotation: 0.05,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+        {
+          name: 'wave-lift',
+          duration: 0.26,
+          pelvisRotation: -0.025, spineRotation: 0.035, headRotation: -0.04,
+          leftShoulderRotation: 0.05, leftElbowRotation: 0.16,
+          rightShoulderRotation: 0.88, rightElbowRotation: 0.58,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: 0.004, z: 0 },
+        },
+        {
+          name: 'wave-flick',
+          duration: 0.24,
+          pelvisRotation: 0.018, spineRotation: 0.03, headRotation: 0.035,
+          leftShoulderRotation: 0.05, leftElbowRotation: 0.16,
+          rightShoulderRotation: 0.78, rightElbowRotation: 0.38,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: 0.006, z: 0 },
+        },
+        {
+          name: 'wave-return',
+          duration: 0.26,
+          pelvisRotation: 0, spineRotation: 0.02, headRotation: 0,
+          leftShoulderRotation: 0.05, leftElbowRotation: 0.15,
+          rightShoulderRotation: 0.14, rightElbowRotation: 0.22,
+          leftHipRotation: 0, leftKneeRotation: 0.05, rightHipRotation: 0, rightKneeRotation: 0.05,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+      ],
+      isLooping: false,
+      canInterruptFrom: new Set(socialStates),
+      blendDuration: 0.16,
+    });
+
+    this.clips.set('social-laugh', {
+      state: 'social-laugh',
+      poses: [
+        {
+          name: 'laugh-catch',
+          duration: 0.18,
+          pelvisRotation: -0.025, spineRotation: 0.045, headRotation: -0.06,
+          leftShoulderRotation: 0.12, leftElbowRotation: 0.24,
+          rightShoulderRotation: 0.14, rightElbowRotation: 0.26,
+          leftHipRotation: 0, leftKneeRotation: 0.07, rightHipRotation: 0, rightKneeRotation: 0.07,
+          positionOffset: { x: 0, y: 0.004, z: 0 },
+        },
+        {
+          name: 'laugh-fold',
+          duration: 0.28,
+          pelvisRotation: 0.035, spineRotation: 0.13, headRotation: 0.09,
+          leftShoulderRotation: 0.3, leftElbowRotation: 0.42,
+          rightShoulderRotation: 0.34, rightElbowRotation: 0.44,
+          leftHipRotation: 0, leftKneeRotation: 0.12, rightHipRotation: 0, rightKneeRotation: 0.12,
+          positionOffset: { x: 0, y: -0.018, z: 0.008 },
+        },
+        {
+          name: 'laugh-recover',
+          duration: 0.3,
+          pelvisRotation: -0.012, spineRotation: 0.035, headRotation: -0.035,
+          leftShoulderRotation: 0.1, leftElbowRotation: 0.2,
+          rightShoulderRotation: 0.12, rightElbowRotation: 0.22,
+          leftHipRotation: 0, leftKneeRotation: 0.06, rightHipRotation: 0, rightKneeRotation: 0.06,
+          positionOffset: { x: 0, y: 0, z: 0 },
+        },
+      ],
+      isLooping: false,
+      canInterruptFrom: new Set(socialStates),
+      blendDuration: 0.14,
+    });
 
     this.clips.set('converse-warm', {
       state: 'converse-warm',
@@ -989,7 +1072,11 @@ export class AnimationController {
 
       // Cycle through poses
       const totalDuration = clip.poses.reduce((sum, p) => sum + p.duration, 0);
-      const cycleTime = (charState.elapsedTime * charState.playbackSpeed + charState.phaseOffset * totalDuration) % totalDuration;
+      const progressed = charState.elapsedTime * charState.playbackSpeed
+        + (clip.isLooping ? charState.phaseOffset * totalDuration : 0);
+      const cycleTime = clip.isLooping
+        ? progressed % totalDuration
+        : Math.min(Math.max(0, totalDuration - 1e-6), progressed);
 
       let accum = 0;
       for (let i = 0; i < clip.poses.length; i++) {
