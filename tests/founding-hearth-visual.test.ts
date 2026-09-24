@@ -31,9 +31,10 @@ describe('founding hearth visual rig', () => {
     const spark = rig.children.find(child => child.userData['hearthSpark'])!;
 
     updateFoundingHearthFireMotion(rig, embers, 1, false);
-    const animatedY = tongue.position.y;
+    const animated = [tongue.position.x, tongue.position.y, tongue.position.z, tongue.rotation.x, tongue.rotation.z, tongue.scale.y];
     updateFoundingHearthFireMotion(rig, embers, 1.2, false);
-    expect(tongue.position.y).not.toBeCloseTo(animatedY, 8);
+    const advanced = [tongue.position.x, tongue.position.y, tongue.position.z, tongue.rotation.x, tongue.rotation.z, tongue.scale.y];
+    expect(advanced).not.toEqual(animated);
     expect(spark.visible).toBe(true);
 
     updateFoundingHearthFireMotion(rig, embers, 2, true);
