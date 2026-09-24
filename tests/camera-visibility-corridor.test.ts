@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { CameraDirector, CameraVisibilityHysteresis, cameraShotValidity, cameraSubjectVisibility, cameraVisibilityCorridor, resolveCameraSafety } from '../src/render/CameraDirector';
+import { CameraDirector, CameraVisibilityHysteresis, cameraFlightCorridorSafe, cameraShotValidity, cameraSubjectVisibility, cameraVisibilityCorridor, resolveCameraSafety } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import { Historian } from '../src/historian/Historian';
 
@@ -36,13 +36,17 @@ describe('continuous documentary visibility', () => {
     expect(cameraSubjectVisibility(sim.state, close, subject, ground, gap)).toBeLessThan(0.5);
   });
 
-  it('rejects travel between clear endpoints when the intermediate subject sightline is blocked', () => {
+  it('separates documentary sightline continuity from physical flight safety', () => {
     const sim = scene();
     const a = new THREE.Vector3(3, 0.8, -2), b = new THREE.Vector3(3, 0.8, 2);
     const options = { environmentProbe: crown };
     expect(cameraShotValidity(sim.state, a, subject, ground, options).valid).toBe(true);
     expect(cameraShotValidity(sim.state, b, subject, ground, options).valid).toBe(true);
+    // Keeping the same subject readable for the entire move is impossible...
     expect(cameraVisibilityCorridor(sim.state, a, b, subject, ground, options)).toBe(false);
+    // ...but the lens itself can still travel safely. A seamless drone is allowed to lose sight of
+    // the next subject while crossing the world instead of treating that as a reason to cut.
+    expect(cameraFlightCorridorSafe(sim.state, a, b, ground, 0.42, crown)).toBe(true);
   });
 
   it('allows brief occlusion, resets after recovery, and fails within a quarter second', () => {
