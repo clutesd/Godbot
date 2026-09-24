@@ -68,7 +68,7 @@ describe('continuous documentary visibility', () => {
     expect(cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: probe, subjects: [subject, person] }).valid).toBe(false);
   });
 
-  it('bounds actual rendered-camera occlusion and retains the recovered side during narration', () => {
+  it('recovers from rendered-camera occlusion without any hard relocation', () => {
     const sim = scene(), historian = new Historian(sim.config);
     const person = sim.state.people[0]!;
     vi.spyOn(historian, 'chooseScene').mockReturnValue({ ...historian.chooseScene(sim.state),
@@ -79,18 +79,17 @@ describe('continuous documentary visibility', () => {
     const director = new CameraDirector(camera, sim.config, historian, () => ({ x: 0, z: 0, footY: 0 }), undefined, probe);
     director.update(1 / 30, 0, sim.state, ground);
     obstacle.copy(camera.position).lerp(subject, 0.5);
-    let consecutive = 0, worst = 0;
-    const recovered: THREE.Vector3[] = [];
-    for (let frame = 1; frame < 75; frame++) {
+    let maximumStep = 0;
+    let finalVisibility = 0;
+    for (let frame = 1; frame < 180; frame++) {
+      const before = camera.position.clone();
       director.update(1 / 30, frame / 30, sim.state, ground);
-      const visible = cameraSubjectVisibility(sim.state, camera.position, subject, ground, probe);
-      consecutive = visible < 0.5 ? consecutive + 1 : 0;
-      worst = Math.max(worst, consecutive);
-      if (frame > 20) recovered.push(camera.position.clone());
+      maximumStep = Math.max(maximumStep, camera.position.distanceTo(before));
+      expect(probe(camera.position)).toBe(0);
+      finalVisibility = cameraSubjectVisibility(sim.state, camera.position, subject, ground, probe);
     }
-    expect(worst).toBeLessThanOrEqual(8);
-    expect(recovered.every(p => p.y < 1.2)).toBe(true);
-    expect(recovered.every(p => p.distanceTo(recovered[0]!) < 0.1)).toBe(true);
+    expect(maximumStep).toBeLessThan(0.24);
+    expect(finalVisibility).toBeGreaterThanOrEqual(0.5);
   });
 
   it('reports failure explicitly when every candidate is inside vegetation', () => {
