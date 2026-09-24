@@ -169,7 +169,7 @@ describe('Founding Chapter 1b continuity', () => {
     expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('uses a deliberate first-year pace and holds authoritative Month Zero without catch-up', () => {
+  it('uses a deliberate first-year pace without freezing authoritative history', () => {
     const simulation = completedArrival('founding-continuity-pacing');
     const historian = new Historian(simulation.config);
     const originalAutoRun = simulation.config.autoRun;
@@ -177,12 +177,18 @@ describe('Founding Chapter 1b continuity', () => {
     installFoundingContinuityPacing();
     const presentation = new PresentationDirector(simulation.config);
 
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
-    expect(simulation.config.autoRun).toBe(false);
-    expect(presentation.tickBudget(simulation.state)).toBe(0);
+    const orientation = chooseFoundingChapterScene(historian, simulation.state);
+    expect(orientation).toBeDefined();
+    expect(simulation.config.autoRun).toBe(originalAutoRun);
+    expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
+    expect(presentation.targetSpeed(simulation.state, {
+      kind: orientation!.kind,
+      interest: orientation!.interest,
+      eventType: orientation!.event?.type,
+      eventMonth: orientation!.event?.month,
+    })).toBeCloseTo(0.08, 5);
 
     completeOrientation(simulation, historian);
-    expect(simulation.config.autoRun).toBe(originalAutoRun);
     const bridge = chooseFoundingContinuityScene(historian, simulation.state);
     expect(bridge).toBeDefined();
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
