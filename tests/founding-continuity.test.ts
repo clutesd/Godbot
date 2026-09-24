@@ -22,7 +22,7 @@ function completedArrival(seed: string): Simulation {
   // Founding-story tests care about narrative contracts, not whether a particular tiny procedural
   // world happens to contain five safely separated sites. Keep enough deterministic land available.
   const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
-  simulation.advanceArrival(60);
+  simulation.advanceArrival(80);
   expect(simulation.historyRunning).toBe(true);
   return simulation;
 }
