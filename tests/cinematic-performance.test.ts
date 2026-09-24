@@ -105,22 +105,30 @@ describe('cinematic motion', () => {
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
     vi.spyOn(historian, 'chooseScene')
-      .mockReturnValueOnce({ ...template, id: 'founding:overview:event-1', kind: 'world-establishing', position: { x: 0, z: 0 } })
-      .mockReturnValueOnce({ ...template, id: 'founding-release:event-1', kind: 'street-observation', position: { x: 0, z: 0 } })
-      .mockReturnValue({ ...template, id: 'ordinary:first-day', kind: 'street-observation', position: { x: 0, z: 0 } });
+      .mockReturnValueOnce({
+        ...template,
+        id: 'founding-release:event-1',
+        kind: 'street-observation',
+        position: { x: 0, z: 0 },
+        title: 'THE FIRST DAY',
+      })
+      .mockReturnValue({
+        ...template,
+        id: 'ordinary:first-day',
+        kind: 'street-observation',
+        position: { x: 0, z: 0 },
+        title: 'Ordinary life',
+      });
 
     const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.observation.sceneId).toBe('founding-release:event-1');
     expect(director.foundingPresentationComplete()).toBe(false);
 
-    let sawRelease = false;
-    for (let frame = 1; frame < 60 * 24; frame++) {
+    for (let frame = 1; frame < 60 * 16 && !director.foundingPresentationComplete(); frame++) {
       director.update(1 / 60, frame / 60, sim.state, () => 0);
-      if (director.observation.sceneId === 'founding-release:event-1') sawRelease = true;
-      if (director.foundingPresentationComplete()) break;
     }
 
-    expect(sawRelease).toBe(true);
     expect(director.foundingPresentationComplete()).toBe(true);
     expect(director.observation.sceneId).not.toBe('founding-release:event-1');
   });
