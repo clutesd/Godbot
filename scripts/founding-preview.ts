@@ -7,7 +7,7 @@ import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { shelterCapacity } from '../src/sim/development/Shelter';
 
 const sim = new Simulation({ seed: 'founding-loop-audit', startMode: 'arrival', world: { size: 64 } });
-sim.advanceArrival(60);
+sim.advanceArrival(80);
 const s = sim.state.settlements[1]!;
 const camera = new THREE.OrthographicCamera(-9, 9, 8, -8, 0.1, 100);
 camera.position.set(12, 17, 20); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
