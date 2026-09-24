@@ -6,7 +6,7 @@ import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { createSettlementLayoutPlan } from '../src/shared/SettlementLayoutPlan';
 
 const CONFIG = { seed: 'arrival-day-preview', startMode: 'arrival' as const };
-const complete = (s: Simulation) => s.advanceArrival(46);
+const complete = (s: Simulation) => s.advanceArrival(80);
 
 describe('Arrival Day / authoritative restart', () => {
   it('erases a developed civilization and regenerates natural resources', () => {
