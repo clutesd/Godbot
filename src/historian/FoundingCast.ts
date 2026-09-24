@@ -34,11 +34,6 @@ interface FoundingCastMemory {
   readonly introducedPersonIds: Set<string>;
   readonly normalAppearances: Map<string, number>;
   releaseShown: boolean;
-  autoRunBeforeIntroduction?: boolean;
-}
-
-interface HistorianConfigAccess {
-  config: { autoRun: boolean };
 }
 
 interface AnchorCandidate {
@@ -157,23 +152,13 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
   return memory;
 }
 
-function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
-  return (historian as unknown as HistorianConfigAccess).config;
-}
-
-function holdIntroduction(historian: Historian, state: SimulationState, memory: FoundingCastMemory): void {
-  const config = historianConfig(historian);
-  if (memory.autoRunBeforeIntroduction === undefined) memory.autoRunBeforeIntroduction = config.autoRun;
-  config.autoRun = false;
+function holdIntroduction(_historian: Historian, state: SimulationState, _memory: FoundingCastMemory): void {
+  // Keep the portrait pacing marker, but let authoritative history continue beneath the shot.
   pacedStates.add(state);
 }
 
-function releaseIntroduction(historian: Historian, state: SimulationState): void {
+function releaseIntroduction(_historian: Historian, state: SimulationState): void {
   pacedStates.delete(state);
-  const memory = memories.get(historian);
-  if (!memory || memory.autoRunBeforeIntroduction === undefined) return;
-  historianConfig(historian).autoRun = memory.autoRunBeforeIntroduction;
-  delete memory.autoRunBeforeIntroduction;
 }
 
 function breakdown(continuity: number, consequence = 0.4): CandidateScoreBreakdown {
@@ -401,14 +386,6 @@ export function installFoundingCastPacing(): void {
     if (pacedStates.has(state)) return FOUNDING_CAST_MONTHS_PER_SECOND;
     if (releaseStates.has(state)) return FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND;
     return targetSpeed.call(this, state, observation);
-  };
-  const tickBudget = PresentationDirector.prototype.tickBudget;
-  PresentationDirector.prototype.tickBudget = function castTickBudget(
-    this: PresentationDirector,
-    state: Parameters<typeof tickBudget>[0],
-  ): number {
-    if (pacedStates.has(state)) return 0;
-    return tickBudget.call(this, state);
   };
 }
 
