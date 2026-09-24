@@ -3,7 +3,7 @@ import { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { surfaceHeightAt, waterDepthAt } from '../terrain/SurfaceGeometry';
 import type { KnowledgeDomain, SimulationState, Vec2, WorldState } from '../types';
 
-export type ArrivalPhase = 'PRISTINE_WORLD' | 'ARRIVAL_SEQUENCE' | 'FOUNDERS_LANDED' | 'HISTORY_RUNNING';
+export type ArrivalPhase = 'PRISTINE_WORLD' | 'ARRIVAL_SEQUENCE' | 'FOUNDERS_LANDED' | 'FOUNDING_ORIENTATION' | 'HISTORY_RUNNING';
 export interface FoundingPod {
   id: string;
   groupId: string;
@@ -45,6 +45,18 @@ export interface FoundingArrivalState {
   minimumSeparation: number;
 }
 export const ARRIVAL_END_SECONDS = 78;
+
+export function isArrivalFilmPhase(phase: ArrivalPhase | undefined): boolean {
+  return phase === 'PRISTINE_WORLD' || phase === 'ARRIVAL_SEQUENCE' || phase === 'FOUNDERS_LANDED';
+}
+
+export function isFoundingOrientationPhase(phase: ArrivalPhase | undefined): boolean {
+  return phase === 'FOUNDING_ORIENTATION';
+}
+
+export function isFoundingPresentationPhase(phase: ArrivalPhase | undefined): boolean {
+  return phase === 'FOUNDING_ORIENTATION' || phase === 'HISTORY_RUNNING';
+}
 /** Radius explicitly terrain-checked around every founding touchdown point. */
 export const FOUNDING_LANDING_SAFE_RADIUS = 3.2;
 export const FOUNDING_PROFILES: readonly { name: string; color: string; domains: KnowledgeDomain[]; knowledge: string[] }[] = [
@@ -123,7 +135,7 @@ export function podPosition(pod: FoundingPod, seconds: number): { x: number; y: 
 /** Wall-clock director with monotonic transitions. The simulation owns all mutations. */
 export class FoundingArrivalDirector {
   advance(state: FoundingArrivalState, delta: number, land: (pod: FoundingPod) => void, emerge: (pod: FoundingPod, count: number) => void, finish: () => void): void {
-    if (state.phase === 'HISTORY_RUNNING') return;
+    if (state.phase === 'FOUNDING_ORIENTATION' || state.phase === 'HISTORY_RUNNING') return;
     if (!Number.isFinite(delta) || delta < 0) return;
     const previous = state.elapsedSeconds;
     const t = Math.min(ARRIVAL_END_SECONDS, previous + delta);
@@ -139,7 +151,10 @@ export class FoundingArrivalDirector {
     state.elapsedSeconds = t;
     if (state.pods.every(p => p.landed)) state.phase = 'FOUNDERS_LANDED';
     if (t >= ARRIVAL_END_SECONDS && state.pods.every(p => p.personIds.length === p.population)) {
-      state.phase = 'HISTORY_RUNNING';
+      // The physical Arrival film is complete, but authoritative monthly history has NOT started.
+      // The presentation layer now owns a finite Year-Zero orientation/cast sequence. Only an
+      // explicit Simulation.beginHistory() call may cross the final boundary into Month 1.
+      state.phase = 'FOUNDING_ORIENTATION';
       finish();
     }
   }
