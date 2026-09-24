@@ -44,7 +44,7 @@ export interface FoundingArrivalState {
   pods: FoundingPod[];
   minimumSeparation: number;
 }
-export const ARRIVAL_END_SECONDS = 46;
+export const ARRIVAL_END_SECONDS = 80;
 /** Radius explicitly terrain-checked around every founding touchdown point. */
 export const FOUNDING_LANDING_SAFE_RADIUS = 3.2;
 export const FOUNDING_PROFILES: readonly { name: string; color: string; domains: KnowledgeDomain[]; knowledge: string[] }[] = [
