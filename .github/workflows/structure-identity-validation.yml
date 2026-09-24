@@ -14,6 +14,7 @@ on:
       - 'src/render/assets/BuildingGrammar.ts'
       - 'src/render/assets/BuildingComposer.ts'
       - 'src/render/farming/FarmFieldRenderer.ts'
+      - 'src/shared/FarmGeometry.ts'
       - 'src/render/assets/StructureComposition.ts'
       - 'src/render/assets/StructureHeritage.ts'
       - 'src/render/assets/StructureComponents.ts'
@@ -63,6 +64,7 @@ jobs:
           src/render/assets/BuildingGrammar.ts
           src/render/assets/BuildingComposer.ts
           src/render/farming/FarmFieldRenderer.ts
+          src/shared/FarmGeometry.ts
           src/render/assets/StructureComposition.ts
           src/render/assets/StructureHeritage.ts
           src/render/assets/StructureComponents.ts
