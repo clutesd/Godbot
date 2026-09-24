@@ -9,6 +9,8 @@ interface PodVisual {
   hull: THREE.Group;
   hatch: THREE.Group;
   light: THREE.MeshBasicMaterial;
+  runeCore: THREE.MeshBasicMaterial;
+  runeHalo: THREE.MeshBasicMaterial;
   trails: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>[];
   dust: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
 }
@@ -25,14 +27,22 @@ export class FoundingPodRenderer {
   private readonly frustum = new THREE.Frustum();
   private readonly effectSphere = new THREE.Sphere();
   private readonly trailTail = new THREE.Vector3();
-  private readonly hullMaterial = new THREE.MeshStandardMaterial({ color: '#aaa79b', roughness: 0.78, metalness: 0.35 });
-  private readonly shieldMaterial = new THREE.MeshStandardMaterial({ color: '#302f2b', roughness: 0.95, metalness: 0.15 });
-  private readonly hullGeometry = new THREE.CylinderGeometry(0.48, 0.92, 1.65, 8);
-  private readonly shieldGeometry = new THREE.CylinderGeometry(0.95, 0.69, 0.3, 8);
+  private readonly hullMaterial = new THREE.MeshStandardMaterial({
+    color: '#805b32', roughness: 0.38, metalness: 0.78,
+  });
+  private readonly shieldMaterial = new THREE.MeshStandardMaterial({
+    color: '#2e2820', roughness: 0.56, metalness: 0.62,
+  });
+  private readonly collarMaterial = new THREE.MeshStandardMaterial({
+    color: '#b07a3f', roughness: 0.3, metalness: 0.84,
+  });
+  private readonly hullGeometry = new THREE.CylinderGeometry(0.48, 0.92, 1.65, 10);
+  private readonly shieldGeometry = new THREE.CylinderGeometry(0.95, 0.69, 0.3, 10);
   private readonly legGeometry = new THREE.CylinderGeometry(0.045, 0.08, 0.9, 5);
   private readonly footGeometry = new THREE.BoxGeometry(0.35, 0.09, 0.32);
-  private readonly bandGeometry = new THREE.TorusGeometry(0.73, 0.028, 4, 8);
+  private readonly bandGeometry = new THREE.TorusGeometry(0.73, 0.028, 5, 20);
   private readonly hatchGeometry = new THREE.BoxGeometry(0.43, 0.72, 0.07);
+  private readonly runeStrokeGeometry = new THREE.BoxGeometry(0.032, 0.24, 0.018);
 
   constructor(private readonly state: SimulationState) {
     this.root.name = 'founding-vessels';
@@ -43,17 +53,33 @@ export class FoundingPodRenderer {
     const hull = new THREE.Group();
     hull.name = pod.id;
     hull.userData['podId'] = pod.id;
+    hull.userData['siteColor'] = pod.color;
+    hull.userData['foundingProfile'] = pod.name;
     const shell = new THREE.Mesh(this.hullGeometry, this.hullMaterial);
+    shell.name = 'bronze-hull';
     shell.castShadow = true;
     const shield = new THREE.Mesh(this.shieldGeometry, this.shieldMaterial);
     shield.position.y = -0.88;
     hull.add(shell, shield);
     const light = new THREE.MeshBasicMaterial({ color: pod.color, transparent: true, opacity: 0.8 });
     const band = new THREE.Mesh(this.bandGeometry, light);
+    band.name = 'site-light-band';
     band.rotation.x = Math.PI / 2;
     band.position.y = -0.15;
     hull.add(band);
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.49, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), this.hullMaterial);
+
+    // Bright bronze collars catch the light like worked ceremonial metal instead of a modern
+    // painted seam. Their slightly different radii follow the tapered shell.
+    for (const [y, scale] of [[0.55, 0.78], [-0.56, 1.12]] as const) {
+      const collar = new THREE.Mesh(this.bandGeometry, this.collarMaterial);
+      collar.name = 'bronze-collar';
+      collar.rotation.x = Math.PI / 2;
+      collar.position.y = y;
+      collar.scale.setScalar(scale);
+      hull.add(collar);
+    }
+
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.49, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), this.hullMaterial);
     cap.position.y = 0.82;
     cap.scale.y = 0.5;
     hull.add(cap);
@@ -70,9 +96,13 @@ export class FoundingPodRenderer {
     const hatch = new THREE.Group();
     hatch.position.set(0, -0.58, -0.87);
     const door = new THREE.Mesh(this.hatchGeometry, this.shieldMaterial);
+    door.name = 'dark-bronze-hatch';
     door.position.y = 0.36;
     hatch.add(door);
     hull.add(hatch);
+
+    const { core: runeCore, halo: runeHalo } = this.addRunes(hull, hatch, pod);
+
     const trails = [0, 1].map(layer => {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_SAMPLES * 6), 3).setUsage(THREE.DynamicDrawUsage));
@@ -103,7 +133,96 @@ export class FoundingPodRenderer {
     dust.frustumCulled = false;
     this.root.add(hull, ...trails, dust);
     hull.visible = false;
-    return { pod, hull, hatch, light, trails, dust };
+    return { pod, hull, hatch, light, runeCore, runeHalo, trails, dust };
+  }
+
+  /**
+   * Build sparse, hand-cut-looking sigils from a tiny shared stroke geometry. The runes sit just
+   * proud of the shell, so they read from cinematic distance without textures or runtime draws.
+   * Each founding profile owns only two lightweight materials: a crisp colored inlay and a larger
+   * additive echo that suggests a soft supernatural glow even when post-processing bloom is off.
+   */
+  private addRunes(hull: THREE.Group, hatch: THREE.Group, pod: FoundingPod): {
+    core: THREE.MeshBasicMaterial;
+    halo: THREE.MeshBasicMaterial;
+  } {
+    const core = new THREE.MeshBasicMaterial({
+      color: pod.color, transparent: true, opacity: 0.68, depthWrite: false,
+    });
+    const halo = new THREE.MeshBasicMaterial({
+      color: pod.color, transparent: true, opacity: 0.11, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const runes = new THREE.Group();
+    runes.name = 'ancient-runes';
+
+    const addStroke = (
+      parent: THREE.Object3D, x: number, y: number, rotation: number, length: number, outward = 0,
+    ): void => {
+      const glow = new THREE.Mesh(this.runeStrokeGeometry, halo);
+      glow.name = 'founding-rune-halo';
+      glow.position.set(x, y, 0.018 + outward);
+      glow.rotation.z = rotation;
+      glow.scale.set(1.75, length * 1.08, 1);
+      parent.add(glow);
+
+      const stroke = new THREE.Mesh(this.runeStrokeGeometry, core);
+      stroke.name = 'founding-rune-core';
+      stroke.position.set(x, y, 0.028 + outward);
+      stroke.rotation.z = rotation;
+      stroke.scale.y = length;
+      parent.add(stroke);
+    };
+
+    // Four deliberately simple rune grammars repeat around the decagonal shell. Repetition makes
+    // them feel like one old written system while the site color makes each vessel culturally legible.
+    for (let face = 0; face < 10; face++) {
+      const angle = face * Math.PI * 2 / 10;
+      const y = -0.32 + (face % 3) * 0.29;
+      const taper = THREE.MathUtils.clamp((y + 0.825) / 1.65, 0, 1);
+      const radius = THREE.MathUtils.lerp(0.92, 0.48, taper) + 0.025;
+      const glyph = new THREE.Group();
+      glyph.name = `rune-${face + 1}`;
+      glyph.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+      glyph.rotation.y = Math.PI / 2 - angle;
+
+      switch (face % 4) {
+        case 0:
+          addStroke(glyph, 0, 0, 0, 0.9);
+          addStroke(glyph, -0.05, 0.02, Math.PI / 3.2, 0.58);
+          addStroke(glyph, 0.05, -0.04, -Math.PI / 3.2, 0.52);
+          break;
+        case 1:
+          addStroke(glyph, -0.045, 0, 0, 0.78);
+          addStroke(glyph, 0.045, 0, 0, 0.78);
+          addStroke(glyph, 0, 0.015, Math.PI / 2, 0.55);
+          break;
+        case 2:
+          addStroke(glyph, 0, 0, Math.PI / 4, 0.86);
+          addStroke(glyph, 0, 0, -Math.PI / 4, 0.86);
+          addStroke(glyph, 0, -0.065, Math.PI / 2, 0.48);
+          break;
+        default:
+          addStroke(glyph, 0, 0, 0, 0.82);
+          addStroke(glyph, -0.055, 0.045, -Math.PI / 4, 0.55);
+          addStroke(glyph, 0.055, -0.045, -Math.PI / 4, 0.55);
+          break;
+      }
+      runes.add(glyph);
+    }
+
+    // The hatch carries one larger threshold sigil. It remains readable after touchdown when the
+    // door opens and the shell runes become partially hidden by people and camp clutter.
+    const hatchSigil = new THREE.Group();
+    hatchSigil.name = 'hatch-sigil';
+    hatchSigil.position.set(0, 0.37, -0.045);
+    hatchSigil.rotation.y = Math.PI;
+    addStroke(hatchSigil, 0, 0, 0, 0.86, 0.004);
+    addStroke(hatchSigil, -0.055, 0.02, Math.PI / 3, 0.58, 0.004);
+    addStroke(hatchSigil, 0.055, 0.02, -Math.PI / 3, 0.58, 0.004);
+    hatch.add(hatchSigil);
+    hull.add(runes);
+    return { core, halo };
   }
 
   update(camera: THREE.Camera): void {
@@ -123,6 +242,9 @@ export class FoundingPodRenderer {
       v.hull.position.y -= settling * Math.sin(Math.max(0, age) * 16) * 0.045;
       v.hatch.rotation.x = -THREE.MathUtils.smoothstep(age, 0.8, 2.8) * 1.8;
       v.light.opacity = age < 0 ? 0.9 : Math.max(0.12, Math.exp(-age * 0.6));
+      const runePulse = 0.5 + Math.sin(t * 0.72 + v.pod.entrySeconds * 0.41) * 0.5;
+      v.runeCore.opacity = (age < 0 ? 0.66 : 0.48) + runePulse * 0.12;
+      v.runeHalo.opacity = (age < 0 ? 0.11 : 0.07) + runePulse * 0.045;
       const headTime = Math.min(t, podTouchdown(v.pod));
       const tailTime = Math.max(v.pod.entrySeconds, headTime - 5.5);
       const tail = podPosition(v.pod, tailTime);
@@ -183,8 +305,8 @@ export class FoundingPodRenderer {
     if (!this.effectsRetired) this.retireEffects();
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
-    for (const g of [this.hullGeometry, this.shieldGeometry, this.legGeometry, this.footGeometry, this.bandGeometry, this.hatchGeometry]) geometries.add(g);
-    materials.add(this.hullMaterial); materials.add(this.shieldMaterial);
+    for (const g of [this.hullGeometry, this.shieldGeometry, this.legGeometry, this.footGeometry, this.bandGeometry, this.hatchGeometry, this.runeStrokeGeometry]) geometries.add(g);
+    materials.add(this.hullMaterial); materials.add(this.shieldMaterial); materials.add(this.collarMaterial);
     this.root.traverse(o => { if (o instanceof THREE.Mesh) { geometries.add(o.geometry); for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m); } });
     geometries.forEach(g => g.dispose());
     materials.forEach(m => m.dispose());
