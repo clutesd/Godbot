@@ -4,6 +4,7 @@ import { settlementLabour } from '../src/sim/people/HumanCapital';
 const seed = process.argv[2] ?? 'founding-loop-audit';
 const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
 simulation.advanceArrival(80);
+simulation.beginHistory();
 const samples: unknown[] = [];
 for (let month = 1; month <= 60; month++) {
   simulation.step(1);
