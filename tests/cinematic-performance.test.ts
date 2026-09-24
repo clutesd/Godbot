@@ -7,7 +7,7 @@ import { Simulation } from '../src/sim/Simulation';
 import { Historian } from '../src/historian/Historian';
 
 describe('cinematic motion', () => {
-  it('glides into a new unobstructed editorial shot instead of cutting on every selection', () => {
+  it('flies to a new editorial subject without cutting or handing off narration before arrival', () => {
     const sim = new Simulation({ seed: 'continuous-camera', startMode: 'established',
       startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
       camera: { shotSeconds: [0.3, 0.3], transitionSeconds: 4 } });
@@ -18,21 +18,29 @@ describe('cinematic motion', () => {
     const historian = new Historian(sim.config), scene = historian.chooseScene(sim.state);
     vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce({ ...scene, id: 'first', kind: 'street-observation', position: { x: 0, z: 0 } })
-      .mockReturnValue({ ...scene, id: 'second', kind: 'street-observation', position: { x: 12, z: 0 } });
+      .mockReturnValue({ ...scene, id: 'second', kind: 'street-observation', position: { x: 18, z: 0 } });
     const camera = new PerspectiveCamera();
     const director = new CameraDirector(camera, sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
-    let changed = false;
-    for (let frame = 1; frame < 120; frame++) {
+    expect(director.observation.sceneId).toBe('first');
+
+    let sawTransit = false;
+    let acquired = false;
+    let maximumStep = 0;
+    for (let frame = 1; frame < 60 * 20; frame++) {
       const before = camera.position.clone();
       director.update(1 / 60, frame / 60, sim.state, () => 0);
-      if (director.current()?.id === 'second') {
-        expect(camera.position.distanceTo(before)).toBeLessThan(0.1);
-        changed = true;
+      maximumStep = Math.max(maximumStep, camera.position.distanceTo(before));
+      if (director.current()?.id === 'first' && frame > 30 && director.observation.sceneId === 'first') sawTransit = true;
+      if (director.observation.sceneId === 'second') {
+        acquired = true;
+        expect(director.current()?.id).toBe('second');
         break;
       }
     }
-    expect(changed).toBe(true);
+    expect(sawTransit).toBe(true);
+    expect(maximumStep).toBeLessThan(0.19);
+    expect(acquired).toBe(true);
   });
 
 
