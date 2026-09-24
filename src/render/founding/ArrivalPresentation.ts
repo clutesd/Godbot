@@ -285,8 +285,8 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
   return {
     beat: 'handoff',
     target: mixPoint(lastTarget, worldTarget, handoff),
-    radius: lerp(5.2, 54, handoff),
-    height: lerp(1.6, 32, handoff),
+    radius: lerp(1.85, 54, handoff),
+    height: lerp(0.92, 32, handoff),
     transitionSeconds: lerp(4.2, 5.2, handoff),
     azimuthOffset: lerp(0.2, 0.02, handoff),
     fov: lerp(31, 38, handoff),
