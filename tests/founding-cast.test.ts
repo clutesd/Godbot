@@ -18,7 +18,8 @@ import { Simulation } from '../src/sim/Simulation';
 function completedArrival(seed: string): Simulation {
   const simulation = new Simulation({ seed, startMode: 'arrival' });
   simulation.advanceArrival(80);
-  expect(simulation.historyRunning).toBe(true);
+  expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+  expect(simulation.historyRunning).toBe(false);
   return simulation;
 }
 
@@ -99,7 +100,7 @@ describe('Founding documentary cast 2a', () => {
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('complete');
   });
 
-  it('keeps portraits cinematic while authoritative history continues underneath', () => {
+  it('keeps portraits cinematic while authoritative history remains frozen at Day 0', () => {
     const simulation = completedArrival('founding-cast-pacing');
     const historian = new Historian(simulation.config);
     const originalAutoRun = simulation.config.autoRun;
@@ -112,6 +113,10 @@ describe('Founding documentary cast 2a', () => {
       const portrait = chooseFoundingCastScene(historian, simulation.state);
       expect(portrait?.id).toContain(`founding-cast:introduction:${index}:`);
       expect(simulation.config.autoRun).toBe(originalAutoRun);
+      expect(simulation.historyRunning).toBe(false);
+      const monthBefore = simulation.state.month;
+      simulation.step(1);
+      expect(simulation.state.month).toBe(monthBefore);
       expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
       expect(presentation.targetSpeed(simulation.state, {
         kind: portrait!.kind,
@@ -124,6 +129,8 @@ describe('Founding documentary cast 2a', () => {
     const release = chooseFoundingCastScene(historian, simulation.state);
     expect(release?.id).toContain('founding-release:');
     expect(simulation.config.autoRun).toBe(originalAutoRun);
+    expect(simulation.historyRunning).toBe(false);
+    expect(simulation.state.month).toBe(0);
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
     expect(presentation.targetSpeed(simulation.state, {
       kind: release!.kind,
