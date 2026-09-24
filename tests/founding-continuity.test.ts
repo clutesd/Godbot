@@ -23,6 +23,8 @@ function completedArrival(seed: string): Simulation {
   // world happens to contain five safely separated sites. Keep enough deterministic land available.
   const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
   simulation.advanceArrival(80);
+  expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+  expect(simulation.beginHistory()).toBe(true);
   expect(simulation.historyRunning).toBe(true);
   return simulation;
 }
