@@ -1017,9 +1017,10 @@ export class CameraDirector {
   }
 
   current(): ObservationCandidate | undefined {
-    // During a flight the documentary still belongs to the last acquired scene. Consumers such as
-    // reaction-glyph prioritization should not jump ahead of the physical camera.
-    return this.acquiredScene ?? this.currentScene;
+    // During a flight the documentary still belongs to the last acquired scene. After Arrival there
+    // may not be one yet; returning undefined is preferable to pretending the remote destination has
+    // already been reached.
+    return this.flight ? this.acquiredScene : this.currentScene;
   }
 
   private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
@@ -1236,7 +1237,9 @@ export class CameraDirector {
       { maxSpeed: 9, maxAcceleration: 4.8, maxJerk: 16, responseSeconds: 0.34 },
     );
 
-    const flightClearance = Math.max(0.72, Math.min(3, cameraClearanceFor(this.currentScene.kind).lens));
+    const departureClearance = cameraClearanceFor(this.acquiredScene?.kind).lens;
+    const destinationClearance = cameraClearanceFor(this.currentScene.kind).lens;
+    const flightClearance = Math.max(0.42, Math.min(1.2, departureClearance, destinationClearance));
     if (!cameraFlightCorridorSafe(state, before, this.camera.position, elevationAt, flightClearance, this.environmentProbe)) {
       // Never cross geometry to preserve a schedule. Return to the last valid frame, bleed momentum,
       // and climb into a new continuous route on the next frame.
