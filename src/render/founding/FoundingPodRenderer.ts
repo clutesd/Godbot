@@ -289,7 +289,7 @@ export class FoundingPodRenderer {
         positions.needsUpdate = true;
       }
     }
-    if (arrival.phase === 'HISTORY_RUNNING') this.retireEffects();
+    if (!isArrivalFilmPhase(arrival.phase)) this.retireEffects();
   }
 
   private retireEffects(): void {
