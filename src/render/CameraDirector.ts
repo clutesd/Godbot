@@ -1327,12 +1327,13 @@ export class CameraDirector {
     }
 
     const distance = this.camera.position.distanceTo(this.shotBasePosition);
+    const leavingFoundingOverlay = Boolean(
+      this.acquiredScene && this.acquiredScene.id !== scene.id && isFoundingOverlayScene(this.acquiredScene.id),
+    );
+    if (leavingFoundingOverlay) this.releaseFoundingOverlayForTransit();
     if (distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
       this.acquireCurrentScene();
       return;
-    }
-    if (this.acquiredScene && this.acquiredScene.id !== scene.id && isFoundingOverlayScene(this.acquiredScene.id)) {
-      this.releaseFoundingOverlayForTransit();
     }
     this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
   }
