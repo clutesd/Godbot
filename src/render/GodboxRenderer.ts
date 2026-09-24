@@ -14,6 +14,7 @@ import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
+import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthFireMotion } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
@@ -585,7 +586,7 @@ export class GodboxRenderer {
     if (renderPolicy.animateHumans) this.updatePeople(humanLife.deltaSeconds, humanLife.elapsedSeconds);
 
     if (renderPolicy.refreshWorldPresentation) {
-      this.updateFirstFirePresentationVisuals();
+      this.updateFirstFirePresentationVisuals(humanLife.elapsedSeconds);
       this.updateCaravans();
       this.updateSmoke(elapsedSeconds);
     }
@@ -1391,24 +1392,17 @@ export class GodboxRenderer {
         settlement,
       ));
     }
-    const survivalFireActive = foundingHearthBurning(settlement);
+    const firstFireVisual = this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches);
+    const survivalFireActive = foundingHearthBurning(settlement) || firstFireVisual.active;
     if (survivalFireActive) {
-      // A two-layer flame gives the first ignition depth without particle-heavy spectacle.
       const hearthOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []) ?? { x: 0, z: 1.6 };
       const hearthWorldX = settlement.position.x + hearthOffset.x;
       const hearthWorldZ = settlement.position.z + hearthOffset.z;
       const groundY = this.elevationAt(hearthWorldX, hearthWorldZ) - settlementY;
-      const rig = new THREE.Group();
+      const rig = createFoundingHearthFlameRig(`${this.config.seed}:${settlement.id}`);
       rig.position.set(hearthOffset.x, groundY, hearthOffset.z);
       rig.userData['survivalFire'] = true;
-      const outer = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.4, 7), palette.getSurfaceMaterial('glow'));
-      outer.position.y = 0.2;
-      const core = new THREE.Mesh(new THREE.ConeGeometry(0.095, 0.25, 6), palette.getSurfaceMaterial('forge'));
-      core.position.set(0.015, 0.13, -0.01);
-      core.rotation.y = 0.42;
-      rig.add(outer, core);
-      const initial = this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches);
-      rig.scale.setScalar(Math.max(0.001, initial.flameScale));
+      rig.scale.set(firstFireVisual.flameScale * 0.96, firstFireVisual.flameScale, firstFireVisual.flameScale * 0.96);
       group.userData['foundingHearthFlameRig'] = rig;
       group.add(rig);
     }
@@ -1429,10 +1423,10 @@ export class GodboxRenderer {
     if (survivalFireActive) {
       const hearth = foundingHearthWorldPosition(settlement, this.state.arrival?.pods ?? []);
       if (hearth) {
-        const baseStrength = 0.24;
+        const baseStrength = 0.3;
         smokeSources.push({
           worldX: hearth.x,
-          worldY: this.elevationAt(hearth.x, hearth.z) + 0.12,
+          worldY: this.elevationAt(hearth.x, hearth.z) + 0.16,
           worldZ: hearth.z,
           strength: baseStrength,
           baseStrength,
@@ -2979,7 +2973,7 @@ export class GodboxRenderer {
   }
 
   /** Real-time ignition performance layered over authoritative hearth geometry and fuel state. */
-  private updateFirstFirePresentationVisuals(): void {
+  private updateFirstFirePresentationVisuals(elapsedSeconds: number): void {
     for (const [settlementId, visual] of this.settlementVisuals) {
       const sample = this.firstFirePresentation.sample(settlementId, this.reducedMotion.matches);
       const infrastructure = visual.group.userData['foundingHearthInfrastructure'];
@@ -2989,16 +2983,21 @@ export class GodboxRenderer {
         infrastructure.scale.setScalar(scale);
       }
       const rig = visual.group.userData['foundingHearthFlameRig'];
+      const embers = visual.group.userData['foundingHearthEmbers'];
+      const emberGroup = embers instanceof THREE.Group ? embers : undefined;
       if (rig instanceof THREE.Group) {
         const scale = Math.max(0.001, sample.flameScale);
         rig.visible = scale > 0.01;
-        rig.scale.set(scale * 0.94, scale, scale * 0.94);
+        rig.scale.set(scale * 0.96, scale, scale * 0.96);
+        updateFoundingHearthFireMotion(rig, emberGroup, elapsedSeconds, this.reducedMotion.matches);
       }
-      const embers = visual.group.userData['foundingHearthEmbers'];
-      if (embers instanceof THREE.Mesh) embers.scale.setScalar(Math.max(0.001, sample.emberScale));
+      if (emberGroup) {
+        emberGroup.visible = sample.emberScale > 0.01;
+        emberGroup.scale.setScalar(Math.max(0.001, sample.emberScale));
+      }
       for (const source of visual.smokeSources) {
         if (source.kind !== 'founding-hearth') continue;
-        source.strength = (source.baseStrength ?? 0.24) * sample.smokeGain;
+        source.strength = (source.baseStrength ?? 0.3) * sample.smokeGain;
         source.presentationGain = Math.min(1, sample.smokeGain * 2.5);
       }
     }
@@ -3122,22 +3121,10 @@ export class GodboxRenderer {
       const worldZ = settlement.position.z + hearthOffset.z;
       const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
       const groundY = this.elevationAt(worldX, worldZ) - settlementY;
-      const stone = palette.getSurfaceMaterial('stone');
-      const infrastructure = new THREE.Group();
+      const visualSeed = `${this.config.seed}:${settlement.id}`;
+      const infrastructure = createFoundingHearthInfrastructure(palette, visualSeed);
       infrastructure.position.set(hearthOffset.x, groundY, hearthOffset.z);
       infrastructure.userData['foundingHearth'] = foundingHearth;
-      const ash = new THREE.Mesh(new THREE.CircleGeometry(0.5, 18), palette.getSurfaceMaterial('shadow'));
-      ash.rotation.x = -Math.PI / 2;
-      ash.position.y = 0.012;
-      infrastructure.add(ash);
-      for (let index = 0; index < 9; index += 1) {
-        const angle = (index / 9) * Math.PI * 2 + random.range(-0.06, 0.06);
-        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.095, 0), stone);
-        rock.position.set(Math.cos(angle) * 0.58, 0.055, Math.sin(angle) * 0.58);
-        rock.castShadow = true;
-        rock.userData['hearthStone'] = true;
-        infrastructure.add(rock);
-      }
       const initial = foundingHearth
         ? this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches)
         : undefined;
@@ -3146,14 +3133,14 @@ export class GodboxRenderer {
       group.add(infrastructure);
 
       // Once earned, the physical hearth remains even if fuel later runs out.
-      if (foundingHearth && (!foundingOffset || !foundingHearthBurning(settlement))) return entries;
-      const embers = new THREE.Mesh(new THREE.IcosahedronGeometry(0.15, 1), glow);
-      embers.position.set(hearthOffset.x, groundY + 0.075, hearthOffset.z);
+      if (foundingHearth && (!foundingOffset || (!foundingHearthBurning(settlement) && !initial?.active))) return entries;
+      const embers = createFoundingHearthEmbers(visualSeed);
+      embers.position.set(hearthOffset.x, groundY + 0.072, hearthOffset.z);
       embers.userData['hearthEmbers'] = true;
       embers.scale.setScalar(Math.max(0.001, initial?.emberScale ?? 1));
       group.userData['foundingHearthEmbers'] = embers;
       group.add(embers);
-      attach(hearthOffset.x, groundY + 0.62, hearthOffset.z, '#ff9448', 2.2, 0.42, 9, 'founding-hearth', settlement.id);
+      attach(hearthOffset.x, groundY + 0.52, hearthOffset.z, '#ff9a43', 2.75, 0.32, 10.5, 'founding-hearth', settlement.id);
       return entries;
     }
 
