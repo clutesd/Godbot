@@ -10,8 +10,10 @@ const ROWS = 4;
 const COLUMNS = 6;
 const PLANTS_PER_CLUMP = 3;
 const MAX_PLANTS = MAX_FIELDS * ROWS * COLUMNS * PLANTS_PER_CLUMP;
-const MAX_FURROWS = MAX_FIELDS * (ROWS + 1);
-const MAX_EDGES = MAX_FIELDS * 8;
+const SOIL_SEGMENTS_X = 10;
+const SOIL_SEGMENTS_Z = 8;
+const RIBBON_SEGMENTS = 10;
+const SOIL_LIFT = 0.0045;
 const MAX_HARVEST_PROPS = MAX_FIELDS * 8;
 const MAX_LEAVES = MAX_PLANTS * 2;
 const MAX_FIELD_MARKERS = MAX_FIELDS * 4;
@@ -55,20 +57,20 @@ export class FarmFieldRenderer {
   readonly group = new THREE.Group();
   readonly fields = new Map<string, { geometry: FarmGeometry; state: FarmPresentationState }>();
 
-  private readonly soil = this.mesh('Cultivated farm soil', new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ color: '#66503b', roughness: 1 }), MAX_FIELDS);
-  private readonly furrows = this.mesh('Cultivated farm furrows', new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ color: '#765b42', roughness: 1 }), MAX_FURROWS);
-  private readonly moisture = this.mesh('Farm irrigation and wet-soil cues', new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ color: '#3b5a50', roughness: 0.95, transparent: true, opacity: 0.72 }), MAX_FURROWS);
+  private readonly soil = this.surfaceMesh('Cultivated farm soil',
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+  private readonly furrows = this.surfaceMesh('Cultivated farm furrows',
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+  private readonly moisture = this.surfaceMesh('Farm irrigation and wet-soil cues',
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, transparent: true, opacity: 0.72, depthWrite: false }));
   private readonly stems = this.mesh('Farm crop stalks', new THREE.CylinderGeometry(0.7, 1, 1, 5),
     new THREE.MeshStandardMaterial({ color: '#789c4c', roughness: 0.92 }), MAX_PLANTS);
   private readonly leaves = this.mesh('Farm crop leaves', new THREE.PlaneGeometry(1, 1),
     new THREE.MeshStandardMaterial({ color: '#6f9147', roughness: 0.95, side: THREE.DoubleSide }), MAX_LEAVES);
   private readonly heads = this.mesh('Farm crop heads', new THREE.SphereGeometry(1, 5, 4),
     new THREE.MeshStandardMaterial({ color: '#c6aa5d', roughness: 0.78, emissive: '#5b481d', emissiveIntensity: 0.08 }), MAX_PLANTS);
-  private readonly borders = this.mesh('Farm field borders', new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ color: '#765b42', roughness: 0.96 }), MAX_EDGES);
+  private readonly borders = this.surfaceMesh('Farm field borders',
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96 }));
   private readonly bundles = this.mesh('Farm harvest bundles', farmSheafGeometry(),
     new THREE.MeshStandardMaterial({ color: '#c3a457', roughness: 0.9 }), MAX_HARVEST_PROPS);
   private readonly sacks = this.mesh('Farm harvest sacks', farmSackGeometry(),
@@ -88,49 +90,68 @@ export class FarmFieldRenderer {
 
   update(state: SimulationState, heightAt: (x: number, z: number) => number, standable: (x: number, z: number) => boolean): void {
     this.fields.clear();
-    const counts = { soil: 0, furrows: 0, moisture: 0, stems: 0, leaves: 0, heads: 0, borders: 0,
+    const surfaces = {
+      soil: new DrapedSurfaceBatch(),
+      furrows: new DrapedSurfaceBatch(),
+      moisture: new DrapedSurfaceBatch(),
+      borders: new DrapedSurfaceBatch(),
+    };
+    const counts = { fields: 0, stems: 0, leaves: 0, heads: 0,
       bundles: 0, sacks: 0, markers: 0, baskets: 0 };
 
     for (const settlement of [...state.settlements].sort((a, b) => a.id.localeCompare(b.id))) {
       const field = farmGeometry(settlement);
-      if (!field || counts.soil >= MAX_FIELDS) continue;
+      if (!field || counts.fields >= MAX_FIELDS) continue;
       const visual = farmPresentationState(settlement, state.month, state.weather.cells[settlement.cellIndex]);
       // Reject an entire unsafe bed instead of moving visual agriculture away from its authoritative geometry.
       if (!standable(field.center.x, field.center.z) && visual.stage !== 'flooded' && visual.stage !== 'snow') continue;
       this.fields.set(settlement.id, { geometry: field, state: visual });
       const palette = PALETTES[visual.stage];
+      counts.fields++;
 
-      this.emitBox(this.soil, counts.soil++, field.center.x, heightAt(field.center.x, field.center.z) + 0.007, field.center.z,
-        field.width, 0.014, field.depth, palette.soil);
+      // Cultivated ground is a true draped surface, not a rigid slab. Every vertex samples the
+      // same terrain authority used by people, buildings and the camera, so hills and hollows pass
+      // naturally through the field without buried corners or floating edges.
+      surfaces.soil.addPatch(field.center.x, field.center.z, field.width, field.depth,
+        SOIL_SEGMENTS_X, SOIL_SEGMENTS_Z, SOIL_LIFT, palette.soil, heightAt);
 
-      // Four broad cultivated rows remain aligned with FarmGeometry/farmAnchor. Thin darker channels
-      // between them make the plot read as intentionally worked land from the normal camera.
+      // Rows are low crowned ribbons that follow the terrain longitudinally and laterally. They
+      // retain the exact FarmGeometry/farmAnchor layout while reading as worked earth rather than
+      // rectangular beams laid across the landscape.
       const rowSpacing = field.depth / ROWS;
+      const rowHalfWidth = rowSpacing * 0.27;
       for (let row = 0; row < ROWS; row++) {
         const z = field.center.z + (row - 1.5) * rowSpacing;
-        this.emitBox(this.furrows, counts.furrows++, field.center.x, heightAt(field.center.x, z) + 0.018, z,
-          field.width * 0.94, 0.022, rowSpacing * 0.54, palette.ridge);
+        surfaces.furrows.addRibbon(
+          field.center.x - field.width * 0.47, z,
+          field.center.x + field.width * 0.47, z,
+          rowHalfWidth * 2, RIBBON_SEGMENTS, 0.008, 0.021, palette.ridge, heightAt,
+        );
       }
       for (let gap = 0; gap <= ROWS; gap++) {
         if (visual.irrigation <= 0.08 || visual.stage === 'snow') break;
         const z = field.center.z + (gap - ROWS / 2) * rowSpacing;
-        const wet = 0.016 + visual.irrigation * 0.02;
-        this.emitBox(this.moisture, counts.moisture++, field.center.x, heightAt(field.center.x, z) + 0.012, z,
-          field.width * 0.9, 0.008, wet, palette.wet);
+        const wetWidth = 0.016 + visual.irrigation * 0.02;
+        surfaces.moisture.addRibbon(
+          field.center.x - field.width * 0.45, z,
+          field.center.x + field.width * 0.45, z,
+          wetWidth, RIBBON_SEGMENTS, 0.0065, 0.0075, palette.wet, heightAt,
+        );
       }
 
-      // A low perimeter gives the plot a readable silhouette without creating collision geometry.
+      // The perimeter is an earthen berm, also draped vertex-by-vertex. A subtle crown gives the
+      // silhouette definition without making the field look fenced or engineered.
       const edge = Math.max(0.025, Math.min(field.width, field.depth) * 0.025);
       const halfW = field.width * 0.5;
       const halfD = field.depth * 0.5;
-      this.emitBox(this.borders, counts.borders++, field.center.x, heightAt(field.center.x, field.center.z - halfD) + 0.035,
-        field.center.z - halfD, field.width + edge * 2, 0.045, edge, palette.border);
-      this.emitBox(this.borders, counts.borders++, field.center.x, heightAt(field.center.x, field.center.z + halfD) + 0.035,
-        field.center.z + halfD, field.width + edge * 2, 0.045, edge, palette.border);
-      this.emitBox(this.borders, counts.borders++, field.center.x - halfW, heightAt(field.center.x - halfW, field.center.z) + 0.035,
-        field.center.z, edge, 0.045, field.depth, palette.border);
-      this.emitBox(this.borders, counts.borders++, field.center.x + halfW, heightAt(field.center.x + halfW, field.center.z) + 0.035,
-        field.center.z, edge, 0.045, field.depth, palette.border);
+      surfaces.borders.addRibbon(field.center.x - halfW - edge, field.center.z - halfD,
+        field.center.x + halfW + edge, field.center.z - halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
+      surfaces.borders.addRibbon(field.center.x - halfW - edge, field.center.z + halfD,
+        field.center.x + halfW + edge, field.center.z + halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
+      surfaces.borders.addRibbon(field.center.x - halfW, field.center.z - halfD,
+        field.center.x - halfW, field.center.z + halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
+      surfaces.borders.addRibbon(field.center.x + halfW, field.center.z - halfD,
+        field.center.x + halfW, field.center.z + halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
 
       // Four small corner markers help cultivated land read as intentionally managed without
       // inventing fences, ownership or infrastructure in simulation state.
@@ -202,17 +223,33 @@ export class FarmFieldRenderer {
       }
     }
 
-    this.finish(this.soil, counts.soil);
-    this.finish(this.furrows, counts.furrows);
-    this.finish(this.moisture, counts.moisture);
+    this.finishSurface(this.soil, surfaces.soil);
+    this.finishSurface(this.furrows, surfaces.furrows);
+    this.finishSurface(this.moisture, surfaces.moisture);
     this.finish(this.stems, counts.stems);
     this.finish(this.leaves, counts.leaves);
     this.finish(this.heads, counts.heads);
-    this.finish(this.borders, counts.borders);
+    this.finishSurface(this.borders, surfaces.borders);
     this.finish(this.bundles, counts.bundles);
     this.finish(this.sacks, counts.sacks);
     this.finish(this.markers, counts.markers);
     this.finish(this.baskets, counts.baskets);
+  }
+
+  private surfaceMesh(name: string, material: THREE.MeshStandardMaterial): THREE.Mesh {
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
+    mesh.name = name;
+    mesh.frustumCulled = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  private finishSurface(mesh: THREE.Mesh, batch: DrapedSurfaceBatch): void {
+    const previous = mesh.geometry;
+    mesh.geometry = batch.build();
+    mesh.visible = batch.triangleCount > 0;
+    previous.dispose();
   }
 
   private mesh(name: string, geometry: THREE.BufferGeometry, material: THREE.Material, capacity: number): THREE.InstancedMesh {
@@ -223,11 +260,6 @@ export class FarmFieldRenderer {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
-  }
-
-  private emitBox(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number,
-    sx: number, sy: number, sz: number, colour: string): void {
-    this.emit(mesh, index, x, y, z, sx, sy, sz, colour);
   }
 
   private emit(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number,
@@ -245,5 +277,104 @@ export class FarmFieldRenderer {
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+}
+
+
+class DrapedSurfaceBatch {
+  private readonly positions: number[] = [];
+  private readonly colours: number[] = [];
+  private readonly indices: number[] = [];
+  private readonly colour = new THREE.Color();
+  triangleCount = 0;
+
+  addPatch(
+    centerX: number,
+    centerZ: number,
+    width: number,
+    depth: number,
+    segmentsX: number,
+    segmentsZ: number,
+    lift: number,
+    colour: string,
+    heightAt: (x: number, z: number) => number,
+  ): void {
+    const base = this.vertexCount;
+    const rgb = this.colour.set(colour);
+    for (let zIndex = 0; zIndex <= segmentsZ; zIndex++) {
+      const v = zIndex / segmentsZ;
+      const z = centerZ + (v - 0.5) * depth;
+      for (let xIndex = 0; xIndex <= segmentsX; xIndex++) {
+        const u = xIndex / segmentsX;
+        const x = centerX + (u - 0.5) * width;
+        this.vertex(x, heightAt(x, z) + lift, z, rgb);
+      }
+    }
+    const stride = segmentsX + 1;
+    for (let zIndex = 0; zIndex < segmentsZ; zIndex++) for (let xIndex = 0; xIndex < segmentsX; xIndex++) {
+      const a = base + zIndex * stride + xIndex;
+      const b = a + 1;
+      const d = base + (zIndex + 1) * stride + xIndex;
+      const e = d + 1;
+      this.indices.push(a, d, b, b, d, e);
+      this.triangleCount += 2;
+    }
+  }
+
+  addRibbon(
+    startX: number,
+    startZ: number,
+    endX: number,
+    endZ: number,
+    width: number,
+    segments: number,
+    edgeLift: number,
+    crownLift: number,
+    colour: string,
+    heightAt: (x: number, z: number) => number,
+  ): void {
+    const dx = endX - startX, dz = endZ - startZ;
+    const length = Math.hypot(dx, dz);
+    if (length <= 0.000001 || width <= 0) return;
+    const perpX = -dz / length, perpZ = dx / length;
+    const half = width * 0.5;
+    const base = this.vertexCount;
+    const rgb = this.colour.set(colour);
+    for (let segment = 0; segment <= segments; segment++) {
+      const t = segment / segments;
+      const centerX = startX + dx * t;
+      const centerZ = startZ + dz * t;
+      const leftX = centerX - perpX * half, leftZ = centerZ - perpZ * half;
+      const rightX = centerX + perpX * half, rightZ = centerZ + perpZ * half;
+      this.vertex(leftX, heightAt(leftX, leftZ) + edgeLift, leftZ, rgb);
+      this.vertex(centerX, heightAt(centerX, centerZ) + crownLift, centerZ, rgb);
+      this.vertex(rightX, heightAt(rightX, rightZ) + edgeLift, rightZ, rgb);
+    }
+    for (let segment = 0; segment < segments; segment++) {
+      const row = base + segment * 3;
+      const next = row + 3;
+      this.indices.push(row, next, row + 1, row + 1, next, next + 1);
+      this.indices.push(row + 1, next + 1, row + 2, row + 2, next + 1, next + 2);
+      this.triangleCount += 4;
+    }
+  }
+
+  build(): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.colours, 3));
+    geometry.setIndex(this.indices);
+    if (this.indices.length) geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  private get vertexCount(): number {
+    return this.positions.length / 3;
+  }
+
+  private vertex(x: number, y: number, z: number, colour: THREE.Color): void {
+    this.positions.push(x, y, z);
+    this.colours.push(colour.r, colour.g, colour.b);
   }
 }
