@@ -37,7 +37,7 @@ describe('Arrival presentation contracts', () => {
       z: arrival.pods[0]?.position.z,
     });
 
-    arrival.phase = 'HISTORY_RUNNING';
+    arrival.phase = 'FOUNDING_ORIENTATION';
     expect(arrivalRenderPolicy(simulation.state)).toEqual({
       active: false,
       animateHumans: true,
@@ -46,6 +46,32 @@ describe('Arrival presentation contracts', () => {
       updateAmbientWorldEffects: true,
     });
     expect(arrivalVegetationAnchor(simulation.state)).toBeUndefined();
+
+    arrival.phase = 'HISTORY_RUNNING';
+    expect(arrivalRenderPolicy(simulation.state).active).toBe(false);
+  });
+
+  it('finishes the Arrival film into a frozen orientation before Month 1 can exist', () => {
+    const simulation = new Simulation({ seed: 'arrival-orientation-authority', startMode: 'arrival' });
+    simulation.advanceArrival(ARRIVAL_END_SECONDS + 10);
+
+    expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+    expect(simulation.historyRunning).toBe(false);
+    expect(simulation.foundingOrientationRunning).toBe(true);
+    expect(simulation.state.month).toBe(0);
+    expect(simulation.state.history.filter(event => event.type === 'ARRIVAL_DAY')).toHaveLength(1);
+
+    // Even direct callers cannot accidentally start the civilization while orientation is playing.
+    simulation.step(24);
+    expect(simulation.state.month).toBe(0);
+    expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+
+    expect(simulation.beginHistory()).toBe(true);
+    expect(simulation.historyRunning).toBe(true);
+    expect(simulation.state.arrival?.phase).toBe('HISTORY_RUNNING');
+    simulation.step(1);
+    expect(simulation.state.month).toBe(1);
+    expect(simulation.beginHistory()).toBe(false);
   });
 
   it('bounds effect buffers and retires them leaving five persistent hulls', () => {
