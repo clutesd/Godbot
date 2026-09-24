@@ -1,3 +1,4 @@
+import { isFoundingPresentationPhase } from '../sim/founding/FoundingArrival';
 import type { SimulationState, Vec2 } from '../sim/types';
 import type { ObservationCandidate } from './types';
 import { Historian } from './Historian';
@@ -226,7 +227,7 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
 
 export function foundingChapterProgress(historian: Historian, state: SimulationState): FoundingChapterProgress {
   const baseline = foundingChapterBaseline(state);
-  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
+  if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
   const memory = memories.get(historian);
   const totalBeats = 1;
   if (memory) return {
@@ -245,7 +246,7 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
  * the geography; this beat states the premise once, then hands directly to human-scale history.
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
-  if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') {
+  if (!state.arrival || !isFoundingPresentationPhase(state.arrival.phase)) {
     releaseFoundingChapterHold(historian, state);
     return undefined;
   }
@@ -286,7 +287,7 @@ export function isFoundingChapterScene(scene: ObservationCandidate): boolean {
   return scene.id.startsWith('founding:');
 }
 
-/** Post-arrival orientation slows history through targetSpeed but never freezes the clock. */
+/** Orientation requests cinematic pacing; monthly authority remains frozen until Simulation.beginHistory(). */
 export function installFoundingChapterPacing(): void {
   if (pacingInstalled) return;
   pacingInstalled = true;
