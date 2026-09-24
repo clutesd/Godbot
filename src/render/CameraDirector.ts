@@ -756,6 +756,7 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
  * how the observer glides between and within scenes.
  */
 interface CameraFlightState {
+  readonly originPosition: THREE.Vector3;
   readonly destinationPosition: THREE.Vector3;
   readonly destinationTarget: THREE.Vector3;
   readonly startDistance: number;
@@ -1150,6 +1151,7 @@ export class CameraDirector {
       responseSeconds: 0.42,
     };
     this.flight = {
+      originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
       destinationTarget: destinationTarget.clone(),
       startDistance: Math.max(0.001, horizontalDistance),
@@ -1197,7 +1199,12 @@ export class CameraDirector {
     if (flight.phase === 'cruise' && horizontalDistance <= approachRadius) flight.phase = 'approach';
 
     if (flight.phase === 'depart') {
-      this.desiredPosition.set(this.camera.position.x, flight.cruiseHeight, this.camera.position.z);
+      // Climb on a forward arc instead of performing a vertical elevator move first.
+      this.desiredPosition.set(
+        THREE.MathUtils.lerp(flight.originPosition.x, flight.destinationPosition.x, 0.32),
+        flight.cruiseHeight,
+        THREE.MathUtils.lerp(flight.originPosition.z, flight.destinationPosition.z, 0.32),
+      );
     } else if (flight.phase === 'cruise') {
       this.desiredPosition.set(flight.destinationPosition.x, flight.cruiseHeight, flight.destinationPosition.z);
     } else {
@@ -1252,9 +1259,13 @@ export class CameraDirector {
 
     this.camera.lookAt(this.lookTarget);
 
+    this.workingDirection.copy(this.lookTarget).sub(this.camera.position).normalize();
+    this.workingTangent.copy(flight.destinationTarget).sub(this.camera.position).normalize();
+    const gazeAcquired = this.workingDirection.dot(this.workingTangent) >= Math.cos(THREE.MathUtils.degToRad(9));
+
     if (flight.phase === 'approach'
       && cameraFlightSettled(this.camera.position, this.positionVelocity, flight.destinationPosition, 0.65)
-      && this.lookTarget.distanceTo(flight.destinationTarget) <= 1.35) {
+      && gazeAcquired) {
       this.flight = undefined;
       this.flightAcceleration.set(0, 0, 0);
       this.gazeFlightAcceleration.set(0, 0, 0);
