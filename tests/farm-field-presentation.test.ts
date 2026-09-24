@@ -144,6 +144,8 @@ describe('farm field visual polish', () => {
     expect(renderer.renderedFields.size).toBe(2);
     expect([...renderer.renderedFields.keys()]).toEqual(['field-a', 'field-b']);
     expect(renderer.fields.get(settlement.id)?.geometry.id).toBe('field-a');
+    expect(renderer.renderedFields.get('field-a')?.state.output).toBeCloseTo(5);
+    expect(renderer.renderedFields.get('field-b')?.state.output).toBeCloseTo(5);
     expect(mesh(renderer, 'Cultivated farm soil').geometry.getAttribute('position').count).toBeGreaterThanOrEqual(198);
   });
 
