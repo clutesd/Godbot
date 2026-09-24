@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
+import { isArrivalFilmPhase, podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
 import type { SimulationState } from '../../sim/types';
 
 const TRAIL_SAMPLES = 64;
