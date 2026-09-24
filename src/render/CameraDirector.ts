@@ -889,6 +889,13 @@ export class CameraDirector {
       this.positionVelocity.multiplyScalar(0.55);
       this.targetVelocity.multiplyScalar(0.55);
     }
+    // Once a destination has been selected, finish the physical flight before making another
+    // editorial decision. Major events remain in Historian memory; they never teleport the lens.
+    if (this.flight) {
+      this.advanceFlight(deltaSeconds, state, elevationAt);
+      return;
+    }
+
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
     const mayInterrupt = this.shotAge >= Math.max(this.currentScene?.id.startsWith('human:') ? 12 : 6, this.config.camera.transitionSeconds * 1.1);
@@ -903,13 +910,18 @@ export class CameraDirector {
       this.chooseShot(state, elevationAt);
     }
 
+    if (this.flight) {
+      this.advanceFlight(deltaSeconds, state, elevationAt);
+      return;
+    }
+
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
 
     const before = this.camera.position.clone();
     if (this.recoveryOffset) this.desiredPosition.copy(this.desiredTarget).add(this.recoveryOffset);
 
-    // Preserve velocity across shots: a new composition eases into motion instead of kicking
-    // immediately to the maximum speed of a first-order lerp.
+    // Local composition changes use the critically damped spring. Large scene-to-scene moves are
+    // handled above by the jerk-limited physical flight controller.
     const editorialTiming = foundingEditorialTimingFor(this.currentScene?.id);
     const transitionSeconds = editorialTiming?.transitionSeconds
       ?? this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
@@ -934,7 +946,6 @@ export class CameraDirector {
   private enforceVisibility(
     before: THREE.Vector3, deltaSeconds: number, state: SimulationState,
     elevationAt: (x: number, z: number) => number, clearance: CameraClearance,
-    preferContinuity = false,
   ): void {
     const subjects: THREE.Vector3[] = [];
     if (this.currentScene && ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(this.currentScene.kind)) {
@@ -955,7 +966,7 @@ export class CameraDirector {
     const beforeValid = corridor || cameraShotValidity(state, before, this.desiredTarget, elevationAt, options).valid;
     if (!corridor && beforeValid) {
       this.camera.position.copy(before);
-      this.positionVelocity.set(0, 0, 0);
+      this.positionVelocity.multiplyScalar(0.28);
     }
     // The actual swept move remains checked every frame. The much longer destination survey
     // needs only four checks a second; repeating it at display frequency multiplies ray work.
@@ -968,30 +979,37 @@ export class CameraDirector {
     if (failed || (!route && beforeValid) || !this.safetyInitialized) {
       const safe = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, options);
       if (safe.valid) {
-        if (safe.position.distanceTo(this.desiredPosition) > 0.001) {
-          this.recoveryOffset = safe.position.clone().sub(this.desiredTarget);
-        }
-        if (safe.requiresCut && preferContinuity && this.safetyInitialized) {
-          // During the authored prologue, an unsafe swept route should pause the move rather than
-          // turn into a visible teleport. The next frames keep searching for a continuous route.
-          this.camera.position.copy(before);
-          this.positionVelocity.multiplyScalar(0.2);
-        } else if (safe.requiresCut || !this.safetyInitialized) {
+        if (!this.safetyInitialized) {
+          // Startup is the one legitimate hard placement: there is no prior physical camera path
+          // to preserve yet.
           this.camera.position.copy(safe.position);
           this.lookTarget.copy(this.desiredTarget);
           this.positionVelocity.set(0, 0, 0);
           this.targetVelocity.set(0, 0, 0);
+          this.recoveryOffset = undefined;
+        } else if (safe.requiresCut) {
+          // Never teleport an established lens. Hold the last valid pose, retire this composition,
+          // and let the next editorial destination be reached through CameraFlight.
+          this.camera.position.copy(before);
+          this.positionVelocity.multiplyScalar(0.32);
+          this.targetVelocity.multiplyScalar(0.65);
+          this.recoveryOffset = undefined;
+          this.shotAge = this.shotDuration;
         } else {
+          if (safe.position.distanceTo(this.desiredPosition) > 0.001) {
+            this.recoveryOffset = safe.position.clone().sub(this.desiredTarget);
+          }
           const next = before.clone().lerp(safe.position, 1 - Math.exp(-deltaSeconds * 4));
           if (cameraVisibilityCorridor(state, before, next, this.desiredTarget, elevationAt, options)) this.camera.position.copy(next);
-          this.positionVelocity.set(0, 0, 0);
+          this.positionVelocity.multiplyScalar(0.55);
         }
         this.safetyInitialized = true;
       } else {
-        // No readable composition exists for this subject: request another documentary shot.
-        // Never advance along a known blocked route or label a least-bad view as safe.
+        // No readable composition exists for this subject: hold safely and request another
+        // destination. The camera remains continuous even when the authored shot is impossible.
         this.camera.position.copy(before);
-        this.positionVelocity.set(0, 0, 0);
+        this.positionVelocity.multiplyScalar(0.25);
+        this.targetVelocity.multiplyScalar(0.65);
         this.shotAge = this.shotDuration;
         this.recoveryOffset = undefined;
       }
@@ -999,7 +1017,9 @@ export class CameraDirector {
   }
 
   current(): ObservationCandidate | undefined {
-    return this.currentScene;
+    // During a flight the documentary still belongs to the last acquired scene. Consumers such as
+    // reaction-glyph prioritization should not jump ahead of the physical camera.
+    return this.acquiredScene ?? this.currentScene;
   }
 
   private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
