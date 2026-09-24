@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { vegetationFixture } from './fixtures/vegetation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 
@@ -27,7 +27,7 @@ function mesh(renderer: FarmFieldRenderer, name: string): THREE.Mesh | THREE.Ins
 }
 
 function visibleCount(object: THREE.Mesh | THREE.InstancedMesh): number {
-  return 'count' in object ? object.count : object.geometry.getAttribute('position')?.count ?? 0;
+  return object instanceof THREE.InstancedMesh ? object.count : object.geometry.getAttribute('position')?.count ?? 0;
 }
 
 describe('farm field visual polish', () => {
