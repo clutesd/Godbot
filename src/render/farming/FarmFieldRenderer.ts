@@ -353,8 +353,10 @@ class DrapedSurfaceBatch {
     for (let segment = 0; segment < segments; segment++) {
       const row = base + segment * 3;
       const next = row + 3;
-      this.indices.push(row, next, row + 1, row + 1, next, next + 1);
-      this.indices.push(row + 1, next + 1, row + 2, row + 2, next + 1, next + 2);
+      // Wind every ribbon triangle toward +Y so the default FrontSide farm materials remain
+      // visible and correctly lit from the documentary camera above the ground.
+      this.indices.push(row, row + 1, next, row + 1, next + 1, next);
+      this.indices.push(row + 1, row + 2, next + 1, row + 2, next + 2, next + 1);
       this.triangleCount += 4;
     }
   }
