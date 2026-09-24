@@ -6,6 +6,7 @@ import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESS
 import { arrivalCaption, arrivalSequenceFocus, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from '../src/render/founding/ArrivalRenderBudget';
 import { ARRIVAL_END_SECONDS, podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
+import { OpeningHandoff } from '../src/sim/founding/OpeningHandoff';
 
 describe('Arrival presentation contracts', () => {
   it('keeps the authored prologue on a lightweight render budget until history begins', () => {
@@ -72,6 +73,48 @@ describe('Arrival presentation contracts', () => {
     simulation.step(1);
     expect(simulation.state.month).toBe(1);
     expect(simulation.beginHistory()).toBe(false);
+  });
+
+  it('crosses the opening gate once and commits Month 1 on the following live frame', () => {
+    const simulation = new Simulation({ seed: 'opening-handoff-first-tick', startMode: 'arrival', autoRun: true });
+    simulation.advanceArrival(ARRIVAL_END_SECONDS + 1);
+    expect(simulation.foundingOrientationRunning).toBe(true);
+    expect(simulation.state.month).toBe(0);
+
+    const handoff = new OpeningHandoff(simulation);
+    expect(handoff.presentationActive(simulation)).toBe(true);
+    expect(handoff.beginIfReady(simulation, false)).toBe(false);
+    expect(simulation.historyRunning).toBe(false);
+
+    expect(handoff.beginIfReady(simulation, true)).toBe(true);
+    expect(simulation.historyRunning).toBe(true);
+    expect(simulation.state.month).toBe(0);
+    expect(handoff.pendingFirstTick).toBe(true);
+    expect(handoff.presentationActive(simulation)).toBe(true);
+
+    // The next live frame commits exactly one first month; normal scheduling owns everything after.
+    expect(handoff.commitFirstTick(simulation)).toBe(true);
+    expect(simulation.state.month).toBe(1);
+    expect(handoff.pendingFirstTick).toBe(false);
+    expect(handoff.presentationActive(simulation)).toBe(false);
+    expect(handoff.commitFirstTick(simulation)).toBe(false);
+    expect(simulation.state.month).toBe(1);
+    expect(handoff.beginIfReady(simulation, true)).toBe(false);
+  });
+
+  it('repairs a resumed archive persisted at HISTORY_RUNNING Month 0', () => {
+    const simulation = new Simulation({ seed: 'opening-handoff-resume', startMode: 'arrival', autoRun: true });
+    simulation.advanceArrival(ARRIVAL_END_SECONDS + 1);
+    expect(simulation.beginHistory()).toBe(true);
+    expect(simulation.state.month).toBe(0);
+
+    // A new controller represents a fresh page load after the authority phase was persisted but
+    // before the following requestAnimationFrame had a chance to commit Month 1.
+    const resumedHandoff = new OpeningHandoff(simulation);
+    expect(resumedHandoff.pendingFirstTick).toBe(true);
+    expect(resumedHandoff.commitFirstTick(simulation)).toBe(true);
+    expect(simulation.state.month).toBe(1);
+    expect(resumedHandoff.commitFirstTick(simulation)).toBe(false);
   });
 
   it('bounds effect buffers and retires them leaving five persistent hulls', () => {

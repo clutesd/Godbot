@@ -5,6 +5,7 @@ import {
   foundingChapterBaseline,
   foundingChapterProgress,
   installFoundingChapterPacing,
+  restoreFoundingChapterProgress,
 } from '../src/historian/FoundingChapter';
 import { Historian } from '../src/historian/Historian';
 import { PresentationDirector } from '../src/historian/PresentationDirector';
@@ -100,13 +101,32 @@ describe('Founding Chapter 1a', () => {
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('does not begin the Year-Zero orientation on a newly created Historian after Month 0', () => {
+  it('does not replay the Year-Zero orientation on a newly created Historian after history begins', () => {
     const simulation = completedArrival('founding-chapter-resume');
     expect(simulation.beginHistory()).toBe(true);
+
+    // This is the narrow resume seam that previously recreated a ready opening at Month 0.
+    const monthZeroHistorian = new Historian(simulation.config);
+    expect(foundingChapterProgress(monthZeroHistorian, simulation.state).phase).toBe('complete');
+    expect(chooseFoundingChapterScene(monthZeroHistorian, simulation.state)).toBeUndefined();
+
     simulation.step(1);
-    const historian = new Historian(simulation.config);
-    expect(foundingChapterProgress(historian, simulation.state).phase).toBe('missed-opening');
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
+    const laterHistorian = new Historian(simulation.config);
+    expect(foundingChapterProgress(laterHistorian, simulation.state).phase).toBe('complete');
+    expect(chooseFoundingChapterScene(laterHistorian, simulation.state)).toBeUndefined();
+  });
+
+  it('restores a completed orientation cursor from archived Day-0 statements', () => {
+    const simulation = completedArrival('founding-chapter-restore-cursor');
+    const firstHistorian = new Historian(simulation.config);
+    expect(chooseFoundingChapterScene(firstHistorian, simulation.state)).toBeDefined();
+    const archived = [...firstHistorian.statements];
+
+    const resumedHistorian = new Historian(simulation.config);
+    expect(foundingChapterProgress(resumedHistorian, simulation.state).phase).toBe('ready');
+    restoreFoundingChapterProgress(resumedHistorian, simulation.state, archived);
+    expect(foundingChapterProgress(resumedHistorian, simulation.state).phase).toBe('complete');
+    expect(chooseFoundingChapterScene(resumedHistorian, simulation.state)).toBeUndefined();
   });
 
   it('keeps the single overview grounded even if one founding settlement is unavailable', () => {

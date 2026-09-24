@@ -4,6 +4,8 @@ import { AudioDirector } from './audio/AudioDirector';
 import type { AudioEra } from './audio/audio.manifest';
 import { configWith } from './config';
 import { restoreFoundingCharacterMemory } from './historian/FoundingCharacterMemory';
+import { restoreFoundingCastProgress } from './historian/FoundingCast';
+import { restoreFoundingChapterProgress } from './historian/FoundingChapter';
 import { Historian } from './historian/Historian';
 import { PresentationDirector, type PresentationTelemetry } from './historian/PresentationDirector';
 import {
@@ -25,6 +27,7 @@ import { setTransportDebugMode, transportDebugReport, type TransportDebugRecord 
 import { WarChronicle } from './render/war/WarChronicle';
 import { arrivalCaption, foundingArrivalDialogue } from './render/founding/ArrivalPresentation';
 import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
+import { OpeningHandoff } from './sim/founding/OpeningHandoff';
 
 declare global {
   interface Window {
@@ -371,7 +374,13 @@ async function beginObservation(seedOverride?: string): Promise<void> {
 
   const historian = new Historian(simulation.config, { observationNumber: identity.observationNumber,
     crossRunContext: computeCrossRunContext(simulation.state.arrival ? [] : previousRuns) });
-  if (resumable) restoreFoundingCharacterMemory(historian, simulation.state, resumable.historianStatements);
+  if (resumable) {
+    // Rebuild presentation cursors before character memory so a page reload resumes the exact
+    // opening chapter instead of replaying already-recorded orientation or founder portraits.
+    restoreFoundingChapterProgress(historian, simulation.state, resumable.historianStatements);
+    restoreFoundingCastProgress(historian, simulation.state, resumable.historianStatements);
+    restoreFoundingCharacterMemory(historian, simulation.state, resumable.historianStatements);
+  }
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
@@ -401,6 +410,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     };
   }
   const presentation = new PresentationDirector(simulation.config);
+  const openingHandoff = new OpeningHandoff(simulation);
   const framePacing = new FramePacingProfiler();
   window.__godboxPacing = () => presentation.telemetry();
   if (import.meta.env.DEV) {
@@ -492,9 +502,25 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     elapsedSeconds += deltaSeconds;
     const wasHistoryRunning = simulation.historyRunning;
     if (!arrivalPaused && simulation.arrivalFilmRunning) simulation.advanceArrival(deltaSeconds);
+
+    // The first authoritative month is a dedicated bootstrap frame, never an accidental remainder
+    // of the old Day-0 presentation cadence. This also repairs a resumed archive persisted in the
+    // narrow HISTORY_RUNNING/Month-0 window.
+    let bootstrapTickCommitted = false;
+    if (!runEnded && wasHistoryRunning && openingHandoff.pendingFirstTick) {
+      const beforeTick = performance.now();
+      bootstrapTickCommitted = openingHandoff.commitFirstTick(simulation);
+      if (bootstrapTickCommitted) {
+        const tickElapsedMs = performance.now() - beforeTick;
+        tickWorkMs += tickElapsedMs;
+        interactiveTickBudget.observe(tickElapsedMs);
+        accumulator = 0;
+      }
+    }
+
     const arrivalFilm = simulation.arrivalFilmRunning;
-    const beforeHistory = !simulation.historyRunning;
-    setClassIfChanged(worldElement, 'witnessing-arrival', beforeHistory);
+    const openingPresentation = !simulation.historyRunning || openingHandoff.presentationActive(simulation);
+    setClassIfChanged(worldElement, 'witnessing-arrival', openingPresentation);
     if (!arrivalWasRunning && simulation.historyRunning) {
       arrivalWasRunning = true;
       arrivalPaused = false;
@@ -503,7 +529,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     }
     const monthsPerSecond = presentation.update(deltaSeconds, simulation.state, view.observation);
     const tickDuration = 1 / Math.max(0.1, monthsPerSecond);
-    if (simulation.config.autoRun && !runEnded && wasHistoryRunning) {
+    if (simulation.config.autoRun && !runEnded && wasHistoryRunning && !bootstrapTickCommitted) {
       accumulator += deltaSeconds;
       let ticks = 0;
       // Quiet deep time may have backlog, but another atomic month only starts when its recent
@@ -526,14 +552,12 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     pendingTickBacklog = tickDuration > 0 ? accumulator / tickDuration : 0;
     view.update(deltaSeconds, elapsedSeconds);
 
-    // The simulation remains at Month 0 through the entire orientation/cast sequence. The camera
-    // owns the final release shot and explicitly signals when that presentation has actually ended.
-    // Only then may authoritative monthly history begin.
-    if (simulation.foundingOrientationRunning && view.foundingPresentationComplete()) {
-      if (simulation.beginHistory()) accumulator = 0;
-    }
+    // The simulation remains at Month 0 through the entire orientation/cast sequence. Camera
+    // completion opens the authority gate, but the ordinary historical HUD stays withheld until
+    // OpeningHandoff commits Month 1 on the following live frame.
+    if (openingHandoff.beginIfReady(simulation, view.foundingPresentationComplete())) accumulator = 0;
     const historyRunningNow = simulation.historyRunning;
-    const beforeHistoryNow = !historyRunningNow;
+    const beforeHistoryNow = !historyRunningNow || openingHandoff.pendingFirstTick;
 
     const foundingDialogue = !arrivalFilm
       ? foundingArrivalDialogue(view.observation.sceneId, view.observation.label, view.observation.detail)

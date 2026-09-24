@@ -1045,20 +1045,42 @@ export class CameraDirector {
     }
 
     this.shotAge += deltaSeconds;
-    const majorEvent = this.findMajorEvent(state);
+
+    // The final Arrival-Day release is an authority barrier, not just another editorial card.
+    // Finish that shot first, signal main, and keep the lens on the acquired release composition
+    // until Simulation.beginHistory() has crossed the authoritative boundary. This guarantees that
+    // the first post-opening Historian destination is selected from live history rather than from
+    // a stale Month-0 orientation state.
+    const finalRelease = isFoundingReleaseScene(this.currentScene?.id);
+    const justCompletedFoundingRelease = Boolean(
+      finalRelease && !this.foundingPresentationDone && this.shotAge >= this.shotDuration,
+    );
+    if (justCompletedFoundingRelease) {
+      this.foundingPresentationDone = true;
+      this.shotAge = this.shotDuration;
+      this.positionVelocity.multiplyScalar(0.82);
+      this.targetVelocity.multiplyScalar(0.82);
+    }
+    const awaitingHistoryAuthority = Boolean(
+      this.foundingPresentationDone && state.arrival?.phase === 'FOUNDING_ORIENTATION',
+    );
+
+    const majorEvent = awaitingHistoryAuthority ? undefined : this.findMajorEvent(state);
     const readableMinimum = this.currentScene?.id.startsWith('human:') ? 14
       : isPersonalCameraKind(this.currentScene?.kind) ? 10
         : 6;
     const mayInterrupt = this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
-    if (!this.currentScene || (majorEvent && mayInterrupt)) {
-      if (majorEvent) this.acknowledgedMajorEventIds.add(majorEvent.id);
-      if (this.acknowledgedMajorEventIds.size > 2048) {
-        const oldest = this.acknowledgedMajorEventIds.values().next().value as string | undefined;
-        if (oldest) this.acknowledgedMajorEventIds.delete(oldest);
+    if (!justCompletedFoundingRelease && !awaitingHistoryAuthority) {
+      if (!this.currentScene || (majorEvent && mayInterrupt)) {
+        if (majorEvent) this.acknowledgedMajorEventIds.add(majorEvent.id);
+        if (this.acknowledgedMajorEventIds.size > 2048) {
+          const oldest = this.acknowledgedMajorEventIds.values().next().value as string | undefined;
+          if (oldest) this.acknowledgedMajorEventIds.delete(oldest);
+        }
+        this.chooseShot(state, elevationAt, majorEvent?.id);
+      } else if (this.shotAge >= this.shotDuration) {
+        this.chooseShot(state, elevationAt);
       }
-      this.chooseShot(state, elevationAt, majorEvent?.id);
-    } else if (this.shotAge >= this.shotDuration) {
-      this.chooseShot(state, elevationAt);
     }
 
     if (this.flight) {
@@ -1522,8 +1544,8 @@ export class CameraDirector {
 
   private releaseFoundingOverlayForTransit(): void {
     // The authored founding card has finished. Do not leave its narration pinned to the screen
-    // while the camera physically travels to the next scene.
-    if (this.observation.sceneId?.startsWith('founding-release:')) this.foundingPresentationDone = true;
+    // while the camera physically travels to the next scene. Founding completion is signalled by
+    // the release-shot barrier above, never by selecting a destination scene.
     delete this.observation.sceneId;
     delete this.observation.statement;
     this.observation.label = 'The first day';

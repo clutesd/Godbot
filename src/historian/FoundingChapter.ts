@@ -1,6 +1,6 @@
 import { isFoundingPresentationPhase } from '../sim/founding/FoundingArrival';
 import type { SimulationState, Vec2 } from '../sim/types';
-import type { ObservationCandidate } from './types';
+import type { HistorianStatement, ObservationCandidate } from './types';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
 
@@ -112,8 +112,8 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
 
 function holdFoundingChapter(historian: Historian, state: SimulationState, memory: FoundingChapterMemory): void {
   void historian; void state; void memory;
-  // Arrival Day already owns the frozen cinematic prologue. Post-arrival orientation now rides
-  // over live, deliberately slow history instead of stopping the simulation for a second prologue.
+  // Monthly authority is intentionally frozen by Simulation until the entire orientation/cast
+  // presentation has completed. This hook remains presentation-only.
 }
 
 /**
@@ -230,6 +230,15 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
   if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
   const memory = memories.get(historian);
   const totalBeats = 1;
+  // A resumed run that already crossed into HISTORY_RUNNING must never replay the opening merely
+  // because WeakMap presentation memory was recreated with the page.
+  if (!memory && state.arrival?.phase === 'HISTORY_RUNNING') return {
+    phase: 'complete',
+    nextBeat: 1,
+    totalBeats,
+    startedMonth: baseline.eventMonth,
+    baseline,
+  };
   if (memory) return {
     phase: memory.complete ? 'complete' : 'orientation',
     nextBeat: memory.nextBeat,
@@ -252,6 +261,7 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
   }
 
   let memory = memories.get(historian);
+  if (!memory && state.arrival.phase === 'HISTORY_RUNNING') return undefined;
   if (!memory) {
     const baseline = foundingChapterBaseline(state);
     if (!baseline || state.month > baseline.eventMonth) {
@@ -281,6 +291,32 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
 
   releaseFoundingChapterHold(historian, state);
   return undefined;
+}
+
+/**
+ * Restores the Day-0 orientation cursor from archived Historian statements after a page reload.
+ * Only FOUNDING_ORIENTATION uses this cursor; a run already in HISTORY_RUNNING never replays 1a.
+ */
+export function restoreFoundingChapterProgress(
+  historian: Historian,
+  state: SimulationState,
+  statements: readonly HistorianStatement[],
+): void {
+  if (state.arrival?.phase !== 'FOUNDING_ORIENTATION') return;
+  const baseline = foundingChapterBaseline(state);
+  if (!baseline) return;
+  const progressed = statements.some(statement =>
+    statement.id === `founding-overview-${baseline.eventId}`
+    || statement.id.startsWith('founding-cast-introduction-')
+    || statement.id === `founding-release-${baseline.eventId}`,
+  );
+  if (!progressed) return;
+  memories.set(historian, {
+    nextBeat: 1,
+    complete: true,
+    startedMonth: baseline.eventMonth,
+    baseline,
+  });
 }
 
 export function isFoundingChapterScene(scene: ObservationCandidate): boolean {

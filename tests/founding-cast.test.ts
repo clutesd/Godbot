@@ -5,11 +5,13 @@ import {
   foundingCastProgress,
   foundingDocumentaryCast,
   installFoundingCastPacing,
+  restoreFoundingCastProgress,
 } from '../src/historian/FoundingCast';
 import {
   chooseFoundingChapterScene,
   foundingChapterBaseline,
   foundingChapterProgress,
+  restoreFoundingChapterProgress,
 } from '../src/historian/FoundingChapter';
 import { Historian } from '../src/historian/Historian';
 import { PresentationDirector } from '../src/historian/PresentationDirector';
@@ -98,6 +100,51 @@ describe('Founding documentary cast 2a', () => {
     expect(release?.statement.text).toBe('The first day continues.');
     expect(release?.kind).toBe('street-observation');
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('complete');
+  });
+
+  it('resumes midway through founder introductions without replaying completed beats', () => {
+    const simulation = completedArrival('founding-cast-resume-cursor');
+    const firstHistorian = new Historian(simulation.config);
+    completeOrientation(simulation, firstHistorian);
+    const cast = foundingDocumentaryCast(simulation.state);
+
+    const firstPortrait = chooseFoundingCastScene(firstHistorian, simulation.state);
+    expect(firstPortrait?.subjectId).toBe(cast[0]?.personId);
+    const archived = [...firstHistorian.statements];
+
+    const resumedHistorian = new Historian(simulation.config);
+    restoreFoundingChapterProgress(resumedHistorian, simulation.state, archived);
+    restoreFoundingCastProgress(resumedHistorian, simulation.state, archived);
+
+    expect(foundingChapterProgress(resumedHistorian, simulation.state).phase).toBe('complete');
+    expect(foundingCastProgress(resumedHistorian, simulation.state).introducedPersonIds)
+      .toEqual([cast[0]!.personId]);
+
+    const nextPortrait = chooseFoundingCastScene(resumedHistorian, simulation.state);
+    expect(nextPortrait?.subjectId).toBe(cast[1]?.personId);
+    expect(nextPortrait?.id).toContain('founding-cast:introduction:1:');
+  });
+
+  it('replays only the final release after a reload that occurred during its camera hold', () => {
+    const simulation = completedArrival('founding-cast-release-resume');
+    const firstHistorian = new Historian(simulation.config);
+    completeOrientation(simulation, firstHistorian);
+    const cast = foundingDocumentaryCast(simulation.state);
+    for (let index = 0; index < cast.length; index += 1) {
+      expect(chooseFoundingCastScene(firstHistorian, simulation.state)?.subjectId).toBe(cast[index]!.personId);
+    }
+    expect(chooseFoundingCastScene(firstHistorian, simulation.state)?.id).toContain('founding-release:');
+    const archived = [...firstHistorian.statements];
+
+    const resumedHistorian = new Historian(simulation.config);
+    restoreFoundingChapterProgress(resumedHistorian, simulation.state, archived);
+    restoreFoundingCastProgress(resumedHistorian, simulation.state, archived);
+
+    const progress = foundingCastProgress(resumedHistorian, simulation.state);
+    expect(progress.introducedPersonIds).toEqual(cast.map(member => member.personId));
+    const replayedRelease = chooseFoundingCastScene(resumedHistorian, simulation.state);
+    expect(replayedRelease?.id).toContain('founding-release:');
+    expect(chooseFoundingCastScene(resumedHistorian, simulation.state)).toBeUndefined();
   });
 
   it('keeps portraits cinematic while authoritative history remains frozen at Day 0', () => {

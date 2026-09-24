@@ -171,8 +171,18 @@ describe('Founding Chapter 1b continuity', () => {
     expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('uses a deliberate first-year pace without freezing authoritative history', () => {
-    const simulation = completedArrival('founding-continuity-pacing');
+  it('uses a deliberate first-year pace after the frozen opening hands off authority', () => {
+    // Exercise the real production order: 1a belongs to FOUNDING_ORIENTATION, then 1b belongs to
+    // live history. A fresh Historian must never manufacture the opening again after beginHistory().
+    const simulation = new Simulation({
+      seed: 'founding-continuity-pacing',
+      startMode: 'arrival',
+      world: { size: 64 },
+    });
+    simulation.advanceArrival(80);
+    expect(simulation.foundingOrientationRunning).toBe(true);
+    expect(simulation.historyRunning).toBe(false);
+
     const historian = new Historian(simulation.config);
     const originalAutoRun = simulation.config.autoRun;
     installFoundingChapterPacing();
@@ -182,6 +192,7 @@ describe('Founding Chapter 1b continuity', () => {
     const orientation = chooseFoundingChapterScene(historian, simulation.state);
     expect(orientation).toBeDefined();
     expect(simulation.config.autoRun).toBe(originalAutoRun);
+    expect(simulation.state.month).toBe(0);
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
     expect(presentation.targetSpeed(simulation.state, {
       kind: orientation!.kind,
@@ -191,6 +202,9 @@ describe('Founding Chapter 1b continuity', () => {
     })).toBeCloseTo(0.08, 5);
 
     completeOrientation(simulation, historian);
+    expect(simulation.beginHistory()).toBe(true);
+    expect(simulation.historyRunning).toBe(true);
+
     const bridge = chooseFoundingContinuityScene(historian, simulation.state);
     expect(bridge).toBeDefined();
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);

@@ -94,7 +94,7 @@ describe('cinematic motion', () => {
     expect(sawDeparture).toBe(true);
   });
 
-  it('signals founding completion when the final release hands directly to an adjacent normal shot', () => {
+  it('finishes the final release before requesting any post-opening destination', () => {
     const sim = new Simulation({ seed: 'founding-release-adjacent', startMode: 'established',
       startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
     sim.state.arrival = undefined;
@@ -104,7 +104,7 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
-    vi.spyOn(historian, 'chooseScene')
+    const choose = vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce({
         ...template,
         id: 'founding-release:event-1',
@@ -125,12 +125,68 @@ describe('cinematic motion', () => {
     expect(director.observation.sceneId).toBe('founding-release:event-1');
     expect(director.foundingPresentationComplete()).toBe(false);
 
-    for (let frame = 1; frame < 60 * 16 && !director.foundingPresentationComplete(); frame++) {
+    let frame = 1;
+    for (; frame < 60 * 16 && !director.foundingPresentationComplete(); frame++) {
       director.update(1 / 60, frame / 60, sim.state, () => 0);
     }
 
+    // Completion belongs to the release shot itself. No ordinary scene may be selected merely to
+    // create the completion signal.
     expect(director.foundingPresentationComplete()).toBe(true);
-    expect(director.observation.sceneId).not.toBe('founding-release:event-1');
+    expect(director.observation.sceneId).toBe('founding-release:event-1');
+    expect(choose).toHaveBeenCalledTimes(1);
+
+    director.update(1 / 60, frame / 60, sim.state, () => 0);
+    expect(choose).toHaveBeenCalledTimes(2);
+    expect(director.flightTelemetry().destinationSceneId).toBe('ordinary:first-day');
+  });
+
+  it('holds the completed release until history authority crosses out of FOUNDING_ORIENTATION', () => {
+    const sim = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival', autoRun: true,
+      startingPopulation: 24 });
+    sim.advanceArrival(120);
+    expect(sim.foundingOrientationRunning).toBe(true);
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce({
+        ...template,
+        id: 'founding-release:event-1',
+        kind: 'street-observation',
+        position: { x: 0, z: 0 },
+        title: 'THE FIRST DAY',
+      })
+      .mockReturnValue({
+        ...template,
+        id: 'ordinary:first-month',
+        kind: 'street-observation',
+        position: { x: 0, z: 0 },
+        title: 'The first month',
+      });
+
+    const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+
+    let frame = 1;
+    for (; frame < 60 * 16 && !director.foundingPresentationComplete(); frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+    }
+    expect(director.foundingPresentationComplete()).toBe(true);
+    expect(choose).toHaveBeenCalledTimes(1);
+    expect(director.observation.sceneId).toBe('founding-release:event-1');
+
+    // Even many extra presentation frames cannot leak into a Month-0 continuity scene.
+    for (let hold = 0; hold < 120; hold++, frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+    }
+    expect(choose).toHaveBeenCalledTimes(1);
+    expect(director.observation.sceneId).toBe('founding-release:event-1');
+
+    expect(sim.beginHistory()).toBe(true);
+    director.update(1 / 60, frame / 60, sim.state, () => 0);
+    expect(choose).toHaveBeenCalledTimes(2);
+    expect(director.flightTelemetry().destinationSceneId).toBe('ordinary:first-month');
   });
 
   it('abandons an impossible physical route instead of trapping the documentary forever', () => {
