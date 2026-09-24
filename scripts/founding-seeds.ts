@@ -4,7 +4,7 @@ import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssign
 
 export function foundingSeed(seed: string, months = 60) {
   const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
-  simulation.advanceArrival(60);
+  simulation.advanceArrival(80);
   const reports = simulation.state.arrival!.pods.map(pod => ({ seed, landing: pod.name, id: pod.settlementId!,
     firstShelter: null as number | null, winterCoverage: 0, firstDwelling: null as number | null,
     foundersYear1: 0, foundersYear5: 0, residentsYear5: 0, extractedTimber: 0,
