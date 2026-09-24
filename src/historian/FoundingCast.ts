@@ -152,7 +152,8 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
   return memory;
 }
 
-function holdIntroduction(_historian: Historian, state: SimulationState, _memory: FoundingCastMemory): void {
+function holdIntroduction(historian: Historian, state: SimulationState, memory: FoundingCastMemory): void {
+  void historian; void memory;
   // Keep the portrait pacing marker, but let authoritative history continue beneath the shot.
   pacedStates.add(state);
 }
