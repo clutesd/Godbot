@@ -478,6 +478,33 @@ describe('Social body language', () => {
     expect(tense.leftElbowRotation + tense.rightElbowRotation).toBeGreaterThan(quiet.leftElbowRotation + quiet.rightElbowRotation);
     expect(new Set([warm.name, quiet.name, teaching.name, tense.name]).size).toBeGreaterThanOrEqual(3);
   });
+  it('adds coherent one-shot wave and laugh microgestures without looping them', () => {
+    const controller = new AnimationController('social-microgestures');
+
+    controller.getOrCreateCharacterState('waver', 'artisan');
+    controller.updateCharacterAnimation('waver', 0.02, 'socialize', 'social-wave', 0);
+    expect(controller.getCurrentPose('waver')!.rightShoulderRotation).toBeLessThan(0.4);
+    let peakWave = 0;
+    for (let frame = 0; frame < 24; frame++) {
+      controller.updateCharacterAnimation('waver', 0.04, 'socialize', 'social-wave', 0);
+      peakWave = Math.max(peakWave, controller.getCurrentPose('waver')!.rightShoulderRotation);
+    }
+    expect(peakWave).toBeGreaterThan(0.65);
+    for (let frame = 0; frame < 40; frame++) controller.updateCharacterAnimation('waver', 0.04, 'socialize', 'social-wave', 0);
+    expect(controller.getCurrentPose('waver')!.name).toBe('wave-return');
+
+    controller.getOrCreateCharacterState('laugher', 'artisan');
+    controller.updateCharacterAnimation('laugher', 0.02, 'socialize', 'social-laugh', 0);
+    expect(controller.getCurrentPose('laugher')!.spineRotation).toBeLessThan(0.08);
+    let peakLaughLean = 0;
+    for (let frame = 0; frame < 18; frame++) {
+      controller.updateCharacterAnimation('laugher', 0.04, 'socialize', 'social-laugh', 0);
+      peakLaughLean = Math.max(peakLaughLean, controller.getCurrentPose('laugher')!.spineRotation);
+    }
+    expect(peakLaughLean).toBeGreaterThan(0.09);
+    for (let frame = 0; frame < 32; frame++) controller.updateCharacterAnimation('laugher', 0.04, 'socialize', 'social-laugh', 0);
+    expect(controller.getCurrentPose('laugher')!.name).toBe('laugh-recover');
+  });
 });
 
 describe('Animation integration', () => {
