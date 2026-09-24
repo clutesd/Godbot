@@ -20,6 +20,7 @@ import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
+import { ReactionGlyphRenderer } from './people/ReactionGlyphRenderer';
 import { HumanLifeClock } from './people/HumanLifeClock';
 import { RestPoseRenderer } from './people/RestPoseRenderer';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
@@ -235,6 +236,7 @@ export class GodboxRenderer {
   /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
   private readonly humanLifeClock = new HumanLifeClock();
   private readonly firstFirePresentation: FoundingFirstFirePresentation;
+  private readonly reactionGlyphs: ReactionGlyphRenderer;
   private readonly localActivities = new LocalActivityPresentation();
   private readonly localPeers = new Map<string, Person>();
   private readonly localPeerPositions = new Map<string, Vec2>();
@@ -387,6 +389,7 @@ export class GodboxRenderer {
   constructor(private readonly host: HTMLElement, private readonly config: GodboxConfig, private readonly state: SimulationState, historian: Historian) {
     this.random = new SeededRandom(`${config.seed}:visuals`);
     this.firstFirePresentation = new FoundingFirstFirePresentation(state);
+    this.reactionGlyphs = new ReactionGlyphRenderer(`${config.seed}:reaction-glyphs`);
     this.animationController = new AnimationController(`${config.seed}:humanoid-animation`);
     this.assetBuilder = new AssetBuilder(`${config.seed}:asset-builder`);
     this.terrainQueries = new TerrainQueries(state.world);
@@ -498,7 +501,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.peopleCargo.frustumCulled = false;
-    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles, this.restPoses.group);
+    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -664,6 +667,7 @@ export class GodboxRenderer {
     this.resourceWorkers.group.visible = visible;
     this.physicalWorkers.group.visible = visible;
     this.restPoses.group.visible = visible;
+    this.reactionGlyphs.group.visible = visible;
   }
 
   private setupLights(): void {
@@ -826,6 +830,9 @@ export class GodboxRenderer {
     this.vegetation.beginResourceImpacts();
     this.peopleVisuals.beginFrame();
     this.localActivities.beginFrame();
+    const reactionSeriousShot = this.observation.audioCategory === 'conflict' || this.observation.audioCategory === 'tragedy';
+    this.reactionGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.cameraDirector.current()?.subjectId,
+      reactionSeriousShot, this.reducedMotion.matches);
     this.localPeers.clear();
     for (const person of this.visiblePeople) if (person.alive) {
       this.localPeers.set(person.id, person);
@@ -1022,6 +1029,9 @@ export class GodboxRenderer {
         heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, headFacing, 0);
       this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
+      this.reactionGlyphs.track(person.id, this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale);
+      this.reactionGlyphs.consider(person.id, { person, local, firstFire: firstFireStanding ? firstFire : undefined,
+        resourceKind: working ? worker?.site.profile.kind : undefined, seriousShot: reactionSeriousShot });
       const legScale = detailed && (!articulated || physical && !physicalStanding) ? heightScale : 0.001;
       this.setLimbInstance(index * 2, display.x, footY, display.z, legScale, heightScale, facing, -0.049 * buildScale * heightScale, 0.45, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
       this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.049 * buildScale * heightScale, 0.45, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
@@ -1076,6 +1086,7 @@ export class GodboxRenderer {
       }
     }
     this.peopleMantles.count = mantles;
+    this.reactionGlyphs.endFrame();
     this.cosmicAccents.endFrame();
     for (const variation of this.cosmicVariations) variation.needsUpdate = true;
     this.resourceWorkers.endFrame();
@@ -3859,6 +3870,7 @@ export class GodboxRenderer {
     this.weatherRenderer.dispose();
     this.peopleVisuals.clear();
     this.localActivities.clear();
+    this.reactionGlyphs.dispose();
     this.localPeers.clear();
     this.localPeerPositions.clear();
     this.animationController.dispose();
