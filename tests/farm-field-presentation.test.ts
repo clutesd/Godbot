@@ -112,9 +112,9 @@ describe('farm field visual polish', () => {
     const rows = rowMesh.geometry.getAttribute('position');
     const rowGroundOffsets = Array.from({ length: rows.count }, (_, index) =>
       rows.getY(index) - heightAt(rows.getX(index), rows.getZ(index)));
-    expect(Math.min(...rowGroundOffsets)).toBeGreaterThan(0.006);
-    expect(Math.max(...rowGroundOffsets)).toBeLessThan(0.023);
-    expect(Math.max(...rowGroundOffsets) - Math.min(...rowGroundOffsets)).toBeGreaterThan(0.01);
+    expect(Math.min(...rowGroundOffsets)).toBeGreaterThan(0.009);
+    expect(Math.max(...rowGroundOffsets)).toBeLessThan(0.036);
+    expect(Math.max(...rowGroundOffsets) - Math.min(...rowGroundOffsets)).toBeGreaterThan(0.02);
 
     const normals = rowMesh.geometry.getAttribute('normal');
     expect(normals.count).toBe(rows.count);
