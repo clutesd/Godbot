@@ -109,7 +109,8 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
   return new Set(signatures).size > 1;
 }
 
-function holdFoundingChapter(_historian: Historian, _state: SimulationState, _memory: FoundingChapterMemory): void {
+function holdFoundingChapter(historian: Historian, state: SimulationState, memory: FoundingChapterMemory): void {
+  void historian; void state; void memory;
   // Arrival Day already owns the frozen cinematic prologue. Post-arrival orientation now rides
   // over live, deliberately slow history instead of stopping the simulation for a second prologue.
 }
@@ -118,7 +119,8 @@ function holdFoundingChapter(_historian: Historian, _state: SimulationState, _me
  * Release the presentation hold after the final 1a shot. This is exported so the outer 1b wrapper
  * can hand off directly without requiring a dummy Historian scene selection in between.
  */
-export function releaseFoundingChapterHold(_historian: Historian, _state: SimulationState): void {
+export function releaseFoundingChapterHold(historian: Historian, state: SimulationState): void {
+  void historian; void state;
   // Compatibility hook for the cast layer; no clock mutation is required anymore.
 }
 
