@@ -54,15 +54,9 @@ interface FoundingChapterMemory {
   complete: boolean;
   startedMonth: number;
   baseline: FoundingChapterBaseline;
-  autoRunBeforeOrientation?: boolean;
-}
-
-interface HistorianConfigAccess {
-  config: { autoRun: boolean };
 }
 
 const memories = new WeakMap<Historian, FoundingChapterMemory>();
-const frozenStates = new WeakSet<SimulationState>();
 let pacingInstalled = false;
 let chapterInstalled = false;
 
@@ -115,27 +109,17 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
   return new Set(signatures).size > 1;
 }
 
-function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
-  return (historian as unknown as HistorianConfigAccess).config;
-}
-
-function holdFoundingChapter(historian: Historian, state: SimulationState, memory: FoundingChapterMemory): void {
-  const config = historianConfig(historian);
-  if (memory.autoRunBeforeOrientation === undefined) memory.autoRunBeforeOrientation = config.autoRun;
-  config.autoRun = false;
-  frozenStates.add(state);
+function holdFoundingChapter(_historian: Historian, _state: SimulationState, _memory: FoundingChapterMemory): void {
+  // Arrival Day already owns the frozen cinematic prologue. Post-arrival orientation now rides
+  // over live, deliberately slow history instead of stopping the simulation for a second prologue.
 }
 
 /**
  * Release the presentation hold after the final 1a shot. This is exported so the outer 1b wrapper
  * can hand off directly without requiring a dummy Historian scene selection in between.
  */
-export function releaseFoundingChapterHold(historian: Historian, state: SimulationState): void {
-  frozenStates.delete(state);
-  const memory = memories.get(historian);
-  if (!memory || memory.autoRunBeforeOrientation === undefined) return;
-  historianConfig(historian).autoRun = memory.autoRunBeforeOrientation;
-  delete memory.autoRunBeforeOrientation;
+export function releaseFoundingChapterHold(_historian: Historian, _state: SimulationState): void {
+  // Compatibility hook for the cast layer; no clock mutation is required anymore.
 }
 
 /**
@@ -300,10 +284,7 @@ export function isFoundingChapterScene(scene: ObservationCandidate): boolean {
   return scene.id.startsWith('founding:');
 }
 
-/**
- * tickBudget=0 is a defensive backstop for direct PresentationDirector users. In the app, autoRun
- * is also held false so the frame accumulator cannot build a catch-up burst during the prologue.
- */
+/** Post-arrival orientation slows history through targetSpeed but never freezes the clock. */
 export function installFoundingChapterPacing(): void {
   if (pacingInstalled) return;
   pacingInstalled = true;
@@ -317,14 +298,6 @@ export function installFoundingChapterPacing(): void {
     return targetSpeed.call(this, state, observation);
   };
 
-  const tickBudget = PresentationDirector.prototype.tickBudget;
-  PresentationDirector.prototype.tickBudget = function foundingTickBudget(
-    this: PresentationDirector,
-    state: Parameters<typeof tickBudget>[0],
-  ): number {
-    if (frozenStates.has(state)) return 0;
-    return tickBudget.call(this, state);
-  };
 }
 
 /**
