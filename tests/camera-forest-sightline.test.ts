@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { CameraDirector, cameraClearanceFor, cameraFramingFor, cameraLensObstruction, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, interactionCameraComposition, resolveCameraSafety, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { CameraDirector, cameraClearanceFor, cameraFlightProfileFor, cameraFramingFor, cameraLensObstruction, cameraMotionProgressFor, cameraShotPacingFor, cameraTargetFloorFor, cameraTransitionScaleFor, forestSightlineObstruction, foundingCastShotProfileFor, foundingEditorialTimingFor, foundingLandingShotProfileFor, isFoundingReleaseScene, isPersonalCameraKind, interactionCameraComposition, resolveCameraSafety, resolveFoundingSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import { Historian } from '../src/historian/Historian';
 import type { PhysicalActionPresentation } from '../src/render/people/PhysicalActionPresentation';
@@ -300,6 +300,32 @@ describe('human-scale documentary camera framing', () => {
     expect(street.height[0]).toBeLessThanOrEqual(1.25);
   });
 
+  it('uses deliberate settle and finish holds instead of moving for the whole shot', () => {
+    const pacing = cameraShotPacingFor('worker-follow');
+    expect(pacing.settleHoldFraction).toBeGreaterThanOrEqual(0.18);
+    expect(pacing.finishHoldFraction).toBeGreaterThanOrEqual(0.22);
+    expect(pacing.motionFraction).toBeLessThan(0.6);
+
+    expect(cameraMotionProgressFor('worker-follow', 2, 12)).toBe(0);
+    const middle = cameraMotionProgressFor('worker-follow', 6, 12);
+    expect(middle).toBeGreaterThan(0);
+    expect(middle).toBeLessThan(1);
+    expect(cameraMotionProgressFor('worker-follow', 10.5, 12)).toBe(1);
+  });
+
+  it('flies into personal scenes lower and slower than wide documentary moves', () => {
+    const personal = cameraFlightProfileFor('worker-follow', 30);
+    const wide = cameraFlightProfileFor('world-establishing', 30);
+
+    expect(isPersonalCameraKind('worker-follow')).toBe(true);
+    expect(isPersonalCameraKind('world-establishing')).toBe(false);
+    expect(personal.limits.maxSpeed).toBeLessThan(wide.limits.maxSpeed);
+    expect(personal.limits.maxAcceleration).toBeLessThan(wide.limits.maxAcceleration);
+    expect(personal.cruiseClearance).toBeLessThan(wide.cruiseClearance);
+    expect(personal.approachFraction).toBeGreaterThan(wide.approachFraction);
+    expect(personal.gazeLimits.maxSpeed).toBeLessThan(wide.gazeLimits.maxSpeed);
+  });
+
   it('allows intimate shots to stay near ground without weakening wide-shot terrain safety', () => {
     const worker = cameraClearanceFor('worker-follow');
     const street = cameraClearanceFor('street-observation');
@@ -309,8 +335,8 @@ describe('human-scale documentary camera framing', () => {
     expect(worker.sightline).toBeLessThan(0.2);
     expect(street.lens).toBeLessThan(0.8);
     expect(cameraTargetFloorFor('worker-follow')).toBeLessThan(0.1);
-    expect(cameraTransitionScaleFor('worker-follow')).toBeGreaterThan(0.7);
-    expect(cameraTransitionScaleFor('worker-follow')).toBeLessThan(0.9);
+    expect(cameraTransitionScaleFor('worker-follow')).toBeGreaterThan(1.1);
+    expect(cameraTransitionScaleFor('worker-follow')).toBeLessThan(1.25);
     expect(wide.lens).toBe(3);
     expect(wide.sightline).toBe(1.6);
     expect(cameraTransitionScaleFor('world-establishing')).toBe(1);
