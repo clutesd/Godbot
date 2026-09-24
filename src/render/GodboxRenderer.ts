@@ -1392,7 +1392,8 @@ export class GodboxRenderer {
         settlement,
       ));
     }
-    const survivalFireActive = foundingHearthBurning(settlement);
+    const firstFireVisual = this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches);
+    const survivalFireActive = foundingHearthBurning(settlement) || firstFireVisual.active;
     if (survivalFireActive) {
       const hearthOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []) ?? { x: 0, z: 1.6 };
       const hearthWorldX = settlement.position.x + hearthOffset.x;
@@ -1401,8 +1402,7 @@ export class GodboxRenderer {
       const rig = createFoundingHearthFlameRig(`${this.config.seed}:${settlement.id}`);
       rig.position.set(hearthOffset.x, groundY, hearthOffset.z);
       rig.userData['survivalFire'] = true;
-      const initial = this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches);
-      rig.scale.set(initial.flameScale * 0.96, initial.flameScale, initial.flameScale * 0.96);
+      rig.scale.set(firstFireVisual.flameScale * 0.96, firstFireVisual.flameScale, firstFireVisual.flameScale * 0.96);
       group.userData['foundingHearthFlameRig'] = rig;
       group.add(rig);
     }
@@ -3133,7 +3133,7 @@ export class GodboxRenderer {
       group.add(infrastructure);
 
       // Once earned, the physical hearth remains even if fuel later runs out.
-      if (foundingHearth && (!foundingOffset || !foundingHearthBurning(settlement))) return entries;
+      if (foundingHearth && (!foundingOffset || (!foundingHearthBurning(settlement) && !initial?.active))) return entries;
       const embers = createFoundingHearthEmbers(visualSeed);
       embers.position.set(hearthOffset.x, groundY + 0.072, hearthOffset.z);
       embers.userData['hearthEmbers'] = true;
