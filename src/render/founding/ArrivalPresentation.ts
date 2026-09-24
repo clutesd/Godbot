@@ -4,7 +4,7 @@ export const WATCHER_LINES = [
   { start: 2.5, end: 8.5, text: 'Before them, only the world.' },
   { start: 13.5, end: 19.5, text: 'Five vessels entered the sky.' },
   { start: 34, end: 40, text: 'Five landings. Five beginnings.' },
-  { start: 73, end: 79, text: 'ARRIVAL DAY' },
+  { start: 66, end: 71, text: 'ARRIVAL DAY' },
 ] as const;
 
 export function arrivalCaption(seconds: number): { text: string; opacity: number } {
@@ -153,7 +153,7 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
   }
 
   const siteStart = 30;
-  const siteSeconds = 8;
+  const siteSeconds = 7;
   const siteCount = arrival.pods.length;
   const siteEnd = siteStart + siteSeconds * siteCount;
   if (siteCount && t < siteEnd) {
@@ -201,7 +201,7 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
     };
   }
 
-  const handoff = smoothstep((t - siteEnd) / Math.max(0.1, 80 - siteEnd));
+  const handoff = smoothstep((t - siteEnd) / Math.max(0.1, 72 - siteEnd));
   const last = arrival.pods[siteCount - 1] ?? hero;
   const lastTarget = { x: last.position.x, y: last.groundY + 0.3, z: last.position.z };
   return {
