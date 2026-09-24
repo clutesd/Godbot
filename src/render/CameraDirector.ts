@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
+import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
@@ -172,9 +173,11 @@ export function cameraTargetFloorFor(kind: ObservationKind | undefined): number 
 }
 
 export function cameraTransitionScaleFor(kind: ObservationKind | undefined): number {
-  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.44;
-  if (kind === 'street-observation') return 0.58;
-  if (kind === 'traveler-follow') return 0.68;
+  // Human-scale tracking still needs to react, but not so aggressively that a moving actor can
+  // whip the lens. Long relocations no longer use this spring at all; CameraFlight owns those.
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.78;
+  if (kind === 'street-observation') return 0.86;
+  if (kind === 'traveler-follow') return 0.9;
   return 1;
 }
 
@@ -572,6 +575,30 @@ export function cameraVisibilityCorridor(
   return true;
 }
 
+
+/**
+ * Physical flight safety deliberately does not require the destination subject to remain visible.
+ * A real drone can cross a ridge or pass behind a building while travelling; the non-negotiable
+ * contract is that the lens itself never enters terrain, structures, vessels or rendered foliage.
+ */
+export function cameraFlightCorridorSafe(
+  state: SimulationState,
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+  lensClearance = 0.72,
+  environmentProbe?: CameraEnvironmentProbe,
+): boolean {
+  const steps = Math.max(1, Math.ceil(from.distanceTo(to) / 0.2));
+  const point = new THREE.Vector3();
+  for (let index = 0; index <= steps; index += 1) {
+    point.lerpVectors(from, to, index / steps);
+    if (point.y < elevationAt(point.x, point.z) + lensClearance - 0.001) return false;
+    if (cameraLensObstruction(state, point, elevationAt, 0.12, environmentProbe) > 0.001) return false;
+  }
+  return true;
+}
+
 /** Hard validity precedes composition cost. Search at cinematic height before any crane escape. */
 export function resolveCameraSafety(
   state: SimulationState, authoredPosition: THREE.Vector3, target: THREE.Vector3,
@@ -728,6 +755,31 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
  */
+export interface CameraFlightTelemetry {
+  readonly active: boolean;
+  readonly phase?: 'depart' | 'cruise' | 'approach';
+  readonly destinationSceneId?: string;
+  readonly startDistance?: number;
+  readonly originHeight?: number;
+  readonly destinationHeight?: number;
+  readonly distance: number;
+  readonly horizontalDistance: number;
+  readonly speed: number;
+  readonly acceleration: number;
+  readonly gazeErrorDegrees: number;
+  readonly cruiseHeight?: number;
+}
+
+interface CameraFlightState {
+  readonly originPosition: THREE.Vector3;
+  readonly destinationPosition: THREE.Vector3;
+  readonly destinationTarget: THREE.Vector3;
+  readonly startDistance: number;
+  readonly limits: CameraFlightLimits;
+  phase: 'depart' | 'cruise' | 'approach';
+  cruiseHeight: number;
+}
+
 export class CameraDirector {
   readonly observation: CurrentObservation = { label: 'The known world', detail: 'A new history begins.', kind: 'world-establishing', interest: 0.1, audioCategory: 'ambient-wilderness', revision: 0 };
   private readonly desiredPosition = new THREE.Vector3();
@@ -735,6 +787,10 @@ export class CameraDirector {
   private readonly lookTarget = new THREE.Vector3();
   private readonly positionVelocity = new THREE.Vector3();
   private readonly targetVelocity = new THREE.Vector3();
+  private readonly flightAcceleration = new THREE.Vector3();
+  private readonly gazeFlightAcceleration = new THREE.Vector3();
+  private flight?: CameraFlightState;
+  private acquiredScene?: ObservationCandidate;
   private routeCheckSeconds = 0;
   private readonly shotBasePosition = new THREE.Vector3();
   private readonly shotBaseTarget = new THREE.Vector3();
@@ -849,6 +905,13 @@ export class CameraDirector {
       this.positionVelocity.multiplyScalar(0.55);
       this.targetVelocity.multiplyScalar(0.55);
     }
+    // Once a destination has been selected, finish the physical flight before making another
+    // editorial decision. Major events remain in Historian memory; they never teleport the lens.
+    if (this.flight) {
+      this.advanceFlight(deltaSeconds, state, elevationAt);
+      return;
+    }
+
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
     const mayInterrupt = this.shotAge >= Math.max(this.currentScene?.id.startsWith('human:') ? 12 : 6, this.config.camera.transitionSeconds * 1.1);
@@ -863,13 +926,18 @@ export class CameraDirector {
       this.chooseShot(state, elevationAt);
     }
 
+    if (this.flight) {
+      this.advanceFlight(deltaSeconds, state, elevationAt);
+      return;
+    }
+
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
 
     const before = this.camera.position.clone();
     if (this.recoveryOffset) this.desiredPosition.copy(this.desiredTarget).add(this.recoveryOffset);
 
-    // Preserve velocity across shots: a new composition eases into motion instead of kicking
-    // immediately to the maximum speed of a first-order lerp.
+    // Local composition changes use the critically damped spring. Large scene-to-scene moves are
+    // handled above by the jerk-limited physical flight controller.
     const editorialTiming = foundingEditorialTimingFor(this.currentScene?.id);
     const transitionSeconds = editorialTiming?.transitionSeconds
       ?? this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
@@ -894,7 +962,6 @@ export class CameraDirector {
   private enforceVisibility(
     before: THREE.Vector3, deltaSeconds: number, state: SimulationState,
     elevationAt: (x: number, z: number) => number, clearance: CameraClearance,
-    preferContinuity = false,
   ): void {
     const subjects: THREE.Vector3[] = [];
     if (this.currentScene && ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(this.currentScene.kind)) {
@@ -915,7 +982,7 @@ export class CameraDirector {
     const beforeValid = corridor || cameraShotValidity(state, before, this.desiredTarget, elevationAt, options).valid;
     if (!corridor && beforeValid) {
       this.camera.position.copy(before);
-      this.positionVelocity.set(0, 0, 0);
+      this.positionVelocity.multiplyScalar(0.28);
     }
     // The actual swept move remains checked every frame. The much longer destination survey
     // needs only four checks a second; repeating it at display frequency multiplies ray work.
@@ -928,30 +995,37 @@ export class CameraDirector {
     if (failed || (!route && beforeValid) || !this.safetyInitialized) {
       const safe = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, options);
       if (safe.valid) {
-        if (safe.position.distanceTo(this.desiredPosition) > 0.001) {
-          this.recoveryOffset = safe.position.clone().sub(this.desiredTarget);
-        }
-        if (safe.requiresCut && preferContinuity && this.safetyInitialized) {
-          // During the authored prologue, an unsafe swept route should pause the move rather than
-          // turn into a visible teleport. The next frames keep searching for a continuous route.
-          this.camera.position.copy(before);
-          this.positionVelocity.multiplyScalar(0.2);
-        } else if (safe.requiresCut || !this.safetyInitialized) {
+        if (!this.safetyInitialized) {
+          // Startup is the one legitimate hard placement: there is no prior physical camera path
+          // to preserve yet.
           this.camera.position.copy(safe.position);
           this.lookTarget.copy(this.desiredTarget);
           this.positionVelocity.set(0, 0, 0);
           this.targetVelocity.set(0, 0, 0);
+          this.recoveryOffset = undefined;
+        } else if (safe.requiresCut) {
+          // Never teleport an established lens. Hold the last valid pose, retire this composition,
+          // and let the next editorial destination be reached through CameraFlight.
+          this.camera.position.copy(before);
+          this.positionVelocity.multiplyScalar(0.32);
+          this.targetVelocity.multiplyScalar(0.65);
+          this.recoveryOffset = undefined;
+          this.shotAge = this.shotDuration;
         } else {
+          if (safe.position.distanceTo(this.desiredPosition) > 0.001) {
+            this.recoveryOffset = safe.position.clone().sub(this.desiredTarget);
+          }
           const next = before.clone().lerp(safe.position, 1 - Math.exp(-deltaSeconds * 4));
           if (cameraVisibilityCorridor(state, before, next, this.desiredTarget, elevationAt, options)) this.camera.position.copy(next);
-          this.positionVelocity.set(0, 0, 0);
+          this.positionVelocity.multiplyScalar(0.55);
         }
         this.safetyInitialized = true;
       } else {
-        // No readable composition exists for this subject: request another documentary shot.
-        // Never advance along a known blocked route or label a least-bad view as safe.
+        // No readable composition exists for this subject: hold safely and request another
+        // destination. The camera remains continuous even when the authored shot is impossible.
         this.camera.position.copy(before);
-        this.positionVelocity.set(0, 0, 0);
+        this.positionVelocity.multiplyScalar(0.25);
+        this.targetVelocity.multiplyScalar(0.65);
         this.shotAge = this.shotDuration;
         this.recoveryOffset = undefined;
       }
@@ -959,7 +1033,54 @@ export class CameraDirector {
   }
 
   current(): ObservationCandidate | undefined {
-    return this.currentScene;
+    // During a flight the documentary still belongs to the last acquired scene. After Arrival there
+    // may not be one yet; returning undefined is preferable to pretending the remote destination has
+    // already been reached.
+    return this.flight ? this.acquiredScene : this.currentScene;
+  }
+
+  flightTelemetry(): CameraFlightTelemetry {
+    const flight = this.flight;
+    if (!flight) {
+      return {
+        active: false,
+        distance: 0,
+        horizontalDistance: 0,
+        speed: this.positionVelocity.length(),
+        acceleration: this.flightAcceleration.length(),
+        gazeErrorDegrees: 0,
+      };
+    }
+
+    this.workingDirection.copy(this.lookTarget).sub(this.camera.position);
+    this.workingTangent.copy(flight.destinationTarget).sub(this.camera.position);
+    let gazeErrorDegrees = 0;
+    if (this.workingDirection.lengthSq() > 1e-8 && this.workingTangent.lengthSq() > 1e-8) {
+      const dot = THREE.MathUtils.clamp(
+        this.workingDirection.normalize().dot(this.workingTangent.normalize()),
+        -1,
+        1,
+      );
+      gazeErrorDegrees = THREE.MathUtils.radToDeg(Math.acos(dot));
+    }
+
+    return {
+      active: true,
+      phase: flight.phase,
+      destinationSceneId: this.currentScene?.id,
+      startDistance: flight.startDistance,
+      originHeight: flight.originPosition.y,
+      destinationHeight: flight.destinationPosition.y,
+      distance: this.camera.position.distanceTo(flight.destinationPosition),
+      horizontalDistance: Math.hypot(
+        this.camera.position.x - flight.destinationPosition.x,
+        this.camera.position.z - flight.destinationPosition.z,
+      ),
+      speed: this.positionVelocity.length(),
+      acceleration: this.flightAcceleration.length(),
+      gazeErrorDegrees,
+      cruiseHeight: flight.cruiseHeight,
+    };
   }
 
   private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
@@ -983,6 +1104,7 @@ export class CameraDirector {
             epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
       }
     }
+
     this.lastHumanShot = scene.id.startsWith('human:');
     this.currentScene = scene;
     this.shotAge = 0;
@@ -990,20 +1112,244 @@ export class CameraDirector {
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
     this.visibility.reset();
+
     const framing = FRAMING[scene.kind];
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
     const releaseScene = isFoundingReleaseScene(scene.id);
     const openingOverview = scene.id.startsWith('founding:overview:');
-    const baseDuration = this.config.camera.shotSeconds[0] + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
+    const baseDuration = this.config.camera.shotSeconds[0]
+      + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
     this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : openingOverview ? 'drift' : this.motionFor(scene));
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
-
     if (scene.id.startsWith('human:')) this.shotDuration = 14;
 
+    const ground = elevationAt(scene.position.x, scene.position.z);
+    this.shotBaseTarget.set(scene.position.x, ground + (foundingProfile?.targetHeight
+      ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight)), scene.position.z);
+
+    // Preserve the physical side of the world the camera is already occupying. A tiny stable
+    // variation avoids mechanical repetition without hashing each scene onto an unrelated compass
+    // direction. Arrival's first Historian overview deliberately keeps the prologue master axis.
+    const radialX = this.camera.position.x - scene.position.x;
+    const radialZ = this.camera.position.z - scene.position.z;
+    const inheritedAzimuth = Math.hypot(radialX, radialZ) > 0.75
+      ? Math.atan2(radialZ, radialX)
+      : this.acquiredScene ? this.shotAzimuth : this.stableAzimuth(scene.id);
+    const continuityVariation = (this.stableUnit(`${scene.id}:continuity-angle`) - 0.5) * 0.22;
+    const baseAzimuth = (openingOverview
+      ? this.stableAzimuth('arrival:master') + 0.02
+      : inheritedAzimuth + continuityVariation)
+      + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
+
+    const radius = foundingProfile?.radius ?? castProfile?.radius
+      ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
+    const height = foundingProfile?.height ?? castProfile?.height
+      ?? (releaseScene ? 3.4 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
+
+    this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
+    this.shotBasePosition.set(
+      scene.position.x + Math.cos(this.shotAzimuth) * radius,
+      ground + height,
+      scene.position.z + Math.sin(this.shotAzimuth) * radius,
+    );
+    this.desiredTarget.copy(this.shotBaseTarget);
+    this.desiredPosition.copy(this.shotBasePosition);
+    this.raiseForTerrain(elevationAt);
+
+    // Validate the endpoint independently from the travel corridor. If the exact authored pose is
+    // inside scenery, choose the nearest readable endpoint now; CameraFlight will still reach it
+    // continuously rather than allowing resolveCameraSafety to teleport there later.
+    const endpointClearance = cameraClearanceFor(scene.kind);
+    const endpoint = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, {
+      lensClearance: endpointClearance.lens,
+      sightlineClearance: endpointClearance.sightline,
+      environmentProbe: this.environmentProbe,
+    });
+    if (endpoint.valid) this.desiredPosition.copy(endpoint.position);
+    this.shotBasePosition.copy(this.desiredPosition);
+
+    const initialStartup = !this.safetyInitialized && !this.acquiredScene && !this.arrivalActive;
+    if (initialStartup) {
+      this.camera.position.copy(this.shotBasePosition);
+      this.lookTarget.copy(this.shotBaseTarget);
+      this.positionVelocity.set(0, 0, 0);
+      this.targetVelocity.set(0, 0, 0);
+      this.safetyInitialized = true;
+      this.acquireCurrentScene();
+      return;
+    }
+
+    const distance = this.camera.position.distanceTo(this.shotBasePosition);
+    if (distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
+      this.acquireCurrentScene();
+      return;
+    }
+    this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
+  }
+
+  private beginFlight(
+    destinationPosition: THREE.Vector3,
+    destinationTarget: THREE.Vector3,
+    elevationAt: (x: number, z: number) => number,
+  ): void {
+    const horizontalDistance = Math.hypot(
+      destinationPosition.x - this.camera.position.x,
+      destinationPosition.z - this.camera.position.z,
+    );
+    const distance = this.camera.position.distanceTo(destinationPosition);
+    const maxSpeed = THREE.MathUtils.clamp(4.4 + distance * 0.075, 4.6, 10.5);
+    const maxAcceleration = distance > 32 ? 2.3 : distance > 14 ? 1.9 : 1.45;
+    const limits: CameraFlightLimits = {
+      maxSpeed,
+      maxAcceleration,
+      maxJerk: distance > 24 ? 6.2 : 5.2,
+      responseSeconds: 0.42,
+    };
+    this.flight = {
+      originPosition: this.camera.position.clone(),
+      destinationPosition: destinationPosition.clone(),
+      destinationTarget: destinationTarget.clone(),
+      startDistance: Math.max(0.001, horizontalDistance),
+      limits,
+      phase: horizontalDistance > 10 ? 'depart' : 'approach',
+      cruiseHeight: this.flightCruiseHeight(destinationPosition, elevationAt),
+    };
+    this.flightAcceleration.set(0, 0, 0);
+    this.gazeFlightAcceleration.set(0, 0, 0);
+    this.recoveryOffset = undefined;
+  }
+
+  private flightCruiseHeight(destination: THREE.Vector3, elevationAt: (x: number, z: number) => number): number {
+    const distance = Math.hypot(destination.x - this.camera.position.x, destination.z - this.camera.position.z);
+    let highestGround = Math.max(
+      elevationAt(this.camera.position.x, this.camera.position.z),
+      elevationAt(destination.x, destination.z),
+    );
+    const samples = Math.max(6, Math.min(18, Math.ceil(distance / 4)));
+    for (let index = 1; index < samples; index += 1) {
+      const amount = index / samples;
+      highestGround = Math.max(highestGround, elevationAt(
+        THREE.MathUtils.lerp(this.camera.position.x, destination.x, amount),
+        THREE.MathUtils.lerp(this.camera.position.z, destination.z, amount),
+      ));
+    }
+    const landscapeClearance = 5.5 + Math.min(6, distance * 0.08);
+    return Math.max(this.camera.position.y, destination.y + 2.5, highestGround + landscapeClearance);
+  }
+
+  private advanceFlight(
+    deltaSeconds: number,
+    state: SimulationState,
+    elevationAt: (x: number, z: number) => number,
+  ): void {
+    const flight = this.flight;
+    if (!flight || !this.currentScene) return;
+
+    const horizontalDistance = Math.hypot(
+      flight.destinationPosition.x - this.camera.position.x,
+      flight.destinationPosition.z - this.camera.position.z,
+    );
+    if (flight.phase === 'depart' && this.camera.position.y >= flight.cruiseHeight - 0.4) flight.phase = 'cruise';
+    // Start the descent while there is still meaningful horizontal travel left. Waiting until the
+    // lens is almost over the destination creates a helicopter-like vertical drop and makes even a
+    // smooth integrator feel late. Long flights get a proportionally larger approach envelope.
+    const approachRadius = THREE.MathUtils.clamp(flight.startDistance * 0.62, 10, 26);
+    if (flight.phase === 'cruise' && horizontalDistance <= approachRadius) flight.phase = 'approach';
+
+    if (flight.phase === 'depart') {
+      // Climb on a forward arc instead of performing a vertical elevator move first.
+      this.desiredPosition.set(
+        THREE.MathUtils.lerp(flight.originPosition.x, flight.destinationPosition.x, 0.32),
+        flight.cruiseHeight,
+        THREE.MathUtils.lerp(flight.originPosition.z, flight.destinationPosition.z, 0.32),
+      );
+    } else if (flight.phase === 'cruise') {
+      this.desiredPosition.set(flight.destinationPosition.x, flight.cruiseHeight, flight.destinationPosition.z);
+    } else {
+      this.desiredPosition.copy(flight.destinationPosition);
+    }
+
+    if (flight.phase === 'approach') {
+      this.desiredTarget.copy(flight.destinationTarget);
+    } else {
+      const dx = flight.destinationPosition.x - this.camera.position.x;
+      const dz = flight.destinationPosition.z - this.camera.position.z;
+      const length = Math.max(0.001, Math.hypot(dx, dz));
+      const ahead = THREE.MathUtils.clamp(horizontalDistance * 0.34, 6, 16);
+      const x = this.camera.position.x + dx / length * ahead;
+      const z = this.camera.position.z + dz / length * ahead;
+      const terrain = elevationAt(x, z);
+      // Look along the route, not instantly at the remote subject. This keeps yaw/pitch changes
+      // physically coupled to the flight instead of snapping the gaze across the world.
+      this.desiredTarget.set(x, Math.max(terrain + 1.4, Math.min(this.camera.position.y - 0.8, flight.destinationTarget.y + 4)), z);
+    }
+
+    const before = this.camera.position.clone();
+    advanceCameraFlight(
+      this.camera.position,
+      this.positionVelocity,
+      this.flightAcceleration,
+      this.desiredPosition,
+      deltaSeconds,
+      flight.limits,
+    );
+    advanceCameraFlight(
+      this.lookTarget,
+      this.targetVelocity,
+      this.gazeFlightAcceleration,
+      this.desiredTarget,
+      deltaSeconds,
+      { maxSpeed: 9, maxAcceleration: 4.8, maxJerk: 16, responseSeconds: 0.34 },
+    );
+
+    const departureClearance = cameraClearanceFor(this.acquiredScene?.kind).lens;
+    const destinationClearance = cameraClearanceFor(this.currentScene.kind).lens;
+    const flightClearance = Math.max(0.42, Math.min(1.2, departureClearance, destinationClearance));
+    if (!cameraFlightCorridorSafe(state, before, this.camera.position, elevationAt, flightClearance, this.environmentProbe)) {
+      // Never cross geometry to preserve a schedule. Return to the last valid frame, bleed momentum,
+      // and climb into a new continuous route on the next frame.
+      this.camera.position.copy(before);
+      this.positionVelocity.multiplyScalar(0.2);
+      this.flightAcceleration.set(0, 0, 0);
+      flight.cruiseHeight += 1.4;
+      flight.phase = 'depart';
+    }
+
+    this.camera.lookAt(this.lookTarget);
+
+    this.workingDirection.copy(this.lookTarget).sub(this.camera.position).normalize();
+    this.workingTangent.copy(flight.destinationTarget).sub(this.camera.position).normalize();
+    const gazeAcquired = this.workingDirection.dot(this.workingTangent) >= Math.cos(THREE.MathUtils.degToRad(9));
+
+    if (flight.phase === 'approach'
+      && cameraFlightSettled(this.camera.position, this.positionVelocity, flight.destinationPosition, 0.65)
+      && gazeAcquired) {
+      this.flight = undefined;
+      this.flightAcceleration.set(0, 0, 0);
+      this.gazeFlightAcceleration.set(0, 0, 0);
+      this.positionVelocity.multiplyScalar(0.72);
+      this.targetVelocity.multiplyScalar(0.72);
+      this.acquireCurrentScene();
+    }
+  }
+
+  private acquireCurrentScene(): void {
+    if (!this.currentScene) return;
+    this.acquiredScene = this.currentScene;
+    this.commitObservation(this.currentScene);
+    this.shotAge = 0;
+    this.trackingInitialized = false;
+    this.routeCheckSeconds = 0;
+    this.recoveryOffset = undefined;
+    this.visibility.reset();
+    this.safetyInitialized = true;
+  }
+
+  private commitObservation(scene: ObservationCandidate): void {
     this.observation.sceneId = scene.id;
     this.observation.label = scene.title;
     this.observation.detail = scene.statement.text;
@@ -1019,22 +1365,6 @@ export class CameraDirector {
       delete this.observation.eventMonth;
     }
     this.observation.revision += 1;
-
-    const ground = elevationAt(scene.position.x, scene.position.z);
-    // The first Historian shot inherits Arrival's screen direction so the title resolves into the
-    // documentary instead of visibly starting a second camera system.
-    const baseAzimuth = (openingOverview ? this.stableAzimuth('arrival:master') + 0.02 : this.stableAzimuth(scene.id))
-      + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
-    const radius = foundingProfile?.radius ?? castProfile?.radius ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
-    const height = foundingProfile?.height ?? castProfile?.height ?? (releaseScene ? 3.4 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
-    const targetHeight = foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight);
-    this.shotBaseTarget.set(scene.position.x, ground + targetHeight, scene.position.z);
-    this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
-    this.shotBasePosition.set(scene.position.x + Math.cos(this.shotAzimuth) * radius, ground + height, scene.position.z + Math.sin(this.shotAzimuth) * radius);
-    this.desiredTarget.copy(this.shotBaseTarget);
-    this.desiredPosition.copy(this.shotBasePosition);
-    this.raiseForTerrain(elevationAt);
-    this.shotBasePosition.copy(this.desiredPosition);
   }
 
   private chooseClearAzimuth(
