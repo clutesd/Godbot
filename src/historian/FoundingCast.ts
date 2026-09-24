@@ -3,7 +3,7 @@ import type { Person, SimulationState } from '../sim/types';
 import { foundingChapterBaseline, foundingChapterProgress, releaseFoundingChapterHold, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
-import type { CandidateScoreBreakdown, ObservationCandidate } from './types';
+import type { CandidateScoreBreakdown, HistorianStatement, ObservationCandidate } from './types';
 
 export const FOUNDING_CAST_TARGET_SIZE = 2;
 export const FOUNDING_CAST_LATEST_INTRO_MONTH = 1;
@@ -245,6 +245,9 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
   const memory = memories.get(historian);
   const members = memory?.members ?? foundingDocumentaryCast(state);
   const introduced = memory ? [...memory.introducedPersonIds] : [];
+  if (!memory && state.arrival?.phase === 'HISTORY_RUNNING') {
+    return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
+  }
   if (memory?.releaseShown && introduced.length >= members.length) {
     return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
   }
@@ -258,6 +261,35 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
     introducedPersonIds: Object.freeze(introduced),
     targetSize: members.length,
   };
+}
+
+/**
+ * Rebuilds the founder-introduction cursor from archived Day-0 statements after a reload. If the
+ * final release card had already been selected, introductions remain complete but the release is
+ * intentionally shown once more because the archive cannot prove that its full camera hold ended.
+ */
+export function restoreFoundingCastProgress(
+  historian: Historian,
+  state: SimulationState,
+  statements: readonly HistorianStatement[],
+): void {
+  if (state.arrival?.phase !== 'FOUNDING_ORIENTATION') return;
+  const baseline = foundingChapterBaseline(state);
+  if (!baseline) return;
+
+  const memory = memoryFor(historian, state);
+  const releaseSelected = statements.some(statement => statement.id === `founding-release-${baseline.eventId}`);
+  for (const member of memory.members) {
+    if (releaseSelected || statements.some(statement => statement.id === `founding-cast-introduction-${member.personId}`)) {
+      memory.introducedPersonIds.add(member.personId);
+    }
+  }
+
+  // A selected release is not equivalent to a completed release. Re-present it after reload so
+  // CameraDirector can establish the authoritative completion barrier again.
+  memory.releaseShown = false;
+  releaseIntroduction(historian, state);
+  releaseStates.delete(state);
 }
 
 function releaseScene(
@@ -309,6 +341,9 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
   releaseStates.delete(state);
   const baseline = foundingChapterBaseline(state);
   if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return undefined;
+  // A fresh Historian created for a run that already crossed into live history must never replay
+  // founder introductions simply because the old WeakMap presentation cursor no longer exists.
+  if (state.arrival?.phase === 'HISTORY_RUNNING' && !memories.has(historian)) return undefined;
   if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH) return undefined;
   const founding = foundingChapterProgress(historian, state);
   if (founding.phase !== 'complete') return undefined;
