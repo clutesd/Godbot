@@ -1,3 +1,4 @@
+import { isFoundingPresentationPhase } from '../sim/founding/FoundingArrival';
 import type { Person, SimulationState } from '../sim/types';
 import { foundingChapterBaseline, foundingChapterProgress, releaseFoundingChapterHold, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
 import { Historian } from './Historian';
@@ -240,7 +241,7 @@ function introductionScene(
 
 export function foundingCastProgress(historian: Historian, state: SimulationState): FoundingCastProgress {
   const baseline = foundingChapterBaseline(state);
-  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', members: Object.freeze([]), introducedPersonIds: Object.freeze([]), targetSize: 0 };
+  if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return { phase: 'unavailable', members: Object.freeze([]), introducedPersonIds: Object.freeze([]), targetSize: 0 };
   const memory = memories.get(historian);
   const members = memory?.members ?? foundingDocumentaryCast(state);
   const introduced = memory ? [...memory.introducedPersonIds] : [];
@@ -300,14 +301,14 @@ function releaseScene(
 
 /**
  * The cast is the final authored beat of Arrival Day: two concise human anchors, then a
- * caption-free release shot. Selection changes no simulation importance. Portraits pause
- * authoritative history; the release restores time and lets ordinary life move.
+ * caption-free release shot. Selection changes no simulation importance. Monthly authority remains
+ * frozen throughout this sequence; main starts history only after the release shot has actually ended.
  */
 export function chooseFoundingCastScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   releaseIntroduction(historian, state);
   releaseStates.delete(state);
   const baseline = foundingChapterBaseline(state);
-  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return undefined;
+  if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return undefined;
   if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH) return undefined;
   const founding = foundingChapterProgress(historian, state);
   if (founding.phase !== 'complete') return undefined;
