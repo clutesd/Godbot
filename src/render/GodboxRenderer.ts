@@ -52,6 +52,7 @@ import { ResourceWorkScene, resourceWorkerCanPresent } from './resources/Resourc
 import { ResourceWorkerRenderer } from './resources/ResourceWorkerRenderer';
 import { resourceWorkAlternateAnchor } from './animation/ResourceWorkMotion';
 import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
+import { farmPlotRotation } from '../shared/FarmGeometry';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
@@ -2191,7 +2192,9 @@ export class GodboxRenderer {
         const localZ = plot.worldZ - settlement.position.z;
         const district = districtForResponse(response);
         placements.push({ key: plot.id, localX, localZ, worldX: plot.worldX, worldZ: plot.worldZ, width: plot.width, depth: plot.depth, height: plot.height,
-          rotationY: cached?.rotationY ?? Math.atan2(-localX, -localZ) + random.range(-0.16, 0.16), major: ['civic', 'sacred', 'industrial'].includes(district), district,
+          rotationY: response.form === 'field' ? farmPlotRotation(settlement, plot)
+            : cached?.rotationY ?? Math.atan2(-localX, -localZ) + random.range(-0.16, 0.16),
+          major: ['civic', 'sacred', 'industrial'].includes(district), district,
           role: developmentBuildingRole(response), builtEra: developmentPresentationEra(response), conservatism: 0, variation: cached?.variation ?? Math.floor(random.float() * 4), development: response });
       }
       this.settlementBuildingPlacements.set(settlement.id, placements);
