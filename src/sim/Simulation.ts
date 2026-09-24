@@ -1,6 +1,6 @@
 import { emitEvent } from './History';
 import { adaptFoodCareer, applyCold, beginFoodMonth, chooseFoodResponse, observeEstablishment, resolveSurvival, survivalHealthChange, survivalMortality } from './pressures/Survival';
-import { assertPristine, createFoundingArrival, FoundingArrivalDirector, type FoundingPod } from './founding/FoundingArrival';
+import { assertPristine, createFoundingArrival, FoundingArrivalDirector, isArrivalFilmPhase, isFoundingOrientationPhase, type FoundingPod } from './founding/FoundingArrival';
 import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
 import { killPeople, observeDeaths } from './people/PersonLifecycle';
 import { configWith, type GodboxConfig, type GodboxConfigInput } from '../config';
@@ -279,6 +279,21 @@ export class Simulation {
   }
 
   get historyRunning(): boolean { return !this.state.arrival || this.state.arrival.phase === 'HISTORY_RUNNING'; }
+  get arrivalFilmRunning(): boolean { return Boolean(this.state.arrival && isArrivalFilmPhase(this.state.arrival.phase)); }
+  get foundingOrientationRunning(): boolean { return Boolean(this.state.arrival && isFoundingOrientationPhase(this.state.arrival.phase)); }
+
+  /**
+   * The only legal transition from the frozen Year-Zero orientation into monthly history.
+   * Camera/narrative code may request this boundary, but it cannot skip the physical Arrival film.
+   */
+  beginHistory(): boolean {
+    const arrival = this.state.arrival;
+    if (!arrival) return false;
+    if (arrival.phase === 'HISTORY_RUNNING') return false;
+    if (arrival.phase !== 'FOUNDING_ORIENTATION') return false;
+    arrival.phase = 'HISTORY_RUNNING';
+    return true;
+  }
 
   /** Diagnostic-only timing. Enabling this never changes simulation rules, order, pacing, or random draws. */
   setTickProfiling(enabled: boolean): void { this.tickProfiler.setEnabled(enabled); }

@@ -9,7 +9,7 @@ import type { AudioCategory, HistorianStatement, ObservationCandidate, Observati
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
 import { FOUNDING_VESSEL_KEEP_OUT_RADIUS } from '../shared/FoundingCampLayout';
-import { podPosition } from '../sim/founding/FoundingArrival';
+import { isArrivalFilmPhase, podPosition } from '../sim/founding/FoundingArrival';
 import type { PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 
 export interface CurrentObservation {
@@ -94,11 +94,11 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
   'settlement-approach': { radius: [15, 22], height: [12, 19], targetHeight: 1.2, durationScale: 1 },
   // Human-scale shots intentionally break from the old aerial grammar. These dimensions are in
   // world units: close people should read as subjects, not colored pixels inside a settlement.
-  'street-observation': { radius: [3.4, 5.4], height: [1.25, 2.0], targetHeight: 0.16, durationScale: 1.1 },
-  'worker-follow': { radius: [1.8, 2.8], height: [0.52, 0.82], targetHeight: 0.14, durationScale: 1.12 },
-  'traveler-follow': { radius: [4.2, 6.4], height: [1.8, 2.8], targetHeight: 0.18, durationScale: 1.08 },
+  'street-observation': { radius: [2.8, 4.5], height: [1.05, 1.7], targetHeight: 0.14, durationScale: 1.18 },
+  'worker-follow': { radius: [1.45, 2.25], height: [0.42, 0.7], targetHeight: 0.12, durationScale: 1.26 },
+  'traveler-follow': { radius: [3.2, 5.0], height: [1.3, 2.05], targetHeight: 0.16, durationScale: 1.18 },
   'institution-exterior': { radius: [10, 16], height: [8, 13], targetHeight: 1.2, durationScale: 1.24 },
-  'discovery-scene': { radius: [1.9, 3.0], height: [0.58, 0.9], targetHeight: 0.14, durationScale: 1.35 },
+  'discovery-scene': { radius: [1.55, 2.35], height: [0.45, 0.72], targetHeight: 0.12, durationScale: 1.42 },
   'battle-overview': { radius: [24, 34], height: [21, 31], targetHeight: 1, durationScale: 1.3 },
   'aftermath-pullback': { radius: [30, 42], height: [27, 39], targetHeight: 0.7, durationScale: 1.4 },
   'city-growth-timelapse': { radius: [20, 29], height: [17, 25], targetHeight: 1.4, durationScale: 1.35 },
@@ -172,13 +172,110 @@ export function cameraTargetFloorFor(kind: ObservationKind | undefined): number 
   return 0.35;
 }
 
+const PERSONAL_CAMERA_KINDS = new Set<ObservationKind>([
+  'street-observation',
+  'worker-follow',
+  'traveler-follow',
+  'discovery-scene',
+]);
+
+export function isPersonalCameraKind(kind: ObservationKind | undefined): boolean {
+  return Boolean(kind && PERSONAL_CAMERA_KINDS.has(kind));
+}
+
 export function cameraTransitionScaleFor(kind: ObservationKind | undefined): number {
-  // Human-scale tracking still needs to react, but not so aggressively that a moving actor can
-  // whip the lens. Long relocations no longer use this spring at all; CameraFlight owns those.
-  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.78;
-  if (kind === 'street-observation') return 0.86;
-  if (kind === 'traveler-follow') return 0.9;
+  // Close documentary work should feel operated, not reactive. Slower springs let the frame
+  // absorb small subject motion without snapping the lens or constantly correcting composition.
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 1.18;
+  if (kind === 'street-observation') return 1.12;
+  if (kind === 'traveler-follow') return 1.08;
   return 1;
+}
+
+export interface CameraShotPacing {
+  readonly settleHoldFraction: number;
+  readonly motionFraction: number;
+  readonly finishHoldFraction: number;
+}
+
+/**
+ * A cinematic operator does not move continuously. Every shot gets a readable settle, one
+ * intentional move, then a final hold so the viewer can inspect the scene before the drone leaves.
+ */
+export function cameraShotPacingFor(kind: ObservationKind | undefined): CameraShotPacing {
+  if (kind === 'worker-follow' || kind === 'discovery-scene') {
+    return { settleHoldFraction: 0.2, motionFraction: 0.56, finishHoldFraction: 0.24 };
+  }
+  if (kind === 'street-observation' || kind === 'traveler-follow') {
+    return { settleHoldFraction: 0.17, motionFraction: 0.61, finishHoldFraction: 0.22 };
+  }
+  return { settleHoldFraction: 0.1, motionFraction: 0.74, finishHoldFraction: 0.16 };
+}
+
+export function cameraMotionProgressFor(
+  kind: ObservationKind | undefined,
+  ageSeconds: number,
+  durationSeconds: number,
+): number {
+  const pacing = cameraShotPacingFor(kind);
+  const progress = clamp01(ageSeconds / Math.max(0.001, durationSeconds));
+  const motionStart = pacing.settleHoldFraction;
+  const motionEnd = motionStart + pacing.motionFraction;
+  if (progress <= motionStart) return 0;
+  if (progress >= motionEnd) return 1;
+  return clamp01((progress - motionStart) / Math.max(0.001, pacing.motionFraction));
+}
+
+export interface CameraFlightProfile {
+  readonly limits: CameraFlightLimits;
+  readonly gazeLimits: CameraFlightLimits;
+  readonly cruiseClearance: number;
+  readonly destinationLift: number;
+  readonly approachFraction: number;
+  readonly minApproachRadius: number;
+  readonly maxApproachRadius: number;
+}
+
+/**
+ * Personal scenes use a low, slow flight envelope. Wide documentary moves may still gain altitude
+ * and cover ground, but a flight into a person should feel like a drone easing down a lane or
+ * between buildings, acquiring the subject well before arrival.
+ */
+export function cameraFlightProfileFor(kind: ObservationKind | undefined, distance: number): CameraFlightProfile {
+  const d = Math.max(0, distance);
+  if (isPersonalCameraKind(kind)) {
+    return {
+      limits: {
+        // Personal travel remains slower than wide flight, but braking authority stays strong
+        // enough to settle into a close composition instead of oscillating around the subject.
+        maxSpeed: THREE.MathUtils.clamp(3.5 + d * 0.07, 3.6, 6.5),
+        maxAcceleration: d > 32 ? 1.8 : d > 14 ? 1.55 : 1.4,
+        maxJerk: d > 24 ? 5 : 4.8,
+        responseSeconds: 0.48,
+      },
+      gazeLimits: { maxSpeed: 5.6, maxAcceleration: 2.8, maxJerk: 8.5, responseSeconds: 0.46 },
+      cruiseClearance: 2.4 + Math.min(3.2, d * 0.045),
+      destinationLift: 1.2,
+      approachFraction: 0.74,
+      // Nearby personal moves should glide directly into the subject, not climb into a mini cruise.
+      minApproachRadius: 14,
+      maxApproachRadius: 30,
+    };
+  }
+  return {
+    limits: {
+      maxSpeed: THREE.MathUtils.clamp(4.4 + d * 0.075, 4.6, 10.5),
+      maxAcceleration: d > 32 ? 2.3 : d > 14 ? 1.9 : 1.45,
+      maxJerk: d > 24 ? 6.2 : 5.2,
+      responseSeconds: 0.42,
+    },
+    gazeLimits: { maxSpeed: 9, maxAcceleration: 4.8, maxJerk: 16, responseSeconds: 0.34 },
+    cruiseClearance: 5.5 + Math.min(6, d * 0.08),
+    destinationLift: 2.5,
+    approachFraction: 0.62,
+    minApproachRadius: 10,
+    maxApproachRadius: 26,
+  };
 }
 
 export interface FoundingEditorialTiming {
@@ -751,6 +848,12 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
     || sceneId?.startsWith('founding-release:'));
 }
 
+function isFoundingOverlayScene(sceneId: string | undefined): boolean {
+  return Boolean(sceneId?.startsWith('founding:overview:')
+    || sceneId?.startsWith('founding-cast:introduction:')
+    || sceneId?.startsWith('founding-release:'));
+}
+
 /**
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
@@ -768,6 +871,10 @@ export interface CameraFlightTelemetry {
   readonly acceleration: number;
   readonly gazeErrorDegrees: number;
   readonly cruiseHeight?: number;
+  readonly elapsedSeconds?: number;
+  readonly maxSeconds?: number;
+  readonly stalledSeconds?: number;
+  readonly obstructionRetries?: number;
 }
 
 interface CameraFlightState {
@@ -776,8 +883,16 @@ interface CameraFlightState {
   readonly destinationTarget: THREE.Vector3;
   readonly startDistance: number;
   readonly limits: CameraFlightLimits;
+  readonly gazeLimits: CameraFlightLimits;
+  readonly approachRadius: number;
+  readonly maxSeconds: number;
+  readonly maximumCruiseHeight: number;
   phase: 'depart' | 'cruise' | 'approach';
   cruiseHeight: number;
+  elapsedSeconds: number;
+  bestDistance: number;
+  stalledSeconds: number;
+  obstructionRetries: number;
 }
 
 export class CameraDirector {
@@ -813,6 +928,7 @@ export class CameraDirector {
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
   private arrivalActive = false;
+  private foundingPresentationDone = false;
   private arrivalSafetySeconds = 0;
   private arrivalSafetyInitialized = false;
   private readonly arrivalSafetyOffset = new THREE.Vector3();
@@ -831,19 +947,32 @@ export class CameraDirector {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
-    if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') {
+    if (state.arrival && isArrivalFilmPhase(state.arrival.phase)) {
       const focus = arrivalSequenceFocus(state.arrival);
       const target = focus.target;
       this.desiredTarget.set(target.x, target.y, target.z);
 
-      // Keep one screen direction for the whole prologue. Composition evolves continuously around
-      // the subject instead of cutting to a new arbitrary side whenever the editorial beat changes.
+      // Arrival uses lens language as part of the shot design: wider for geography, narrower when
+      // founders become the subject. Ease focal length continuously so it feels like a camera
+      // operator riding the lens rather than a digital zoom cut.
+      const fovBlend = 1 - Math.exp(-deltaSeconds * 1.15);
+      const nextFov = THREE.MathUtils.lerp(this.camera.fov, focus.fov, fovBlend);
+      if (Math.abs(nextFov - this.camera.fov) > 0.001) {
+        this.camera.fov = nextFov;
+        this.camera.updateProjectionMatrix();
+      }
+
+      // Wide Arrival beats preserve one screen direction. Human-scale site beats instead provide
+      // an explicit camera pose inside the cleared landing geography so safety does not have to
+      // invent a vertical escape route just to reach a founder.
       const azimuth = this.stableAzimuth('arrival:master') + focus.azimuthOffset;
-      const authored = new THREE.Vector3(
-        target.x + Math.cos(azimuth) * focus.radius,
-        target.y + focus.height,
-        target.z + Math.sin(azimuth) * focus.radius,
-      );
+      const authored = focus.cameraPosition
+        ? new THREE.Vector3(focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z)
+        : new THREE.Vector3(
+            target.x + Math.cos(azimuth) * focus.radius,
+            target.y + focus.height,
+            target.z + Math.sin(azimuth) * focus.radius,
+          );
       const before = this.camera.position.clone();
 
       // Exact forest/silhouette safety is intentionally a low-frequency survey during Arrival.
@@ -883,12 +1012,15 @@ export class CameraDirector {
       }
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
-        : focus.beat === 'handoff' ? 'Arrival Day'
-          : 'The landings';
+        : focus.beat === 'site-flythrough' ? 'The first camps'
+          : focus.beat === 'handoff' ? 'Arrival Day'
+            : 'The landings';
       this.observation.detail = focus.beat === 'pristine'
         ? 'Year 0 · Month 0 · Day 0'
-        : focus.beat === 'handoff' ? 'Five communities begin here.'
-          : 'Five vessels cross into the world.';
+        : focus.beat === 'site-flythrough'
+          ? `Landing ${(focus.siteIndex ?? 0) + 1} · founders emerge beside the vessel.`
+          : focus.beat === 'handoff' ? 'Five communities begin here.'
+            : 'Five vessels cross into the world.';
       delete this.observation.sceneId;
       return;
     }
@@ -914,7 +1046,10 @@ export class CameraDirector {
 
     this.shotAge += deltaSeconds;
     const majorEvent = this.findMajorEvent(state);
-    const mayInterrupt = this.shotAge >= Math.max(this.currentScene?.id.startsWith('human:') ? 12 : 6, this.config.camera.transitionSeconds * 1.1);
+    const readableMinimum = this.currentScene?.id.startsWith('human:') ? 14
+      : isPersonalCameraKind(this.currentScene?.kind) ? 10
+        : 6;
+    const mayInterrupt = this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
     if (!this.currentScene || (majorEvent && mayInterrupt)) {
       if (majorEvent) this.acknowledgedMajorEventIds.add(majorEvent.id);
       if (this.acknowledgedMajorEventIds.size > 2048) {
@@ -1039,6 +1174,10 @@ export class CameraDirector {
     return this.flight ? this.acquiredScene : this.currentScene;
   }
 
+  foundingPresentationComplete(): boolean {
+    return this.foundingPresentationDone;
+  }
+
   flightTelemetry(): CameraFlightTelemetry {
     const flight = this.flight;
     if (!flight) {
@@ -1080,6 +1219,10 @@ export class CameraDirector {
       acceleration: this.flightAcceleration.length(),
       gazeErrorDegrees,
       cruiseHeight: flight.cruiseHeight,
+      elapsedSeconds: flight.elapsedSeconds,
+      maxSeconds: flight.maxSeconds,
+      stalledSeconds: flight.stalledSeconds,
+      obstructionRetries: flight.obstructionRetries,
     };
   }
 
@@ -1125,7 +1268,7 @@ export class CameraDirector {
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
-    if (scene.id.startsWith('human:')) this.shotDuration = 14;
+    if (scene.id.startsWith('human:')) this.shotDuration = 18;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
     this.shotBaseTarget.set(scene.position.x, ground + (foundingProfile?.targetHeight
@@ -1184,6 +1327,10 @@ export class CameraDirector {
     }
 
     const distance = this.camera.position.distanceTo(this.shotBasePosition);
+    const leavingFoundingOverlay = Boolean(
+      this.acquiredScene && this.acquiredScene.id !== scene.id && isFoundingOverlayScene(this.acquiredScene.id),
+    );
+    if (leavingFoundingOverlay) this.releaseFoundingOverlayForTransit();
     if (distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
       this.acquireCurrentScene();
       return;
@@ -1201,29 +1348,50 @@ export class CameraDirector {
       destinationPosition.z - this.camera.position.z,
     );
     const distance = this.camera.position.distanceTo(destinationPosition);
-    const maxSpeed = THREE.MathUtils.clamp(4.4 + distance * 0.075, 4.6, 10.5);
-    const maxAcceleration = distance > 32 ? 2.3 : distance > 14 ? 1.9 : 1.45;
-    const limits: CameraFlightLimits = {
-      maxSpeed,
-      maxAcceleration,
-      maxJerk: distance > 24 ? 6.2 : 5.2,
-      responseSeconds: 0.42,
-    };
+    const profile = cameraFlightProfileFor(this.currentScene?.kind, distance);
+    const cruiseHeight = this.flightCruiseHeight(
+      destinationPosition,
+      elevationAt,
+      profile.cruiseClearance,
+      profile.destinationLift,
+    );
+    const maxSeconds = THREE.MathUtils.clamp(
+      9 + distance / Math.max(1, profile.limits.maxSpeed) * 2.4,
+      14,
+      38,
+    );
     this.flight = {
       originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
       destinationTarget: destinationTarget.clone(),
       startDistance: Math.max(0.001, horizontalDistance),
-      limits,
-      phase: horizontalDistance > 10 ? 'depart' : 'approach',
-      cruiseHeight: this.flightCruiseHeight(destinationPosition, elevationAt),
+      limits: profile.limits,
+      gazeLimits: profile.gazeLimits,
+      approachRadius: THREE.MathUtils.clamp(
+        horizontalDistance * profile.approachFraction,
+        profile.minApproachRadius,
+        profile.maxApproachRadius,
+      ),
+      maxSeconds,
+      maximumCruiseHeight: cruiseHeight + 8,
+      phase: horizontalDistance > profile.minApproachRadius ? 'depart' : 'approach',
+      cruiseHeight,
+      elapsedSeconds: 0,
+      bestDistance: Math.max(0.001, distance),
+      stalledSeconds: 0,
+      obstructionRetries: 0,
     };
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
     this.recoveryOffset = undefined;
   }
 
-  private flightCruiseHeight(destination: THREE.Vector3, elevationAt: (x: number, z: number) => number): number {
+  private flightCruiseHeight(
+    destination: THREE.Vector3,
+    elevationAt: (x: number, z: number) => number,
+    landscapeClearance: number,
+    destinationLift: number,
+  ): number {
     const distance = Math.hypot(destination.x - this.camera.position.x, destination.z - this.camera.position.z);
     let highestGround = Math.max(
       elevationAt(this.camera.position.x, this.camera.position.z),
@@ -1237,8 +1405,7 @@ export class CameraDirector {
         THREE.MathUtils.lerp(this.camera.position.z, destination.z, amount),
       ));
     }
-    const landscapeClearance = 5.5 + Math.min(6, distance * 0.08);
-    return Math.max(this.camera.position.y, destination.y + 2.5, highestGround + landscapeClearance);
+    return Math.max(this.camera.position.y, destination.y + destinationLift, highestGround + landscapeClearance);
   }
 
   private advanceFlight(
@@ -1248,17 +1415,16 @@ export class CameraDirector {
   ): void {
     const flight = this.flight;
     if (!flight || !this.currentScene) return;
+    flight.elapsedSeconds += deltaSeconds;
 
     const horizontalDistance = Math.hypot(
       flight.destinationPosition.x - this.camera.position.x,
       flight.destinationPosition.z - this.camera.position.z,
     );
     if (flight.phase === 'depart' && this.camera.position.y >= flight.cruiseHeight - 0.4) flight.phase = 'cruise';
-    // Start the descent while there is still meaningful horizontal travel left. Waiting until the
-    // lens is almost over the destination creates a helicopter-like vertical drop and makes even a
-    // smooth integrator feel late. Long flights get a proportionally larger approach envelope.
-    const approachRadius = THREE.MathUtils.clamp(flight.startDistance * 0.62, 10, 26);
-    if (flight.phase === 'cruise' && horizontalDistance <= approachRadius) flight.phase = 'approach';
+    // Personal flights acquire the destination early and spend most of the final leg descending
+    // toward the composition. This reads as a deliberate low fly-through instead of cruise-then-drop.
+    if (flight.phase === 'cruise' && horizontalDistance <= flight.approachRadius) flight.phase = 'approach';
 
     if (flight.phase === 'depart') {
       // Climb on a forward arc instead of performing a vertical elevator move first.
@@ -1303,7 +1469,7 @@ export class CameraDirector {
       this.gazeFlightAcceleration,
       this.desiredTarget,
       deltaSeconds,
-      { maxSpeed: 9, maxAcceleration: 4.8, maxJerk: 16, responseSeconds: 0.34 },
+      flight.gazeLimits,
     );
 
     const departureClearance = cameraClearanceFor(this.acquiredScene?.kind).lens;
@@ -1315,8 +1481,25 @@ export class CameraDirector {
       this.camera.position.copy(before);
       this.positionVelocity.multiplyScalar(0.2);
       this.flightAcceleration.set(0, 0, 0);
-      flight.cruiseHeight += 1.4;
+      flight.obstructionRetries += 1;
+      flight.cruiseHeight = Math.min(flight.maximumCruiseHeight, flight.cruiseHeight + 1.4);
       flight.phase = 'depart';
+    }
+
+    const remainingDistance = this.camera.position.distanceTo(flight.destinationPosition);
+    if (remainingDistance < flight.bestDistance - 0.06) {
+      flight.bestDistance = remainingDistance;
+      flight.stalledSeconds = 0;
+    } else {
+      flight.stalledSeconds += deltaSeconds;
+    }
+
+    const routeExhausted = flight.elapsedSeconds >= flight.maxSeconds
+      || flight.stalledSeconds >= 6
+      || (flight.obstructionRetries >= 6 && flight.cruiseHeight >= flight.maximumCruiseHeight - 0.01);
+    if (routeExhausted) {
+      this.abandonCurrentFlight();
+      return;
     }
 
     this.camera.lookAt(this.lookTarget);
@@ -1335,6 +1518,41 @@ export class CameraDirector {
       this.targetVelocity.multiplyScalar(0.72);
       this.acquireCurrentScene();
     }
+  }
+
+  private releaseFoundingOverlayForTransit(): void {
+    // The authored founding card has finished. Do not leave its narration pinned to the screen
+    // while the camera physically travels to the next scene.
+    if (this.observation.sceneId?.startsWith('founding-release:')) this.foundingPresentationDone = true;
+    delete this.observation.sceneId;
+    delete this.observation.statement;
+    this.observation.label = 'The first day';
+    this.observation.detail = 'History continues beyond the landings.';
+    this.observation.kind = 'regional-travel';
+    this.observation.interest = 0.56;
+    this.observation.audioCategory = 'settlement';
+    this.observation.eventType = 'ARRIVAL_DAY';
+    this.observation.eventMonth = 0;
+    this.observation.revision += 1;
+  }
+
+  private abandonCurrentFlight(): void {
+    // A camera route is presentation, never simulation authority. If a route cannot be completed
+    // safely, keep the last valid physical frame and move on rather than trapping the documentary.
+    // If the unreachable destination was the final release shot, the opening must still terminate.
+    if (this.currentScene?.id.startsWith('founding-release:')) this.foundingPresentationDone = true;
+    this.flight = undefined;
+    this.flightAcceleration.set(0, 0, 0);
+    this.gazeFlightAcceleration.set(0, 0, 0);
+    this.positionVelocity.multiplyScalar(0.18);
+    this.targetVelocity.multiplyScalar(0.35);
+    this.currentScene = this.acquiredScene;
+    this.lastHumanShot = Boolean(this.acquiredScene?.id.startsWith('human:'));
+    this.shotAge = Number.POSITIVE_INFINITY;
+    this.trackingInitialized = false;
+    this.routeCheckSeconds = 0;
+    this.recoveryOffset = undefined;
+    this.visibility.reset();
   }
 
   private acquireCurrentScene(): void {
@@ -1408,7 +1626,7 @@ export class CameraDirector {
     this.desiredPosition.copy(this.shotBasePosition);
     this.desiredTarget.copy(this.shotBaseTarget);
 
-    const progress = Math.max(0, Math.min(1, this.shotAge / Math.max(0.001, this.shotDuration)));
+    const progress = cameraMotionProgressFor(scene.kind, this.shotAge, this.shotDuration);
     const eased = this.smoothstep(progress);
 
     const war = scene.statement.claims.warId ? state.wars.find(w => w.id === scene.statement.claims.warId) : undefined;

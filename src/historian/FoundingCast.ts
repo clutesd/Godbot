@@ -1,3 +1,4 @@
+import { isFoundingPresentationPhase } from '../sim/founding/FoundingArrival';
 import type { Person, SimulationState } from '../sim/types';
 import { foundingChapterBaseline, foundingChapterProgress, releaseFoundingChapterHold, type FoundingChapterBaseline, type FoundingCommunityBaseline } from './FoundingChapter';
 import { Historian } from './Historian';
@@ -34,11 +35,6 @@ interface FoundingCastMemory {
   readonly introducedPersonIds: Set<string>;
   readonly normalAppearances: Map<string, number>;
   releaseShown: boolean;
-  autoRunBeforeIntroduction?: boolean;
-}
-
-interface HistorianConfigAccess {
-  config: { autoRun: boolean };
 }
 
 interface AnchorCandidate {
@@ -157,23 +153,14 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
   return memory;
 }
 
-function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
-  return (historian as unknown as HistorianConfigAccess).config;
-}
-
 function holdIntroduction(historian: Historian, state: SimulationState, memory: FoundingCastMemory): void {
-  const config = historianConfig(historian);
-  if (memory.autoRunBeforeIntroduction === undefined) memory.autoRunBeforeIntroduction = config.autoRun;
-  config.autoRun = false;
+  void historian; void memory;
+  // Keep the portrait pacing marker, but let authoritative history continue beneath the shot.
   pacedStates.add(state);
 }
 
-function releaseIntroduction(historian: Historian, state: SimulationState): void {
+function releaseIntroduction(_historian: Historian, state: SimulationState): void {
   pacedStates.delete(state);
-  const memory = memories.get(historian);
-  if (!memory || memory.autoRunBeforeIntroduction === undefined) return;
-  historianConfig(historian).autoRun = memory.autoRunBeforeIntroduction;
-  delete memory.autoRunBeforeIntroduction;
 }
 
 function breakdown(continuity: number, consequence = 0.4): CandidateScoreBreakdown {
@@ -254,7 +241,7 @@ function introductionScene(
 
 export function foundingCastProgress(historian: Historian, state: SimulationState): FoundingCastProgress {
   const baseline = foundingChapterBaseline(state);
-  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', members: Object.freeze([]), introducedPersonIds: Object.freeze([]), targetSize: 0 };
+  if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return { phase: 'unavailable', members: Object.freeze([]), introducedPersonIds: Object.freeze([]), targetSize: 0 };
   const memory = memories.get(historian);
   const members = memory?.members ?? foundingDocumentaryCast(state);
   const introduced = memory ? [...memory.introducedPersonIds] : [];
@@ -314,14 +301,14 @@ function releaseScene(
 
 /**
  * The cast is the final authored beat of Arrival Day: two concise human anchors, then a
- * caption-free release shot. Selection changes no simulation importance. Portraits pause
- * authoritative history; the release restores time and lets ordinary life move.
+ * caption-free release shot. Selection changes no simulation importance. Monthly authority remains
+ * frozen throughout this sequence; main starts history only after the release shot has actually ended.
  */
 export function chooseFoundingCastScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
   releaseIntroduction(historian, state);
   releaseStates.delete(state);
   const baseline = foundingChapterBaseline(state);
-  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return undefined;
+  if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return undefined;
   if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH) return undefined;
   const founding = foundingChapterProgress(historian, state);
   if (founding.phase !== 'complete') return undefined;
@@ -401,14 +388,6 @@ export function installFoundingCastPacing(): void {
     if (pacedStates.has(state)) return FOUNDING_CAST_MONTHS_PER_SECOND;
     if (releaseStates.has(state)) return FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND;
     return targetSpeed.call(this, state, observation);
-  };
-  const tickBudget = PresentationDirector.prototype.tickBudget;
-  PresentationDirector.prototype.tickBudget = function castTickBudget(
-    this: PresentationDirector,
-    state: Parameters<typeof tickBudget>[0],
-  ): number {
-    if (pacedStates.has(state)) return 0;
-    return tickBudget.call(this, state);
   };
 }
 

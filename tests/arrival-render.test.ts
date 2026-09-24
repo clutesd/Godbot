@@ -5,7 +5,7 @@ import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer'
 import { FOUNDING_HEARTH_DISTANCE, FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthEstablished, foundingHearthOffset, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../src/shared/FoundingCampLayout';
 import { arrivalCaption, arrivalSequenceFocus, foundingArrivalDialogue } from '../src/render/founding/ArrivalPresentation';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from '../src/render/founding/ArrivalRenderBudget';
-import { podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
+import { ARRIVAL_END_SECONDS, podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 
 describe('Arrival presentation contracts', () => {
   it('keeps the authored prologue on a lightweight render budget until history begins', () => {
@@ -22,13 +22,22 @@ describe('Arrival presentation contracts', () => {
       updateAmbientWorldEffects: false,
     });
 
+    arrival.elapsedSeconds = 30;
+    expect(arrivalRenderPolicy(simulation.state)).toEqual({
+      active: true,
+      animateHumans: true,
+      refreshWorldPresentation: false,
+      refreshVegetationLod: true,
+      updateAmbientWorldEffects: false,
+    });
+
     const anchor = arrivalVegetationAnchor(simulation.state);
     expect(anchor).toEqual({
       x: arrival.pods[0]?.position.x,
       z: arrival.pods[0]?.position.z,
     });
 
-    arrival.phase = 'HISTORY_RUNNING';
+    arrival.phase = 'FOUNDING_ORIENTATION';
     expect(arrivalRenderPolicy(simulation.state)).toEqual({
       active: false,
       animateHumans: true,
@@ -37,6 +46,32 @@ describe('Arrival presentation contracts', () => {
       updateAmbientWorldEffects: true,
     });
     expect(arrivalVegetationAnchor(simulation.state)).toBeUndefined();
+
+    arrival.phase = 'HISTORY_RUNNING';
+    expect(arrivalRenderPolicy(simulation.state).active).toBe(false);
+  });
+
+  it('finishes the Arrival film into a frozen orientation before Month 1 can exist', () => {
+    const simulation = new Simulation({ seed: 'arrival-orientation-authority', startMode: 'arrival' });
+    simulation.advanceArrival(ARRIVAL_END_SECONDS + 10);
+
+    expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+    expect(simulation.historyRunning).toBe(false);
+    expect(simulation.foundingOrientationRunning).toBe(true);
+    expect(simulation.state.month).toBe(0);
+    expect(simulation.state.history.filter(event => event.type === 'ARRIVAL_DAY')).toHaveLength(1);
+
+    // Even direct callers cannot accidentally start the civilization while orientation is playing.
+    simulation.step(24);
+    expect(simulation.state.month).toBe(0);
+    expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+
+    expect(simulation.beginHistory()).toBe(true);
+    expect(simulation.historyRunning).toBe(true);
+    expect(simulation.state.arrival?.phase).toBe('HISTORY_RUNNING');
+    simulation.step(1);
+    expect(simulation.state.month).toBe(1);
+    expect(simulation.beginHistory()).toBe(false);
   });
 
   it('bounds effect buffers and retires them leaving five persistent hulls', () => {
@@ -47,7 +82,7 @@ describe('Arrival presentation contracts', () => {
     view.update(camera);
     expect(view.root.children.filter(o => o instanceof THREE.Group && o.visible)).toHaveLength(0);
     const objects = [...view.root.children];
-    for (let i = 0; i < 450; i++) { s.advanceArrival(0.1); view.update(camera); }
+    for (let i = 0; i < (ARRIVAL_END_SECONDS - 1) * 10; i++) { s.advanceArrival(0.1); view.update(camera); }
     expect(view.root.children).toEqual(objects);
     s.advanceArrival(1.1); view.update(camera);
     expect(view.root.children).toHaveLength(5);
@@ -58,7 +93,7 @@ describe('Arrival presentation contracts', () => {
     view.dispose();
     expect(scene.children).toHaveLength(0);
     expect(view.root.children).toHaveLength(0);
-  }, 10000);
+  }, 15000);
 
   it('skins every founding vessel as a bronze relic with site-colored luminous runes', () => {
     const s = new Simulation({ seed: 'arrival-bronze-runes', startMode: 'arrival' });
@@ -170,7 +205,7 @@ describe('Arrival presentation contracts', () => {
 
   it('reserves future hearth ground without claiming the hearth exists at touchdown', () => {
     const s = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });
-    s.advanceArrival(46);
+    s.advanceArrival(ARRIVAL_END_SECONDS);
     const founding = s.state.settlements.filter(settlement => settlement.foundingPodId);
     expect(founding).toHaveLength(5);
     expect(founding.every(settlement => !foundingHearthEstablished(settlement))).toBe(true);
@@ -212,13 +247,24 @@ describe('Arrival presentation contracts', () => {
     }
     expect(new Set(s.state.arrival!.pods.map(p => p.entrySeconds)).size).toBe(5);
     let previous = arrivalSequenceFocus(s.state.arrival!);
-    for (let step = 0; step <= 460; step += 1) {
+    const visitedSites = new Set<number>();
+    let closestSiteRadius = Number.POSITIVE_INFINITY;
+    for (let step = 0; step <= ARRIVAL_END_SECONDS * 10; step += 1) {
       const second = step / 10;
       s.state.arrival!.elapsedSeconds = second;
       const focus = arrivalSequenceFocus(s.state.arrival!);
-      expect([focus.target.x, focus.target.y, focus.target.z, focus.radius, focus.height, focus.transitionSeconds, focus.azimuthOffset]
+      expect([focus.target.x, focus.target.y, focus.target.z, focus.radius, focus.height, focus.transitionSeconds, focus.azimuthOffset, focus.fov]
         .every(Number.isFinite)).toBe(true);
-      expect(['pristine', 'descent', 'touchdown', 'handoff']).toContain(focus.beat);
+      if (focus.cameraPosition) {
+        expect([focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z].every(Number.isFinite)).toBe(true);
+      }
+      expect(['pristine', 'descent', 'touchdown', 'site-flythrough', 'handoff']).toContain(focus.beat);
+      expect(focus.fov).toBeGreaterThanOrEqual(30);
+      expect(focus.fov).toBeLessThanOrEqual(38);
+      if (focus.beat === 'site-flythrough' && focus.siteIndex !== undefined) {
+        visitedSites.add(focus.siteIndex);
+        closestSiteRadius = Math.min(closestSiteRadius, focus.radius);
+      }
       if (step > 0) {
         expect(Math.hypot(
           focus.target.x - previous.target.x,
@@ -232,6 +278,23 @@ describe('Arrival presentation contracts', () => {
       expect(caption.opacity).toBeGreaterThanOrEqual(0);
       expect(caption.opacity).toBeLessThanOrEqual(1);
       previous = focus;
+    }
+    expect([...visitedSites]).toEqual([0, 1, 2, 3, 4]);
+    expect(closestSiteRadius).toBeLessThan(2);
+
+    // Every founding site gets a true stationary close hold rather than immediately climbing away.
+    for (let siteIndex = 0; siteIndex < 5; siteIndex += 1) {
+      s.state.arrival!.elapsedSeconds = 30 + siteIndex * 8 + 6.2;
+      const heldA = arrivalSequenceFocus(s.state.arrival!);
+      s.state.arrival!.elapsedSeconds += 0.8;
+      const heldB = arrivalSequenceFocus(s.state.arrival!);
+      expect(heldA.beat).toBe('site-flythrough');
+      expect(heldA.siteIndex).toBe(siteIndex);
+      expect(heldA.cameraPosition).toBeDefined();
+      expect(heldB.cameraPosition).toEqual(heldA.cameraPosition);
+      expect(heldB.target).toEqual(heldA.target);
+      expect(heldA.height).toBeLessThan(1);
+      expect(heldA.fov).toBeLessThanOrEqual(31);
     }
   });
 });

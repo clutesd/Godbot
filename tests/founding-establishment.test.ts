@@ -16,7 +16,8 @@ import type { Settlement, SimulationState } from '../src/sim/types';
 
 function arrival() {
   const sim = new Simulation({ seed: 'founding-loop-audit', startMode: 'arrival', world: { size: 64 } });
-  sim.advanceArrival(60);
+  sim.advanceArrival(80);
+  if (!sim.beginHistory()) throw new Error('Expected founding orientation to release into history');
   return sim;
 }
 function residents(state: SimulationState, s: Settlement) { return state.people.filter(p => p.alive && p.homeId === s.id); }

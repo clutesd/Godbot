@@ -1,3 +1,4 @@
+import { isArrivalFilmPhase } from '../../sim/founding/FoundingArrival';
 import type { SimulationState, Vec2 } from '../../sim/types';
 
 export interface ArrivalRenderPolicy {
@@ -14,12 +15,19 @@ export interface ArrivalRenderPolicy {
  * cannot change until history starts.
  */
 export function arrivalRenderPolicy(state: SimulationState): ArrivalRenderPolicy {
-  const active = Boolean(state.arrival && state.arrival.phase !== 'HISTORY_RUNNING');
+  const arrival = state.arrival;
+  const active = Boolean(arrival && isArrivalFilmPhase(arrival.phase));
+  // Founders begin emerging shortly after the first touchdown. From that point onward the people
+  // are the subject of the film, so keep character presentation live while the heavier simulation
+  // and world-maintenance systems remain frozen.
+  const humanSequence = Boolean(active && arrival && arrival.elapsedSeconds >= 26.5);
   return {
     active,
-    animateHumans: !active,
+    animateHumans: !active || humanSequence,
     refreshWorldPresentation: !active,
-    refreshVegetationLod: !active,
+    // The camera now visits all five sites at ground level. Refreshing vegetation LOD during the
+    // site tour prevents a beautiful low shot from inheriting the opening's single-site LOD.
+    refreshVegetationLod: !active || Boolean(arrival && arrival.elapsedSeconds >= 28),
     updateAmbientWorldEffects: !active,
   };
 }
@@ -29,7 +37,7 @@ export function arrivalRenderPolicy(state: SimulationState): ArrivalRenderPolicy
  * stable LOD assignment for the whole prologue instead of re-sorting thousands of trees mid-shot.
  */
 export function arrivalVegetationAnchor(state: SimulationState): Vec2 | undefined {
-  if (!state.arrival || state.arrival.phase === 'HISTORY_RUNNING') return undefined;
+  if (!state.arrival || !isArrivalFilmPhase(state.arrival.phase)) return undefined;
   const hero = state.arrival.pods[0];
   return hero ? { x: hero.position.x, z: hero.position.z } : undefined;
 }

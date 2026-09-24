@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
+import { isArrivalFilmPhase, podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
 import type { SimulationState } from '../../sim/types';
 
 const TRAIL_SAMPLES = 64;
@@ -289,7 +289,7 @@ export class FoundingPodRenderer {
         positions.needsUpdate = true;
       }
     }
-    if (arrival.phase === 'HISTORY_RUNNING') this.retireEffects();
+    if (!isArrivalFilmPhase(arrival.phase)) this.retireEffects();
   }
 
   private retireEffects(): void {

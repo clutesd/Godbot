@@ -46,6 +46,135 @@ describe('cinematic motion', () => {
     expect(acquired).toBe(true);
   });
 
+  it('releases the Arrival orientation card as soon as its authored shot ends', () => {
+    const sim = new Simulation({ seed: 'founding-overlay-transit', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const person = sim.state.people.find(candidate => candidate.alive);
+    if (!person) throw new Error('Expected a represented person');
+    vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce({
+        ...template,
+        id: 'founding:overview:event-1',
+        kind: 'world-establishing',
+        position: { x: 0, z: 0 },
+        title: 'ARRIVAL DAY · THE 5 LANDINGS',
+      })
+      .mockReturnValue({
+        ...template,
+        id: `founding-cast:introduction:0:${person.id}`,
+        subjectId: person.id,
+        kind: 'worker-follow',
+        position: { x: 18, z: 0 },
+        title: person.name,
+      });
+
+    const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.observation.sceneId).toBe('founding:overview:event-1');
+
+    let sawDeparture = false;
+    for (let frame = 1; frame < 60 * 12; frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+      const flight = director.flightTelemetry();
+      if (flight.active && flight.destinationSceneId?.startsWith('founding-cast:introduction:')) {
+        sawDeparture = true;
+        expect(director.observation.sceneId).toBeUndefined();
+        expect(director.observation.label).toBe('The first day');
+        expect(director.observation.eventType).toBe('ARRIVAL_DAY');
+        break;
+      }
+    }
+    expect(sawDeparture).toBe(true);
+  });
+
+  it('signals founding completion when the final release hands directly to an adjacent normal shot', () => {
+    const sim = new Simulation({ seed: 'founding-release-adjacent', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce({
+        ...template,
+        id: 'founding-release:event-1',
+        kind: 'street-observation',
+        position: { x: 0, z: 0 },
+        title: 'THE FIRST DAY',
+      })
+      .mockReturnValue({
+        ...template,
+        id: 'ordinary:first-day',
+        kind: 'street-observation',
+        position: { x: 0, z: 0 },
+        title: 'Ordinary life',
+      });
+
+    const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.observation.sceneId).toBe('founding-release:event-1');
+    expect(director.foundingPresentationComplete()).toBe(false);
+
+    for (let frame = 1; frame < 60 * 16 && !director.foundingPresentationComplete(); frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+    }
+
+    expect(director.foundingPresentationComplete()).toBe(true);
+    expect(director.observation.sceneId).not.toBe('founding-release:event-1');
+  });
+
+  it('abandons an impossible physical route instead of trapping the documentary forever', () => {
+    const sim = new Simulation({ seed: 'camera-route-watchdog', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
+      camera: { shotSeconds: [0.2, 0.2], transitionSeconds: 2 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const first = { ...template, id: 'watchdog:first', kind: 'street-observation' as const, position: { x: 0, z: 0 } };
+    const second = { ...template, id: 'watchdog:blocked', kind: 'street-observation' as const, position: { x: 18, z: 0 } };
+    const third = { ...template, id: 'watchdog:after', kind: 'street-observation' as const, position: { x: 2, z: 0 } };
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValue(third);
+
+    const director = new CameraDirector(
+      new PerspectiveCamera(),
+      sim.config,
+      historian,
+      undefined,
+      undefined,
+      () => 1,
+    );
+    director.update(1 / 60, 0, sim.state, () => 0);
+
+    let escapedBlockedDestination = false;
+    for (let frame = 1; frame < 60 * 8; frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+      const flight = director.flightTelemetry();
+      if (choose.mock.calls.length >= 3 && flight.destinationSceneId !== 'watchdog:blocked') {
+        escapedBlockedDestination = true;
+        break;
+      }
+    }
+    expect(escapedBlockedDestination).toBe(true);
+    expect(choose.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
 
   it('keeps exact Arrival camera probing out of the display-frequency hot path', () => {
     const sim = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival' });

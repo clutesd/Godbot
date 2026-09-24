@@ -358,6 +358,7 @@ export class GodboxRenderer {
   private readonly postProcessing: EcologyPostProcessing;
   private readonly maintenance = new RenderMaintenanceScheduler();
   private arrivalRenderBudgetActive = false;
+  private humanPresentationVisible = true;
   private readonly arrivalVegetationCamera = new THREE.Vector3();
   private readonly routePlacementReports = new Map<string, RoutePlacementReport>();
   private readonly routeGroup = new THREE.Group();
@@ -510,6 +511,10 @@ export class GodboxRenderer {
     window.addEventListener('resize', this.resizeHandler);
   }
 
+  foundingPresentationComplete(): boolean {
+    return this.cameraDirector.foundingPresentationComplete();
+  }
+
   /**
    * Compile and render-warm the full visual stack while the opening overlay still owns the screen.
    * First-use shader compilation, shadow variants and post-processing programs must never occur
@@ -546,7 +551,6 @@ export class GodboxRenderer {
     const renderPolicy = arrivalRenderPolicy(this.state);
     if (renderPolicy.active !== this.arrivalRenderBudgetActive) {
       this.arrivalRenderBudgetActive = renderPolicy.active;
-      this.setHumanPresentationVisible(!renderPolicy.active);
       if (!renderPolicy.active) {
         // Catch presentation state up after the deliberately frozen prologue, but still release
         // only one heavy maintenance job per render frame so history never starts with a hitch.
@@ -554,8 +558,15 @@ export class GodboxRenderer {
       }
     }
 
+    const shouldShowHumans = renderPolicy.animateHumans;
+    if (shouldShowHumans !== this.humanPresentationVisible) {
+      this.humanPresentationVisible = shouldShowHumans;
+      this.setHumanPresentationVisible(shouldShowHumans);
+    }
+
     // Human presentation time still advances during Arrival so history does not inherit a giant
-    // first-frame delta. The expensive character/choreography pass itself is intentionally frozen.
+    // first-frame delta. Once founders begin emerging, the character pass comes alive because the
+    // people themselves become the subject of the Arrival film.
     const humanLife = this.humanLifeClock.advance(deltaSeconds);
     if (renderPolicy.updateAmbientWorldEffects) {
       this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds);

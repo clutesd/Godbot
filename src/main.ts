@@ -359,7 +359,13 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   worldNameElement.textContent = `WORLD: ${identity.worldName.replace(/^The /, '')}`;
   openingSeedElement.textContent = `SEED: ${simulation.config.seed}`;
   if (resumable) {
-    simulation.advanceArrival(resumable.foundingArrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
+    const archivedHistoryRunning = resumable.foundingArrival?.phase === 'HISTORY_RUNNING' || resumable.lastRecordedMonth > 0;
+    // Archives from the earlier 46-second prologue may report HISTORY_RUNNING before the new film
+    // duration. Reconstruct the complete Year-Zero manifest first, then restore the authority gate.
+    simulation.advanceArrival(archivedHistoryRunning
+      ? ARRIVAL_END_SECONDS
+      : (resumable.foundingArrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS));
+    if (archivedHistoryRunning) simulation.beginHistory();
     await replayToMonth(simulation, resumable.lastRecordedMonth);
   }
 
@@ -484,18 +490,20 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const deltaSeconds = Math.min(0.1, Math.max(0, (now - lastTime) / 1000));
     lastTime = now;
     elapsedSeconds += deltaSeconds;
-    const wasArriving = !simulation.historyRunning;
-    if (!arrivalPaused) simulation.advanceArrival(deltaSeconds);
-    const arriving = !simulation.historyRunning;
-    setClassIfChanged(worldElement, 'witnessing-arrival', arriving);
+    const wasHistoryRunning = simulation.historyRunning;
+    if (!arrivalPaused && simulation.arrivalFilmRunning) simulation.advanceArrival(deltaSeconds);
+    const arrivalFilm = simulation.arrivalFilmRunning;
+    const beforeHistory = !simulation.historyRunning;
+    setClassIfChanged(worldElement, 'witnessing-arrival', beforeHistory);
     if (!arrivalWasRunning && simulation.historyRunning) {
       arrivalWasRunning = true;
+      arrivalPaused = false;
       audio.transitionMusicTo(audioEra(simulation.state));
       void persist();
     }
     const monthsPerSecond = presentation.update(deltaSeconds, simulation.state, view.observation);
     const tickDuration = 1 / Math.max(0.1, monthsPerSecond);
-    if (simulation.config.autoRun && !runEnded && !wasArriving && !arrivalPaused) {
+    if (simulation.config.autoRun && !runEnded && wasHistoryRunning) {
       accumulator += deltaSeconds;
       let ticks = 0;
       // Quiet deep time may have backlog, but another atomic month only starts when its recent
@@ -518,7 +526,16 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     pendingTickBacklog = tickDuration > 0 ? accumulator / tickDuration : 0;
     view.update(deltaSeconds, elapsedSeconds);
 
-    const foundingDialogue = !arriving
+    // The simulation remains at Month 0 through the entire orientation/cast sequence. The camera
+    // owns the final release shot and explicitly signals when that presentation has actually ended.
+    // Only then may authoritative monthly history begin.
+    if (simulation.foundingOrientationRunning && view.foundingPresentationComplete()) {
+      if (simulation.beginHistory()) accumulator = 0;
+    }
+    const historyRunningNow = simulation.historyRunning;
+    const beforeHistoryNow = !historyRunningNow;
+
+    const foundingDialogue = !arrivalFilm
       ? foundingArrivalDialogue(view.observation.sceneId, view.observation.label, view.observation.detail)
       : undefined;
     setClassIfChanged(worldElement, 'founding-orientation', Boolean(foundingDialogue));
@@ -531,7 +548,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       cinematicDialogueSeconds += deltaSeconds;
     }
 
-    if (arriving) {
+    if (arrivalFilm) {
       const caption = arrivalCaption(simulation.state.arrival?.elapsedSeconds ?? ARRIVAL_END_SECONDS);
       setTextIfChanged(arrivalCaptionEyebrowElement, '');
       setTextIfChanged(arrivalCaptionHeadingElement, '');
@@ -557,7 +574,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
 
     warChronicle.update(simulation.state, view.observation.statement?.claims.warId);
     audio.update(deltaSeconds);
-    if ((!arriving || (simulation.state.arrival?.elapsedSeconds ?? 0) >= 12) && view.observation.revision !== lastObservationRevision) {
+    if ((!arrivalFilm || (simulation.state.arrival?.elapsedSeconds ?? 0) >= 12) && view.observation.revision !== lastObservationRevision) {
       lastObservationRevision = view.observation.revision;
       audio.transitionTo(view.observation.audioCategory, view.observation.statement?.voiceAssetId, audioEra(simulation.state));
       evidenceElement.textContent = view.observation.statement?.epistemicStatus.replaceAll('-', ' ').toUpperCase() ?? 'RECORDED FACT';
@@ -566,8 +583,8 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const observedPopulation = representedPopulation(simulation.state);
     displayPopulation += (observedPopulation - displayPopulation) * Math.min(1, deltaSeconds * 4);
     const month = simulation.state.month % 12;
-    const day = arriving || simulation.state.month === 0 && accumulator === 0 ? 0 : Math.min(30, Math.floor(accumulator / tickDuration * 30) + 1);
-    const dateText = arriving
+    const day = beforeHistoryNow || simulation.state.month === 0 && accumulator === 0 ? 0 : Math.min(30, Math.floor(accumulator / tickDuration * 30) + 1);
+    const dateText = beforeHistoryNow
       ? 'YEAR 0 · MONTH 0 · DAY 0'
       : `YEAR ${simulation.year.toLocaleString()} · ${inferredEra(simulation.state)} · ${monthNames[month] ?? 'SPRING'} · DAY ${day}`;
     setTextIfChanged(dateElement, dateText);
@@ -577,9 +594,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     if (simulation.state.month - lastArchivedMonth >= 120) void persist();
     const extinct = observedPopulation === 0 || simulation.state.advanced.outcome.classification === 'EXTINCT';
     const atHorizon = simulation.state.month >= simulation.config.experiment.runYears * 12;
-    if (!runEnded && !arriving && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
+    if (!runEnded && historyRunningNow && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
     const completedFrameMs = performance.now() - frameStartedAt;
-    framePacing.observe(completedFrameMs, arriving);
+    framePacing.observe(completedFrameMs, beforeHistoryNow);
     interactiveTickBudget.observeFrame(Math.max(0, completedFrameMs - tickWorkMs));
     rafId = window.requestAnimationFrame(frame);
   };

@@ -22,7 +22,9 @@ function completedArrival(seed: string): Simulation {
   // Founding-story tests care about narrative contracts, not whether a particular tiny procedural
   // world happens to contain five safely separated sites. Keep enough deterministic land available.
   const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
-  simulation.advanceArrival(60);
+  simulation.advanceArrival(80);
+  expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+  expect(simulation.beginHistory()).toBe(true);
   expect(simulation.historyRunning).toBe(true);
   return simulation;
 }
@@ -169,7 +171,7 @@ describe('Founding Chapter 1b continuity', () => {
     expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
   });
 
-  it('uses a deliberate first-year pace and holds authoritative Month Zero without catch-up', () => {
+  it('uses a deliberate first-year pace without freezing authoritative history', () => {
     const simulation = completedArrival('founding-continuity-pacing');
     const historian = new Historian(simulation.config);
     const originalAutoRun = simulation.config.autoRun;
@@ -177,12 +179,18 @@ describe('Founding Chapter 1b continuity', () => {
     installFoundingContinuityPacing();
     const presentation = new PresentationDirector(simulation.config);
 
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
-    expect(simulation.config.autoRun).toBe(false);
-    expect(presentation.tickBudget(simulation.state)).toBe(0);
+    const orientation = chooseFoundingChapterScene(historian, simulation.state);
+    expect(orientation).toBeDefined();
+    expect(simulation.config.autoRun).toBe(originalAutoRun);
+    expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
+    expect(presentation.targetSpeed(simulation.state, {
+      kind: orientation!.kind,
+      interest: orientation!.interest,
+      eventType: orientation!.event?.type,
+      eventMonth: orientation!.event?.month,
+    })).toBeCloseTo(0.08, 5);
 
     completeOrientation(simulation, historian);
-    expect(simulation.config.autoRun).toBe(originalAutoRun);
     const bridge = chooseFoundingContinuityScene(historian, simulation.state);
     expect(bridge).toBeDefined();
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);

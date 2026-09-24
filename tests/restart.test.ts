@@ -1,12 +1,15 @@
 ﻿import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
-import { assertPristine, podPosition, podTouchdown, validLandingSite } from '../src/sim/founding/FoundingArrival';
+import { ARRIVAL_END_SECONDS, assertPristine, podPosition, podTouchdown, validLandingSite } from '../src/sim/founding/FoundingArrival';
 import { RunRecordBuilder, createRunIdentity, migrateArchiveRecord } from '../src/historian/RunArchive';
 import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { createSettlementLayoutPlan } from '../src/shared/SettlementLayoutPlan';
 
 const CONFIG = { seed: 'arrival-day-preview', startMode: 'arrival' as const };
-const complete = (s: Simulation) => s.advanceArrival(46);
+const complete = (s: Simulation) => {
+  s.advanceArrival(ARRIVAL_END_SECONDS);
+  if (!s.beginHistory()) throw new Error('Expected completed Arrival orientation boundary');
+};
 
 describe('Arrival Day / authoritative restart', () => {
   it('erases a developed civilization and regenerates natural resources', () => {
@@ -116,8 +119,10 @@ describe('Arrival Day / authoritative restart', () => {
   }, 15000);
   it('replays independently of animation frame cadence', () => {
     const a = new Simulation(CONFIG), b = new Simulation(CONFIG); complete(a);
-    for (let i = 0; i < 460; i++) b.advanceArrival(0.1);
+    for (let i = 0; i < ARRIVAL_END_SECONDS * 10; i++) b.advanceArrival(0.1);
     b.advanceArrival(0.01);
+    expect(b.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
+    expect(b.beginHistory()).toBe(true);
     expect(a.state).toEqual(b.state);
     a.step(12); b.step(12);
     expect(a.state).toEqual(b.state);

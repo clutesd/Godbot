@@ -1,3 +1,4 @@
+import { isFoundingPresentationPhase } from '../sim/founding/FoundingArrival';
 import type { SimulationState, Vec2 } from '../sim/types';
 import type { ObservationCandidate } from './types';
 import { Historian } from './Historian';
@@ -54,15 +55,9 @@ interface FoundingChapterMemory {
   complete: boolean;
   startedMonth: number;
   baseline: FoundingChapterBaseline;
-  autoRunBeforeOrientation?: boolean;
-}
-
-interface HistorianConfigAccess {
-  config: { autoRun: boolean };
 }
 
 const memories = new WeakMap<Historian, FoundingChapterMemory>();
-const frozenStates = new WeakSet<SimulationState>();
 let pacingInstalled = false;
 let chapterInstalled = false;
 
@@ -115,15 +110,10 @@ function differingStartingConditions(baseline: FoundingChapterBaseline): boolean
   return new Set(signatures).size > 1;
 }
 
-function historianConfig(historian: Historian): HistorianConfigAccess['config'] {
-  return (historian as unknown as HistorianConfigAccess).config;
-}
-
 function holdFoundingChapter(historian: Historian, state: SimulationState, memory: FoundingChapterMemory): void {
-  const config = historianConfig(historian);
-  if (memory.autoRunBeforeOrientation === undefined) memory.autoRunBeforeOrientation = config.autoRun;
-  config.autoRun = false;
-  frozenStates.add(state);
+  void historian; void state; void memory;
+  // Arrival Day already owns the frozen cinematic prologue. Post-arrival orientation now rides
+  // over live, deliberately slow history instead of stopping the simulation for a second prologue.
 }
 
 /**
@@ -131,11 +121,8 @@ function holdFoundingChapter(historian: Historian, state: SimulationState, memor
  * can hand off directly without requiring a dummy Historian scene selection in between.
  */
 export function releaseFoundingChapterHold(historian: Historian, state: SimulationState): void {
-  frozenStates.delete(state);
-  const memory = memories.get(historian);
-  if (!memory || memory.autoRunBeforeOrientation === undefined) return;
-  historianConfig(historian).autoRun = memory.autoRunBeforeOrientation;
-  delete memory.autoRunBeforeOrientation;
+  void historian; void state;
+  // Compatibility hook for the cast layer; no clock mutation is required anymore.
 }
 
 /**
@@ -240,7 +227,7 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
 
 export function foundingChapterProgress(historian: Historian, state: SimulationState): FoundingChapterProgress {
   const baseline = foundingChapterBaseline(state);
-  if (!baseline || state.arrival?.phase !== 'HISTORY_RUNNING') return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
+  if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return { phase: 'unavailable', nextBeat: 0, totalBeats: 0 };
   const memory = memories.get(historian);
   const totalBeats = 1;
   if (memory) return {
@@ -259,7 +246,7 @@ export function foundingChapterProgress(historian: Historian, state: SimulationS
  * the geography; this beat states the premise once, then hands directly to human-scale history.
  */
 export function chooseFoundingChapterScene(historian: Historian, state: SimulationState): ObservationCandidate | undefined {
-  if (!state.arrival || state.arrival.phase !== 'HISTORY_RUNNING') {
+  if (!state.arrival || !isFoundingPresentationPhase(state.arrival.phase)) {
     releaseFoundingChapterHold(historian, state);
     return undefined;
   }
@@ -300,10 +287,7 @@ export function isFoundingChapterScene(scene: ObservationCandidate): boolean {
   return scene.id.startsWith('founding:');
 }
 
-/**
- * tickBudget=0 is a defensive backstop for direct PresentationDirector users. In the app, autoRun
- * is also held false so the frame accumulator cannot build a catch-up burst during the prologue.
- */
+/** Orientation requests cinematic pacing; monthly authority remains frozen until Simulation.beginHistory(). */
 export function installFoundingChapterPacing(): void {
   if (pacingInstalled) return;
   pacingInstalled = true;
@@ -317,14 +301,6 @@ export function installFoundingChapterPacing(): void {
     return targetSpeed.call(this, state, observation);
   };
 
-  const tickBudget = PresentationDirector.prototype.tickBudget;
-  PresentationDirector.prototype.tickBudget = function foundingTickBudget(
-    this: PresentationDirector,
-    state: Parameters<typeof tickBudget>[0],
-  ): number {
-    if (frozenStates.has(state)) return 0;
-    return tickBudget.call(this, state);
-  };
 }
 
 /**
