@@ -9,7 +9,7 @@ import type { AudioCategory, HistorianStatement, ObservationCandidate, Observati
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
 import { FOUNDING_VESSEL_KEEP_OUT_RADIUS } from '../shared/FoundingCampLayout';
-import { podPosition } from '../sim/founding/FoundingArrival';
+import { isArrivalFilmPhase, podPosition } from '../sim/founding/FoundingArrival';
 import type { PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 
 export interface CurrentObservation {
@@ -850,7 +850,8 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
 
 function isFoundingOverlayScene(sceneId: string | undefined): boolean {
   return Boolean(sceneId?.startsWith('founding:overview:')
-    || sceneId?.startsWith('founding-cast:introduction:'));
+    || sceneId?.startsWith('founding-cast:introduction:')
+    || sceneId?.startsWith('founding-release:'));
 }
 
 /**
@@ -945,7 +946,7 @@ export class CameraDirector {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
-    if (state.arrival && state.arrival.phase !== 'HISTORY_RUNNING') {
+    if (state.arrival && isArrivalFilmPhase(state.arrival.phase)) {
       const focus = arrivalSequenceFocus(state.arrival);
       const target = focus.target;
       this.desiredTarget.set(target.x, target.y, target.z);
