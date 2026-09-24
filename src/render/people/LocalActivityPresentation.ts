@@ -121,9 +121,10 @@ interface SocialBeat {
 }
 const SOCIAL_SCRIPTS: Record<SocialEncounterTone, readonly SocialBeat[]> = {
   warm: [
-    { action: 'warm-greeting', animation: 'converse-warm', seconds: 1.15, spacing: 0.44, lateral: 0.03 },
-    { action: 'warm-conversation', animation: 'converse-warm', seconds: 2.25, spacing: 0.45, lateral: 0.06 },
-    { action: 'linger-together', animation: 'converse-quiet', seconds: 1.65, spacing: 0.47, lateral: 0.04 },
+    { action: 'warm-greeting', animation: 'social-wave', seconds: 0.95, spacing: 0.44, lateral: 0.03 },
+    { action: 'warm-conversation', animation: 'converse-warm', seconds: 2.0, spacing: 0.45, lateral: 0.06 },
+    { action: 'small-shared-laugh', animation: 'social-laugh', seconds: 0.78, spacing: 0.46, lateral: 0.05 },
+    { action: 'linger-together', animation: 'converse-quiet', seconds: 1.4, spacing: 0.47, lateral: 0.04 },
   ],
   supportive: [
     { action: 'check-in', animation: 'converse-quiet', seconds: 1.35, spacing: 0.43, lateral: 0.02 },
@@ -146,7 +147,7 @@ const SOCIAL_SCRIPTS: Record<SocialEncounterTone, readonly SocialBeat[]> = {
     { action: 'acknowledge', animation: 'converse-quiet', seconds: 1.0, spacing: 0.6, lateral: 0.02 },
   ],
   casual: [
-    { action: 'greeting', animation: 'converse', seconds: 1.0, spacing: 0.52, lateral: 0.04 },
+    { action: 'greeting', animation: 'social-wave', seconds: 0.85, spacing: 0.52, lateral: 0.04 },
     { action: 'brief-conversation', animation: 'converse', seconds: 1.75, spacing: 0.54, lateral: 0.06 },
   ],
   tense: [
@@ -1334,7 +1335,10 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
   state.partnerId = peer.id;
   const speaking = encounter.role === 'mentor' || encounter.role === 'supporter'
     || encounter.role === 'peer' && (person.id < peer.id) === (encounter.beat % 2 === 0);
-  state.animation = encounter.role === 'supported' && encounter.beat === 1 ? 'reflect' : speaking ? beat.animation : 'converse-quiet';
+  const sharedLaugh = encounter.tone === 'warm' && beat.animation === 'social-laugh';
+  state.animation = encounter.role === 'supported' && encounter.beat === 1
+    ? 'reflect'
+    : sharedLaugh ? 'social-laugh' : speaking ? beat.animation : 'converse-quiet';
   state.action = socialActionFor(encounter, beat.action);
   const relationalLinger = encounter.tone === 'tense'
     ? 0.82 + encounter.strength * 0.08
