@@ -412,6 +412,8 @@ export function composeBuilding(
     group.userData['grammarRole'] = grammar.role;
     group.userData['grammarEra'] = grammar.era;
     group.userData['productiveGroundOwner'] = 'FarmFieldRenderer';
+    group.userData['productiveStructureAnchorX'] = shedX;
+    group.userData['productiveStructureAnchorZ'] = shedZ;
     return { group, height: 0.15 + shedHeight, extentX: 2.3, extentZ: 1.9 };
   }
 
