@@ -138,12 +138,12 @@ describe('cinematic motion', () => {
 
     director.update(1 / 60, frame / 60, sim.state, () => 0);
     expect(choose).toHaveBeenCalledTimes(2);
-    expect(director.observation.sceneId).toBe('ordinary:first-day');
+    expect(director.flightTelemetry().destinationSceneId).toBe('ordinary:first-day');
   });
 
   it('holds the completed release until history authority crosses out of FOUNDING_ORIENTATION', () => {
-    const sim = new Simulation({ seed: 'founding-release-authority-barrier', startMode: 'arrival', autoRun: true,
-      startingPopulation: 24, world: { size: 20 } });
+    const sim = new Simulation({ seed: 'arrival-day-preview', startMode: 'arrival', autoRun: true,
+      startingPopulation: 24 });
     sim.advanceArrival(120);
     expect(sim.foundingOrientationRunning).toBe(true);
 
@@ -186,7 +186,7 @@ describe('cinematic motion', () => {
     expect(sim.beginHistory()).toBe(true);
     director.update(1 / 60, frame / 60, sim.state, () => 0);
     expect(choose).toHaveBeenCalledTimes(2);
-    expect(director.observation.sceneId).toBe('ordinary:first-month');
+    expect(director.flightTelemetry().destinationSceneId).toBe('ordinary:first-month');
   });
 
   it('abandons an impossible physical route instead of trapping the documentary forever', () => {
