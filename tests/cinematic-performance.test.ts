@@ -94,6 +94,37 @@ describe('cinematic motion', () => {
     expect(sawDeparture).toBe(true);
   });
 
+  it('signals founding completion when the final release hands directly to an adjacent normal shot', () => {
+    const sim = new Simulation({ seed: 'founding-release-adjacent', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce({ ...template, id: 'founding:overview:event-1', kind: 'world-establishing', position: { x: 0, z: 0 } })
+      .mockReturnValueOnce({ ...template, id: 'founding-release:event-1', kind: 'street-observation', position: { x: 0, z: 0 } })
+      .mockReturnValue({ ...template, id: 'ordinary:first-day', kind: 'street-observation', position: { x: 0, z: 0 } });
+
+    const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.foundingPresentationComplete()).toBe(false);
+
+    let sawRelease = false;
+    for (let frame = 1; frame < 60 * 24; frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+      if (director.observation.sceneId === 'founding-release:event-1') sawRelease = true;
+      if (director.foundingPresentationComplete()) break;
+    }
+
+    expect(sawRelease).toBe(true);
+    expect(director.foundingPresentationComplete()).toBe(true);
+    expect(director.observation.sceneId).not.toBe('founding-release:event-1');
+  });
+
   it('abandons an impossible physical route instead of trapping the documentary forever', () => {
     const sim = new Simulation({ seed: 'camera-route-watchdog', startMode: 'established',
       startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
