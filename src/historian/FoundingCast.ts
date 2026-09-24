@@ -244,7 +244,11 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
   if (!baseline || !isFoundingPresentationPhase(state.arrival?.phase)) return { phase: 'unavailable', members: Object.freeze([]), introducedPersonIds: Object.freeze([]), targetSize: 0 };
   const memory = memories.get(historian);
   const members = memory?.members ?? foundingDocumentaryCast(state);
-  const introduced = memory ? [...memory.introducedPersonIds] : [];
+  const introduced = memory
+    ? [...memory.introducedPersonIds]
+    : state.arrival?.phase === 'HISTORY_RUNNING'
+      ? members.map(member => member.personId)
+      : [];
   if (!memory && state.arrival?.phase === 'HISTORY_RUNNING') {
     return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
   }
