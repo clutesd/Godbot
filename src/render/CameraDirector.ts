@@ -1248,7 +1248,10 @@ export class CameraDirector {
       flight.destinationPosition.z - this.camera.position.z,
     );
     if (flight.phase === 'depart' && this.camera.position.y >= flight.cruiseHeight - 0.4) flight.phase = 'cruise';
-    const approachRadius = THREE.MathUtils.clamp(flight.startDistance * 0.18, 3.5, 7.5);
+    // Start the descent while there is still meaningful horizontal travel left. Waiting until the
+    // lens is almost over the destination creates a helicopter-like vertical drop and makes even a
+    // smooth integrator feel late. Long flights get a proportionally larger approach envelope.
+    const approachRadius = THREE.MathUtils.clamp(flight.startDistance * 0.42, 7, 16);
     if (flight.phase === 'cruise' && horizontalDistance <= approachRadius) flight.phase = 'approach';
 
     if (flight.phase === 'depart') {
