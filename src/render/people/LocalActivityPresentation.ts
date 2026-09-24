@@ -357,8 +357,11 @@ export class LocalActivityPresentation {
         state.encounter.beat = invitation.encounter.beat;
         state.partnerId = peer.id; state.seconds = 0;
         applySocialBeat(person, peer, context, state);
-        // The invited listener holds their place while the initiator approaches.
-        state.destination = { x: context.visual?.x ?? state.base.x, z: context.visual?.z ?? state.base.z };
+        // The invited listener holds their place while the initiator approaches only when that
+        // floor slot is still clear. In a dense pod, keeping the safe encounter destination is
+        // preferable to overwriting it with a current position another bystander has entered.
+        const holdPosition = { x: context.visual?.x ?? state.base.x, z: context.visual?.z ?? state.base.z };
+        if (hasPeerClearance(person, holdPosition, context, peer.id, 0.34)) state.destination = holdPosition;
         state.restFacing = facingTarget(state.destination, context.visualFor?.(peer.id) ?? peer.position);
         break;
       }
