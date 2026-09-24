@@ -230,8 +230,8 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
     }
 
     const previous = foundingSiteComposition(arrival.pods[siteIndex - 1]!, siteIndex - 1);
-    const transitEnd = 0.34;
-    const approachEnd = 0.68;
+    const transitEnd = 0.5;
+    const approachEnd = 0.75;
 
     if (local < transitEnd) {
       const transit = smoothstep(local / transitEnd);
