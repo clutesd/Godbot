@@ -198,6 +198,25 @@ describe('structural component contract', () => {
     builder.dispose();
   });
 
+  it('leaves productive ground to the terrain-conforming farm renderer instead of composing a flat field slab', () => {
+    const { context, profile, response } = setup();
+    const development = response('food', 'field', 2, 'earth');
+    const grammar = resolveBuildingGrammar(profile, 'early', developmentBuildingRole(development), 'terrain-owned-field', development);
+    const palette = new MaterialPalette({ culture: context.culture.style, era: 'early' });
+    const composed = composeBuilding(grammar, palette, 'terrain-owned-field', BUILD_STAGE.DETAIL);
+
+    expect(composed.group.getObjectByName('ground')).toBeUndefined();
+    expect(composed.group.userData['productiveGroundOwner']).toBe('FarmFieldRenderer');
+    expect(composed.group.children.some(child => child.name === 'roof-thatch')).toBe(true);
+
+    composed.group.traverse(object => {
+      if ('geometry' in object && object.geometry && typeof object.geometry === 'object' && 'dispose' in object.geometry) {
+        (object.geometry as { dispose: () => void }).dispose();
+      }
+    });
+    palette.dispose();
+  });
+
   it('gives open fields and markets a damage-ready logical vocabulary', () => {
     const { response } = setup();
     const field = manifestFor(response('food', 'field', 1, 'earth'));
