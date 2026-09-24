@@ -1172,7 +1172,9 @@ export class AnimationController {
     if (!clip || clip.poses.length === 0) return null;
     const current = clip.poses[charState.currentPoseIndex];
     if (!current) return null;
-    const next = clip.poses[(charState.currentPoseIndex + 1) % clip.poses.length];
+    const nextIndex = charState.currentPoseIndex + 1;
+    const next = nextIndex < clip.poses.length ? clip.poses[nextIndex]
+      : clip.isLooping ? clip.poses[0] : undefined;
     if (!next || next === current) return current;
     return lerpPose(current, next, smoothstep(charState.poseFraction), this.poseBuffer);
   }
