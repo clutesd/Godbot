@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
+import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
@@ -172,9 +173,11 @@ export function cameraTargetFloorFor(kind: ObservationKind | undefined): number 
 }
 
 export function cameraTransitionScaleFor(kind: ObservationKind | undefined): number {
-  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.44;
-  if (kind === 'street-observation') return 0.58;
-  if (kind === 'traveler-follow') return 0.68;
+  // Human-scale tracking still needs to react, but not so aggressively that a moving actor can
+  // whip the lens. Long relocations no longer use this spring at all; CameraFlight owns those.
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.78;
+  if (kind === 'street-observation') return 0.86;
+  if (kind === 'traveler-follow') return 0.9;
   return 1;
 }
 
@@ -572,6 +575,30 @@ export function cameraVisibilityCorridor(
   return true;
 }
 
+
+/**
+ * Physical flight safety deliberately does not require the destination subject to remain visible.
+ * A real drone can cross a ridge or pass behind a building while travelling; the non-negotiable
+ * contract is that the lens itself never enters terrain, structures, vessels or rendered foliage.
+ */
+export function cameraFlightCorridorSafe(
+  state: SimulationState,
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+  elevationAt: (x: number, z: number) => number,
+  lensClearance = 0.72,
+  environmentProbe?: CameraEnvironmentProbe,
+): boolean {
+  const steps = Math.max(1, Math.ceil(from.distanceTo(to) / 0.2));
+  const point = new THREE.Vector3();
+  for (let index = 0; index <= steps; index += 1) {
+    point.lerpVectors(from, to, index / steps);
+    if (point.y < elevationAt(point.x, point.z) + lensClearance - 0.001) return false;
+    if (cameraLensObstruction(state, point, elevationAt, 0.12, environmentProbe) > 0.001) return false;
+  }
+  return true;
+}
+
 /** Hard validity precedes composition cost. Search at cinematic height before any crane escape. */
 export function resolveCameraSafety(
   state: SimulationState, authoredPosition: THREE.Vector3, target: THREE.Vector3,
@@ -728,6 +755,15 @@ function isFoundingCameraScene(sceneId: string | undefined): boolean {
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
  */
+interface CameraFlightState {
+  readonly destinationPosition: THREE.Vector3;
+  readonly destinationTarget: THREE.Vector3;
+  readonly startDistance: number;
+  readonly limits: CameraFlightLimits;
+  phase: 'depart' | 'cruise' | 'approach';
+  cruiseHeight: number;
+}
+
 export class CameraDirector {
   readonly observation: CurrentObservation = { label: 'The known world', detail: 'A new history begins.', kind: 'world-establishing', interest: 0.1, audioCategory: 'ambient-wilderness', revision: 0 };
   private readonly desiredPosition = new THREE.Vector3();
@@ -735,6 +771,10 @@ export class CameraDirector {
   private readonly lookTarget = new THREE.Vector3();
   private readonly positionVelocity = new THREE.Vector3();
   private readonly targetVelocity = new THREE.Vector3();
+  private readonly flightAcceleration = new THREE.Vector3();
+  private readonly gazeFlightAcceleration = new THREE.Vector3();
+  private flight?: CameraFlightState;
+  private acquiredScene?: ObservationCandidate;
   private routeCheckSeconds = 0;
   private readonly shotBasePosition = new THREE.Vector3();
   private readonly shotBaseTarget = new THREE.Vector3();
