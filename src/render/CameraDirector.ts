@@ -942,14 +942,17 @@ export class CameraDirector {
         this.camera.updateProjectionMatrix();
       }
 
-      // Keep one screen direction for the whole prologue. Composition evolves continuously around
-      // the subject instead of cutting to a new arbitrary side whenever the editorial beat changes.
+      // Wide Arrival beats preserve one screen direction. Human-scale site beats instead provide
+      // an explicit camera pose inside the cleared landing geography so safety does not have to
+      // invent a vertical escape route just to reach a founder.
       const azimuth = this.stableAzimuth('arrival:master') + focus.azimuthOffset;
-      const authored = new THREE.Vector3(
-        target.x + Math.cos(azimuth) * focus.radius,
-        target.y + focus.height,
-        target.z + Math.sin(azimuth) * focus.radius,
-      );
+      const authored = focus.cameraPosition
+        ? new THREE.Vector3(focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z)
+        : new THREE.Vector3(
+            target.x + Math.cos(azimuth) * focus.radius,
+            target.y + focus.height,
+            target.z + Math.sin(azimuth) * focus.radius,
+          );
       const before = this.camera.position.clone();
 
       // Exact forest/silhouette safety is intentionally a low-frequency survey during Arrival.
