@@ -511,6 +511,10 @@ export class GodboxRenderer {
     window.addEventListener('resize', this.resizeHandler);
   }
 
+  foundingPresentationComplete(): boolean {
+    return this.cameraDirector.foundingPresentationComplete();
+  }
+
   /**
    * Compile and render-warm the full visual stack while the opening overlay still owns the screen.
    * First-use shader compilation, shadow variants and post-processing programs must never occur
