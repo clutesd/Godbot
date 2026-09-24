@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { farmGeometry, type FarmGeometry } from '../../shared/FarmGeometry';
+import { farmGeometries, farmGeometry, farmPoint, type FarmGeometry } from '../../shared/FarmGeometry';
 import type { SimulationState } from '../../sim/types';
 import { farmPresentationState, type FarmPresentationState, type FarmStage } from './FarmActionPresentation';
 import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation';
@@ -13,7 +13,7 @@ const MAX_PLANTS = MAX_FIELDS * ROWS * COLUMNS * PLANTS_PER_CLUMP;
 const SOIL_SEGMENTS_X = 10;
 const SOIL_SEGMENTS_Z = 8;
 const RIBBON_SEGMENTS = 10;
-const SOIL_LIFT = 0.0045;
+const SOIL_LIFT = 0.0055;
 const MAX_HARVEST_PROPS = MAX_FIELDS * 8;
 const MAX_LEAVES = MAX_PLANTS * 2;
 const MAX_FIELD_MARKERS = MAX_FIELDS * 4;
@@ -42,6 +42,23 @@ const PALETTES: Record<FarmStage, FarmPalette> = {
   snow: { soil: '#8f9187', ridge: '#aaa99c', crop: '#7f846f', leaf: '#7f846f', head: '#aaa17f', wet: '#647978', border: '#7d776a' },
 };
 
+function presentationForField(base: FarmPresentationState, field: FarmGeometry): FarmPresentationState {
+  if (field.workable || field.source === 'fallback') return base;
+  const weatherStage = base.stage === 'snow' || base.stage === 'flooded' ? base.stage : undefined;
+  const damaged = field.burning || field.condition < 0.45 || field.status === 'ruin';
+  return {
+    ...base,
+    stage: weatherStage ?? (damaged ? 'damaged' : 'dormant'),
+    productive: false,
+    harvestable: false,
+    density: 0,
+    height: 0,
+    irrigation: 0,
+    output: 0,
+    blockedReason: field.burning ? 'fire-damaged-field' : field.status === 'active' ? 'unsafe-field' : 'fallow-field',
+  };
+}
+
 const STEM_OFFSETS = [
   [-0.025, 0],
   [0.02, -0.018],
@@ -55,7 +72,10 @@ const STEM_OFFSETS = [
  */
 export class FarmFieldRenderer {
   readonly group = new THREE.Group();
+  /** Primary work field by settlement, preserved for farmer choreography. */
   readonly fields = new Map<string, { geometry: FarmGeometry; state: FarmPresentationState }>();
+  /** Every visible physical/fallback field keyed by field id. */
+  readonly renderedFields = new Map<string, { geometry: FarmGeometry; state: FarmPresentationState }>();
 
   private readonly soil = this.surfaceMesh('Cultivated farm soil',
     new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
@@ -90,6 +110,7 @@ export class FarmFieldRenderer {
 
   update(state: SimulationState, heightAt: (x: number, z: number) => number, standable: (x: number, z: number) => boolean): void {
     this.fields.clear();
+    this.renderedFields.clear();
     const surfaces = {
       soil: new DrapedSurfaceBatch(),
       furrows: new DrapedSurfaceBatch(),
@@ -100,19 +121,30 @@ export class FarmFieldRenderer {
       bundles: 0, sacks: 0, markers: 0, baskets: 0 };
 
     for (const settlement of [...state.settlements].sort((a, b) => a.id.localeCompare(b.id))) {
-      const field = farmGeometry(settlement);
-      if (!field || counts.fields >= MAX_FIELDS) continue;
-      const visual = farmPresentationState(settlement, state.month, state.weather.cells[settlement.cellIndex]);
-      // Reject an entire unsafe bed instead of moving visual agriculture away from its authoritative geometry.
-      if (!standable(field.center.x, field.center.z) && visual.stage !== 'flooded' && visual.stage !== 'snow') continue;
-      this.fields.set(settlement.id, { geometry: field, state: visual });
-      const palette = PALETTES[visual.stage];
-      counts.fields++;
+      const candidates = farmGeometries(settlement);
+      if (candidates.length === 0 || counts.fields >= MAX_FIELDS) continue;
+      const baseVisual = farmPresentationState(settlement, state.month, state.weather.cells[settlement.cellIndex]);
+      const primary = farmGeometry(settlement);
+      const productiveFieldCount = Math.max(1, candidates.filter(field => field.workable).length);
+      for (const field of candidates) {
+        if (counts.fields >= MAX_FIELDS) break;
+        const sharedVisual = field.workable && field.source === 'plot' && productiveFieldCount > 1
+          ? { ...baseVisual, output: baseVisual.output / productiveFieldCount }
+          : baseVisual;
+        const visual = presentationForField(sharedVisual, field);
+        // Physical field plots persist even when damaged or temporarily unsafe. Only the synthetic
+        // fallback bed is rejected when the selected ground is not currently standable.
+        if (field.source === 'fallback' && !standable(field.center.x, field.center.z)
+          && visual.stage !== 'flooded' && visual.stage !== 'snow') continue;
+        this.renderedFields.set(field.id, { geometry: field, state: visual });
+        if (primary?.id === field.id) this.fields.set(settlement.id, { geometry: field, state: visual });
+        const palette = PALETTES[visual.stage];
+        counts.fields++;
 
       // Cultivated ground is a true draped surface, not a rigid slab. Every vertex samples the
       // same terrain authority used by people, buildings and the camera, so hills and hollows pass
       // naturally through the field without buried corners or floating edges.
-      surfaces.soil.addPatch(field.center.x, field.center.z, field.width, field.depth,
+      surfaces.soil.addPatch(field.center.x, field.center.z, field.width, field.depth, field.rotationY,
         SOIL_SEGMENTS_X, SOIL_SEGMENTS_Z, SOIL_LIFT, palette.soil, heightAt);
 
       // Rows are low crowned ribbons that follow the terrain longitudinally and laterally. They
@@ -120,46 +152,52 @@ export class FarmFieldRenderer {
       // rectangular beams laid across the landscape.
       const rowSpacing = field.depth / ROWS;
       const rowHalfWidth = rowSpacing * 0.27;
+      const maintained = field.workable || field.source === 'fallback';
       for (let row = 0; row < ROWS; row++) {
-        const z = field.center.z + (row - 1.5) * rowSpacing;
+        if (!maintained && field.status === 'ruin' && row % 2 === 1) continue;
+        const localZ = (row - 1.5) * rowSpacing;
+        const start = farmPoint(field, -field.width * 0.47, localZ);
+        const end = farmPoint(field, field.width * 0.47, localZ);
         surfaces.furrows.addRibbon(
-          field.center.x - field.width * 0.47, z,
-          field.center.x + field.width * 0.47, z,
-          rowHalfWidth * 2, RIBBON_SEGMENTS, 0.008, 0.021, palette.ridge, heightAt,
+          start.x, start.z, end.x, end.z,
+          rowHalfWidth * 2, RIBBON_SEGMENTS, maintained ? 0.011 : 0.007, maintained ? 0.034 : 0.017, palette.ridge, heightAt,
         );
       }
       for (let gap = 0; gap <= ROWS; gap++) {
         if (visual.irrigation <= 0.08 || visual.stage === 'snow') break;
-        const z = field.center.z + (gap - ROWS / 2) * rowSpacing;
+        const localZ = (gap - ROWS / 2) * rowSpacing;
+        const start = farmPoint(field, -field.width * 0.45, localZ);
+        const end = farmPoint(field, field.width * 0.45, localZ);
         const wetWidth = 0.016 + visual.irrigation * 0.02;
         surfaces.moisture.addRibbon(
-          field.center.x - field.width * 0.45, z,
-          field.center.x + field.width * 0.45, z,
-          wetWidth, RIBBON_SEGMENTS, 0.0065, 0.0075, palette.wet, heightAt,
+          start.x, start.z, end.x, end.z,
+          wetWidth, RIBBON_SEGMENTS, 0.0065, 0.009, palette.wet, heightAt,
         );
       }
 
       // The perimeter is an earthen berm, also draped vertex-by-vertex. A subtle crown gives the
       // silhouette definition without making the field look fenced or engineered.
-      const edge = Math.max(0.025, Math.min(field.width, field.depth) * 0.025);
+      const edge = Math.max(0.03, Math.min(field.width, field.depth) * 0.028);
       const halfW = field.width * 0.5;
       const halfD = field.depth * 0.5;
-      surfaces.borders.addRibbon(field.center.x - halfW - edge, field.center.z - halfD,
-        field.center.x + halfW + edge, field.center.z - halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
-      surfaces.borders.addRibbon(field.center.x - halfW - edge, field.center.z + halfD,
-        field.center.x + halfW + edge, field.center.z + halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
-      surfaces.borders.addRibbon(field.center.x - halfW, field.center.z - halfD,
-        field.center.x - halfW, field.center.z + halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
-      surfaces.borders.addRibbon(field.center.x + halfW, field.center.z - halfD,
-        field.center.x + halfW, field.center.z + halfD, edge * 2, RIBBON_SEGMENTS, 0.007, 0.027, palette.border, heightAt);
+      const northA = farmPoint(field, -halfW - edge, -halfD), northB = farmPoint(field, halfW + edge, -halfD);
+      const southA = farmPoint(field, -halfW - edge, halfD), southB = farmPoint(field, halfW + edge, halfD);
+      const westA = farmPoint(field, -halfW, -halfD), westB = farmPoint(field, -halfW, halfD);
+      const eastA = farmPoint(field, halfW, -halfD), eastB = farmPoint(field, halfW, halfD);
+      const bermEdge = maintained ? 0.01 : 0.007;
+      const bermCrown = maintained ? 0.045 : field.status === 'ruin' ? 0.018 : 0.028;
+      surfaces.borders.addRibbon(northA.x, northA.z, northB.x, northB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
+      surfaces.borders.addRibbon(southA.x, southA.z, southB.x, southB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
+      surfaces.borders.addRibbon(westA.x, westA.z, westB.x, westB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
+      surfaces.borders.addRibbon(eastA.x, eastA.z, eastB.x, eastB.z, edge * 2, RIBBON_SEGMENTS, bermEdge, bermCrown, palette.border, heightAt);
 
       // Four small corner markers help cultivated land read as intentionally managed without
       // inventing fences, ownership or infrastructure in simulation state.
       if (visual.stage !== 'dormant' && visual.stage !== 'snow') {
         for (const [mx, mz] of [[-halfW, -halfD], [halfW, -halfD], [-halfW, halfD], [halfW, halfD]] as const) {
-          const x = field.center.x + mx, z = field.center.z + mz;
-          this.emit(this.markers, counts.markers++, x, heightAt(x, z) + 0.09, z,
-            0.025, 0.18, 0.025, palette.border, resourceVisualUnit(`${settlement.id}:${mx}:${mz}:marker`) * 0.12 - 0.06);
+          const point = farmPoint(field, mx, mz);
+          this.emit(this.markers, counts.markers++, point.x, heightAt(point.x, point.z) + 0.09, point.z,
+            0.025, 0.18, 0.025, palette.border, resourceVisualUnit(`${field.id}:${mx}:${mz}:marker`) * 0.12 - 0.06);
         }
       }
 
@@ -168,17 +206,19 @@ export class FarmFieldRenderer {
         const headStage = visual.stage === 'mature' || visual.stage === 'harvest';
         const stubble = visual.stage === 'stubble';
         for (let row = 0; row < ROWS; row++) for (let column = 0; column < COLUMNS; column++) {
-          const baseX = field.center.x + (column / (COLUMNS - 1) - 0.5) * field.width * 0.8;
-          const baseZ = field.center.z + (row - 1.5) * rowSpacing;
+          const base = farmPoint(field, (column / (COLUMNS - 1) - 0.5) * field.width * 0.8, (row - 1.5) * rowSpacing);
+          const baseX = base.x;
+          const baseZ = base.z;
           const h = visual.height * (0.8 + visual.health * 0.2);
           for (let plant = 0; plant < plantCount; plant++) {
             const [ox, oz] = STEM_OFFSETS[plant]!;
-            const x = baseX + ox * (0.65 + field.width * 0.08);
-            const z = baseZ + oz * (0.65 + field.depth * 0.08);
+            const localOffset = farmPoint(field, ox * (0.65 + field.width * 0.08), oz * (0.65 + field.depth * 0.08));
+            const x = baseX + (localOffset.x - field.center.x);
+            const z = baseZ + (localOffset.z - field.center.z);
             const stalkHeight = stubble ? Math.max(0.012, h) : h * (0.9 + plant * 0.05);
             const radius = 0.006 + visual.density * 0.004;
-            const lean = (resourceVisualUnit(`${settlement.id}:${row}:${column}:${plant}:lean`) - 0.5) * 0.2;
-            const turn = resourceVisualUnit(`${settlement.id}:${row}:${column}:${plant}:turn`) * Math.PI;
+            const lean = (resourceVisualUnit(`${field.id}:${row}:${column}:${plant}:lean`) - 0.5) * 0.2;
+            const turn = resourceVisualUnit(`${field.id}:${row}:${column}:${plant}:turn`) * Math.PI;
             this.emit(this.stems, counts.stems++, x, heightAt(x, z) + stalkHeight * 0.5 + 0.016, z,
               radius, stalkHeight, radius, palette.crop, lean, turn);
             if (!stubble && stalkHeight > 0.03) {
@@ -203,23 +243,24 @@ export class FarmFieldRenderer {
         && (visual.stage === 'mature' || visual.stage === 'harvest' || visual.stage === 'stubble');
       if (harvestEvidence) {
         const pieces = Math.min(5, Math.max(1, Math.ceil(Math.log2(1 + visual.output))));
-        const edgeZ = field.center.z + halfD + 0.16;
+        const edgeLocalZ = halfD + 0.16;
         for (let piece = 0; piece < pieces; piece++) {
-          const x = field.center.x + (piece - (pieces - 1) / 2) * 0.13;
-          const y = heightAt(x, edgeZ) + 0.06;
-          this.emit(this.bundles, counts.bundles++, x, y, edgeZ, 0.95, 0.95, 0.95, palette.head,
-            piece % 2 ? 0.16 : -0.13, resourceVisualUnit(`${settlement.id}:sheaf:${piece}`) * Math.PI);
+          const point = farmPoint(field, (piece - (pieces - 1) / 2) * 0.13, edgeLocalZ);
+          const y = heightAt(point.x, point.z) + 0.06;
+          this.emit(this.bundles, counts.bundles++, point.x, y, point.z, 0.95, 0.95, 0.95, palette.head,
+            piece % 2 ? 0.16 : -0.13, resourceVisualUnit(`${field.id}:sheaf:${piece}`) * Math.PI);
         }
         if (visual.harvestable) {
-          const x = field.center.x + Math.min(halfW * 0.72, 0.42);
-          this.emit(this.baskets, counts.baskets++, x, heightAt(x, edgeZ) + 0.055, edgeZ, 1, 1, 1, '#8d6942');
+          const basket = farmPoint(field, Math.min(halfW * 0.72, 0.42), edgeLocalZ);
+          this.emit(this.baskets, counts.baskets++, basket.x, heightAt(basket.x, basket.z) + 0.055, basket.z, 1, 1, 1, '#8d6942');
           const sackCount = Math.min(2, Math.max(1, Math.ceil(Math.log2(1 + visual.output) / 3)));
           for (let sack = 0; sack < sackCount; sack++) {
-            const sx = field.center.x - Math.min(halfW * 0.7, 0.38) + sack * 0.14;
-            this.emit(this.sacks, counts.sacks++, sx, heightAt(sx, edgeZ) + 0.075, edgeZ,
+            const point = farmPoint(field, -Math.min(halfW * 0.7, 0.38) + sack * 0.14, edgeLocalZ);
+            this.emit(this.sacks, counts.sacks++, point.x, heightAt(point.x, point.z) + 0.075, point.z,
               0.9, 0.9, 0.9, '#a88a5f', (sack ? 1 : -1) * 0.06);
           }
         }
+      }
       }
     }
 
@@ -293,6 +334,7 @@ class DrapedSurfaceBatch {
     centerZ: number,
     width: number,
     depth: number,
+    rotationY: number,
     segmentsX: number,
     segmentsZ: number,
     lift: number,
@@ -301,12 +343,15 @@ class DrapedSurfaceBatch {
   ): void {
     const base = this.vertexCount;
     const rgb = this.colour.set(colour);
+    const cosine = Math.cos(rotationY), sine = Math.sin(rotationY);
     for (let zIndex = 0; zIndex <= segmentsZ; zIndex++) {
       const v = zIndex / segmentsZ;
-      const z = centerZ + (v - 0.5) * depth;
+      const localZ = (v - 0.5) * depth;
       for (let xIndex = 0; xIndex <= segmentsX; xIndex++) {
         const u = xIndex / segmentsX;
-        const x = centerX + (u - 0.5) * width;
+        const localX = (u - 0.5) * width;
+        const x = centerX + localX * cosine + localZ * sine;
+        const z = centerZ - localX * sine + localZ * cosine;
         this.vertex(x, heightAt(x, z) + lift, z, rgb);
       }
     }

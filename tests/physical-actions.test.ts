@@ -864,8 +864,13 @@ describe('agricultural presentation', () => {
     person.activity = 'travel'; expect(farmerCanPresent(person, field, state, weather)).toBe(false);
     for (let step = 0; step < 12; step++) {
       const a = farmAnchor(field, person.id, step); expect(a).toEqual(farmAnchor(field, person.id, step));
-      expect(Math.abs(a.target.x - field.center.x)).toBeLessThan(field.width / 2);
-      expect(Math.abs(a.anchor.z - field.center.z)).toBeLessThan(field.depth / 2);
+      const cosine = Math.cos(field.rotationY), sine = Math.sin(field.rotationY);
+      const targetDx = a.target.x - field.center.x, targetDz = a.target.z - field.center.z;
+      const anchorDx = a.anchor.x - field.center.x, anchorDz = a.anchor.z - field.center.z;
+      const targetLocalX = targetDx * cosine - targetDz * sine;
+      const anchorLocalZ = anchorDx * sine + anchorDz * cosine;
+      expect(Math.abs(targetLocalX)).toBeLessThan(field.width / 2);
+      expect(Math.abs(anchorLocalZ)).toBeLessThan(field.depth / 2);
     }
   });
   it('shows crop props only after contact and varies individual cadence', () => {

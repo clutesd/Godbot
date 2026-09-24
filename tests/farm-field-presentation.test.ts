@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { vegetationFixture } from './fixtures/vegetation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
+import { farmGeometries, farmGeometry } from '../src/shared/FarmGeometry';
+import type { Settlement, SimulationState } from '../src/sim/types';
+import type { StructureDevelopment } from '../src/sim/development/types';
 
 function fixture(month = 6) {
   const f = vegetationFixture(`farm-field-polish:${month}`);
@@ -29,6 +32,41 @@ function mesh(renderer: FarmFieldRenderer, name: string): THREE.Mesh | THREE.Ins
 function visibleCount(object: THREE.Mesh | THREE.InstancedMesh): number {
   return object instanceof THREE.InstancedMesh ? object.count : object.geometry.getAttribute('position')?.count ?? 0;
 }
+
+function fieldDevelopment(state: SimulationState, settlement: Settlement, status: StructureDevelopment['status']): StructureDevelopment {
+  const culture = state.cultures.find(entry => entry.id in settlement.cultureShares) ?? state.cultures[0]!;
+  const origin = {
+    month: 0,
+    action: 'founded' as const,
+    name: 'farmstead',
+    need: 'food' as const,
+    cultureId: culture.id,
+    reasons: ['test-field'],
+    form: 'field' as const,
+    level: 1,
+    material: 'earth' as const,
+  };
+  return {
+    need: 'food',
+    form: 'field',
+    name: 'farmstead',
+    level: 1,
+    material: 'earth',
+    cultureId: culture.id,
+    style: structuredClone(culture.style),
+    services: { food: 1 },
+    reasons: ['test-field'],
+    capabilities: ['crop-selection'],
+    cost: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 },
+    labor: 1,
+    status,
+    origin,
+    history: [],
+    transitionCount: 0,
+    lastUsedMonth: state.month,
+  };
+}
+
 
 describe('farm field visual polish', () => {
   it('renders readable cultivated rows, crops, ripe heads and harvest material from existing agriculture state', () => {
@@ -74,15 +112,61 @@ describe('farm field visual polish', () => {
     const rows = rowMesh.geometry.getAttribute('position');
     const rowGroundOffsets = Array.from({ length: rows.count }, (_, index) =>
       rows.getY(index) - heightAt(rows.getX(index), rows.getZ(index)));
-    expect(Math.min(...rowGroundOffsets)).toBeGreaterThan(0.006);
-    expect(Math.max(...rowGroundOffsets)).toBeLessThan(0.023);
-    expect(Math.max(...rowGroundOffsets) - Math.min(...rowGroundOffsets)).toBeGreaterThan(0.01);
+    expect(Math.min(...rowGroundOffsets)).toBeGreaterThan(0.009);
+    expect(Math.max(...rowGroundOffsets)).toBeLessThan(0.036);
+    expect(Math.max(...rowGroundOffsets) - Math.min(...rowGroundOffsets)).toBeGreaterThan(0.02);
 
     const normals = rowMesh.geometry.getAttribute('normal');
     expect(normals.count).toBe(rows.count);
     const upwardShare = Array.from({ length: normals.count }, (_, index) => normals.getY(index))
       .filter(y => y > 0.15).length / normals.count;
     expect(upwardShare).toBeGreaterThan(0.95);
+  });
+
+  it('renders every developed farm plot while keeping one deterministic safe work field', () => {
+    const { state, settlement } = fixture(6);
+    const a = fieldDevelopment(state, settlement, 'active');
+    const b = fieldDevelopment(state, settlement, 'active');
+    settlement.structurePlots = [
+      { id: 'field-a', development: a, worldX: settlement.position.x + 2.1, worldZ: settlement.position.z + 0.7,
+        width: 2.6, depth: 1.9, height: 0.4, radius: 1.6, condition: 1, foundedMonth: 4 },
+      { id: 'field-b', development: b, worldX: settlement.position.x - 2.4, worldZ: settlement.position.z + 1.1,
+        width: 2.4, depth: 1.8, height: 0.4, radius: 1.5, condition: 0.88, foundedMonth: 8 },
+    ];
+
+    const geometries = farmGeometries(settlement);
+    expect(geometries.map(field => field.id)).toEqual(['field-a', 'field-b']);
+    expect(new Set(geometries.map(field => field.rotationY)).size).toBe(2);
+    expect(farmGeometry(settlement)?.id).toBe('field-a');
+
+    const renderer = new FarmFieldRenderer();
+    renderer.update(state, (x, z) => x * 0.03 - z * 0.02, () => true);
+    expect(renderer.renderedFields.size).toBe(2);
+    expect([...renderer.renderedFields.keys()]).toEqual(['field-a', 'field-b']);
+    expect(renderer.fields.get(settlement.id)?.geometry.id).toBe('field-a');
+    expect(renderer.renderedFields.get('field-a')?.state.output).toBeCloseTo(5);
+    expect(renderer.renderedFields.get('field-b')?.state.output).toBeCloseTo(5);
+    expect(mesh(renderer, 'Cultivated farm soil').geometry.getAttribute('position').count).toBeGreaterThanOrEqual(198);
+  });
+
+  it('keeps damaged and abandoned farm ground visible without treating it as productive work', () => {
+    const { state, settlement } = fixture(6);
+    settlement.structurePlots = [
+      { id: 'working-field', development: fieldDevelopment(state, settlement, 'active'),
+        worldX: settlement.position.x + 2, worldZ: settlement.position.z + 0.6,
+        width: 2.5, depth: 1.8, height: 0.4, radius: 1.5, condition: 0.95, foundedMonth: 2 },
+      { id: 'old-field', development: fieldDevelopment(state, settlement, 'abandoned'),
+        worldX: settlement.position.x - 2.2, worldZ: settlement.position.z + 0.8,
+        width: 2.3, depth: 1.7, height: 0.4, radius: 1.45, condition: 0.35, foundedMonth: -30, accessRestricted: true },
+    ];
+
+    const renderer = new FarmFieldRenderer();
+    renderer.update(state, () => 0, () => true);
+    const old = renderer.renderedFields.get('old-field');
+    expect(old).toBeDefined();
+    expect(old?.state.productive).toBe(false);
+    expect(old?.state.stage).toBe('damaged');
+    expect(farmGeometry(settlement)?.id).toBe('working-field');
   });
 
   it('uses irrigation only as a visual cue and clears it when existing irrigation authority is absent', () => {
