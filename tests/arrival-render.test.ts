@@ -229,6 +229,9 @@ describe('Arrival presentation contracts', () => {
       const focus = arrivalSequenceFocus(s.state.arrival!);
       expect([focus.target.x, focus.target.y, focus.target.z, focus.radius, focus.height, focus.transitionSeconds, focus.azimuthOffset, focus.fov]
         .every(Number.isFinite)).toBe(true);
+      if (focus.cameraPosition) {
+        expect([focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z].every(Number.isFinite)).toBe(true);
+      }
       expect(['pristine', 'descent', 'touchdown', 'site-flythrough', 'handoff']).toContain(focus.beat);
       expect(focus.fov).toBeGreaterThanOrEqual(30);
       expect(focus.fov).toBeLessThanOrEqual(38);
@@ -251,6 +254,21 @@ describe('Arrival presentation contracts', () => {
       previous = focus;
     }
     expect([...visitedSites]).toEqual([0, 1, 2, 3, 4]);
-    expect(closestSiteRadius).toBeLessThan(4.5);
+    expect(closestSiteRadius).toBeLessThan(2);
+
+    // Every founding site gets a true stationary close hold rather than immediately climbing away.
+    for (let siteIndex = 0; siteIndex < 5; siteIndex += 1) {
+      s.state.arrival!.elapsedSeconds = 30 + siteIndex * 8 + 6.2;
+      const heldA = arrivalSequenceFocus(s.state.arrival!);
+      s.state.arrival!.elapsedSeconds += 0.8;
+      const heldB = arrivalSequenceFocus(s.state.arrival!);
+      expect(heldA.beat).toBe('site-flythrough');
+      expect(heldA.siteIndex).toBe(siteIndex);
+      expect(heldA.cameraPosition).toBeDefined();
+      expect(heldB.cameraPosition).toEqual(heldA.cameraPosition);
+      expect(heldB.target).toEqual(heldA.target);
+      expect(heldA.height).toBeLessThan(1);
+      expect(heldA.fov).toBeLessThanOrEqual(31);
+    }
   });
 });
