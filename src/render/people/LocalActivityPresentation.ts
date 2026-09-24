@@ -1327,7 +1327,8 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
   }
   if (encounter.pairedOffset) {
     const paired = { x: state.destination.x + encounter.pairedOffset.x, z: state.destination.z + encounter.pairedOffset.z };
-    if (bounded(person, paired) && localSegmentSafe(from, paired, context)) state.destination = paired;
+    if (bounded(person, paired) && localSegmentSafe(from, paired, context)
+      && hasPeerClearance(person, paired, context, peer.id, 0.34)) state.destination = paired;
   }
   state.focus.x = peerPosition.x;
   state.focus.z = peerPosition.z;
