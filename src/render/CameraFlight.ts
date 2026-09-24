@@ -68,16 +68,9 @@ export function advanceCameraFlight(
     velocity.addScaledVector(acceleration, stepSeconds);
     clampLength(velocity, limits.maxSpeed);
 
-    offset.copy(target).sub(position);
-    const remaining = offset.length();
-    const travel = velocity.length() * stepSeconds;
-    if (remaining > EPSILON && travel >= remaining && velocity.dot(offset) > 0) {
-      position.copy(target);
-      velocity.multiplyScalar(0.35);
-      acceleration.multiplyScalar(0.25);
-    } else {
-      position.addScaledVector(velocity, stepSeconds);
-    }
+    // Do not snap or damp at the destination. The braking-speed target above naturally reduces
+    // velocity and the jerk limit carries that deceleration through the final approach.
+    position.addScaledVector(velocity, stepSeconds);
   }
 }
 
