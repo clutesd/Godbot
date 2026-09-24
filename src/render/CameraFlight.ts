@@ -75,5 +75,7 @@ export function advanceCameraFlight(
 }
 
 export function cameraFlightSettled(position: Readonly<Vector3>, velocity: Readonly<Vector3>, target: Readonly<Vector3>, tolerance = 0.35): boolean {
-  return position.distanceTo(target) <= tolerance && velocity.length() <= Math.max(0.22, tolerance * 0.8);
+  // Acquisition is a handoff to the local critically damped spring, not a requirement to stop dead
+  // in space. A small residual velocity makes the transition feel like one continuous move.
+  return position.distanceTo(target) <= tolerance && velocity.length() <= Math.max(0.28, tolerance * 1.1);
 }
