@@ -59,6 +59,40 @@ describe('Arrival presentation contracts', () => {
     expect(scene.children).toHaveLength(0);
     expect(view.root.children).toHaveLength(0);
   }, 10000);
+
+  it('skins every founding vessel as a bronze relic with site-colored luminous runes', () => {
+    const s = new Simulation({ seed: 'arrival-bronze-runes', startMode: 'arrival' });
+    const view = new FoundingPodRenderer(s.state);
+
+    const hulls = view.root.children.filter((object): object is THREE.Group =>
+      object instanceof THREE.Group && Boolean(object.userData.podId));
+    expect(hulls).toHaveLength(5);
+
+    for (const [index, hull] of hulls.entries()) {
+      const pod = s.state.arrival!.pods[index]!;
+      expect(hull.userData.siteColor).toBe(pod.color);
+      expect(hull.userData.foundingProfile).toBe(pod.name);
+
+      const shell = hull.getObjectByName('bronze-hull') as THREE.Mesh | undefined;
+      expect(shell).toBeDefined();
+      const shellMaterial = shell!.material as THREE.MeshStandardMaterial;
+      expect(shellMaterial.metalness).toBeGreaterThan(0.7);
+      expect(shellMaterial.roughness).toBeLessThan(0.5);
+
+      const runes = hull.getObjectByName('ancient-runes');
+      expect(runes).toBeDefined();
+      const runeCore = runes!.getObjectByName('founding-rune-core') as THREE.Mesh | undefined;
+      const runeHalo = runes!.getObjectByName('founding-rune-halo') as THREE.Mesh | undefined;
+      expect(runeCore).toBeDefined();
+      expect(runeHalo).toBeDefined();
+      expect((runeCore!.material as THREE.MeshBasicMaterial).color.getHexString())
+        .toBe(new THREE.Color(pod.color).getHexString());
+      expect((runeHalo!.material as THREE.MeshBasicMaterial).blending).toBe(THREE.AdditiveBlending);
+    }
+
+    view.dispose();
+  });
+
   it('keeps the central Arrival cinematic through the human anchors, then releases it', () => {
     expect(foundingArrivalDialogue(undefined, 'Elsewhere', 'Ordinary history')).toBeUndefined();
     expect(foundingArrivalDialogue('worker:someone', 'A worker', 'Ordinary history')).toBeUndefined();
