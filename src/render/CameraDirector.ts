@@ -246,12 +246,14 @@ export function cameraFlightProfileFor(kind: ObservationKind | undefined, distan
   if (isPersonalCameraKind(kind)) {
     return {
       limits: {
-        maxSpeed: THREE.MathUtils.clamp(3.1 + d * 0.055, 3.2, 5.8),
-        maxAcceleration: d > 32 ? 1.45 : d > 14 ? 1.25 : 1.05,
-        maxJerk: d > 24 ? 4 : 3.6,
-        responseSeconds: 0.55,
+        // Personal travel remains slower than wide flight, but braking authority stays strong
+        // enough to settle into a close composition instead of oscillating around the subject.
+        maxSpeed: THREE.MathUtils.clamp(3.5 + d * 0.07, 3.6, 6.5),
+        maxAcceleration: d > 32 ? 1.8 : d > 14 ? 1.55 : 1.4,
+        maxJerk: d > 24 ? 5 : 4.8,
+        responseSeconds: 0.48,
       },
-      gazeLimits: { maxSpeed: 5.4, maxAcceleration: 2.6, maxJerk: 8, responseSeconds: 0.48 },
+      gazeLimits: { maxSpeed: 5.6, maxAcceleration: 2.8, maxJerk: 8.5, responseSeconds: 0.46 },
       cruiseClearance: 2.4 + Math.min(3.2, d * 0.045),
       destinationLift: 1.2,
       approachFraction: 0.74,
