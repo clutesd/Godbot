@@ -70,12 +70,19 @@ describe('farm field visual polish', () => {
     }
     expect(maxY - minY).toBeGreaterThan(0.08);
 
-    const rows = mesh(renderer, 'Cultivated farm furrows').geometry.getAttribute('position');
+    const rowMesh = mesh(renderer, 'Cultivated farm furrows');
+    const rows = rowMesh.geometry.getAttribute('position');
     const rowGroundOffsets = Array.from({ length: rows.count }, (_, index) =>
       rows.getY(index) - heightAt(rows.getX(index), rows.getZ(index)));
     expect(Math.min(...rowGroundOffsets)).toBeGreaterThan(0.006);
     expect(Math.max(...rowGroundOffsets)).toBeLessThan(0.023);
     expect(Math.max(...rowGroundOffsets) - Math.min(...rowGroundOffsets)).toBeGreaterThan(0.01);
+
+    const normals = rowMesh.geometry.getAttribute('normal');
+    expect(normals.count).toBe(rows.count);
+    const upwardShare = Array.from({ length: normals.count }, (_, index) => normals.getY(index))
+      .filter(y => y > 0.15).length / normals.count;
+    expect(upwardShare).toBeGreaterThan(0.95);
   });
 
   it('uses irrigation only as a visual cue and clears it when existing irrigation authority is absent', () => {
