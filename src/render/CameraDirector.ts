@@ -1253,8 +1253,8 @@ export class CameraDirector {
     this.camera.lookAt(this.lookTarget);
 
     if (flight.phase === 'approach'
-      && cameraFlightSettled(this.camera.position, this.positionVelocity, flight.destinationPosition, 0.48)
-      && this.lookTarget.distanceTo(flight.destinationTarget) <= 1.15) {
+      && cameraFlightSettled(this.camera.position, this.positionVelocity, flight.destinationPosition, 0.65)
+      && this.lookTarget.distanceTo(flight.destinationTarget) <= 1.35) {
       this.flight = undefined;
       this.flightAcceleration.set(0, 0, 0);
       this.gazeFlightAcceleration.set(0, 0, 0);
