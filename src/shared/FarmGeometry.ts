@@ -29,7 +29,7 @@ export function farmPlotRotation(settlement: Settlement, plot: Pick<StructurePlo
   const dz = plot.worldZ - settlement.position.z;
   const radial = Math.hypot(dx, dz) > 0.001 ? Math.atan2(-dx, -dz) : 0;
   const variation = (resourceVisualUnit(`${plot.id}:field-orientation`) - 0.5) * 0.24;
-  return radial + Math.PI * 0.5 + variation;
+  return radial + variation;
 }
 
 function plotFarmGeometry(settlement: Settlement, plot: StructurePlot): FarmGeometry {
