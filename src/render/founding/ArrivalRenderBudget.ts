@@ -14,12 +14,19 @@ export interface ArrivalRenderPolicy {
  * cannot change until history starts.
  */
 export function arrivalRenderPolicy(state: SimulationState): ArrivalRenderPolicy {
-  const active = Boolean(state.arrival && state.arrival.phase !== 'HISTORY_RUNNING');
+  const arrival = state.arrival;
+  const active = Boolean(arrival && arrival.phase !== 'HISTORY_RUNNING');
+  // Founders begin emerging shortly after the first touchdown. From that point onward the people
+  // are the subject of the film, so keep character presentation live while the heavier simulation
+  // and world-maintenance systems remain frozen.
+  const humanSequence = Boolean(active && arrival && arrival.elapsedSeconds >= 26.5);
   return {
     active,
-    animateHumans: !active,
+    animateHumans: !active || humanSequence,
     refreshWorldPresentation: !active,
-    refreshVegetationLod: !active,
+    // The camera now visits all five sites at ground level. Refreshing vegetation LOD during the
+    // site tour prevents a beautiful low shot from inheriting the opening's single-site LOD.
+    refreshVegetationLod: !active || Boolean(arrival && arrival.elapsedSeconds >= 28),
     updateAmbientWorldEffects: !active,
   };
 }
