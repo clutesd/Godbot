@@ -40,6 +40,9 @@ describe('cinematic motion', () => {
     }
     expect(sawTransit).toBe(true);
     expect(maximumStep).toBeLessThan(0.19);
+    if (!acquired) {
+      throw new Error(`Camera failed to acquire remote scene: ${JSON.stringify(director.flightTelemetry())}`);
+    }
     expect(acquired).toBe(true);
   });
 
