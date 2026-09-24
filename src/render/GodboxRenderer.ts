@@ -1823,7 +1823,21 @@ export class GodboxRenderer {
     const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
     const fit = Math.min(placement.width / grammarWidth, placement.depth / grammarDepth) * (placement.development ? 0.64 + placement.development.level * 0.12 : 1);
 
-    building.position.set(placement.localX, terrainY, placement.localZ);
+    // Field assets contain only a small edge store; FarmFieldRenderer owns the cultivated ground.
+    // Ground the store where it is actually drawn rather than at the plot centre so sloped fields
+    // do not leave the agricultural structure hovering or buried.
+    let groundedTerrainY = terrainY;
+    if (placement.development?.form === 'field') {
+      const anchorX = Number(asset.mesh.userData['productiveStructureAnchorX'] ?? 0);
+      const anchorZ = Number(asset.mesh.userData['productiveStructureAnchorZ'] ?? 0);
+      const cosine = Math.cos(placement.rotationY), sine = Math.sin(placement.rotationY);
+      const offsetX = (anchorX * cosine + anchorZ * sine) * fit;
+      const offsetZ = (-anchorX * sine + anchorZ * cosine) * fit;
+      const settlementY = this.elevationAt(placement.worldX, placement.worldZ) - terrainY;
+      groundedTerrainY = this.elevationAt(placement.worldX + offsetX, placement.worldZ + offsetZ) - settlementY;
+    }
+
+    building.position.set(placement.localX, groundedTerrainY, placement.localZ);
     building.rotation.y = placement.rotationY;
     building.scale.setScalar(fit);
     building.userData['placementKey'] = placement.key;

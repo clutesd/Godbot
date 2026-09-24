@@ -389,28 +389,50 @@ export function composeBuilding(
   stage: BuildStage,
 ): ComposedBuilding {
   const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift);
-  // Open institutions and productive land have their own physical silhouette, using the same
-  // surface batching and footprint contract as enclosed buildings.
-  if (grammar.development?.form === 'gathering' && grammar.development.level === 1 || grammar.development?.form === 'field') {
-    canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.012, 0, 2.2, 0.024, 1.8);
-    const field = grammar.development?.form === 'field';
-    for (let i = 0; i < (field ? 7 : 6); i++) {
-      if (field) {
-        canvas.at('timber', BUILD_STAGE.WALLS)?.addBox(-0.9 + i * 0.28, 0.045, 0, 0.08, 0.065, 1.5);
-      } else {
-        const angle = i / 6 * Math.PI * 2;
-        canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.1, Math.sin(angle) * 0.55, 0.3, 0.2, 0.22, angle);
-        if (grammar.development?.need === 'trade') {
-          canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.3, Math.sin(angle) * 0.55, 0.04, 0.6, 0.04);
-          canvas.at('cloth', BUILD_STAGE.ROOF)?.addBox(Math.cos(angle) * 0.65, 0.6, Math.sin(angle) * 0.55, 0.48, 0.04, 0.4, angle);
-        }
-      }
+  // Productive ground is rendered by FarmFieldRenderer, which can conform every vertex to the
+  // terrain. The structure asset contributes only a small above-ground farm store at the plot edge;
+  // it must never add a second rigid field slab or fake rows through the terrain.
+  if (grammar.development?.form === 'field') {
+    const level = grammar.development.level;
+    const shedX = 0.72, shedZ = 0.56;
+    const shedHeight = 0.32 + Math.min(0.16, (level - 1) * 0.08);
+    const halfX = 0.19 + Math.min(0.05, level * 0.015);
+    const halfZ = 0.16 + Math.min(0.04, level * 0.012);
+    canvas.at('timber', BUILD_STAGE.FOUNDATION)?.addBox(shedX, 0.035, shedZ, halfX * 2.35, 0.07, halfZ * 2.35);
+    for (const [x, z] of [[-halfX, -halfZ], [halfX, -halfZ], [-halfX, halfZ], [halfX, halfZ]] as const) {
+      canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(shedX + x, 0.11 + shedHeight * 0.35, shedZ + z, 0.035, shedHeight * 0.7, 0.035);
     }
-    if (field) canvas.at('plaster', BUILD_STAGE.ROOF)?.addBox(0.75, 0.2 * grammar.development!.level, 0.6, 0.45, 0.4 * grammar.development!.level, 0.4);
+    canvas.at('daub', BUILD_STAGE.WALLS)?.addBox(shedX, 0.1 + shedHeight * 0.5, shedZ,
+      halfX * 1.85, shedHeight, halfZ * 1.85);
+    canvas.at('timber', BUILD_STAGE.WALLS)?.addBox(shedX, 0.14 + shedHeight * 0.42, shedZ + halfZ * 0.94,
+      halfX * 0.55, shedHeight * 0.52, 0.018);
+    canvas.at('roof-thatch', BUILD_STAGE.ROOF)?.addBox(shedX, 0.12 + shedHeight, shedZ,
+      halfX * 2.35, 0.055, halfZ * 2.35);
     const group = canvas.build(palette);
     group.userData['grammarRole'] = grammar.role;
     group.userData['grammarEra'] = grammar.era;
-    return { group, height: field ? 0.4 * grammar.development!.level : 0.62, extentX: 2.3, extentZ: 1.9 };
+    group.userData['productiveGroundOwner'] = 'FarmFieldRenderer';
+    group.userData['productiveStructureAnchorX'] = shedX;
+    group.userData['productiveStructureAnchorZ'] = shedZ;
+    return { group, height: 0.15 + shedHeight, extentX: 2.3, extentZ: 1.9 };
+  }
+
+  // Open gathering places keep a modest flat precinct because they are architectural surfaces,
+  // unlike cultivated earth which must follow the natural ground.
+  if (grammar.development?.form === 'gathering' && grammar.development.level === 1) {
+    canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.012, 0, 2.2, 0.024, 1.8);
+    for (let i = 0; i < 6; i++) {
+      const angle = i / 6 * Math.PI * 2;
+      canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.1, Math.sin(angle) * 0.55, 0.3, 0.2, 0.22, angle);
+      if (grammar.development?.need === 'trade') {
+        canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.3, Math.sin(angle) * 0.55, 0.04, 0.6, 0.04);
+        canvas.at('cloth', BUILD_STAGE.ROOF)?.addBox(Math.cos(angle) * 0.65, 0.6, Math.sin(angle) * 0.55, 0.48, 0.04, 0.4, angle);
+      }
+    }
+    const group = canvas.build(palette);
+    group.userData['grammarRole'] = grammar.role;
+    group.userData['grammarEra'] = grammar.era;
+    return { group, height: 0.62, extentX: 2.3, extentZ: 1.9 };
   }
   const random = new SeededRandom(`${seed}:compose`);
   const rank = eraRank(grammar.era);
