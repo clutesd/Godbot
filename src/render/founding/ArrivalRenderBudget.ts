@@ -1,3 +1,4 @@
+import { isArrivalFilmPhase } from '../../sim/founding/FoundingArrival';
 import type { SimulationState, Vec2 } from '../../sim/types';
 
 export interface ArrivalRenderPolicy {
@@ -15,7 +16,7 @@ export interface ArrivalRenderPolicy {
  */
 export function arrivalRenderPolicy(state: SimulationState): ArrivalRenderPolicy {
   const arrival = state.arrival;
-  const active = Boolean(arrival && arrival.phase !== 'HISTORY_RUNNING');
+  const active = Boolean(arrival && isArrivalFilmPhase(arrival.phase));
   // Founders begin emerging shortly after the first touchdown. From that point onward the people
   // are the subject of the film, so keep character presentation live while the heavier simulation
   // and world-maintenance systems remain frozen.
@@ -36,7 +37,7 @@ export function arrivalRenderPolicy(state: SimulationState): ArrivalRenderPolicy
  * stable LOD assignment for the whole prologue instead of re-sorting thousands of trees mid-shot.
  */
 export function arrivalVegetationAnchor(state: SimulationState): Vec2 | undefined {
-  if (!state.arrival || state.arrival.phase === 'HISTORY_RUNNING') return undefined;
+  if (!state.arrival || !isArrivalFilmPhase(state.arrival.phase)) return undefined;
   const hero = state.arrival.pods[0];
   return hero ? { x: hero.position.x, z: hero.position.z } : undefined;
 }
