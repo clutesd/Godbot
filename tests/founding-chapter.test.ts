@@ -12,7 +12,7 @@ import { Simulation } from '../src/sim/Simulation';
 
 function completedArrival(seed: string): Simulation {
   const simulation = new Simulation({ seed, startMode: 'arrival' });
-  simulation.advanceArrival(60);
+  simulation.advanceArrival(80);
   expect(simulation.historyRunning).toBe(true);
   expect(simulation.state.history.some(event => event.type === 'ARRIVAL_DAY')).toBe(true);
   return simulation;
