@@ -1,4 +1,5 @@
 import './SettlementStreetPresentation';
+import './MemorialSitePresentation';
 import type * as THREE from 'three';
 import { GodboxRenderer } from '../GodboxRenderer';
 import { eraRank } from '../assets/BuildingGrammar';
