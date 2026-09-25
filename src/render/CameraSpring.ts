@@ -2,7 +2,7 @@ import type { Vector3 } from 'three';
 
 /** Exact critically damped response to a held target. Velocity survives editorial changes. */
 export function advanceCameraSpring(position: Vector3, velocity: Vector3, target: Vector3, deltaSeconds: number, settlingSeconds: number): void {
-  const dt = Math.max(0, deltaSeconds);
+  const dt = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
   const omega = 5 / Math.max(0.5, settlingSeconds);
   const decay = Math.exp(-omega * dt);
   for (const axis of ['x', 'y', 'z'] as const) {
