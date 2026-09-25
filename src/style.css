@@ -133,7 +133,12 @@ body { min-width: 320px; }
   gap: 14px;
   background: #111529;
   text-align: center;
-  transition: opacity 2.2s ease, visibility 2.2s;
+  will-change: opacity;
+  transition: opacity 2.2s cubic-bezier(.22, .61, .36, 1), visibility 2.2s;
+}
+.opening.preparing .opening-mark { animation-duration: 2.35s; }
+.opening.ready .opening-mark {
+  animation: opening-ready 1.05s cubic-bezier(.22, .61, .36, 1) forwards;
 }
 .opening.departed { opacity: 0; visibility: hidden; }
 .arrival-caption {
@@ -210,6 +215,11 @@ body { min-width: 320px; }
 
 @keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
 @keyframes opening { 50% { transform: rotate(135deg) scale(.78); border-color: #d96c86; } }
+@keyframes opening-ready {
+  0% { transform: rotate(45deg) scale(.92); border-color: #d7a54d; }
+  55% { transform: rotate(135deg) scale(1.04); border-color: #f0c36a; }
+  100% { transform: rotate(135deg) scale(1); border-color: rgba(215, 165, 77, .72); }
+}
 
 .commandhint { color: rgba(255, 239, 219, .3); }
 .commandline {

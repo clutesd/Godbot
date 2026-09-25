@@ -30,6 +30,7 @@ import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
 import { OpeningHandoff } from './sim/founding/OpeningHandoff';
 import { footerMarkup, installCameraToggleInput, showCameraArchived, syncAudioToggle as renderAudioToggle, syncCameraToggle as renderCameraToggle, syncRestartToggle } from './ui/FooterControls';
 import { performAtomicRestart } from './ui/RestartLifecycle';
+import { runOpeningReadinessGate } from './ui/OpeningReadinessGate';
 
 declare global {
   interface Window {
@@ -375,6 +376,20 @@ if (import.meta.env.DEV) {
 }
 
 async function beginObservation(seedOverride?: string): Promise<void> {
+  const nextFrame = (): Promise<void> => new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+  const delay = (milliseconds: number): Promise<void> => new Promise(resolve => window.setTimeout(resolve, milliseconds));
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Guarantee that the branded opening is actually painted before any potentially expensive world
+  // construction begins. This is especially important on restart, where synchronous renderer work
+  // must never leave the previous civilization frozen on screen.
+  openingTitleElement.textContent = 'GODBOX';
+  openingStatusElement.textContent = 'Preparing the observation…';
+  openingElement.classList.remove('departed', 'ending', 'ready');
+  openingElement.classList.add('preparing');
+  arrivalCaptionElement.style.opacity = '0';
+  await nextFrame();
+
   const preview = import.meta.env.DEV && new URLSearchParams(location.search).has('arrival-preview');
   if (preview && seedOverride === undefined) seedOverride = 'arrival-day-preview';
   const baseConfig = configWith({ ...GODBOX_CONFIG, startMode: 'arrival' });
@@ -402,10 +417,11 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   }
   activeSeed = simulation.config.seed;
   openingTitleElement.textContent = 'GODBOX';
-  openingStatusElement.textContent = 'History is the protagonist.';
+  openingStatusElement.textContent = 'Preparing the landscape…';
   requestedAutonomousCamera = true;
   syncCameraToggle();
-  openingElement.classList.remove('departed', 'ending');
+  openingElement.classList.remove('departed', 'ending', 'ready');
+  openingElement.classList.add('preparing');
 
   const observationLabel = `OBSERVATION ${String(identity.observationNumber).padStart(3, '0')}`;
   seedElement.textContent = `SEED · ${simulation.config.seed.toUpperCase()}`;
@@ -440,13 +456,8 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   requestedAutonomousCamera = true;
   syncCameraToggle();
   applyRequestedCameraMode();
-  openingStatusElement.textContent = 'Preparing the observation…';
+  openingStatusElement.textContent = 'Preparing light and atmosphere…';
   const openingWarmupMs = await view.warmUpOpening();
-  // Give the browser two quiet presentation frames after compilation/texture uploads. Arrival time
-  // has not started yet, so these frames absorb driver/layout settling instead of becoming hitches.
-  await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
-  await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
-  openingStatusElement.textContent = 'History is the protagonist.';
   warChronicle.update(simulation.state);
   window.__godboxRenderer = view;
   window.__godboxPlacementReport = () => view.getPlacementSmokeReport();
@@ -726,11 +737,33 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       .finally(() => archiveStore.close());
   };
   activeRun = { retire };
+
+  // All synchronous construction, archive setup and GPU compilation are complete at this point.
+  // Render a few true zero-time frames so the opening pose, LOD and presentation buffers settle
+  // without advancing Arrival or letting the camera "find itself" in front of the viewer.
+  await runOpeningReadinessGate({
+    settleFrame: () => view.settleOpeningFrame(),
+    nextFrame,
+    onReady: () => {
+      openingStatusElement.textContent = 'History is the protagonist.';
+      openingElement.classList.remove('preparing');
+      openingElement.classList.add('ready');
+    },
+    reveal: () => openingElement.classList.add('departed'),
+    delay,
+    reducedMotion,
+  });
+
+  // Start observer time only after the reveal has begun. Resetting lastTime here prevents the
+  // loading/reveal duration from becoming a giant first-frame delta.
+  lastTime = performance.now();
   document.addEventListener('visibilitychange', persistWhenHidden);
   window.addEventListener('beforeunload', persistBeforeUnload);
   rafId = window.requestAnimationFrame(frame);
-  if (simulation.state.arrival) openingElement.classList.add('departed');
-  else openingTimeout = window.setTimeout(() => openingElement.classList.add('departed'), resumable ? 1000 : 2800);
+  if (!simulation.state.arrival) {
+    openingElement.classList.remove('departed');
+    openingTimeout = window.setTimeout(() => openingElement.classList.add('departed'), resumable ? 1000 : 2800);
+  }
 }
 
 void beginObservation().catch((error: unknown) => {
