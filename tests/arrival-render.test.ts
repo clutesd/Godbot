@@ -7,6 +7,8 @@ import { arrivalCaption, arrivalSequenceFocus, foundingArrivalDialogue } from '.
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from '../src/render/founding/ArrivalRenderBudget';
 import { ARRIVAL_END_SECONDS, podPosition, podTouchdown } from '../src/sim/founding/FoundingArrival';
 import { OpeningHandoff } from '../src/sim/founding/OpeningHandoff';
+import { CameraDirector } from '../src/render/CameraDirector';
+import { Historian } from '../src/historian/Historian';
 
 describe('Arrival presentation contracts', () => {
   it('keeps the authored prologue on a lightweight render budget until history begins', () => {
@@ -50,6 +52,55 @@ describe('Arrival presentation contracts', () => {
 
     arrival.phase = 'HISTORY_RUNNING';
     expect(arrivalRenderPolicy(simulation.state).active).toBe(false);
+  });
+
+
+  it('recovers the authored Arrival camera continuously from a low manual handoff', () => {
+    const simulation = new Simulation({ seed: 'arrival-manual-camera-recovery', startMode: 'arrival' });
+    const arrival = simulation.state.arrival;
+    if (!arrival) throw new Error('Expected Arrival state');
+    arrival.phase = 'ARRIVAL_SEQUENCE';
+    arrival.elapsedSeconds = 20;
+    for (const cell of simulation.state.world.cells) cell.wood = 0;
+    for (const settlement of simulation.state.settlements) settlement.structurePlots = [];
+
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 500);
+    const director = new CameraDirector(
+      camera,
+      simulation.config,
+      new Historian(simulation.config),
+      undefined,
+      undefined,
+      () => 0,
+    );
+
+    // Let the authored Arrival camera own the lens first, then emulate manual control descending
+    // below its normal lens floor.
+    for (let frame = 0; frame < 30; frame += 1) {
+      arrival.elapsedSeconds = 20 + frame / 60;
+      director.update(1 / 60, frame / 60, simulation.state, () => 0);
+    }
+    camera.position.set(0, 0.25, 0);
+    camera.lookAt(1, 0.25, 0);
+    camera.updateMatrixWorld(true);
+    const manualPosition = camera.position.clone();
+
+    director.resumeFromExternalPose();
+    expect(camera.position.distanceTo(manualPosition)).toBeLessThan(1e-9);
+
+    arrival.elapsedSeconds += 1 / 60;
+    director.update(1 / 60, 0.51, simulation.state, () => 0);
+    expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
+
+    for (let frame = 1; frame <= 120; frame += 1) {
+      arrival.elapsedSeconds += 1 / 60;
+      director.update(1 / 60, 0.51 + frame / 60, simulation.state, () => 0);
+    }
+
+    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.25);
+    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(0.5);
+    expect(simulation.state.month).toBe(0);
+    expect(simulation.historyRunning).toBe(false);
   });
 
   it('finishes the Arrival film into a frozen orientation before Month 1 can exist', () => {
