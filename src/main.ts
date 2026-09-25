@@ -395,7 +395,6 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     setClassIfChanged(worldElement, 'manual-camera', !autonomous);
   };
   const toggleCameraMode = (): void => {
-    if (!simulation.historyRunning) return;
     view.setAutonomousCamera(!view.autonomousCamera);
     syncCameraMode();
   };
