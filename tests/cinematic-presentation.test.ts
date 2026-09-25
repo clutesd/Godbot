@@ -31,6 +31,41 @@ describe('Cinematic presentation pacing', () => {
     expect(director.monthsPerSecond).toBeGreaterThan(simulation.config.presentation.momentousMonthsPerSecond);
   });
 
+
+  it('keeps observer-time pacing materially frame-rate independent', () => {
+    const run = (fps: number): number => {
+      const simulation = new Simulation({ seed: `cinematic-frame-rate-${fps}`, startingPopulation: 180 });
+      simulation.state.month = 1;
+      const director = new PresentationDirector(simulation.config);
+      const quiet = { interest: 0.1, kind: 'landscape-pause' as const };
+      for (let frame = 0; frame < fps * 20; frame += 1) {
+        director.update(1 / fps, simulation.state, quiet);
+      }
+      return director.monthsPerSecond;
+    };
+
+    const speeds = [30, 60, 144].map(run);
+    expect(Math.max(...speeds) - Math.min(...speeds)).toBeLessThan(0.08);
+  });
+
+  it('ignores backwards and non-finite timing samples instead of poisoning cinematic telemetry', () => {
+    const simulation = new Simulation({ seed: 'cinematic-invalid-delta', startingPopulation: 180 });
+    simulation.state.month = 1;
+    const director = new PresentationDirector(simulation.config);
+    const quiet = { interest: 0.1, kind: 'landscape-pause' as const };
+    const before = director.telemetry();
+
+    for (const delta of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      director.update(delta, simulation.state, quiet);
+    }
+
+    const after = director.telemetry();
+    expect(after.monthsPerSecond).toBe(before.monthsPerSecond);
+    expect(after.holdSecondsRemaining).toBe(before.holdSecondsRemaining);
+    expect(after.seasonalHoldSecondsRemaining).toBe(before.seasonalHoldSecondsRemaining);
+    expect(after.viewingSeconds).toEqual(before.viewingSeconds);
+  });
+
   it('slows an increasingly busy world before a specific event must be selected', () => {
     const simulation = new Simulation({ seed: 'cinematic-pressure', startingPopulation: 180 });
     const director = new PresentationDirector(simulation.config);
