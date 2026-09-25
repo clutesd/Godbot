@@ -2088,8 +2088,12 @@ export class CameraDirector {
         const authoredOrbit = castProfile ? (eased - 0.5) * castProfile.orbitSpan : 0;
         // Human scenes should feel observed, not continuously operated. Keep the lens mostly
         // planted and reserve only a tiny breathing correction during the motion window.
+        const pacing = cameraShotPacingFor(scene.kind);
+        const normalizedAge = clamp01(this.shotAge / Math.max(0.001, this.shotDuration));
+        const motionEnd = pacing.settleHoldFraction + pacing.motionFraction;
+        const inMotionWindow = normalizedAge > pacing.settleHoldFraction && normalizedAge < motionEnd;
         const motionWindow = cameraMotionProgressFor(scene.kind, this.shotAge, this.shotDuration);
-        const observationStillness = Math.sin(Math.PI * motionWindow);
+        const observationStillness = inMotionWindow ? Math.sin(Math.PI * motionWindow) : 0;
         const microOrbit = Math.sin(elapsedSeconds * 0.075 + this.shotAzimuth)
           * 0.014 * observationStillness * (1 - contactLock * 0.92);
         const angle = baseAngle + authoredOrbit * 0.7 + microOrbit;
