@@ -438,7 +438,13 @@ function buildFoxGeometry(): THREE.BufferGeometry {
   tail.translate(0, 0.086, -0.145);
   parts.push(colourGeometry(tail, coat));
   parts.push(spherePart([0.033, 0.030, 0.040], [0, 0.118, -0.245], cream, 6));
-  return mergeParts(parts);
+  const geometry = mergeParts(parts);
+  // Keep the fox's long readable silhouette while matching real-world height relative to a person.
+  // Length remains useful from documentary camera distance; only the vertical exaggeration is removed.
+  geometry.scale(1, 0.72, 1);
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
 }
 
 export function buildLandAnimalGeometry(species: LandAnimalSpecies): THREE.BufferGeometry {
