@@ -11,6 +11,7 @@ import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
+import { setAutonomousCameraMode } from './CameraControlMode';
 import { ManualCameraController } from './ManualCameraController';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
@@ -550,7 +551,7 @@ export class GodboxRenderer {
   }
 
   setAutonomousCamera(enabled: boolean): void {
-    this.manualCamera.setEnabled(!enabled);
+    setAutonomousCameraMode(this.manualCamera, this.cameraDirector, enabled);
   }
 
   get autonomousCamera(): boolean {

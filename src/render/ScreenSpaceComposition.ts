@@ -111,7 +111,7 @@ export function screenSpaceComposition(
 }
 
 export function easeCameraFov(current: number, desired: number, dtSeconds: number): number {
-  const dt = Math.max(0, Math.min(0.1, dtSeconds));
+  const dt = Number.isFinite(dtSeconds) ? Math.max(0, Math.min(0.1, dtSeconds)) : 0;
   const alpha = 1 - Math.exp(-dt / 0.9);
   return THREE.MathUtils.lerp(current, desired, alpha);
 }

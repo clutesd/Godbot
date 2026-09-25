@@ -727,6 +727,16 @@ export function cameraVisibilityCorridor(
  * A real drone can cross a ridge or pass behind a building while travelling; the non-negotiable
  * contract is that the lens itself never enters terrain, structures, vessels or rendered foliage.
  */
+export interface CameraFlightCorridorOptions {
+  /**
+   * Manual control can leave the lens below the autonomous clearance envelope or partially inside
+   * presentation geometry. During the first recovery flight, allow only non-worsening motion out
+   * of that starting violation. Once a frame begins from a normally safe point, strict validation
+   * automatically resumes.
+   */
+  readonly allowUnsafeDeparture?: boolean;
+}
+
 export function cameraFlightCorridorSafe(
   state: SimulationState,
   from: THREE.Vector3,
@@ -734,13 +744,34 @@ export function cameraFlightCorridorSafe(
   elevationAt: (x: number, z: number) => number,
   lensClearance = 0.72,
   environmentProbe?: CameraEnvironmentProbe,
+  options: CameraFlightCorridorOptions = {},
 ): boolean {
+  const startClearance = from.y - elevationAt(from.x, from.z);
+  const startObstruction = cameraLensObstruction(state, from, elevationAt, 0.12, environmentProbe);
+  const recoveringDeparture = Boolean(
+    options.allowUnsafeDeparture
+      && (startClearance < lensClearance - 0.001 || startObstruction > 0.001),
+  );
+  const minimumRecoveryClearance = Math.min(startClearance, lensClearance);
+  const maximumRecoveryObstruction = Math.max(0.001, startObstruction);
+
   const steps = Math.max(1, Math.ceil(from.distanceTo(to) / 0.2));
   const point = new THREE.Vector3();
   for (let index = 0; index <= steps; index += 1) {
     point.lerpVectors(from, to, index / steps);
-    if (point.y < elevationAt(point.x, point.z) + lensClearance - 0.001) return false;
-    if (cameraLensObstruction(state, point, elevationAt, 0.12, environmentProbe) > 0.001) return false;
+    const terrainClearance = point.y - elevationAt(point.x, point.z);
+    const obstruction = cameraLensObstruction(state, point, elevationAt, 0.12, environmentProbe);
+
+    if (recoveringDeparture) {
+      // A recovery step may remain temporarily below normal autonomous clearance, but it may never
+      // descend below the clearance it started with or move deeper into an obstruction.
+      if (terrainClearance < minimumRecoveryClearance - 0.001) return false;
+      if (obstruction > maximumRecoveryObstruction + 0.001) return false;
+      continue;
+    }
+
+    if (terrainClearance < lensClearance - 0.001) return false;
+    if (obstruction > 0.001) return false;
   }
   return true;
 }
@@ -807,7 +838,7 @@ export class CameraVisibilityHysteresis {
   score = 1;
   private failedSeconds = 0;
   update(validity: CameraShotValidity, deltaSeconds: number, pathSafety = 1): boolean {
-    const dt = Math.max(0, deltaSeconds);
+    const dt = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
     this.score += (Math.min(validity.score, pathSafety) - this.score) * (1 - Math.exp(-dt * 8));
     this.failedSeconds = validity.valid ? 0 : this.failedSeconds + dt;
     return validity.lensSafety === 0 || validity.terrainClearance === 0 || this.failedSeconds >= 0.25;
@@ -1100,6 +1131,7 @@ interface CameraFlightState {
   bestDistance: number;
   stalledSeconds: number;
   obstructionRetries: number;
+  allowUnsafeDeparture: boolean;
 }
 
 export class CameraDirector {
@@ -1145,6 +1177,9 @@ export class CameraDirector {
   private scenicShotIndex = 0;
   private readonly sequencePlanner = new CinematicSequencePlanner();
   private activeSequence?: { id: string; ordinal: number; total: number };
+  private externalPoseRecoveryPending = false;
+  private interruptedFlightResumePending = false;
+  private manualHumanReestablishPending = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -1214,15 +1249,37 @@ export class CameraDirector {
       advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, focus.transitionSeconds / 1.14);
       this.arrivalActive = true;
 
-      // Per-frame Arrival safety is deliberately cheap: one exact lens-volume probe plus terrain
-      // clearance. If the next spring step would enter geometry, reject that step and force an
-      // immediate full survey on the next frame instead of performing thousands of ray probes now.
-      const lensBlocked = cameraLensObstruction(state, this.camera.position, elevationAt, 0.12, this.environmentProbe) > 0.001;
-      const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + 0.72;
-      if (lensBlocked || this.camera.position.y < lensFloor) {
+      // Per-frame Arrival safety remains a cheap lens-volume corridor check. Ordinarily it is
+      // strict. If manual control handed back an already-low/obstructed pose, permit only a
+      // non-worsening spring step out of that violation; once normal clearance is recovered the
+      // very next frame returns to the ordinary strict contract.
+      const arrivalLensClearance = 0.72;
+      const recoveringExternalPose = this.externalPoseRecoveryPending;
+      const stepSafe = cameraFlightCorridorSafe(
+        state,
+        before,
+        this.camera.position,
+        elevationAt,
+        arrivalLensClearance,
+        this.environmentProbe,
+        { allowUnsafeDeparture: recoveringExternalPose },
+      );
+      if (!stepSafe) {
         this.camera.position.copy(before);
         this.positionVelocity.multiplyScalar(0.2);
         this.arrivalSafetySeconds = 0;
+      } else if (recoveringExternalPose) {
+        const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + arrivalLensClearance;
+        const lensBlocked = cameraLensObstruction(
+          state,
+          this.camera.position,
+          elevationAt,
+          0.12,
+          this.environmentProbe,
+        ) > 0.001;
+        if (!lensBlocked && this.camera.position.y >= lensFloor - 0.001) {
+          this.externalPoseRecoveryPending = false;
+        }
       }
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
@@ -1267,6 +1324,13 @@ export class CameraDirector {
         this.camera.updateProjectionMatrix();
       }
       this.camera.lookAt(this.lookTarget);
+      return;
+    }
+
+    if (this.interruptedFlightResumePending && this.currentScene) {
+      this.interruptedFlightResumePending = false;
+      this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
+      this.advanceFlight(deltaSeconds, state, elevationAt);
       return;
     }
 
@@ -1319,6 +1383,7 @@ export class CameraDirector {
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
 
     const before = this.camera.position.clone();
+    const beforeTarget = this.externalPoseRecoveryPending ? this.lookTarget.clone() : undefined;
     if (this.recoveryOffset) this.desiredPosition.copy(this.desiredTarget).add(this.recoveryOffset);
 
     // Local composition changes use the critically damped spring. Large scene-to-scene moves are
@@ -1329,6 +1394,43 @@ export class CameraDirector {
     advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, transitionSeconds);
     advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, transitionSeconds / 1.22);
     const clearance = cameraClearanceForScene(this.currentScene?.kind, this.currentScene?.id);
+
+    if (this.externalPoseRecoveryPending) {
+      const recoveryStepSafe = cameraFlightCorridorSafe(
+        state,
+        before,
+        this.camera.position,
+        elevationAt,
+        clearance.lens,
+        this.environmentProbe,
+        { allowUnsafeDeparture: true },
+      );
+      if (!recoveryStepSafe) {
+        this.camera.position.copy(before);
+        if (beforeTarget) this.lookTarget.copy(beforeTarget);
+        this.positionVelocity.multiplyScalar(0.2);
+        this.targetVelocity.multiplyScalar(0.4);
+        this.camera.lookAt(this.lookTarget);
+        return;
+      }
+
+      const recovered = cameraFlightCorridorSafe(
+        state,
+        this.camera.position,
+        this.camera.position,
+        elevationAt,
+        clearance.lens,
+        this.environmentProbe,
+      );
+      if (!recovered) {
+        // The lens is improving continuously but has not yet re-entered the ordinary autonomous
+        // envelope. Do not invoke strict visibility recovery yet; it would undo the egress step.
+        this.camera.lookAt(this.lookTarget);
+        return;
+      }
+      this.externalPoseRecoveryPending = false;
+    }
+
     const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens;
     if (this.camera.position.y < lensFloor) {
       this.camera.position.y = lensFloor;
@@ -1427,6 +1529,65 @@ export class CameraDirector {
 
   foundingPresentationComplete(): boolean {
     return this.foundingPresentationDone;
+  }
+
+  /**
+   * Re-anchors autonomous presentation to a camera pose that was moved by an external/manual
+   * controller. The first autonomous frame must continue from the exact visible lens orientation,
+   * not from stale look-target/velocity state retained before manual control began.
+   */
+  resumeFromExternalPose(): void {
+    this.camera.updateMatrixWorld(true);
+    this.workingDirection.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
+    const previousFocusDistance = this.camera.position.distanceTo(this.lookTarget);
+    const focusDistance = Number.isFinite(previousFocusDistance)
+      ? THREE.MathUtils.clamp(previousFocusDistance, 3, 14)
+      : 8;
+    this.lookTarget.copy(this.camera.position).addScaledVector(this.workingDirection, focusDistance);
+    this.desiredPosition.copy(this.camera.position);
+    this.desiredTarget.copy(this.lookTarget);
+
+    // A flight that was already authored before manual takeover still owns the edit. Keep its
+    // destination and shot-base composition, then rebuild only the physical route from the manual
+    // lens pose on the next autonomous frame. This prevents manual control from silently skipping
+    // an unseen destination and preserves founding/sequence continuity.
+    this.interruptedFlightResumePending = Boolean(this.flight && this.currentScene);
+    this.flight = undefined;
+    if (!this.interruptedFlightResumePending) {
+      this.sequencePlanner.interrupt();
+      this.activeSequence = undefined;
+      this.lastHumanShot = Boolean(this.currentScene?.id.startsWith('human:'));
+      this.manualHumanReestablishPending = this.lastHumanShot;
+    }
+
+    this.positionVelocity.set(0, 0, 0);
+    this.targetVelocity.set(0, 0, 0);
+    this.flightAcceleration.set(0, 0, 0);
+    this.gazeFlightAcceleration.set(0, 0, 0);
+    this.recoveryBridgeSeconds = 0;
+    this.recoveryBridgeFov = undefined;
+    this.arrivalSafetySeconds = 0;
+    this.arrivalSafetyInitialized = false;
+    this.arrivalSafetyOffset.set(0, 0, 0);
+    this.routeCheckSeconds = 0;
+    this.recoveryOffset = undefined;
+    this.trackingInitialized = false;
+    this.safetyInitialized = true;
+    this.visibility.reset();
+    this.externalPoseRecoveryPending = true;
+
+    if (!this.interruptedFlightResumePending) {
+      // Ordinary history should not treat the observer's manual pose as a freshly authored shot.
+      // Preserve that exact lens on the handoff frame, then make the next autonomous update choose
+      // a real documentary composition and fly there continuously. This is especially important
+      // after eye-level/manual exploration: personal shots deliberately hold for many seconds, so
+      // resetting shotAge to zero would strand autonomous mode at the manual altitude.
+      //
+      // Founding/Arrival editorial beats are authority barriers with authored timing. Their
+      // shotAge was already frozen while manual control owned the lens, so preserve it exactly.
+      // Ordinary history instead requests a fresh authored composition immediately.
+      if (!isFoundingCameraScene(this.currentScene?.id)) this.shotAge = this.shotDuration;
+    }
   }
 
   flightTelemetry(): CameraFlightTelemetry {
@@ -1546,8 +1707,12 @@ export class CameraDirector {
       }
     }
     const sequenceBeatActive = Boolean(this.activeSequence);
+    const suppressScenicForManualHumanReestablish = this.manualHumanReestablishPending && !scene.id.startsWith('human:');
+    if (suppressScenicForManualHumanReestablish) this.manualHumanReestablishPending = false;
 
-    if (!sequenceBeatActive && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
+    if (!sequenceBeatActive
+      && !suppressScenicForManualHumanReestablish
+      && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
       const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
       if (scenic) {
         scene = scenic;
@@ -1712,7 +1877,7 @@ export class CameraDirector {
       14,
       38,
     );
-    const terrainRoute = smoothCameraRoute(planTerrainAwareCameraRoute(
+    const terrainPlan = planTerrainAwareCameraRoute(
       this.camera.position,
       destinationPosition,
       elevationAt,
@@ -1720,7 +1885,13 @@ export class CameraDirector {
         clearance: Math.max(1.6, Math.min(profile.cruiseClearance, 4.2)),
         lateralOffsets: [-5.5, -2.75, 0, 2.75, 5.5],
       },
-    ).points, 3);
+    );
+    const terrainRoute = smoothCameraRoute(
+      terrainPlan.points,
+      3,
+      elevationAt,
+      terrainPlan.clearance,
+    );
     this.flight = {
       originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
@@ -1743,7 +1914,9 @@ export class CameraDirector {
       bestDistance: Math.max(0.001, distance),
       stalledSeconds: 0,
       obstructionRetries: 0,
+      allowUnsafeDeparture: this.externalPoseRecoveryPending,
     };
+    this.externalPoseRecoveryPending = false;
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
     this.recoveryOffset = undefined;
@@ -1838,7 +2011,19 @@ export class CameraDirector {
     const departureClearance = cameraClearanceForScene(this.acquiredScene?.kind, this.acquiredScene?.id).lens;
     const destinationClearance = cameraClearanceForScene(this.currentScene.kind, this.currentScene.id).lens;
     const flightClearance = Math.max(0.42, Math.min(1.2, departureClearance, destinationClearance));
-    if (!cameraFlightCorridorSafe(state, before, this.camera.position, elevationAt, flightClearance, this.environmentProbe)) {
+    const departureNormallySafe = before.y >= elevationAt(before.x, before.z) + flightClearance - 0.001
+      && cameraLensObstruction(state, before, elevationAt, 0.12, this.environmentProbe) <= 0.001;
+    if (flight.allowUnsafeDeparture && departureNormallySafe) flight.allowUnsafeDeparture = false;
+
+    if (!cameraFlightCorridorSafe(
+      state,
+      before,
+      this.camera.position,
+      elevationAt,
+      flightClearance,
+      this.environmentProbe,
+      { allowUnsafeDeparture: flight.allowUnsafeDeparture },
+    )) {
       // Never cross geometry to preserve a schedule. Return to the last valid frame, bleed momentum,
       // and climb into a new continuous route on the next frame.
       this.camera.position.copy(before);
@@ -1939,6 +2124,8 @@ export class CameraDirector {
 
   private acquireCurrentScene(): void {
     if (!this.currentScene) return;
+    this.externalPoseRecoveryPending = false;
+    this.interruptedFlightResumePending = false;
     this.acquiredScene = this.currentScene;
     this.commitObservation(this.currentScene);
     this.shotAge = 0;

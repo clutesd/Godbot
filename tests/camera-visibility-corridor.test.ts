@@ -49,6 +49,78 @@ describe('continuous documentary visibility', () => {
     expect(cameraFlightCorridorSafe(sim.state, a, b, ground, 0.42, crown)).toBe(true);
   });
 
+
+  it('lets a low manual pose climb continuously into the autonomous safety envelope', () => {
+    const sim = scene();
+    const low = new THREE.Vector3(0, 0.35, 0);
+    const improving = new THREE.Vector3(0.02, 0.42, 0);
+    const worse = new THREE.Vector3(0.02, 0.28, 0);
+
+    expect(cameraFlightCorridorSafe(sim.state, low, improving, ground, 1.2)).toBe(false);
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      low,
+      improving,
+      ground,
+      1.2,
+      undefined,
+      { allowUnsafeDeparture: true },
+    )).toBe(true);
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      low,
+      worse,
+      ground,
+      1.2,
+      undefined,
+      { allowUnsafeDeparture: true },
+    )).toBe(false);
+  });
+
+
+  it('allows recovery out of an obstruction but never deeper into it', () => {
+    const sim = scene();
+    const start = new THREE.Vector3(0, 1.3, 0);
+    const improving = new THREE.Vector3(-0.08, 1.3, 0);
+    const worsening = new THREE.Vector3(0.08, 1.3, 0);
+    const gradientObstruction = (point: THREE.Vector3): number => 0.5 + point.x * 2;
+
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      start,
+      improving,
+      ground,
+      0.42,
+      gradientObstruction,
+      { allowUnsafeDeparture: true },
+    )).toBe(true);
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      start,
+      worsening,
+      ground,
+      0.42,
+      gradientObstruction,
+      { allowUnsafeDeparture: true },
+    )).toBe(false);
+  });
+
+  it('returns to strict flight safety as soon as a recovery frame starts from normal clearance', () => {
+    const sim = scene();
+    const safe = new THREE.Vector3(0, 1.25, 0);
+    const unsafe = new THREE.Vector3(0.02, 1.05, 0);
+
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      safe,
+      unsafe,
+      ground,
+      1.2,
+      undefined,
+      { allowUnsafeDeparture: true },
+    )).toBe(false);
+  });
+
   it('allows brief occlusion, resets after recovery, and fails within a quarter second', () => {
     const sim = scene(), hysteresis = new CameraVisibilityHysteresis();
     const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
@@ -58,6 +130,41 @@ describe('continuous documentary visibility', () => {
     expect(hysteresis.update(blocked, 0.15)).toBe(false);
     expect(hysteresis.update(blocked, 0.1)).toBe(true);
     expect(hysteresis.score).toBeLessThan(0.5);
+  });
+
+
+  it('uses elapsed occlusion time rather than frame count at 30, 60 and 144 Hz', () => {
+    const sim = scene();
+    const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
+    const failureTimes = [30, 60, 144].map(fps => {
+      const hysteresis = new CameraVisibilityHysteresis();
+      let elapsed = 0;
+      while (elapsed < 1) {
+        elapsed += 1 / fps;
+        if (hysteresis.update(blocked, 1 / fps)) return elapsed;
+      }
+      throw new Error(`Visibility hysteresis never failed at ${fps} Hz`);
+    });
+
+    for (const time of failureTimes) {
+      expect(time).toBeGreaterThanOrEqual(0.24);
+      expect(time).toBeLessThan(0.29);
+    }
+    expect(Math.max(...failureTimes) - Math.min(...failureTimes)).toBeLessThan(1 / 30 + 1e-6);
+  });
+
+  it('ignores invalid timing samples instead of poisoning visibility state', () => {
+    const sim = scene();
+    const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
+    const hysteresis = new CameraVisibilityHysteresis();
+
+    expect(hysteresis.update(blocked, Number.NaN)).toBe(false);
+    expect(Number.isFinite(hysteresis.score)).toBe(true);
+    expect(hysteresis.update(blocked, Number.POSITIVE_INFINITY)).toBe(false);
+    expect(Number.isFinite(hysteresis.score)).toBe(true);
+
+    expect(hysteresis.update(blocked, 0.24)).toBe(false);
+    expect(hysteresis.update(blocked, 0.02)).toBe(true);
   });
 
   it('protects each subject rather than only the empty midpoint', () => {

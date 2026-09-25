@@ -159,7 +159,11 @@ export class CinematicSequencePlanner {
           + eventCoherence
           - repetitionPenalty;
 
-        if (!best || score > best.score) best = { scene, role, score };
+        if (!best
+          || score > best.score + 1e-9
+          || (Math.abs(score - best.score) <= 1e-9 && scene.id.localeCompare(best.scene.id) < 0)) {
+          best = { scene, role, score };
+        }
       }
       return best?.scene;
     };
