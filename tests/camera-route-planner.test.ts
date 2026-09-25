@@ -30,6 +30,38 @@ describe('CameraRoutePlanner', () => {
     }
   });
 
+
+  it('keeps the smoothed flight path above terrain, not only its sparse control points', () => {
+    const ridge = (x: number, z: number): number =>
+      1.2 + Math.exp(-((x - 18) ** 2 + (z - 1.5) ** 2) / 22) * 7.5
+      + Math.sin(x * 0.35) * 0.45;
+    const origin = new THREE.Vector3(0, 5, 0);
+    const destination = new THREE.Vector3(36, 5, 3);
+    const plan = planTerrainAwareCameraRoute(origin, destination, ridge, {
+      clearance: 2.4,
+      lateralOffsets: [-5, -2.5, 0, 2.5, 5],
+    });
+    const smooth = smoothCameraRoute(plan.points, 5, ridge, plan.clearance);
+
+    for (const point of smooth.slice(1, -1)) {
+      expect(point.y).toBeGreaterThanOrEqual(ridge(point.x, point.z) + plan.clearance - 1e-6);
+    }
+  });
+
+  it('remains finite and endpoint-stable for a zero-distance editorial transfer', () => {
+    const origin = new THREE.Vector3(4, 6, -3);
+    const plan = planTerrainAwareCameraRoute(origin, origin.clone(), terrain, { clearance: 2.2 });
+    const smooth = smoothCameraRoute(plan.points, 4, terrain, plan.clearance);
+
+    expect(smooth[0]!.distanceTo(origin)).toBeLessThan(1e-9);
+    expect(smooth[smooth.length - 1]!.distanceTo(origin)).toBeLessThan(1e-9);
+    for (const point of smooth) {
+      expect(Number.isFinite(point.x)).toBe(true);
+      expect(Number.isFinite(point.y)).toBe(true);
+      expect(Number.isFinite(point.z)).toBe(true);
+    }
+  });
+
   it('smooths sparse waypoints into a continuous route without moving endpoints', () => {
     const points = [
       new THREE.Vector3(0, 3, 0),
