@@ -62,7 +62,7 @@ function harness(people = [person()], overrides: Partial<LocalActivityContext> =
 describe('renderer-owned local activity', () => {
   it.each([
     ['home', 'rest'], ['market', 'trade'], ['plaza', 'socialize'], ['workshop', 'craft'], ['shrine', 'worship'],
-    ['civic-building', 'assist'], ['knowledge-institution', 'study'], ['industrial-site', 'craft'], ['patrol-route', 'patrol'],
+    ['memorial-site', 'mourn'], ['civic-building', 'assist'], ['knowledge-institution', 'study'], ['industrial-site', 'craft'], ['patrol-route', 'patrol'],
   ] as [DestinationKind, Activity][])('gives %s a bounded sequence under sixty seconds of frozen authority', (kind, activity) => {
     const p = person(); p.activity = activity; p.navigation!.destinationKind = kind;
     const before = JSON.stringify(p), h = harness([p]); const actions = new Set<string>(), points = new Set<string>();
