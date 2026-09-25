@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
 import { PerspectiveCamera, Vector3 } from 'three';
 import { advanceCameraSpring } from '../src/render/CameraSpring';
 import { AdaptiveResolution } from '../src/render/AdaptiveResolution';
@@ -351,6 +352,104 @@ describe('cinematic motion', () => {
     expect(Math.abs(velocity.x - before)).toBeLessThan(0.5);
   });
 });
+
+
+  it('re-anchors from manual control without snapping or skipping an unseen flight destination', () => {
+    const sim = new Simulation({ seed: 'manual-autonomous-handoff', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
+      camera: { shotSeconds: [0.25, 0.25], transitionSeconds: 3 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const first = { ...template, id: 'manual:first', kind: 'regional-travel' as const, position: { x: 0, z: 0 } };
+    const remote = { ...template, id: 'manual:remote', kind: 'regional-travel' as const, position: { x: 18, z: 0 } };
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce(first)
+      .mockReturnValue(remote);
+    vi.spyOn(historian, 'candidates').mockImplementation(() =>
+      choose.mock.calls.length <= 1 ? [first] : [remote]);
+
+    const camera = new PerspectiveCamera(38, 1, 0.01, 200);
+    const director = new CameraDirector(camera, sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.observation.sceneId).toBe('manual:first');
+
+    let enteredRemoteFlight = false;
+    for (let frame = 1; frame < 60 * 8; frame += 1) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+      if (director.flightTelemetry().destinationSceneId === 'manual:remote') {
+        enteredRemoteFlight = true;
+        break;
+      }
+    }
+    expect(enteredRemoteFlight).toBe(true);
+    expect(director.current()?.id).toBe('manual:first');
+
+    // Emulate the observer moving and looking somewhere entirely different while autonomous
+    // presentation is suspended.
+    camera.position.set(11, 3.2, 7);
+    camera.lookAt(19, 3.2, 7);
+    camera.updateMatrixWorld(true);
+    const manualPosition = camera.position.clone();
+    const manualDirection = new Vector3();
+    camera.getWorldDirection(manualDirection);
+
+    director.resumeFromExternalPose();
+
+    expect(director.flightTelemetry().active).toBe(false);
+    expect(director.current()?.id).toBe('manual:first');
+
+    director.update(1 / 60, 9, sim.state, () => 0);
+    const resumedDirection = new Vector3();
+    camera.getWorldDirection(resumedDirection);
+    expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
+    expect(resumedDirection.angleTo(manualDirection)).toBeLessThan(THREE.MathUtils.degToRad(2));
+    expect(director.observation.sceneId).toBe('manual:first');
+  });
+
+  it('keeps a full editorial transfer materially frame-rate independent at 30, 60 and 144 Hz', () => {
+    const run = (fps: number): { acquiredAt: number; position: Vector3; maxSpeed: number } => {
+      const sim = new Simulation({ seed: 'director-frame-rate', startMode: 'established',
+        startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
+        camera: { shotSeconds: [0.25, 0.25], transitionSeconds: 3 } });
+      sim.state.arrival = undefined;
+      sim.state.history = [];
+      for (const cell of sim.state.world.cells) cell.wood = 0;
+      for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+      const historian = new Historian(sim.config);
+      const template = historian.chooseScene(sim.state);
+      const first = { ...template, id: 'fps:first', kind: 'regional-travel' as const, position: { x: 0, z: 0 } };
+      const second = { ...template, id: 'fps:second', kind: 'regional-travel' as const, position: { x: 18, z: 0 } };
+      const choose = vi.spyOn(historian, 'chooseScene').mockReturnValueOnce(first).mockReturnValue(second);
+      vi.spyOn(historian, 'candidates').mockImplementation(() =>
+        choose.mock.calls.length <= 1 ? [first] : [second]);
+      const camera = new PerspectiveCamera(38, 1, 0.01, 200);
+      const director = new CameraDirector(camera, sim.config, historian);
+      director.update(1 / fps, 0, sim.state, () => 0);
+
+      let maxSpeed = 0;
+      for (let frame = 1; frame < fps * 20; frame += 1) {
+        director.update(1 / fps, frame / fps, sim.state, () => 0);
+        maxSpeed = Math.max(maxSpeed, director.flightTelemetry().speed);
+        if (director.observation.sceneId === 'fps:second') {
+          return { acquiredAt: frame / fps, position: camera.position.clone(), maxSpeed };
+        }
+      }
+      throw new Error(`Camera did not acquire at ${fps} Hz`);
+    };
+
+    const runs = [30, 60, 144].map(run);
+    const acquisitionTimes = runs.map(result => result.acquiredAt);
+    expect(Math.max(...acquisitionTimes) - Math.min(...acquisitionTimes)).toBeLessThan(0.35);
+    expect(runs[0]!.position.distanceTo(runs[1]!.position)).toBeLessThan(0.2);
+    expect(runs[1]!.position.distanceTo(runs[2]!.position)).toBeLessThan(0.2);
+    expect(Math.max(...runs.map(result => result.maxSpeed)) - Math.min(...runs.map(result => result.maxSpeed))).toBeLessThan(0.25);
+  });
+
 
 describe('resolution pacing', () => {
   function run(controller: AdaptiveResolution, seconds: number, fps: number): number {
