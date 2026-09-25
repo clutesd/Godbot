@@ -1495,39 +1495,51 @@ export class CameraDirector {
         this.activeSequence = { id: planned.sequenceId, ordinal: planned.ordinal, total: planned.total };
       } else {
         const anchor = this.historian.chooseScene(state);
-        const eligibleForSequence = !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:');
-        if (eligibleForSequence) {
-          const candidates = this.historian.candidates(state).filter(candidate =>
-            !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
-          const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
-          scene = first.scene;
-          this.activeSequence = { id: first.sequenceId, ordinal: first.ordinal, total: first.total };
-        } else {
-          scene = anchor;
+
+        // Social documentary moments are editorial anchors in their own right. Give them one chance
+        // at sequence boundaries before planning another 3–5 shot package; otherwise the sequence
+        // planner continuously claims ordinary anchors and this path can never run.
+        let humanScene: ObservationCandidate | undefined;
+        if (!isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id)
+          && !anchor.id.startsWith('human:') && !this.lastHumanShot) {
+          let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
+          for (const id of this.humanSubjects?.() ?? []) {
+            const view = this.subjectPresentation?.(id);
+            if (!view?.partnerId || !view.socialMeaning || !this.subjectPresentation?.(view.partnerId)) continue;
+            const score = view.socialMeaning;
+            if (!best || score > best.score) best = { id, view, score };
+          }
+          const actor = best && state.people.find(p => p.alive && p.id === best.id);
+          const partner = best && state.people.find(p => p.alive && p.id === best.view.partnerId);
+          if (best && actor && partner) {
+            const id = `human:${actor.id}:${partner.id}`;
+            humanScene = { ...anchor, id, subjectId: actor.id, kind: 'worker-follow',
+              position: { x: best.view.x, z: best.view.z }, title: `${actor.name} and ${partner.name}`,
+              score: best.score, interest: best.score, event: undefined,
+              statement: { id, month: state.month, text: `${actor.name} and ${partner.name} share a ${best.view.socialTone ?? 'quiet'} moment.`,
+                epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
+          }
+        }
+
+        if (humanScene) {
+          scene = humanScene;
           this.activeSequence = undefined;
+        } else {
+          const eligibleForSequence = !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:');
+          if (eligibleForSequence) {
+            const candidates = this.historian.candidates(state).filter(candidate =>
+              !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
+            const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
+            scene = first.scene;
+            this.activeSequence = { id: first.sequenceId, ordinal: first.ordinal, total: first.total };
+          } else {
+            scene = anchor;
+            this.activeSequence = undefined;
+          }
         }
       }
     }
     const sequenceBeatActive = Boolean(this.activeSequence);
-    if (!focusEventId && !sequenceBeatActive && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
-      let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
-      for (const id of this.humanSubjects?.() ?? []) {
-        const view = this.subjectPresentation?.(id);
-        if (!view?.partnerId || !view.socialMeaning || !this.subjectPresentation?.(view.partnerId)) continue;
-        const score = view.socialMeaning;
-        if (!best || score > best.score) best = { id, view, score };
-      }
-      const actor = best && state.people.find(p => p.alive && p.id === best.id);
-      const partner = best && state.people.find(p => p.alive && p.id === best.view.partnerId);
-      if (best && actor && partner) {
-        const id = `human:${actor.id}:${partner.id}`;
-        scene = { ...scene, id, subjectId: actor.id, kind: 'worker-follow',
-          position: { x: best.view.x, z: best.view.z }, title: `${actor.name} and ${partner.name}`,
-          score: best.score, interest: best.score, event: undefined,
-          statement: { id, month: state.month, text: `${actor.name} and ${partner.name} share a ${best.view.socialTone ?? 'quiet'} moment.`,
-            epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
-      }
-    }
 
     if (!sequenceBeatActive && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
       const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
