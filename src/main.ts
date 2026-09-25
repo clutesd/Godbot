@@ -28,6 +28,7 @@ import { WarChronicle } from './render/war/WarChronicle';
 import { arrivalCaption, foundingArrivalDialogue } from './render/founding/ArrivalPresentation';
 import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
 import { OpeningHandoff } from './sim/founding/OpeningHandoff';
+import { installCameraToggleInput, showCameraArchived, syncAudioToggle as renderAudioToggle, syncCameraToggle as renderCameraToggle } from './ui/FooterControls';
 
 declare global {
   interface Window {
@@ -182,22 +183,11 @@ let requestedAutonomousCamera = true;
 let audioMuted = readAudioMutedPreference();
 
 function syncAudioToggle(): void {
-  audioToggleElement.textContent = audioMuted ? 'AUDIO OFF' : 'AUDIO ON';
-  audioToggleElement.setAttribute('aria-pressed', String(!audioMuted));
-  audioToggleElement.setAttribute('aria-label', audioMuted ? 'Unmute ambient music' : 'Mute ambient music');
-  audioToggleElement.title = audioMuted ? 'Unmute ambient music' : 'Mute ambient music';
+  renderAudioToggle(audioToggleElement, audioMuted);
 }
 
 function syncCameraToggle(): void {
-  const autonomous = requestedAutonomousCamera;
-  cameraModeToggleElement.setAttribute('aria-pressed', String(autonomous));
-  cameraModeToggleElement.innerHTML = autonomous ? '<i></i> AUTONOMOUS' : '<i></i> MANUAL · WASD + MOUSE';
-  const actionLabel = autonomous ? 'Switch to manual camera control' : 'Switch to autonomous camera control';
-  cameraModeToggleElement.setAttribute('aria-label', actionLabel);
-  cameraModeToggleElement.title = autonomous
-    ? actionLabel
-    : 'Switch to autonomous camera · WASD move · mouse look · Q/E down/up · Shift faster';
-  setClassIfChanged(worldElement, 'manual-camera', !autonomous);
+  renderCameraToggle(cameraModeToggleElement, worldElement, requestedAutonomousCamera);
 }
 
 function applyRequestedCameraMode(): void {
@@ -213,24 +203,7 @@ function toggleCameraMode(): void {
   applyRequestedCameraMode();
 }
 
-// Pointer input gets a capture-phase fallback based on the button's actual screen rectangle.
-// This keeps the control operable even if a transient cinematic overlay wins normal hit testing.
-window.addEventListener('pointerdown', (event) => {
-  if (event.button !== 0) return;
-  const rect = cameraModeToggleElement.getBoundingClientRect();
-  const inside = event.clientX >= rect.left && event.clientX <= rect.right
-    && event.clientY >= rect.top && event.clientY <= rect.bottom;
-  if (!inside) return;
-  event.preventDefault();
-  event.stopPropagation();
-  toggleCameraMode();
-}, { capture: true });
-
-// Native keyboard/button activation still works for Enter/Space and assistive technology.
-// Pointer clicks are already handled above, so only synthetic keyboard clicks are accepted here.
-cameraModeToggleElement.addEventListener('click', (event) => {
-  if (event.detail === 0) toggleCameraMode();
-});
+installCameraToggleInput(cameraModeToggleElement, toggleCameraMode);
 syncCameraToggle();
 
 
@@ -531,7 +504,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     const reasonText = reason === 'extinction'
       ? `${identity.worldName} ended with no surviving represented population after ${simulation.year.toLocaleString()} years.`
       : `${identity.worldName} completed its configured ${simulation.config.experiment.runYears.toLocaleString()}-year observation as ${classification}.`;
-    runStatusElement.innerHTML = '<i></i> ARCHIVED';
+    showCameraArchived(cameraModeToggleElement, worldElement);
     await persist({ status: 'completed', classification, reason: reasonText });
     openingTitleElement.textContent = 'GODBOX';
     openingObservationElement.textContent = `${observationLabel} COMPLETE`;
