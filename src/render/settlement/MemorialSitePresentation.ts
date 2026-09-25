@@ -934,7 +934,7 @@ export function createMemorialSiteLandscape(
   landscape.userData['memorialPrecinctCount'] = sites;
   landscape.userData['memorialPathTiles'] = pathTiles;
   landscape.userData['memorialCulturalLayers'] = culturalLayers.size;
-  landscape.userData['memorialCulturalSequence'] = culturalSequence.sort().join('|');
+  landscape.userData['memorialCulturalSequence'] = culturalSequence.sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10)).join('|');
   landscape.traverse((object) => {
     if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true;
   });
