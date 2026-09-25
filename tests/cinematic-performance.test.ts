@@ -323,7 +323,7 @@ describe('cinematic motion', () => {
     expect(choose.mock.calls.length).toBe(callsAtBlockedSelection);
   });
 
-  it('re-anchors from manual control without snapping or skipping an unseen flight destination', () => {
+  it('leaves a low manual pose without snapping, then immediately restores authored autonomous motion', () => {
     const sim = new Simulation({ seed: 'manual-autonomous-handoff', startMode: 'established',
       startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
       camera: { shotSeconds: [0.25, 0.25], transitionSeconds: 3 } });
@@ -358,10 +358,10 @@ describe('cinematic motion', () => {
     expect(enteredRemoteFlight).toBe(true);
     expect(director.current()?.id).toBe('manual:first');
 
-    // Emulate the observer moving and looking somewhere entirely different while autonomous
-    // presentation is suspended.
-    camera.position.set(11, 3.2, 7);
-    camera.lookAt(19, 3.2, 7);
+    // Manual control can legally descend below the clearance used by an ordinary autonomous
+    // regional shot. Releasing control must not strand the camera there.
+    camera.position.set(11, 0.35, 7);
+    camera.lookAt(19, 0.35, 7);
     camera.updateMatrixWorld(true);
     const manualPosition = camera.position.clone();
     const manualDirection = new Vector3();
@@ -369,15 +369,29 @@ describe('cinematic motion', () => {
 
     director.resumeFromExternalPose();
 
+    // The toggle itself never teleports the lens.
     expect(director.flightTelemetry().active).toBe(false);
-    expect(director.current()?.id).toBe('manual:first');
+    expect(camera.position.distanceTo(manualPosition)).toBeLessThan(1e-9);
 
+    // On the very next autonomous frame, a fresh authored destination is already in flight while
+    // narration remains on the last scene until physical acquisition.
     director.update(1 / 60, 9, sim.state, () => 0);
     const resumedDirection = new Vector3();
     camera.getWorldDirection(resumedDirection);
+    const recovery = director.flightTelemetry();
+    expect(recovery.active).toBe(true);
+    expect(recovery.destinationSceneId).toBe('manual:remote');
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
     expect(resumedDirection.angleTo(manualDirection)).toBeLessThan(THREE.MathUtils.degToRad(2));
     expect(director.observation.sceneId).toBe('manual:first');
+
+    // Recovery is continuous but decisive: it must climb out of the low manual envelope rather
+    // than spending a documentary hold at eye level.
+    for (let frame = 1; frame <= 120; frame += 1) {
+      director.update(1 / 60, 9 + frame / 60, sim.state, () => 0);
+    }
+    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.25);
+    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(0.5);
   });
 
   it('keeps a full editorial transfer materially frame-rate independent at 30, 60 and 144 Hz', () => {
