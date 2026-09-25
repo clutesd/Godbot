@@ -1178,6 +1178,7 @@ export class CameraDirector {
   private readonly sequencePlanner = new CinematicSequencePlanner();
   private activeSequence?: { id: string; ordinal: number; total: number };
   private externalPoseRecoveryPending = false;
+  private interruptedFlightResumePending = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -1300,6 +1301,13 @@ export class CameraDirector {
         this.camera.updateProjectionMatrix();
       }
       this.camera.lookAt(this.lookTarget);
+      return;
+    }
+
+    if (this.interruptedFlightResumePending && this.currentScene) {
+      this.interruptedFlightResumePending = false;
+      this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
+      this.advanceFlight(deltaSeconds, state, elevationAt);
       return;
     }
 
@@ -1478,14 +1486,17 @@ export class CameraDirector {
     this.desiredPosition.copy(this.camera.position);
     this.desiredTarget.copy(this.lookTarget);
 
-    // If manual control interrupted a physical transfer, resume from the last scene that had
-    // actually been acquired. Re-plan subsequent editorial beats from there rather than skipping
-    // an unseen destination that happened to be queued before the observer took control.
-    if (this.flight && this.acquiredScene) this.currentScene = this.acquiredScene;
+    // A flight that was already authored before manual takeover still owns the edit. Keep its
+    // destination and shot-base composition, then rebuild only the physical route from the manual
+    // lens pose on the next autonomous frame. This prevents manual control from silently skipping
+    // an unseen destination and preserves founding/sequence continuity.
+    this.interruptedFlightResumePending = Boolean(this.flight && this.currentScene);
     this.flight = undefined;
-    this.sequencePlanner.interrupt();
-    this.activeSequence = undefined;
-    this.lastHumanShot = Boolean(this.currentScene?.id.startsWith('human:'));
+    if (!this.interruptedFlightResumePending) {
+      this.sequencePlanner.interrupt();
+      this.activeSequence = undefined;
+      this.lastHumanShot = Boolean(this.currentScene?.id.startsWith('human:'));
+    }
 
     this.positionVelocity.set(0, 0, 0);
     this.targetVelocity.set(0, 0, 0);
@@ -1500,15 +1511,17 @@ export class CameraDirector {
     this.visibility.reset();
     this.externalPoseRecoveryPending = true;
 
-    // Ordinary history should not treat the observer's manual pose as a freshly authored shot.
-    // Preserve that exact lens on the handoff frame, then make the next autonomous update choose
-    // a real documentary composition and fly there continuously. This is especially important
-    // after eye-level/manual exploration: personal shots deliberately hold for many seconds, so
-    // resetting shotAge to zero would strand autonomous mode at the manual altitude.
-    //
-    // Founding/Arrival editorial beats are authority barriers with authored timing; never let a
-    // manual toggle prematurely advance those sequences.
-    this.shotAge = isFoundingCameraScene(this.currentScene?.id) ? 0 : this.shotDuration;
+    if (!this.interruptedFlightResumePending) {
+      // Ordinary history should not treat the observer's manual pose as a freshly authored shot.
+      // Preserve that exact lens on the handoff frame, then make the next autonomous update choose
+      // a real documentary composition and fly there continuously. This is especially important
+      // after eye-level/manual exploration: personal shots deliberately hold for many seconds, so
+      // resetting shotAge to zero would strand autonomous mode at the manual altitude.
+      //
+      // Founding/Arrival editorial beats are authority barriers with authored timing; never let a
+      // manual toggle prematurely advance those sequences.
+      this.shotAge = isFoundingCameraScene(this.currentScene?.id) ? 0 : this.shotDuration;
+    }
   }
 
   flightTelemetry(): CameraFlightTelemetry {
@@ -2042,6 +2055,7 @@ export class CameraDirector {
   private acquireCurrentScene(): void {
     if (!this.currentScene) return;
     this.externalPoseRecoveryPending = false;
+    this.interruptedFlightResumePending = false;
     this.acquiredScene = this.currentScene;
     this.commitObservation(this.currentScene);
     this.shotAge = 0;
