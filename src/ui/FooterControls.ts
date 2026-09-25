@@ -1,3 +1,16 @@
+export function footerMarkup(): string {
+  return `
+    <footer class="runline">
+      <button class="audio-toggle" id="restart" type="button">RESTART</button>
+      <span id="observation">OBSERVATION 01</span>
+      <button class="audio-toggle pulse" id="camera-mode-toggle" type="button" aria-pressed="true" aria-label="Switch to manual camera control" title="Switch to manual camera control"><i></i> AUTONOMOUS</button>
+      <span id="seed">SEED &middot; -</span>
+      <button class="audio-toggle" id="audio-toggle" type="button" aria-pressed="false" aria-label="Mute ambient music" title="Mute ambient music">AUDIO ON</button>
+      <span class="commandhint">/ &middot; COMMANDS</span>
+    </footer>
+  `;
+}
+
 export function syncAudioToggle(button: HTMLButtonElement, muted: boolean): void {
   button.textContent = muted ? 'AUDIO OFF' : 'AUDIO ON';
   button.setAttribute('aria-pressed', String(!muted));
