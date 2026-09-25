@@ -1179,6 +1179,7 @@ export class CameraDirector {
   private activeSequence?: { id: string; ordinal: number; total: number };
   private externalPoseRecoveryPending = false;
   private interruptedFlightResumePending = false;
+  private manualHumanReestablishPending = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -1556,6 +1557,7 @@ export class CameraDirector {
       this.sequencePlanner.interrupt();
       this.activeSequence = undefined;
       this.lastHumanShot = Boolean(this.currentScene?.id.startsWith('human:'));
+      this.manualHumanReestablishPending = this.lastHumanShot;
     }
 
     this.positionVelocity.set(0, 0, 0);
@@ -1705,8 +1707,12 @@ export class CameraDirector {
       }
     }
     const sequenceBeatActive = Boolean(this.activeSequence);
+    const suppressScenicForManualHumanReestablish = this.manualHumanReestablishPending && !scene.id.startsWith('human:');
+    if (suppressScenicForManualHumanReestablish) this.manualHumanReestablishPending = false;
 
-    if (!sequenceBeatActive && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
+    if (!sequenceBeatActive
+      && !suppressScenicForManualHumanReestablish
+      && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
       const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
       if (scenic) {
         scene = scenic;
