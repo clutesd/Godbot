@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  footerMarkup,
   installCameraToggleInput,
   showCameraArchived,
   syncAudioToggle,
@@ -63,6 +64,17 @@ function clickEvent(detail: number): Event {
 }
 
 describe('footer control contracts', () => {
+
+  it('renders Restart, camera mode and audio as real non-submit buttons', () => {
+    const markup = footerMarkup();
+
+    for (const id of ['restart', 'camera-mode-toggle', 'audio-toggle']) {
+      expect(markup).toMatch(new RegExp(`<button[^>]*id=["']${id}["'][^>]*type=["']button["']`));
+    }
+    expect(markup).not.toMatch(/<span[^>]*id=["'](?:restart|camera-mode-toggle|audio-toggle)["']/);
+    expect((markup.match(/id=["']camera-mode-toggle["']/g) ?? [])).toHaveLength(1);
+  });
+
   it('exposes audio mute state through visible text and accessible button state', () => {
     const button = new FakeButton() as unknown as HTMLButtonElement;
 
