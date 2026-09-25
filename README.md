@@ -8,7 +8,7 @@ GODBOX is a deterministic, autonomous civilization experiment presented as a liv
 
 ## Start
 
-Use Node.js 22 or newer. The checked-in lockfile is for npm, so use `npm ci` for a fresh clone or Cloudflare build.
+Use Node.js 22.13 or newer. The checked-in lockfile is for npm, so use `npm ci` for a fresh clone or Cloudflare build.
 
 ```bash
 npm ci
@@ -279,14 +279,14 @@ Cloudflare Pages settings:
 | Build command | `npm run build` |
 | Build output directory | `dist` |
 | Root directory | repository root |
-| Node version | `22` or newer |
+| Node version | `22.13` or newer |
 | Runtime environment variables | None |
 
 The repository also includes [`wrangler.toml`](./wrangler.toml) with `pages_build_output_dir = "dist"`, so direct Pages deploys and Wrangler-based Pages deploys agree on the output directory. Serve through HTTP rather than opening `dist/index.html` directly so module and audio paths resolve correctly. If deploying below a URL subpath, set the matching Vite `base` and `audio.basePath`.
 
 Troubleshooting:
 
-- If Cloudflare installs with an older Node version, set the Pages environment variable `NODE_VERSION=22` and rebuild.
+- If Cloudflare installs with an older Node version, set the Pages environment variable `NODE_VERSION=22.13.0` and rebuild.
 - If `npm ci` fails, confirm `package-lock.json` is present and the Cloudflare package manager is npm.
 - If the app loads without music, click the subtle `AUDIO` control once; browsers may block autoplay until user interaction.
 - If an audio path 404s, confirm `public/audio/music/moonlit-drift.mp3` exists before building and that the deployed output contains `dist/audio/music/moonlit-drift.mp3`.

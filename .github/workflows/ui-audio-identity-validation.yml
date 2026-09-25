@@ -1,0 +1,70 @@
+name: UI audio identity validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/main.ts'
+      - 'src/style.css'
+      - 'src/ui/FooterControls.ts'
+      - 'src/audio/**'
+      - 'src/config.ts'
+      - 'src/render/style/BannerIdentity.ts'
+      - 'src/render/style/BannerLegacy.ts'
+      - 'tests/footer-controls.test.ts'
+      - 'tests/audio.test.ts'
+      - 'tests/banner-identity.test.ts'
+      - 'tests/banner-legacy.test.ts'
+      - '.github/workflows/ui-audio-identity-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/main.ts'
+      - 'src/style.css'
+      - 'src/ui/FooterControls.ts'
+      - 'src/audio/**'
+      - 'src/config.ts'
+      - 'src/render/style/BannerIdentity.ts'
+      - 'src/render/style/BannerLegacy.ts'
+      - 'tests/footer-controls.test.ts'
+      - 'tests/audio.test.ts'
+      - 'tests/banner-identity.test.ts'
+      - 'tests/banner-legacy.test.ts'
+      - '.github/workflows/ui-audio-identity-validation.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ui-audio-identity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: >-
+          npx eslint
+          src/main.ts
+          src/ui/FooterControls.ts
+          src/audio/AudioDirector.ts
+          src/audio/audio.manifest.ts
+          src/render/style/BannerIdentity.ts
+          src/render/style/BannerLegacy.ts
+          tests/footer-controls.test.ts
+          tests/audio.test.ts
+          tests/banner-identity.test.ts
+          tests/banner-legacy.test.ts
+      - run: >-
+          npx vitest run
+          tests/footer-controls.test.ts
+          tests/audio.test.ts
+          tests/banner-identity.test.ts
+          tests/banner-legacy.test.ts
+      - run: npm run build

@@ -346,8 +346,13 @@ describe('human-scale documentary camera framing', () => {
     expect(worker.sightline).toBeLessThan(0.2);
     expect(street.lens).toBeLessThan(0.8);
     expect(cameraTargetFloorFor('worker-follow')).toBeLessThan(0.1);
-    expect(cameraTransitionScaleFor('worker-follow')).toBeGreaterThan(1.1);
-    expect(cameraTransitionScaleFor('worker-follow')).toBeLessThan(1.25);
+    const workerTransition = cameraTransitionScaleFor('worker-follow');
+    const streetTransition = cameraTransitionScaleFor('street-observation');
+    const travelerTransition = cameraTransitionScaleFor('traveler-follow');
+    expect(workerTransition).toBeGreaterThan(streetTransition);
+    expect(streetTransition).toBeGreaterThan(travelerTransition);
+    expect(travelerTransition).toBeGreaterThan(1.1);
+    expect(workerTransition).toBeLessThanOrEqual(1.5);
     expect(wide.lens).toBe(3);
     expect(wide.sightline).toBe(1.6);
     expect(cameraTransitionScaleFor('world-establishing')).toBe(1);

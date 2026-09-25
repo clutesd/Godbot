@@ -111,18 +111,22 @@ function mixHex(a: string, b: string, amount: number): string {
   return `#${channel(ar, br)}${channel(ag, bg)}${channel(ab, bb)}`;
 }
 
+function institutionInfluence(institution: BannerIdentityInstitution): number {
+  return clamp01(institution.support) * 0.45 + clamp01(institution.prestige) * 0.55;
+}
+
 function institutionStrength(institutions: readonly BannerIdentityInstitution[], kind: InstitutionKind): number {
   let strongest = 0;
   for (const institution of institutions) {
     if (institution.kind !== kind) continue;
-    strongest = Math.max(strongest, clamp01(institution.support) * 0.45 + clamp01(institution.prestige) * 0.55);
+    strongest = Math.max(strongest, institutionInfluence(institution));
   }
   return strongest;
 }
 
 function strongestInstitution(institutions: readonly BannerIdentityInstitution[]): BannerIdentityInstitution | undefined {
   return [...institutions].sort((a, b) =>
-    (b.support * 0.45 + b.prestige * 0.55) - (a.support * 0.45 + a.prestige * 0.55))[0];
+    institutionInfluence(b) - institutionInfluence(a) || a.kind.localeCompare(b.kind))[0];
 }
 
 function highestScore<T extends string>(scores: Record<T, number>): T {
@@ -167,6 +171,7 @@ export function generateBannerIdentity(input: BannerIdentityInput): BannerIdenti
   const council = institutionStrength(input.institutions, 'council');
   const craft = institutionStrength(input.institutions, 'craft-circle');
   const waterLinked = input.river || input.lake || input.coast || input.biome === 'water' || input.biome === 'wetland';
+  const activeTradeRoutes = Math.max(0, Math.min(3, input.activeTradeRoutes));
 
   const emblemScores: Record<BannerEmblem, number> = {
     sun: 0.12,
@@ -192,7 +197,7 @@ export function generateBannerIdentity(input: BannerIdentityInput): BannerIdenti
   emblemScores.rune += dimensions.longTermOrientation * 0.26 + dimensions.institutionalTrust * 0.12 + knowledgeKeepers * 0.26 + craft * 0.12;
   emblemScores.moon += dimensions.religiousTendency * 0.34 + temple * 0.42;
   emblemScores.sun += dimensions.religiousTendency * 0.12 + temple * 0.12;
-  emblemScores['river-wave'] += dimensions.tradeOrientation * 0.22 + merchants * 0.34 + Math.min(3, input.activeTradeRoutes) * 0.07;
+  emblemScores['river-wave'] += dimensions.tradeOrientation * 0.22 + merchants * 0.34 + activeTradeRoutes * 0.07;
 
   if (input.specialization === 'forestry') emblemScores.tree += 0.2;
   else if (input.specialization === 'mining') emblemScores.mountain += 0.18;
@@ -222,7 +227,7 @@ export function generateBannerIdentity(input: BannerIdentityInput): BannerIdenti
 
   const fieldScores: Record<BannerFieldPattern, number> = {
     solid: 0.34,
-    stripe: dimensions.tradeOrientation * 0.42 + merchants * 0.42 + Math.min(3, input.activeTradeRoutes) * 0.08,
+    stripe: dimensions.tradeOrientation * 0.42 + merchants * 0.42 + activeTradeRoutes * 0.08,
     split: dimensions.militarism * 0.42 + militaryOrder * 0.42 + dimensions.hierarchy * 0.12,
     border: dimensions.cooperation * 0.26 + dimensions.institutionalTrust * 0.3 + council * 0.38,
     'top-band': dimensions.hierarchy * 0.38 + dimensions.religiousTendency * 0.2 + temple * 0.34,

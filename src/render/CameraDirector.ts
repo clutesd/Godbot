@@ -1495,39 +1495,57 @@ export class CameraDirector {
         this.activeSequence = { id: planned.sequenceId, ordinal: planned.ordinal, total: planned.total };
       } else {
         const anchor = this.historian.chooseScene(state);
-        const eligibleForSequence = !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:');
-        if (eligibleForSequence) {
-          const candidates = this.historian.candidates(state).filter(candidate =>
-            !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
-          const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
-          scene = first.scene;
-          this.activeSequence = { id: first.sequenceId, ordinal: first.ordinal, total: first.total };
-        } else {
+
+        // Social documentary moments are editorial anchors in their own right. Give them one chance
+        // at sequence boundaries before planning another 3–5 shot package; otherwise the sequence
+        // planner continuously claims ordinary anchors and this path can never run.
+        let humanScene: ObservationCandidate | undefined;
+        if (!isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id)
+          && !anchor.id.startsWith('human:') && !this.lastHumanShot) {
+          let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
+          for (const id of this.humanSubjects?.() ?? []) {
+            const view = this.subjectPresentation?.(id);
+            if (!view?.partnerId || !view.socialMeaning || !this.subjectPresentation?.(view.partnerId)) continue;
+            const score = view.socialMeaning;
+            if (!best || score > best.score) best = { id, view, score };
+          }
+          const actor = best && state.people.find(p => p.alive && p.id === best.id);
+          const partner = best && state.people.find(p => p.alive && p.id === best.view.partnerId);
+          if (best && actor && partner) {
+            const id = `human:${actor.id}:${partner.id}`;
+            humanScene = { ...anchor, id, subjectId: actor.id, kind: 'worker-follow',
+              position: { x: best.view.x, z: best.view.z }, title: `${actor.name} and ${partner.name}`,
+              score: best.score, interest: best.score, event: undefined,
+              statement: { id, month: state.month, text: `${actor.name} and ${partner.name} share a ${best.view.socialTone ?? 'quiet'} moment.`,
+                epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
+          }
+        }
+
+        if (this.lastHumanShot) {
+          // A personal detail earns an immediate contextual re-establish before another multi-shot
+          // package or social close-up. This keeps the edit readable and prevents a sequence planner
+          // from burying the return to place behind several long intermediate beats.
           scene = anchor;
           this.activeSequence = undefined;
+        } else if (humanScene) {
+          scene = humanScene;
+          this.activeSequence = undefined;
+        } else {
+          const eligibleForSequence = !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:');
+          if (eligibleForSequence) {
+            const candidates = this.historian.candidates(state).filter(candidate =>
+              !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
+            const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
+            scene = first.scene;
+            this.activeSequence = { id: first.sequenceId, ordinal: first.ordinal, total: first.total };
+          } else {
+            scene = anchor;
+            this.activeSequence = undefined;
+          }
         }
       }
     }
     const sequenceBeatActive = Boolean(this.activeSequence);
-    if (!focusEventId && !sequenceBeatActive && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
-      let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
-      for (const id of this.humanSubjects?.() ?? []) {
-        const view = this.subjectPresentation?.(id);
-        if (!view?.partnerId || !view.socialMeaning || !this.subjectPresentation?.(view.partnerId)) continue;
-        const score = view.socialMeaning;
-        if (!best || score > best.score) best = { id, view, score };
-      }
-      const actor = best && state.people.find(p => p.alive && p.id === best.id);
-      const partner = best && state.people.find(p => p.alive && p.id === best.view.partnerId);
-      if (best && actor && partner) {
-        const id = `human:${actor.id}:${partner.id}`;
-        scene = { ...scene, id, subjectId: actor.id, kind: 'worker-follow',
-          position: { x: best.view.x, z: best.view.z }, title: `${actor.name} and ${partner.name}`,
-          score: best.score, interest: best.score, event: undefined,
-          statement: { id, month: state.month, text: `${actor.name} and ${partner.name} share a ${best.view.socialTone ?? 'quiet'} moment.`,
-            epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
-      }
-    }
 
     if (!sequenceBeatActive && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
       const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
@@ -1562,14 +1580,19 @@ export class CameraDirector {
     this.shotDuration = scenicProfile?.durationSeconds
       ?? editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
-    if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
-      this.shotDuration = Math.max(this.shotDuration, 20);
-    } else if (scene.kind === 'street-observation') {
-      this.shotDuration = Math.max(this.shotDuration, 18);
-    } else if (scene.kind === 'traveler-follow') {
-      this.shotDuration = Math.max(this.shotDuration, 16);
+    // Authored opening beats own their timing. The longer documentary holds are for ordinary
+    // human observation after Arrival; applying them to founding cast/release beats stretches a
+    // deliberately paced 6–8 second sequence into 18–20 second stalls.
+    if (!editorialTiming && !scenicProfile) {
+      if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
+        this.shotDuration = Math.max(this.shotDuration, 20);
+      } else if (scene.kind === 'street-observation') {
+        this.shotDuration = Math.max(this.shotDuration, 18);
+      } else if (scene.kind === 'traveler-follow') {
+        this.shotDuration = Math.max(this.shotDuration, 16);
+      }
+      if (scene.id.startsWith('human:')) this.shotDuration = Math.max(this.shotDuration, 22);
     }
-    if (scene.id.startsWith('human:')) this.shotDuration = Math.max(this.shotDuration, 22);
 
     const ground = elevationAt(scene.position.x, scene.position.z);
     this.shotBaseTarget.set(scene.position.x, ground + (scenicProfile?.targetHeight
@@ -2123,23 +2146,29 @@ export class CameraDirector {
         // in world space. This is deliberately gentle so it never fights collision/sightline safety.
         const leadDirection = new THREE.Vector3();
         if (composition) leadDirection.set(composition.targetX - actorX, 0, composition.targetZ - actorZ);
-        const compositionTrim = screenSpaceComposition(
-          this.camera,
-          new THREE.Vector3(actorX, actorFocusY, actorZ),
-          scene.kind,
-          {
-            moving: scene.kind === 'traveler-follow' || leadDirection.lengthSq() > 0.01,
-            pair: Boolean(partner),
-            leadDirection,
-            distance: followingDistance,
-          },
-        );
-        const viewDir = this.desiredTarget.clone().sub(this.desiredPosition).normalize();
-        const right = new THREE.Vector3().crossVectors(viewDir, this.camera.up).normalize();
-        this.desiredTarget.addScaledVector(right, compositionTrim.offsetX);
-        this.desiredTarget.y += compositionTrim.offsetY;
-        this.camera.fov = easeCameraFov(this.camera.fov, compositionTrim.desiredFov, deltaSeconds);
-        this.camera.updateProjectionMatrix();
+        if (deltaSeconds > 0) {
+          // Endpoint authoring calls animateShot(0) before the lens has physically reached this
+          // composition. Projecting through that old camera can generate a bogus off-screen trim.
+          // Author the flight toward the untrimmed subject first; once the real lens is in motion or
+          // acquired, apply the gentle screen-space correction from its actual pose.
+          const compositionTrim = screenSpaceComposition(
+            this.camera,
+            new THREE.Vector3(actorX, actorFocusY, actorZ),
+            scene.kind,
+            {
+              moving: scene.kind === 'traveler-follow' || leadDirection.lengthSq() > 0.01,
+              pair: Boolean(partner),
+              leadDirection,
+              distance: followingDistance,
+            },
+          );
+          const viewDir = this.desiredTarget.clone().sub(this.desiredPosition).normalize();
+          const right = new THREE.Vector3().crossVectors(viewDir, this.camera.up).normalize();
+          this.desiredTarget.addScaledVector(right, compositionTrim.offsetX);
+          this.desiredTarget.y += compositionTrim.offsetY;
+          this.camera.fov = easeCameraFov(this.camera.fov, compositionTrim.desiredFov, deltaSeconds);
+          this.camera.updateProjectionMatrix();
+        }
 
         this.raiseForTerrain(elevationAt);
         return;

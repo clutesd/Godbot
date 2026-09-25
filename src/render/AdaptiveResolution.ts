@@ -5,7 +5,8 @@
 export class AdaptiveResolution {
   readonly scale = 1;
 
-  sample(_deltaSeconds: number): boolean {
+  sample(deltaSeconds: number): boolean {
+    void deltaSeconds;
     return false;
   }
 }

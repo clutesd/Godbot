@@ -16,9 +16,14 @@ describe('cinematic motion', () => {
     for (const cell of sim.state.world.cells) cell.wood = 0;
     for (const settlement of sim.state.settlements) settlement.structurePlots = [];
     const historian = new Historian(sim.config), scene = historian.chooseScene(sim.state);
-    vi.spyOn(historian, 'chooseScene')
-      .mockReturnValueOnce({ ...scene, id: 'first', kind: 'street-observation', position: { x: 0, z: 0 } })
-      .mockReturnValue({ ...scene, id: 'second', kind: 'street-observation', position: { x: 18, z: 0 } });
+    const first = { ...scene, id: 'first', kind: 'regional-travel' as const, position: { x: 0, z: 0 } };
+    const second = { ...scene, id: 'second', kind: 'regional-travel' as const, position: { x: 18, z: 0 } };
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce(first)
+      .mockReturnValue(second);
+    // This test owns editorial selection. Keep the sequence planner from substituting unrelated
+    // real Historian candidates; sequence behavior has its own dedicated test suite.
+    vi.spyOn(historian, 'candidates').mockImplementation(() => [choose.mock.calls.length <= 1 ? first : second]);
     const camera = new PerspectiveCamera();
     const director = new CameraDirector(camera, sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
@@ -104,21 +109,25 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
+    const release = {
+      ...template,
+      id: 'founding-release:event-1',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'THE FIRST DAY',
+    };
+    const ordinary = {
+      ...template,
+      id: 'ordinary:first-day',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'Ordinary life',
+    };
     const choose = vi.spyOn(historian, 'chooseScene')
-      .mockReturnValueOnce({
-        ...template,
-        id: 'founding-release:event-1',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'THE FIRST DAY',
-      })
-      .mockReturnValue({
-        ...template,
-        id: 'ordinary:first-day',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'Ordinary life',
-      });
+      .mockReturnValueOnce(release)
+      .mockReturnValue(ordinary);
+    // This test is about the founding authority barrier. Sequence composition is tested separately.
+    vi.spyOn(historian, 'candidates').mockReturnValue([ordinary]);
 
     const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
@@ -149,21 +158,25 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
+    const release = {
+      ...template,
+      id: 'founding-release:event-1',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'THE FIRST DAY',
+    };
+    const ordinary = {
+      ...template,
+      id: 'ordinary:first-month',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'The first month',
+    };
     const choose = vi.spyOn(historian, 'chooseScene')
-      .mockReturnValueOnce({
-        ...template,
-        id: 'founding-release:event-1',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'THE FIRST DAY',
-      })
-      .mockReturnValue({
-        ...template,
-        id: 'ordinary:first-month',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'The first month',
-      });
+      .mockReturnValueOnce(release)
+      .mockReturnValue(ordinary);
+    // Hold/release authority is independent from sequence candidate ranking.
+    vi.spyOn(historian, 'candidates').mockReturnValue([ordinary]);
 
     const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
@@ -200,13 +213,18 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
-    const first = { ...template, id: 'watchdog:first', kind: 'street-observation' as const, position: { x: 0, z: 0 } };
-    const second = { ...template, id: 'watchdog:blocked', kind: 'street-observation' as const, position: { x: 18, z: 0 } };
-    const third = { ...template, id: 'watchdog:after', kind: 'street-observation' as const, position: { x: 2, z: 0 } };
+    const first = { ...template, id: 'watchdog:first', kind: 'regional-travel' as const, position: { x: 0, z: 0 } };
+    const second = { ...template, id: 'watchdog:blocked', kind: 'regional-travel' as const, position: { x: 18, z: 0 } };
+    const third = { ...template, id: 'watchdog:after', kind: 'regional-travel' as const, position: { x: 2, z: 0 } };
     const choose = vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce(first)
       .mockReturnValueOnce(second)
       .mockReturnValue(third);
+    vi.spyOn(historian, 'candidates').mockImplementation(() => {
+      if (choose.mock.calls.length <= 1) return [first];
+      if (choose.mock.calls.length === 2) return [second];
+      return [third];
+    });
 
     const director = new CameraDirector(
       new PerspectiveCamera(),
@@ -271,13 +289,18 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
-    const first = { ...template, id: 'bridge:first', kind: 'street-observation' as const, position: { x: 0, z: 0 } };
-    const blocked = { ...template, id: 'bridge:blocked', kind: 'street-observation' as const, position: { x: 18, z: 0 } };
-    const after = { ...template, id: 'bridge:after', kind: 'street-observation' as const, position: { x: 2, z: 0 } };
+    const first = { ...template, id: 'bridge:first', kind: 'regional-travel' as const, position: { x: 0, z: 0 } };
+    const blocked = { ...template, id: 'bridge:blocked', kind: 'regional-travel' as const, position: { x: 18, z: 0 } };
+    const after = { ...template, id: 'bridge:after', kind: 'regional-travel' as const, position: { x: 2, z: 0 } };
     const choose = vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce(first)
       .mockReturnValueOnce(blocked)
       .mockReturnValue(after);
+    vi.spyOn(historian, 'candidates').mockImplementation(() => {
+      if (choose.mock.calls.length <= 1) return [first];
+      if (choose.mock.calls.length === 2) return [blocked];
+      return [after];
+    });
 
     const director = new CameraDirector(
       new PerspectiveCamera(),

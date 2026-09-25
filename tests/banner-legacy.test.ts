@@ -111,6 +111,87 @@ describe('banner legacy', () => {
     expect(legacy.latestChange).toContain('cultural shift');
   });
 
+
+  it('is invariant to history ordering because chronology, not storage order, owns the legacy', () => {
+    const history = [
+      event('politics', 'political-transition', 160, { actors: ['polity-1'] }),
+      event('battle', 'battle', 220, { actors: ['settlement-1'], significance: 0.8 }),
+      event('culture', 'cultural-shift', 300, { actors: ['culture-1'] }),
+      event('same-month-z', 'recovery', 360, { actors: ['settlement-1'], significance: 0.7 }),
+      event('same-month-a', 'alliance-formed', 360, { actors: ['polity-1'], significance: 0.7 }),
+    ];
+
+    expect(deriveBannerLegacy(input({ history }))).toEqual(deriveBannerLegacy(input({ history: [...history].reverse() })));
+  });
+
+  it('ignores events before founding and events from the future', () => {
+    const legacy = deriveBannerLegacy(input({
+      currentMonth: 600,
+      foundedMonth: 100,
+      history: [
+        event('before-founding', 'political-transition', 80, { actors: ['polity-1'] }),
+        event('future', 'cultural-shift', 720, { actors: ['culture-1'] }),
+      ],
+    }));
+
+    expect(legacy.generation).toBe(1);
+    expect(legacy.politicalBands).toBe(0);
+    expect(legacy.culturalMarks).toBe(0);
+    expect(legacy.latestChange).toBeUndefined();
+  });
+
+  it('keeps legacy scalars bounded when restored data contains extreme values', () => {
+    const legacy = deriveBannerLegacy(input({
+      prosperity: 9,
+      crisisMonths: -30,
+      successionCount: -4,
+      institutions: [{ kind: 'council', support: 8, prestige: 12 }],
+      history: Array.from({ length: 12 }, (_, index) =>
+        event(`battle-${index}`, 'battle', 100 + index, { significance: 1 })),
+    }));
+
+    expect(legacy.successionMarks).toBe(0);
+    expect(legacy.wear).toBeGreaterThanOrEqual(0);
+    expect(legacy.wear).toBeLessThanOrEqual(1);
+    expect(legacy.scorch).toBeGreaterThanOrEqual(0);
+    expect(legacy.scorch).toBeLessThanOrEqual(1);
+    expect(legacy.prestigeTrim).toBeGreaterThanOrEqual(0);
+    expect(legacy.prestigeTrim).toBeLessThanOrEqual(1);
+    expect(legacy.repairPatches).toBeGreaterThanOrEqual(0);
+    expect(legacy.repairPatches).toBeLessThanOrEqual(3);
+  });
+
+  it('expires mourning after the documented two-year window', () => {
+    const atBoundary = deriveBannerLegacy(input({
+      currentMonth: 300,
+      history: [event('battle', 'battle', 276, { significance: 0.8 })],
+    }));
+    const expired = deriveBannerLegacy(input({
+      currentMonth: 300,
+      history: [event('battle', 'battle', 275, { significance: 0.8 })],
+    }));
+
+    expect(atBoundary.mourning).toBe(true);
+    expect(expired.mourning).toBe(false);
+  });
+
+  it('uses explicit site precedence when sacred, market and military claims compete', () => {
+    const legacy = deriveBannerLegacy(input({
+      hasLandGate: true,
+      hasAnyPortal: true,
+      specialization: 'exchange',
+      conflictPressure: 0.9,
+      institutions: [
+        { kind: 'temple', support: 0.95, prestige: 0.95 },
+        { kind: 'merchant-association', support: 0.95, prestige: 0.95 },
+        { kind: 'military-order', support: 0.95, prestige: 0.95 },
+      ],
+    }));
+
+    expect(legacy.site).toBe('gate');
+    expect(legacy.mount).toBe('pennon');
+  });
+
   it('turns conflict, crisis and recovery into wear, mourning and repairs', () => {
     const legacy = deriveBannerLegacy(input({
       currentMonth: 300,

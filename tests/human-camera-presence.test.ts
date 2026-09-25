@@ -25,8 +25,11 @@ describe('human documentary camera', () => {
     const person = sim.state.people.find(p => p.alive)!;
     const historian = new Historian(sim.config);
     const candidate = historian.chooseScene(sim.state);
-    vi.spyOn(historian, 'chooseScene').mockReturnValue({ ...candidate, id: 'rendered-person',
-      subjectId: person.id, kind: 'worker-follow', position: { x: 40, z: 40 } });
+    const renderedPerson = { ...candidate, id: 'rendered-person',
+      subjectId: person.id, kind: 'worker-follow' as const, position: { x: 40, z: 40 } };
+    vi.spyOn(historian, 'chooseScene').mockReturnValue(renderedPerson);
+    // Endpoint composition is the contract here; sequence selection has its own focused tests.
+    vi.spyOn(historian, 'candidates').mockReturnValue([renderedPerson]);
     const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 200);
     const director = new CameraDirector(camera, sim.config, historian, () => ({ x: 0, z: 0, footY: 0 }));
     const before = JSON.stringify(sim.state);
