@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
 import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
+import { CinematicSequencePlanner } from './CinematicSequencePlanner';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
@@ -1133,6 +1134,8 @@ export class CameraDirector {
   private readonly arrivalSafetyOffset = new THREE.Vector3();
   private shotsSinceScenic = 1;
   private scenicShotIndex = 0;
+  private readonly sequencePlanner = new CinematicSequencePlanner();
+  private activeSequence?: { id: string; ordinal: number; total: number };
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -1457,8 +1460,33 @@ export class CameraDirector {
     focusEventId?: string,
     elapsedSeconds = 0,
   ): void {
-    let scene = this.historian.chooseScene(state, focusEventId);
-    if (!focusEventId && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
+    let scene: ObservationCandidate;
+    if (focusEventId) {
+      this.sequencePlanner.interrupt();
+      this.activeSequence = undefined;
+      scene = this.historian.chooseScene(state, focusEventId);
+    } else {
+      const planned = this.sequencePlanner.takePlannedShot();
+      if (planned) {
+        scene = planned.scene;
+        this.activeSequence = { id: planned.sequenceId, ordinal: planned.ordinal, total: planned.total };
+      } else {
+        const anchor = this.historian.chooseScene(state);
+        const eligibleForSequence = !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:');
+        if (eligibleForSequence) {
+          const candidates = this.historian.candidates(state).filter(candidate =>
+            !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
+          const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
+          scene = first.scene;
+          this.activeSequence = { id: first.sequenceId, ordinal: first.ordinal, total: first.total };
+        } else {
+          scene = anchor;
+          this.activeSequence = undefined;
+        }
+      }
+    }
+    const sequenceBeatActive = Boolean(this.activeSequence);
+    if (!focusEventId && !sequenceBeatActive && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
       let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
       for (const id of this.humanSubjects?.() ?? []) {
         const view = this.subjectPresentation?.(id);
@@ -1478,7 +1506,7 @@ export class CameraDirector {
       }
     }
 
-    if (shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
+    if (!sequenceBeatActive && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
       const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
       if (scenic) {
         scene = scenic;
