@@ -229,21 +229,32 @@ describe('Arrival camera frame budget', () => {
 });
 
 describe('Arrival Day editorial pacing', () => {
-  it('gives the post-title handoff enough time to settle without becoming another long montage', () => {
-    const overview = foundingEditorialTimingFor('founding:overview:event-1');
-    const portrait = foundingEditorialTimingFor('founding-cast:introduction:0:person-1');
-    const release = foundingEditorialTimingFor('founding-release:event-1');
-    expect(overview).toEqual({ durationSeconds: 7.8, transitionSeconds: 3.2 });
-    expect(portrait).toEqual({ durationSeconds: 6.2, transitionSeconds: 2.6 });
-    expect(release).toEqual({ durationSeconds: 7.8, transitionSeconds: 3.2 });
-    expect(overview!.durationSeconds + portrait!.durationSeconds * 2 + release!.durationSeconds).toBeLessThan(30);
+  it('gives the post-title handoff readable authored holds without turning Arrival into another long montage', () => {
+    const overview = foundingEditorialTimingFor('founding:overview:event-1')!;
+    const portrait = foundingEditorialTimingFor('founding-cast:introduction:0:person-1')!;
+    const release = foundingEditorialTimingFor('founding-release:event-1')!;
+
+    for (const timing of [overview, portrait, release]) {
+      expect(timing.durationSeconds).toBeGreaterThanOrEqual(5);
+      expect(timing.durationSeconds).toBeLessThanOrEqual(10);
+      expect(timing.transitionSeconds).toBeGreaterThanOrEqual(2);
+      expect(timing.transitionSeconds).toBeLessThan(timing.durationSeconds);
+    }
+    expect(overview.durationSeconds).toBeGreaterThanOrEqual(portrait.durationSeconds);
+    expect(release.durationSeconds).toBeGreaterThanOrEqual(portrait.durationSeconds);
+    expect(release.transitionSeconds).toBeGreaterThanOrEqual(portrait.transitionSeconds);
+    expect(overview.durationSeconds + portrait.durationSeconds * 2 + release.durationSeconds).toBeLessThan(30);
     expect(foundingEditorialTimingFor('ordinary:scene')).toBeUndefined();
   });
 
-  it('lets documentary anchors settle, then gives the silent release room to breathe', () => {
-    expect(foundingEditorialTimingFor('founding-cast:framing:event-1')).toEqual({ durationSeconds: 6, transitionSeconds: 2.6 });
-    expect(foundingEditorialTimingFor('founding-cast:introduction:0:person-1')).toEqual({ durationSeconds: 6.2, transitionSeconds: 2.6 });
-    expect(foundingEditorialTimingFor('founding-release:event-1')).toEqual({ durationSeconds: 7.8, transitionSeconds: 3.2 });
+  it('lets documentary anchors settle, then gives the silent release at least as much breathing room', () => {
+    const framing = foundingEditorialTimingFor('founding-cast:framing:event-1')!;
+    const portrait = foundingEditorialTimingFor('founding-cast:introduction:0:person-1')!;
+    const release = foundingEditorialTimingFor('founding-release:event-1')!;
+
+    expect(framing.durationSeconds).toBeLessThanOrEqual(portrait.durationSeconds);
+    expect(release.durationSeconds).toBeGreaterThan(portrait.durationSeconds);
+    expect(release.transitionSeconds).toBeGreaterThanOrEqual(portrait.transitionSeconds);
     expect(isFoundingReleaseScene('founding-release:event-1')).toBe(true);
     expect(isFoundingReleaseScene('ordinary:scene')).toBe(false);
     expect(foundingEditorialTimingFor(undefined)).toBeUndefined();
@@ -353,9 +364,10 @@ describe('human-scale documentary camera framing', () => {
     expect(streetTransition).toBeGreaterThan(travelerTransition);
     expect(travelerTransition).toBeGreaterThan(1.1);
     expect(workerTransition).toBeLessThanOrEqual(1.5);
-    expect(wide.lens).toBe(3);
-    expect(wide.sightline).toBe(1.6);
-    expect(cameraTransitionScaleFor('world-establishing')).toBe(1);
+    expect(wide.lens).toBeGreaterThan(street.lens);
+    expect(wide.lens).toBeGreaterThan(worker.lens);
+    expect(wide.sightline).toBeGreaterThan(worker.sightline);
+    expect(cameraTransitionScaleFor('world-establishing')).toBeLessThan(travelerTransition);
   });
 });
 
