@@ -81,13 +81,14 @@ export class WaterEcology {
         float daylightWater = 1.0 - ecologyNight;
         vec3 dayJewel = mix(vec3(0.025, 0.32, 0.38), vec3(0.15, 0.31, 0.47),
           0.5 + 0.5 * bioNoise(vEcologyWaterWorld.xz * 0.045 + ecologyTime * 0.006));
+      `);
+      // Night becomes deep rather than black, preserving physical reflections and luminous life.
+      shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `
+        // Apply living colour after the base water shader has finished its depth/current/ice pass.
         diffuseColor.rgb = mix(diffuseColor.rgb, dayJewel,
           daylightWater * surfaceLife * livingVeil * 0.055);
         diffuseColor.rgb += vec3(0.045, 0.22, 0.22) * shoreAura * daylightWater
           * (0.025 + livingVeil * surfaceLife * 0.055);
-      `);
-      // Night becomes deep rather than black, preserving physical reflections and luminous life.
-      shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.025, 0.064), ecologyNight * (1.0 - bioIce) * 0.72);
         #include <roughnessmap_fragment>
         roughnessFactor = clamp(roughnessFactor - livingVeil * surfaceLife * (0.025 + daylightWater * 0.018), 0.055, 0.96);`);
