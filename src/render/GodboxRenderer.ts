@@ -418,6 +418,7 @@ export class GodboxRenderer {
       (personId) => this.inspectCameraSubject(personId),
       () => [...this.localPeers.keys()],
       (position, padding) => this.vegetation.cameraLensObstruction(position, padding),
+      (elapsedSeconds) => this.vegetation.wildlifeCameraSubjects(elapsedSeconds),
     );
     this.foundingPods = new FoundingPodRenderer(state);
     this.scene.add(this.foundingPods.root);
