@@ -84,6 +84,25 @@ describe('ambient land wildlife presentation', () => {
     expect(heights.fox).toBeLessThan(0.15);
   });
 
+  it('exposes the same presentation-only animal motion to the camera', () => {
+    const { world, surface } = temperateWildlifeWorld('wildlife-camera');
+    const plans = [manualPlan('elk', 0)];
+    const renderer = new LandWildlifeRenderer(world, surface, 'wildlife-camera', [], plans);
+    const before = JSON.stringify(world.cells);
+
+    const first = renderer.cameraSubjects(0);
+    const later = renderer.cameraSubjects(8);
+
+    expect(first).toHaveLength(1);
+    expect(first[0]?.species).toBe('elk');
+    expect(later[0]?.x).not.toBe(first[0]?.x);
+    expect(JSON.stringify(world.cells)).toBe(before);
+
+    renderer.setExclusionZones([{ x: later[0]!.x, z: later[0]!.z, radius: 1 }]);
+    expect(renderer.cameraSubjects(8)).toHaveLength(0);
+    renderer.dispose();
+  });
+
   it('grounds and animates presentation without mutating world state', () => {
     const { world, surface } = temperateWildlifeWorld('wildlife-render');
     const plans = [manualPlan('elk', -3), manualPlan('fox', 0), manualPlan('bear', 3)];
