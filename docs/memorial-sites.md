@@ -20,6 +20,18 @@ Memorials now read as settlement-scale places rather than isolated marker meshes
 - Presentation remains bounded: one landscape precinct per memorial plot, a small number of edge elements and vegetation instances, and short terrain-following path tiles. The renderer never expands aggregate deaths into one grave per casualty.
 - Every generated surface is marked for the existing weather presentation pipeline. The landscape is deterministic from plot identity, memorial form, age and condition and consumes no simulation randomness.
 
+### Visual language pass
+
+The precinct renderer now treats the four memorial forms as different places rather than differently coloured markers.
+
+- Earth-mound sites receive irregular terrain-following burial mounds, head/foot stones, organic row variation and a low earthen commemorative focus.
+- Ancestor sites use carved timber posts, varied crowns and shoulders, stronger gate silhouettes, grove-like vegetation and multi-post event focuses.
+- Cairn sites use deterministic stacked irregular stones for both individual marks and boundaries, with larger commemorative stacks for remembered events.
+- Stela sites use stepped bases, upright slabs, caps, axial organization and a stronger central monolith.
+- Age and condition physically affect presentation through lean, edge irregularity, litter, moss-like ground accents, vegetation density and material weathering. Ancient sites therefore read as old from shape and landscape history rather than only from colour.
+- The building asset is now a bounded ceremonial focal composition while the terrain presentation owns distributed burial markers. This avoids double-counting simulation deaths while making the site legible at both close and settlement camera distances.
+- Terrain patches use deterministic vertex-colour breakup and irregular edges while continuing to sample the authoritative elevation field. The visual pass never flattens terrain or writes back into simulation state.
+
 Construction retains normal labor, material, project, placement, and 96-plot settlement limits. When blocked, evidence remains pending. Later mortality updates a site's aggregate representation within its reserved ground; this is symbolic growth, not a simulated physical capacity or a new funeral economy. Named retention is bounded, so later ordinary lives contribute to collective memory rather than replacing older markers. Legacy saves initialize the optional fields as new evidence arrives; there is no speculative historical backfill.
 
 ![Offline audit of actual generated memorial geometry](memorial-sites-preview.png)
