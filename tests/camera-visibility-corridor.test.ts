@@ -60,6 +60,41 @@ describe('continuous documentary visibility', () => {
     expect(hysteresis.score).toBeLessThan(0.5);
   });
 
+
+  it('uses elapsed occlusion time rather than frame count at 30, 60 and 144 Hz', () => {
+    const sim = scene();
+    const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
+    const failureTimes = [30, 60, 144].map(fps => {
+      const hysteresis = new CameraVisibilityHysteresis();
+      let elapsed = 0;
+      while (elapsed < 1) {
+        elapsed += 1 / fps;
+        if (hysteresis.update(blocked, 1 / fps)) return elapsed;
+      }
+      throw new Error(`Visibility hysteresis never failed at ${fps} Hz`);
+    });
+
+    for (const time of failureTimes) {
+      expect(time).toBeGreaterThanOrEqual(0.24);
+      expect(time).toBeLessThan(0.29);
+    }
+    expect(Math.max(...failureTimes) - Math.min(...failureTimes)).toBeLessThan(1 / 30 + 1e-6);
+  });
+
+  it('ignores invalid timing samples instead of poisoning visibility state', () => {
+    const sim = scene();
+    const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
+    const hysteresis = new CameraVisibilityHysteresis();
+
+    expect(hysteresis.update(blocked, Number.NaN)).toBe(false);
+    expect(Number.isFinite(hysteresis.score)).toBe(true);
+    expect(hysteresis.update(blocked, Number.POSITIVE_INFINITY)).toBe(false);
+    expect(Number.isFinite(hysteresis.score)).toBe(true);
+
+    expect(hysteresis.update(blocked, 0.24)).toBe(false);
+    expect(hysteresis.update(blocked, 0.02)).toBe(true);
+  });
+
   it('protects each subject rather than only the empty midpoint', () => {
     const sim = scene();
     const person = new THREE.Vector3(0, 0.17, 1);
