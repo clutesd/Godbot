@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
 import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
 import { CinematicSequencePlanner } from './CinematicSequencePlanner';
+import { easeCameraFov, screenSpaceComposition } from './ScreenSpaceComposition';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
@@ -2032,6 +2033,30 @@ export class CameraDirector {
           Math.max(actorGround + platformLift + cameraHeight, elevationAt(x, z) + clearance.lens),
           z,
         );
+
+        // Screen-space trim: keep human subjects intentionally framed rather than merely centered
+        // in world space. This is deliberately gentle so it never fights collision/sightline safety.
+        const leadDirection = new THREE.Vector3();
+        if (action?.target) leadDirection.set(action.target.x - actorX, 0, action.target.z - actorZ);
+        const partner = presentation?.partnerId ? this.subjectPresentation?.(presentation.partnerId) : undefined;
+        const compositionTrim = screenSpaceComposition(
+          this.camera,
+          new THREE.Vector3(actorX, actorFocusY, actorZ),
+          scene.kind,
+          {
+            moving: scene.kind === 'traveler-follow' || leadDirection.lengthSq() > 0.01,
+            pair: Boolean(partner),
+            leadDirection,
+            distance: followingDistance,
+          },
+        );
+        const viewDir = this.desiredTarget.clone().sub(this.desiredPosition).normalize();
+        const right = new THREE.Vector3().crossVectors(viewDir, this.camera.up).normalize();
+        this.desiredTarget.addScaledVector(right, compositionTrim.offsetX);
+        this.desiredTarget.y += compositionTrim.offsetY;
+        this.camera.fov = easeCameraFov(this.camera.fov, compositionTrim.desiredFov, deltaSeconds);
+        this.camera.updateProjectionMatrix();
+
         this.raiseForTerrain(elevationAt);
         return;
       }
@@ -2059,6 +2084,18 @@ export class CameraDirector {
     }
 
     this.applyCinematicMotion(this.currentMotion, eased, elapsedSeconds);
+    const genericTrim = screenSpaceComposition(
+      this.camera,
+      this.desiredTarget,
+      scene.kind,
+      { distance: this.desiredPosition.distanceTo(this.desiredTarget) },
+    );
+    const genericViewDir = this.desiredTarget.clone().sub(this.desiredPosition).normalize();
+    const genericRight = new THREE.Vector3().crossVectors(genericViewDir, this.camera.up).normalize();
+    this.desiredTarget.addScaledVector(genericRight, genericTrim.offsetX * 0.55);
+    this.desiredTarget.y += genericTrim.offsetY * 0.45;
+    this.camera.fov = easeCameraFov(this.camera.fov, genericTrim.desiredFov, deltaSeconds);
+    this.camera.updateProjectionMatrix();
     this.raiseForTerrain(elevationAt);
   }
 
