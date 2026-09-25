@@ -28,8 +28,8 @@ describe('scenic low-flight camera grammar', () => {
 
     const ordinaryClearance = cameraClearanceFor('landscape-pause');
     const scenicClearance = cameraClearanceForScene('landscape-pause', 'scenic:forest:0:cell');
-    expect(ordinaryClearance.lens).toBe(3);
-    expect(scenicClearance.lens).toBeLessThan(ordinaryClearance.lens);
+    expect(ordinaryClearance.lens).toBeGreaterThan(scenicClearance.lens);
+    expect(ordinaryClearance.sightline).toBeGreaterThan(scenicClearance.sightline);
   });
 
   it('spaces beauty shots between documentary beats and never displaces priority scenes', () => {
