@@ -209,7 +209,7 @@ body { min-width: 320px; }
 .founding-orientation::before, .founding-orientation::after { height: 6%; }
 .witnessing-arrival .identity, .witnessing-arrival .population, .witnessing-arrival .chronicle .rule, .witnessing-arrival .place, .witnessing-arrival .activity, .witnessing-arrival .evidence { opacity: 0; }
 .witnessing-arrival .chronicle { bottom: 8%; }
-.witnessing-arrival .runline, .founding-orientation .runline { z-index: 8; }
+.witnessing-arrival .runline, .founding-orientation .runline { z-index: 12; }
 .founding-orientation .identity, .founding-orientation .chronicle { opacity: 0; }
 /* The last Arrival Day shot removes both narration and HUD: the frame opens up while time resumes. */
 .founding-release .identity, .founding-release .chronicle { opacity: 0; }
