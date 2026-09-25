@@ -71,6 +71,72 @@ describe('CinematicSequencePlanner', () => {
     expect(shots.every(shot => shot.sequenceId === shots[0]!.sequenceId)).toBe(true);
   });
 
+
+  it('is deterministic when equally scored candidates arrive in a different array order', () => {
+    const makeRun = (reverse: boolean): string[] => {
+      const planner = new CinematicSequencePlanner();
+      const anchor = scene('anchor', 'street-observation', 10, 10, 0.9);
+      const candidates = [
+        anchor,
+        scene('a-establish', 'world-establishing', 11, 10, 0.7),
+        scene('b-establish', 'world-establishing', 9, 10, 0.7),
+        scene('a-detail', 'worker-follow', 10, 11, 0.7),
+        scene('b-detail', 'worker-follow', 10, 9, 0.7),
+        scene('release', 'landscape-pause', 12, 12, 0.65),
+      ];
+      const ordered = reverse ? [...candidates].reverse() : candidates;
+      const first = planner.plan(state, anchor, ordered);
+      const ids = [first.scene.id];
+      while (planner.hasPlannedShot()) {
+        const next = planner.takePlannedShot();
+        if (next) ids.push(next.scene.id);
+      }
+      return ids;
+    };
+
+    expect(makeRun(false)).toEqual(makeRun(true));
+  });
+
+  it('keeps sequence metadata internally consistent and includes the anchor exactly once', () => {
+    const planner = new CinematicSequencePlanner();
+    const anchor = scene('anchor', 'settlement-approach', 0, 0, 0.92);
+    const first = planner.plan(state, anchor, [
+      scene('establish', 'world-establishing', 0, 1, 0.7),
+      anchor,
+      scene('detail', 'worker-follow', 1, 0, 0.76),
+      scene('context', 'institution-exterior', 1.5, 0.5, 0.72),
+      scene('release', 'landscape-pause', 3, 2, 0.68),
+    ]);
+    const shots = [first];
+    while (planner.hasPlannedShot()) {
+      const next = planner.takePlannedShot();
+      if (next) shots.push(next);
+    }
+
+    expect(shots.filter(shot => shot.scene.id === anchor.id)).toHaveLength(1);
+    expect(shots.map(shot => shot.ordinal)).toEqual(shots.map((_, index) => index));
+    expect(shots.every(shot => shot.total === shots.length)).toBe(true);
+    expect(shots.every(shot => shot.sequenceId === first.sequenceId)).toBe(true);
+  });
+
+  it('never mutates simulation state or candidate facts while planning presentation', () => {
+    const planner = new CinematicSequencePlanner();
+    const anchor = scene('anchor', 'street-observation', 4, 4, 0.9);
+    const candidates = [
+      anchor,
+      scene('wide', 'world-establishing', 4, 5, 0.7),
+      scene('detail', 'worker-follow', 5, 4, 0.72),
+      scene('release', 'landscape-pause', 7, 6, 0.65),
+    ];
+    const stateBefore = JSON.stringify(state);
+    const candidateBefore = JSON.stringify(candidates);
+
+    planner.plan(state, anchor, candidates);
+
+    expect(JSON.stringify(state)).toBe(stateBefore);
+    expect(JSON.stringify(candidates)).toBe(candidateBefore);
+  });
+
   it('interrupts queued editorial beats immediately for a major event', () => {
     const planner = new CinematicSequencePlanner();
     const anchor = scene('anchor', 'settlement-approach', 0, 0);
