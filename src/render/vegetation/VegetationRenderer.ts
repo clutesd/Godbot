@@ -17,6 +17,7 @@ import { bindTreeMaterial } from './TreeMaterials';
 import { insideVegetationTerrain } from './VegetationPlacement';
 import { BioluminescentFlora } from './BioluminescentFlora';
 import { DEFAULT_ECOLOGY_QUALITY, type EcologyField, type EcologyQuality } from '../ecology/EcologyField';
+import { LandWildlifeRenderer, type LandWildlifeReport } from '../wildlife/LandWildlifeRenderer';
 
 export interface VegetationReport {
   trees: number;
@@ -30,6 +31,7 @@ export interface VegetationReport {
   triangles: number;
   byFamily: Record<TreeFamily, number>;
   bioluminescence?: { planned: number; flora: number; motes: number; drawCalls: number };
+  wildlife: LandWildlifeReport;
 }
 
 interface Bucket {
@@ -98,6 +100,7 @@ export class VegetationRenderer {
   private readonly cameraMorphology = new WeakMap<ResolvedTreeLifecycle, TreeMorphology>();
   private readonly flowers: FlowerField;
   private readonly birds: AmbientBirds;
+  private readonly wildlife: LandWildlifeRenderer;
   private readonly luminousFlora?: BioluminescentFlora;
   private readonly rootPlates: THREE.InstancedMesh;
   private readonly rootPlateTriangles: number;
@@ -164,7 +167,8 @@ export class VegetationRenderer {
     const flowerBudget = budget <= 0 ? 0 : Math.max(400, Math.min(2800, Math.round(budget * 0.8)));
     this.flowers = new FlowerField(world, surface, `${seed}:flowers`, flowerBudget, this.placements);
     this.birds = new AmbientBirds(seed, this.placements);
-    this.group.add(this.flowers.group, this.birds.group);
+    this.wildlife = new LandWildlifeRenderer(world, surface, seed, anchors, budget > 0 ? undefined : []);
+    this.group.add(this.flowers.group, this.birds.group, this.wildlife.group);
     if (ecology && budget > 0) {
       this.luminousFlora = new BioluminescentFlora(world, surface, seed, this.placements, ecology, quality);
       this.group.add(this.luminousFlora.group);
@@ -203,6 +207,7 @@ export class VegetationRenderer {
     for (const [key, bucket] of this.nearBuckets) triangles += bucket.count * (this.triangleCost.get(key)?.near ?? 0);
     for (const [key, bucket] of this.farBuckets) triangles += bucket.count * (this.triangleCost.get(key)?.far ?? 0);
     const flowerReport = this.flowers.report;
+    const wildlifeReport = this.wildlife.report;
     return {
       trees: this.placements.length,
       significantTrees: this.placements.filter((placement) => placement.id !== undefined).length,
@@ -213,10 +218,12 @@ export class VegetationRenderer {
       flowers: { placed: flowerReport.placements, visible: flowerReport.visible },
       drawCalls: [...this.nearBuckets.values(), ...this.farBuckets.values()].filter(bucket => bucket.count > 0).length * 2
         + flowerReport.drawCalls + (this.leaves.geometry.drawRange.count > 0 ? 1 : 0) + (this.rootPlateCount > 0 ? 1 : 0)
-        + (this.luminousFlora?.report.drawCalls ?? 0),
-      triangles: triangles + this.rootPlateCount * this.rootPlateTriangles + flowerReport.triangles + (this.luminousFlora?.report.triangles ?? 0),
+        + (this.luminousFlora?.report.drawCalls ?? 0) + wildlifeReport.drawCalls,
+      triangles: triangles + this.rootPlateCount * this.rootPlateTriangles + flowerReport.triangles
+        + (this.luminousFlora?.report.triangles ?? 0) + wildlifeReport.triangles,
       byFamily: { ...this.byFamily },
       bioluminescence: this.luminousFlora?.report,
+      wildlife: wildlifeReport,
     };
   }
 
@@ -338,6 +345,9 @@ export class VegetationRenderer {
     for (const zone of next) this.recoveryZones.delete(zone.id);
     this.trimRecoveryZones(currentYear);
     this.disturbance = next;
+    // Presentation-only exclusion prevents animals clipping through an occupied settlement.
+    // It does not alter their plans or feed any behaviour back into simulation state.
+    this.wildlife.setExclusionZones([...next, ...this.occupiedGround]);
   }
 
   setSeason(season: number): void {
@@ -362,6 +372,7 @@ export class VegetationRenderer {
   /** Re-sorts every placement into the near or far tier. Called at the structural update rate. */
   updateLod(camera: THREE.Vector3): void {
     this.birds.setCamera(camera);
+    this.wildlife.setCamera(camera);
     this.leafSites.length = 0;
     const scars = this.world.weather?.forestScars ?? [];
     const signature = `${scars.length}:${scars[0]?.id}:${scars.at(-1)?.id}`;
@@ -549,6 +560,7 @@ export class VegetationRenderer {
     colours.needsUpdate = true;
     this.leaves.geometry.setDrawRange(0, this.leafSites.length);
     this.birds.update(elapsed, wind?.wind ?? 0, [...this.disturbance, ...this.occupiedGround]);
+    this.wildlife.update(elapsed);
   }
 
   private syncManagedPlantings(settlements: readonly Settlement[]): void {
