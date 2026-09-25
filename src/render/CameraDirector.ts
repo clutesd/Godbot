@@ -1014,6 +1014,7 @@ export function scenicObservationFor(
       }
     }
 
+    if (!position) continue;
     const id = `scenic:${motif}:${sequence}:${subjectId}`;
     return {
       ...fallback,
@@ -1032,7 +1033,8 @@ export function scenicObservationFor(
         text: detail,
         epistemicStatus: 'probabilistic-inference',
         sourceEventIds: [],
-        sourceEntityIds: motif === 'wildlife' ? [subjectId] : [],
+        // Scenic wildlife is presentation-only; do not misrepresent a visual plan id as simulation authority.
+        sourceEntityIds: [],
         sourceArchiveIds: [],
         claims: {},
       },
