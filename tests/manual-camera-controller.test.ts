@@ -33,6 +33,15 @@ function keyboardEvent(type: 'keydown' | 'keyup', code: string): KeyboardEvent {
   return event as KeyboardEvent;
 }
 
+function mouseMoveEvent(movementX: number, movementY: number): MouseEvent {
+  const event = new Event('mousemove');
+  Object.defineProperties(event, {
+    movementX: { value: movementX },
+    movementY: { value: movementY },
+  });
+  return event as MouseEvent;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -92,6 +101,92 @@ describe('ManualCameraController', () => {
     controller.update(0.5);
     expect(camera.position.distanceTo(stopped)).toBeLessThan(1e-6);
     controller.dispose();
+  });
+
+
+  it('applies mouse look only while this canvas owns pointer lock', () => {
+    const { documentTarget } = installDomStubs();
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+    const element = testCanvas();
+    const controller = new ManualCameraController(camera, element);
+    controller.setEnabled(true);
+
+    const before = camera.quaternion.clone();
+    documentTarget.dispatchEvent(mouseMoveEvent(120, -50));
+    controller.update(1 / 60);
+    expect(camera.quaternion.angleTo(before)).toBeLessThan(1e-8);
+
+    documentTarget.pointerLockElement = element;
+    documentTarget.dispatchEvent(mouseMoveEvent(120, -50));
+    controller.update(1 / 60);
+    expect(camera.quaternion.angleTo(before)).toBeGreaterThan(0.05);
+    controller.dispose();
+  });
+
+  it('supports vertical flight and a faster Shift travel mode without changing diagonal top speed', () => {
+    const { windowTarget } = installDomStubs();
+    const ordinaryCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+    const fastCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+    const ordinary = new ManualCameraController(ordinaryCamera, testCanvas());
+    const fast = new ManualCameraController(fastCamera, testCanvas());
+
+    ordinary.setEnabled(true);
+    fast.setEnabled(true);
+
+    windowTarget.dispatchEvent(keyboardEvent('keydown', 'KeyW'));
+    windowTarget.dispatchEvent(keyboardEvent('keydown', 'KeyD'));
+    windowTarget.dispatchEvent(keyboardEvent('keydown', 'KeyE'));
+    for (let i = 0; i < 30; i += 1) ordinary.update(1 / 60);
+    const ordinaryDistance = ordinaryCamera.position.length();
+    expect(ordinaryCamera.position.y).toBeGreaterThan(0);
+
+    // Clear the shared key state in both controllers, then drive the fast controller with Shift.
+    windowTarget.dispatchEvent(keyboardEvent('keyup', 'KeyW'));
+    windowTarget.dispatchEvent(keyboardEvent('keyup', 'KeyD'));
+    windowTarget.dispatchEvent(keyboardEvent('keyup', 'KeyE'));
+    windowTarget.dispatchEvent(keyboardEvent('keydown', 'KeyW'));
+    windowTarget.dispatchEvent(keyboardEvent('keydown', 'ShiftLeft'));
+    for (let i = 0; i < 30; i += 1) fast.update(1 / 60);
+
+    expect(fastCamera.position.length()).toBeGreaterThan(ordinaryDistance);
+    ordinary.dispose();
+    fast.dispose();
+  });
+
+  it('exits owned pointer lock and stops all motion when manual mode is disabled', () => {
+    const { windowTarget, documentTarget } = installDomStubs();
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+    const element = testCanvas();
+    const controller = new ManualCameraController(camera, element);
+    controller.setEnabled(true);
+    documentTarget.pointerLockElement = element;
+
+    windowTarget.dispatchEvent(keyboardEvent('keydown', 'KeyW'));
+    controller.update(0.05);
+    const beforeDisable = camera.position.clone();
+
+    controller.setEnabled(false);
+    expect(documentTarget.exitPointerLock).toHaveBeenCalledTimes(1);
+    controller.update(0.5);
+    expect(camera.position.distanceTo(beforeDisable)).toBeLessThan(1e-9);
+    controller.dispose();
+  });
+
+  it('caps a long frame delta so a browser hitch cannot launch the manual camera across the world', () => {
+    const run = (dt: number): THREE.Vector3 => {
+      const { windowTarget } = installDomStubs();
+      const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+      const controller = new ManualCameraController(camera, testCanvas());
+      controller.setEnabled(true);
+      windowTarget.dispatchEvent(keyboardEvent('keydown', 'KeyW'));
+      controller.update(dt);
+      const position = camera.position.clone();
+      controller.dispose();
+      vi.unstubAllGlobals();
+      return position;
+    };
+
+    expect(run(5).distanceTo(run(0.05))).toBeLessThan(1e-10);
   });
 
   it('clears held movement when the window loses focus', () => {
