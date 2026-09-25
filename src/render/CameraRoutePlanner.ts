@@ -102,9 +102,21 @@ export function planTerrainAwareCameraRoute(
   return { points, clearance };
 }
 
-export function smoothCameraRoute(points: readonly THREE.Vector3[], subdivisions = 3): THREE.Vector3[] {
+export function smoothCameraRoute(
+  points: readonly THREE.Vector3[],
+  subdivisions = 3,
+  elevationAt?: (x: number, z: number) => number,
+  clearance = 0,
+): THREE.Vector3[] {
   if (points.length <= 2) return points.map(point => point.clone());
   const curve = new THREE.CatmullRomCurve3(points.map(point => point.clone()), false, 'centripetal', 0.5);
   const count = Math.max(points.length, (points.length - 1) * Math.max(2, subdivisions) + 1);
-  return curve.getPoints(count);
+  const smoothed = curve.getPoints(count);
+  if (elevationAt) {
+    for (let index = 1; index < smoothed.length - 1; index += 1) {
+      const point = smoothed[index]!;
+      point.y = Math.max(point.y, elevationAt(point.x, point.z) + Math.max(0, clearance));
+    }
+  }
+  return smoothed;
 }
