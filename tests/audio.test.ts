@@ -5,15 +5,28 @@ import { configWith } from '../src/config';
 
 class FakeAudio {
   static readonly instances: FakeAudio[] = [];
+  static rejectNextPlay?: Error;
   loop = false;
   preload = '';
   volume = 1;
   paused = true;
   ended = false;
+  playCalls = 0;
+  pauseCalls = 0;
 
   constructor(readonly src: string) { FakeAudio.instances.push(this); }
-  play(): Promise<void> { this.paused = false; return Promise.resolve(); }
-  pause(): void { this.paused = true; }
+  play(): Promise<void> {
+    this.playCalls += 1;
+    const rejection = FakeAudio.rejectNextPlay;
+    FakeAudio.rejectNextPlay = undefined;
+    if (rejection) return Promise.reject(rejection);
+    this.paused = false;
+    return Promise.resolve();
+  }
+  pause(): void {
+    this.pauseCalls += 1;
+    this.paused = true;
+  }
 }
 
 const manifest: AudioManifest = {
@@ -29,6 +42,7 @@ const manifest: AudioManifest = {
 afterEach(() => {
   vi.unstubAllGlobals();
   FakeAudio.instances.length = 0;
+  FakeAudio.rejectNextPlay = undefined;
 });
 
 describe('AudioDirector', () => {
@@ -109,6 +123,72 @@ describe('AudioDirector', () => {
     expect(FakeAudio.instances[2]?.loop).toBe(false);
     expect(FakeAudio.instances[2]?.volume).toBe(0.5);
     expect(FakeAudio.instances[3]?.volume).toBe(0.25);
+  });
+
+
+  it('records browser autoplay rejection without throwing or poisoning later playback', async () => {
+    vi.stubGlobal('Audio', FakeAudio);
+    FakeAudio.rejectNextPlay = new Error('playback blocked');
+    const director = new AudioDirector(configWith(), manifest);
+
+    expect(() => director.transitionTo('settlement')).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(director.failureReason).toBe('playback blocked');
+
+    director.transitionTo('conflict');
+    director.update(1);
+    const conflict = FakeAudio.instances.find(audio => audio.src === '/audio/conflict.ogg');
+    expect(conflict?.paused).toBe(false);
+    expect(conflict?.playCalls).toBe(1);
+  });
+
+  it('does not restart ambience or event one-shots when the documentary category is unchanged', () => {
+    vi.stubGlobal('Audio', FakeAudio);
+    const layered: AudioManifest = {
+      ...manifest,
+      events: { settlement: [{ file: 'events/bell.ogg' }] },
+    };
+    const director = new AudioDirector(configWith(), layered);
+
+    director.transitionTo('settlement');
+    director.update(1);
+    const firstCount = FakeAudio.instances.length;
+    const firstSources = FakeAudio.instances.map(audio => audio.src);
+
+    director.transitionTo('settlement');
+    director.update(1);
+
+    expect(FakeAudio.instances).toHaveLength(firstCount);
+    expect(FakeAudio.instances.map(audio => audio.src)).toEqual(firstSources);
+  });
+
+  it('stops every active layer and one-shot cleanly and is safe to stop twice', () => {
+    vi.stubGlobal('Audio', FakeAudio);
+    const layered: AudioManifest = {
+      ...manifest,
+      music: { ...manifest.music, settlement: [{ file: 'music/moonlit.ogg' }] },
+      events: { settlement: [{ file: 'events/bell.ogg' }] },
+    };
+    const director = new AudioDirector(configWith(), layered);
+    director.transitionTo('settlement', 'witness', 'settlement');
+    director.update(0.5);
+
+    expect(FakeAudio.instances.some(audio => !audio.paused)).toBe(true);
+    director.stop();
+    expect(FakeAudio.instances.every(audio => audio.paused)).toBe(true);
+    expect(() => director.stop()).not.toThrow();
+  });
+
+  it('never constructs browser audio when audio is disabled in configuration', () => {
+    vi.stubGlobal('Audio', FakeAudio);
+    const director = new AudioDirector(configWith({ audio: { enabled: false } }), manifest);
+
+    director.transitionTo('settlement', 'witness', 'settlement');
+    director.update(5);
+    director.resume();
+
+    expect(FakeAudio.instances).toHaveLength(0);
   });
 
   it('lets a non-looping arrival score finish before the settlement loop begins', () => {
