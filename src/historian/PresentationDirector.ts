@@ -72,6 +72,7 @@ export class PresentationDirector {
   }
 
   update(deltaSeconds: number, state: SimulationState, observation: PresentationObservation): number {
+    const dt = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
     const urgency = this.urgency(state, observation);
     const focusKey = `${observation.kind}:${observation.eventType ?? 'none'}:${observation.eventMonth ?? -1}`;
     const seasonalKey = this.seasonalTransitionKey(state.month);
@@ -94,8 +95,8 @@ export class PresentationDirector {
       this.holdSecondsRemaining = Math.max(this.holdSecondsRemaining, urgency >= 2 ? 11 : 6.5);
     }
 
-    if (urgency === 0 && observation.interest < 0.48 && this.holdSecondsRemaining <= 0 && this.seasonalHoldSecondsRemaining <= 0) this.quietSeconds += deltaSeconds;
-    else this.quietSeconds = Math.max(0, this.quietSeconds - deltaSeconds * (urgency >= 2 ? 5 : 2.5));
+    if (urgency === 0 && observation.interest < 0.48 && this.holdSecondsRemaining <= 0 && this.seasonalHoldSecondsRemaining <= 0) this.quietSeconds += dt;
+    else this.quietSeconds = Math.max(0, this.quietSeconds - dt * (urgency >= 2 ? 5 : 2.5));
 
     const directTarget = this.targetSpeed(state, observation);
     const heldTarget = this.heldUrgency >= 2
@@ -108,8 +109,8 @@ export class PresentationDirector {
       ? Math.min(eventTarget, this.seasonalTransitionSpeed())
       : eventTarget;
 
-    this.holdSecondsRemaining = Math.max(0, this.holdSecondsRemaining - deltaSeconds);
-    this.seasonalHoldSecondsRemaining = Math.max(0, this.seasonalHoldSecondsRemaining - deltaSeconds);
+    this.holdSecondsRemaining = Math.max(0, this.holdSecondsRemaining - dt);
+    this.seasonalHoldSecondsRemaining = Math.max(0, this.seasonalHoldSecondsRemaining - dt);
     if (this.holdSecondsRemaining === 0 && urgency === 0) this.heldUrgency = 0;
 
     // Season boundaries should visibly settle almost immediately; returning to fast history stays
@@ -119,12 +120,12 @@ export class PresentationDirector {
     const seasonalSlowing = slowing && this.seasonalHoldSecondsRemaining > 0;
     const transitionFactor = seasonalSlowing ? 0.12 : slowing ? 0.34 : 1.35;
     const timeConstant = Math.max(0.18, this.config.presentation.transitionSeconds * transitionFactor);
-    const transition = 1 - Math.exp(-deltaSeconds / timeConstant);
+    const transition = 1 - Math.exp(-dt / timeConstant);
     this.monthsPerSecond += (this.targetMonthsPerSecond - this.monthsPerSecond) * transition;
 
     this.mode = this.modeFor(observation, this.targetMonthsPerSecond);
     this.tempo = this.tempoFor(urgency, this.targetMonthsPerSecond);
-    this.viewingSeconds[this.mode] += deltaSeconds;
+    this.viewingSeconds[this.mode] += dt;
     return this.monthsPerSecond;
   }
 
