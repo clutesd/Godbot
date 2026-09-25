@@ -8,6 +8,7 @@ on:
       - 'src/main.ts'
       - 'src/style.css'
       - 'src/ui/FooterControls.ts'
+      - 'src/ui/RestartLifecycle.ts'
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/Camera*.ts'
       - 'src/render/Cinematic*.ts'
@@ -41,12 +42,15 @@ on:
       - 'tests/pacing.test.ts'
       - 'tests/pressures.test.ts'
       - 'tests/footer-controls.test.ts'
+      - 'tests/restart-lifecycle.test.ts'
+      - 'tests/restart.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   pull_request:
     paths:
       - 'src/main.ts'
       - 'src/style.css'
       - 'src/ui/FooterControls.ts'
+      - 'src/ui/RestartLifecycle.ts'
       - 'src/historian/PresentationDirector.ts'
       - 'src/render/Camera*.ts'
       - 'src/render/Cinematic*.ts'
@@ -80,6 +84,8 @@ on:
       - 'tests/pacing.test.ts'
       - 'tests/pressures.test.ts'
       - 'tests/footer-controls.test.ts'
+      - 'tests/restart-lifecycle.test.ts'
+      - 'tests/restart.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   workflow_dispatch:
 
@@ -99,6 +105,7 @@ jobs:
           npx eslint
           src/main.ts
           src/ui/FooterControls.ts
+          src/ui/RestartLifecycle.ts
           src/historian/PresentationDirector.ts
           src/render/AdaptiveResolution.ts
           src/render/Camera*.ts
@@ -126,6 +133,8 @@ jobs:
           tests/human-camera-presence.test.ts
           tests/manual-camera-controller.test.ts
           tests/footer-controls.test.ts
+          tests/restart-lifecycle.test.ts
+          tests/restart.test.ts
           tests/screen-space-composition.test.ts
           tests/land-wildlife.test.ts
           tests/local-activity.test.ts
@@ -143,6 +152,8 @@ jobs:
           tests/human-camera-presence.test.ts
           tests/manual-camera-controller.test.ts
           tests/footer-controls.test.ts
+          tests/restart-lifecycle.test.ts
+          tests/restart.test.ts
           tests/screen-space-composition.test.ts
           tests/land-wildlife.test.ts
           tests/pacing.test.ts

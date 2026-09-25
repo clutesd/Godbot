@@ -28,7 +28,8 @@ import { WarChronicle } from './render/war/WarChronicle';
 import { arrivalCaption, foundingArrivalDialogue } from './render/founding/ArrivalPresentation';
 import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
 import { OpeningHandoff } from './sim/founding/OpeningHandoff';
-import { footerMarkup, installCameraToggleInput, showCameraArchived, syncAudioToggle as renderAudioToggle, syncCameraToggle as renderCameraToggle } from './ui/FooterControls';
+import { footerMarkup, installCameraToggleInput, showCameraArchived, syncAudioToggle as renderAudioToggle, syncCameraToggle as renderCameraToggle, syncRestartToggle } from './ui/FooterControls';
+import { performAtomicRestart } from './ui/RestartLifecycle';
 
 declare global {
   interface Window {
@@ -133,6 +134,7 @@ const activityElement = requiredElement<HTMLElement>('#activity');
 const evidenceElement = requiredElement<HTMLElement>('#evidence');
 const seedElement = requiredElement<HTMLElement>('#seed');
 const observationElement = requiredElement<HTMLElement>('#observation');
+const restartButtonElement = requiredElement<HTMLButtonElement>('#restart');
 const cameraModeToggleElement = requiredElement<HTMLButtonElement>('#camera-mode-toggle');
 const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
 const transportDebugLegendElement = requiredElement<HTMLElement>('#transport-debug-legend');
@@ -243,12 +245,11 @@ function matchingOngoingRun(records: readonly RunArchiveRecord[], familyFingerpr
     && record.identity.baseSeed === baseSeed);
 }
 
-let activeRun: { conclude: (reason: string) => Promise<void> } | undefined;
+let activeRun: { retire: (reason: string) => void } | undefined;
 let activeSeed = '';
 let rafId = 0;
 let openingTimeout = 0;
 let restartInProgress = false;
-requiredElement<HTMLButtonElement>('#restart').addEventListener('click', () => { void restartObservation(generateSeed()); });
 
 function generateSeed(): string {
   const values = new Uint32Array(2);
@@ -256,18 +257,49 @@ function generateSeed(): string {
   return `world-${[...values].map((value) => value.toString(36)).join('')}`;
 }
 
-/** Ends the current run cleanly and begins a fresh observation from Year 0. */
+function reportRestartFailure(error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error);
+  activityElement.textContent = `The observation could not restart: ${detail}`;
+  evidenceElement.textContent = 'RESTART FAILURE';
+  openingStatusElement.textContent = `RESTART FAILURE · ${detail}`;
+  console.error('GODBOX restart failed', error);
+}
+
+/**
+ * Atomically replaces the browser observation. Teardown is immediate; archive finalization is
+ * deliberately background work so storage latency can never strand the viewer in the old world.
+ */
 async function restartObservation(seed: string): Promise<void> {
   if (restartInProgress) return;
   restartInProgress = true;
   try {
-    await activeRun?.conclude('The observer restarted this world from Year 0.');
-    window.clearTimeout(openingTimeout);
-    await beginObservation(seed);
+    await performAtomicRestart({
+      seed,
+      retireCurrent: () => {
+        window.clearTimeout(openingTimeout);
+        const current = activeRun;
+        activeRun = undefined;
+        current?.retire('The observer restarted this world from Year 0.');
+      },
+      beginFresh: beginObservation,
+      setBusy: (busy) => {
+        syncRestartToggle(restartButtonElement, busy);
+        if (busy) {
+          openingElement.classList.remove('departed', 'ending');
+          openingStatusElement.textContent = 'Restarting the observation…';
+          arrivalCaptionElement.style.opacity = '0';
+        }
+      },
+      onFailure: reportRestartFailure,
+    });
   } finally {
     restartInProgress = false;
   }
 }
+
+restartButtonElement.addEventListener('click', () => {
+  void restartObservation(generateSeed()).catch(() => undefined);
+});
 
 function executeObserverCommand(raw: string): string {
   const parts = raw.trim().replace(/^\/+/, '').split(/\s+/).filter(Boolean);
@@ -280,7 +312,7 @@ function executeObserverCommand(raw: string): string {
         ? activeSeed
         : argument;
     if (!seed) return 'No active observation to replay.';
-    void restartObservation(seed);
+    void restartObservation(seed).catch(() => undefined);
     return `RESTARTING · SEED ${seed.toUpperCase()}`;
   }
   if (command === 'transport-debug') {
@@ -661,7 +693,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       view.dispose();
     }
   };
-  const conclude = async (reason: string): Promise<void> => {
+  const retire = (reason: string): void => {
     if (disposed) return;
     disposed = true;
     const previouslyEnded = runEnded;
@@ -677,11 +709,23 @@ async function beginObservation(seedOverride?: string): Promise<void> {
       syncCameraToggle();
     }
     view.dispose();
+
+    let finalization: Promise<void>;
     try {
-      if (!previouslyEnded) await persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
-    } finally { archiveStore.close(); }
+      finalization = previouslyEnded
+        ? Promise.resolve()
+        : persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
+    } catch (error) {
+      console.error('GODBOX archive finalization failed during retirement', error);
+      archiveStore.close();
+      return;
+    }
+
+    void finalization
+      .catch((error: unknown) => { console.error('GODBOX archive finalization failed during retirement', error); })
+      .finally(() => archiveStore.close());
   };
-  activeRun = { conclude };
+  activeRun = { retire };
   document.addEventListener('visibilitychange', persistWhenHidden);
   window.addEventListener('beforeunload', persistBeforeUnload);
   rafId = window.requestAnimationFrame(frame);

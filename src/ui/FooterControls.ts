@@ -31,6 +31,19 @@ export function syncCameraToggle(button: HTMLButtonElement, world: HTMLElement, 
   world.classList.toggle('manual-camera', !autonomous);
 }
 
+export function syncRestartToggle(button: HTMLButtonElement, restarting: boolean): void {
+  button.disabled = restarting;
+  button.textContent = restarting ? 'RESTARTING…' : 'RESTART';
+  if (restarting) {
+    button.setAttribute('aria-busy', 'true');
+    button.setAttribute('aria-label', 'Restarting observation');
+  } else {
+    button.removeAttribute('aria-busy');
+    button.setAttribute('aria-label', 'Restart observation');
+  }
+  button.title = restarting ? 'Restarting observation' : 'Restart observation';
+}
+
 export function showCameraArchived(button: HTMLButtonElement, world: HTMLElement): void {
   button.disabled = true;
   button.setAttribute('aria-disabled', 'true');
