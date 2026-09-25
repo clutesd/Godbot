@@ -109,21 +109,25 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
+    const release = {
+      ...template,
+      id: 'founding-release:event-1',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'THE FIRST DAY',
+    };
+    const ordinary = {
+      ...template,
+      id: 'ordinary:first-day',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'Ordinary life',
+    };
     const choose = vi.spyOn(historian, 'chooseScene')
-      .mockReturnValueOnce({
-        ...template,
-        id: 'founding-release:event-1',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'THE FIRST DAY',
-      })
-      .mockReturnValue({
-        ...template,
-        id: 'ordinary:first-day',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'Ordinary life',
-      });
+      .mockReturnValueOnce(release)
+      .mockReturnValue(ordinary);
+    // This test is about the founding authority barrier. Sequence composition is tested separately.
+    vi.spyOn(historian, 'candidates').mockReturnValue([ordinary]);
 
     const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
@@ -154,21 +158,25 @@ describe('cinematic motion', () => {
 
     const historian = new Historian(sim.config);
     const template = historian.chooseScene(sim.state);
+    const release = {
+      ...template,
+      id: 'founding-release:event-1',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'THE FIRST DAY',
+    };
+    const ordinary = {
+      ...template,
+      id: 'ordinary:first-month',
+      kind: 'street-observation' as const,
+      position: { x: 0, z: 0 },
+      title: 'The first month',
+    };
     const choose = vi.spyOn(historian, 'chooseScene')
-      .mockReturnValueOnce({
-        ...template,
-        id: 'founding-release:event-1',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'THE FIRST DAY',
-      })
-      .mockReturnValue({
-        ...template,
-        id: 'ordinary:first-month',
-        kind: 'street-observation',
-        position: { x: 0, z: 0 },
-        title: 'The first month',
-      });
+      .mockReturnValueOnce(release)
+      .mockReturnValue(ordinary);
+    // Hold/release authority is independent from sequence candidate ranking.
+    vi.spyOn(historian, 'candidates').mockReturnValue([ordinary]);
 
     const director = new CameraDirector(new PerspectiveCamera(), sim.config, historian);
     director.update(1 / 60, 0, sim.state, () => 0);
