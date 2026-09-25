@@ -5,6 +5,7 @@ import { generateWorld } from '../src/sim/world';
 import { WeatherSystem } from '../src/sim/weather/WeatherSystem';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { WeatherRenderer } from '../src/render/atmosphere/WeatherRenderer';
+import { SkyAtmosphere } from '../src/render/atmosphere/SkyAtmosphere';
 import { Simulation } from '../src/sim/Simulation';
 
 describe('Weather presentation', () => {
@@ -77,6 +78,58 @@ describe('Weather presentation', () => {
     renderer.dispose();
   });
 
+  it('drives cloud mass, storm tone and wind from the same eased local weather frame', () => {
+    const config = configWith({ seed: 'weather-atmosphere-frame', world: { size: 20 } });
+    const world = generateWorld(config);
+    const weather = new WeatherSystem(world, config);
+    const surface = new TerrainSurface(world);
+    const renderer = new WeatherRenderer(world, surface, config.seed);
+    const atmosphere = new SkyAtmosphere(world, surface, config.seed);
+    const camera = new THREE.PerspectiveCamera(60, 1.5, 0.1, 200);
+    camera.position.set(0, 24, 22);
+    camera.lookAt(0, 0, 0);
+    for (const cell of weather.state.cells) {
+      cell.kind = 'thunderstorm'; cell.precipitation = 'rain'; cell.intensity = 1;
+      cell.wind = 0.9; cell.windX = 0.7; cell.windZ = -0.4;
+    }
+    renderer.update(1, 1, camera);
+    expect(renderer.report.cloud).toBeGreaterThan(0.5);
+    expect(renderer.report.storm).toBeGreaterThan(0.5);
+    expect(Math.hypot(renderer.report.windX, renderer.report.windZ)).toBeGreaterThan(0.3);
+    atmosphere.setWeatherFrame(renderer.report);
+    atmosphere.update(1, 1);
+    const clouds = atmosphere.group.getObjectByName('cloud-layer') as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+    expect(clouds.material.opacity).toBeGreaterThan(0.3);
+    expect(clouds.material.size).toBeGreaterThan(26);
+    expect(clouds.position.y).toBeLessThan(0);
+    renderer.dispose();
+  });
+
+  it('presents authoritative lightning once near the camera without mutating weather state', () => {
+    const config = configWith({ seed: 'weather-lightning-presentation', world: { size: 20 } });
+    const world = generateWorld(config);
+    const weather = new WeatherSystem(world, config);
+    const renderer = new WeatherRenderer(world, new TerrainSurface(world), config.seed);
+    const camera = new THREE.PerspectiveCamera(60, 1.5, 0.1, 240);
+    camera.position.set(0, 18, 24);
+    camera.lookAt(0, 0, 0);
+    weather.state.lightning = [{ id: 'strike:test', month: weather.state.month, x: 0, z: 0, intensity: 1 }];
+    const before = JSON.stringify(weather.state);
+    renderer.update(0.016, 2, camera);
+    const bolt = renderer.group.getObjectByName('lightning-bolt') as THREE.Line;
+    const flash = renderer.group.getObjectByName('lightning-flash') as THREE.PointLight;
+    expect(bolt.visible).toBe(true);
+    expect(flash.intensity).toBeGreaterThan(0);
+    expect(renderer.report.lightning).toBeGreaterThan(0.5);
+    renderer.update(0.016, 3, camera);
+    expect(bolt.visible).toBe(false);
+    expect(renderer.report.lightning).toBe(0);
+    renderer.update(0.016, 4, camera);
+    expect(renderer.report.lightning).toBe(0);
+    expect(JSON.stringify(weather.state)).toBe(before);
+    renderer.dispose();
+  });
+
   it('keeps complete headless history identical with renderer updates and different step chunk sizes', () => {
     const config = { seed: 'tornado-aftermath', startingPopulation: 40, world: { size: 20 }, settlementCount: [2, 2] as const };
     const observed = new Simulation(config);
@@ -121,6 +174,7 @@ describe('Weather presentation', () => {
     callback(shader, {} as THREE.WebGLRenderer);
     expect(shader.vertexShader).toContain('weatherUp');
     expect(shader.fragmentShader).toContain('snowCover');
+    expect(shader.fragmentShader).toContain('wetSurface');
     expect(shader.fragmentShader).toContain('weatherUp * (1.0 - immersion)');
     weather.state.tornadoes.push({ id: 'funnel', frontId: 'storm', month: 0, intensity: 0.8, width: 1, speed: 10,
       lifetimeHours: 1, direction: { x: 1, z: 0 }, path: [{ x: -5, z: 0 }, { x: 5, z: 0 }] });
