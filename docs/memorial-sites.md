@@ -32,6 +32,18 @@ The precinct renderer now treats the four memorial forms as different places rat
 - The building asset is now a bounded ceremonial focal composition while the terrain presentation owns distributed burial markers. This avoids double-counting simulation deaths while making the site legible at both close and settlement camera distances.
 - Terrain patches use deterministic vertex-colour breakup and irregular edges while continuing to sample the authoritative elevation field. The visual pass never flattens terrain or writes back into simulation state.
 
+### Mourning and visitation behavior
+
+Memorials are now semantic destinations distinct from shrines. A non-sacred burial ground can therefore receive mourners without becoming a religious building, while ordinary worship continues to use religion-service destinations.
+
+- Existing personal loss memories drive attendance. Close family and lost mentors can trigger an immediate mourning visit when a built memorial site exists.
+- Recent grief produces bounded, deterministic evening visits whose cadence is influenced by relationship strength already encoded in the memory plus loyalty, empathy, and cultural tradition.
+- Strong personal memories can produce anniversary remembrance for up to ten years without keeping residents permanently attached to the cemetery.
+- Priests and ritual specialists can lead communal remembrance for recent significant deaths, battles, pandemics, catastrophes, war endings, and recoveries already present in retained history.
+- Memorial attendance uses the normal PeopleSystem route authority. The renderer can therefore photograph the walk to the cemetery, arrival, focal gathering, quiet reflection, offerings, and departure without creating a separate funeral simulation clock.
+- `mourn` is a distinct activity and `memorial-site` is a distinct destination. Ordinary mourners use reflective choreography; ritual specialists use the existing ritual animation vocabulary.
+- Memorial groups are focal rather than conversational. The presentation system arranges attendants around the site without treating a funeral as a market/plaza social mixer or mutating relationship state.
+
 Construction retains normal labor, material, project, placement, and 96-plot settlement limits. When blocked, evidence remains pending. Later mortality updates a site's aggregate representation within its reserved ground; this is symbolic growth, not a simulated physical capacity or a new funeral economy. Named retention is bounded, so later ordinary lives contribute to collective memory rather than replacing older markers. Legacy saves initialize the optional fields as new evidence arrives; there is no speculative historical backfill.
 
 ![Offline audit of actual generated memorial geometry](memorial-sites-preview.png)
