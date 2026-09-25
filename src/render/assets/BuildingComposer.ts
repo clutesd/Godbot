@@ -391,37 +391,73 @@ export function composeBuilding(
   const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift);
   const memorial = grammar.development?.memorial;
   if (memorial) {
-    // Bounded geometry: ordinary mortality thickens communal ground, named lives get distinct marks.
+    // The landscape renderer owns distributed burial markers. This asset is the ceremonial focal
+    // composition: a small, highly legible silhouette that survives settlement-camera distance.
     const count = Math.min(12, Math.ceil(Math.log2(1 + memorial.deaths)));
     const named = memorial.people.length;
     const surface = memorial.form === 'ancestor-posts' ? 'timber' : memorial.form === 'earth-mounds' ? 'ground' : 'stone';
     const fabric = canvas.at(surface, BUILD_STAGE.FRAME);
-    fabric?.setWeathering(Math.min(0.7, memorial.ageBand * 0.14), grammar.toneShift);
-    for (let i = 0; i < count + named; i++) {
-      const personal = i >= count;
-      const angle = i * 2.399, radius = 0.2 + Math.sqrt(i) * 0.16;
-      const ordered = memorial.form === 'stelae' || memorial.form === 'earth-mounds';
-      const x = ordered ? ((i % 5) - 2) * 0.38 : Math.cos(angle) * radius;
-      const z = ordered ? (Math.floor(i / 5) - 1.5) * 0.38 : Math.sin(angle) * radius;
-      const height = memorial.form === 'ancestor-posts' ? 0.45 : memorial.form === 'stelae' ? 0.36 : 0.12;
-      if (memorial.form === 'earth-mounds') {
-        fabric?.addFanUp({ x, y: height, z }, squareRing(0.15, 0.1, 0, 1).map(p => ({ x: p.x + x, y: p.y, z: p.z + z })));
-      } else fabric?.addBox(x, height / 2, z, memorial.form === 'ancestor-posts' ? 0.065 : 0.24, height, 0.18);
-      if (memorial.form === 'stone-cairns') fabric?.addBox(x, 0.17, z, 0.15, 0.1, 0.12);
-      if (personal) canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(x, height + 0.025, z, 0.09, 0.05, 0.08);
+    const weathering = Math.min(0.78, memorial.ageBand * 0.15);
+    fabric?.setWeathering(weathering, grammar.toneShift);
+
+    if (memorial.form === 'earth-mounds') {
+      canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addFanUp(
+        { x: 0, y: 0.12, z: 0.06 },
+        squareRing(0.48, 0.32, 0, 1).map(p => ({ x: p.x, y: p.y, z: p.z + 0.06 })),
+      );
+      for (const x of [-0.24, 0, 0.24]) {
+        canvas.at('stone', BUILD_STAGE.FRAME)?.addBox(x, 0.1, 0.46, x === 0 ? 0.14 : 0.1, x === 0 ? 0.24 : 0.17, 0.07, x * 0.22);
+      }
+    } else if (memorial.form === 'ancestor-posts') {
+      for (const [x, height] of [[-0.28, 0.58], [0, 0.76], [0.28, 0.62]] as const) {
+        canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(x, height / 2, 0.12, 0.075, height, 0.075, x * 0.18);
+        canvas.at('timber', BUILD_STAGE.DETAIL)?.addBox(x, height * 0.72, 0.12, 0.18, 0.045, 0.065, -x * 0.35);
+      }
+      canvas.at('timber', BUILD_STAGE.ROOF)?.addBox(0, 0.61, 0.12, 0.72, 0.07, 0.11);
+      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.78, 0.12, 0.13, 0.09, 0.08);
+    } else if (memorial.form === 'stone-cairns') {
+      for (let layer = 0; layer < 5; layer += 1) {
+        const width = 0.58 - layer * 0.085;
+        const y = 0.06 + layer * 0.105;
+        canvas.at('stone', BUILD_STAGE.FRAME)?.addBox(
+          (layer % 2 === 0 ? -1 : 1) * 0.018,
+          y,
+          0.1 + (layer % 2 === 0 ? 0.012 : -0.012),
+          width,
+          0.105,
+          width * 0.72,
+          layer * 0.23,
+        );
+      }
+      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.59, 0.1, 0.13, 0.12, 0.1, 0.35);
+    } else {
+      canvas.at('stone', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.05, 0.12, 0.72, 0.1, 0.46);
+      canvas.at('stone', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.12, 0.12, 0.52, 0.07, 0.34);
+      canvas.at('stone', BUILD_STAGE.WALLS)?.addBox(0, 0.48, 0.12, 0.27, 0.72, 0.12);
+      canvas.at('stone', BUILD_STAGE.ROOF)?.addBox(0, 0.85, 0.12, 0.33, 0.06, 0.15);
+      for (const x of [-0.31, 0.31]) canvas.at('stone', BUILD_STAGE.FRAME)?.addBox(x, 0.25, 0.12, 0.13, 0.36, 0.1, x * 0.12);
+      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.55, 0.055, 0.15, 0.22, 0.025);
     }
-    // The commemorative focus is shared, including sites founded for an event without burials.
-    canvas.at(surface, BUILD_STAGE.FOUNDATION)?.addBox(0, 0.045, 0.84, 0.65, 0.09, 0.25);
-    if (memorial.events.length) canvas.at(surface, BUILD_STAGE.WALLS)?.addBox(0, 0.26, 0.84, 0.28, 0.42, 0.1);
+
+    if (memorial.events.length) {
+      canvas.at(surface, BUILD_STAGE.FOUNDATION)?.addBox(0, 0.045, 0.78, 0.72, 0.09, 0.3);
+      canvas.at(surface, BUILD_STAGE.WALLS)?.addBox(0, 0.3, 0.78, 0.3, 0.5, 0.11);
+      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.35, 0.72, 0.14, 0.17, 0.025);
+    }
     if (memorial.sacred) {
-      for (const x of [-0.23, 0.23]) canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(x, 0.3, 0.84, 0.06, 0.6, 0.06);
-      canvas.at('timber', BUILD_STAGE.ROOF)?.addBox(0, 0.6, 0.84, 0.64, 0.08, 0.28);
+      for (const x of [-0.32, 0.32]) canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(x, 0.34, 0.84, 0.065, 0.68, 0.065);
+      canvas.at('timber', BUILD_STAGE.ROOF)?.addBox(0, 0.66, 0.84, 0.78, 0.075, 0.22);
+      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.74, 0.84, 0.14, 0.07, 0.05);
     }
+
     const group = canvas.build(palette);
     group.userData['memorialForm'] = memorial.form;
     group.userData['individualMarkers'] = named;
     group.userData['communalMarkers'] = count;
-    return { group, height: memorial.sacred ? 0.64 : 0.5, extentX: 2.2, extentZ: 2.2 };
+    group.userData['memorialVisualKit'] = 'v2';
+    group.userData['ceremonialFocus'] = true;
+    group.userData['memorialWeathering'] = weathering;
+    return { group, height: memorial.form === 'stelae' ? 0.9 : memorial.sacred ? 0.8 : 0.66, extentX: 2.2, extentZ: 2.2 };
   }
   // Productive ground is rendered by FarmFieldRenderer, which can conform every vertex to the
   // terrain. The structure asset contributes only a small above-ground farm store at the plot edge;
