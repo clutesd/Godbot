@@ -474,7 +474,9 @@ describe('cinematic motion', () => {
     vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce(initial)
       .mockReturnValue(autonomous);
-    vi.spyOn(historian, 'candidates').mockReturnValue([autonomous]);
+    vi.spyOn(historian, 'candidates')
+      .mockReturnValueOnce([initial])
+      .mockReturnValue([autonomous]);
 
     const camera = new PerspectiveCamera(38, 1, 0.01, 200);
     const director = new CameraDirector(camera, sim.config, historian);
