@@ -423,7 +423,7 @@ describe('cinematic motion', () => {
       position: { x: 12, z: 0 },
       title: 'The settlement',
     };
-    const choose = vi.spyOn(historian, 'chooseScene')
+    vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce(human)
       .mockReturnValue(context);
     vi.spyOn(historian, 'candidates').mockReturnValue([context]);
