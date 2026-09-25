@@ -6,6 +6,14 @@ on:
       - main
     paths:
       - 'src/historian/PresentationDirector.ts'
+      - 'src/main.ts'
+      - 'src/style.css'
+      - 'src/render/AdaptiveResolution.ts'
+      - 'src/render/CameraRoutePlanner.ts'
+      - 'src/render/CameraSpring.ts'
+      - 'src/render/CinematicSequencePlanner.ts'
+      - 'src/render/ManualCameraController.ts'
+      - 'src/render/ScreenSpaceComposition.ts'
       - 'src/render/CameraDirector.ts'
       - 'src/render/CameraFlight.ts'
       - 'src/render/GodboxRenderer.ts'
@@ -40,11 +48,24 @@ on:
       - 'tests/camera-scenic-flight.test.ts'
       - 'tests/land-wildlife.test.ts'
       - 'tests/cinematic-performance.test.ts'
+      - 'tests/camera-route-planner.test.ts'
+      - 'tests/cinematic-sequence-planner.test.ts'
+      - 'tests/human-camera-presence.test.ts'
+      - 'tests/manual-camera-controller.test.ts'
+      - 'tests/screen-space-composition.test.ts'
       - 'tests/reaction-glyph-presentation.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   pull_request:
     paths:
       - 'src/historian/PresentationDirector.ts'
+      - 'src/main.ts'
+      - 'src/style.css'
+      - 'src/render/AdaptiveResolution.ts'
+      - 'src/render/CameraRoutePlanner.ts'
+      - 'src/render/CameraSpring.ts'
+      - 'src/render/CinematicSequencePlanner.ts'
+      - 'src/render/ManualCameraController.ts'
+      - 'src/render/ScreenSpaceComposition.ts'
       - 'src/render/CameraDirector.ts'
       - 'src/render/CameraFlight.ts'
       - 'src/render/GodboxRenderer.ts'
@@ -79,6 +100,11 @@ on:
       - 'tests/camera-scenic-flight.test.ts'
       - 'tests/land-wildlife.test.ts'
       - 'tests/cinematic-performance.test.ts'
+      - 'tests/camera-route-planner.test.ts'
+      - 'tests/cinematic-sequence-planner.test.ts'
+      - 'tests/human-camera-presence.test.ts'
+      - 'tests/manual-camera-controller.test.ts'
+      - 'tests/screen-space-composition.test.ts'
       - 'tests/reaction-glyph-presentation.test.ts'
       - '.github/workflows/cinematic-motion-validation.yml'
   workflow_dispatch:
@@ -95,6 +121,63 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npx eslint src/historian/PresentationDirector.ts src/render/CameraDirector.ts src/render/CameraFlight.ts src/render/GodboxRenderer.ts src/render/vegetation/VegetationRenderer.ts src/render/wildlife/LandWildlifeRenderer.ts src/render/animation/AnimationController.ts src/render/founding/FoundingFirstFirePresentation.ts src/shared/FoundingCampLayout.ts src/sim/pressures/Survival.ts src/render/people/LocalActivityPresentation.ts src/render/people/RestPresentation.ts src/render/people/RestChoreography.ts src/render/people/RestPoseRenderer.ts src/render/people/PeopleVisualState.ts src/render/people/ReactionGlyphRenderer.ts src/sim/people/PeopleSystem.ts tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts tests/camera-flight.test.ts tests/camera-scenic-flight.test.ts tests/land-wildlife.test.ts tests/cinematic-performance.test.ts tests/local-activity.test.ts tests/rest-presentation.test.ts tests/rest-choreography.test.ts tests/rest-pose-renderer.test.ts tests/human-physical-presence.test.ts tests/documentary-human-cadence.test.ts tests/founding-first-fire-presentation.test.ts tests/reaction-glyph-presentation.test.ts
-      - run: npx vitest run tests/cinematic-presentation.test.ts tests/camera-forest-sightline.test.ts tests/camera-flight.test.ts tests/camera-scenic-flight.test.ts tests/land-wildlife.test.ts tests/cinematic-performance.test.ts tests/pacing.test.ts tests/local-activity.test.ts tests/rest-presentation.test.ts tests/rest-choreography.test.ts tests/rest-pose-renderer.test.ts tests/human-physical-presence.test.ts tests/documentary-human-cadence.test.ts tests/founding-first-fire-presentation.test.ts tests/reaction-glyph-presentation.test.ts tests/arrival-render.test.ts tests/pressures.test.ts
+      - run: >-
+          npx eslint
+          src/main.ts
+          src/historian/PresentationDirector.ts
+          src/render/AdaptiveResolution.ts
+          src/render/CameraDirector.ts
+          src/render/CameraFlight.ts
+          src/render/CameraRoutePlanner.ts
+          src/render/CameraSpring.ts
+          src/render/CinematicSequencePlanner.ts
+          src/render/ManualCameraController.ts
+          src/render/ScreenSpaceComposition.ts
+          src/render/GodboxRenderer.ts
+          src/render/vegetation/VegetationRenderer.ts
+          src/render/wildlife/LandWildlifeRenderer.ts
+          src/render/animation/AnimationController.ts
+          src/render/founding/FoundingFirstFirePresentation.ts
+          src/shared/FoundingCampLayout.ts
+          src/sim/pressures/Survival.ts
+          src/render/people/LocalActivityPresentation.ts
+          src/render/people/RestPresentation.ts
+          src/render/people/RestChoreography.ts
+          src/render/people/RestPoseRenderer.ts
+          src/render/people/PeopleVisualState.ts
+          src/render/people/ReactionGlyphRenderer.ts
+          src/sim/people/PeopleSystem.ts
+          tests/camera-*.test.ts
+          tests/cinematic-*.test.ts
+          tests/human-camera-presence.test.ts
+          tests/manual-camera-controller.test.ts
+          tests/screen-space-composition.test.ts
+          tests/land-wildlife.test.ts
+          tests/local-activity.test.ts
+          tests/rest-presentation.test.ts
+          tests/rest-choreography.test.ts
+          tests/rest-pose-renderer.test.ts
+          tests/human-physical-presence.test.ts
+          tests/documentary-human-cadence.test.ts
+          tests/founding-first-fire-presentation.test.ts
+          tests/reaction-glyph-presentation.test.ts
+      - run: >-
+          npx vitest run
+          tests/camera-*.test.ts
+          tests/cinematic-*.test.ts
+          tests/human-camera-presence.test.ts
+          tests/manual-camera-controller.test.ts
+          tests/screen-space-composition.test.ts
+          tests/land-wildlife.test.ts
+          tests/pacing.test.ts
+          tests/local-activity.test.ts
+          tests/rest-presentation.test.ts
+          tests/rest-choreography.test.ts
+          tests/rest-pose-renderer.test.ts
+          tests/human-physical-presence.test.ts
+          tests/documentary-human-cadence.test.ts
+          tests/founding-first-fire-presentation.test.ts
+          tests/reaction-glyph-presentation.test.ts
+          tests/arrival-render.test.ts
+          tests/pressures.test.ts
       - run: npm run build
