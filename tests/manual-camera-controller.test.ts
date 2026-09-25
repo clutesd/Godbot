@@ -24,6 +24,22 @@ describe('ManualCameraController', () => {
     controller.dispose();
   });
 
+  it('stays in manual mode when pointer lock is denied', async () => {
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
+    const element = document.createElement('canvas');
+    element.requestPointerLock = vi.fn(() => Promise.reject(new Error('pointer lock denied')));
+    const controller = new ManualCameraController(camera, element);
+
+    controller.setEnabled(true);
+    await Promise.resolve();
+
+    expect(controller.active).toBe(true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+    controller.update(1 / 10);
+    expect(camera.position.z).toBeLessThan(0);
+    controller.dispose();
+  });
+
   it('supports WASD movement while enabled and ignores movement while autonomous', () => {
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 500);
     const element = document.createElement('canvas');
