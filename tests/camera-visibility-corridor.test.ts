@@ -77,6 +77,34 @@ describe('continuous documentary visibility', () => {
     )).toBe(false);
   });
 
+
+  it('allows recovery out of an obstruction but never deeper into it', () => {
+    const sim = scene();
+    const start = new THREE.Vector3(0, 1.3, 0);
+    const improving = new THREE.Vector3(-0.08, 1.3, 0);
+    const worsening = new THREE.Vector3(0.08, 1.3, 0);
+    const gradientObstruction = (point: THREE.Vector3): number => 0.5 + point.x * 2;
+
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      start,
+      improving,
+      ground,
+      0.42,
+      gradientObstruction,
+      { allowUnsafeDeparture: true },
+    )).toBe(true);
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      start,
+      worsening,
+      ground,
+      0.42,
+      gradientObstruction,
+      { allowUnsafeDeparture: true },
+    )).toBe(false);
+  });
+
   it('returns to strict flight safety as soon as a recovery frame starts from normal clearance', () => {
     const sim = scene();
     const safe = new THREE.Vector3(0, 1.25, 0);
