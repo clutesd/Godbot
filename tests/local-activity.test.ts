@@ -79,6 +79,7 @@ describe('renderer-owned local activity', () => {
     mourner.navigation!.destinationKind = 'memorial-site';
     mourner.navigation!.destinationId = 'cemetery';
     const mournerHarness = harness([mourner]);
+    mournerHarness.tick(0);
     for (let i = 0; i < 180 && mournerHarness.local.get(mourner.id)?.action === 'arrive'; i++) mournerHarness.tick(1 / 60);
     for (let i = 0; i < 180 && mournerHarness.local.get(mourner.id)?.animation === 'idle'; i++) mournerHarness.tick(1 / 60);
     expect(mournerHarness.local.get(mourner.id)?.animation).toBe('reflect');
@@ -89,6 +90,7 @@ describe('renderer-owned local activity', () => {
     leader.navigation!.destinationKind = 'memorial-site';
     leader.navigation!.destinationId = 'cemetery';
     const leaderHarness = harness([leader]);
+    leaderHarness.tick(0);
     for (let i = 0; i < 180 && leaderHarness.local.get(leader.id)?.action === 'arrive'; i++) leaderHarness.tick(1 / 60);
     for (let i = 0; i < 180 && leaderHarness.local.get(leader.id)?.animation === 'idle'; i++) leaderHarness.tick(1 / 60);
     expect(leaderHarness.local.get(leader.id)?.animation).toBe('ritual');
