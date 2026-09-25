@@ -250,10 +250,8 @@ function addBoundaryAndEntrance(
     const worldX = plot.worldX + x;
     const worldZ = plot.worldZ + z;
     const baseY = elevationAt(worldX, worldZ) - settlementY;
-    const height = element instanceof THREE.Mesh ? Number((element.geometry as THREE.BufferGeometry).boundingBox?.max.y ?? 0) : 0;
-    void height;
     element.position.set(siteX + x, baseY + (memorial.form === 'stelae' ? 0.08 : memorial.form === 'ancestor-posts' ? 0.27 : 0.08), siteZ + z);
-    element.rotation.y = memorial.form === 'stelae' ? -angle : 0;
+    element.rotation.y = memorial.form === 'stelae' ? Math.PI / 2 - angle : 0;
     boundary.add(element);
     emitted += 1;
   }
@@ -289,7 +287,7 @@ function addBoundaryAndEntrance(
     const lintel = new THREE.Mesh(new THREE.BoxGeometry(half * 2.45, 0.07, 0.09), gateMaterial);
     lintel.name = 'memorial-entrance-lintel';
     lintel.position.set(siteX + centerX, y + profile.gateHeight, siteZ + centerZ);
-    lintel.rotation.y = gateAngle + Math.PI / 2;
+    lintel.rotation.y = Math.PI / 2 - gateAngle;
     lintel.castShadow = true;
     gate.add(lintel);
     const accent = new THREE.Mesh(
