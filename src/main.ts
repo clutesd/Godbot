@@ -177,6 +177,7 @@ function writeAudioMutedPreference(muted: boolean): void {
 }
 
 let activeAudio: AudioDirector | undefined;
+let activeCameraView: { autonomousCamera: boolean; setAutonomousCamera(enabled: boolean): void } | undefined;
 let audioMuted = readAudioMutedPreference();
 
 function syncAudioToggle(): void {
@@ -185,6 +186,24 @@ function syncAudioToggle(): void {
   audioToggleElement.setAttribute('aria-label', audioMuted ? 'Unmute ambient music' : 'Mute ambient music');
   audioToggleElement.title = audioMuted ? 'Unmute ambient music' : 'Mute ambient music';
 }
+
+function syncCameraToggle(): void {
+  const autonomous = activeCameraView?.autonomousCamera ?? true;
+  cameraModeToggleElement.setAttribute('aria-pressed', String(autonomous));
+  cameraModeToggleElement.innerHTML = autonomous ? '<i></i> AUTONOMOUS' : '<i></i> MANUAL · WASD + MOUSE';
+  cameraModeToggleElement.title = autonomous
+    ? 'Switch to manual camera control'
+    : 'Click the world to capture mouse · WASD move · Q/E down/up · Shift faster · toggle to resume autonomous camera';
+  setClassIfChanged(worldElement, 'manual-camera', !autonomous);
+}
+
+cameraModeToggleElement.addEventListener('click', () => {
+  if (!activeCameraView) return;
+  activeCameraView.setAutonomousCamera(!activeCameraView.autonomousCamera);
+  syncCameraToggle();
+});
+syncCameraToggle();
+
 
 audioToggleElement.addEventListener('click', () => {
   audioMuted = !audioMuted;
@@ -385,23 +404,8 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
-  const syncCameraMode = (): void => {
-    const autonomous = view.autonomousCamera;
-    cameraModeToggleElement.setAttribute('aria-pressed', String(autonomous));
-    cameraModeToggleElement.innerHTML = autonomous ? '<i></i> AUTONOMOUS' : '<i></i> MANUAL · WASD + MOUSE';
-    cameraModeToggleElement.title = autonomous
-      ? 'Switch to manual camera control'
-      : 'Click the world to capture mouse · WASD move · Q/E down/up · Shift faster · toggle to resume autonomous camera';
-    setClassIfChanged(worldElement, 'manual-camera', !autonomous);
-  };
-  const toggleCameraMode = (): void => {
-    view.setAutonomousCamera(!view.autonomousCamera);
-    syncCameraMode();
-  };
-  // A new observation reuses the persistent footer. Keep exactly one camera listener;
-  // otherwise Restart leaves stale closures attached to disposed renderers.
-  cameraModeToggleElement.onclick = toggleCameraMode;
-  syncCameraMode();
+  activeCameraView = view;
+  syncCameraToggle();
   openingStatusElement.textContent = 'Preparing the observation…';
   const openingWarmupMs = await view.warmUpOpening();
   // Give the browser two quiet presentation frames after compilation/texture uploads. Arrival time
@@ -666,7 +670,10 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     window.removeEventListener('beforeunload', persistBeforeUnload);
     audio.stop();
     if (activeAudio === audio) activeAudio = undefined;
-    if (cameraModeToggleElement.onclick === toggleCameraMode) cameraModeToggleElement.onclick = null;
+    if (activeCameraView === view) {
+      activeCameraView = undefined;
+      syncCameraToggle();
+    }
     view.dispose();
     try {
       if (!previouslyEnded) await persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
