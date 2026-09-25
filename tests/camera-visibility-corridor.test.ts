@@ -49,6 +49,50 @@ describe('continuous documentary visibility', () => {
     expect(cameraFlightCorridorSafe(sim.state, a, b, ground, 0.42, crown)).toBe(true);
   });
 
+
+  it('lets a low manual pose climb continuously into the autonomous safety envelope', () => {
+    const sim = scene();
+    const low = new THREE.Vector3(0, 0.35, 0);
+    const improving = new THREE.Vector3(0.02, 0.42, 0);
+    const worse = new THREE.Vector3(0.02, 0.28, 0);
+
+    expect(cameraFlightCorridorSafe(sim.state, low, improving, ground, 1.2)).toBe(false);
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      low,
+      improving,
+      ground,
+      1.2,
+      undefined,
+      { allowUnsafeDeparture: true },
+    )).toBe(true);
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      low,
+      worse,
+      ground,
+      1.2,
+      undefined,
+      { allowUnsafeDeparture: true },
+    )).toBe(false);
+  });
+
+  it('returns to strict flight safety as soon as a recovery frame starts from normal clearance', () => {
+    const sim = scene();
+    const safe = new THREE.Vector3(0, 1.25, 0);
+    const unsafe = new THREE.Vector3(0.02, 1.05, 0);
+
+    expect(cameraFlightCorridorSafe(
+      sim.state,
+      safe,
+      unsafe,
+      ground,
+      1.2,
+      undefined,
+      { allowUnsafeDeparture: true },
+    )).toBe(false);
+  });
+
   it('allows brief occlusion, resets after recovery, and fails within a quarter second', () => {
     const sim = scene(), hysteresis = new CameraVisibilityHysteresis();
     const blocked = cameraShotValidity(sim.state, authored, subject, ground, { environmentProbe: crown });
