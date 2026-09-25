@@ -105,7 +105,7 @@ app.innerHTML = `
     <footer class="runline">
       <button class="audio-toggle" id="restart" type="button">RESTART</button>
       <span id="observation">OBSERVATION 01</span>
-      <button class="camera-mode-toggle pulse" id="camera-mode-toggle" type="button" aria-pressed="true" title="Toggle autonomous/manual camera"><i></i> AUTONOMOUS</button>
+      <button class="audio-toggle pulse" id="camera-mode-toggle" type="button" aria-pressed="true" aria-label="Switch to manual camera control" title="Switch to manual camera control"><i></i> AUTONOMOUS</button>
       <span id="seed">SEED &middot; -</span>
       <button class="audio-toggle" id="audio-toggle" type="button" aria-pressed="false" aria-label="Mute ambient music" title="Mute ambient music">AUDIO ON</button>
       <span class="commandhint">/ &middot; COMMANDS</span>
@@ -191,16 +191,36 @@ function syncCameraToggle(): void {
   const autonomous = activeCameraView?.autonomousCamera ?? true;
   cameraModeToggleElement.setAttribute('aria-pressed', String(autonomous));
   cameraModeToggleElement.innerHTML = autonomous ? '<i></i> AUTONOMOUS' : '<i></i> MANUAL · WASD + MOUSE';
+  const actionLabel = autonomous ? 'Switch to manual camera control' : 'Switch to autonomous camera control';
+  cameraModeToggleElement.setAttribute('aria-label', actionLabel);
   cameraModeToggleElement.title = autonomous
-    ? 'Switch to manual camera control'
-    : 'Click the world to capture mouse · WASD move · Q/E down/up · Shift faster · toggle to resume autonomous camera';
+    ? actionLabel
+    : 'Switch to autonomous camera · WASD move · mouse look · Q/E down/up · Shift faster';
   setClassIfChanged(worldElement, 'manual-camera', !autonomous);
 }
 
-cameraModeToggleElement.addEventListener('click', () => {
+function toggleCameraMode(): void {
   if (!activeCameraView) return;
   activeCameraView.setAutonomousCamera(!activeCameraView.autonomousCamera);
   syncCameraToggle();
+}
+
+// Pointer input gets a capture-phase fallback based on the button's actual screen rectangle.
+// This keeps the control operable even if a transient cinematic overlay wins normal hit testing.
+window.addEventListener('pointerdown', (event) => {
+  const rect = cameraModeToggleElement.getBoundingClientRect();
+  const inside = event.clientX >= rect.left && event.clientX <= rect.right
+    && event.clientY >= rect.top && event.clientY <= rect.bottom;
+  if (!inside) return;
+  event.preventDefault();
+  event.stopPropagation();
+  toggleCameraMode();
+}, { capture: true });
+
+// Native keyboard/button activation still works for Enter/Space and assistive technology.
+// Pointer clicks are already handled above, so only synthetic keyboard clicks are accepted here.
+cameraModeToggleElement.addEventListener('click', (event) => {
+  if (event.detail === 0) toggleCameraMode();
 });
 syncCameraToggle();
 
