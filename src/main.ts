@@ -140,7 +140,6 @@ const activityElement = requiredElement<HTMLElement>('#activity');
 const evidenceElement = requiredElement<HTMLElement>('#evidence');
 const seedElement = requiredElement<HTMLElement>('#seed');
 const observationElement = requiredElement<HTMLElement>('#observation');
-const runStatusElement = requiredElement<HTMLElement>('#camera-mode-toggle');
 const cameraModeToggleElement = requiredElement<HTMLButtonElement>('#camera-mode-toggle');
 const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
 const transportDebugLegendElement = requiredElement<HTMLElement>('#transport-debug-legend');
@@ -379,7 +378,8 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   activeSeed = simulation.config.seed;
   openingTitleElement.textContent = 'GODBOX';
   openingStatusElement.textContent = 'History is the protagonist.';
-  runStatusElement.innerHTML = '<i></i> AUTONOMOUS';
+  requestedAutonomousCamera = true;
+  syncCameraToggle();
   openingElement.classList.remove('departed', 'ending');
 
   const observationLabel = `OBSERVATION ${String(identity.observationNumber).padStart(3, '0')}`;
