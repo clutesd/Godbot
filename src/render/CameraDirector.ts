@@ -2093,10 +2093,20 @@ export class CameraDirector {
         const motionEnd = pacing.settleHoldFraction + pacing.motionFraction;
         const inMotionWindow = normalizedAge > pacing.settleHoldFraction && normalizedAge < motionEnd;
         const motionWindow = cameraMotionProgressFor(scene.kind, this.shotAge, this.shotDuration);
-        const observationStillness = inMotionWindow ? Math.sin(Math.PI * motionWindow) : 0;
+
+        // Movement must have editorial purpose. Work/contact scenes may reveal actor→object relation,
+        // travelers may breathe laterally along their direction of travel, and social pairs may open
+        // just enough to read both people. Otherwise the camera stays planted.
+        const motivatedMove = Boolean(
+          (action && composition?.span && composition.span > 0.08)
+          || scene.kind === 'traveler-follow'
+          || partner,
+        );
+        const moveEnvelope = motivatedMove && inMotionWindow ? Math.sin(Math.PI * motionWindow) : 0;
         const microOrbit = Math.sin(elapsedSeconds * 0.075 + this.shotAzimuth)
-          * 0.014 * observationStillness * (1 - contactLock * 0.92);
-        const angle = baseAngle + authoredOrbit * 0.7 + microOrbit;
+          * 0.012 * moveEnvelope * (1 - contactLock * 0.94);
+        const authoredScale = motivatedMove ? 0.7 : 0;
+        const angle = baseAngle + authoredOrbit * authoredScale + microOrbit;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
         const clearance = cameraClearanceForScene(scene.kind, scene.id);
