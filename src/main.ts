@@ -28,7 +28,7 @@ import { WarChronicle } from './render/war/WarChronicle';
 import { arrivalCaption, foundingArrivalDialogue } from './render/founding/ArrivalPresentation';
 import { ARRIVAL_END_SECONDS } from './sim/founding/FoundingArrival';
 import { OpeningHandoff } from './sim/founding/OpeningHandoff';
-import { installCameraToggleInput, showCameraArchived, syncAudioToggle as renderAudioToggle, syncCameraToggle as renderCameraToggle } from './ui/FooterControls';
+import { footerMarkup, installCameraToggleInput, showCameraArchived, syncAudioToggle as renderAudioToggle, syncCameraToggle as renderCameraToggle } from './ui/FooterControls';
 
 declare global {
   interface Window {
@@ -103,14 +103,7 @@ app.innerHTML = `
       <p class="activity" id="activity">A new history begins.</p>
       <p class="evidence" id="evidence">RECORDED FACT</p>
     </section>
-    <footer class="runline">
-      <button class="audio-toggle" id="restart" type="button">RESTART</button>
-      <span id="observation">OBSERVATION 01</span>
-      <button class="audio-toggle pulse" id="camera-mode-toggle" type="button" aria-pressed="true" aria-label="Switch to manual camera control" title="Switch to manual camera control"><i></i> AUTONOMOUS</button>
-      <span id="seed">SEED &middot; -</span>
-      <button class="audio-toggle" id="audio-toggle" type="button" aria-pressed="false" aria-label="Mute ambient music" title="Mute ambient music">AUDIO ON</button>
-      <span class="commandhint">/ &middot; COMMANDS</span>
-    </footer>
+    ${footerMarkup()}
     <form class="commandline" id="commandline" hidden>
       <span class="command-prompt" aria-hidden="true">/</span>
       <input id="command-input" type="text" autocomplete="off" spellcheck="false" aria-label="Observer command" />
