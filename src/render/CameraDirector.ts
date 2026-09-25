@@ -807,7 +807,7 @@ export class CameraVisibilityHysteresis {
   score = 1;
   private failedSeconds = 0;
   update(validity: CameraShotValidity, deltaSeconds: number, pathSafety = 1): boolean {
-    const dt = Math.max(0, deltaSeconds);
+    const dt = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
     this.score += (Math.min(validity.score, pathSafety) - this.score) * (1 - Math.exp(-dt * 8));
     this.failedSeconds = validity.valid ? 0 : this.failedSeconds + dt;
     return validity.lensSafety === 0 || validity.terrainClearance === 0 || this.failedSeconds >= 0.25;
