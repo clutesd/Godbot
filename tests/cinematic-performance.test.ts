@@ -471,7 +471,7 @@ describe('cinematic motion', () => {
     const template = historian.chooseScene(sim.state);
     const initial = { ...template, id: 'restore:initial', kind: 'street-observation' as const, position: { x: 0, z: 0 } };
     const autonomous = { ...template, id: 'restore:autonomous', kind: 'settlement-approach' as const, position: { x: 10, z: 3 } };
-    const choose = vi.spyOn(historian, 'chooseScene')
+    vi.spyOn(historian, 'chooseScene')
       .mockReturnValueOnce(initial)
       .mockReturnValue(autonomous);
     vi.spyOn(historian, 'candidates').mockReturnValue([autonomous]);
