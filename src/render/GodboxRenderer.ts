@@ -550,7 +550,10 @@ export class GodboxRenderer {
   }
 
   setAutonomousCamera(enabled: boolean): void {
+    const wasAutonomous = !this.manualCamera.active;
+    if (enabled === wasAutonomous) return;
     this.manualCamera.setEnabled(!enabled);
+    if (enabled) this.cameraDirector.resumeFromExternalPose();
   }
 
   get autonomousCamera(): boolean {
