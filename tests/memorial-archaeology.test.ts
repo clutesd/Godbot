@@ -5,12 +5,10 @@ import { developmentContext, responseForNeed } from '../src/sim/development/Sett
 import type { DevelopmentResponse, StructureDevelopment } from '../src/sim/development/types';
 import { rememberMortality } from '../src/sim/development/Remembrance';
 import { emitEvent } from '../src/sim/History';
-import type { Settlement, SimulationState, StructurePlot } from '../src/sim/types';
+import type { StructurePlot } from '../src/sim/types';
 import { societyFixture } from './fixtures/settlementDevelopment';
 
 function install(
-  state: SimulationState,
-  settlement: Settlement,
   plot: StructurePlot,
   response: DevelopmentResponse,
   month: number,
@@ -57,7 +55,7 @@ describe('memorial archaeology', () => {
       { id: 'recovery-a', summary: 'Recovery followed.', month: 1800, type: 'recovery', significance: 0.78 },
     ];
     const plot = town.structurePlots![0]!;
-    install(state, town, plot, response, 120);
+    install(plot, response, 120);
 
     const first = deriveMemorialComposition(state, town, plot, plot.development!.memorial!);
     const second = deriveMemorialComposition(state, town, plot, plot.development!.memorial!);
@@ -119,7 +117,7 @@ describe('memorial archaeology', () => {
       { id: 'recovery-a', summary: 'Recovery.', month: 1400, type: 'recovery', significance: 0.76 },
     ];
     const plot = town.structurePlots![0]!;
-    install(state, town, plot, response, 120);
+    install(plot, response, 120);
     const before = structuredClone({
       remembrance: town.remembrance,
       plots: town.structurePlots,
@@ -156,7 +154,7 @@ describe('memorial archaeology', () => {
     firstResponse.memorial!.form = 'ancestor-posts';
     firstResponse.memorial!.ageBand = 4;
     const firstPlot = town.structurePlots![0]!;
-    install(state, town, firstPlot, firstResponse, 120);
+    install(firstPlot, firstResponse, 120);
 
     state.month = 1320;
     town.cultureShares = { [secondCulture.id]: 1 };
@@ -166,7 +164,7 @@ describe('memorial archaeology', () => {
     secondResponse.memorial!.form = 'stelae';
     secondResponse.memorial!.ageBand = 1;
     const secondPlot = town.structurePlots![1]!;
-    install(state, town, secondPlot, secondResponse, 1320);
+    install(secondPlot, secondResponse, 1320);
 
     const oldComposition = deriveMemorialComposition(state, town, firstPlot, firstPlot.development!.memorial!);
     const newComposition = deriveMemorialComposition(state, town, secondPlot, secondPlot.development!.memorial!);
