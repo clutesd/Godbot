@@ -9,8 +9,19 @@ Deaths and significant local events now leave settlement-owned remembrance recor
 - Completion events include remembered names, event references, burial counts, and site form. Original death/event IDs remain construction causes, allowing historian consumers to follow the evidence without generating a new narrative authority.
 - Completed sites keep their founding culture and cannot be automatically repurposed. New cultures can establish another layer. Age advances in 25-year bands, changes weathering, and qualifies the site for existing structure heritage. Abandoned settlements still allow normal decay into ruins.
 
+## Landscape presentation
+
+Memorials now read as settlement-scale places rather than isolated marker meshes. The simulation remains authoritative for mortality, culture, construction, plot reservation and age; the renderer derives a bounded precinct from those facts.
+
+- The reserved memorial footprint receives terrain-following ground treatment, an entrance and a bounded cultural edge. Nothing flattens or replaces the simulation terrain.
+- A pedestrian path is routed from the settlement circulation zone toward the memorial through the same dry-ground walkability contract used by represented people. Existing structures are treated as obstacles, and the path is omitted if a sensible route is unavailable.
+- Earth mounds become irregular burial fields, ancestor posts become grove-like precincts, cairns gain rough stone edges, and stelae form more ordered courts. This is landscape language, not a second cultural authority.
+- Age bands now change more than surface weathering. Older sites accumulate trees, shrubs and edge density, so an ancient cemetery can remain legible from settlement-level documentary shots without increasing the number of simulated burials.
+- Presentation remains bounded: one landscape precinct per memorial plot, a small number of edge elements and vegetation instances, and short terrain-following path tiles. The renderer never expands aggregate deaths into one grave per casualty.
+- Every generated surface is marked for the existing weather presentation pipeline. The landscape is deterministic from plot identity, memorial form, age and condition and consumes no simulation randomness.
+
 Construction retains normal labor, material, project, placement, and 96-plot settlement limits. When blocked, evidence remains pending. Later mortality updates a site's aggregate representation within its reserved ground; this is symbolic growth, not a simulated physical capacity or a new funeral economy. Named retention is bounded, so later ordinary lives contribute to collective memory rather than replacing older markers. Legacy saves initialize the optional fields as new evidence arrives; there is no speculative historical backfill.
 
 ![Offline audit of actual generated memorial geometry](memorial-sites-preview.png)
 
-Regression coverage includes death deduplication, notable documentary deaths, aggregate mortality, event retention, paid construction, blocked terrain, cultural succession, fixed plots, serialization, aging, deterministic replay, and bounded geometry/cache changes. Existing historian, advanced simulation, personal-memory, placement, and structure-rendering suites also pass. The settlement-development suite's nine existing failures were reproduced on clean HEAD (material-processing conservation and an invalid-terrain stock assertion).
+Regression coverage includes death deduplication, notable documentary deaths, aggregate mortality, event retention, paid construction, blocked terrain, cultural succession, fixed plots, serialization, aging, deterministic replay, bounded geometry/cache changes, cultural landscape differentiation, age-driven vegetation and presentation-state immutability. Existing historian, advanced simulation, personal-memory, placement, and structure-rendering suites also pass. The settlement-development suite's nine existing failures were reproduced on clean HEAD (material-processing conservation and an invalid-terrain stock assertion).
