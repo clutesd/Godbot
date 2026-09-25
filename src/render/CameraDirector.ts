@@ -52,6 +52,17 @@ export type CameraSubjectPresentationResolver = (personId: string) => CameraSubj
 /** Renderer-owned collision knowledge that simulation state cannot express precisely (for example individual tree crowns). */
 export type CameraEnvironmentProbe = (position: THREE.Vector3, padding: number) => number;
 
+export interface ScenicCameraSubject {
+  readonly id: string;
+  readonly species: 'elk' | 'fox' | 'bear';
+  readonly x: number;
+  readonly z: number;
+  readonly yaw: number;
+  readonly moving: boolean;
+}
+
+export type ScenicCameraSubjectResolver = (elapsedSeconds: number) => readonly ScenicCameraSubject[];
+
 export interface CameraSafetyOptions {
   readonly lensClearance?: number;
   readonly sightlineClearance?: number;
@@ -166,6 +177,7 @@ export function cameraClearanceFor(kind: ObservationKind | undefined): CameraCle
   if (kind === 'settlement-approach' || kind === 'institution-exterior' || kind === 'infrastructure-scene') {
     return { lens: 0.9, sightline: 0.3 };
   }
+  if (kind === 'landscape-pause') return { lens: 1.15, sightline: 0.38 };
   return { lens: 3, sightline: 1.6 };
 }
 
@@ -244,8 +256,25 @@ export interface CameraFlightProfile {
  * and cover ground, but a flight into a person should feel like a drone easing down a lane or
  * between buildings, acquiring the subject well before arrival.
  */
-export function cameraFlightProfileFor(kind: ObservationKind | undefined, distance: number): CameraFlightProfile {
+export function cameraFlightProfileFor(kind: ObservationKind | undefined, distance: number, sceneId?: string): CameraFlightProfile {
   const d = Math.max(0, distance);
+  const scenic = scenicFlightProfileFor(sceneId);
+  if (scenic) {
+    return {
+      limits: {
+        maxSpeed: THREE.MathUtils.clamp(3.4 + d * 0.055, 3.6, 6.6),
+        maxAcceleration: d > 28 ? 1.7 : 1.4,
+        maxJerk: 4.6,
+        responseSeconds: 0.52,
+      },
+      gazeLimits: { maxSpeed: 5.8, maxAcceleration: 2.8, maxJerk: 8.2, responseSeconds: 0.5 },
+      cruiseClearance: Math.max(2.2, scenic.height + 0.45),
+      destinationLift: 0.7,
+      approachFraction: 0.82,
+      minApproachRadius: 12,
+      maxApproachRadius: 30,
+    };
+  }
   if (isPersonalCameraKind(kind) || kind === 'settlement-approach' || kind === 'institution-exterior' || kind === 'infrastructure-scene') {
     return {
       limits: {
@@ -857,6 +886,161 @@ function isFoundingOverlayScene(sceneId: string | undefined): boolean {
     || sceneId?.startsWith('founding-release:'));
 }
 
+export type ScenicFlightMotif = 'valley' | 'forest' | 'wildlife';
+
+export interface ScenicFlightProfile {
+  readonly motif: ScenicFlightMotif;
+  readonly height: number;
+  readonly targetHeight: number;
+  readonly routeLength: number;
+  readonly sideOffset: number;
+  readonly targetLead: number;
+  readonly durationSeconds: number;
+}
+
+const SCENIC_FLIGHT_SEQUENCE: readonly ScenicFlightMotif[] = ['valley', 'wildlife', 'forest', 'wildlife'];
+
+export function scenicFlightProfileFor(sceneId: string | undefined): ScenicFlightProfile | undefined {
+  if (!sceneId?.startsWith('scenic:')) return undefined;
+  const motif = sceneId.split(':')[1] as ScenicFlightMotif | undefined;
+  if (motif === 'valley') {
+    return { motif, height: 2.65, targetHeight: 0.62, routeLength: 22, sideOffset: 1.2, targetLead: 7.5, durationSeconds: 22 };
+  }
+  if (motif === 'forest') {
+    return { motif, height: 2.35, targetHeight: 0.5, routeLength: 15, sideOffset: 1.55, targetLead: 5.4, durationSeconds: 20 };
+  }
+  if (motif === 'wildlife') {
+    return { motif, height: 1.9, targetHeight: 0.22, routeLength: 12, sideOffset: 2.8, targetLead: 0, durationSeconds: 18 };
+  }
+  return undefined;
+}
+
+export function isScenicFlightScene(sceneId: string | undefined): boolean {
+  return Boolean(scenicFlightProfileFor(sceneId));
+}
+
+export function shouldScheduleScenicFlight(
+  shotsSinceScenic: number,
+  focusEventId: string | undefined,
+  sceneId: string,
+): boolean {
+  return shotsSinceScenic >= 2
+    && !focusEventId
+    && !isFoundingCameraScene(sceneId)
+    && !sceneId.startsWith('human:')
+    && !isScenicFlightScene(sceneId);
+}
+
+function scenicStableUnit(id: string): number {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) hash = Math.imul(31, hash) + id.charCodeAt(index) | 0;
+  return (hash >>> 0) / 4_294_967_296;
+}
+
+function scenicCellFor(
+  state: SimulationState,
+  motif: Exclude<ScenicFlightMotif, 'wildlife'>,
+  key: string,
+): SimulationState['world']['cells'][number] | undefined {
+  let best: SimulationState['world']['cells'][number] | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const cell of state.world.cells) {
+    if (cell.water || cell.x < 3 || cell.z < 3 || cell.x >= state.world.size - 3 || cell.z >= state.world.size - 3) continue;
+    if (cell.slope > (motif === 'forest' ? 0.34 : 0.4)) continue;
+    if (state.settlements.some((settlement) => settlement.alive
+      && Math.hypot(cell.worldX - settlement.position.x, cell.worldZ - settlement.position.z) < 6.5)) continue;
+
+    let score = 0;
+    if (motif === 'valley') {
+      if (!['valley', 'canyon', 'basin'].includes(cell.landform)) continue;
+      score = cell.relief * 0.34 + cell.flow * 0.24 + cell.moisture * 0.12 + cell.wood * 0.08
+        + (cell.biome === 'forest' || cell.biome === 'grassland' ? 0.14 : 0);
+    } else {
+      if (cell.biome !== 'forest' || cell.wood < 0.34) continue;
+      const edge = 1 - Math.min(1, Math.abs(cell.wood - 0.58) / 0.42);
+      score = edge * 0.42 + cell.relief * 0.18 + cell.moisture * 0.18 + cell.habitability * 0.1;
+    }
+    score += scenicStableUnit(`${key}:${cell.x}:${cell.z}`) * 0.12;
+    if (score > bestScore) {
+      bestScore = score;
+      best = cell;
+    }
+  }
+  return best;
+}
+
+export function scenicObservationFor(
+  state: SimulationState,
+  fallback: ObservationCandidate,
+  sequence: number,
+  wildlife: readonly ScenicCameraSubject[] = [],
+): ObservationCandidate | undefined {
+  const preferred = SCENIC_FLIGHT_SEQUENCE[((sequence % SCENIC_FLIGHT_SEQUENCE.length) + SCENIC_FLIGHT_SEQUENCE.length) % SCENIC_FLIGHT_SEQUENCE.length]!;
+  const motifs: ScenicFlightMotif[] = [preferred, ...SCENIC_FLIGHT_SEQUENCE.filter((motif) => motif !== preferred)];
+  const key = `${state.month}:${fallback.id}:${sequence}`;
+
+  for (const motif of motifs) {
+    let subjectId = `scenic:${motif}`;
+    let position: { x: number; z: number } | undefined;
+    let title = 'Across the living world';
+    let detail = 'The camera stays low and lets the landscape carry the scene.';
+
+    if (motif === 'wildlife') {
+      const subject = [...wildlife].sort((left, right) => {
+        const weight = (animal: ScenicCameraSubject): number =>
+          (animal.species === 'elk' ? 1 : animal.species === 'bear' ? 0.88 : 0.66)
+          + (animal.moving ? 0.08 : 0)
+          + scenicStableUnit(`${key}:${animal.id}`) * 0.12;
+        return weight(right) - weight(left);
+      })[0];
+      if (!subject) continue;
+      subjectId = subject.id;
+      position = { x: subject.x, z: subject.z };
+      title = subject.species === 'elk' ? 'Elk across the wild'
+        : subject.species === 'bear' ? 'A bear in the landscape'
+          : 'A fox at the forest edge';
+      detail = 'Wildlife moves through the same terrain as the civilization, briefly becoming part of the documentary.';
+    } else {
+      const cell = scenicCellFor(state, motif, key);
+      if (!cell) continue;
+      subjectId = `scenic-cell:${cell.x}:${cell.z}`;
+      position = { x: cell.worldX, z: cell.worldZ };
+      if (motif === 'valley') {
+        title = 'Through the valley';
+        detail = 'A low flight follows the natural corridor between slopes, water, and open ground.';
+      } else {
+        title = 'Along the forest edge';
+        detail = 'The camera threads the open woodland, keeping trunks, canopy, and terrain close enough to feel physical.';
+      }
+    }
+
+    const id = `scenic:${motif}:${sequence}:${subjectId}`;
+    return {
+      ...fallback,
+      id,
+      subjectId,
+      kind: 'landscape-pause',
+      position,
+      title,
+      score: Math.max(0.5, Math.min(0.68, fallback.score * 0.82 + 0.12)),
+      interest: Math.max(0.48, Math.min(0.66, fallback.interest * 0.78 + 0.16)),
+      audioCategory: 'ambient-wilderness',
+      event: undefined,
+      statement: {
+        id,
+        month: state.month,
+        text: detail,
+        epistemicStatus: 'probabilistic-inference',
+        sourceEventIds: [],
+        sourceEntityIds: motif === 'wildlife' ? [subjectId] : [],
+        sourceArchiveIds: [],
+        claims: {},
+      },
+    };
+  }
+  return undefined;
+}
+
 /**
  * Documentary camera controller. Historical state remains authoritative; this class only decides
  * how the observer glides between and within scenes.
@@ -935,6 +1119,8 @@ export class CameraDirector {
   private arrivalSafetySeconds = 0;
   private arrivalSafetyInitialized = false;
   private readonly arrivalSafetyOffset = new THREE.Vector3();
+  private shotsSinceScenic = 1;
+  private scenicShotIndex = 0;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -943,6 +1129,7 @@ export class CameraDirector {
     private readonly subjectPresentation?: CameraSubjectPresentationResolver,
     private readonly humanSubjects?: () => readonly string[],
     private readonly environmentProbe?: CameraEnvironmentProbe,
+    private readonly scenicSubjects?: ScenicCameraSubjectResolver,
   ) {
     this.camera.position.set(38, 48, 52);
     this.lookTarget.set(0, 0, 0);
@@ -1080,9 +1267,9 @@ export class CameraDirector {
           const oldest = this.acknowledgedMajorEventIds.values().next().value as string | undefined;
           if (oldest) this.acknowledgedMajorEventIds.delete(oldest);
         }
-        this.chooseShot(state, elevationAt, majorEvent?.id);
+        this.chooseShot(state, elevationAt, majorEvent?.id, elapsedSeconds);
       } else if (this.shotAge >= this.shotDuration) {
-        this.chooseShot(state, elevationAt);
+        this.chooseShot(state, elevationAt, undefined, elapsedSeconds);
       }
     }
 
@@ -1251,7 +1438,12 @@ export class CameraDirector {
     };
   }
 
-  private chooseShot(state: SimulationState, elevationAt: (x: number, z: number) => number, focusEventId?: string): void {
+  private chooseShot(
+    state: SimulationState,
+    elevationAt: (x: number, z: number) => number,
+    focusEventId?: string,
+    elapsedSeconds = 0,
+  ): void {
     let scene = this.historian.chooseScene(state, focusEventId);
     if (!focusEventId && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
       let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
@@ -1273,6 +1465,16 @@ export class CameraDirector {
       }
     }
 
+    if (shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
+      const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
+      if (scenic) {
+        scene = scenic;
+        this.scenicShotIndex += 1;
+        this.shotsSinceScenic = 0;
+      }
+    }
+    if (!isFoundingCameraScene(scene.id) && !isScenicFlightScene(scene.id)) this.shotsSinceScenic += 1;
+
     this.lastHumanShot = scene.id.startsWith('human:');
     this.currentScene = scene;
     this.shotAge = 0;
@@ -1282,22 +1484,25 @@ export class CameraDirector {
     this.visibility.reset();
 
     const framing = FRAMING[scene.kind];
+    const scenicProfile = scenicFlightProfileFor(scene.id);
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
     const releaseScene = isFoundingReleaseScene(scene.id);
     const openingOverview = scene.id.startsWith('founding:overview:');
     const baseDuration = this.config.camera.shotSeconds[0]
       + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
-    this.currentMotion = foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : openingOverview ? 'drift' : this.motionFor(scene));
+    this.currentMotion = scenicProfile ? 'follow'
+      : foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : openingOverview ? 'drift' : this.motionFor(scene));
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
-    this.shotDuration = editorialTiming?.durationSeconds
+    this.shotDuration = scenicProfile?.durationSeconds
+      ?? editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
     if (scene.id.startsWith('human:')) this.shotDuration = 18;
 
     const ground = elevationAt(scene.position.x, scene.position.z);
-    this.shotBaseTarget.set(scene.position.x, ground + (foundingProfile?.targetHeight
-      ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight)), scene.position.z);
+    this.shotBaseTarget.set(scene.position.x, ground + (scenicProfile?.targetHeight
+      ?? foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight)), scene.position.z);
 
     // Preserve the physical side of the world the camera is already occupying. A tiny stable
     // variation avoids mechanical repetition without hashing each scene onto an unrelated compass
@@ -1313,17 +1518,38 @@ export class CameraDirector {
       : inheritedAzimuth + continuityVariation)
       + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
 
-    const radius = foundingProfile?.radius ?? castProfile?.radius
-      ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
-    const height = foundingProfile?.height ?? castProfile?.height
+    const radius = scenicProfile ? scenicProfile.routeLength * 0.5
+      : foundingProfile?.radius ?? castProfile?.radius
+        ?? (releaseScene ? 6.8 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
+    const height = scenicProfile?.height ?? foundingProfile?.height ?? castProfile?.height
       ?? (releaseScene ? 3.4 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
 
     this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
-    this.shotBasePosition.set(
-      scene.position.x + Math.cos(this.shotAzimuth) * radius,
-      ground + height,
-      scene.position.z + Math.sin(this.shotAzimuth) * radius,
-    );
+    if (scenicProfile) {
+      const radialX = Math.cos(this.shotAzimuth);
+      const radialZ = Math.sin(this.shotAzimuth);
+      const tangentX = -radialZ;
+      const tangentZ = radialX;
+      const lateral = scenicProfile.sideOffset * 0.6;
+      const startX = scene.position.x + radialX * radius + tangentX * lateral;
+      const startZ = scene.position.z + radialZ * radius + tangentZ * lateral;
+      this.shotBasePosition.set(startX, elevationAt(startX, startZ) + scenicProfile.height, startZ);
+      if (scenicProfile.motif === 'wildlife') {
+        this.shotBaseTarget.set(scene.position.x, ground + scenicProfile.targetHeight, scene.position.z);
+      } else {
+        const forwardX = -radialX;
+        const forwardZ = -radialZ;
+        const targetX = startX + forwardX * scenicProfile.targetLead;
+        const targetZ = startZ + forwardZ * scenicProfile.targetLead;
+        this.shotBaseTarget.set(targetX, elevationAt(targetX, targetZ) + scenicProfile.targetHeight, targetZ);
+      }
+    } else {
+      this.shotBasePosition.set(
+        scene.position.x + Math.cos(this.shotAzimuth) * radius,
+        ground + height,
+        scene.position.z + Math.sin(this.shotAzimuth) * radius,
+      );
+    }
     this.desiredTarget.copy(this.shotBaseTarget);
     this.desiredPosition.copy(this.shotBasePosition);
     this.raiseForTerrain(elevationAt);
@@ -1380,7 +1606,7 @@ export class CameraDirector {
       destinationPosition.z - this.camera.position.z,
     );
     const distance = this.camera.position.distanceTo(destinationPosition);
-    const profile = cameraFlightProfileFor(this.currentScene?.kind, distance);
+    const profile = cameraFlightProfileFor(this.currentScene?.kind, distance, this.currentScene?.id);
     const cruiseHeight = this.flightCruiseHeight(
       destinationPosition,
       elevationAt,
@@ -1661,6 +1887,45 @@ export class CameraDirector {
     const progress = cameraMotionProgressFor(scene.kind, this.shotAge, this.shotDuration);
     const eased = this.smoothstep(progress);
 
+    const scenicProfile = scenicFlightProfileFor(scene.id);
+    if (scenicProfile) {
+      const liveAnimal = scenicProfile.motif === 'wildlife'
+        ? this.scenicSubjects?.(elapsedSeconds).find((subject) => subject.id === scene.subjectId)
+        : undefined;
+      const centerX = liveAnimal?.x ?? scene.position.x;
+      const centerZ = liveAnimal?.z ?? scene.position.z;
+      const centerGround = elevationAt(centerX, centerZ);
+      const radialX = Math.cos(this.shotAzimuth);
+      const radialZ = Math.sin(this.shotAzimuth);
+      const tangentX = -radialZ;
+      const tangentZ = radialX;
+      const radial = scenicProfile.routeLength * (0.5 - eased);
+      const lateral = scenicProfile.sideOffset * (0.6 + Math.sin(eased * Math.PI) * 0.4);
+      const x = centerX + radialX * radial + tangentX * lateral;
+      const z = centerZ + radialZ * radial + tangentZ * lateral;
+      const flightGround = elevationAt(x, z);
+      this.desiredPosition.set(
+        x,
+        flightGround + scenicProfile.height + Math.sin(eased * Math.PI) * (scenicProfile.motif === 'valley' ? 0.4 : 0.22),
+        z,
+      );
+
+      if (scenicProfile.motif === 'wildlife') {
+        this.smoothFocus(centerX, centerGround + scenicProfile.targetHeight, centerZ, deltaSeconds, 1.25);
+        this.desiredTarget.copy(this.trackedFocus);
+      } else {
+        const forwardX = -radialX;
+        const forwardZ = -radialZ;
+        const targetX = x + forwardX * scenicProfile.targetLead;
+        const targetZ = z + forwardZ * scenicProfile.targetLead;
+        const targetY = elevationAt(targetX, targetZ) + scenicProfile.targetHeight;
+        this.smoothFocus(targetX, targetY, targetZ, deltaSeconds, 1.05);
+        this.desiredTarget.copy(this.trackedFocus);
+      }
+      this.raiseForTerrain(elevationAt);
+      return;
+    }
+
     const war = scene.statement.claims.warId ? state.wars.find(w => w.id === scene.statement.claims.warId) : undefined;
     if (war) {
       const a = state.settlements.find(s => s.id === war.attacker);
@@ -1827,6 +2092,7 @@ export class CameraDirector {
   }
 
   private motionFor(scene: ObservationCandidate): CameraMotion {
+    if (isScenicFlightScene(scene.id)) return 'follow';
     const variation = this.stableUnit(`${scene.id}:motion`);
     switch (scene.kind) {
       case 'world-establishing': return variation < 0.55 ? 'drift' : 'orbit';
