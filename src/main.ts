@@ -178,6 +178,7 @@ function writeAudioMutedPreference(muted: boolean): void {
 
 let activeAudio: AudioDirector | undefined;
 let activeCameraView: { autonomousCamera: boolean; setAutonomousCamera(enabled: boolean): void } | undefined;
+let requestedAutonomousCamera = true;
 let audioMuted = readAudioMutedPreference();
 
 function syncAudioToggle(): void {
@@ -188,7 +189,7 @@ function syncAudioToggle(): void {
 }
 
 function syncCameraToggle(): void {
-  const autonomous = activeCameraView?.autonomousCamera ?? true;
+  const autonomous = requestedAutonomousCamera;
   cameraModeToggleElement.setAttribute('aria-pressed', String(autonomous));
   cameraModeToggleElement.innerHTML = autonomous ? '<i></i> AUTONOMOUS' : '<i></i> MANUAL · WASD + MOUSE';
   const actionLabel = autonomous ? 'Switch to manual camera control' : 'Switch to autonomous camera control';
@@ -199,10 +200,17 @@ function syncCameraToggle(): void {
   setClassIfChanged(worldElement, 'manual-camera', !autonomous);
 }
 
-function toggleCameraMode(): void {
+function applyRequestedCameraMode(): void {
   if (!activeCameraView) return;
-  activeCameraView.setAutonomousCamera(!activeCameraView.autonomousCamera);
+  if (activeCameraView.autonomousCamera !== requestedAutonomousCamera) {
+    activeCameraView.setAutonomousCamera(requestedAutonomousCamera);
+  }
+}
+
+function toggleCameraMode(): void {
+  requestedAutonomousCamera = !requestedAutonomousCamera;
   syncCameraToggle();
+  applyRequestedCameraMode();
 }
 
 // Pointer input gets a capture-phase fallback based on the button's actual screen rectangle.
@@ -339,6 +347,11 @@ function executeObserverCommand(raw: string): string {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'KeyM' && commandLineElement.hidden && document.activeElement !== commandInputElement) {
+    event.preventDefault();
+    toggleCameraMode();
+    return;
+  }
   if (event.key === '/' && commandLineElement.hidden && document.activeElement !== commandInputElement) {
     event.preventDefault();
     commandInputElement.placeholder = COMMAND_PLACEHOLDER;
@@ -426,7 +439,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
   activeCameraView = view;
+  requestedAutonomousCamera = true;
   syncCameraToggle();
+  applyRequestedCameraMode();
   openingStatusElement.textContent = 'Preparing the observation…';
   const openingWarmupMs = await view.warmUpOpening();
   // Give the browser two quiet presentation frames after compilation/texture uploads. Arrival time
