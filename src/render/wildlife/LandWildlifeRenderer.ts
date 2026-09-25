@@ -54,7 +54,6 @@ interface MotionSample {
 }
 
 const SPECIES: readonly LandAnimalSpecies[] = ['elk', 'fox', 'bear'];
-const FORWARD = new THREE.Vector3(0, 0, 1);
 const UP = new THREE.Vector3(0, 1, 0);
 const PROFILE: Record<LandAnimalSpecies, SpeciesProfile> = {
   // World scale is calibrated against the canonical ~0.30-unit adult humanoid. Elk shoulder
@@ -477,7 +476,7 @@ export class LandWildlifeRenderer {
   private visible = 0;
 
   constructor(
-    private readonly world: WorldState,
+    world: WorldState,
     private readonly surface: TerrainSurface,
     seed: string,
     anchors: readonly Vec2[] = [],
