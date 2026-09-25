@@ -105,7 +105,6 @@ export class CinematicSequencePlanner {
   private queue: CinematicPlannedShot[] = [];
   private sequenceCounter = 0;
   private recentSceneIds: string[] = [];
-  private lastKind?: ObservationKind;
 
   clear(): void {
     this.queue = [];
@@ -214,7 +213,6 @@ export class CinematicSequencePlanner {
   }
 
   private remember(scene: ObservationCandidate): void {
-    this.lastKind = scene.kind;
     this.recentSceneIds.push(scene.id);
     if (this.recentSceneIds.length > 10) this.recentSceneIds.splice(0, this.recentSceneIds.length - 10);
   }
