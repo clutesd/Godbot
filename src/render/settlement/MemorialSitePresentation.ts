@@ -4,6 +4,7 @@ import type { MemorialSite } from '../../sim/development/types';
 import type { Settlement, SimulationState, StructurePlot, Vec2 } from '../../sim/types';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import { boundedStreetRoute, densifyStreetRoute } from './SettlementPathGeometry';
+import { deriveMemorialComposition, type MemorialComposition } from './MemorialArchaeology';
 
 export interface MemorialLandscapeProfile {
   radiusScale: number;
@@ -650,6 +651,210 @@ function addCulturalDetails(
   root.userData['memorialAgeBand'] = age;
 }
 
+
+function addArchaeologicalLayers(
+  root: THREE.Group,
+  settlement: Settlement,
+  plot: StructurePlot,
+  memorial: MemorialSite,
+  composition: MemorialComposition,
+  settlementY: number,
+  elevationAt: (x: number, z: number) => number,
+  radius: number,
+): void {
+  const siteX = plot.worldX - settlement.position.x;
+  const siteZ = plot.worldZ - settlement.position.z;
+  const stone = new THREE.MeshStandardMaterial({ color: '#68645c', roughness: 1 });
+  const paleStone = new THREE.MeshStandardMaterial({ color: '#817b6e', roughness: 0.98 });
+  const timber = new THREE.MeshStandardMaterial({ color: '#4d3c2d', roughness: 1 });
+  const accent = new THREE.MeshStandardMaterial({
+    color: plot.development?.style.accent ?? '#b89b68',
+    roughness: 0.92,
+  });
+
+  for (const stratum of composition.strata) {
+    const layer = new THREE.Group();
+    layer.name = 'memorial-archaeology-stratum';
+    layer.position.set(siteX, 0, siteZ);
+    layer.userData['archaeological'] = true;
+    layer.userData['stratumOrdinal'] = stratum.ordinal;
+    layer.userData['startMonth'] = stratum.startMonth;
+    layer.userData['endMonth'] = stratum.endMonth;
+    layer.userData['cultureId'] = composition.cultureId;
+    layer.userData['evidenceIds'] = stratum.evidenceIds.join(',');
+    layer.userData['eventTypes'] = stratum.eventTypes.join(',');
+    const bandRadius = radius * (0.28 + stratum.ordinal * 0.105);
+    const fragments = Math.min(7, 3 + stratum.evidenceIds.length);
+    for (let index = 0; index < fragments; index += 1) {
+      const identity = \`${plot.id}:stratum:${stratum.ordinal}:${index}\`;
+      const angle = index / fragments * Math.PI * 2
+        + (stableUnit(\`${identity}:angle\`) - 0.5) * 0.42
+        + stratum.ordinal * 0.31;
+      const r = bandRadius * (0.9 + stableUnit(\`${identity}:radius\`) * 0.18);
+      const x = Math.cos(angle) * r;
+      const z = Math.sin(angle) * r;
+      const old = clamp(stratum.age * 0.75 + memorialWeathering(memorial, plot.condition) * 0.35);
+      const ground = elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY;
+      let fragment: THREE.Mesh;
+      if (memorial.form === 'earth-mounds') {
+        fragment = new THREE.Mesh(new THREE.DodecahedronGeometry(0.065 + stableUnit(\`${identity}:size\`) * 0.025, 0), stone);
+        fragment.scale.set(1.35, 0.6, 0.85);
+      } else if (memorial.form === 'ancestor-posts') {
+        fragment = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.17 + (1 - old) * 0.12, 0.055), timber);
+      } else if (memorial.form === 'stone-cairns') {
+        fragment = new THREE.Mesh(new THREE.DodecahedronGeometry(0.075 + stableUnit(\`${identity}:size\`) * 0.025, 0), stone);
+        fragment.scale.y = 0.72;
+      } else {
+        fragment = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.12 + (1 - old) * 0.09, 0.07), stone);
+      }
+      fragment.name = 'memorial-stratum-fragment';
+      const halfHeight = memorial.form === 'ancestor-posts' ? 0.1 : memorial.form === 'stelae' ? 0.07 : 0.045;
+      fragment.position.set(x, ground + halfHeight, z);
+      fragment.rotation.set(
+        (stableUnit(\`${identity}:rx\`) - 0.5) * old * 0.35,
+        stableUnit(\`${identity}:ry\`) * Math.PI,
+        (stableUnit(\`${identity}:rz\`) - 0.5) * old * 0.4,
+      );
+      fragment.castShadow = true;
+      layer.add(fragment);
+    }
+    root.add(layer);
+  }
+
+  const namedEvidence = composition.evidence.filter(layer => layer.kind === 'named-life').slice(0, 8);
+  for (let index = 0; index < namedEvidence.length; index += 1) {
+    const evidence = namedEvidence[index]!;
+    const chronology = namedEvidence.length <= 1 ? 0.5 : index / (namedEvidence.length - 1);
+    const angle = stableUnit(\`${plot.id}:${evidence.id}:name-angle\`) * Math.PI * 2;
+    const r = radius * (0.31 + chronology * 0.29);
+    const x = Math.cos(angle) * r;
+    const z = Math.sin(angle) * r;
+    const tablet = new THREE.Group();
+    tablet.name = 'memorial-name-fragment';
+    tablet.userData['personId'] = evidence.personId;
+    tablet.userData['personName'] = evidence.personName;
+    tablet.userData['month'] = evidence.month;
+    tablet.userData['cultureId'] = evidence.cultureId;
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.035, 0.11), stone);
+    base.position.y = 0.018;
+    const face = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.025), paleStone);
+    face.position.set(0, 0.075, -0.015);
+    face.rotation.z = (stableUnit(\`${plot.id}:${evidence.id}:name-lean\`) - 0.5) * 0.12;
+    base.castShadow = face.castShadow = true;
+    tablet.add(base, face);
+    tablet.position.set(
+      siteX + x,
+      elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY + 0.005,
+      siteZ + z,
+    );
+    root.add(tablet);
+  }
+
+  const eventEvidence = composition.evidence.filter(layer => layer.kind === 'event').slice(0, 4);
+  for (let index = 0; index < eventEvidence.length; index += 1) {
+    const evidence = eventEvidence[index]!;
+    const chronology = eventEvidence.length <= 1 ? 0.5 : index / (eventEvidence.length - 1);
+    const angle = stableUnit(\`${plot.id}:${evidence.id}:event-angle\`) * Math.PI * 2;
+    const r = radius * (0.43 + chronology * 0.27);
+    const x = Math.cos(angle) * r;
+    const z = Math.sin(angle) * r;
+    const relic = new THREE.Group();
+    relic.name = 'memorial-archaeology-event-relic';
+    relic.userData['eventId'] = evidence.eventId;
+    relic.userData['eventType'] = evidence.eventType ?? 'unknown';
+    relic.userData['significance'] = evidence.significance ?? 0.65;
+    relic.userData['month'] = evidence.month;
+    relic.userData['cultureId'] = evidence.cultureId;
+
+    switch (evidence.eventType) {
+      case 'battle': {
+        for (const side of [-1, 1]) {
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.34, 0.065), side < 0 ? stone : paleStone);
+          slab.position.set(side * 0.075, 0.17, 0);
+          slab.rotation.z = side * 0.26;
+          slab.castShadow = true;
+          relic.add(slab);
+        }
+        break;
+      }
+      case 'pandemic':
+      case 'harvest-crisis': {
+        for (let stoneIndex = 0; stoneIndex < 4; stoneIndex += 1) {
+          const theta = stoneIndex / 4 * Math.PI * 2;
+          const token = new THREE.Mesh(new THREE.DodecahedronGeometry(0.06 + stoneIndex * 0.006, 0), stone);
+          token.position.set(Math.cos(theta) * 0.11, 0.055, Math.sin(theta) * 0.11);
+          token.scale.y = 0.65;
+          token.castShadow = true;
+          relic.add(token);
+        }
+        break;
+      }
+      case 'natural-catastrophe': {
+        const fallen = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.46, 0.08), stone);
+        fallen.position.set(0, 0.08, 0);
+        fallen.rotation.z = Math.PI / 2.8;
+        fallen.castShadow = true;
+        relic.add(fallen);
+        const displaced = new THREE.Mesh(new THREE.DodecahedronGeometry(0.09, 0), paleStone);
+        displaced.position.set(0.18, 0.055, 0.08);
+        displaced.castShadow = true;
+        relic.add(displaced);
+        break;
+      }
+      case 'settlement-founded': {
+        for (const side of [-1, 1]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.36, 0.065), stone);
+          post.position.set(side * 0.14, 0.18, 0);
+          post.castShadow = true;
+          relic.add(post);
+        }
+        const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.055, 0.08), accent);
+        lintel.position.y = 0.36;
+        lintel.castShadow = true;
+        relic.add(lintel);
+        break;
+      }
+      case 'war-ended':
+      case 'recovery': {
+        for (const side of [-1, 1]) {
+          const token = new THREE.Mesh(new THREE.DodecahedronGeometry(0.085, 0), side < 0 ? stone : accent);
+          token.position.set(side * 0.095, 0.09, 0);
+          token.scale.set(0.8, 1.25, 0.7);
+          token.castShadow = true;
+          relic.add(token);
+        }
+        break;
+      }
+      default: {
+        const token = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.32, 0.075), paleStone);
+        token.position.y = 0.16;
+        token.rotation.z = (stableUnit(\`${plot.id}:${evidence.id}:event-lean\`) - 0.5) * 0.18;
+        token.castShadow = true;
+        relic.add(token);
+        break;
+      }
+    }
+
+    relic.position.set(
+      siteX + x,
+      elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY + 0.005,
+      siteZ + z,
+    );
+    root.add(relic);
+  }
+
+  root.userData['memorialArchaeology'] = 'v1';
+  root.userData['memorialLayerCount'] = composition.strata.length;
+  root.userData['memorialHistoricalSpanMonths'] = composition.historicalSpanMonths;
+  root.userData['memorialDocumentaryDepth'] = composition.documentaryDepth;
+  root.userData['memorialSuccessionOrdinal'] = composition.successionOrdinal;
+  root.userData['memorialSuccessionCount'] = composition.successionCount;
+  root.userData['memorialCultureId'] = composition.cultureId;
+  root.userData['memorialActiveCultureShare'] = composition.activeCultureShare;
+  root.userData['memorialLegacyCulture'] = composition.legacyCulture;
+  root.userData['memorialArchaeologyFingerprint'] = composition.fingerprint;
+}
+
 function memorialRoute(
   state: SimulationState,
   settlement: Settlement,
@@ -692,10 +897,13 @@ export function createMemorialSiteLandscape(
   landscape.name = 'memorial-site-landscape';
   let sites = 0;
   let pathTiles = 0;
+  const culturalLayers = new Set<string>();
+  const culturalSequence: string[] = [];
 
   for (const plot of settlement.structurePlots ?? []) {
     const memorial = plot.development?.memorial;
     if (!memorial || plot.condition <= 0.02) continue;
+    const composition = deriveMemorialComposition(state, settlement, plot, memorial);
     const profile = memorialLandscapeProfile(memorial, plot.condition);
     const radius = Math.max(1.05, plot.radius * profile.radiusScale);
     const site = new THREE.Group();
@@ -708,6 +916,7 @@ export function createMemorialSiteLandscape(
     addBoundaryAndEntrance(site, settlement, plot, memorial, settlementY, elevationAt, radius, profile);
     addVegetation(site, settlement, plot, memorial, settlementY, elevationAt, radius, profile);
     addCulturalDetails(site, settlement, plot, memorial, settlementY, elevationAt, radius);
+    addArchaeologicalLayers(site, settlement, plot, memorial, composition, settlementY, elevationAt, radius);
 
     const route = memorialRoute(state, settlement, plot, radius);
     if (route.length >= 2) {
@@ -716,12 +925,16 @@ export function createMemorialSiteLandscape(
       landscape.add(path);
     }
 
+    culturalLayers.add(composition.cultureId);
+    culturalSequence.push(`${composition.successionOrdinal}:${composition.cultureId}:${composition.form}:${composition.foundedMonth}`);
     landscape.add(site);
     sites += 1;
   }
 
   landscape.userData['memorialPrecinctCount'] = sites;
   landscape.userData['memorialPathTiles'] = pathTiles;
+  landscape.userData['memorialCulturalLayers'] = culturalLayers.size;
+  landscape.userData['memorialCulturalSequence'] = culturalSequence.sort().join('|');
   landscape.traverse((object) => {
     if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true;
   });
