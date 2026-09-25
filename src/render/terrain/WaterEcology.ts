@@ -89,8 +89,8 @@ export class WaterEcology {
       // Night becomes deep rather than black, preserving physical reflections and luminous life.
       shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.025, 0.064), ecologyNight * (1.0 - bioIce) * 0.72);
-        roughnessFactor = clamp(roughnessFactor - livingVeil * surfaceLife * (0.025 + daylightWater * 0.018), 0.055, 0.96);
-        #include <roughnessmap_fragment>`);
+        #include <roughnessmap_fragment>
+        roughnessFactor = clamp(roughnessFactor - livingVeil * surfaceLife * (0.025 + daylightWater * 0.018), 0.055, 0.96);`);
       shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         vec2 waterP = vEcologyWaterWorld.xz;
         float waveT = ecologyTime;
