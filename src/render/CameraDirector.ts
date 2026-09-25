@@ -215,9 +215,9 @@ export function isPersonalCameraKind(kind: ObservationKind | undefined): boolean
 export function cameraTransitionScaleFor(kind: ObservationKind | undefined): number {
   // Close documentary work should feel operated, not reactive. Slower springs let the frame
   // absorb small subject motion without snapping the lens or constantly correcting composition.
-  if (kind === 'worker-follow' || kind === 'discovery-scene') return 1.18;
-  if (kind === 'street-observation') return 1.12;
-  if (kind === 'traveler-follow') return 1.08;
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 1.42;
+  if (kind === 'street-observation') return 1.32;
+  if (kind === 'traveler-follow') return 1.24;
   return 1;
 }
 
@@ -233,10 +233,13 @@ export interface CameraShotPacing {
  */
 export function cameraShotPacingFor(kind: ObservationKind | undefined): CameraShotPacing {
   if (kind === 'worker-follow' || kind === 'discovery-scene') {
-    return { settleHoldFraction: 0.2, motionFraction: 0.56, finishHoldFraction: 0.24 };
+    return { settleHoldFraction: 0.34, motionFraction: 0.26, finishHoldFraction: 0.4 };
   }
-  if (kind === 'street-observation' || kind === 'traveler-follow') {
-    return { settleHoldFraction: 0.17, motionFraction: 0.61, finishHoldFraction: 0.22 };
+  if (kind === 'street-observation') {
+    return { settleHoldFraction: 0.3, motionFraction: 0.32, finishHoldFraction: 0.38 };
+  }
+  if (kind === 'traveler-follow') {
+    return { settleHoldFraction: 0.24, motionFraction: 0.42, finishHoldFraction: 0.34 };
   }
   return { settleHoldFraction: 0.1, motionFraction: 0.74, finishHoldFraction: 0.16 };
 }
@@ -1289,9 +1292,11 @@ export class CameraDirector {
     );
 
     const majorEvent = awaitingHistoryAuthority ? undefined : this.findMajorEvent(state);
-    const readableMinimum = this.currentScene?.id.startsWith('human:') ? 14
-      : isPersonalCameraKind(this.currentScene?.kind) ? 10
-        : 6;
+    const readableMinimum = this.currentScene?.id.startsWith('human:') ? 18
+      : this.currentScene?.kind === 'worker-follow' || this.currentScene?.kind === 'discovery-scene' ? 16
+        : this.currentScene?.kind === 'street-observation' ? 14
+          : this.currentScene?.kind === 'traveler-follow' ? 12
+            : 6;
     const mayInterrupt = this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
     if (!justCompletedFoundingRelease && !awaitingHistoryAuthority) {
       if (!this.currentScene || (majorEvent && mayInterrupt)) {
@@ -1557,7 +1562,14 @@ export class CameraDirector {
     this.shotDuration = scenicProfile?.durationSeconds
       ?? editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
-    if (scene.id.startsWith('human:')) this.shotDuration = 18;
+    if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
+      this.shotDuration = Math.max(this.shotDuration, 20);
+    } else if (scene.kind === 'street-observation') {
+      this.shotDuration = Math.max(this.shotDuration, 18);
+    } else if (scene.kind === 'traveler-follow') {
+      this.shotDuration = Math.max(this.shotDuration, 16);
+    }
+    if (scene.id.startsWith('human:')) this.shotDuration = Math.max(this.shotDuration, 22);
 
     const ground = elevationAt(scene.position.x, scene.position.z);
     this.shotBaseTarget.set(scene.position.x, ground + (scenicProfile?.targetHeight
@@ -2074,8 +2086,27 @@ export class CameraDirector {
         const contactLock = composition?.contactLock ?? 0;
         const baseAngle = composition?.azimuth ?? this.shotAzimuth;
         const authoredOrbit = castProfile ? (eased - 0.5) * castProfile.orbitSpan : 0;
-        const microOrbit = Math.sin(elapsedSeconds * 0.11 + this.shotAzimuth) * 0.035 * (1 - contactLock * 0.88);
-        const angle = baseAngle + authoredOrbit + microOrbit;
+        // Human scenes should feel observed, not continuously operated. Keep the lens mostly
+        // planted and reserve only a tiny breathing correction during the motion window.
+        const pacing = cameraShotPacingFor(scene.kind);
+        const normalizedAge = clamp01(this.shotAge / Math.max(0.001, this.shotDuration));
+        const motionEnd = pacing.settleHoldFraction + pacing.motionFraction;
+        const inMotionWindow = normalizedAge > pacing.settleHoldFraction && normalizedAge < motionEnd;
+        const motionWindow = cameraMotionProgressFor(scene.kind, this.shotAge, this.shotDuration);
+
+        // Movement must have editorial purpose. Work/contact scenes may reveal actor→object relation,
+        // travelers may breathe laterally along their direction of travel, and social pairs may open
+        // just enough to read both people. Otherwise the camera stays planted.
+        const motivatedMove = Boolean(
+          (action && composition?.span && composition.span > 0.08)
+          || scene.kind === 'traveler-follow'
+          || partner,
+        );
+        const moveEnvelope = motivatedMove && inMotionWindow ? Math.sin(Math.PI * motionWindow) : 0;
+        const microOrbit = Math.sin(elapsedSeconds * 0.075 + this.shotAzimuth)
+          * 0.012 * moveEnvelope * (1 - contactLock * 0.94);
+        const authoredScale = motivatedMove ? 0.7 : 0;
+        const angle = baseAngle + authoredOrbit * authoredScale + microOrbit;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
         const clearance = cameraClearanceForScene(scene.kind, scene.id);
