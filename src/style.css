@@ -107,6 +107,8 @@ body { min-width: 320px; }
 }
 .audio-toggle:hover, .audio-toggle:focus-visible { color: rgba(239, 183, 88, .82); }
 .audio-toggle:focus-visible { outline: 1px solid rgba(239, 183, 88, .62); outline-offset: 5px; }
+.audio-toggle:disabled { cursor: default; color: rgba(255, 239, 219, .32); }
+.audio-toggle:disabled:hover { color: rgba(255, 239, 219, .32); }
 .audio-toggle[aria-pressed="false"] { color: rgba(255, 239, 219, .28); }
 #camera-mode-toggle {
   position: relative;
