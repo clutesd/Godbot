@@ -1429,6 +1429,45 @@ export class CameraDirector {
     return this.foundingPresentationDone;
   }
 
+  /**
+   * Re-anchors autonomous presentation to a camera pose that was moved by an external/manual
+   * controller. The first autonomous frame must continue from the exact visible lens orientation,
+   * not from stale look-target/velocity state retained before manual control began.
+   */
+  resumeFromExternalPose(): void {
+    this.camera.updateMatrixWorld(true);
+    this.workingDirection.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
+    const previousFocusDistance = this.camera.position.distanceTo(this.lookTarget);
+    const focusDistance = Number.isFinite(previousFocusDistance)
+      ? THREE.MathUtils.clamp(previousFocusDistance, 3, 14)
+      : 8;
+    this.lookTarget.copy(this.camera.position).addScaledVector(this.workingDirection, focusDistance);
+    this.desiredPosition.copy(this.camera.position);
+    this.desiredTarget.copy(this.lookTarget);
+
+    // If manual control interrupted a physical transfer, resume from the last scene that had
+    // actually been acquired. Re-plan subsequent editorial beats from there rather than skipping
+    // an unseen destination that happened to be queued before the observer took control.
+    if (this.flight && this.acquiredScene) this.currentScene = this.acquiredScene;
+    this.flight = undefined;
+    this.sequencePlanner.interrupt();
+    this.activeSequence = undefined;
+    this.lastHumanShot = Boolean(this.currentScene?.id.startsWith('human:'));
+
+    this.positionVelocity.set(0, 0, 0);
+    this.targetVelocity.set(0, 0, 0);
+    this.flightAcceleration.set(0, 0, 0);
+    this.gazeFlightAcceleration.set(0, 0, 0);
+    this.recoveryBridgeSeconds = 0;
+    this.recoveryBridgeFov = undefined;
+    this.routeCheckSeconds = 0;
+    this.recoveryOffset = undefined;
+    this.trackingInitialized = false;
+    this.safetyInitialized = true;
+    this.visibility.reset();
+    this.shotAge = 0;
+  }
+
   flightTelemetry(): CameraFlightTelemetry {
     const flight = this.flight;
     if (!flight) {
