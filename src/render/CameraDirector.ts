@@ -1382,6 +1382,7 @@ export class CameraDirector {
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
 
     const before = this.camera.position.clone();
+    const beforeTarget = this.externalPoseRecoveryPending ? this.lookTarget.clone() : undefined;
     if (this.recoveryOffset) this.desiredPosition.copy(this.desiredTarget).add(this.recoveryOffset);
 
     // Local composition changes use the critically damped spring. Large scene-to-scene moves are
@@ -1392,6 +1393,43 @@ export class CameraDirector {
     advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, transitionSeconds);
     advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, transitionSeconds / 1.22);
     const clearance = cameraClearanceForScene(this.currentScene?.kind, this.currentScene?.id);
+
+    if (this.externalPoseRecoveryPending) {
+      const recoveryStepSafe = cameraFlightCorridorSafe(
+        state,
+        before,
+        this.camera.position,
+        elevationAt,
+        clearance.lens,
+        this.environmentProbe,
+        { allowUnsafeDeparture: true },
+      );
+      if (!recoveryStepSafe) {
+        this.camera.position.copy(before);
+        if (beforeTarget) this.lookTarget.copy(beforeTarget);
+        this.positionVelocity.multiplyScalar(0.2);
+        this.targetVelocity.multiplyScalar(0.4);
+        this.camera.lookAt(this.lookTarget);
+        return;
+      }
+
+      const recovered = cameraFlightCorridorSafe(
+        state,
+        this.camera.position,
+        this.camera.position,
+        elevationAt,
+        clearance.lens,
+        this.environmentProbe,
+      );
+      if (!recovered) {
+        // The lens is improving continuously but has not yet re-entered the ordinary autonomous
+        // envelope. Do not invoke strict visibility recovery yet; it would undo the egress step.
+        this.camera.lookAt(this.lookTarget);
+        return;
+      }
+      this.externalPoseRecoveryPending = false;
+    }
+
     const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens;
     if (this.camera.position.y < lensFloor) {
       this.camera.position.y = lensFloor;
