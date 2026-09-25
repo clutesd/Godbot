@@ -961,17 +961,17 @@ function scenicCellFor(
     if (state.settlements.some((settlement) => settlement.alive
       && Math.hypot(cell.worldX - settlement.position.x, cell.worldZ - settlement.position.z) < 6.5)) continue;
 
-    let score = 0;
+    let scenicScore: number;
     if (motif === 'valley') {
       if (!['valley', 'canyon', 'basin'].includes(cell.landform)) continue;
-      score = cell.relief * 0.34 + cell.flow * 0.24 + cell.moisture * 0.12 + cell.wood * 0.08
+      scenicScore = cell.relief * 0.34 + cell.flow * 0.24 + cell.moisture * 0.12 + cell.wood * 0.08
         + (cell.biome === 'forest' || cell.biome === 'grassland' ? 0.14 : 0);
     } else {
       if (cell.biome !== 'forest' || cell.wood < 0.34) continue;
       const edge = 1 - Math.min(1, Math.abs(cell.wood - 0.58) / 0.42);
-      score = edge * 0.42 + cell.relief * 0.18 + cell.moisture * 0.18 + cell.habitability * 0.1;
+      scenicScore = edge * 0.42 + cell.relief * 0.18 + cell.moisture * 0.18 + cell.habitability * 0.1;
     }
-    score += scenicStableUnit(`${key}:${cell.x}:${cell.z}`) * 0.12;
+    const score = scenicScore + scenicStableUnit(`${key}:${cell.x}:${cell.z}`) * 0.12;
     if (score > bestScore) {
       bestScore = score;
       best = cell;
@@ -991,10 +991,10 @@ export function scenicObservationFor(
   const key = `${state.month}:${fallback.id}:${sequence}`;
 
   for (const motif of motifs) {
-    let subjectId = `scenic:${motif}`;
-    let position: { x: number; z: number } | undefined;
-    let title = 'Across the living world';
-    let detail = 'The camera stays low and lets the landscape carry the scene.';
+    let subjectId: string;
+    let position: { x: number; z: number };
+    let title: string;
+    let detail: string;
 
     if (motif === 'wildlife') {
       const subject = [...wildlife].sort((left, right) => {
@@ -1025,7 +1025,6 @@ export function scenicObservationFor(
       }
     }
 
-    if (!position) continue;
     const id = `scenic:${motif}:${sequence}:${subjectId}`;
     return {
       ...fallback,
