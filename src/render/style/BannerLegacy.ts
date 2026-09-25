@@ -82,7 +82,7 @@ function institutionStrength(institutions: readonly BannerLegacyInstitution[], k
 }
 
 function belongsTo(input: BannerLegacyInput, event: HistoricalEvent): boolean {
-  if (event.month < input.foundedMonth) return false;
+  if (event.month < input.foundedMonth || event.month > input.currentMonth) return false;
   if (event.locationId === input.settlementId) return true;
   if (event.actors.includes(input.settlementId) || event.actors.includes(input.polityId)) return true;
   if (input.cultureId && event.actors.includes(input.cultureId)) return true;
@@ -152,13 +152,13 @@ export function deriveBannerLegacy(input: BannerLegacyInput): BannerLegacy {
   const generation = 1 + politicalTransitions + culturalShifts + newHouseCount;
   const politicalBands = Math.min(3, politicalTransitions + newHouseCount);
   const culturalMarks = Math.min(3, culturalShifts);
-  const successionMarks = Math.min(4, input.successionCount);
+  const successionMarks = Math.max(0, Math.min(4, input.successionCount));
   const allianceKnots = Math.min(3, alliances.filter(event => event.type === 'alliance-formed').length);
 
   const ageMonths = Math.max(0, input.currentMonth - input.foundedMonth);
   const ageWear = Math.min(0.26, Math.floor(ageMonths / 120) * 0.035);
   const battleWear = Math.min(0.32, conflict.filter(event => event.type === 'battle').length * 0.055);
-  const crisisWear = Math.min(0.28, crises.length * 0.07 + input.crisisMonths * 0.008);
+  const crisisWear = Math.min(0.28, crises.length * 0.07 + Math.max(0, input.crisisMonths) * 0.008);
   const wear = clamp01(0.04 + ageWear + battleWear + crisisWear);
   const scorch = clamp01(
     conflict.filter(event => event.type === 'battle').length * 0.075
@@ -171,8 +171,8 @@ export function deriveBannerLegacy(input: BannerLegacyInput): BannerLegacy {
 
   const institutionalPrestige = input.institutions.length === 0
     ? 0
-    : input.institutions.reduce((sum, institution) => sum + institution.prestige, 0) / input.institutions.length;
-  const prestigeTrim = clamp01(input.prosperity * 0.5 + institutionalPrestige * 0.25 + (input.isCapital ? 0.28 : 0) - wear * 0.12);
+    : input.institutions.reduce((sum, institution) => sum + clamp01(institution.prestige), 0) / input.institutions.length;
+  const prestigeTrim = clamp01(clamp01(input.prosperity) * 0.5 + institutionalPrestige * 0.25 + (input.isCapital ? 0.28 : 0) - wear * 0.12);
 
   // Changes are additive and bounded so descendants still resemble the founding banner.
   const fieldVariant = (input.identity.fieldVariant + politicalBands + culturalMarks) % 4;
