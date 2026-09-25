@@ -119,8 +119,8 @@ function createTerrainPatch(
   for (let index = 0; index < segments; index += 1) {
     const a = index / segments * Math.PI * 2;
     const b = (index + 1) / segments * Math.PI * 2;
-    const edgeA = 0.965 + (stableUnit(\`${plot.id}:ground-a:${index}\`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
-    const edgeB = 0.965 + (stableUnit(\`${plot.id}:ground-b:${index}\`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
+    const edgeA = 0.965 + (stableUnit(`${plot.id}:ground-a:${index}`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
+    const edgeB = 0.965 + (stableUnit(`${plot.id}:ground-b:${index}`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
     const ax = Math.cos(a) * radius * ratioX * edgeA;
     const az = Math.sin(a) * radius * ratioZ * edgeA;
     const bx = Math.cos(b) * radius * ratioX * edgeB;
@@ -128,7 +128,7 @@ function createTerrainPatch(
     const ay = elevationAt(plot.worldX + ax, plot.worldZ + az) - settlementY + 0.016;
     const by = elevationAt(plot.worldX + bx, plot.worldZ + bz) - settlementY + 0.016;
     positions.push(0, centerY, 0, ax, ay, az, bx, by, bz);
-    const variation = (stableUnit(\`${plot.id}:ground-colour:${index}\`) - 0.5) * 0.05;
+    const variation = (stableUnit(`${plot.id}:ground-colour:${index}`) - 0.5) * 0.05;
     const edgeColour = base.clone().offsetHSL(0, -age * 0.006, variation - age * 0.006);
     for (const colour of [centerColour, edgeColour, edgeColour]) colours.push(colour.r, colour.g, colour.b);
   }
@@ -153,7 +153,7 @@ function createTerrainPatch(
   return ground;
 }
 
-function createTerrainPath(function createTerrainPath(
+function createTerrainPath(
   settlement: Settlement,
   route: readonly Vec2[],
   settlementY: number,
@@ -214,7 +214,7 @@ function createBoundaryElement(
   weathering: number,
   identity: string,
 ): THREE.Object3D {
-  const lean = (stableUnit(\`${identity}:lean:${index}\`) - 0.5) * weathering * 0.22;
+  const lean = (stableUnit(`${identity}:lean:${index}`) - 0.5) * weathering * 0.22;
   if (form === 'ancestor-posts') {
     const group = new THREE.Group();
     group.name = 'memorial-boundary-post';
@@ -224,7 +224,7 @@ function createBoundaryElement(
     post.castShadow = true;
     const cap = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.045, 0.07), material);
     cap.position.y = height * 0.82;
-    cap.rotation.y = (stableUnit(\`${identity}:cap:${index}\`) - 0.5) * 0.3;
+    cap.rotation.y = (stableUnit(`${identity}:cap:${index}`) - 0.5) * 0.3;
     cap.castShadow = true;
     group.add(post, cap);
     group.rotation.z = lean;
@@ -250,16 +250,16 @@ function createBoundaryElement(
       const size = 0.125 - layer * 0.025;
       const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), material);
       stone.position.set(
-        (stableUnit(\`${identity}:cairn-x:${index}:${layer}\`) - 0.5) * 0.045,
+        (stableUnit(`${identity}:cairn-x:${index}:${layer}`) - 0.5) * 0.045,
         size * 0.75 + layer * 0.105,
-        (stableUnit(\`${identity}:cairn-z:${index}:${layer}\`) - 0.5) * 0.045,
+        (stableUnit(`${identity}:cairn-z:${index}:${layer}`) - 0.5) * 0.045,
       );
       stone.rotation.set(
-        stableUnit(\`${identity}:cairn-rx:${index}:${layer}\`) * 0.5,
-        stableUnit(\`${identity}:cairn-ry:${index}:${layer}\`) * Math.PI,
-        stableUnit(\`${identity}:cairn-rz:${index}:${layer}\`) * 0.5,
+        stableUnit(`${identity}:cairn-rx:${index}:${layer}`) * 0.5,
+        stableUnit(`${identity}:cairn-ry:${index}:${layer}`) * Math.PI,
+        stableUnit(`${identity}:cairn-rz:${index}:${layer}`) * 0.5,
       );
-      stone.scale.y = 0.7 + stableUnit(\`${identity}:cairn-sy:${index}:${layer}\`) * 0.35;
+      stone.scale.y = 0.7 + stableUnit(`${identity}:cairn-sy:${index}:${layer}`) * 0.35;
       stone.castShadow = true;
       cairn.add(stone);
     }
@@ -271,13 +271,13 @@ function createBoundaryElement(
   const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.095 + (index % 2) * 0.025, 0), material);
   stone.position.y = 0.075;
   stone.scale.set(1.25, 0.72, 0.9);
-  stone.rotation.set(0.08, stableUnit(\`${identity}:stone-y:${index}\`) * Math.PI, lean);
+  stone.rotation.set(0.08, stableUnit(`${identity}:stone-y:${index}`) * Math.PI, lean);
   stone.castShadow = true;
   group.add(stone);
   return group;
 }
 
-function addBoundaryAndEntrance(function addBoundaryAndEntrance(
+function addBoundaryAndEntrance(
   root: THREE.Group,
   settlement: Settlement,
   plot: StructurePlot,
@@ -386,26 +386,26 @@ function addVegetation(
   const gateAngle = Math.atan2(settlement.position.z - plot.worldZ, settlement.position.x - plot.worldX);
 
   for (let index = 0; index < profile.treeCount; index += 1) {
-    let angle = stableUnit(\`${plot.id}:tree-angle:${index}\`) * Math.PI * 2;
+    let angle = stableUnit(`${plot.id}:tree-angle:${index}`) * Math.PI * 2;
     if (angularDistance(angle, gateAngle) < 0.48) angle += 0.72;
-    const radial = radius * (0.6 + stableUnit(\`${plot.id}:tree-radius:${index}\`) * 0.25);
+    const radial = radius * (0.6 + stableUnit(`${plot.id}:tree-radius:${index}`) * 0.25);
     const x = Math.cos(angle) * radial;
     const z = Math.sin(angle) * radial;
     const ground = elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY;
-    const maturity = 0.4 + age * 0.12 + stableUnit(\`${plot.id}:tree-size:${index}\`) * 0.14;
+    const maturity = 0.4 + age * 0.12 + stableUnit(`${plot.id}:tree-size:${index}`) * 0.14;
     const height = 0.72 + maturity * 1.05;
     const tree = new THREE.Group();
     tree.name = 'memorial-tree';
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.035 + maturity * 0.025, 0.058 + maturity * 0.032, height * 0.62, 7), trunkMaterial);
     trunk.position.y = height * 0.31;
-    trunk.rotation.z = (stableUnit(\`${plot.id}:tree-lean:${index}\`) - 0.5) * 0.08;
+    trunk.rotation.z = (stableUnit(`${plot.id}:tree-lean:${index}`) - 0.5) * 0.08;
     trunk.castShadow = true;
     tree.add(trunk);
     const crownCount = memorial.form === 'ancestor-posts' ? 4 : 3;
     for (let crownIndex = 0; crownIndex < crownCount; crownIndex += 1) {
       const crownSize = 0.18 + maturity * (0.13 + crownIndex * 0.015);
       const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(crownSize, 1), foliageMaterial);
-      const phase = crownIndex / crownCount * Math.PI * 2 + stableUnit(\`${plot.id}:crown-phase:${index}\`) * 0.8;
+      const phase = crownIndex / crownCount * Math.PI * 2 + stableUnit(`${plot.id}:crown-phase:${index}`) * 0.8;
       crown.position.set(
         Math.cos(phase) * crownSize * 0.52,
         height * (0.64 + crownIndex * 0.075),
@@ -416,25 +416,25 @@ function addVegetation(
       tree.add(crown);
     }
     tree.position.set(siteX + x, ground, siteZ + z);
-    tree.rotation.y = stableUnit(\`${plot.id}:tree-yaw:${index}\`) * Math.PI * 2;
+    tree.rotation.y = stableUnit(`${plot.id}:tree-yaw:${index}`) * Math.PI * 2;
     root.add(tree);
   }
 
   for (let index = 0; index < profile.shrubCount; index += 1) {
-    let angle = stableUnit(\`${plot.id}:shrub-angle:${index}\`) * Math.PI * 2;
+    let angle = stableUnit(`${plot.id}:shrub-angle:${index}`) * Math.PI * 2;
     if (angularDistance(angle, gateAngle) < 0.34) angle += 0.5;
-    const radial = radius * (0.42 + stableUnit(\`${plot.id}:shrub-radius:${index}\`) * 0.46);
+    const radial = radius * (0.42 + stableUnit(`${plot.id}:shrub-radius:${index}`) * 0.46);
     const x = Math.cos(angle) * radial;
     const z = Math.sin(angle) * radial;
     const ground = elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY;
-    const size = 0.07 + stableUnit(\`${plot.id}:shrub-size:${index}\`) * (0.06 + age * 0.012);
+    const size = 0.07 + stableUnit(`${plot.id}:shrub-size:${index}`) * (0.06 + age * 0.012);
     const shrub = new THREE.Group();
     shrub.name = 'memorial-shrub';
     for (let lobe = 0; lobe < 3; lobe += 1) {
       const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(size * (0.82 + lobe * 0.08), 0), shrubMaterial);
       const phase = lobe / 3 * Math.PI * 2;
       leaf.position.set(Math.cos(phase) * size * 0.65, size * (0.55 + lobe * 0.12), Math.sin(phase) * size * 0.65);
-      leaf.scale.y = 0.7 + stableUnit(\`${plot.id}:shrub-shape:${index}:${lobe}\`) * 0.5;
+      leaf.scale.y = 0.7 + stableUnit(`${plot.id}:shrub-shape:${index}:${lobe}`) * 0.5;
       leaf.castShadow = true;
       shrub.add(leaf);
     }
@@ -446,15 +446,15 @@ function addVegetation(
     const litterMaterial = new THREE.MeshStandardMaterial({ color: '#504a38', roughness: 1 });
     const litterCount = Math.min(10, 2 + Math.floor(weathering * 10));
     for (let index = 0; index < litterCount; index += 1) {
-      const angle = stableUnit(\`${plot.id}:litter-angle:${index}\`) * Math.PI * 2;
-      const radial = radius * (0.18 + stableUnit(\`${plot.id}:litter-radius:${index}\`) * 0.64);
+      const angle = stableUnit(`${plot.id}:litter-angle:${index}`) * Math.PI * 2;
+      const radial = radius * (0.18 + stableUnit(`${plot.id}:litter-radius:${index}`) * 0.64);
       const x = Math.cos(angle) * radial;
       const z = Math.sin(angle) * radial;
       const y = elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY + 0.02;
-      const patch = new THREE.Mesh(new THREE.CircleGeometry(0.035 + stableUnit(\`${plot.id}:litter-size:${index}\`) * 0.055, 6), litterMaterial);
+      const patch = new THREE.Mesh(new THREE.CircleGeometry(0.035 + stableUnit(`${plot.id}:litter-size:${index}`) * 0.055, 6), litterMaterial);
       patch.name = 'memorial-age-litter';
       patch.rotation.x = -Math.PI / 2;
-      patch.rotation.z = stableUnit(\`${plot.id}:litter-yaw:${index}\`) * Math.PI;
+      patch.rotation.z = stableUnit(`${plot.id}:litter-yaw:${index}`) * Math.PI;
       patch.scale.y = 0.55;
       patch.position.set(siteX + x, y, siteZ + z);
       patch.receiveShadow = true;
@@ -498,20 +498,20 @@ function addCulturalDetails(
     const row = Math.floor(index / 5);
     const column = index % 5;
     const ordered = memorial.form === 'stelae' || memorial.form === 'earth-mounds';
-    const angle = index * 2.399 + stableUnit(\`${plot.id}:detail-angle:${index}\`) * 0.35;
+    const angle = index * 2.399 + stableUnit(`${plot.id}:detail-angle:${index}`) * 0.35;
     const radial = radius * (0.22 + Math.sqrt(index + 1) / Math.sqrt(count + 1) * 0.48);
     let x = ordered ? (column - 2) * radius * 0.23 : Math.cos(angle) * radial;
     let z = ordered ? (row - (Math.ceil(count / 5) - 1) / 2) * radius * 0.22 : Math.sin(angle) * radial;
-    x += (stableUnit(\`${plot.id}:detail-x:${index}\`) - 0.5) * (ordered ? 0.09 : 0.13);
-    z += (stableUnit(\`${plot.id}:detail-z:${index}\`) - 0.5) * (ordered ? 0.08 : 0.13);
+    x += (stableUnit(`${plot.id}:detail-x:${index}`) - 0.5) * (ordered ? 0.09 : 0.13);
+    z += (stableUnit(`${plot.id}:detail-z:${index}`) - 0.5) * (ordered ? 0.08 : 0.13);
     const named = index >= Math.max(0, count - memorial.people.length);
-    const lean = (stableUnit(\`${plot.id}:detail-lean:${index}\`) - 0.5) * weathering * 0.26;
+    const lean = (stableUnit(`${plot.id}:detail-lean:${index}`) - 0.5) * weathering * 0.26;
 
     if (memorial.form === 'earth-mounds') {
       const marker = new THREE.Group();
       marker.name = 'memorial-burial-mound';
       const mound = new THREE.Mesh(new THREE.SphereGeometry(0.21 + (named ? 0.025 : 0), 10, 6), earth);
-      mound.scale.set(1, 0.22 + stableUnit(\`${plot.id}:mound-height:${index}\`) * 0.08, 1.35);
+      mound.scale.set(1, 0.22 + stableUnit(`${plot.id}:mound-height:${index}`) * 0.08, 1.35);
       mound.position.y = 0.035;
       mound.castShadow = mound.receiveShadow = true;
       marker.add(mound);
@@ -521,29 +521,29 @@ function addCulturalDetails(
       headstone.rotation.z = lean;
       headstone.castShadow = true;
       marker.add(headstone);
-      marker.rotation.y = Math.atan2(-x, -z) + (stableUnit(\`${plot.id}:mound-yaw:${index}\`) - 0.5) * 0.16;
+      marker.rotation.y = Math.atan2(-x, -z) + (stableUnit(`${plot.id}:mound-yaw:${index}`) - 0.5) * 0.16;
       place(marker, x, z, 0.005);
     } else if (memorial.form === 'ancestor-posts') {
       const marker = new THREE.Group();
       marker.name = 'memorial-ancestor-post';
-      const height = 0.38 + (named ? 0.12 : 0) + stableUnit(\`${plot.id}:ancestor-height:${index}\`) * 0.16;
+      const height = 0.38 + (named ? 0.12 : 0) + stableUnit(`${plot.id}:ancestor-height:${index}`) * 0.16;
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, height, 7), timber);
       post.position.y = height / 2;
       post.castShadow = true;
       const shoulders = new THREE.Mesh(new THREE.BoxGeometry(named ? 0.2 : 0.14, 0.045, 0.055), timber);
       shoulders.position.y = height * 0.72;
-      shoulders.rotation.y = (stableUnit(\`${plot.id}:ancestor-shoulders:${index}\`) - 0.5) * 0.25;
+      shoulders.rotation.y = (stableUnit(`${plot.id}:ancestor-shoulders:${index}`) - 0.5) * 0.25;
       shoulders.castShadow = true;
       marker.add(post, shoulders);
       if (named) {
         const crown = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.09, 5), paleStone);
         crown.position.y = height + 0.035;
-        crown.rotation.y = stableUnit(\`${plot.id}:ancestor-crown:${index}\`) * Math.PI;
+        crown.rotation.y = stableUnit(`${plot.id}:ancestor-crown:${index}`) * Math.PI;
         crown.castShadow = true;
         marker.add(crown);
       }
       marker.rotation.z = lean * 0.75;
-      marker.rotation.y = stableUnit(\`${plot.id}:ancestor-yaw:${index}\`) * Math.PI * 2;
+      marker.rotation.y = stableUnit(`${plot.id}:ancestor-yaw:${index}`) * Math.PI * 2;
       place(marker, x, z);
     } else if (memorial.form === 'stone-cairns') {
       const marker = new THREE.Group();
@@ -553,15 +553,15 @@ function addCulturalDetails(
         const size = 0.105 - layer * 0.012 + (named ? 0.01 : 0);
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), layer === layers - 1 && named ? paleStone : stone);
         rock.position.set(
-          (stableUnit(\`${plot.id}:stack-x:${index}:${layer}\`) - 0.5) * 0.055,
+          (stableUnit(`${plot.id}:stack-x:${index}:${layer}`) - 0.5) * 0.055,
           0.055 + layer * 0.095,
-          (stableUnit(\`${plot.id}:stack-z:${index}:${layer}\`) - 0.5) * 0.055,
+          (stableUnit(`${plot.id}:stack-z:${index}:${layer}`) - 0.5) * 0.055,
         );
-        rock.scale.set(1.08, 0.62 + stableUnit(\`${plot.id}:stack-y:${index}:${layer}\`) * 0.28, 0.92);
+        rock.scale.set(1.08, 0.62 + stableUnit(`${plot.id}:stack-y:${index}:${layer}`) * 0.28, 0.92);
         rock.rotation.set(
-          stableUnit(\`${plot.id}:stack-rx:${index}:${layer}\`) * 0.4,
-          stableUnit(\`${plot.id}:stack-ry:${index}:${layer}\`) * Math.PI,
-          stableUnit(\`${plot.id}:stack-rz:${index}:${layer}\`) * 0.4,
+          stableUnit(`${plot.id}:stack-rx:${index}:${layer}`) * 0.4,
+          stableUnit(`${plot.id}:stack-ry:${index}:${layer}`) * Math.PI,
+          stableUnit(`${plot.id}:stack-rz:${index}:${layer}`) * 0.4,
         );
         rock.castShadow = true;
         marker.add(rock);
@@ -574,7 +574,7 @@ function addCulturalDetails(
       const base = new THREE.Mesh(new THREE.BoxGeometry(named ? 0.28 : 0.23, 0.075, named ? 0.19 : 0.16), stone);
       base.position.y = 0.038;
       base.castShadow = base.receiveShadow = true;
-      const slabHeight = 0.32 + (named ? 0.12 : 0) + stableUnit(\`${plot.id}:stela-height:${index}\`) * 0.08;
+      const slabHeight = 0.32 + (named ? 0.12 : 0) + stableUnit(`${plot.id}:stela-height:${index}`) * 0.08;
       const slab = new THREE.Mesh(new THREE.BoxGeometry(named ? 0.2 : 0.16, slabHeight, 0.075), named ? paleStone : stone);
       slab.position.y = 0.075 + slabHeight / 2;
       slab.castShadow = true;
@@ -584,15 +584,15 @@ function addCulturalDetails(
       cap.castShadow = true;
       marker.add(cap);
       marker.rotation.z = lean * 0.55;
-      marker.rotation.y = (stableUnit(\`${plot.id}:stela-yaw:${index}\`) - 0.5) * 0.12;
+      marker.rotation.y = (stableUnit(`${plot.id}:stela-yaw:${index}`) - 0.5) * 0.12;
       place(marker, x, z);
     }
 
-    if (weathering > 0.28 && stableUnit(\`${plot.id}:moss:${index}\`) < weathering * 0.75) {
-      const patch = new THREE.Mesh(new THREE.CircleGeometry(0.045 + stableUnit(\`${plot.id}:moss-size:${index}\`) * 0.045, 7), moss);
+    if (weathering > 0.28 && stableUnit(`${plot.id}:moss:${index}`) < weathering * 0.75) {
+      const patch = new THREE.Mesh(new THREE.CircleGeometry(0.045 + stableUnit(`${plot.id}:moss-size:${index}`) * 0.045, 7), moss);
       patch.name = 'memorial-weathering-accent';
       patch.rotation.x = -Math.PI / 2;
-      patch.rotation.z = stableUnit(\`${plot.id}:moss-yaw:${index}\`) * Math.PI;
+      patch.rotation.z = stableUnit(`${plot.id}:moss-yaw:${index}`) * Math.PI;
       patch.scale.y = 0.55;
       place(patch, x + 0.045, z + 0.035, 0.018);
       weatheringAccents += 1;
@@ -650,7 +650,7 @@ function addCulturalDetails(
   root.userData['memorialAgeBand'] = age;
 }
 
-function memorialRoute(function memorialRoute(
+function memorialRoute(
   state: SimulationState,
   settlement: Settlement,
   plot: StructurePlot,
