@@ -1526,6 +1526,9 @@ export class CameraDirector {
     this.gazeFlightAcceleration.set(0, 0, 0);
     this.recoveryBridgeSeconds = 0;
     this.recoveryBridgeFov = undefined;
+    this.arrivalSafetySeconds = 0;
+    this.arrivalSafetyInitialized = false;
+    this.arrivalSafetyOffset.set(0, 0, 0);
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
     this.trackingInitialized = false;
