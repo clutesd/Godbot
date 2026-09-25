@@ -123,7 +123,7 @@ export class SkyAtmosphere {
   followCamera(camera: THREE.Camera): void {
     // Keep the horizon effectively infinite while preserving world-up for scattering.
     this.sky.position.copy(camera.position);
-    this.clouds?.position.set(camera.position.x, 0, camera.position.z);
+    if (this.clouds) this.clouds.position.set(camera.position.x, this.clouds.position.y, camera.position.z);
   }
 }
 
