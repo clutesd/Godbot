@@ -3913,6 +3913,7 @@ export class GodboxRenderer {
   }
 
   dispose(): void {
+    this.manualCamera.dispose();
     this.foundingPods.dispose();
     this.postProcessing.dispose();
     this.ecology.dispose();
