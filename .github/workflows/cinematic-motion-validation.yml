@@ -101,13 +101,12 @@ jobs:
           src/ui/FooterControls.ts
           src/historian/PresentationDirector.ts
           src/render/AdaptiveResolution.ts
-          src/render/CameraDirector.ts
-          src/render/CameraFlight.ts
-          src/render/CameraRoutePlanner.ts
-          src/render/CameraSpring.ts
-          src/render/CinematicSequencePlanner.ts
+          src/render/Camera*.ts
+          src/render/Cinematic*.ts
           src/render/ManualCameraController.ts
           src/render/ScreenSpaceComposition.ts
+          src/render/atmosphere/CinematicLightPolish.ts
+          src/render/atmosphere/EnvironmentFrameState.ts
           src/render/GodboxRenderer.ts
           src/render/vegetation/VegetationRenderer.ts
           src/render/wildlife/LandWildlifeRenderer.ts
