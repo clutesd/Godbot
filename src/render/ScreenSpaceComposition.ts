@@ -78,9 +78,18 @@ export function screenSpaceComposition(
     readonly distance?: number;
   },
 ): ScreenCompositionResult {
-  const target = targetFor(kind, Boolean(options?.moving), Boolean(options?.pair));
+  const moving = Boolean(options?.moving);
+  const target = targetFor(kind, moving, Boolean(options?.pair));
+  let targetX = target.x;
+  if (moving && options?.leadDirection && options.leadDirection.lengthSq() > 1e-4) {
+    const lead = options.leadDirection.clone().normalize();
+    const viewDir = subject.clone().sub(camera.position).normalize();
+    const right = new THREE.Vector3().crossVectors(viewDir, camera.up).normalize();
+    const screenLead = THREE.MathUtils.clamp(lead.dot(right), -1, 1);
+    targetX = THREE.MathUtils.clamp(-screenLead * 0.2, -0.22, 0.22);
+  }
   const projected = subject.clone().project(camera);
-  const xError = target.x - projected.x;
+  const xError = targetX - projected.x;
   const yError = target.y - projected.y;
   const correctedX = deadZoneCorrection(xError, target.deadZoneX);
   const correctedY = deadZoneCorrection(yError, target.deadZoneY);
