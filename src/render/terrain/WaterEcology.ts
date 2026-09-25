@@ -44,6 +44,7 @@ export class WaterEcology {
         ecologyTerrain: { value: this.terrain }, ecologyTerrainBounds: { value: this.bounds },
         ecologySeaY: { value: elevationToY(this.world.seaLevel, this.world.seaLevel) },
         ecologySeed: { value: this.ecology.seedPhase },
+        ecologyCellWorld: { value: this.world.cellSize },
       });
       shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vEcologyWaterWorld;')
         .replace('#include <project_vertex>', 'vEcologyWaterWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n#include <project_vertex>');
@@ -70,11 +71,27 @@ export class WaterEcology {
         float bioStorm = vWaterStorm;
         vec2 bioFlow = vWaterFlowDirection * vWaterFlow * 0.2 + ecologyWind * 0.035;
       `;
-      shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\n${depth}`);
-      // Append after the original color/ice calculation, not before it.
+      shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\n${depth}
+        // Blend the cell-resolution habitat into a broad biological field before it can touch colour.
+        // This prevents biome/weather cells from reading as luminous square patches.
+        vec4 waterHabitat = waterHabitatAt(vEcologyWaterWorld.xz);
+        float surfaceLife = waterHabitat.g * (1.0 + waterHabitat.b * 0.7) * (1.0 - bioIce);
+        float livingVeil = livingSurfaceVeil(vEcologyWaterWorld.xz, bioFlow);
+        float shoreAura = (1.0 - smoothstep(0.08, 2.2, bioDepth)) * smoothstep(0.0, 0.06, bioDepth);
+        float daylightWater = 1.0 - ecologyNight;
+        vec3 dayJewel = mix(vec3(0.025, 0.32, 0.38), vec3(0.15, 0.31, 0.47),
+          0.5 + 0.5 * bioNoise(vEcologyWaterWorld.xz * 0.045 + ecologyTime * 0.006));
+      `);
+      // Night becomes deep rather than black, preserving physical reflections and luminous life.
       shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.025, 0.064), ecologyNight * (1.0 - bioIce) * 0.86);
-        #include <roughnessmap_fragment>`);
+        // Apply living colour after the base water shader has finished its depth/current/ice pass.
+        diffuseColor.rgb = mix(diffuseColor.rgb, dayJewel,
+          daylightWater * surfaceLife * livingVeil * 0.055);
+        diffuseColor.rgb += vec3(0.045, 0.22, 0.22) * shoreAura * daylightWater
+          * (0.025 + livingVeil * surfaceLife * 0.055);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.025, 0.064), ecologyNight * (1.0 - bioIce) * 0.72);
+        #include <roughnessmap_fragment>
+        roughnessFactor = clamp(roughnessFactor - livingVeil * surfaceLife * (0.025 + daylightWater * 0.018), 0.055, 0.96);`);
       shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         vec2 waterP = vEcologyWaterWorld.xz;
         float waveT = ecologyTime;
@@ -88,11 +105,16 @@ export class WaterEcology {
       shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         #if ECOLOGY_WATER_COMPLEXITY > 0
         if (ecologyNight > 0.001) {
-          vec4 habitat = habitatAt(vEcologyWaterWorld.xz);
+          vec4 habitat = waterHabitatAt(vEcologyWaterWorld.xz);
           float distanceFade = 1.0 - smoothstep(110.0, 280.0, length(vViewPosition));
-          float life = habitat.g * (1.0 + habitat.b * 2.5) * (1.0 - bioIce) * ecologyNight * distanceFade;
+          float life = habitat.g * (1.0 + habitat.b * 1.35) * (1.0 - bioIce) * ecologyNight * distanceFade;
           ${ocean ? '' : 'life *= 1.0 - step(1.5, vWaterKind) * 0.92;'}
-          totalEmissiveRadiance += livingWater(vEcologyWaterWorld.xz, bioDepth, bioFlow, bioRain, bioStorm) * life;
+          vec3 organisms = livingWater(vEcologyWaterWorld.xz, bioDepth, bioFlow, bioRain, bioStorm);
+          float breathingCurrent = livingSurfaceVeil(vEcologyWaterWorld.xz, bioFlow);
+          vec3 currentAura = mix(vec3(0.012, 0.16, 0.34), vec3(0.09, 0.20, 0.46),
+            bioNoise(vEcologyWaterWorld.xz * 0.05 + 31.0));
+          totalEmissiveRadiance += organisms * life;
+          totalEmissiveRadiance += currentAura * breathingCurrent * life * (0.10 + bioStorm * 0.08);
         }
         #endif
         // A subdued blue sky reflection remains between the emissive organisms; physical light
@@ -102,7 +124,7 @@ export class WaterEcology {
           * skyFresnel * (1.0 - bioIce);
       `);
     };
-    material.customProgramCacheKey = () => `${originalKey}-ecology-v1-${this.complexity}`;
+    material.customProgramCacheKey = () => `${originalKey}-ecology-v2-living-water-${this.complexity}`;
     material.needsUpdate = true;
   }
   dispose(): void {
@@ -113,6 +135,7 @@ export class WaterEcology {
 
 const WATER_LIFE_GLSL = `
 uniform float ecologySeed;
+uniform float ecologyCellWorld;
 float bioHash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031 + ecologySeed);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -123,6 +146,29 @@ float bioNoise(vec2 p) {
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(bioHash(i), bioHash(i + vec2(1, 0)), f.x),
     mix(bioHash(i + vec2(0, 1)), bioHash(i + vec2(1, 1)), f.x), f.y);
+}
+// Five rotated taps turn the cell atlas into a continuous habitat field. Simulation cells remain
+// authoritative; only their visual transition is softened so no square ecology tile can bloom.
+vec4 waterHabitatAt(vec2 p) {
+  float r = max(0.25, ecologyCellWorld * 0.72);
+  vec4 h = habitatAt(p) * 0.32;
+  h += habitatAt(p + vec2(0.78, 0.31) * r) * 0.17;
+  h += habitatAt(p + vec2(-0.42, 0.84) * r) * 0.17;
+  h += habitatAt(p + vec2(-0.81, -0.27) * r) * 0.17;
+  h += habitatAt(p + vec2(0.36, -0.88) * r) * 0.17;
+  float micro = 0.88 + bioNoise(p * 0.063 + ecologyTime * 0.003) * 0.24;
+  h.g *= micro;
+  h.b *= 0.72 + micro * 0.28;
+  return h;
+}
+float livingSurfaceVeil(vec2 p, vec2 flow) {
+  float t = ecologyTime;
+  vec2 q = p - flow * t * 0.42;
+  float warpA = bioNoise(q * 0.036 + vec2(t * 0.006, -t * 0.004));
+  float warpB = bioNoise(q * 0.052 + vec2(-t * 0.004, t * 0.005) + 47.0);
+  float ribbonA = 0.5 + 0.5 * sin(q.x * 0.31 + q.y * 0.23 - t * 0.13 + (warpA - 0.5) * 5.4);
+  float ribbonB = 0.5 + 0.5 * sin(q.x * -0.19 + q.y * 0.37 + t * 0.09 + (warpB - 0.5) * 4.2);
+  return smoothstep(0.54, 0.94, ribbonA * 0.58 + ribbonB * 0.42);
 }
 vec3 planktonPoints(vec2 p, float abundance, float t) {
   vec2 id = floor(p);
@@ -147,10 +193,15 @@ vec3 livingWater(vec2 p, float depth, vec2 flow, float rain, float storm) {
   float colonies = bioNoise(q * 0.11);
   float colonyPatch = smoothstep(0.38, 0.76, colonies);
   float shore = (1.0 - smoothstep(0.07, 2.8, depth)) * smoothstep(0.0, 0.08, depth);
-  // Advected sparse cells and curved noise bands: no screen-space/static star texture.
-  vec3 light = planktonPoints(q * 1.9, 0.07 + colonyPatch * 0.28 + shore * 0.15, t);
+  // Rotate both point fields away from world/grid axes before hashing. They remain deterministic,
+  // but read as drifting constellations rather than cells stamped onto the hydrology atlas.
+  mat2 bioRotateA = mat2(0.8192, -0.5736, 0.5736, 0.8192);
+  mat2 bioRotateB = mat2(0.6157, 0.7880, -0.7880, 0.6157);
+  vec2 starsA = bioRotateA * q;
+  vec3 light = planktonPoints(starsA * 1.72, 0.055 + colonyPatch * 0.22 + shore * 0.13, t);
   #if ECOLOGY_WATER_COMPLEXITY > 1
-    light += planktonPoints(q * 4.3 + vec2(12.0, t * 0.015), 0.035 + colonyPatch * 0.14, t + 17.0) * 0.48;
+    vec2 starsB = bioRotateB * (q + vec2(9.7, -13.2));
+    light += planktonPoints(starsB * 3.85 + vec2(t * 0.012, -t * 0.009), 0.03 + colonyPatch * 0.11, t + 17.0) * 0.42;
     float thread = abs(sin(q.x * 0.44 + q.y * 0.29 + bioNoise(q * 0.09 + 14.0) * 10.0 - t * 0.06));
     float filament = (1.0 - smoothstep(0.025, 0.09 + fwidth(thread), thread)) * colonyPatch;
     light += mix(vec3(0.025, 0.3, 0.85), vec3(0.3, 0.05, 0.65), warp.y) * filament * 1.2;

@@ -4,6 +4,7 @@ import { Simulation } from '../src/sim/Simulation';
 import { buildInlandWater, waterFreezeFactor, WaterSystem } from '../src/render/terrain/WaterSystem';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { nearestIndex } from '../src/sim/terrain/TerrainField';
+import { EcologyField } from '../src/render/ecology/EcologyField';
 
 function waterWorld() {
   const simulation = new Simulation({ seed: 'water-rendering-foundation', startingPopulation: 40, world: { size: 20 }, settlementCount: [2, 2] });
@@ -114,6 +115,9 @@ describe('Water rendering foundation', () => {
     expect(material.transparent).toBe(false);
     expect(material.depthWrite).toBe(true);
     expect(material.clearcoat).toBeGreaterThan(0);
+    // The diagnostic per-cell colour attribute stays on the geometry, but the visible material
+    // must not multiply it back into checkerboard patches.
+    expect(material.vertexColors).toBe(false);
 
     const shader = shaderStub();
     material.onBeforeCompile(shader as unknown as Parameters<typeof material.onBeforeCompile>[0], {} as THREE.WebGLRenderer);
@@ -131,6 +135,8 @@ describe('Water rendering foundation', () => {
     expect(shader.vertexShader).toContain('waterEmergence');
     expect(shader.fragmentShader).toContain('waterRiverTint');
     expect(shader.fragmentShader).toContain('currentLane');
+    expect(shader.fragmentShader).toContain('waterWander');
+    expect(shader.fragmentShader).toContain('shorelinePearl');
     expect(shader.fragmentShader).toContain('rapidCrest');
     expect(shader.fragmentShader).toContain('snowOnIce');
     expect(shader.fragmentShader).toContain('roughnessFactor');
@@ -201,6 +207,8 @@ describe('Water rendering foundation', () => {
     renderer.update(12.5);
     expect(shader.uniforms['waterTime']!.value).toBe(12.5);
     expect(shader.uniforms['waterWind']!.value).toBe(0.9);
+    expect(shader.fragmentShader).toContain('oceanWanderA');
+    expect(shader.fragmentShader).toContain('oceanSilk');
     const y = ocean.position.y;
     const rapidPositions = rapidFoam!.geometry.getAttribute('position');
     const plungePositions = plunge!.geometry.getAttribute('position');
@@ -215,6 +223,26 @@ describe('Water rendering foundation', () => {
     expect(shader.uniforms['waterTime']!.value).toBe(12.5);
 
     disposeRenderer(renderer);
+  });
+
+  it('softens ecology cells into continuous living water before bloom or bioluminescence', () => {
+    const world = waterWorld();
+    const ecology = new EcologyField(world, 'living-water-test');
+    const renderer = new WaterSystem(world, new TerrainSurface(world), 'living-water-test', ecology, 2);
+    const ocean = renderer.group.children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
+    const shader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <common>\n#include <begin_vertex>\n#include <project_vertex>',
+      fragmentShader: '#include <common>\n#include <color_fragment>\n#include <normal_fragment_begin>\n#include <emissivemap_fragment>\n#include <roughnessmap_fragment>',
+    };
+    ocean.material.onBeforeCompile(shader as unknown as Parameters<typeof ocean.material.onBeforeCompile>[0], {} as THREE.WebGLRenderer);
+    expect(shader.uniforms['ecologyCellWorld']!.value).toBe(world.cellSize);
+    expect(shader.fragmentShader).toContain('waterHabitatAt');
+    expect(shader.fragmentShader).toContain('livingSurfaceVeil');
+    expect(shader.fragmentShader).toContain('bioRotateA');
+    expect(shader.fragmentShader).not.toContain('vec4 habitat = habitatAt(vEcologyWaterWorld.xz)');
+    disposeRenderer(renderer);
+    ecology.dispose();
   });
 
   it('eases newly flooded ground upward and leaves temporary wetness after recession without widening water', () => {
