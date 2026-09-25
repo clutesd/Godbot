@@ -17,7 +17,7 @@ import { bindTreeMaterial } from './TreeMaterials';
 import { insideVegetationTerrain } from './VegetationPlacement';
 import { BioluminescentFlora } from './BioluminescentFlora';
 import { DEFAULT_ECOLOGY_QUALITY, type EcologyField, type EcologyQuality } from '../ecology/EcologyField';
-import { LandWildlifeRenderer, type LandWildlifeReport } from '../wildlife/LandWildlifeRenderer';
+import { LandWildlifeRenderer, type LandWildlifeReport, type WildlifeCameraSubject } from '../wildlife/LandWildlifeRenderer';
 
 export interface VegetationReport {
   trees: number;
@@ -227,6 +227,11 @@ export class VegetationRenderer {
     };
   }
 
+
+  /** Current rendered land-animal positions for scenic documentary framing. */
+  wildlifeCameraSubjects(elapsedSeconds: number): readonly WildlifeCameraSubject[] {
+    return this.wildlife.cameraSubjects(elapsedSeconds);
+  }
 
   /**
    * Camera collision query against the same deterministic tree placements that are actually drawn.
