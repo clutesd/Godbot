@@ -1,4 +1,4 @@
-import type { CultureStyle, ResourceStock } from '../types';
+import type { CultureStyle, HistoricalEventType, ResourceStock } from '../types';
 
 export const SETTLEMENT_NEEDS = ['food', 'housing', 'trade', 'government', 'security', 'religion', 'knowledge', 'healthcare', 'manufacturing', 'transport', 'energy', 'water', 'memory'] as const;
 export type SettlementNeed = typeof SETTLEMENT_NEEDS[number];
@@ -115,7 +115,7 @@ export interface Remembrance {
   firstMonth: number;
   deaths: number;
   people: { id: string; name: string; month: number; eventId: string }[];
-  events: { id: string; summary: string; month: number }[];
+  events: { id: string; summary: string; month: number; type?: HistoricalEventType; significance?: number }[];
 }
 
 export interface MemorialSite extends Remembrance {
