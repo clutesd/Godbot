@@ -398,7 +398,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     view.setAutonomousCamera(!view.autonomousCamera);
     syncCameraMode();
   };
-  cameraModeToggleElement.addEventListener('click', toggleCameraMode);
+  // A new observation reuses the persistent footer. Keep exactly one camera listener;
+  // otherwise Restart leaves stale closures attached to disposed renderers.
+  cameraModeToggleElement.onclick = toggleCameraMode;
   syncCameraMode();
   openingStatusElement.textContent = 'Preparing the observation…';
   const openingWarmupMs = await view.warmUpOpening();
@@ -664,6 +666,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     window.removeEventListener('beforeunload', persistBeforeUnload);
     audio.stop();
     if (activeAudio === audio) activeAudio = undefined;
+    if (cameraModeToggleElement.onclick === toggleCameraMode) cameraModeToggleElement.onclick = null;
     view.dispose();
     try {
       if (!previouslyEnded) await persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });
