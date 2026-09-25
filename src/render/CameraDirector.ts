@@ -1089,7 +1089,7 @@ interface CameraFlightState {
   readonly approachRadius: number;
   readonly maxSeconds: number;
   readonly maximumCruiseHeight: number;
-  readonly routePoints: readonly THREE.Vector3[];
+  readonly routePoints: THREE.Vector3[];
   routeIndex: number;
   phase: 'depart' | 'cruise' | 'approach';
   cruiseHeight: number;
@@ -1688,7 +1688,7 @@ export class CameraDirector {
       maximumCruiseHeight: cruiseHeight + 8,
       routePoints: terrainRoute,
       routeIndex: Math.min(1, Math.max(0, terrainRoute.length - 1)),
-      phase: horizontalDistance > profile.minApproachRadius ? 'depart' : 'approach',
+      phase: horizontalDistance > profile.minApproachRadius ? 'cruise' : 'approach',
       cruiseHeight,
       elapsedSeconds: 0,
       bestDistance: Math.max(0.001, distance),
@@ -1735,11 +1735,6 @@ export class CameraDirector {
       flight.destinationPosition.x - this.camera.position.x,
       flight.destinationPosition.z - this.camera.position.z,
     );
-    if (flight.phase === 'depart' && this.camera.position.y >= flight.cruiseHeight - 0.4) flight.phase = 'cruise';
-    // Personal flights acquire the destination early and spend most of the final leg descending
-    // toward the composition. This reads as a deliberate low fly-through instead of cruise-then-drop.
-    if (flight.phase === 'cruise' && horizontalDistance <= flight.approachRadius) flight.phase = 'approach';
-
     const finalRouteIndex = flight.routePoints.length - 1;
     while (flight.routeIndex < finalRouteIndex
       && this.camera.position.distanceTo(flight.routePoints[flight.routeIndex]!) < 1.35) {
