@@ -171,7 +171,7 @@ export function generateBannerIdentity(input: BannerIdentityInput): BannerIdenti
   const council = institutionStrength(input.institutions, 'council');
   const craft = institutionStrength(input.institutions, 'craft-circle');
   const waterLinked = input.river || input.lake || input.coast || input.biome === 'water' || input.biome === 'wetland';
-  const activeTradeRoutes = Math.max(0, activeTradeRoutes);
+  const activeTradeRoutes = Math.max(0, Math.min(3, input.activeTradeRoutes));
 
   const emblemScores: Record<BannerEmblem, number> = {
     sun: 0.12,
