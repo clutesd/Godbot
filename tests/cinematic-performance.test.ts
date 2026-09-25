@@ -394,6 +394,66 @@ describe('cinematic motion', () => {
     expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(0.5);
   });
 
+
+  it('re-establishes context immediately after manual control leaves an acquired human close-up', () => {
+    const sim = new Simulation({ seed: 'manual-human-reestablish', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
+      camera: { shotSeconds: [0.25, 0.25], transitionSeconds: 3 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const person = sim.state.people.find(candidate => candidate.alive);
+    if (!person) throw new Error('Expected a represented person');
+    const human = {
+      ...template,
+      id: `human:${person.id}:partner`,
+      subjectId: person.id,
+      kind: 'worker-follow' as const,
+      position: { x: 0, z: 0 },
+      title: person.name,
+    };
+    const context = {
+      ...template,
+      id: 'manual:context',
+      kind: 'settlement-approach' as const,
+      position: { x: 12, z: 0 },
+      title: 'The settlement',
+    };
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce(human)
+      .mockReturnValue(context);
+    vi.spyOn(historian, 'candidates').mockReturnValue([context]);
+
+    const camera = new PerspectiveCamera(38, 1, 0.01, 200);
+    const director = new CameraDirector(camera, sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.observation.sceneId).toBe(human.id);
+
+    camera.position.set(1, 0.38, 1);
+    camera.lookAt(2, 0.38, 1);
+    camera.updateMatrixWorld(true);
+    const manualPosition = camera.position.clone();
+
+    director.resumeFromExternalPose();
+    director.update(1 / 60, 1 / 60, sim.state, () => 0);
+
+    const flight = director.flightTelemetry();
+    expect(flight.active).toBe(true);
+    expect(flight.destinationSceneId).toBe(context.id);
+    expect(director.observation.sceneId).toBe(human.id);
+    expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
+
+    for (let frame = 1; frame <= 120; frame += 1) {
+      director.update(1 / 60, (frame + 1) / 60, sim.state, () => 0);
+    }
+    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.2);
+    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(0.5);
+  });
+
   it('keeps a full editorial transfer materially frame-rate independent at 30, 60 and 144 Hz', () => {
     const run = (fps: number): { acquiredAt: number; position: Vector3; maxSpeed: number } => {
       const sim = new Simulation({ seed: 'director-frame-rate', startMode: 'established',
