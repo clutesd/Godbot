@@ -24,6 +24,8 @@ describe('Arrival Day / authoritative restart', () => {
     expect(s.state).not.toBe(old);
     expect(() => assertPristine(s.state)).not.toThrow();
     expect(s.state).toEqual(new Simulation(CONFIG).state);
+    expect(s.state.arrival?.phase).toBe('PRISTINE_WORLD');
+    expect(s.state.arrival?.pods).toHaveLength(5);
     expect(s.state.people).toHaveLength(0);
     expect(s.state.settlements).toHaveLength(0);
     expect(s.state.history).toHaveLength(0);

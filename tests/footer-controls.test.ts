@@ -5,6 +5,7 @@ import {
   showCameraArchived,
   syncAudioToggle,
   syncCameraToggle,
+  syncRestartToggle,
 } from '../src/ui/FooterControls';
 
 class FakeClassList {
@@ -73,6 +74,22 @@ describe('footer control contracts', () => {
     }
     expect(markup).not.toMatch(/<span[^>]*id=["'](?:restart|camera-mode-toggle|audio-toggle)["']/);
     expect((markup.match(/id=["']camera-mode-toggle["']/g) ?? [])).toHaveLength(1);
+  });
+
+  it('exposes an explicit busy state while Restart replaces the active observation', () => {
+    const button = new FakeButton() as unknown as HTMLButtonElement;
+
+    syncRestartToggle(button, true);
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe('RESTARTING…');
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.getAttribute('aria-label')).toBe('Restarting observation');
+
+    syncRestartToggle(button, false);
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toBe('RESTART');
+    expect(button.getAttribute('aria-busy')).toBeNull();
+    expect(button.getAttribute('aria-label')).toBe('Restart observation');
   });
 
   it('exposes audio mute state through visible text and accessible button state', () => {
