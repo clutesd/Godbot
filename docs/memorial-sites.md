@@ -32,6 +32,19 @@ The precinct renderer now treats the four memorial forms as different places rat
 - The building asset is now a bounded ceremonial focal composition while the terrain presentation owns distributed burial markers. This avoids double-counting simulation deaths while making the site legible at both close and settlement camera distances.
 - Terrain patches use deterministic vertex-colour breakup and irregular edges while continuing to sample the authoritative elevation field. The visual pass never flattens terrain or writes back into simulation state.
 
+### Archaeological layering and cultural succession
+
+Memorial presentation now derives a bounded `MemorialComposition` from the authoritative site rather than treating the cemetery as one timeless visual state.
+
+- Founding fabric, aggregate communal remembrance, named lives, and remembered events are ordered chronologically and compressed into at most four archaeological strata.
+- Significant remembered events retain their original event type and significance alongside the existing id, summary, and month. That provenance survives normal historian event eviction, so a battle, pandemic, catastrophe, founding, war ending, or recovery can leave a different physical trace without reconstructing history later.
+- Named lives can leave small inscription fragments keyed to their retained person id, name, and month. This remains capped by the existing eight-name archive limit.
+- Remembered events can leave up to four bounded relic compositions. Battles use broken opposing slabs, pandemics and harvest crises use clustered stones, catastrophes use displaced/fallen fabric, settlement founding uses a threshold form, and war endings/recoveries use paired commemorative stones.
+- Strata are deterministic from retained evidence, plot identity, age, condition, and founding culture. Older bands sit as partial, weathered remnants rather than pristine duplicate monuments.
+- When a settlement contains memorials from successive cultures, each precinct receives an explicit succession ordinal and the landscape exposes the ordered cultural sequence. The original site remains fixed and ages in place while later cultures build their own separately styled memorial grounds.
+- Current culture share is observational only. An old cemetery can therefore read as a legacy culture layer even when that culture is no longer dominant, without rewriting its founding form or ownership history.
+- Documentary depth and archaeology fingerprints are presentation metadata only. They provide stable seams for camera, historian, inspection, or future archaeology systems without adding new simulation authority.
+
 ### Mourning and visitation behavior
 
 Memorials are now semantic destinations distinct from shrines. A non-sacred burial ground can therefore receive mourners without becoming a religious building, while ordinary worship continues to use religion-service destinations.
