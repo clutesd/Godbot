@@ -268,7 +268,6 @@ export class WeatherRenderer {
     this.precipitation.dispose();
     this.lightningBolt.geometry.dispose();
     this.lightningBolt.material.dispose();
-    this.lightningLight.dispose();
     this.texture.dispose();
     this.waterTexture.dispose();
     for (const object of [...this.funnels, ...this.funnelDust]) {
