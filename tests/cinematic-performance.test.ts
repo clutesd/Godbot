@@ -393,8 +393,8 @@ describe('cinematic motion', () => {
     for (let frame = 1; frame <= 120; frame += 1) {
       director.update(1 / 60, 9 + frame / 60, sim.state, () => 0);
     }
-    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.25);
-    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(0.5);
+    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.9);
+    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(1.5);
   });
 
 
@@ -453,8 +453,55 @@ describe('cinematic motion', () => {
     for (let frame = 1; frame <= 120; frame += 1) {
       director.update(1 / 60, (frame + 1) / 60, sim.state, () => 0);
     }
-    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.2);
-    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(0.5);
+    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.9);
+    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(1.5);
+  });
+
+
+  it('restores an eye-level manual camera into a clearly autonomous composition instead of lingering near the observer pose', () => {
+    const sim = new Simulation({ seed: 'manual-low-pose-restore', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
+      camera: { shotSeconds: [0.4, 0.4], transitionSeconds: 3 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const initial = { ...template, id: 'restore:initial', kind: 'street-observation' as const, position: { x: 0, z: 0 } };
+    const autonomous = { ...template, id: 'restore:autonomous', kind: 'settlement-approach' as const, position: { x: 10, z: 3 } };
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce(initial)
+      .mockReturnValue(autonomous);
+    vi.spyOn(historian, 'candidates').mockReturnValue([autonomous]);
+
+    const camera = new PerspectiveCamera(38, 1, 0.01, 200);
+    const director = new CameraDirector(camera, sim.config, historian);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(director.observation.sceneId).toBe(initial.id);
+
+    camera.position.set(0.4, 0.34, 0.3);
+    camera.lookAt(1.4, 0.34, 0.3);
+    camera.updateMatrixWorld(true);
+    const manualPosition = camera.position.clone();
+
+    director.resumeFromExternalPose();
+    expect(camera.position.distanceTo(manualPosition)).toBeLessThan(1e-9);
+
+    director.update(1 / 60, 1 / 60, sim.state, () => 0);
+    const firstRecovery = director.flightTelemetry();
+    expect(firstRecovery.active).toBe(true);
+    expect(firstRecovery.destinationSceneId).toBe(autonomous.id);
+    expect(firstRecovery.destinationHeight).toBeGreaterThan(manualPosition.y + 1);
+
+    for (let frame = 1; frame <= 90; frame += 1) {
+      director.update(1 / 60, (frame + 1) / 60, sim.state, () => 0);
+    }
+
+    expect(camera.position.y).toBeGreaterThan(manualPosition.y + 0.65);
+    expect(camera.position.distanceTo(manualPosition)).toBeGreaterThan(1.2);
+    expect(director.flightTelemetry().speed).toBeGreaterThan(0.15);
   });
 
   it('keeps a full editorial transfer materially frame-rate independent at 30, 60 and 144 Hz', () => {
