@@ -90,7 +90,8 @@ function belongsTo(input: BannerLegacyInput, event: HistoricalEvent): boolean {
 }
 
 function latest(events: readonly HistoricalEvent[]): HistoricalEvent | undefined {
-  return [...events].sort((a, b) => b.month - a.month || b.significance - a.significance)[0];
+  return [...events].sort((a, b) =>
+    b.month - a.month || b.significance - a.significance || a.id.localeCompare(b.id))[0];
 }
 
 function chooseSite(input: BannerLegacyInput): { site: BannerDisplaySite; mount: BannerMount; reason: string } {
