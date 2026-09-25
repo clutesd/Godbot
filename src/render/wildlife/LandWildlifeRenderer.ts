@@ -30,6 +30,16 @@ export interface LandWildlifeReport {
   bySpecies: Record<LandAnimalSpecies, number>;
 }
 
+/** Read-only presentation snapshot used by the documentary camera. */
+export interface WildlifeCameraSubject {
+  readonly id: string;
+  readonly species: LandAnimalSpecies;
+  readonly x: number;
+  readonly z: number;
+  readonly yaw: number;
+  readonly moving: boolean;
+}
+
 export interface WildlifeExclusionZone {
   x: number;
   z: number;
@@ -520,6 +530,24 @@ export class LandWildlifeRenderer {
   setExclusionZones(zones: readonly WildlifeExclusionZone[]): void {
     // Copy the tiny descriptor list so presentation never observes a caller mutating it mid-frame.
     this.exclusions = zones.map((zone) => ({ ...zone }));
+  }
+
+  /**
+   * Current visual animal positions for camera composition. This is deliberately derived from the
+   * same presentation clock and route sampler as rendering, so the camera photographs where an
+   * animal is actually drawn without promoting wildlife presentation into simulation authority.
+   */
+  cameraSubjects(elapsed: number): readonly WildlifeCameraSubject[] {
+    const subjects: WildlifeCameraSubject[] = [];
+    for (const plan of this.plans) {
+      const motion = sampleMotion(plan, elapsed);
+      if (this.exclusions.some((zone) => Math.hypot(motion.x - zone.x, motion.z - zone.z) < zone.radius + 0.35)) continue;
+      const ground = this.surface.heightAt(motion.x, motion.z);
+      const water = this.surface.waterYAt(motion.x, motion.z);
+      if (Number.isFinite(water) && water > ground - 0.03) continue;
+      subjects.push({ id: plan.id, species: plan.species, x: motion.x, z: motion.z, yaw: motion.yaw, moving: motion.moving });
+    }
+    return subjects;
   }
 
   update(elapsed: number): void {
