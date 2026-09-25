@@ -2093,6 +2093,7 @@ export class CameraDirector {
         const motionEnd = pacing.settleHoldFraction + pacing.motionFraction;
         const inMotionWindow = normalizedAge > pacing.settleHoldFraction && normalizedAge < motionEnd;
         const motionWindow = cameraMotionProgressFor(scene.kind, this.shotAge, this.shotDuration);
+        const partner = presentation?.partnerId ? this.subjectPresentation?.(presentation.partnerId) : undefined;
 
         // Movement must have editorial purpose. Work/contact scenes may reveal actor→object relation,
         // travelers may breathe laterally along their direction of travel, and social pairs may open
@@ -2121,8 +2122,7 @@ export class CameraDirector {
         // Screen-space trim: keep human subjects intentionally framed rather than merely centered
         // in world space. This is deliberately gentle so it never fights collision/sightline safety.
         const leadDirection = new THREE.Vector3();
-        if (action?.target) leadDirection.set(action.target.x - actorX, 0, action.target.z - actorZ);
-        const partner = presentation?.partnerId ? this.subjectPresentation?.(presentation.partnerId) : undefined;
+        if (composition) leadDirection.set(composition.targetX - actorX, 0, composition.targetZ - actorZ);
         const compositionTrim = screenSpaceComposition(
           this.camera,
           new THREE.Vector3(actorX, actorFocusY, actorZ),
