@@ -1202,6 +1202,8 @@ export class AnimationController {
         return 'work';
       case 'worship':
         return 'ritual';
+      case 'mourn':
+        return 'reflect';
       case 'patrol':
         return 'idle';
       case 'shelter':

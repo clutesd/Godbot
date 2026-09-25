@@ -2,7 +2,7 @@ import type { DestinationKind, Settlement, StructurePlot } from '../sim/types';
 import type { SettlementNeed } from '../sim/development/types';
 
 const DESTINATION_NEED: Partial<Record<DestinationKind, SettlementNeed>> = {
-  field: 'food', workshop: 'manufacturing', market: 'trade', shrine: 'religion', 'civic-building': 'government',
+  field: 'food', workshop: 'manufacturing', market: 'trade', shrine: 'religion', 'memorial-site': 'memory', 'civic-building': 'government',
   warehouse: 'transport', 'industrial-site': 'manufacturing', 'knowledge-institution': 'knowledge', 'patrol-route': 'security',
 };
 

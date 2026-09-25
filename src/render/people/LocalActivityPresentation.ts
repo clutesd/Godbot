@@ -97,6 +97,10 @@ const ROUTINES: Partial<Record<DestinationKind, readonly Intent[]>> = {
     ['inspect', 2, 'inspect-work-area', 4], ['interact', 3, 'look-to-colleague', 3], ['pause', 3, 'pause', 4]],
   shrine: [['task', 0, 'ritual', 6], ['pause', 0, 'pause', 3], ['reposition', 1, 'adjust-gathering-position', 2],
     ['task', 1, 'ritual', 4], ['inspect', 2, 'observe-gathering', 3], ['reposition', 3, 'step-out-of-gathering', 3]],
+  'memorial-site': [['task', 0, 'quiet-remembrance', 7], ['pause', 0, 'stand-in-silence', 4],
+    ['reposition', 1, 'approach-marker', 2.4], ['task', 1, 'leave-offering', 4.5],
+    ['inspect', 2, 'remember-life', 4], ['pause', 2, 'quiet-reflection', 4.5],
+    ['reposition', 3, 'depart-memorial', 3]],
   home: [['task', 0, 'rest', 6.5], ['pause', 0, 'pause', 2.8], ['reposition', 1, 'household-step', 1.8],
     ['interact', 4, 'look-to-household', 3.4], ['inspect', 3, 'check-household', 2.6],
     ['reposition', 2, 'household-crossing', 1.8], ['return', 0, 'rest', 5.5]],
@@ -106,6 +110,7 @@ const ROUTINES: Partial<Record<DestinationKind, readonly Intent[]>> = {
 const EXCLUSIVE_ACTIVITIES = new Set(['flee', 'migrate', 'shelter', 'travel', 'construct', 'farm', 'gather']);
 const STRUCTURES: Partial<Record<DestinationKind, readonly string[]>> = {
   home: ['shelter', 'lean-to', 'hut', 'house', 'compound'], market: ['market'], shrine: ['shrine', 'ritual-marker'],
+  'memorial-site': ['ritual-marker', 'shrine'],
   workshop: ['workshop'], 'civic-building': ['hall'], 'knowledge-institution': ['research', 'hall'],
   'industrial-site': ['factory', 'foundry', 'energy'], warehouse: ['warehouse', 'granary'],
 };
@@ -647,13 +652,21 @@ export class LocalActivityPresentation {
         state.action = 'wait-for-rest-place';
       }
       else if (kind === 'shrine' && person.activity === 'worship') { state.animation = 'ritual'; state.action = 'ritual'; }
+      else if (kind === 'memorial-site' && person.activity === 'mourn') {
+        state.animation = ['priest', 'ritual-specialist'].includes(person.role ?? '') ? 'ritual' : 'reflect';
+        state.action = action;
+      }
       else if (state.structure && ['craft', 'study', 'assist'].includes(person.activity)) {
         state.animation = 'work'; state.action = person.activity === 'study' ? 'study'
           : kind === 'workshop' ? 'bench-task' : kind === 'industrial-site' ? 'station-task' : 'workstation-task';
       }
     }
+    if (kind === 'memorial-site' && person.activity === 'mourn') {
+      state.animation = ['priest', 'ritual-specialist'].includes(person.role ?? '') ? 'ritual' : 'reflect';
+      state.action = action;
+    }
     if (kind === 'patrol-route') state.animation = 'alert';
-    if (step === 'inspect' && ['bag', 'basket', 'ledger', 'toolkit'].includes(person.appearance?.carriedItem ?? '')) {
+    if (kind !== 'memorial-site' && step === 'inspect' && ['bag', 'basket', 'ledger', 'toolkit'].includes(person.appearance?.carriedItem ?? '')) {
       state.action = 'check-carried-object'; state.animation = 'carry';
     }
     const from = context.visual ?? state.destination;

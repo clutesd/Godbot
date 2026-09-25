@@ -62,7 +62,7 @@ function harness(people = [person()], overrides: Partial<LocalActivityContext> =
 describe('renderer-owned local activity', () => {
   it.each([
     ['home', 'rest'], ['market', 'trade'], ['plaza', 'socialize'], ['workshop', 'craft'], ['shrine', 'worship'],
-    ['civic-building', 'assist'], ['knowledge-institution', 'study'], ['industrial-site', 'craft'], ['patrol-route', 'patrol'],
+    ['memorial-site', 'mourn'], ['civic-building', 'assist'], ['knowledge-institution', 'study'], ['industrial-site', 'craft'], ['patrol-route', 'patrol'],
   ] as [DestinationKind, Activity][])('gives %s a bounded sequence under sixty seconds of frozen authority', (kind, activity) => {
     const p = person(); p.activity = activity; p.navigation!.destinationKind = kind;
     const before = JSON.stringify(p), h = harness([p]); const actions = new Set<string>(), points = new Set<string>();
@@ -73,6 +73,29 @@ describe('renderer-owned local activity', () => {
     expect(actions.size).toBeGreaterThan(3); expect(points.size).toBeGreaterThan(12);
     expect(JSON.stringify(p)).toBe(before);
   });
+  it('presents ordinary mourners reflectively and ritual specialists as memorial leaders', () => {
+    const mourner = person('mourner');
+    mourner.activity = 'mourn';
+    mourner.navigation!.destinationKind = 'memorial-site';
+    mourner.navigation!.destinationId = 'cemetery';
+    const mournerHarness = harness([mourner]);
+    mournerHarness.tick(0);
+    for (let i = 0; i < 180 && mournerHarness.local.get(mourner.id)?.action === 'arrive'; i++) mournerHarness.tick(1 / 60);
+    for (let i = 0; i < 180 && mournerHarness.local.get(mourner.id)?.animation === 'idle'; i++) mournerHarness.tick(1 / 60);
+    expect(mournerHarness.local.get(mourner.id)?.animation).toBe('reflect');
+
+    const leader = person('leader');
+    leader.role = 'ritual-specialist';
+    leader.activity = 'mourn';
+    leader.navigation!.destinationKind = 'memorial-site';
+    leader.navigation!.destinationId = 'cemetery';
+    const leaderHarness = harness([leader]);
+    leaderHarness.tick(0);
+    for (let i = 0; i < 180 && leaderHarness.local.get(leader.id)?.action === 'arrive'; i++) leaderHarness.tick(1 / 60);
+    for (let i = 0; i < 180 && leaderHarness.local.get(leader.id)?.animation === 'idle'; i++) leaderHarness.tick(1 / 60);
+    expect(leaderHarness.local.get(leader.id)?.animation).toBe('ritual');
+  });
+
   it('keeps a frozen authority inhabited for sixty seconds, bounded and byte-for-byte unchanged', () => {
     const p = person(); const before = JSON.stringify(p);
     const h = harness([p]); const points = new Set<string>(); let moving = 0, standing = 0;

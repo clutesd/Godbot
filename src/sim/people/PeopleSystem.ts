@@ -25,6 +25,7 @@ import {
   resourceWorkPreferredWaypoints,
 } from './ResourceWorkRouting';
 import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../terrain/SurfaceGeometry';
+import { memorialVisitPlan } from './MemorialBehavior';
 
 interface ScheduledDestination {
   kind: DestinationKind;
@@ -80,6 +81,7 @@ const DESTINATION_DISTRICT: Partial<Record<DestinationKind, BuildingDistrict>> =
   market: 'market',
   plaza: 'civic',
   shrine: 'sacred',
+  'memorial-site': 'sacred',
   'civic-building': 'civic',
   'construction-site': 'craft',
   warehouse: 'market',
@@ -385,6 +387,8 @@ export class PeopleSystem {
     if (person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
       return { kind: 'home', phase: 'home', activity: 'rest', reason: physicalRestSite(state, person) ? 'resting in available physical shelter' : 'resting at the household camp' };
     }
+    const memorial = memorialVisitPlan(person, settlement, state, shiftedHour);
+    if (memorial) return memorial;
     if (shiftedHour < 8) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'commute');
       if (building) return { kind: 'construction-site', phase: 'commute', activity: 'travel', reason: 'carrying supplies to the active shelter project' };
@@ -666,6 +670,7 @@ function activityAtDestination(role: PersonRole, destination: DestinationKind): 
   if (destination === 'market') return role === 'trader' || role === 'merchant' ? 'trade' : 'socialize';
   if (destination === 'plaza') return 'socialize';
   if (destination === 'shrine') return 'worship';
+  if (destination === 'memorial-site') return 'mourn';
   return activityForRole(role, destination);
 }
 
