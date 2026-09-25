@@ -50,7 +50,9 @@ describe('Cinematic presentation pacing', () => {
 
   it('ignores backwards and non-finite timing samples instead of poisoning cinematic telemetry', () => {
     const simulation = new Simulation({ seed: 'cinematic-invalid-delta', startingPopulation: 180 });
-    simulation.state.month = 1;
+    // Month 5 is neither a seasonal boundary nor the month immediately before one.
+    // This fixture isolates elapsed-time handling from legitimate semantic hold arming.
+    simulation.state.month = 5;
     const director = new PresentationDirector(simulation.config);
     const quiet = { interest: 0.1, kind: 'landscape-pause' as const };
     const before = director.telemetry();
