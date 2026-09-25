@@ -1,3 +1,4 @@
+import { farmGeometries } from './FarmGeometry';
 import { SeededRandom } from '../sim/prng';
 import { nearestIndex, sampleHeight } from '../sim/terrain/TerrainField';
 import { waterAt } from '../sim/transport/TerrainTraversal';
@@ -12,6 +13,7 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
     const plots = settlement.structurePlots ??= [];
     if (plots.length >= 96) return undefined;
     const allPlots = state.settlements.flatMap(entry => entry.structurePlots ?? []);
+    const fields = state.settlements.flatMap(entry => farmGeometries(entry));
     const contract = new PlacementContract(state.world);
     const foundingHearth = foundingHearthWorldPosition(settlement, state.arrival?.pods ?? []);
     const layout = createSettlementLayoutPlan({ settlement, settlements: state.settlements, routes: state.tradeRoutes, eraRank: 1, seed: state.seed });
@@ -33,6 +35,13 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
       const cell = cellAt(state.world, worldX, worldZ);
       if (!cell || waterAt(state.world, { x: worldX, z: worldZ }, cell) || cell.slope > 0.42 || cell.biome === 'mountain') continue;
       if (allPlots.some(plot => Math.hypot(plot.worldX - worldX, plot.worldZ - worldZ) < plot.radius + radius + 0.25)) continue;
+      if (fields.some(field => {
+        const dx = worldX - field.center.x, dz = worldZ - field.center.z;
+        const localX = dx * Math.cos(field.rotationY) - dz * Math.sin(field.rotationY);
+        const localZ = dx * Math.sin(field.rotationY) + dz * Math.cos(field.rotationY);
+        return Math.hypot(Math.max(0, Math.abs(localX) - field.width / 2),
+          Math.max(0, Math.abs(localZ) - field.depth / 2)) < radius + 0.25;
+      })) continue;
       const ground = sampleHeight(state.world.terrain, worldX, worldZ);
       let valid = true;
       for (let sample = 0; sample < 9; sample += 1) {

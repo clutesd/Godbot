@@ -1401,7 +1401,7 @@ export class GodboxRenderer {
     if (activeSite) {
       const response = settlement.development?.project?.response;
       if (response?.adaptation) {
-        const mesh = createSurvivalStructure(response, constructionProgress, activeSite.width, activeSite.depth, palette);
+        const mesh = createSurvivalStructure(response, constructionProgress, activeSite.width, activeSite.depth, palette, this.shelterGroundAt(activeSite));
         mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
         mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
         group.add(mesh);
@@ -1810,9 +1810,16 @@ export class GodboxRenderer {
     return palette;
   }
 
+  private shelterGroundAt(placement: BuildingPlacement): (x: number, z: number) => number {
+    const cosine = Math.cos(placement.rotationY), sine = Math.sin(placement.rotationY);
+    const center = this.elevationAt(placement.worldX, placement.worldZ);
+    return (x, z) => this.elevationAt(placement.worldX + x * cosine + z * sine,
+      placement.worldZ - x * sine + z * cosine) - center;
+  }
+
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number): THREE.Object3D {
     if (placement.development?.adaptation) {
-      const building = createSurvivalStructure(placement.development, 1, placement.width, placement.depth, this.getPalette(cultureStyle, era));
+      const building = createSurvivalStructure(placement.development, 1, placement.width, placement.depth, this.getPalette(cultureStyle, era), this.shelterGroundAt(placement));
       building.position.set(placement.localX, terrainY, placement.localZ); building.rotation.y = placement.rotationY;
       building.userData['placementKey'] = placement.key;
       return building;
@@ -1833,23 +1840,26 @@ export class GodboxRenderer {
     // proportions survive, and bounded by the footprint, so nothing spills onto its neighbour.
     const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
     const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
-    const fit = Math.min(placement.width / grammarWidth, placement.depth / grammarDepth) * (placement.development ? 0.64 + placement.development.level * 0.12 : 1);
+    const fit = Math.min(placement.width / grammarWidth, placement.depth / grammarDepth) * (placement.development ? Math.min(1, 0.64 + placement.development.level * 0.12) : 1);
 
     // Field assets contain only a small edge store; FarmFieldRenderer owns the cultivated ground.
     // Ground the store where it is actually drawn rather than at the plot centre so sloped fields
     // do not leave the agricultural structure hovering or buried.
     let groundedTerrainY = terrainY;
+    let structureOffsetX = 0, structureOffsetZ = 0;
     if (placement.development?.form === 'field') {
       const anchorX = Number(asset.mesh.userData['productiveStructureAnchorX'] ?? 0);
       const anchorZ = Number(asset.mesh.userData['productiveStructureAnchorZ'] ?? 0);
       const cosine = Math.cos(placement.rotationY), sine = Math.sin(placement.rotationY);
-      const offsetX = (anchorX * cosine + anchorZ * sine) * fit;
-      const offsetZ = (-anchorX * sine + anchorZ * cosine) * fit;
+      const offsetX = placement.width * 0.35 * cosine;
+      const offsetZ = -placement.width * 0.35 * sine;
+      structureOffsetX = offsetX - (anchorX * cosine + anchorZ * sine) * fit;
+      structureOffsetZ = offsetZ - (-anchorX * sine + anchorZ * cosine) * fit;
       const settlementY = this.elevationAt(placement.worldX, placement.worldZ) - terrainY;
       groundedTerrainY = this.elevationAt(placement.worldX + offsetX, placement.worldZ + offsetZ) - settlementY;
     }
 
-    building.position.set(placement.localX, groundedTerrainY, placement.localZ);
+    building.position.set(placement.localX + structureOffsetX, groundedTerrainY, placement.localZ + structureOffsetZ);
     building.rotation.y = placement.rotationY;
     building.scale.setScalar(fit);
     building.userData['placementKey'] = placement.key;

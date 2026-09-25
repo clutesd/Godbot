@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { isArrivalFilmPhase, podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
 import type { SimulationState } from '../../sim/types';
 
@@ -28,21 +29,40 @@ export class FoundingPodRenderer {
   private readonly effectSphere = new THREE.Sphere();
   private readonly trailTail = new THREE.Vector3();
   private readonly hullMaterial = new THREE.MeshStandardMaterial({
-    color: '#805b32', roughness: 0.38, metalness: 0.78,
+    color: '#88714e', roughness: 0.47, metalness: 0.76, vertexColors: true,
   });
   private readonly shieldMaterial = new THREE.MeshStandardMaterial({
-    color: '#2e2820', roughness: 0.56, metalness: 0.62,
+    color: '#293d3b', roughness: 0.86, metalness: 0.32,
   });
   private readonly collarMaterial = new THREE.MeshStandardMaterial({
-    color: '#b07a3f', roughness: 0.3, metalness: 0.84,
+    color: '#a88b55', roughness: 0.57, metalness: 0.72,
   });
-  private readonly hullGeometry = new THREE.CylinderGeometry(0.48, 0.92, 1.65, 10);
+  private readonly hullGeometry = this.relicShell();
+
+  /** Flat panels with deterministic oxidation; no texture downloads or shader hooks. */
+  private relicShell(): THREE.BufferGeometry {
+    const geometry = new THREE.LatheGeometry([
+      new THREE.Vector2(0.78, -0.85), new THREE.Vector2(0.88, -0.65),
+      new THREE.Vector2(0.76, -0.38), new THREE.Vector2(0.58, 0.48),
+      new THREE.Vector2(0.48, 0.72), new THREE.Vector2(0.32, 0.91),
+      new THREE.Vector2(0.26, 1.02),
+    ], 10).toNonIndexed();
+    geometry.computeVertexNormals();
+    const positions = geometry.getAttribute('position');
+    const colors: number[] = [];
+    for (let i = 0; i < positions.count; i += 3) {
+      const weather = (Math.sin(i * 12.9898 + 17.2) * 43758.5453) % 1;
+      const color = new THREE.Color(weather > 0.35 ? '#688a77' : '#c1ad88');
+      color.multiplyScalar(0.7 + Math.abs(weather) * 0.3);
+      for (let j = 0; j < 3; j++) colors.push(color.r, color.g, color.b);
+    }
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return geometry;
+  }
   private readonly shieldGeometry = new THREE.CylinderGeometry(0.95, 0.69, 0.3, 10);
-  private readonly legGeometry = new THREE.CylinderGeometry(0.045, 0.08, 0.9, 5);
-  private readonly footGeometry = new THREE.BoxGeometry(0.35, 0.09, 0.32);
   private readonly bandGeometry = new THREE.TorusGeometry(0.73, 0.028, 5, 20);
   private readonly hatchGeometry = new THREE.BoxGeometry(0.43, 0.72, 0.07);
-  private readonly runeStrokeGeometry = new THREE.BoxGeometry(0.032, 0.24, 0.018);
+  private readonly runeStrokeGeometry = new THREE.BoxGeometry(0.016, 0.24, 0.012);
 
   constructor(private readonly state: SimulationState) {
     this.root.name = 'founding-vessels';
@@ -68,31 +88,58 @@ export class FoundingPodRenderer {
     band.position.y = -0.15;
     hull.add(band);
 
-    // Bright bronze collars catch the light like worked ceremonial metal instead of a modern
-    // painted seam. Their slightly different radii follow the tapered shell.
-    for (const [y, scale] of [[0.55, 0.78], [-0.56, 1.12]] as const) {
-      const collar = new THREE.Mesh(this.bandGeometry, this.collarMaterial);
-      collar.name = 'bronze-collar';
-      collar.rotation.x = Math.PI / 2;
-      collar.position.y = y;
-      collar.scale.setScalar(scale);
-      hull.add(collar);
+    // Merge static ornament by material: the rich silhouette costs only two extra draws.
+    const bronze: THREE.BufferGeometry[] = [];
+    const stone: THREE.BufferGeometry[] = [];
+    const place = (geometry: THREE.BufferGeometry, bucket: THREE.BufferGeometry[],
+      x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): void => {
+      const matrix = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)), new THREE.Vector3(1, 1, 1));
+      const flat = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+      flat.applyMatrix4(matrix); bucket.push(flat); geometry.dispose();
+    };
+    for (const [y, radius, thickness] of [[-0.83, 0.87, 0.055], [-0.62, 0.9, 0.045],
+      [0.49, 0.59, 0.038], [0.74, 0.48, 0.035], [1.05, 0.3, 0.035]] as const) {
+      place(new THREE.TorusGeometry(radius, thickness, 4, 10), bronze, 0, y, 0, Math.PI / 2);
     }
-
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.49, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), this.hullMaterial);
-    cap.position.y = 0.82;
-    cap.scale.y = 0.5;
-    hull.add(cap);
+    for (let i = 0; i < 10; i++) {
+      const angle = i * Math.PI * 2 / 10;
+      // Raised structural ribs frame the narrow inscription tablets.
+      place(new THREE.BoxGeometry(0.065, 1.28, 0.08), bronze,
+        Math.sin(angle) * 0.73, -0.06, Math.cos(angle) * 0.73,
+        -0.23 * Math.cos(angle), angle, 0.23 * Math.sin(angle));
+      place(new THREE.BoxGeometry(0.17, 0.42, 0.12), stone,
+        Math.sin(angle) * 0.34, 1.1 + (i % 2) * 0.09, Math.cos(angle) * 0.34, 0, angle);
+      place(new THREE.OctahedronGeometry(0.075, 0), bronze,
+        Math.sin(angle) * 0.91, -0.61, Math.cos(angle) * 0.91);
+      for (let mark = 0; mark < 3; mark++) {
+        place(new THREE.BoxGeometry(0.022, 0.045 + mark * 0.014, 0.018), bronze,
+          Math.sin(angle + (mark - 1) * 0.065) * 0.905, -0.75,
+          Math.cos(angle + (mark - 1) * 0.065) * 0.905, 0, angle, 0.25);
+      }
+    }
     for (let i = 0; i < 4; i++) {
       const angle = i * Math.PI / 2 + Math.PI / 4;
-      const leg = new THREE.Mesh(this.legGeometry, this.shieldMaterial);
-      leg.position.set(Math.cos(angle) * 0.8, -0.75, Math.sin(angle) * 0.8);
-      leg.rotation.z = Math.cos(angle) * -0.42;
-      leg.rotation.x = Math.sin(angle) * 0.42;
-      const foot = new THREE.Mesh(this.footGeometry, this.shieldMaterial);
-      foot.position.set(Math.cos(angle), -1.05, Math.sin(angle));
-      hull.add(leg, foot);
+      place(new THREE.BoxGeometry(0.18, 0.68, 0.25), stone,
+        Math.sin(angle) * 0.88, -0.72, Math.cos(angle) * 0.88,
+        -0.35 * Math.cos(angle), angle, 0.35 * Math.sin(angle));
+      place(new THREE.BoxGeometry(0.31, 0.12, 0.4), bronze,
+        Math.sin(angle), -1.035, Math.cos(angle), 0, angle);
     }
+    for (const [parts, material, name] of [
+      [bronze, this.collarMaterial, 'relic-bronze-ribs'],
+      [stone, this.shieldMaterial, 'relic-crown-and-buttresses'],
+    ] as const) {
+      const mesh = new THREE.Mesh(mergeGeometries([...parts])!, material);
+      mesh.name = name; mesh.castShadow = true; mesh.receiveShadow = true;
+      hull.add(mesh); parts.forEach(part => part.dispose());
+    }
+    const heart = new THREE.Mesh(new THREE.OctahedronGeometry(0.19), light);
+    heart.name = 'sealed-crown-heart'; heart.position.y = 1.14; heart.scale.y = 1.45;
+    hull.add(heart);
+    const seal = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.023, 4, 10), this.collarMaterial);
+    seal.name = 'crown-astrolabe'; seal.position.y = 1.16; seal.rotation.x = 0.35;
+    hull.add(seal);
     const hatch = new THREE.Group();
     hatch.position.set(0, -0.58, -0.87);
     const door = new THREE.Mesh(this.hatchGeometry, this.shieldMaterial);
@@ -137,8 +184,8 @@ export class FoundingPodRenderer {
   }
 
   /**
-   * Build sparse, hand-cut-looking sigils from a tiny shared stroke geometry. The runes sit just
-   * proud of the shell, so they read from cinematic distance without textures or runtime draws.
+   * Build stacked inscriptions in dark tablets from a shared stroke geometry, then batch their
+   * inlays and halos per vessel to keep cinematic detail inexpensive.
    * Each founding profile owns only two lightweight materials: a crisp colored inlay and a larger
    * additive echo that suggests a soft supernatural glow even when post-processing bloom is off.
    */
@@ -177,14 +224,18 @@ export class FoundingPodRenderer {
     // Four deliberately simple rune grammars repeat around the decagonal shell. Repetition makes
     // them feel like one old written system while the site color makes each vessel culturally legible.
     for (let face = 0; face < 10; face++) {
-      const angle = face * Math.PI * 2 / 10;
-      const y = -0.32 + (face % 3) * 0.29;
+      const angle = (face + 0.5) * Math.PI * 2 / 10;
+      const y = -0.03;
       const taper = THREE.MathUtils.clamp((y + 0.825) / 1.65, 0, 1);
-      const radius = THREE.MathUtils.lerp(0.92, 0.48, taper) + 0.025;
+      const radius = THREE.MathUtils.lerp(0.92, 0.48, taper) - 0.015;
       const glyph = new THREE.Group();
       glyph.name = `rune-${face + 1}`;
       glyph.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
       glyph.rotation.y = Math.PI / 2 - angle;
+      glyph.rotation.x = -0.206;
+      const tablet = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.66, 0.045), this.shieldMaterial);
+      tablet.name = 'recessed-inscription-tablet';
+      tablet.position.z = -0.014; glyph.add(tablet);
 
       switch (face % 4) {
         case 0:
@@ -208,6 +259,11 @@ export class FoundingPodRenderer {
           addStroke(glyph, 0.055, -0.045, -Math.PI / 4, 0.55);
           break;
       }
+      // Smaller stacked marks read as an inscription rather than isolated painted symbols.
+      addStroke(glyph, 0, 0.22, Math.PI / 4, 0.32);
+      addStroke(glyph, 0, 0.22, -Math.PI / 4, 0.32);
+      addStroke(glyph, -0.035, -0.23, 0.5, 0.24);
+      addStroke(glyph, 0.035, -0.23, -0.5, 0.24);
       runes.add(glyph);
     }
 
@@ -221,6 +277,23 @@ export class FoundingPodRenderer {
     addStroke(hatchSigil, -0.055, 0.02, Math.PI / 3, 0.58, 0.004);
     addStroke(hatchSigil, 0.055, 0.02, -Math.PI / 3, 0.58, 0.004);
     hatch.add(hatchSigil);
+    for (const parent of [runes, hatchSigil]) {
+      parent.updateMatrixWorld(true);
+      const inverse = parent.matrixWorld.clone().invert();
+      for (const [material, name] of [[core, 'founding-rune-core'], [halo, 'founding-rune-halo']] as const) {
+        const parts: THREE.BufferGeometry[] = [];
+        const strokes: THREE.Mesh[] = [];
+        parent.traverse(object => {
+          if (object instanceof THREE.Mesh && object.material === material) {
+            parts.push(object.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(inverse, object.matrixWorld)));
+            strokes.push(object);
+          }
+        });
+        const mesh = new THREE.Mesh(mergeGeometries(parts)!, material); mesh.name = name;
+        strokes.forEach(stroke => stroke.removeFromParent());
+        parts.forEach(part => part.dispose()); parent.add(mesh);
+      }
+    }
     hull.add(runes);
     return { core, halo };
   }
@@ -305,7 +378,7 @@ export class FoundingPodRenderer {
     if (!this.effectsRetired) this.retireEffects();
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
-    for (const g of [this.hullGeometry, this.shieldGeometry, this.legGeometry, this.footGeometry, this.bandGeometry, this.hatchGeometry, this.runeStrokeGeometry]) geometries.add(g);
+    for (const g of [this.hullGeometry, this.shieldGeometry, this.bandGeometry, this.hatchGeometry, this.runeStrokeGeometry]) geometries.add(g);
     materials.add(this.hullMaterial); materials.add(this.shieldMaterial); materials.add(this.collarMaterial);
     this.root.traverse(o => { if (o instanceof THREE.Mesh) { geometries.add(o.geometry); for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m); } });
     geometries.forEach(g => g.dispose());

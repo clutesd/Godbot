@@ -181,6 +181,37 @@ describe('Arrival to physical establishment', () => {
     expect(s.survival!.cold.exposure).toBeGreaterThan(0);
   });
 
+  it('keeps detailed shelter roofs and braces inside the reserved ground with bounded draw calls', () => {
+    const sim = arrival(); sim.step(1);
+    const response = sim.state.settlements[0]!.development!.project!.response;
+    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
+    for (const adaptation of ['lean-to', 'earth-shelter', 'hut', 'cache'] as const) {
+      const view = createSurvivalStructure({ ...response, adaptation }, 1, 1.5, 1.2, palette);
+      const bounds = new THREE.Box3().setFromObject(view);
+      expect(bounds.min.x).toBeGreaterThanOrEqual(-0.75);
+      expect(bounds.max.x).toBeLessThanOrEqual(0.75);
+      expect(bounds.min.z).toBeGreaterThanOrEqual(-0.6);
+      expect(bounds.max.z).toBeLessThanOrEqual(0.6);
+      let meshes = 0;
+      view.traverse(object => { if (object instanceof THREE.Mesh) { meshes++; object.geometry.dispose(); } });
+      expect(meshes).toBeLessThanOrEqual(7);
+      expect(view.getObjectByName('knee-braces')).toBeDefined();
+    }
+  });
+
+  it('builds a level terrace that reaches the downslope terrain', () => {
+    const sim = arrival(); sim.step(1);
+    const response = sim.state.settlements[0]!.development!.project!.response;
+    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
+    const view = createSurvivalStructure(response, 1, 1.5, 1.2, palette, (x, z) => x * 0.3 + z * 0.1);
+    expect(view.userData.foundationLift).toBeCloseTo(0.2622);
+    expect(view.getObjectByName('terrain-foundation')).toBeDefined();
+    const stone = view.getObjectByName('shelter-stone') as THREE.Mesh;
+    stone.geometry.computeBoundingBox();
+    expect(stone.geometry.boundingBox!.min.y).toBeLessThan(-0.25);
+    view.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+  });
+
   it('renders paid stages and a real roof at usability without frame-level economic mutation', () => {
     const sim = arrival(); sim.step(1);
     const s = sim.state.settlements[0]!, response = s.development!.project!.response;

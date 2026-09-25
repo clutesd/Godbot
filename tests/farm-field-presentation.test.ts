@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { vegetationFixture } from './fixtures/vegetation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
-import { farmGeometries, farmGeometry } from '../src/shared/FarmGeometry';
+import { farmGeometries, farmGeometry, farmPlotRotation } from '../src/shared/FarmGeometry';
 import type { Settlement, SimulationState } from '../src/sim/types';
 import type { StructureDevelopment } from '../src/sim/development/types';
 
@@ -69,6 +69,35 @@ function fieldDevelopment(state: SimulationState, settlement: Settlement, status
 
 
 describe('farm field visual polish', () => {
+  it('keeps cultivated rows out of the store strip at every field orientation', () => {
+    const { state, settlement } = fixture();
+    for (let i = 0; i < 12; i++) {
+      const plot = { id: `clearance-${i}`, development: fieldDevelopment(state, settlement, 'active'),
+        worldX: settlement.position.x + Math.cos(i) * 4, worldZ: settlement.position.z + Math.sin(i) * 4,
+        width: 2.6, depth: 2.1, height: 0.4, radius: 1.75, condition: 1, foundedMonth: 0 };
+      settlement.structurePlots = [plot];
+      const field = farmGeometry(settlement)!;
+      const angle = farmPlotRotation(settlement, plot);
+      const dx = field.center.x - plot.worldX, dz = field.center.z - plot.worldZ;
+      const centerX = dx * Math.cos(angle) - dz * Math.sin(angle);
+      expect(centerX - field.width / 2).toBeGreaterThan(-plot.width / 2);
+      // Maximum store roof half-width is 0.288 canonical units / 2.3 plot units.
+      const storeLeft = plot.width * (0.35 - 0.288 / 2.3);
+      expect(storeLeft - (centerX + field.width / 2)).toBeGreaterThan(0.1 * plot.width);
+    }
+  });
+
+  it('moves legacy cultivation clear of a building on its original site', () => {
+    const { settlement } = fixture();
+    const initial = farmGeometry(settlement)!;
+    settlement.structurePlots = [{ id: 'existing-home', worldX: initial.center.x, worldZ: initial.center.z,
+      width: 2, depth: 2, height: 1, radius: 1.42, condition: 1, foundedMonth: 0 }];
+    const moved = farmGeometry(settlement)!;
+    expect(Math.hypot(moved.center.x - initial.center.x, moved.center.z - initial.center.z))
+      .toBeGreaterThan(1.42 + Math.hypot(moved.width, moved.depth) / 2 + 0.2);
+    expect(farmGeometry(settlement)).toEqual(moved);
+  });
+
   it('renders readable cultivated rows, crops, ripe heads and harvest material from existing agriculture state', () => {
     const { state, surface } = fixture(6);
     const renderer = new FarmFieldRenderer();

@@ -4,7 +4,7 @@ import type { FoundingArrivalState } from './founding/FoundingArrival';
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState, TraversalPath } from './transport/types';
-import type { SettlementDevelopment, StructureDevelopment } from './development/types';
+import type { Remembrance, SettlementDevelopment, StructureDevelopment } from './development/types';
 import type { ForestCommunity, Geology, LandModification, ModificationKind, Soil } from './environment/types';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
@@ -589,6 +589,7 @@ export interface IndustrialState {
 }
 
 export interface Settlement {
+  remembrance?: Remembrance[];
   /** Last evaluated agricultural contribution, recorded by the economy, never by presentation.
    * Needed because net food balance includes consumption/foraging and cannot recover farm output. */
   agriculture?: { month: number; labour: number; yieldPerWorker: number; production: number; irrigation: number };

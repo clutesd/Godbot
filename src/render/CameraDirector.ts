@@ -91,19 +91,19 @@ export type CameraMotion = 'hold' | 'drift' | 'truck' | 'dolly-in' | 'dolly-out'
 const FRAMING: Record<ObservationKind, CameraFraming> = {
   'world-establishing': { radius: [46, 62], height: [42, 58], targetHeight: 1, durationScale: 1.25 },
   'regional-travel': { radius: [22, 31], height: [19, 28], targetHeight: 0.8, durationScale: 1.15 },
-  'settlement-approach': { radius: [15, 22], height: [12, 19], targetHeight: 1.2, durationScale: 1 },
+  'settlement-approach': { radius: [7, 11], height: [2.4, 4.2], targetHeight: 0.35, durationScale: 1 },
   // Human-scale shots intentionally break from the old aerial grammar. These dimensions are in
   // world units: close people should read as subjects, not colored pixels inside a settlement.
   'street-observation': { radius: [2.8, 4.5], height: [1.05, 1.7], targetHeight: 0.14, durationScale: 1.18 },
   'worker-follow': { radius: [1.45, 2.25], height: [0.42, 0.7], targetHeight: 0.12, durationScale: 1.26 },
   'traveler-follow': { radius: [3.2, 5.0], height: [1.3, 2.05], targetHeight: 0.16, durationScale: 1.18 },
-  'institution-exterior': { radius: [10, 16], height: [8, 13], targetHeight: 1.2, durationScale: 1.24 },
+  'institution-exterior': { radius: [6, 10], height: [2.6, 4.5], targetHeight: 0.65, durationScale: 1.24 },
   'discovery-scene': { radius: [1.55, 2.35], height: [0.45, 0.72], targetHeight: 0.12, durationScale: 1.42 },
   'battle-overview': { radius: [24, 34], height: [21, 31], targetHeight: 1, durationScale: 1.3 },
   'aftermath-pullback': { radius: [30, 42], height: [27, 39], targetHeight: 0.7, durationScale: 1.4 },
   'city-growth-timelapse': { radius: [20, 29], height: [17, 25], targetHeight: 1.4, durationScale: 1.35 },
   'night-transition': { radius: [27, 38], height: [24, 34], targetHeight: 0.8, durationScale: 1.18 },
-  'infrastructure-scene': { radius: [9, 15], height: [7, 12], targetHeight: 0.8, durationScale: 1.25 },
+  'infrastructure-scene': { radius: [6, 10], height: [2.4, 4.2], targetHeight: 0.5, durationScale: 1.25 },
   'landscape-pause': { radius: [30, 44], height: [28, 40], targetHeight: 0.6, durationScale: 1.18 },
   'atomic-threshold': { radius: [12, 18], height: [9, 14], targetHeight: 1.1, durationScale: 1.55 },
   'orbital-establishing': { radius: [48, 66], height: [48, 68], targetHeight: 0.6, durationScale: 1.55 },
@@ -163,6 +163,9 @@ export function cameraClearanceFor(kind: ObservationKind | undefined): CameraCle
   if (kind === 'worker-follow' || kind === 'discovery-scene') return { lens: 0.42, sightline: 0.12 };
   if (kind === 'street-observation') return { lens: 0.72, sightline: 0.22 };
   if (kind === 'traveler-follow') return { lens: 1.1, sightline: 0.36 };
+  if (kind === 'settlement-approach' || kind === 'institution-exterior' || kind === 'infrastructure-scene') {
+    return { lens: 0.9, sightline: 0.3 };
+  }
   return { lens: 3, sightline: 1.6 };
 }
 
@@ -243,7 +246,7 @@ export interface CameraFlightProfile {
  */
 export function cameraFlightProfileFor(kind: ObservationKind | undefined, distance: number): CameraFlightProfile {
   const d = Math.max(0, distance);
-  if (isPersonalCameraKind(kind)) {
+  if (isPersonalCameraKind(kind) || kind === 'settlement-approach' || kind === 'institution-exterior' || kind === 'infrastructure-scene') {
     return {
       limits: {
         // Personal travel remains slower than wide flight, but braking authority stays strong
@@ -1324,6 +1327,13 @@ export class CameraDirector {
     this.desiredTarget.copy(this.shotBaseTarget);
     this.desiredPosition.copy(this.shotBasePosition);
     this.raiseForTerrain(elevationAt);
+
+    // Acquire the rendered actor and interaction framing before planning the flight. Simulation
+    // positions can differ from the visible worksite; arriving there first causes a second chase.
+    if (['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)) {
+      this.animateShot(0, 0, state, elevationAt);
+      this.shotBaseTarget.copy(this.desiredTarget);
+    }
 
     // Validate the endpoint independently from the travel corridor. If the exact authored pose is
     // inside scenery, choose the nearest readable endpoint now; CameraFlight will still reach it

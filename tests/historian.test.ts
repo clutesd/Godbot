@@ -163,3 +163,23 @@ describe('Presentation independence', () => {
     expect(director.targetSpeed(simulation.state, { kind: 'worker-follow', interest: 0.2 })).toBeLessThanOrEqual(simulation.config.presentation.personalMonthsPerSecond);
   });
 });
+
+
+describe('documentary shot sequence', () => {
+  it('moves from a person to their community and reserves geography for context', () => {
+    const sim = new Simulation({ seed: 'documentary-sequence', startMode: 'established', startingPopulation: 120 });
+    sim.state.history = [];
+    const before = JSON.stringify(sim.state);
+    const historian = new Historian(sim.config);
+    const scenes = Array.from({ length: 10 }, () => historian.chooseScene(sim.state));
+    for (const index of [0, 3, 6]) {
+      expect(['worker-follow', 'traveler-follow', 'street-observation']).toContain(scenes[index]!.kind);
+    }
+    const person = sim.state.people.find(p => p.id === scenes[0]!.subjectId)!;
+    expect(person).toBeDefined();
+    expect(scenes[1]!.subjectId === person.homeId || sim.state.institutions.some(i =>
+      i.id === scenes[1]!.subjectId && i.settlementId === person.homeId)).toBe(true);
+    expect(['historian-context', 'world-establishing', 'city-growth-timelapse']).toContain(scenes[9]!.kind);
+    expect(JSON.stringify(sim.state)).toBe(before);
+  });
+});

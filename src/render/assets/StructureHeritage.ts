@@ -79,7 +79,7 @@ export function heritageFingerprint(response: DevelopmentResponse | undefined): 
  */
 export function deriveStructureHeritage(response: DevelopmentResponse): StructureHeritage | undefined {
   if (!isStructureDevelopment(response)) return undefined;
-  if (response.transitionCount <= 0 && response.history.length === 0) return undefined;
+  if (response.transitionCount <= 0 && response.history.length === 0 && !response.memorial?.ageBand) return undefined;
 
   const origin = response.origin;
   const phases = [origin, ...response.history]

@@ -1,3 +1,4 @@
+import { rememberHistoricalEvent } from './development/Remembrance';
 import type { HistoricalEvent, SimulationState } from './types';
 
 const observers = new WeakMap<SimulationState, Set<(event: HistoricalEvent) => void>>();
@@ -18,6 +19,7 @@ export function emitEvent(state: SimulationState, draft: Omit<HistoricalEvent, '
   state.eventSequence = sequence;
   const event = { ...draft, id: `event-${sequence}`, sequence, month: state.month };
   state.history.push(event);
+  rememberHistoricalEvent(state, event);
   for (const observer of observers.get(state) ?? []) observer(event);
   return event;
 }

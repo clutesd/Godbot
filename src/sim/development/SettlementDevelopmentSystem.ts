@@ -1,3 +1,4 @@
+import { pendingRemembrance, refreshMemorials } from './Remembrance';
 import { settlementLabour } from '../people/HumanCapital';
 import { seedHash } from '../prng';
 import type { Culture, Institution, InstitutionKind, Person, ResourceStock, Settlement, SimulationState, StructurePlot, TradeRoute } from '../types';
@@ -25,6 +26,7 @@ import {
   type DevelopmentBlocker,
   type DevelopmentCandidateDecision,
   type DevelopmentResponse,
+  type MemorialSite,
   type ServiceSupply,
   type SettlementNeed,
   type StructureDevelopment,
@@ -54,6 +56,7 @@ function connected(state: SimulationState, route: TradeRoute): boolean {
 export interface DevelopmentContext {
   settlement: Settlement;
   culture: Culture;
+  memoryCulture?: Culture;
   institutions: Institution[];
   population: number;
   farmers: number;
@@ -79,7 +82,7 @@ export function developmentContext(state: SimulationState, settlement: Settlemen
   const count = (occupation: Person['occupation']) => labour.effective[occupation] ?? 0;
   const polity = state.polities.find(p => p.id === settlement.polityId);
   const waterState = settlement.development?.water;
-  return { settlement, culture, institutions: state.institutions.filter(i => settlement.institutionIds.includes(i.id) && i.support >= 0.2),
+  return { settlement, culture, memoryCulture: state.cultures.find(c => c.id === pendingRemembrance(settlement)?.cultureId), institutions: state.institutions.filter(i => settlement.institutionIds.includes(i.id) && i.support >= 0.2),
     population: labour.population, farmers: count('farmer'), artisans: count('artisan'), keepers: count('keeper'), builders: count('builder'),
     health: city?.health ?? residents.reduce((n, p) => n + p.health, 0) / Math.max(1, residents.length),
     routes: state.tradeRoutes.filter(r => (r.a === settlement.id || r.b === settlement.id) && connected(state, r)).length,
@@ -125,7 +128,7 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
     energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power),
     water: scale * (s.urbanization * 1.3 + s.pollution + (c.water ? 0.1 : 0.55) + s.climateStress * 0.5
       + (waterState ? waterState.droughtStress * 1.8 + (1 - waterState.quality) * 0.8 + waterState.floodContamination * 0.7 : 0)),
-    memory: c.memory > 0.3 ? scale * Math.min(1.8, c.memory) * d.longTermOrientation : 0,
+    memory: pendingRemembrance(s) ? scale * 0.2 + 1.4 : c.memory > 0.3 ? scale * Math.min(1.8, c.memory) * d.longTermOrientation : 0,
   };
   // A documented famine makes reserve infrastructure useful even after this year's harvest recovers.
   pressures.food = (pressures.food ?? 0) + scale * (c.culture.memory.foodScarcity?.strength ?? 0) * 0.7;
@@ -160,7 +163,9 @@ function materialFor(c: DevelopmentContext, level: number): StructureMaterial {
 /** Capability requirements attach to a response, never to a world-era counter. */
 export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, requestedLevel = 1): DevelopmentResponse | undefined {
   const s = c.settlement;
-  const d = c.culture.dimensions;
+  const evidence = need === 'memory' ? pendingRemembrance(s) : undefined;
+  const siteCulture = evidence ? c.memoryCulture ?? c.culture : c.culture;
+  const d = siteCulture.dimensions;
   let form: StructureForm = 'hall';
   let sponsor: Institution | undefined;
   let names: string[];
@@ -262,8 +267,8 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
       if (maxLevel === 2 && knows('contagion-patterns', 0.4) && knows('civic-administration', 0.4)) maxLevel = 3;
       break;
     case 'memory':
-      if (c.memory < 0.3) return undefined;
-      form = 'marker'; names = ['memory marker', 'memorial', 'commemorative precinct'];
+      if (c.memory < 0.3 && !evidence) return undefined;
+      form = 'marker'; names = [evidence?.deaths ? 'burial ground' : 'memory marker', 'memorial', 'commemorative precinct'];
       if (engineered && d.longTermOrientation > 0.6) maxLevel = 2;
       if (maxLevel === 2 && knows('durable-records', 0.4) && c.memory > 1 && c.capitalReach > 0) maxLevel = 3;
       break;
@@ -274,7 +279,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   const level = Math.min(requestedLevel, maxLevel);
   if (level > 1) requirements.push('leverage', practical(s, 'stone-composites') >= 0.3 ? 'stone-composites' : 'pottery-firing');
   if (level === 3 && ['manufacturing', 'energy', 'water'].includes(need)) form = 'works';
-  const material = materialFor(c, level);
+  const material = materialFor({ ...c, culture: siteCulture }, level);
   const cost = stock();
   const open = form === 'gathering' && level === 1 || form === 'marker';
   const units = level * (open ? 0.45 : 1);
@@ -295,7 +300,16 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     ...(need === 'food' ? [s.monthlyBalance.food > 0 ? 'agricultural-surplus' : 'food-resilience'] : []),
     ...(need === 'water' && s.development?.water ? [s.development.water.droughtStress > 0.4 ? 'drought-resilience' : s.development.water.quality < 0.55 ? 'clean-water' : 'water-security'] : []),
     ...(c.routes > 0 && ['trade', 'transport', 'religion'].includes(need) ? ['connected-exchange'] : [])];
-  return { need, form, name: names[level - 1]!, level, material, cultureId: c.culture.id, style: { ...c.culture.style }, institutionId: sponsor?.id,
+  const sacred = d.religiousTendency >= 0.65;
+  const memorial = evidence ? { ...structuredClone(evidence),
+    form: (d.hierarchy > 0.7 ? 'stelae' : d.religiousTendency > 0.65 ? 'ancestor-posts' : d.longTermOrientation > 0.65 && c.localMinerals > 0.3 ? 'stone-cairns' : 'earth-mounds') as MemorialSite['form'],
+    sacred, ageBand: 0 } : undefined;
+  if (memorial) {
+    reasons.push('collective-remembrance', ...memorial.people.map(p => p.eventId), ...memorial.events.map(e => e.id));
+    if (sacred) services.religion = 0.5;
+    names[0] = memorial.deaths > 0 ? sacred ? 'ancestor burial ground' : 'communal burial ground' : sacred ? 'remembrance shrine' : 'event memorial';
+  }
+  return { memorial, need, form, name: names[level - 1]!, level, material, cultureId: siteCulture.id, style: { ...siteCulture.style }, institutionId: sponsor?.id,
     services, reasons, capabilities: [...new Set(requirements)], cost, materialCost, labor: level * (open ? 0.5 : 1) };
 }
 
@@ -331,7 +345,7 @@ function validPlot(state: SimulationState, plot: StructurePlot): boolean {
 function historyEvent(settlement: Settlement, plot: StructurePlot, record: StructureHistoryEntry): KnowledgeEventDraft {
   return { type: 'infrastructure-built', location: { x: plot.worldX, z: plot.worldZ }, locationId: settlement.id,
     actors: [settlement.id, plot.id, record.cultureId, ...(record.institutionId ? [record.institutionId] : [])],
-    causes: record.reasons, context: { structureId: plot.id, need: record.need, action: record.action, foundedMonth: plot.foundedMonth },
+    causes: record.reasons, context: { ...(plot.development?.memorial ? { rememberedPeople: plot.development.memorial.people.map(p => p.name).join(', '), rememberedEvents: plot.development.memorial.events.map(e => e.id).join(','), burials: plot.development.memorial.deaths, memorialForm: plot.development.memorial.form } : {}), structureId: plot.id, need: record.need, action: record.action, foundedMonth: plot.foundedMonth },
     outcome: `${record.name} ${record.action} at a persistent site.`, significance: record.need === 'housing' ? 0.22 : 0.52,
     tags: ['settlement-development', record.need, record.action], summary: `${settlement.name}: ${record.name} ${record.action}.` };
 }
@@ -471,6 +485,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     dev.project = undefined; dev.revision++;
   }
   if (state.month - dev.evaluatedMonth >= 12) {
+    refreshMemorials(state, settlement);
     const c = developmentContext(state, settlement, residents);
     const { pressures, informal } = evaluatePressures(c);
     dev.pressures = pressures; dev.informal = informal; dev.providers = {}; dev.evaluatedMonth = state.month;
@@ -491,6 +506,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       supplied[need] = (supplied[need] ?? 0) + best;
     }
     dev.unmet = Object.fromEntries(SETTLEMENT_NEEDS.map(need => [need, Math.max(0, (pressures[need] ?? 0) - (informal[need] ?? 0) - (supplied[need] ?? 0))]));
+    if (pendingRemembrance(settlement)) dev.unmet.memory = Math.max(1.2, dev.unmet.memory ?? 0);
     for (const plot of settlement.structurePlots ?? []) {
       const building = plot.development;
       if (!building || dev.project?.plotId === plot.id) continue;
@@ -500,7 +516,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       const supported = responseForNeed(c, building.need, building.level);
       const lostCapability = building.level === 3 && (!supported || supported.level < 3);
       if (building.status === 'active') {
-        if (!settlement.alive || demand < 0.3 || patronGone && demand < 1 || lostCapability || surplus > (building.services[building.need] ?? 0) + 0.5) building.underusedSince ??= state.month;
+        if (!settlement.alive || !building.memorial && (demand < 0.3 || patronGone && demand < 1 || lostCapability || surplus > (building.services[building.need] ?? 0) + 0.5)) building.underusedSince ??= state.month;
         else { building.underusedSince = undefined; building.lastUsedMonth = state.month; }
         if (building.underusedSince !== undefined && (!settlement.alive || state.month - building.underusedSince >= 120)) {
           building.status = 'abandoned';
@@ -522,7 +538,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         .sort((a, b) => (dev.unmet[b] ?? 0) * (b === 'housing' ? 1.2 : 1) - (dev.unmet[a] ?? 0) * (a === 'housing' ? 1.2 : 1));
       const candidates: DevelopmentCandidateDecision[] = [];
       for (const need of needs) {
-        const plots = (settlement.structurePlots ?? []).filter(p => !p.fire);
+        const plots = (settlement.structurePlots ?? []).filter(p => !p.fire && !p.development?.memorial);
         const ancestor = plots.find(p => p.development?.status === 'active' && p.development.need === need && p.development.level < 3);
         const desiredLevel = ancestor ? ancestor.development!.level + 1 : 1;
         const candidate: DevelopmentCandidateDecision = { need, desiredLevel, blockers: [] };
@@ -532,13 +548,13 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
           candidates.push(candidate);
           continue;
         }
-        let plot = ancestor && response.level > ancestor.development!.level ? ancestor : undefined;
+        let plot = !response.memorial && ancestor && response.level > ancestor.development!.level ? ancestor : undefined;
         let action: StructureHistoryEntry['action'] = plot ? (response.form === plot.development!.form ? 'expanded' : 'upgraded') : 'founded';
         let materialScale = 1;
         if (!plot) {
           response = responseForNeed(c, need)!;
           // Adapt a dormant building or a redundant communal hall before claiming new ground.
-          plot = plots.find(p => p.development && (p.development.status !== 'active' ||
+          plot = response.memorial ? undefined : plots.find(p => p.development && (p.development.status !== 'active' ||
             ['gathering', 'hall'].includes(p.development.form) && (dev.pressures[p.development.need] ?? 0) < 0.5) && validPlot(state, p));
           if (plot) action = plot.development!.status === 'active' ? 'repurposed' : 'reused';
         }

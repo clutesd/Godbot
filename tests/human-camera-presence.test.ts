@@ -1,10 +1,45 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { CameraDirector, resolveHumanSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
+import { CameraDirector, cameraFramingFor, cameraClearanceFor, cameraFlightProfileFor, resolveHumanSightline, structureSightlineObstruction } from '../src/render/CameraDirector';
 import { Historian } from '../src/historian/Historian';
 import { Simulation } from '../src/sim/Simulation';
 
 describe('human documentary camera', () => {
+  it('keeps settlement approaches below an aerial angle and uses a low local flight', () => {
+    for (const kind of ['settlement-approach', 'institution-exterior', 'infrastructure-scene'] as const) {
+      const framing = cameraFramingFor(kind);
+      expect(framing.height[1] / framing.radius[0]).toBeLessThan(0.8);
+      expect(cameraClearanceFor(kind).lens).toBeLessThan(framing.height[0]);
+      const flight = cameraFlightProfileFor(kind, 8);
+      expect(flight.cruiseClearance).toBeLessThan(3);
+      expect(flight.minApproachRadius).toBeGreaterThan(8);
+    }
+  });
+
+  it('acquires the rendered person before composing the flight endpoint', () => {
+    const sim = new Simulation({ seed: 'rendered-camera-subject', startMode: 'established', startingPopulation: 72 });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+    const person = sim.state.people.find(p => p.alive)!;
+    const historian = new Historian(sim.config);
+    const candidate = historian.chooseScene(sim.state);
+    vi.spyOn(historian, 'chooseScene').mockReturnValue({ ...candidate, id: 'rendered-person',
+      subjectId: person.id, kind: 'worker-follow', position: { x: 40, z: 40 } });
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 200);
+    const director = new CameraDirector(camera, sim.config, historian, () => ({ x: 0, z: 0, footY: 0 }));
+    const before = JSON.stringify(sim.state);
+    director.update(1 / 60, 0, sim.state, () => 0);
+    expect(Math.hypot(camera.position.x, camera.position.z)).toBeLessThan(3);
+    expect(camera.position.y).toBeLessThan(1);
+    camera.updateMatrixWorld();
+    const screen = new THREE.Vector3(0, 0.12, 0).project(camera);
+    expect(Math.abs(screen.x)).toBeLessThan(0.1);
+    expect(Math.abs(screen.y)).toBeLessThan(0.1);
+    expect(JSON.stringify(sim.state)).toBe(before);
+  });
+
   it('protects both people from a foreground building while retaining a medium shot', () => {
     const sim = new Simulation({ seed: 'documentary-human-cadence', startMode: 'established', startingPopulation: 72, settlementCount: [2, 2], world: { size: 20 } });
     for (const cell of sim.state.world.cells) cell.wood = 0;

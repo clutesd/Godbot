@@ -18,13 +18,16 @@ function preservationBand(value: number): 'trace' | 'material' | 'strong' {
  */
 export function structureVisualHistorySignature(response: DevelopmentResponse | undefined): string {
   if (!response) return 'none';
+  const site = response.memorial;
+  const memorial = site ? `memorial:${site.form}:${site.sacred}:${Math.min(12, Math.ceil(Math.log2(1 + site.deaths)))}:${site.people.length}:${site.events.length > 0}:${site.ageBand}|` : '';
   const generations = deriveArchitecturalGenerations(response);
   const heritage = deriveStructureHeritage(response);
-  if (!heritage) return `fresh:${generations.visualSignature}`;
+  if (!heritage) return `${memorial}fresh:${generations.visualSignature}`;
 
   // Historical inheritance only distinguishes upgrade counts up to the point where geometry caps.
   const geometricUpgradeCount = Math.min(5, heritage.upgradeCount);
   return [
+    memorial,
     `generations=${generations.visualSignature}`,
     `legacy=${heritage.legacyNeed}.${heritage.legacyForm}.${heritage.legacyMaterial}.${heritage.legacyCultureId}`,
     `originLevel=${heritage.originLevel}`,

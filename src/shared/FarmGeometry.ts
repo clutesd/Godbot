@@ -36,10 +36,13 @@ function plotFarmGeometry(settlement: Settlement, plot: StructurePlot): FarmGeom
   const status = plot.development?.status ?? 'ruin';
   return {
     id: plot.id,
-    center: { x: plot.worldX, z: plot.worldZ },
-    // Leave a narrow service margin for the field-side store while using most of the real plot.
-    width: Math.max(0.9, plot.width * 0.9),
-    depth: Math.max(0.78, plot.depth * 0.84),
+    center: {
+      x: plot.worldX - Math.cos(farmPlotRotation(settlement, plot)) * plot.width * 0.18,
+      z: plot.worldZ + Math.sin(farmPlotRotation(settlement, plot)) * plot.width * 0.18,
+    },
+    // Cultivation owns the left portion; the right strip belongs to storage and access.
+    width: plot.width * 0.58,
+    depth: plot.depth * 0.84,
     rotationY: farmPlotRotation(settlement, plot),
     source: 'plot',
     status,
@@ -52,12 +55,26 @@ function plotFarmGeometry(settlement: Settlement, plot: StructurePlot): FarmGeom
 
 function fallbackFarmGeometry(settlement: Settlement): FarmGeometry | undefined {
   if (!settlement.alive || !(settlement.agriculture && settlement.agriculture.labour > 0)) return undefined;
-  const angle = resourceVisualUnit(`${settlement.id}:cultivated-field`) * Math.PI * 2;
+  const initialAngle = resourceVisualUnit(`${settlement.id}:cultivated-field`) * Math.PI * 2;
+  // Legacy agriculture has no reserved plot. Search deterministically around existing buildings.
+  let angle = initialAngle, distance = 4;
+  let found = false;
+  for (let attempt = 0; attempt < 96; attempt++) {
+    angle = initialAngle + (attempt % 16) * Math.PI / 8;
+    distance = 4 + Math.floor(attempt / 16) * 1.5;
+    const x = settlement.position.x + Math.cos(angle) * distance;
+    const z = settlement.position.z + Math.sin(angle) * distance;
+    if (!(settlement.structurePlots ?? []).some(plot =>
+      Math.hypot(plot.worldX - x, plot.worldZ - z) < Math.max(plot.radius, Math.hypot(plot.width, plot.depth) / 2) + 1.52)) {
+      found = true; break;
+    }
+  }
+  if (!found) return undefined;
   return {
     id: `${settlement.id}:field`,
     center: {
-      x: settlement.position.x + Math.cos(angle) * 4,
-      z: settlement.position.z + Math.sin(angle) * 4,
+      x: settlement.position.x + Math.cos(angle) * distance,
+      z: settlement.position.z + Math.sin(angle) * distance,
     },
     width: 2.05,
     depth: 1.5,

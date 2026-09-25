@@ -383,7 +383,7 @@ export class AssetBuilder {
     const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
-    const lods = stage === BUILD_STAGE.DETAIL
+    const lods = stage === BUILD_STAGE.DETAIL && !config.development?.memorial
       ? this.generateBuildingLODs(grammar, composed.height, palette)
       : [];
 

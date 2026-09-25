@@ -86,6 +86,7 @@ export interface SettlementWaterState {
 }
 
 export interface DevelopmentResponse {
+  memorial?: MemorialSite;
   /** Small physical adaptations use worker-months, not the historical development index. */
   adaptation?: 'lean-to' | 'earth-shelter' | 'hut' | 'cache';
   temporary?: boolean;
@@ -106,6 +107,21 @@ export interface DevelopmentResponse {
   /** Processed materials paid alongside ordinary construction budgets. */
   materialCost?: Record<string, number>;
   labor: number;
+}
+
+/** Bounded, archive-safe evidence; ordinary deaths are counted, never expanded into agents. */
+export interface Remembrance {
+  cultureId: string;
+  firstMonth: number;
+  deaths: number;
+  people: { id: string; name: string; month: number; eventId: string }[];
+  events: { id: string; summary: string; month: number }[];
+}
+
+export interface MemorialSite extends Remembrance {
+  form: 'earth-mounds' | 'ancestor-posts' | 'stone-cairns' | 'stelae';
+  sacred: boolean;
+  ageBand: number;
 }
 
 export interface StructureHistoryEntry {

@@ -97,7 +97,7 @@ export type YardProps =
   | 'utility';
 
 export interface BuildingGrammar {
-  development?: Pick<DevelopmentResponse, 'form' | 'need' | 'level' | 'material'>;
+  development?: Pick<DevelopmentResponse, 'form' | 'need' | 'level' | 'material' | 'memorial'>;
   role: BuildingRole;
   era: Era;
   /** Canonical footprint. The renderer scales this to the reserved placement footprint. */
@@ -690,7 +690,7 @@ export function resolveBuildingGrammar(
   grammar.toneShift = random.range(-0.85, 0.85);
   grammar.postThickness *= random.range(0.93, 1.08);
   if (development) {
-    grammar.development = { form: development.form, need: development.need, level: development.level, material: development.material };
+    grammar.development = { memorial: development.memorial, form: development.form, need: development.need, level: development.level, material: development.material };
     grammar.postStyle = development.material === 'metal' ? 'steel' : development.material === 'masonry' ? 'stone' : 'timber';
     grammar.wallLayer = development.material === 'metal' ? 'panel' : development.material === 'masonry' ? 'stone' : development.material === 'ceramic' ? 'brick' : 'daub';
     grammar.openings = development.material === 'metal' ? 'glazed' : development.level > 1 ? 'lattice' : 'shutter';

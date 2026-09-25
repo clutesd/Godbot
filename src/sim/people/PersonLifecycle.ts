@@ -1,3 +1,4 @@
+import { rememberPerson } from '../development/Remembrance';
 import type { Person, SimulationState } from '../types';
 import { emitEvent } from '../History';
 import { isStatistical } from '../Population';
@@ -24,7 +25,7 @@ export function killPeople(state: SimulationState, victims: readonly Person[], c
     person.partnerId = undefined;
     const settlement = settlements.get(person.homeId);
     const expert = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence)[0];
-    emitEvent(state, {
+    const deathEvent = emitEvent(state, {
       type: 'death', location: settlement?.position ?? person.position, locationId: settlement?.id, actors: [person.id],
       causes: [cause, ...((cause === 'scarcity' || cause === 'exposure') && settlement?.survival?.observations[cause === 'scarcity' ? 'food' : 'cold']?.eventId
         ? [settlement.survival.observations[cause === 'scarcity' ? 'food' : 'cold']!.eventId!] : [])],
@@ -46,6 +47,7 @@ export function killPeople(state: SimulationState, victims: readonly Person[], c
       tags: ['life', cause, ...((expert?.competence ?? 0) >= 0.7 ? ['expertise-loss'] : [])],
       summary: `${person.name} dies at ${Math.floor(person.ageMonths / 12)} in ${settlement?.name ?? 'the wilderness'}.`,
     });
+    if (settlement) rememberPerson(state, settlement, person, deathEvent.id);
     if (isStatistical(state)) state.stats.documentaryDeaths = (state.stats.documentaryDeaths ?? 0) + 1;
     else state.stats.deaths++;
   }

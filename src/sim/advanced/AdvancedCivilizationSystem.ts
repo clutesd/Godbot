@@ -1,3 +1,4 @@
+import { rememberMortality } from '../development/Remembrance';
 import { killPeople } from '../people/PersonLifecycle';
 import { workforceProfile } from '../people/HumanCapital';
 import { survivalMortality } from '../pressures/Survival';
@@ -144,6 +145,10 @@ export class AdvancedCivilizationSystem {
     const cities = new Map(advanced.cities.map(city => [city.settlementId, city]));
     const deprivationHazard = state.settlements.reduce((sum, s) => sum + (s.alive ? survivalMortality(s) * (cities.get(s.id)?.population ?? 0) : 0), 0)
       / Math.max(1, advanced.representedPopulation);
+    // Only the existing mortality hazard is evidence; net demographic growth is not a death count.
+    for (const settlement of state.settlements) {
+      if (settlement.alive) rememberMortality(state, settlement, survivalMortality(settlement) * (cities.get(settlement.id)?.population ?? 0) / 12);
+    }
     // Mortality never changes sign above carrying capacity and is charged to represented citizens once.
     advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 + (annualGrowth * logistic - deprivationHazard) / 12));
     const elderTarget = clamp(0.1 + health * 0.16, 0.07, 0.3);
@@ -637,7 +642,11 @@ export class AdvancedCivilizationSystem {
     const loss = clamp(populationLossFraction * (1 - protection), 0, advanced.space.selfSustainingBodies >= 2 ? 0.65 : 0.96);
     if (advanced.scale === 'modern-statistical') {
       advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 - loss));
-      for (const city of advanced.cities) city.population *= 1 - loss;
+      for (const city of advanced.cities) {
+        const settlement = state.settlements.find(s => s.id === city.settlementId);
+        if (settlement) rememberMortality(state, settlement, city.population * loss);
+        city.population *= 1 - loss;
+      }
       state.stats.deaths += Math.round(populationBefore - advanced.representedPopulation);
     }
     const living = state.people.filter((person) => person.alive);

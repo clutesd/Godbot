@@ -80,11 +80,11 @@ export class Historian {
     this.refreshRepresentatives(state);
     this.resolvePredictions(state);
     const candidates = this.candidates(state);
-    const pattern = ['ordinary', 'city', 'significant', 'ordinary', 'context', 'travel', 'city', 'ordinary', 'significant', 'context'] as const;
+    const pattern = ['ordinary', 'city', 'significant', 'ordinary', 'city', 'travel', 'ordinary', 'city', 'significant', 'context'] as const;
     const beat = pattern[this.sceneSequence % pattern.length] ?? 'ordinary';
     this.sceneSequence += 1;
     const preferred = candidates.filter((candidate) => {
-      if (beat === 'ordinary') return ['worker-follow', 'street-observation', 'settlement-approach', 'landscape-pause', 'night-transition'].includes(candidate.kind);
+      if (beat === 'ordinary') return ['worker-follow', 'traveler-follow', 'street-observation'].includes(candidate.kind);
       if (beat === 'city') return ['settlement-approach', 'street-observation', 'institution-exterior', 'city-growth-timelapse', 'infrastructure-scene'].includes(candidate.kind);
       if (beat === 'significant') return candidate.interest >= 0.62;
       if (beat === 'context') return candidate.kind === 'historian-context' || candidate.kind === 'world-establishing' || candidate.kind === 'city-growth-timelapse';
@@ -93,7 +93,16 @@ export class Historian {
     const focusEvent = focusEventId ? state.history.find(event => event.id === focusEventId && event.month <= state.month) : undefined;
     const focusCandidate = focusEvent ? this.eventCandidate(state, focusEvent) : undefined;
     const focused = focusCandidate && this.validateStatement(focusCandidate.statement, state) ? focusCandidate : undefined;
-    const pool = preferred.length > 0 ? preferred : candidates;
+    // Stay in the same community for the next detail or medium view when one is available.
+    // Context and event beats remain free to take us elsewhere.
+    const previousPerson = state.people.find(person => person.id === this.lastSubjectId);
+    const communityId = previousPerson?.homeId ?? this.lastSubjectId;
+    const local = beat === 'ordinary' || beat === 'city' ? preferred.filter(candidate =>
+      candidate.subjectId !== this.lastSubjectId && (candidate.subjectId === communityId
+        || state.people.some(person => person.id === candidate.subjectId && person.homeId === communityId)
+        || state.institutions.some(institution => institution.id === candidate.subjectId && institution.settlementId === communityId)),
+    ) : [];
+    const pool = local.length > 0 ? local : preferred.length > 0 ? preferred : candidates;
     pool.sort((a, b) => b.score - a.score);
     const shortlist = pool.slice(0, Math.min(6, pool.length));
     const choice = focused ?? shortlist[this.random.weightedIndex(shortlist.map((candidate, index) => Math.max(0.04, candidate.score * (1 - index * 0.1))))] ?? pool[0] ?? this.fallback(state);

@@ -1,0 +1,16 @@
+# Persistent cultural and memorial sites
+
+Deaths and significant local events now leave settlement-owned remembrance records. These survive historian event eviction and normal state serialization. Development turns that evidence into a paid, terrain-validated memory structure in the existing sacred district. Existing roads and sacred anchors determine its neighborhood; the reserved plot remains fixed as the settlement expands.
+
+- Explicit mortality counts each real death once. Represented kin with family ties or traditional values can receive an individual marker; historically notable people can also be retained.
+- Each cultural layer retains at most eight permanent names (ordinary kin use at most four), four event references with summaries, and one aggregate death count. It occupies one shared site rather than a plot for each death. Geometry grows logarithmically to twelve communal marks, plus the named markers.
+- Statistical counts use existing survival mortality and shock casualties. Documentary agent deaths can retain notable identities but do not add casualties again. The model exposes net demographic growth, not a separate baseline statistical death rate; this pass does not invent that rate.
+- Religious tendency, hierarchy, long-term orientation, local stone availability, and founding cultural style select ancestor posts, stelae, cairns, or earth mounds. Sacred memorials supply the existing religion service and therefore participate in existing shrine destinations and worship schedules.
+- Completion events include remembered names, event references, burial counts, and site form. Original death/event IDs remain construction causes, allowing historian consumers to follow the evidence without generating a new narrative authority.
+- Completed sites keep their founding culture and cannot be automatically repurposed. New cultures can establish another layer. Age advances in 25-year bands, changes weathering, and qualifies the site for existing structure heritage. Abandoned settlements still allow normal decay into ruins.
+
+Construction retains normal labor, material, project, placement, and 96-plot settlement limits. When blocked, evidence remains pending. Later mortality updates a site's aggregate representation within its reserved ground; this is symbolic growth, not a simulated physical capacity or a new funeral economy. Named retention is bounded, so later ordinary lives contribute to collective memory rather than replacing older markers. Legacy saves initialize the optional fields as new evidence arrives; there is no speculative historical backfill.
+
+![Offline audit of actual generated memorial geometry](memorial-sites-preview.png)
+
+Regression coverage includes death deduplication, notable documentary deaths, aggregate mortality, event retention, paid construction, blocked terrain, cultural succession, fixed plots, serialization, aging, deterministic replay, and bounded geometry/cache changes. Existing historian, advanced simulation, personal-memory, placement, and structure-rendering suites also pass. The settlement-development suite's nine existing failures were reproduced on clean HEAD (material-processing conservation and an invalid-terrain stock assertion).
