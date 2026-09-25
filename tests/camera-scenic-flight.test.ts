@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Historian } from '../src/historian/Historian';
 import {
+  cameraClearanceFor,
+  cameraClearanceForScene,
   cameraFlightProfileFor,
   scenicFlightProfileFor,
   scenicObservationFor,
@@ -23,6 +25,11 @@ describe('scenic low-flight camera grammar', () => {
     const ordinaryTransfer = cameraFlightProfileFor('landscape-pause', 40, 'ordinary-landscape');
     expect(scenicTransfer.limits.maxSpeed).toBeLessThan(ordinaryTransfer.limits.maxSpeed);
     expect(scenicTransfer.cruiseClearance).toBeLessThan(ordinaryTransfer.cruiseClearance);
+
+    const ordinaryClearance = cameraClearanceFor('landscape-pause');
+    const scenicClearance = cameraClearanceForScene('landscape-pause', 'scenic:forest:0:cell');
+    expect(ordinaryClearance.lens).toBe(3);
+    expect(scenicClearance.lens).toBeLessThan(ordinaryClearance.lens);
   });
 
   it('spaces beauty shots between documentary beats and never displaces priority scenes', () => {
