@@ -92,6 +92,46 @@ describe('procedural settlement banner identity', () => {
     expect(mercantile.fieldPattern).toBe('stripe');
   });
 
+
+  it('is invariant to institution ordering, including exact-strength ties', () => {
+    const council = { kind: 'council' as const, support: 0.8, prestige: 0.8 };
+    const temple = { kind: 'temple' as const, support: 0.8, prestige: 0.8 };
+    const forward = generateBannerIdentity(input({ institutions: [council, temple] }));
+    const reversed = generateBannerIdentity(input({ institutions: [temple, council] }));
+
+    expect(forward).toEqual(reversed);
+  });
+
+  it('clamps noisy influence inputs instead of letting malformed values distort heraldry', () => {
+    const noisy = generateBannerIdentity(input({
+      activeTradeRoutes: -8,
+      institutions: [{ kind: 'council', support: 4, prestige: -3 }],
+    }));
+    const bounded = generateBannerIdentity(input({
+      activeTradeRoutes: 0,
+      institutions: [{ kind: 'council', support: 1, prestige: 0 }],
+    }));
+
+    expect(noisy.id).toBe(bounded.id);
+    expect(noisy.emblem).toBe(bounded.emblem);
+    expect(noisy.fieldPattern).toBe(bounded.fieldPattern);
+  });
+
+  it('always emits render-safe palette and bounded variant data even without a culture', () => {
+    const banner = generateBannerIdentity(input({ culture: undefined, polity: undefined, activeTradeRoutes: 99 }));
+
+    for (const color of [banner.primary, banner.secondary, banner.accent]) {
+      expect(color).toMatch(/^#[0-9a-f]{6}$/);
+    }
+    expect(banner.fieldVariant).toBeGreaterThanOrEqual(0);
+    expect(banner.fieldVariant).toBeLessThanOrEqual(3);
+    expect(banner.emblemVariant).toBeGreaterThanOrEqual(0);
+    expect(banner.emblemVariant).toBeLessThanOrEqual(3);
+    expect(banner.lineageMarks).toBeGreaterThanOrEqual(1);
+    expect(banner.lineageMarks).toBeLessThanOrEqual(3);
+    expect(banner.lineageKey).toBe('settlement-1');
+  });
+
   it('uses founding era to preserve a settlement silhouette tradition', () => {
     expect(generateBannerIdentity(input({ foundingEra: 'primitive' })).shape).toBe('ragged');
     expect(generateBannerIdentity(input({ foundingEra: 'early' })).shape).toBe('pointed');
