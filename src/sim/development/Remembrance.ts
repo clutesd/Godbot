@@ -42,7 +42,7 @@ export function rememberHistoricalEvent(state: SimulationState, event: Historica
   if (!cultureId) return;
   const memory = record(state, settlement, cultureId);
   if (memory.events.length < 4 && !memory.events.some(e => e.id === event.id)) {
-    memory.events.push({ id: event.id, summary: event.summary, month: event.month });
+    memory.events.push({ id: event.id, summary: event.summary, month: event.month, type: event.type, significance: event.significance });
   }
 }
 

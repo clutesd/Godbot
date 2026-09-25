@@ -14,6 +14,8 @@ on:
       - 'src/render/assets/BuildingGrammar.ts'
       - 'src/render/assets/BuildingComposer.ts'
       - 'src/render/farming/FarmFieldRenderer.ts'
+      - 'src/render/settlement/MemorialArchaeology.ts'
+      - 'src/render/settlement/MemorialSitePresentation.ts'
       - 'src/shared/FarmGeometry.ts'
       - 'src/render/assets/StructureComposition.ts'
       - 'src/render/assets/StructureHeritage.ts'
@@ -23,6 +25,7 @@ on:
       - 'src/render/assets/StructureVisualValidation.ts'
       - 'src/render/materials/MaterialPalette.ts'
       - 'src/sim/development/SettlementDevelopmentSystem.ts'
+      - 'src/sim/development/Remembrance.ts'
       - 'src/sim/development/types.ts'
       - 'src/sim/resources/MaterialUse.ts'
       - 'tests/settlement-render-budget.test.ts'
@@ -35,6 +38,9 @@ on:
       - 'tests/structure-components.test.ts'
       - 'tests/structure-generations.test.ts'
       - 'tests/structure-visual-validation.test.ts'
+      - 'tests/memorial-sites.test.ts'
+      - 'tests/memorial-site-presentation.test.ts'
+      - 'tests/memorial-archaeology.test.ts'
       - 'tests/architecture.test.ts'
       - '.github/workflows/structure-identity-validation.yml'
   workflow_dispatch:
@@ -64,6 +70,8 @@ jobs:
           src/render/assets/BuildingGrammar.ts
           src/render/assets/BuildingComposer.ts
           src/render/farming/FarmFieldRenderer.ts
+          src/render/settlement/MemorialArchaeology.ts
+          src/render/settlement/MemorialSitePresentation.ts
           src/shared/FarmGeometry.ts
           src/render/assets/StructureComposition.ts
           src/render/assets/StructureHeritage.ts
@@ -72,6 +80,7 @@ jobs:
           src/render/assets/StructureVisualSignature.ts
           src/render/assets/StructureVisualValidation.ts
           src/sim/development/SettlementDevelopmentSystem.ts
+          src/sim/development/Remembrance.ts
           src/sim/development/types.ts
           src/sim/resources/MaterialUse.ts
           tests/settlement-render-budget.test.ts
@@ -84,6 +93,9 @@ jobs:
           tests/structure-components.test.ts
           tests/structure-generations.test.ts
           tests/structure-visual-validation.test.ts
+          tests/memorial-sites.test.ts
+          tests/memorial-site-presentation.test.ts
+          tests/memorial-archaeology.test.ts
       - run: >-
           npx vitest run
           tests/settlement-render-budget.test.ts
@@ -96,5 +108,8 @@ jobs:
           tests/structure-components.test.ts
           tests/structure-generations.test.ts
           tests/structure-visual-validation.test.ts
+          tests/memorial-sites.test.ts
+          tests/memorial-site-presentation.test.ts
+          tests/memorial-archaeology.test.ts
           tests/architecture.test.ts
       - run: npm run build
