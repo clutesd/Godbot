@@ -18,18 +18,23 @@ export class ManualCameraController {
     }
   };
   private readonly onKeyUp = (event: KeyboardEvent): void => { this.keys.delete(event.code); };
+  private readonly onWindowBlur = (): void => {
+    this.keys.clear();
+    this.velocity.set(0, 0, 0);
+  };
   private readonly onMouseMove = (event: MouseEvent): void => {
     if (!this.enabled || document.pointerLockElement !== this.domElement) return;
     this.yaw -= event.movementX * 0.0018;
     this.pitch = THREE.MathUtils.clamp(this.pitch - event.movementY * 0.0018, -Math.PI * 0.48, Math.PI * 0.48);
   };
   private readonly onClick = (): void => {
-    if (this.enabled && document.pointerLockElement !== this.domElement) void this.domElement.requestPointerLock();
+    if (this.enabled && document.pointerLockElement !== this.domElement) this.tryPointerLock();
   };
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly domElement: HTMLElement) {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('blur', this.onWindowBlur);
     document.addEventListener('mousemove', this.onMouseMove);
     domElement.addEventListener('click', this.onClick);
   }
@@ -45,9 +50,21 @@ export class ManualCameraController {
       const euler = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
       this.pitch = euler.x;
       this.yaw = euler.y;
-      void this.domElement.requestPointerLock();
-    } else if (document.pointerLockElement === this.domElement) {
+      this.tryPointerLock();
+    } else if (document.pointerLockElement === this.domElement && typeof document.exitPointerLock === 'function') {
       document.exitPointerLock();
+    }
+  }
+
+  private tryPointerLock(): void {
+    const request = this.domElement.requestPointerLock;
+    if (typeof request !== 'function') return;
+    try {
+      const result = request.call(this.domElement);
+      if (result && typeof result.catch === 'function') void result.catch(() => undefined);
+    } catch {
+      // Manual mode remains active even when the browser denies pointer lock.
+      // The user can click the canvas again to retry, and keyboard flight remains available.
     }
   }
 
@@ -81,6 +98,7 @@ export class ManualCameraController {
     this.setEnabled(false);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('blur', this.onWindowBlur);
     document.removeEventListener('mousemove', this.onMouseMove);
     this.domElement.removeEventListener('click', this.onClick);
   }
