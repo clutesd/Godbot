@@ -1751,7 +1751,7 @@ export class CameraDirector {
       14,
       38,
     );
-    const terrainRoute = smoothCameraRoute(planTerrainAwareCameraRoute(
+    const terrainPlan = planTerrainAwareCameraRoute(
       this.camera.position,
       destinationPosition,
       elevationAt,
@@ -1759,7 +1759,13 @@ export class CameraDirector {
         clearance: Math.max(1.6, Math.min(profile.cruiseClearance, 4.2)),
         lateralOffsets: [-5.5, -2.75, 0, 2.75, 5.5],
       },
-    ).points, 3);
+    );
+    const terrainRoute = smoothCameraRoute(
+      terrainPlan.points,
+      3,
+      elevationAt,
+      terrainPlan.clearance,
+    );
     this.flight = {
       originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
