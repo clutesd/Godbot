@@ -1485,7 +1485,8 @@ export class CameraDirector {
         }
       }
     }
-    if (!focusEventId && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
+    const sequenceBeatActive = Boolean(this.activeSequence);
+    if (!focusEventId && !sequenceBeatActive && !isFoundingCameraScene(scene.id) && !this.lastHumanShot) {
       let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
       for (const id of this.humanSubjects?.() ?? []) {
         const view = this.subjectPresentation?.(id);
@@ -1505,7 +1506,7 @@ export class CameraDirector {
       }
     }
 
-    if (shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
+    if (!sequenceBeatActive && shouldScheduleScenicFlight(this.shotsSinceScenic, focusEventId, scene.id)) {
       const scenic = scenicObservationFor(state, scene, this.scenicShotIndex, this.scenicSubjects?.(elapsedSeconds) ?? []);
       if (scenic) {
         scene = scenic;
