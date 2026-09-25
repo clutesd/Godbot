@@ -1543,9 +1543,10 @@ export class CameraDirector {
       // after eye-level/manual exploration: personal shots deliberately hold for many seconds, so
       // resetting shotAge to zero would strand autonomous mode at the manual altitude.
       //
-      // Founding/Arrival editorial beats are authority barriers with authored timing; never let a
-      // manual toggle prematurely advance those sequences.
-      this.shotAge = isFoundingCameraScene(this.currentScene?.id) ? 0 : this.shotDuration;
+      // Founding/Arrival editorial beats are authority barriers with authored timing. Their
+      // shotAge was already frozen while manual control owned the lens, so preserve it exactly.
+      // Ordinary history instead requests a fresh authored composition immediately.
+      if (!isFoundingCameraScene(this.currentScene?.id)) this.shotAge = this.shotDuration;
     }
   }
 
