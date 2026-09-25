@@ -11,6 +11,7 @@ import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
+import { ManualCameraController } from './ManualCameraController';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
@@ -211,6 +212,7 @@ export class GodboxRenderer {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 900);
   private readonly cameraDirector: CameraDirector;
+  private readonly manualCamera: ManualCameraController;
   private readonly random: SeededRandom;
   private readonly sun = new THREE.DirectionalLight('#ffe2b5', 3.4);
   private readonly moon = new THREE.DirectionalLight('#8fa6d9', 0.16);
@@ -423,6 +425,7 @@ export class GodboxRenderer {
     this.foundingPods = new FoundingPodRenderer(state);
     this.scene.add(this.foundingPods.root);
     this.observation = this.cameraDirector.observation;
+    this.manualCamera = new ManualCameraController(this.camera, this.renderer.domElement);
 
     this.terrainSurface = new TerrainSurface(state.world);
     this.ecology = new EcologyField(state.world, config.seed);
@@ -546,6 +549,14 @@ export class GodboxRenderer {
     return performance.now() - startedAt;
   }
 
+  setAutonomousCamera(enabled: boolean): void {
+    this.manualCamera.setEnabled(!enabled);
+  }
+
+  get autonomousCamera(): boolean {
+    return !this.manualCamera.active;
+  }
+
   update(deltaSeconds: number, elapsedSeconds: number): void {
     if (this.adaptiveResolution.sample(deltaSeconds)) this.resize();
 
@@ -623,7 +634,8 @@ export class GodboxRenderer {
       if (maintenanceTask) this.runMaintenanceTask(maintenanceTask);
     }
 
-    this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    if (this.manualCamera.active) this.manualCamera.update(deltaSeconds);
+    else this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
     this.skyAtmosphere.followCamera(this.camera);
     this.foundingPods.update(this.camera);
 
