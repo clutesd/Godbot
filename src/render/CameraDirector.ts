@@ -1120,6 +1120,8 @@ export class CameraDirector {
   private safetyInitialized = false;
   private readonly visibility = new CameraVisibilityHysteresis();
   private recoveryOffset?: THREE.Vector3;
+  private recoveryBridgeSeconds = 0;
+  private recoveryBridgeFov?: number;
   private shotAge = 0;
   private lastHumanShot = false;
   private shotDuration = 12;
@@ -1250,6 +1252,18 @@ export class CameraDirector {
     // editorial decision. Major events remain in Historian memory; they never teleport the lens.
     if (this.flight) {
       this.advanceFlight(deltaSeconds, state, elevationAt);
+      return;
+    }
+
+    if (this.recoveryBridgeSeconds > 0) {
+      this.recoveryBridgeSeconds = Math.max(0, this.recoveryBridgeSeconds - deltaSeconds);
+      this.positionVelocity.multiplyScalar(Math.exp(-deltaSeconds * 1.8));
+      this.targetVelocity.multiplyScalar(Math.exp(-deltaSeconds * 1.8));
+      if (this.recoveryBridgeFov !== undefined) {
+        this.camera.fov = easeCameraFov(this.camera.fov, this.recoveryBridgeFov, deltaSeconds);
+        this.camera.updateProjectionMatrix();
+      }
+      this.camera.lookAt(this.lookTarget);
       return;
     }
 
@@ -1877,6 +1891,10 @@ export class CameraDirector {
     this.targetVelocity.multiplyScalar(0.35);
     this.currentScene = this.acquiredScene;
     this.lastHumanShot = Boolean(this.acquiredScene?.id.startsWith('human:'));
+    // Hold the last valid frame briefly so a failed route resolves like an intentional editorial
+    // pause rather than a sudden jump back into shot selection on the next frame.
+    this.recoveryBridgeSeconds = 1.15;
+    this.recoveryBridgeFov = this.camera.fov;
     this.shotAge = Number.POSITIVE_INFINITY;
     this.trackingInitialized = false;
     this.routeCheckSeconds = 0;
@@ -1892,6 +1910,8 @@ export class CameraDirector {
     this.trackingInitialized = false;
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
+    this.recoveryBridgeSeconds = 0;
+    this.recoveryBridgeFov = undefined;
     this.visibility.reset();
     this.safetyInitialized = true;
   }
@@ -1993,6 +2013,8 @@ export class CameraDirector {
         this.smoothFocus(targetX, targetY, targetZ, deltaSeconds, 1.05);
         this.desiredTarget.copy(this.trackedFocus);
       }
+      this.camera.fov = easeCameraFov(this.camera.fov, scenicProfile.motif === 'wildlife' ? 35 : 39, deltaSeconds);
+      this.camera.updateProjectionMatrix();
       this.raiseForTerrain(elevationAt);
       return;
     }
@@ -2015,6 +2037,8 @@ export class CameraDirector {
           Math.max(this.trackedFocus.y + (aftermath ? 16 + eased * 3 : 10), elevationAt(this.trackedFocus.x + Math.cos(angle) * radius, this.trackedFocus.z + Math.sin(angle) * radius) + 3),
           this.trackedFocus.z + Math.sin(angle) * radius,
         );
+        this.camera.fov = easeCameraFov(this.camera.fov, aftermath ? 41 : 39, deltaSeconds);
+        this.camera.updateProjectionMatrix();
         this.raiseForTerrain(elevationAt);
         return;
       }
@@ -2107,6 +2131,8 @@ export class CameraDirector {
         const cameraZ = this.trackedFocus.z + Math.sin(angle) * 18;
         this.desiredTarget.copy(this.trackedFocus);
         this.desiredPosition.set(cameraX, Math.max(this.trackedFocus.y + 14.5, elevationAt(cameraX, cameraZ) + 3), cameraZ);
+        this.camera.fov = easeCameraFov(this.camera.fov, 39, deltaSeconds);
+        this.camera.updateProjectionMatrix();
         this.raiseForTerrain(elevationAt);
         return;
       }

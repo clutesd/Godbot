@@ -260,6 +260,46 @@ describe('cinematic motion', () => {
     expect(probes).toBeLessThan(15000);
   });
 
+  it('holds the last valid frame briefly after an impossible route before reselecting', () => {
+    const sim = new Simulation({ seed: 'camera-route-bridge', startMode: 'established',
+      startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
+      camera: { shotSeconds: [0.2, 0.2], transitionSeconds: 2 } });
+    sim.state.arrival = undefined;
+    sim.state.history = [];
+    for (const cell of sim.state.world.cells) cell.wood = 0;
+    for (const settlement of sim.state.settlements) settlement.structurePlots = [];
+
+    const historian = new Historian(sim.config);
+    const template = historian.chooseScene(sim.state);
+    const first = { ...template, id: 'bridge:first', kind: 'street-observation' as const, position: { x: 0, z: 0 } };
+    const blocked = { ...template, id: 'bridge:blocked', kind: 'street-observation' as const, position: { x: 18, z: 0 } };
+    const after = { ...template, id: 'bridge:after', kind: 'street-observation' as const, position: { x: 2, z: 0 } };
+    const choose = vi.spyOn(historian, 'chooseScene')
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(blocked)
+      .mockReturnValue(after);
+
+    const director = new CameraDirector(
+      new PerspectiveCamera(),
+      sim.config,
+      historian,
+      undefined,
+      undefined,
+      () => 1,
+    );
+    director.update(1 / 60, 0, sim.state, () => 0);
+
+    for (let frame = 1; frame < 60 * 7 && choose.mock.calls.length < 2; frame++) {
+      director.update(1 / 60, frame / 60, sim.state, () => 0);
+    }
+    const callsAtBlockedSelection = choose.mock.calls.length;
+
+    for (let frame = 0; frame < 30; frame++) {
+      director.update(1 / 60, 8 + frame / 60, sim.state, () => 0);
+    }
+    expect(choose.mock.calls.length).toBe(callsAtBlockedSelection);
+  });
+
   it('settles identically at 30, 60 and 144 Hz without overshooting', () => {
     const results = [30, 60, 144].map(fps => {
       const position = new Vector3(), velocity = new Vector3(), target = new Vector3(10, 5, -8);
