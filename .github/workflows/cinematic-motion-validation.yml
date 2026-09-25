@@ -159,6 +159,7 @@ jobs:
           tests/manual-camera-controller.test.ts
           tests/footer-controls.test.ts
           tests/restart-lifecycle.test.ts
+          tests/opening-readiness.test.ts
           tests/restart.test.ts
           tests/screen-space-composition.test.ts
           tests/land-wildlife.test.ts
