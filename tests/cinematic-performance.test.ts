@@ -357,6 +357,7 @@ describe('cinematic motion', () => {
     }
     expect(enteredRemoteFlight).toBe(true);
     expect(director.current()?.id).toBe('manual:first');
+    const choicesBeforeManual = choose.mock.calls.length;
 
     // Manual control can legally descend below the clearance used by an ordinary autonomous
     // regional shot. Releasing control must not strand the camera there.
@@ -373,14 +374,16 @@ describe('cinematic motion', () => {
     expect(director.flightTelemetry().active).toBe(false);
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(1e-9);
 
-    // On the very next autonomous frame, a fresh authored destination is already in flight while
-    // narration remains on the last scene until physical acquisition.
+    // On the very next autonomous frame, the same unseen authored destination is re-planned from
+    // the manual lens pose. The Historian is not asked for another scene, and narration remains on
+    // the last acquired scene until physical acquisition.
     director.update(1 / 60, 9, sim.state, () => 0);
     const resumedDirection = new Vector3();
     camera.getWorldDirection(resumedDirection);
     const recovery = director.flightTelemetry();
     expect(recovery.active).toBe(true);
     expect(recovery.destinationSceneId).toBe('manual:remote');
+    expect(choose.mock.calls.length).toBe(choicesBeforeManual);
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
     expect(resumedDirection.angleTo(manualDirection)).toBeLessThan(THREE.MathUtils.degToRad(2));
     expect(director.observation.sceneId).toBe('manual:first');
