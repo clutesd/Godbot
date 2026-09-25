@@ -76,7 +76,8 @@ body { min-width: 320px; }
 
 .runline {
   position: absolute;
-  z-index: 4;
+  z-index: 12;
+  pointer-events: auto;
   left: clamp(22px, 5vw, 72px);
   right: clamp(22px, 5vw, 72px);
   bottom: 22px;
@@ -92,6 +93,10 @@ body { min-width: 320px; }
 .pulse { color: rgba(255, 239, 219, .63); }
 .camera-mode-toggle {
   appearance: none;
+  position: relative;
+  z-index: 13;
+  pointer-events: auto;
+  min-height: 28px;
   padding: 5px 7px;
   border: 1px solid transparent;
   border-radius: 2px;
