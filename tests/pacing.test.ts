@@ -50,15 +50,11 @@ describe('Pacing presets', () => {
     const overrides = { seed: 'pacing-equality', startingPopulation: 180, settlementCount: [4, 4] as const };
     const fast = new Simulation(timePresetConfig('fast-test', overrides));
     const normalRun = new Simulation(timePresetConfig('normal', overrides));
-    const started = performance.now();
     fast.step(40 * 12);
-    const elapsedMs = performance.now() - started;
     normalRun.step(40 * 12);
     // Identical history under both pacings.
     expect(fast.summary()).toEqual(normalRun.summary());
     expect(fast.state.history).toEqual(normalRun.state.history);
-    // Practical to execute: 40 simulated years well inside a test budget.
-    expect(elapsedMs).toBeLessThan(60_000);
   }, 30_000);
 });
 
