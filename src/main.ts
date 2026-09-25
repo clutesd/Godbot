@@ -105,7 +105,7 @@ app.innerHTML = `
     <footer class="runline">
       <button class="audio-toggle" id="restart" type="button">RESTART</button>
       <span id="observation">OBSERVATION 01</span>
-      <span class="pulse" id="run-status"><i></i> AUTONOMOUS</span>
+      <button class="camera-mode-toggle pulse" id="camera-mode-toggle" type="button" aria-pressed="true" title="Toggle autonomous/manual camera"><i></i> AUTONOMOUS</button>
       <span id="seed">SEED &middot; -</span>
       <button class="audio-toggle" id="audio-toggle" type="button" aria-pressed="false" aria-label="Mute ambient music" title="Mute ambient music">AUDIO ON</button>
       <span class="commandhint">/ &middot; COMMANDS</span>
@@ -139,7 +139,8 @@ const activityElement = requiredElement<HTMLElement>('#activity');
 const evidenceElement = requiredElement<HTMLElement>('#evidence');
 const seedElement = requiredElement<HTMLElement>('#seed');
 const observationElement = requiredElement<HTMLElement>('#observation');
-const runStatusElement = requiredElement<HTMLElement>('#run-status');
+const runStatusElement = requiredElement<HTMLElement>('#camera-mode-toggle');
+const cameraModeToggleElement = requiredElement<HTMLButtonElement>('#camera-mode-toggle');
 const audioToggleElement = requiredElement<HTMLButtonElement>('#audio-toggle');
 const transportDebugLegendElement = requiredElement<HTMLElement>('#transport-debug-legend');
 const openingElement = requiredElement<HTMLElement>('#opening');
@@ -384,6 +385,22 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   const archive = new RunRecordBuilder(identity, simulation.config, simulation.state, resumable);
   const { GodboxRenderer } = await import('./render/GodboxRenderer');
   const view = new GodboxRenderer(viewport, simulation.config, simulation.state, historian);
+  const syncCameraMode = (): void => {
+    const autonomous = view.autonomousCamera;
+    cameraModeToggleElement.setAttribute('aria-pressed', String(autonomous));
+    cameraModeToggleElement.innerHTML = autonomous ? '<i></i> AUTONOMOUS' : '<i></i> MANUAL · WASD + MOUSE';
+    cameraModeToggleElement.title = autonomous
+      ? 'Switch to manual camera control'
+      : 'Click the world to capture mouse · WASD move · Q/E down/up · Shift faster · toggle to resume autonomous camera';
+    setClassIfChanged(worldElement, 'manual-camera', !autonomous);
+  };
+  const toggleCameraMode = (): void => {
+    if (!simulation.historyRunning) return;
+    view.setAutonomousCamera(!view.autonomousCamera);
+    syncCameraMode();
+  };
+  cameraModeToggleElement.addEventListener('click', toggleCameraMode);
+  syncCameraMode();
   openingStatusElement.textContent = 'Preparing the observation…';
   const openingWarmupMs = await view.warmUpOpening();
   // Give the browser two quiet presentation frames after compilation/texture uploads. Arrival time
