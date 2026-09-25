@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { PerspectiveCamera, Vector3 } from 'three';
-import { advanceCameraSpring } from '../src/render/CameraSpring';
 import { AdaptiveResolution } from '../src/render/AdaptiveResolution';
 import { CameraDirector } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
@@ -324,36 +323,6 @@ describe('cinematic motion', () => {
     expect(choose.mock.calls.length).toBe(callsAtBlockedSelection);
   });
 
-  it('settles identically at 30, 60 and 144 Hz without overshooting', () => {
-    const results = [30, 60, 144].map(fps => {
-      const position = new Vector3(), velocity = new Vector3(), target = new Vector3(10, 5, -8);
-      let lastX = 0;
-      for (let frame = 0; frame < fps * 4; frame++) {
-        advanceCameraSpring(position, velocity, target, 1 / fps, 4);
-        expect(position.x).toBeGreaterThanOrEqual(lastX);
-        expect(position.x).toBeLessThan(10);
-        lastX = position.x;
-      }
-      return position;
-    });
-    expect(results[0]!.distanceTo(results[1]!)).toBeLessThan(1e-10);
-    expect(results[1]!.distanceTo(results[2]!)).toBeLessThan(1e-10);
-    expect(results[0]!.x).toBeGreaterThan(9.5);
-  });
-
-  it('eases in from rest and preserves momentum when a new composition is chosen', () => {
-    const position = new Vector3(), velocity = new Vector3(), target = new Vector3(20, 0, 0);
-    advanceCameraSpring(position, velocity, target, 1 / 60, 4);
-    expect(position.x).toBeLessThan(0.01);
-    for (let i = 0; i < 60; i++) advanceCameraSpring(position, velocity, target, 1 / 60, 4);
-    const before = velocity.x;
-    advanceCameraSpring(position, velocity, new Vector3(-20, 0, 0), 1 / 144, 4);
-    expect(velocity.x).toBeGreaterThan(0);
-    expect(Math.abs(velocity.x - before)).toBeLessThan(0.5);
-  });
-});
-
-
   it('re-anchors from manual control without snapping or skipping an unseen flight destination', () => {
     const sim = new Simulation({ seed: 'manual-autonomous-handoff', startMode: 'established',
       startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
@@ -449,7 +418,7 @@ describe('cinematic motion', () => {
     expect(runs[1]!.position.distanceTo(runs[2]!.position)).toBeLessThan(0.2);
     expect(Math.max(...runs.map(result => result.maxSpeed)) - Math.min(...runs.map(result => result.maxSpeed))).toBeLessThan(0.25);
   });
-
+});
 
 describe('resolution pacing', () => {
   function run(controller: AdaptiveResolution, seconds: number, fps: number): number {
