@@ -117,7 +117,8 @@ describe('banner legacy', () => {
       event('politics', 'political-transition', 160, { actors: ['polity-1'] }),
       event('battle', 'battle', 220, { actors: ['settlement-1'], significance: 0.8 }),
       event('culture', 'cultural-shift', 300, { actors: ['culture-1'] }),
-      event('recovery', 'recovery', 360, { actors: ['settlement-1'] }),
+      event('same-month-z', 'recovery', 360, { actors: ['settlement-1'], significance: 0.7 }),
+      event('same-month-a', 'alliance-formed', 360, { actors: ['polity-1'], significance: 0.7 }),
     ];
 
     expect(deriveBannerLegacy(input({ history }))).toEqual(deriveBannerLegacy(input({ history: [...history].reverse() })));
