@@ -279,6 +279,7 @@ export class GodboxRenderer {
   private readonly duskColor = new THREE.Color('#b87569');
   private readonly nightColor = new THREE.Color('#11172d');
   private readonly fogDayColor = new THREE.Color('#75837d');
+  private readonly stormFogColor = new THREE.Color('#66747d');
   private readonly aftermathColor = new THREE.Color('#403f43');
   private readonly zenithDayColor = new THREE.Color('#6f9dc4');
   private readonly zenithNightColor = new THREE.Color('#0d1428');
@@ -631,10 +632,17 @@ export class GodboxRenderer {
       this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     }
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
-    const blizzard = this.weatherRenderer.report.blizzard;
+    const weatherFrame = this.weatherRenderer.report;
+    this.skyAtmosphere.setWeatherFrame(weatherFrame);
+    const stormDim = THREE.MathUtils.clamp(weatherFrame.cloud * 0.34 + weatherFrame.storm * 0.28, 0, 0.58);
+    this.sun.intensity *= 1 - stormDim;
+    this.hemisphere.intensity *= 1 - stormDim * 0.42;
+    this.renderer.toneMappingExposure *= 1 - THREE.MathUtils.clamp(weatherFrame.cloud * 0.045 + weatherFrame.storm * 0.07, 0, 0.1);
     if (this.scene.fog instanceof THREE.FogExp2) {
-      this.scene.fog.density += blizzard * 0.035;
-      this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
+      const rainHaze = weatherFrame.intensity * (0.0035 + weatherFrame.storm * 0.003);
+      this.scene.fog.density += weatherFrame.blizzard * 0.035 + rainHaze + weatherFrame.cloud * 0.0012;
+      this.scene.fog.color.lerp(this.fogDayColor, weatherFrame.blizzard * 0.7);
+      this.scene.fog.color.lerp(this.stormFogColor, THREE.MathUtils.clamp(weatherFrame.storm * 0.62 + weatherFrame.intensity * 0.18, 0, 0.72));
     }
     this.postProcessing.render(this.ecology.night.value);
   }
