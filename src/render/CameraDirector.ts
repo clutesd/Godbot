@@ -727,6 +727,16 @@ export function cameraVisibilityCorridor(
  * A real drone can cross a ridge or pass behind a building while travelling; the non-negotiable
  * contract is that the lens itself never enters terrain, structures, vessels or rendered foliage.
  */
+export interface CameraFlightCorridorOptions {
+  /**
+   * Manual control can leave the lens below the autonomous clearance envelope or partially inside
+   * presentation geometry. During the first recovery flight, allow only non-worsening motion out
+   * of that starting violation. Once a frame begins from a normally safe point, strict validation
+   * automatically resumes.
+   */
+  readonly allowUnsafeDeparture?: boolean;
+}
+
 export function cameraFlightCorridorSafe(
   state: SimulationState,
   from: THREE.Vector3,
@@ -734,13 +744,34 @@ export function cameraFlightCorridorSafe(
   elevationAt: (x: number, z: number) => number,
   lensClearance = 0.72,
   environmentProbe?: CameraEnvironmentProbe,
+  options: CameraFlightCorridorOptions = {},
 ): boolean {
+  const startClearance = from.y - elevationAt(from.x, from.z);
+  const startObstruction = cameraLensObstruction(state, from, elevationAt, 0.12, environmentProbe);
+  const recoveringDeparture = Boolean(
+    options.allowUnsafeDeparture
+      && (startClearance < lensClearance - 0.001 || startObstruction > 0.001),
+  );
+  const minimumRecoveryClearance = Math.min(startClearance, lensClearance);
+  const maximumRecoveryObstruction = Math.max(0.001, startObstruction);
+
   const steps = Math.max(1, Math.ceil(from.distanceTo(to) / 0.2));
   const point = new THREE.Vector3();
   for (let index = 0; index <= steps; index += 1) {
     point.lerpVectors(from, to, index / steps);
-    if (point.y < elevationAt(point.x, point.z) + lensClearance - 0.001) return false;
-    if (cameraLensObstruction(state, point, elevationAt, 0.12, environmentProbe) > 0.001) return false;
+    const terrainClearance = point.y - elevationAt(point.x, point.z);
+    const obstruction = cameraLensObstruction(state, point, elevationAt, 0.12, environmentProbe);
+
+    if (recoveringDeparture) {
+      // A recovery step may remain temporarily below normal autonomous clearance, but it may never
+      // descend below the clearance it started with or move deeper into an obstruction.
+      if (terrainClearance < minimumRecoveryClearance - 0.001) return false;
+      if (obstruction > maximumRecoveryObstruction + 0.001) return false;
+      continue;
+    }
+
+    if (terrainClearance < lensClearance - 0.001) return false;
+    if (obstruction > 0.001) return false;
   }
   return true;
 }
@@ -1100,6 +1131,7 @@ interface CameraFlightState {
   bestDistance: number;
   stalledSeconds: number;
   obstructionRetries: number;
+  allowUnsafeDeparture: boolean;
 }
 
 export class CameraDirector {
@@ -1145,6 +1177,7 @@ export class CameraDirector {
   private scenicShotIndex = 0;
   private readonly sequencePlanner = new CinematicSequencePlanner();
   private activeSequence?: { id: string; ordinal: number; total: number };
+  private externalPoseRecoveryPending = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -1465,6 +1498,7 @@ export class CameraDirector {
     this.trackingInitialized = false;
     this.safetyInitialized = true;
     this.visibility.reset();
+    this.externalPoseRecoveryPending = true;
 
     // Ordinary history should not treat the observer's manual pose as a freshly authored shot.
     // Preserve that exact lens on the handoff frame, then make the next autonomous update choose
@@ -1797,7 +1831,9 @@ export class CameraDirector {
       bestDistance: Math.max(0.001, distance),
       stalledSeconds: 0,
       obstructionRetries: 0,
+      allowUnsafeDeparture: this.externalPoseRecoveryPending,
     };
+    this.externalPoseRecoveryPending = false;
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
     this.recoveryOffset = undefined;
@@ -1892,7 +1928,19 @@ export class CameraDirector {
     const departureClearance = cameraClearanceForScene(this.acquiredScene?.kind, this.acquiredScene?.id).lens;
     const destinationClearance = cameraClearanceForScene(this.currentScene.kind, this.currentScene.id).lens;
     const flightClearance = Math.max(0.42, Math.min(1.2, departureClearance, destinationClearance));
-    if (!cameraFlightCorridorSafe(state, before, this.camera.position, elevationAt, flightClearance, this.environmentProbe)) {
+    const departureNormallySafe = before.y >= elevationAt(before.x, before.z) + flightClearance - 0.001
+      && cameraLensObstruction(state, before, elevationAt, 0.12, this.environmentProbe) <= 0.001;
+    if (flight.allowUnsafeDeparture && departureNormallySafe) flight.allowUnsafeDeparture = false;
+
+    if (!cameraFlightCorridorSafe(
+      state,
+      before,
+      this.camera.position,
+      elevationAt,
+      flightClearance,
+      this.environmentProbe,
+      { allowUnsafeDeparture: flight.allowUnsafeDeparture },
+    )) {
       // Never cross geometry to preserve a schedule. Return to the last valid frame, bleed momentum,
       // and climb into a new continuous route on the next frame.
       this.camera.position.copy(before);
@@ -1993,6 +2041,7 @@ export class CameraDirector {
 
   private acquireCurrentScene(): void {
     if (!this.currentScene) return;
+    this.externalPoseRecoveryPending = false;
     this.acquiredScene = this.currentScene;
     this.commitObservation(this.currentScene);
     this.shotAge = 0;
