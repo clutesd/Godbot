@@ -6,6 +6,14 @@ import { createAtmosphericSkyMaterial, setAtmosphericSkyPalette, type Atmospheri
 import { LowMistField } from './LowMistField';
 import { softPointTexture } from './sprites';
 
+export interface WeatherAtmosphereFrame {
+  cloud: number;
+  storm: number;
+  intensity: number;
+  windX: number;
+  windZ: number;
+}
+
 /**
  * Sky, cloud and low-mist atmosphere.
  *
@@ -21,6 +29,18 @@ export class SkyAtmosphere {
   private readonly clouds: THREE.Points | undefined;
   private readonly zenith = new THREE.Color();
   private readonly horizon = new THREE.Color();
+  private readonly cloudTint = new THREE.Color('#eef2f2');
+  private readonly stormTint = new THREE.Color('#66717b');
+  private cloudTarget = 0;
+  private stormTarget = 0;
+  private rainTarget = 0;
+  private windTargetX = 0;
+  private windTargetZ = 0;
+  private cloudCover = 0;
+  private stormCover = 0;
+  private rainStrength = 0;
+  private windX = 0;
+  private windZ = 0;
 
   constructor(world: WorldState, surface: TerrainSurface, seed: string) {
     this.group.name = 'atmosphere';
@@ -60,20 +80,50 @@ export class SkyAtmosphere {
   }
 
   setCloudTint(colour: THREE.Color): void {
-    if (!this.clouds) return;
-    const material = this.clouds.material;
-    if (material instanceof THREE.PointsMaterial) material.color.copy(colour);
+    this.cloudTint.copy(colour);
+    this.applyCloudAppearance();
+  }
+
+  setWeatherFrame(frame: WeatherAtmosphereFrame): void {
+    this.cloudTarget = THREE.MathUtils.clamp(frame.cloud, 0, 1);
+    this.stormTarget = THREE.MathUtils.clamp(frame.storm, 0, 1);
+    this.rainTarget = THREE.MathUtils.clamp(frame.intensity, 0, 1);
+    this.windTargetX = THREE.MathUtils.clamp(frame.windX, -1, 1);
+    this.windTargetZ = THREE.MathUtils.clamp(frame.windZ, -1, 1);
   }
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
-    if (this.clouds) this.clouds.rotation.y += deltaSeconds * 0.0042;
+    const blend = 1 - Math.exp(-Math.min(1, deltaSeconds) * 1.35);
+    this.cloudCover += (this.cloudTarget - this.cloudCover) * blend;
+    this.stormCover += (this.stormTarget - this.stormCover) * blend;
+    this.rainStrength += (this.rainTarget - this.rainStrength) * blend;
+    this.windX += (this.windTargetX - this.windX) * blend;
+    this.windZ += (this.windTargetZ - this.windZ) * blend;
+    if (this.clouds) {
+      const wind = Math.hypot(this.windX, this.windZ);
+      const direction = Math.abs(this.windZ) > 0.04 ? Math.sign(this.windZ) : 1;
+      this.clouds.rotation.y += deltaSeconds * (0.0018 + wind * 0.013) * direction;
+      this.clouds.position.y = -this.stormCover * 5.5;
+      this.applyCloudAppearance();
+    }
     this.lowMistField.update(deltaSeconds, elapsedSeconds);
+  }
+
+  private applyCloudAppearance(): void {
+    if (!this.clouds) return;
+    const material = this.clouds.material;
+    if (!(material instanceof THREE.PointsMaterial)) return;
+    const cover = THREE.MathUtils.clamp(this.cloudCover, 0, 1);
+    const storm = THREE.MathUtils.clamp(this.stormCover, 0, 1);
+    material.opacity = 0.12 + cover * 0.34 + storm * 0.2;
+    material.size = 23 + cover * 8 + storm * 5;
+    material.color.copy(this.cloudTint).lerp(this.stormTint, THREE.MathUtils.clamp(storm * 0.82 + this.rainStrength * 0.16, 0, 0.92));
   }
 
   followCamera(camera: THREE.Camera): void {
     // Keep the horizon effectively infinite while preserving world-up for scattering.
     this.sky.position.copy(camera.position);
-    this.clouds?.position.set(camera.position.x, 0, camera.position.z);
+    if (this.clouds) this.clouds.position.set(camera.position.x, this.clouds.position.y, camera.position.z);
   }
 }
 

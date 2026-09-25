@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SeededRandom } from '../../sim/prng';
 import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import type { TornadoState, WorldState } from '../../sim/types';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
@@ -26,6 +27,11 @@ export class WeatherRenderer {
   private readonly funnelStarts = new Map<string, number>();
   private readonly funnelEvents = new Map<string, TornadoState>();
   private readonly funnelDust: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>[] = [];
+  private readonly lightningBolt: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  private readonly lightningLight = new THREE.PointLight('#dfe8ff', 0, 150, 1.5);
+  private readonly lightningStarts = new Map<string, number>();
+  private activeLightningId: string | undefined;
+  private lightningFlash = 0;
 
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, seed: string) {
     this.group.name = 'weather';
@@ -41,6 +47,15 @@ export class WeatherRenderer {
     this.waterTexture = new THREE.DataTexture(this.waterPixels, resolution, resolution, THREE.RedFormat, THREE.FloatType);
     this.precipitation = new PrecipitationRenderer(world, surface, seed);
     this.group.add(this.precipitation.group);
+    const lightningGeometry = new THREE.BufferGeometry();
+    lightningGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9 * 3), 3));
+    this.lightningBolt = new THREE.Line(lightningGeometry,
+      new THREE.LineBasicMaterial({ color: '#eaf2ff', transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+    this.lightningBolt.name = 'lightning-bolt';
+    this.lightningBolt.visible = false;
+    this.lightningBolt.frustumCulled = false;
+    this.lightningLight.name = 'lightning-flash';
+    this.group.add(this.lightningBolt, this.lightningLight);
     for (let index = 0; index < 4; index += 1) {
       const funnel = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 0.15, 9, 14, 8, true),
         new THREE.MeshStandardMaterial({ color: '#777a73', transparent: true, opacity: 0.12, side: THREE.DoubleSide, roughness: 1, depthWrite: false }));
@@ -106,7 +121,8 @@ export class WeatherRenderer {
             float localWater = texture2D(waterMap, floodUv).r;
             float immersion = 1.0 - smoothstep(localWater, localWater + 0.06, weatherWorldPosition.y);
             float snowCover = (1.0 - exp(-max(0.0, weatherSample.b) * ${SNOW_COVERAGE_RATE.toFixed(1)})) * weatherUp * (1.0 - immersion);
-            diffuseColor.rgb *= 1.0 - max(weatherSample.a * 0.12, immersion * 0.35);
+            float wetSurface = weatherSample.a * (1.0 - snowCover) * (1.0 - immersion);
+            diffuseColor.rgb *= 1.0 - max(wetSurface * 0.18, immersion * 0.35);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.92, 0.95), snowCover * ${foliage ? '0.86' : '0.98'});
           `);
         };
@@ -124,7 +140,10 @@ export class WeatherRenderer {
       this.pixels[index * 4] = Math.round((cell.windX * cell.wind * 0.5 + 0.5) * 255);
       this.pixels[index * 4 + 1] = Math.round((cell.windZ * cell.wind * 0.5 + 0.5) * 255);
       this.snowTargets[index] = Math.min(255, cell.snowpack * 255);
-      this.pixels[index * 4 + 3] = Math.round(this.world.cells[index]!.moisture * 255);
+      const rainWetness = cell.precipitation === 'rain' ? cell.intensity
+        : cell.precipitation === 'mixed' ? cell.intensity * (1 - (cell.snowFraction ?? 0)) : 0;
+      const retainedDamp = this.world.cells[index]!.moisture * 0.28;
+      this.pixels[index * 4 + 3] = Math.round(Math.min(1, Math.max(retainedDamp, rainWetness)) * 255);
     }
     for (let index = 0; index < this.waterPixels.length; index++) {
       const level = this.world.terrain.waterLevel[index]!;
@@ -138,6 +157,7 @@ export class WeatherRenderer {
 
   update(delta: number, elapsed: number, camera: THREE.Camera): void {
     this.time.value = elapsed;
+    this.updateLightning(elapsed, camera);
     const events = this.world.weather?.tornadoes ?? [];
     for (const [id, start] of this.funnelStarts) {
       if (elapsed - start >= 8 && !events.some((event) => event.id === id)) { this.funnelStarts.delete(id); this.funnelEvents.delete(id); }
@@ -193,10 +213,61 @@ export class WeatherRenderer {
     this.precipitation.update(delta, elapsed, camera);
   }
 
-  get report() { return this.precipitation.report; }
+  private updateLightning(elapsed: number, camera: THREE.Camera): void {
+    const strikes = this.world.weather?.lightning ?? [];
+    const ids = new Set(strikes.map((strike) => strike.id));
+    for (const id of this.lightningStarts.keys()) if (!ids.has(id) && id !== this.activeLightningId) this.lightningStarts.delete(id);
+
+    let active = this.activeLightningId ? strikes.find((strike) => strike.id === this.activeLightningId) : undefined;
+    let age = active ? elapsed - (this.lightningStarts.get(active.id) ?? elapsed) : Number.POSITIVE_INFINITY;
+    if (!active || age >= 0.62) {
+      active = strikes
+        .filter((strike) => !this.lightningStarts.has(strike.id)
+          && Math.hypot(strike.x - camera.position.x, strike.z - camera.position.z) < 180)
+        .sort((a, b) => Math.hypot(a.x - camera.position.x, a.z - camera.position.z)
+          - Math.hypot(b.x - camera.position.x, b.z - camera.position.z))[0];
+      if (active) {
+        this.activeLightningId = active.id;
+        this.lightningStarts.set(active.id, elapsed);
+        age = 0;
+        const ground = this.surface.heightAt(active.x, active.z);
+        const random = new SeededRandom(`${active.id}:presentation`);
+        const position = this.lightningBolt.geometry.getAttribute('position');
+        for (let index = 0; index < position.count; index += 1) {
+          const t = index / (position.count - 1);
+          const taper = Math.sin(t * Math.PI);
+          position.setXYZ(index,
+            active.x + random.range(-1.8, 1.8) * taper,
+            ground + 0.35 + (1 - t) * (34 + active.intensity * 12),
+            active.z + random.range(-1.8, 1.8) * taper);
+        }
+        position.needsUpdate = true;
+        this.lightningLight.position.set(active.x, ground + 7, active.z);
+      } else {
+        this.activeLightningId = undefined;
+      }
+    }
+
+    if (!active || age >= 0.62) {
+      this.lightningFlash = 0;
+      this.lightningBolt.visible = false;
+      this.lightningLight.intensity = 0;
+      return;
+    }
+    const primary = Math.exp(-age * 18);
+    const returnStroke = age > 0.1 ? Math.exp(-(age - 0.1) * 30) * 0.55 : 0;
+    this.lightningFlash = Math.min(1, (primary + returnStroke) * active.intensity);
+    this.lightningBolt.visible = age < 0.2;
+    this.lightningBolt.material.opacity = Math.min(1, this.lightningFlash * 1.25);
+    this.lightningLight.intensity = this.lightningFlash * 72;
+  }
+
+  get report() { return { ...this.precipitation.report, lightning: this.lightningFlash }; }
 
   dispose(): void {
     this.precipitation.dispose();
+    this.lightningBolt.geometry.dispose();
+    this.lightningBolt.material.dispose();
     this.texture.dispose();
     this.waterTexture.dispose();
     for (const object of [...this.funnels, ...this.funnelDust]) {

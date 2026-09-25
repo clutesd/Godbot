@@ -25,6 +25,9 @@ export class PrecipitationRenderer {
   private cloud = 0;
   private wet = 0;
   private thunder = 0;
+  private storm = 0;
+  private windX = 0;
+  private windZ = 0;
   constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, seed: string) {
     const random = new SeededRandom(`${seed}:precipitation`);
     this.drops = Array.from({ length: PRECIPITATION_BUDGET }, () => ({ x: random.range(-RANGE, RANGE), z: random.range(-RANGE, RANGE),
@@ -58,9 +61,21 @@ export class PrecipitationRenderer {
     const focus = cellAt(this.world, this.center.x, this.center.z);
     const local = focus && this.world.weather?.cells[focus.z * this.world.size + focus.x];
     this.severity += ((local?.blizzard ?? 0) - this.severity) * blend;
-    this.cloud += ((local ? local.kind === 'clear' ? 0 : local.intensity : 0) - this.cloud) * blend;
+    const cloudTarget = local
+      ? local.kind === 'clear' ? 0
+        : local.kind === 'cloudy' ? 0.48 + local.intensity * 0.28
+          : local.precipitation !== 'none' ? 0.64 + local.intensity * 0.36
+            : 0.42 + local.intensity * 0.35
+      : 0;
+    const stormTarget = local && ['thunderstorm', 'windstorm', 'hurricane', 'tornado'].includes(local.kind)
+      ? local.intensity
+      : local && ['heavy-rain', 'heavy-snow'].includes(local.kind) ? local.intensity * 0.38 : 0;
+    this.cloud += (Math.min(1, cloudTarget) - this.cloud) * blend;
     this.wet += ((local && local.precipitation !== 'none' ? local.intensity : 0) - this.wet) * blend;
-    this.thunder = local?.kind === 'thunderstorm' ? local.intensity : 0;
+    this.thunder += ((local?.kind === 'thunderstorm' ? local.intensity : 0) - this.thunder) * blend;
+    this.storm += (stormTarget - this.storm) * blend;
+    this.windX += (((local?.windX ?? 0) * (local?.wind ?? 0)) - this.windX) * blend;
+    this.windZ += (((local?.windZ ?? 0) * (local?.wind ?? 0)) - this.windZ) * blend;
     this.accumulator += delta;
     const sampleWeather = this.accumulator >= 0.15;
     if (sampleWeather) this.accumulator = 0;
@@ -119,6 +134,12 @@ export class PrecipitationRenderer {
     this.rain.geometry.setDrawRange(0, rain * 2); this.snow.geometry.setDrawRange(0, snow);
     for (const attribute of [rp, rc, sp, sc, ss]) attribute.needsUpdate = true;
   }
-  get report() { return { rain: this.rainCount, snow: this.snowCount, budget: PRECIPITATION_BUDGET, blizzard: this.severity, cloud: this.cloud, intensity: this.wet, thunder: this.thunder }; }
+  get report() {
+    return {
+      rain: this.rainCount, snow: this.snowCount, budget: PRECIPITATION_BUDGET,
+      blizzard: this.severity, cloud: this.cloud, intensity: this.wet, thunder: this.thunder,
+      storm: this.storm, windX: this.windX, windZ: this.windZ,
+    };
+  }
   dispose(): void { for (const object of [this.rain, this.snow]) { object.geometry.dispose(); object.material.dispose(); } }
 }
