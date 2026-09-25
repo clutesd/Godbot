@@ -1521,7 +1521,13 @@ export class CameraDirector {
           }
         }
 
-        if (humanScene) {
+        if (this.lastHumanShot) {
+          // A personal detail earns an immediate contextual re-establish before another multi-shot
+          // package or social close-up. This keeps the edit readable and prevents a sequence planner
+          // from burying the return to place behind several long intermediate beats.
+          scene = anchor;
+          this.activeSequence = undefined;
+        } else if (humanScene) {
           scene = humanScene;
           this.activeSequence = undefined;
         } else {
@@ -2140,23 +2146,29 @@ export class CameraDirector {
         // in world space. This is deliberately gentle so it never fights collision/sightline safety.
         const leadDirection = new THREE.Vector3();
         if (composition) leadDirection.set(composition.targetX - actorX, 0, composition.targetZ - actorZ);
-        const compositionTrim = screenSpaceComposition(
-          this.camera,
-          new THREE.Vector3(actorX, actorFocusY, actorZ),
-          scene.kind,
-          {
-            moving: scene.kind === 'traveler-follow' || leadDirection.lengthSq() > 0.01,
-            pair: Boolean(partner),
-            leadDirection,
-            distance: followingDistance,
-          },
-        );
-        const viewDir = this.desiredTarget.clone().sub(this.desiredPosition).normalize();
-        const right = new THREE.Vector3().crossVectors(viewDir, this.camera.up).normalize();
-        this.desiredTarget.addScaledVector(right, compositionTrim.offsetX);
-        this.desiredTarget.y += compositionTrim.offsetY;
-        this.camera.fov = easeCameraFov(this.camera.fov, compositionTrim.desiredFov, deltaSeconds);
-        this.camera.updateProjectionMatrix();
+        if (deltaSeconds > 0) {
+          // Endpoint authoring calls animateShot(0) before the lens has physically reached this
+          // composition. Projecting through that old camera can generate a bogus off-screen trim.
+          // Author the flight toward the untrimmed subject first; once the real lens is in motion or
+          // acquired, apply the gentle screen-space correction from its actual pose.
+          const compositionTrim = screenSpaceComposition(
+            this.camera,
+            new THREE.Vector3(actorX, actorFocusY, actorZ),
+            scene.kind,
+            {
+              moving: scene.kind === 'traveler-follow' || leadDirection.lengthSq() > 0.01,
+              pair: Boolean(partner),
+              leadDirection,
+              distance: followingDistance,
+            },
+          );
+          const viewDir = this.desiredTarget.clone().sub(this.desiredPosition).normalize();
+          const right = new THREE.Vector3().crossVectors(viewDir, this.camera.up).normalize();
+          this.desiredTarget.addScaledVector(right, compositionTrim.offsetX);
+          this.desiredTarget.y += compositionTrim.offsetY;
+          this.camera.fov = easeCameraFov(this.camera.fov, compositionTrim.desiredFov, deltaSeconds);
+          this.camera.updateProjectionMatrix();
+        }
 
         this.raiseForTerrain(elevationAt);
         return;
