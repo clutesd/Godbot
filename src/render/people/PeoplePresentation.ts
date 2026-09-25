@@ -24,6 +24,7 @@ const COHESION: Partial<Record<DestinationKind, number>> = {
   market: 0.89,
   plaza: 0.91,
   shrine: 0.88,
+  'memorial-site': 0.84,
   'construction-site': 0.78,
   'safe-area': 0.76,
   workshop: 0.7,
@@ -41,7 +42,7 @@ const COHESION: Partial<Record<DestinationKind, number>> = {
 /** Destinations people attend by talking to each other rather than by working. */
 const CONVERSATIONAL = new Set<DestinationKind>(['market', 'plaza']);
 /** Destinations with a focal point every attendant turns toward. */
-const FOCAL = new Set<DestinationKind>(['shrine', 'construction-site']);
+const FOCAL = new Set<DestinationKind>(['shrine', 'memorial-site', 'construction-site']);
 const LINEAR = new Set<DestinationKind>(['dock', 'station', 'patrol-route']);
 const WORK_GRID = new Set<DestinationKind>([
   'field', 'workshop', 'construction-site', 'warehouse', 'industrial-site', 'knowledge-institution', 'civic-building',
