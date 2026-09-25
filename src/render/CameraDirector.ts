@@ -1562,14 +1562,19 @@ export class CameraDirector {
     this.shotDuration = scenicProfile?.durationSeconds
       ?? editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
-    if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
-      this.shotDuration = Math.max(this.shotDuration, 20);
-    } else if (scene.kind === 'street-observation') {
-      this.shotDuration = Math.max(this.shotDuration, 18);
-    } else if (scene.kind === 'traveler-follow') {
-      this.shotDuration = Math.max(this.shotDuration, 16);
+    // Authored opening beats own their timing. The longer documentary holds are for ordinary
+    // human observation after Arrival; applying them to founding cast/release beats stretches a
+    // deliberately paced 6–8 second sequence into 18–20 second stalls.
+    if (!editorialTiming && !scenicProfile) {
+      if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
+        this.shotDuration = Math.max(this.shotDuration, 20);
+      } else if (scene.kind === 'street-observation') {
+        this.shotDuration = Math.max(this.shotDuration, 18);
+      } else if (scene.kind === 'traveler-follow') {
+        this.shotDuration = Math.max(this.shotDuration, 16);
+      }
+      if (scene.id.startsWith('human:')) this.shotDuration = Math.max(this.shotDuration, 22);
     }
-    if (scene.id.startsWith('human:')) this.shotDuration = Math.max(this.shotDuration, 22);
 
     const ground = elevationAt(scene.position.x, scene.position.z);
     this.shotBaseTarget.set(scene.position.x, ground + (scenicProfile?.targetHeight
