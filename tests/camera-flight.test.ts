@@ -31,6 +31,37 @@ describe('physical camera flight', () => {
     expect(results[1]!.distanceTo(results[2]!)).toBeLessThan(0.08);
   });
 
+
+  it('treats invalid or backwards frame deltas as no-ops and clamps a long browser hitch', () => {
+    const limits = { maxSpeed: 8, maxAcceleration: 2, maxJerk: 5, responseSeconds: 0.4 };
+    for (const delta of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const position = new Vector3(2, 3, 4);
+      const velocity = new Vector3(1, 0, 0);
+      const acceleration = new Vector3(0.5, 0, 0);
+      const before = [position.clone(), velocity.clone(), acceleration.clone()];
+      advanceCameraFlight(position, velocity, acceleration, new Vector3(20, 3, 4), delta, limits);
+      expect(position.equals(before[0]!)).toBe(true);
+      expect(velocity.equals(before[1]!)).toBe(true);
+      expect(acceleration.equals(before[2]!)).toBe(true);
+    }
+
+    const long = { position: new Vector3(), velocity: new Vector3(), acceleration: new Vector3() };
+    const clamped = { position: new Vector3(), velocity: new Vector3(), acceleration: new Vector3() };
+    const target = new Vector3(20, 5, -8);
+    advanceCameraFlight(long.position, long.velocity, long.acceleration, target, 2, limits);
+    advanceCameraFlight(clamped.position, clamped.velocity, clamped.acceleration, target, 0.1, limits);
+    expect(long.position.distanceTo(clamped.position)).toBeLessThan(1e-10);
+    expect(long.velocity.distanceTo(clamped.velocity)).toBeLessThan(1e-10);
+    expect(long.acceleration.distanceTo(clamped.acceleration)).toBeLessThan(1e-10);
+  });
+
+  it('does not report acquisition while residual momentum is still too high', () => {
+    const target = new Vector3(10, 0, 0);
+    expect(cameraFlightSettled(new Vector3(10.1, 0, 0), new Vector3(0.2, 0, 0), target, 0.35)).toBe(true);
+    expect(cameraFlightSettled(new Vector3(10.1, 0, 0), new Vector3(1.2, 0, 0), target, 0.35)).toBe(false);
+    expect(cameraFlightSettled(new Vector3(11, 0, 0), new Vector3(), target, 0.35)).toBe(false);
+  });
+
   it('preserves forward momentum when the destination changes instead of reversing instantly', () => {
     const position = new Vector3();
     const velocity = new Vector3();
