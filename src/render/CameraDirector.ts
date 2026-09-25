@@ -1248,15 +1248,37 @@ export class CameraDirector {
       advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, focus.transitionSeconds / 1.14);
       this.arrivalActive = true;
 
-      // Per-frame Arrival safety is deliberately cheap: one exact lens-volume probe plus terrain
-      // clearance. If the next spring step would enter geometry, reject that step and force an
-      // immediate full survey on the next frame instead of performing thousands of ray probes now.
-      const lensBlocked = cameraLensObstruction(state, this.camera.position, elevationAt, 0.12, this.environmentProbe) > 0.001;
-      const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + 0.72;
-      if (lensBlocked || this.camera.position.y < lensFloor) {
+      // Per-frame Arrival safety remains a cheap lens-volume corridor check. Ordinarily it is
+      // strict. If manual control handed back an already-low/obstructed pose, permit only a
+      // non-worsening spring step out of that violation; once normal clearance is recovered the
+      // very next frame returns to the ordinary strict contract.
+      const arrivalLensClearance = 0.72;
+      const recoveringExternalPose = this.externalPoseRecoveryPending;
+      const stepSafe = cameraFlightCorridorSafe(
+        state,
+        before,
+        this.camera.position,
+        elevationAt,
+        arrivalLensClearance,
+        this.environmentProbe,
+        { allowUnsafeDeparture: recoveringExternalPose },
+      );
+      if (!stepSafe) {
         this.camera.position.copy(before);
         this.positionVelocity.multiplyScalar(0.2);
         this.arrivalSafetySeconds = 0;
+      } else if (recoveringExternalPose) {
+        const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + arrivalLensClearance;
+        const lensBlocked = cameraLensObstruction(
+          state,
+          this.camera.position,
+          elevationAt,
+          0.12,
+          this.environmentProbe,
+        ) > 0.001;
+        if (!lensBlocked && this.camera.position.y >= lensFloor - 0.001) {
+          this.externalPoseRecoveryPending = false;
+        }
       }
       this.camera.lookAt(this.lookTarget);
       this.observation.label = focus.beat === 'pristine' ? 'Before history'
