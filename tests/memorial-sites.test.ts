@@ -119,6 +119,8 @@ describe('persistent cultural remembrance', () => {
     expect(new Set(assets.map(a => a.mesh)).size).toBe(4);
     for (const a of assets) {
       expect(a.mesh.userData['communalMarkers']).toBe(12);
+      expect(a.mesh.userData['memorialVisualKit']).toBe('v2');
+      expect(a.mesh.userData['ceremonialFocus']).toBe(true);
       expect(a.lods).toHaveLength(0);
     }
     const older = builder.getAsset('building', { ...config, development: { ...response, memorial: { ...response.memorial!, ageBand: 2 } } });
