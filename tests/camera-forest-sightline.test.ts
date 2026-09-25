@@ -300,6 +300,17 @@ describe('human-scale documentary camera framing', () => {
     expect(street.height[0]).toBeLessThanOrEqual(1.25);
   });
 
+  it('gives human observation shots substantially more stillness than movement', () => {
+    const worker = cameraShotPacingFor('worker-follow');
+    const street = cameraShotPacingFor('street-observation');
+    const traveler = cameraShotPacingFor('traveler-follow');
+
+    expect(worker.settleHoldFraction + worker.finishHoldFraction).toBeGreaterThanOrEqual(0.7);
+    expect(worker.motionFraction).toBeLessThanOrEqual(0.3);
+    expect(street.settleHoldFraction + street.finishHoldFraction).toBeGreaterThanOrEqual(0.65);
+    expect(traveler.settleHoldFraction + traveler.finishHoldFraction).toBeGreaterThan(traveler.motionFraction);
+  });
+
   it('uses deliberate settle and finish holds instead of moving for the whole shot', () => {
     const pacing = cameraShotPacingFor('worker-follow');
     expect(pacing.settleHoldFraction).toBeGreaterThanOrEqual(0.18);
