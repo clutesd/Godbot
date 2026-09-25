@@ -1465,7 +1465,16 @@ export class CameraDirector {
     this.trackingInitialized = false;
     this.safetyInitialized = true;
     this.visibility.reset();
-    this.shotAge = 0;
+
+    // Ordinary history should not treat the observer's manual pose as a freshly authored shot.
+    // Preserve that exact lens on the handoff frame, then make the next autonomous update choose
+    // a real documentary composition and fly there continuously. This is especially important
+    // after eye-level/manual exploration: personal shots deliberately hold for many seconds, so
+    // resetting shotAge to zero would strand autonomous mode at the manual altitude.
+    //
+    // Founding/Arrival editorial beats are authority barriers with authored timing; never let a
+    // manual toggle prematurely advance those sequences.
+    this.shotAge = isFoundingCameraScene(this.currentScene?.id) ? 0 : this.shotDuration;
   }
 
   flightTelemetry(): CameraFlightTelemetry {
