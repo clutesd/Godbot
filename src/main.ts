@@ -208,6 +208,7 @@ function toggleCameraMode(): void {
 // Pointer input gets a capture-phase fallback based on the button's actual screen rectangle.
 // This keeps the control operable even if a transient cinematic overlay wins normal hit testing.
 window.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
   const rect = cameraModeToggleElement.getBoundingClientRect();
   const inside = event.clientX >= rect.left && event.clientX <= rect.right
     && event.clientY >= rect.top && event.clientY <= rect.bottom;
