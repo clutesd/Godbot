@@ -3,6 +3,7 @@ import { advanceCameraSpring } from './CameraSpring';
 import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
 import { CinematicSequencePlanner } from './CinematicSequencePlanner';
 import { easeCameraFov, screenSpaceComposition } from './ScreenSpaceComposition';
+import { planTerrainAwareCameraRoute, smoothCameraRoute } from './CameraRoutePlanner';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
@@ -1088,6 +1089,8 @@ interface CameraFlightState {
   readonly approachRadius: number;
   readonly maxSeconds: number;
   readonly maximumCruiseHeight: number;
+  readonly routePoints: readonly THREE.Vector3[];
+  routeIndex: number;
   phase: 'depart' | 'cruise' | 'approach';
   cruiseHeight: number;
   elapsedSeconds: number;
@@ -1660,6 +1663,15 @@ export class CameraDirector {
       14,
       38,
     );
+    const terrainRoute = smoothCameraRoute(planTerrainAwareCameraRoute(
+      this.camera.position,
+      destinationPosition,
+      elevationAt,
+      {
+        clearance: Math.max(1.6, Math.min(profile.cruiseClearance, 4.2)),
+        lateralOffsets: [-5.5, -2.75, 0, 2.75, 5.5],
+      },
+    ).points, 3);
     this.flight = {
       originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
@@ -1674,6 +1686,8 @@ export class CameraDirector {
       ),
       maxSeconds,
       maximumCruiseHeight: cruiseHeight + 8,
+      routePoints: terrainRoute,
+      routeIndex: Math.min(1, Math.max(0, terrainRoute.length - 1)),
       phase: horizontalDistance > profile.minApproachRadius ? 'depart' : 'approach',
       cruiseHeight,
       elapsedSeconds: 0,
@@ -1726,32 +1740,37 @@ export class CameraDirector {
     // toward the composition. This reads as a deliberate low fly-through instead of cruise-then-drop.
     if (flight.phase === 'cruise' && horizontalDistance <= flight.approachRadius) flight.phase = 'approach';
 
-    if (flight.phase === 'depart') {
-      // Climb on a forward arc instead of performing a vertical elevator move first.
-      this.desiredPosition.set(
-        THREE.MathUtils.lerp(flight.originPosition.x, flight.destinationPosition.x, 0.32),
-        flight.cruiseHeight,
-        THREE.MathUtils.lerp(flight.originPosition.z, flight.destinationPosition.z, 0.32),
-      );
-    } else if (flight.phase === 'cruise') {
-      this.desiredPosition.set(flight.destinationPosition.x, flight.cruiseHeight, flight.destinationPosition.z);
-    } else {
-      this.desiredPosition.copy(flight.destinationPosition);
+    const finalRouteIndex = flight.routePoints.length - 1;
+    while (flight.routeIndex < finalRouteIndex
+      && this.camera.position.distanceTo(flight.routePoints[flight.routeIndex]!) < 1.35) {
+      flight.routeIndex += 1;
+    }
+
+    const routePoint = flight.routePoints[Math.min(flight.routeIndex, finalRouteIndex)] ?? flight.destinationPosition;
+    const remainingRoutePoints = finalRouteIndex - flight.routeIndex;
+    if (flight.phase !== 'approach' && (remainingRoutePoints <= 1 || horizontalDistance <= flight.approachRadius)) {
+      flight.phase = 'approach';
     }
 
     if (flight.phase === 'approach') {
+      this.desiredPosition.copy(flight.destinationPosition);
       this.desiredTarget.copy(flight.destinationTarget);
     } else {
-      const dx = flight.destinationPosition.x - this.camera.position.x;
-      const dz = flight.destinationPosition.z - this.camera.position.z;
-      const length = Math.max(0.001, Math.hypot(dx, dz));
-      const ahead = THREE.MathUtils.clamp(horizontalDistance * 0.34, 6, 16);
-      const x = this.camera.position.x + dx / length * ahead;
-      const z = this.camera.position.z + dz / length * ahead;
-      const terrain = elevationAt(x, z);
-      // Look along the route, not instantly at the remote subject. This keeps yaw/pitch changes
-      // physically coupled to the flight instead of snapping the gaze across the world.
-      this.desiredTarget.set(x, Math.max(terrain + 1.4, Math.min(this.camera.position.y - 0.8, flight.destinationTarget.y + 4)), z);
+      this.desiredPosition.copy(routePoint);
+      // Preserve a graceful terrain-following envelope while allowing the path to stay low.
+      this.desiredPosition.y = Math.max(
+        this.desiredPosition.y,
+        elevationAt(this.desiredPosition.x, this.desiredPosition.z) + 1.2,
+      );
+
+      const gazeIndex = Math.min(finalRouteIndex, flight.routeIndex + 2);
+      const gazePoint = flight.routePoints[gazeIndex] ?? flight.destinationPosition;
+      const terrain = elevationAt(gazePoint.x, gazePoint.z);
+      this.desiredTarget.set(
+        gazePoint.x,
+        Math.max(terrain + 1.2, Math.min(this.camera.position.y - 0.55, flight.destinationTarget.y + 3.2)),
+        gazePoint.z,
+      );
     }
 
     const before = this.camera.position.clone();
@@ -1782,8 +1801,23 @@ export class CameraDirector {
       this.positionVelocity.multiplyScalar(0.2);
       this.flightAcceleration.set(0, 0, 0);
       flight.obstructionRetries += 1;
-      flight.cruiseHeight = Math.min(flight.maximumCruiseHeight, flight.cruiseHeight + 1.4);
-      flight.phase = 'depart';
+      // First try a lateral route alternative instead of turning every obstruction into altitude.
+      const currentRoute = flight.routePoints[flight.routeIndex];
+      const nextRoute = flight.routePoints[Math.min(flight.routeIndex + 1, flight.routePoints.length - 1)];
+      if (currentRoute && nextRoute) {
+        const direction = nextRoute.clone().sub(this.camera.position);
+        const horizontal = new THREE.Vector3(direction.x, 0, direction.z);
+        if (horizontal.lengthSq() > 0.01) {
+          const side = new THREE.Vector3(-horizontal.z, 0, horizontal.x).normalize();
+          const amount = flight.obstructionRetries % 2 === 0 ? 1.6 : -1.6;
+          currentRoute.addScaledVector(side, amount);
+          currentRoute.y = Math.max(currentRoute.y, elevationAt(currentRoute.x, currentRoute.z) + flightClearance + 0.35);
+        }
+      }
+      if (flight.obstructionRetries % 3 === 0) {
+        flight.cruiseHeight = Math.min(flight.maximumCruiseHeight, flight.cruiseHeight + 0.9);
+      }
+      flight.phase = 'cruise';
     }
 
     const remainingDistance = this.camera.position.distanceTo(flight.destinationPosition);
