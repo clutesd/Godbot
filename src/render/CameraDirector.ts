@@ -177,14 +177,25 @@ export function cameraClearanceFor(kind: ObservationKind | undefined): CameraCle
   if (kind === 'settlement-approach' || kind === 'institution-exterior' || kind === 'infrastructure-scene') {
     return { lens: 0.9, sightline: 0.3 };
   }
-  if (kind === 'landscape-pause') return { lens: 1.15, sightline: 0.38 };
   return { lens: 3, sightline: 1.6 };
+}
+
+export function cameraClearanceForScene(kind: ObservationKind | undefined, sceneId?: string): CameraClearance {
+  if (isScenicFlightScene(sceneId)) return { lens: 1.05, sightline: 0.34 };
+  return cameraClearanceFor(kind);
 }
 
 export function cameraTargetFloorFor(kind: ObservationKind | undefined): number {
   if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.08;
   if (kind === 'street-observation' || kind === 'traveler-follow') return 0.12;
   return 0.35;
+}
+
+export function cameraTargetFloorForScene(kind: ObservationKind | undefined, sceneId?: string): number {
+  const scenic = scenicFlightProfileFor(sceneId);
+  if (scenic?.motif === 'wildlife') return 0.1;
+  if (scenic) return 0.22;
+  return cameraTargetFloorFor(kind);
 }
 
 const PERSONAL_CAMERA_KINDS = new Set<ObservationKind>([
@@ -1292,13 +1303,14 @@ export class CameraDirector {
       ?? this.config.camera.transitionSeconds * cameraTransitionScaleFor(this.currentScene?.kind);
     advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, transitionSeconds);
     advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, transitionSeconds / 1.22);
-    const clearance = cameraClearanceFor(this.currentScene?.kind);
+    const clearance = cameraClearanceForScene(this.currentScene?.kind, this.currentScene?.id);
     const lensFloor = elevationAt(this.camera.position.x, this.camera.position.z) + clearance.lens;
     if (this.camera.position.y < lensFloor) {
       this.camera.position.y = lensFloor;
       this.positionVelocity.y = Math.max(0, this.positionVelocity.y);
     }
-    const targetFloor = elevationAt(this.lookTarget.x, this.lookTarget.z) + cameraTargetFloorFor(this.currentScene?.kind);
+    const targetFloor = elevationAt(this.lookTarget.x, this.lookTarget.z)
+      + cameraTargetFloorForScene(this.currentScene?.kind, this.currentScene?.id);
     if (this.lookTarget.y < targetFloor) {
       this.lookTarget.y = targetFloor;
       this.targetVelocity.y = Math.max(0, this.targetVelocity.y);
@@ -1566,7 +1578,7 @@ export class CameraDirector {
     // Validate the endpoint independently from the travel corridor. If the exact authored pose is
     // inside scenery, choose the nearest readable endpoint now; CameraFlight will still reach it
     // continuously rather than allowing resolveCameraSafety to teleport there later.
-    const endpointClearance = cameraClearanceFor(scene.kind);
+    const endpointClearance = cameraClearanceForScene(scene.kind, scene.id);
     const endpoint = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, {
       lensClearance: endpointClearance.lens,
       sightlineClearance: endpointClearance.sightline,
@@ -1732,8 +1744,8 @@ export class CameraDirector {
       flight.gazeLimits,
     );
 
-    const departureClearance = cameraClearanceFor(this.acquiredScene?.kind).lens;
-    const destinationClearance = cameraClearanceFor(this.currentScene.kind).lens;
+    const departureClearance = cameraClearanceForScene(this.acquiredScene?.kind, this.acquiredScene?.id).lens;
+    const destinationClearance = cameraClearanceForScene(this.currentScene.kind, this.currentScene.id).lens;
     const flightClearance = Math.max(0.42, Math.min(1.2, departureClearance, destinationClearance));
     if (!cameraFlightCorridorSafe(state, before, this.camera.position, elevationAt, flightClearance, this.environmentProbe)) {
       // Never cross geometry to preserve a schedule. Return to the last valid frame, bleed momentum,
@@ -1985,7 +1997,7 @@ export class CameraDirector {
         const angle = baseAngle + authoredOrbit + microOrbit;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
-        const clearance = cameraClearanceFor(scene.kind);
+        const clearance = cameraClearanceForScene(scene.kind, scene.id);
         const platformLift = Math.max(0, action?.platformHeight ?? 0) * 0.62;
         this.desiredTarget.copy(this.trackedFocus);
         this.desiredPosition.set(
@@ -2123,7 +2135,7 @@ export class CameraDirector {
    * the lens and the subject, clearing only the camera's own footprint is not enough.
    */
   private raiseForTerrain(elevationAt: (x: number, z: number) => number): void {
-    const clearance = cameraClearanceFor(this.currentScene?.kind);
+    const clearance = cameraClearanceForScene(this.currentScene?.kind, this.currentScene?.id);
     this.desiredPosition.y = Math.max(
       this.desiredPosition.y,
       elevationAt(this.desiredPosition.x, this.desiredPosition.z) + clearance.lens,
