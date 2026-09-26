@@ -29,12 +29,6 @@ interface EditorialMemoryEntry {
   threadId: string;
 }
 
-const WIDE_KINDS = new Set<ObservationKind>([
-  'world-establishing', 'regional-travel', 'battle-overview', 'aftermath-pullback',
-  'city-growth-timelapse', 'landscape-pause', 'historian-context', 'orbital-establishing',
-  'civilization-ending',
-]);
-
 const MEDIUM_KINDS = new Set<ObservationKind>([
   'settlement-approach', 'institution-exterior', 'infrastructure-scene', 'atomic-threshold',
 ]);
