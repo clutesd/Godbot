@@ -607,14 +607,25 @@ function waterKindAt(world: WorldState, index: number): number {
  * become separate surfaces. Ordinary downhill channel samples must stay connected; treating a
  * large but continuous grade as a discontinuity produces the floating water shelves seen from
  * low documentary camera angles. */
-function crossesMappedWaterfall(world: WorldState, a: number, b: number): boolean {
-  if (a === b) return false;
+function touchesMappedWaterfall(world: WorldState, index: number): boolean {
   const { terrain } = world;
-  if (!terrain.river[a] || !terrain.river[b]) return false;
+  if (!terrain.river[index]) return false;
+  if ((terrain.fall[index] ?? 0) >= 0.22) return true;
   const downstream = terrain.drainage?.downstream;
   if (!downstream) return false;
-  return (downstream[a] === b && (terrain.fall[a] ?? 0) >= 0.22)
-    || (downstream[b] === a && (terrain.fall[b] ?? 0) >= 0.22);
+  const x = index % terrain.resolution;
+  const z = Math.floor(index / terrain.resolution);
+  for (let dz = -1; dz <= 1; dz += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = x + dx;
+      const nz = z + dz;
+      if (nx < 0 || nz < 0 || nx >= terrain.resolution || nz >= terrain.resolution) continue;
+      const neighbour = nz * terrain.resolution + nx;
+      if ((terrain.fall[neighbour] ?? 0) >= 0.22 && downstream[neighbour] === index) return true;
+    }
+  }
+  return false;
 }
 
 /** Wet-only interpolation removes terraced puddles without allowing a dry sample to become water. */
@@ -635,15 +646,17 @@ function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fall
     [z1 * terrain.resolution + x1, tx * tz],
   ];
   const fallback = terrain.waterLevel[fallbackIndex] ?? seaLevel;
+  const localY = elevationToY(fallback, seaLevel);
   let weighted = 0;
   let weight = 0;
   for (const [index, influence] of samples) {
     const level = terrain.waterLevel[index] ?? -1;
     if (level < 0 || influence <= 0) continue;
-    // Do not infer a waterfall from height difference alone. That heuristic split ordinary
-    // descending rivers into disconnected horizontal plates. The hydrology already marks real
-    // falls and the dedicated waterfall sheet owns their vertical connection.
-    if (crossesMappedWaterfall(world, fallbackIndex, index)) continue;
+    // Do not infer a waterfall from height difference alone. Only a large jump touching an
+    // explicit hydrology fall is separated; ordinary descending reaches remain one surface.
+    const separatedByMappedFall = Math.abs(elevationToY(level, seaLevel) - localY) > 0.32
+      && (touchesMappedWaterfall(world, fallbackIndex) || touchesMappedWaterfall(world, index));
+    if (separatedByMappedFall) continue;
     weighted += level * influence;
     weight += influence;
   }
