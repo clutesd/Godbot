@@ -1,6 +1,32 @@
 import * as THREE from 'three';
 import type { TreeFamily } from './TreeLibrary';
 
+export const CAMERA_CANOPY_DISSOLVE = {
+  fullDistance: 2.8,
+  clearDistance: 11.5,
+  innerAngle: 0.075,
+  outerAngle: 0.22,
+  maxDissolve: 0.9,
+} as const;
+
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const smoothstep01 = (value: number): number => {
+  const t = clamp01(value);
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * CPU mirror of the foliage shader envelope, used by tests and tuning tools.
+ * `tangentAngle` is view-space radial offset / forward depth, so the response is resolution and FOV stable.
+ */
+export function cameraCanopyDissolveStrength(distance: number, tangentAngle: number): number {
+  const distanceSpan = CAMERA_CANOPY_DISSOLVE.clearDistance - CAMERA_CANOPY_DISSOLVE.fullDistance;
+  const angleSpan = CAMERA_CANOPY_DISSOLVE.outerAngle - CAMERA_CANOPY_DISSOLVE.innerAngle;
+  const near = 1 - smoothstep01((distance - CAMERA_CANOPY_DISSOLVE.fullDistance) / Math.max(0.001, distanceSpan));
+  const centered = 1 - smoothstep01((tangentAngle - CAMERA_CANOPY_DISSOLVE.innerAngle) / Math.max(0.001, angleSpan));
+  return clamp01(near * centered * CAMERA_CANOPY_DISSOLVE.maxDissolve);
+}
+
 /** Shared colour/shadow deformation. Attributes are owned by each existing instance bucket. */
 export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foliage', family: TreeFamily, height: number): THREE.InstancedBufferAttribute {
   const state = new THREE.InstancedBufferAttribute(new Float32Array(mesh.instanceMatrix.count * 4), 4);
@@ -15,6 +41,18 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
     float fractureY = treeHeight * treeCondition.x + treeHeight * 0.008 *
       (sin(treeLocal.x * 173.0 + treeCondition.z) + sin(treeLocal.z * 131.0));
     if (treeCondition.x < 0.999 && treeLocal.y > fractureY) discard;
+  `;
+  const canopyDissolve = `
+    // Presentation-only foreground clearing. vViewPosition is already supplied by MeshStandardMaterial:
+    // it lets foliage yield around the centre of the lens without deleting trees or touching bark.
+    float canopyViewDistance = length(vViewPosition);
+    float canopyViewAngle = length(vViewPosition.xy) / max(abs(vViewPosition.z), 0.001);
+    float canopyNear = 1.0 - smoothstep(${CAMERA_CANOPY_DISSOLVE.fullDistance.toFixed(3)}, ${CAMERA_CANOPY_DISSOLVE.clearDistance.toFixed(3)}, canopyViewDistance);
+    float canopyCentered = 1.0 - smoothstep(${CAMERA_CANOPY_DISSOLVE.innerAngle.toFixed(3)}, ${CAMERA_CANOPY_DISSOLVE.outerAngle.toFixed(3)}, canopyViewAngle);
+    float canopyFade = canopyNear * canopyCentered * ${CAMERA_CANOPY_DISSOLVE.maxDissolve.toFixed(3)};
+    vec3 canopyCell = floor((treeLocal / max(treeHeight, 0.001)) * 41.0);
+    float canopyDither = fract(sin(dot(canopyCell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    if (canopyDither < canopyFade) discard;
   `;
   for (const target of [material, depth, distance]) {
     target.onBeforeCompile = shader => {
@@ -32,7 +70,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
       shader.fragmentShader = `uniform float treeHeight; ${declarations}\n${shader.fragmentShader}`;
       shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
         #include <clipping_planes_fragment>
-        ${bark ? fracture : 'if (treeCondition.x < 0.001) discard;'}
+        ${bark ? fracture : `if (treeCondition.x < 0.001) discard;${target === material ? canopyDissolve : ''}`}
       `);
       if (!bark && target === material) {
         // Thin foliage scatters incident light; keep this light-dependent so nights stay dark.
