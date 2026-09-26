@@ -2141,6 +2141,7 @@ export class CameraDirector {
     this.observation.audioCategory = 'settlement';
     this.observation.eventType = 'ARRIVAL_DAY';
     this.observation.eventMonth = 0;
+    this.observation.narrationVisible = false;
     this.observation.revision += 1;
   }
 
@@ -2204,7 +2205,15 @@ export class CameraDirector {
     this.observation.revision += 1;
   }
 
-  private sequenceState(shot: CinematicPlannedShot): NonNullable<CameraDirector['activeSequence']> {
+  private sequenceState(shot: CinematicPlannedShot): {
+    id: string;
+    ordinal: number;
+    total: number;
+    role: CinematicBeatRole;
+    narrate: boolean;
+    scale: DocumentaryShotScale;
+    threadId: string;
+  } {
     return {
       id: shot.sequenceId,
       ordinal: shot.ordinal,
@@ -2247,8 +2256,12 @@ export class CameraDirector {
     const partnerPresent = presentation?.partnerId
       ? Boolean(this.subjectPresentation?.(presentation.partnerId))
       : undefined;
-    const subjectPresent = ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)
-      ? Boolean(state.people.find(person => person.alive && person.id === scene.subjectId) && presentation)
+    const personalScene = ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind);
+    const livingSubject = personalScene
+      ? Boolean(state.people.find(person => person.alive && person.id === scene.subjectId))
+      : undefined;
+    const subjectPresent = personalScene
+      ? this.subjectPresentation ? Boolean(livingSubject && presentation) : livingSubject
       : undefined;
     return documentaryShotShouldComplete({
       mode: scene.editorial?.completion,
@@ -2273,8 +2286,7 @@ export class CameraDirector {
     ground: number,
     elevationAt: (x: number, z: number) => number,
   ): number {
-    // The final corridor authority uses actual placements; do not pre-rotate from forest cells.
-    if (this.environmentProbe || !FOREST_AWARE_KINDS.has(kind)) return baseAzimuth;
+    if (!FOREST_AWARE_KINDS.has(kind)) return baseAzimuth;
 
     let bestAzimuth = baseAzimuth;
     let bestScore = Number.POSITIVE_INFINITY;
@@ -2284,12 +2296,23 @@ export class CameraDirector {
       const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius;
       const clearance = cameraClearanceFor(kind);
       this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + clearance.lens), z);
-      const forestObstruction = forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
+
+      // Renderer geometry is authoritative when available. Search nearby angles once at shot
+      // authoring time so a tree can live on the edge of frame rather than forcing visibility
+      // recovery after the lens has already arrived behind it.
+      const validity = cameraShotValidity(state, this.forestCandidatePosition, this.shotBaseTarget, elevationAt, {
+        lensClearance: clearance.lens,
+        sightlineClearance: clearance.sightline,
+        environmentProbe: this.environmentProbe,
+      });
+      const fallbackForest = this.environmentProbe
+        ? 0
+        : forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
       const structureObstruction = structureSightlineObstruction(state, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
-      // Preserve the authored side when it is genuinely usable, but never prefer it over an angle
-      // that keeps a low lens out of a wall or removes a building from the subject sightline.
+      const hardPenalty = validity.valid ? 0 : 12;
+      const visibilityPenalty = (1 - validity.subjectVisibility) * 3.4;
       const compositionPenalty = Math.abs(offset) * 0.035;
-      const score = forestObstruction + structureObstruction + compositionPenalty;
+      const score = hardPenalty + visibilityPenalty + fallbackForest * 2 + structureObstruction * 4 + compositionPenalty;
       if (score < bestScore) {
         bestScore = score;
         bestAzimuth = azimuth;
