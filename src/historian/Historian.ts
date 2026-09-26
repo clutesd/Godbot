@@ -232,7 +232,9 @@ export class Historian {
       const localPopulation = settlementRepresentedPopulation(state, settlement.id);
       const shown = this.shownSubjects.get(settlement.id) ?? 0;
       const base = 0.43 + Math.min(0.2, people.length / 600) + settlement.prosperity * 0.12 - shown * 0.045;
-      const kind: ObservationKind = settlement.industry.active ? 'city-growth-timelapse' : settlement.urbanization > 0.35 ? 'street-observation' : 'settlement-approach';
+      // A settlement center is geographic context, not a human subject. Reserve human-scale
+      // observation kinds for candidates that resolve to actual people.
+      const kind: ObservationKind = settlement.industry.active ? 'city-growth-timelapse' : 'settlement-approach';
       const statement = this.statement({
         month: state.month,
         text: state.month - settlement.foundedMonth >= this.config.historicalPace.generationYears * 24
