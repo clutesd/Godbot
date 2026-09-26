@@ -34,7 +34,8 @@ describe('scenic low-flight camera grammar', () => {
 
   it('spaces beauty shots between documentary beats and never displaces priority scenes', () => {
     expect(shouldScheduleScenicFlight(1, undefined, 'ordinary:one')).toBe(false);
-    expect(shouldScheduleScenicFlight(2, undefined, 'ordinary:two')).toBe(true);
+    expect(shouldScheduleScenicFlight(2, undefined, 'ordinary:two')).toBe(false);
+    expect(shouldScheduleScenicFlight(6, undefined, 'ordinary:six')).toBe(true);
     expect(shouldScheduleScenicFlight(4, 'major-event', 'ordinary:three')).toBe(false);
     expect(shouldScheduleScenicFlight(4, undefined, 'human:a:b')).toBe(false);
     expect(shouldScheduleScenicFlight(4, undefined, 'founding:overview:event')).toBe(false);
@@ -54,11 +55,11 @@ describe('scenic low-flight camera grammar', () => {
     const fallback = historian.chooseScene(simulation.state);
     const before = JSON.stringify(simulation.state);
 
-    const scenic = scenicObservationFor(simulation.state, fallback, 1, [{
+    const scenic = scenicObservationFor(simulation.state, fallback, 1, [{ id: 'distant-elk', species: 'elk', x: 10000, z: 10000, yaw: 0, moving: true }, {
       id: 'elk-camera-subject',
       species: 'elk',
-      x: 4,
-      z: -3,
+      x: fallback.position.x + 2,
+      z: fallback.position.z,
       yaw: 0.4,
       moving: true,
     }]);
@@ -66,7 +67,7 @@ describe('scenic low-flight camera grammar', () => {
     expect(scenic).toBeDefined();
     expect(scenic?.id.startsWith('scenic:wildlife:')).toBe(true);
     expect(scenic?.kind).toBe('landscape-pause');
-    expect(scenic?.position).toEqual({ x: 4, z: -3 });
+    expect(scenic?.position).toEqual({ x: fallback.position.x + 2, z: fallback.position.z });
     expect(scenic?.audioCategory).toBe('ambient-wilderness');
     expect(scenic?.event).toBeUndefined();
     expect(scenic?.statement.sourceEntityIds).toEqual([]);

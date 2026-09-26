@@ -18,6 +18,7 @@ import { setAutonomousCameraMode } from './CameraControlMode';
 import { ManualCameraController } from './ManualCameraController';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
+import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthFireMotion } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
@@ -195,7 +196,8 @@ const HUMAN_WORLD_SCALE = 0.28;
 const NO_ACTIVITY_STRUCTURES: readonly ActivityStructure[] = [];
 function foundingCampGroundArtifacts(state: SimulationState): Array<{ x: number; z: number; radius: number }> {
   const pods = state.arrival?.pods ?? [];
-  const artifacts = pods.filter(pod => pod.landed).map(pod => ({ ...pod.position, radius: 1.8 }));
+  const artifacts = pods.map(pod => ({ ...pod.position, radius: arrivalClearingRadius(pod, state.arrival!.elapsedSeconds) }))
+    .filter(zone => zone.radius > 0);
   for (const settlement of state.settlements) {
     const hearth = foundingHearthWorldPosition(settlement, pods);
     if (hearth) artifacts.push({ ...hearth, radius: FOUNDING_HEARTH_RESERVE_RADIUS });
@@ -368,6 +370,7 @@ export class GodboxRenderer {
   private readonly postProcessing: EcologyPostProcessing;
   private readonly maintenance = new RenderMaintenanceScheduler();
   private arrivalRenderBudgetActive = false;
+  private arrivalGroundSignature = '';
   private humanPresentationVisible = true;
   private readonly arrivalVegetationCamera = new THREE.Vector3();
   private readonly routePlacementReports = new Map<string, RoutePlacementReport>();
@@ -589,6 +592,14 @@ export class GodboxRenderer {
     if (this.adaptiveResolution.sample(deltaSeconds)) this.resize();
 
     const renderPolicy = arrivalRenderPolicy(this.state);
+    if (renderPolicy.active && this.state.arrival) {
+      const signature = this.state.arrival.pods.map(p => Math.floor(arrivalClearingRadius(p, this.state.arrival!.elapsedSeconds) * 2)).join(':');
+      if (signature !== this.arrivalGroundSignature) {
+        this.arrivalGroundSignature = signature;
+        this.vegetation.setDisturbance(this.state.settlements, foundingCampGroundArtifacts(this.state));
+        this.vegetation.updateLod(this.camera.position);
+      }
+    }
     if (renderPolicy.active !== this.arrivalRenderBudgetActive) {
       this.arrivalRenderBudgetActive = renderPolicy.active;
       if (!renderPolicy.active) {
@@ -958,7 +969,10 @@ export class GodboxRenderer {
       }, deltaSeconds);
       const aim = worker ? resourceWorkAlternateAnchor(worker.site.profile, worker.variation, elapsedSeconds)
         ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? local?.destination ?? base;
-      const visual = this.peopleVisuals.resolve(person.id, {
+      const foundingPod = person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'
+        ? this.state.arrival?.pods.find(p => p.id === person.foundingOrigin?.podId) : undefined;
+      const egress = foundingPod ? arrivalFounderPose(person, foundingPod, this.state.arrival!.elapsedSeconds, this.personGround.heightAt) : undefined;
+      const visual = egress ? this.peopleVisuals.stageArrival(person.id, egress, this.personGround) : this.peopleVisuals.resolve(person.id, {
         destination: aim,
         greetingPartnerId: local?.encounter?.beat === 0 && ['hug', 'handshake'].includes(local.encounter.greeting ?? '') ? local.encounter.partnerId : undefined,
         embracing: local?.encounter?.beat === 0 && local.encounter.greeting === 'hug',

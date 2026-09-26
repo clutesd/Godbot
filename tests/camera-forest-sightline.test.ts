@@ -241,20 +241,20 @@ describe('Arrival Day editorial pacing', () => {
       expect(timing.transitionSeconds).toBeLessThan(timing.durationSeconds);
     }
     expect(overview.durationSeconds).toBeGreaterThanOrEqual(portrait.durationSeconds);
-    expect(release.durationSeconds).toBeGreaterThanOrEqual(portrait.durationSeconds);
-    expect(release.transitionSeconds).toBeGreaterThanOrEqual(portrait.transitionSeconds);
+    expect(release.durationSeconds).toBeLessThanOrEqual(portrait.durationSeconds);
+    expect(release.transitionSeconds).toBeLessThanOrEqual(portrait.transitionSeconds);
     expect(overview.durationSeconds + portrait.durationSeconds * 2 + release.durationSeconds).toBeLessThan(30);
     expect(foundingEditorialTimingFor('ordinary:scene')).toBeUndefined();
   });
 
-  it('lets documentary anchors settle, then gives the silent release at least as much breathing room', () => {
+  it('lets documentary anchors settle, then releases promptly into human activity', () => {
     const framing = foundingEditorialTimingFor('founding-cast:framing:event-1')!;
     const portrait = foundingEditorialTimingFor('founding-cast:introduction:0:person-1')!;
     const release = foundingEditorialTimingFor('founding-release:event-1')!;
 
     expect(framing.durationSeconds).toBeLessThanOrEqual(portrait.durationSeconds);
-    expect(release.durationSeconds).toBeGreaterThan(portrait.durationSeconds);
-    expect(release.transitionSeconds).toBeGreaterThanOrEqual(portrait.transitionSeconds);
+    expect(release.durationSeconds).toBeLessThanOrEqual(portrait.durationSeconds);
+    expect(release.transitionSeconds).toBeLessThanOrEqual(portrait.transitionSeconds);
     expect(isFoundingReleaseScene('founding-release:event-1')).toBe(true);
     expect(isFoundingReleaseScene('ordinary:scene')).toBe(false);
     expect(foundingEditorialTimingFor(undefined)).toBeUndefined();

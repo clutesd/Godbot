@@ -44,7 +44,7 @@ export interface FoundingArrivalState {
   pods: FoundingPod[];
   minimumSeparation: number;
 }
-export const ARRIVAL_END_SECONDS = 78;
+export const ARRIVAL_END_SECONDS = 38;
 
 export function isArrivalFilmPhase(phase: ArrivalPhase | undefined): boolean {
   return phase === 'PRISTINE_WORLD' || phase === 'ARRIVAL_SEQUENCE' || phase === 'FOUNDERS_LANDED';
@@ -105,7 +105,7 @@ export function createFoundingArrival(world: WorldState, seed: string): Founding
         domains: [...profile.domains], knowledge: [...profile.knowledge], position: site.point,
         groundY: surfaceHeightAt(world, site.point.x, site.point.z), cellIndex: site.cell.z * world.size + site.cell.x,
         population: 22, personIds: [], landed: false, condition: 1, shelterCapacity: 4,
-        entrySeconds: 13 + [0, 1.8, 4.3, 5.5, 7.6][i]!, descentSeconds: 12 + [0, 1.2, -0.4, 0.7, 1.4][i]!,
+        entrySeconds: 5 + [0, 1.8, 4.3, 5.5, 7.6][i]!, descentSeconds: 12 + [0, 1.2, -0.4, 0.7, 1.4][i]!,
         entryOffset: { x: -20 + i * 6, z: -25 - i * 2 }, supplies: { food: 100, goods: 6, timber: 8, stone: 3 },
         site: {
           biome: site.cell.biome,
@@ -138,11 +138,15 @@ export class FoundingArrivalDirector {
     if (state.phase === 'FOUNDING_ORIENTATION' || state.phase === 'HISTORY_RUNNING') return;
     if (!Number.isFinite(delta) || delta < 0) return;
     const previous = state.elapsedSeconds;
-    const t = Math.min(ARRIVAL_END_SECONDS, previous + delta);
+    // Older archives retain their original descent timestamps. Never clamp their clock
+    // before the last passenger can emerge, or their history gate would remain closed forever.
+    const endSeconds = Math.max(ARRIVAL_END_SECONDS, ...state.pods.map(pod =>
+      podTouchdown(pod) + 1.5 + pod.population / 5 + 0.1));
+    const t = Math.min(endSeconds, previous + delta);
     // Fixed event ordering makes replay and skipped preview time match real-time playback.
     for (let tick = Math.floor(previous * 10 + 1e-8) + 1; tick <= Math.floor(t * 10 + 1e-8); tick++) {
       state.elapsedSeconds = tick / 10;
-      if (state.elapsedSeconds >= 12) state.phase = 'ARRIVAL_SEQUENCE';
+      if (state.elapsedSeconds >= 4) state.phase = 'ARRIVAL_SEQUENCE';
       for (const pod of state.pods) {
         if (state.elapsedSeconds + 1e-8 >= podTouchdown(pod) && !pod.landed) { land(pod); pod.landed = true; }
         if (pod.landed) emerge(pod, Math.min(pod.population, Math.max(0, Math.floor((state.elapsedSeconds - podTouchdown(pod) - 1.5) * 5 + 1e-8))));
@@ -150,7 +154,7 @@ export class FoundingArrivalDirector {
     }
     state.elapsedSeconds = t;
     if (state.pods.every(p => p.landed)) state.phase = 'FOUNDERS_LANDED';
-    if (t >= ARRIVAL_END_SECONDS && state.pods.every(p => p.personIds.length === p.population)) {
+    if (t >= endSeconds && state.pods.every(p => p.personIds.length === p.population)) {
       // The physical Arrival film is complete, but authoritative monthly history has NOT started.
       // The presentation layer now owns a finite Year-Zero orientation/cast sequence. Only an
       // explicit Simulation.beginHistory() call may cross the final boundary into Month 1.

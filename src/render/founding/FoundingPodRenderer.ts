@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { isArrivalFilmPhase, podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
 import type { SimulationState } from '../../sim/types';
+import { ARRIVAL_HATCH } from './ArrivalChoreography';
 
 const TRAIL_SAMPLES = 64;
 const DUST_COUNT = 56;
@@ -47,6 +48,18 @@ export class FoundingPodRenderer {
       new THREE.Vector2(0.48, 0.72), new THREE.Vector2(0.32, 0.91),
       new THREE.Vector2(0.26, 1.02),
     ], 10).toNonIndexed();
+    // A real opening, not a door painted over a solid hull. Remove only the front lower panels.
+    const source = geometry.getAttribute('position');
+    const panels: number[] = [];
+    for (let i = 0; i < source.count; i += 3) {
+      const x = (source.getX(i) + source.getX(i + 1) + source.getX(i + 2)) / 3;
+      const y = (source.getY(i) + source.getY(i + 1) + source.getY(i + 2)) / 3;
+      const z = (source.getZ(i) + source.getZ(i + 1) + source.getZ(i + 2)) / 3;
+      if (z < -0.45 && Math.abs(x) < 0.32 && y < 0.1) continue;
+      for (let j = 0; j < 3; j++) panels.push(source.getX(i + j), source.getY(i + j), source.getZ(i + j));
+    }
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(panels, 3));
+    geometry.deleteAttribute('normal'); geometry.deleteAttribute('uv');
     geometry.computeVertexNormals();
     const positions = geometry.getAttribute('position');
     const colors: number[] = [];
@@ -61,7 +74,7 @@ export class FoundingPodRenderer {
   }
   private readonly shieldGeometry = new THREE.CylinderGeometry(0.95, 0.69, 0.3, 10);
   private readonly bandGeometry = new THREE.TorusGeometry(0.73, 0.028, 5, 20);
-  private readonly hatchGeometry = new THREE.BoxGeometry(0.43, 0.72, 0.07);
+  private readonly hatchGeometry = new THREE.BoxGeometry(0.62, ARRIVAL_HATCH.length, 0.05);
   private readonly runeStrokeGeometry = new THREE.BoxGeometry(0.016, 0.24, 0.012);
 
   constructor(private readonly state: SimulationState) {
@@ -141,12 +154,16 @@ export class FoundingPodRenderer {
     seal.name = 'crown-astrolabe'; seal.position.y = 1.16; seal.rotation.x = 0.35;
     hull.add(seal);
     const hatch = new THREE.Group();
-    hatch.position.set(0, -0.58, -0.87);
+    hatch.position.set(0, ARRIVAL_HATCH.sill - 1.1, ARRIVAL_HATCH.z);
     const door = new THREE.Mesh(this.hatchGeometry, this.shieldMaterial);
     door.name = 'dark-bronze-hatch';
-    door.position.y = 0.36;
+    door.position.y = ARRIVAL_HATCH.length / 2;
     hatch.add(door);
     hull.add(hatch);
+    const interior = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.82), new THREE.MeshBasicMaterial({ color: '#101a19', side: THREE.DoubleSide }));
+    interior.name = 'open-hatch-interior';
+    interior.position.set(0, -0.35, -0.58);
+    hull.add(interior);
 
     const { core: runeCore, halo: runeHalo } = this.addRunes(hull, hatch, pod);
 
@@ -308,12 +325,12 @@ export class FoundingPodRenderer {
     for (const v of this.visuals) {
       const p = podPosition(v.pod, t);
       const age = t - podTouchdown(v.pod);
-      v.hull.visible = t >= v.pod.entrySeconds;
+      v.hull.visible = t >= Math.max(1, v.pod.entrySeconds - 5);
       v.hull.position.set(p.x, p.y, p.z);
       const settling = age >= 0 ? Math.exp(-age * 4) : 0;
       v.hull.rotation.z = age < 0 ? (1 - Math.min(1, (t - v.pod.entrySeconds) / v.pod.descentSeconds)) * 0.18 : Math.sin(age * 31) * settling * 0.015;
       v.hull.position.y -= settling * Math.sin(Math.max(0, age) * 16) * 0.045;
-      v.hatch.rotation.x = -THREE.MathUtils.smoothstep(age, 0.8, 2.8) * 1.8;
+      v.hatch.rotation.x = -THREE.MathUtils.smoothstep(age, 0.45, 1.65) * ARRIVAL_HATCH.angle;
       v.light.opacity = age < 0 ? 0.9 : Math.max(0.12, Math.exp(-age * 0.6));
       const runePulse = 0.5 + Math.sin(t * 0.72 + v.pod.entrySeconds * 0.41) * 0.5;
       v.runeCore.opacity = (age < 0 ? 0.66 : 0.48) + runePulse * 0.12;

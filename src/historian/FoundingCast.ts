@@ -322,8 +322,8 @@ function releaseScene(
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return {
     id: `founding-release:${arrival.id}`,
-    subjectId: 'world',
-    kind: 'street-observation',
+    subjectId: person.id,
+    kind: 'worker-follow',
     position: person.position,
     title: 'THE FIRST DAY',
     statement,

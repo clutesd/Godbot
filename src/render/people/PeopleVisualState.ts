@@ -205,6 +205,18 @@ export class PeopleVisualStateStore {
     return state;
   }
 
+  /** An authored physical egress path may stand on the vessel ramp instead of terrain. */
+  stageArrival(personId: string, pose: Vec2 & { footY: number; facing: number; speed: number }, ground: PersonVisualGround): PersonVisualState {
+    const state = this.states.get(personId) ?? this.spawn(personId, pose, ground);
+    this.states.set(personId, state);
+    Object.assign(state, pose, { lastFrame: this.frame, snapped: false, traveling: pose.speed > 0,
+      originX: pose.x, originZ: pose.z, destinationX: pose.x, destinationZ: pose.z,
+      velocityX: Math.sin(pose.facing) * pose.speed, velocityZ: Math.cos(pose.facing) * pose.speed,
+      lastGroundX: pose.x, lastGroundZ: pose.z, path: [{ x: pose.x, z: pose.z }], waypoint: 1, progress: 1,
+      desiredFacing: pose.facing, blocked: false });
+    return state;
+  }
+
   private depenetrate(state: PersonVisualState, personId: string, ground: PersonVisualGround): boolean {
     if (safeGroundSegment(state, state, ground)) return false;
     const recovered = nearestSafeVisualPoint({ x: state.x, z: state.z }, `${personId}:depenetrate`, ground);

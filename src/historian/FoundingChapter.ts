@@ -195,8 +195,8 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
     ? `${count} separated communities`
     : `${resolvedCount} traceable communities from ${count} recorded vessels`;
   const thesis = differingStartingConditions(baseline)
-    ? 'Their land, knowledge, skills, and supplies differ. This is the last moment their histories are known together. From here, we watch what those differences become.'
-    : 'They begin from the same recorded conditions. This is the last moment their histories are known together. From here, we watch how their paths separate.';
+    ? 'Different land. Different knowledge. What will they build here?'
+    : 'A shared beginning. What will they build here?';
   const sourceEntityIds = baseline.communities
     .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
     .map(community => community.settlementId);
@@ -212,9 +212,9 @@ function overviewScene(historian: Historian, state: SimulationState, baseline: F
   };
   return rememberStatement(historian, {
     id: `founding:overview:${event.id}`,
-    subjectId: 'world',
-    kind: 'world-establishing',
-    position: baseline.center,
+    subjectId: state.arrival!.pods[0]!.settlementId ?? 'world',
+    kind: 'street-observation',
+    position: { x: state.arrival!.pods[0]!.position.x, z: state.arrival!.pods[0]!.position.z - 1.6 },
     title: `ARRIVAL DAY · THE ${count} LANDINGS`,
     statement,
     score: 0.98,

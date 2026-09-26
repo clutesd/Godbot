@@ -92,6 +92,11 @@ export type DocumentaryCompletionMode = 'settled' | 'subject-action' | 'sequence
  * with it before moving on.
  */
 export interface DocumentaryEditorialIntent {
+  subjectId?: string;
+  importance?: number;
+  desiredActivity?: string;
+  shotPurpose?: 'witness-change' | 'follow-up' | 'context' | 'observe';
+  completionCondition?: string;
   threadId: string;
   why: string;
   activityMeaning: number;

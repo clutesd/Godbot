@@ -1,3 +1,4 @@
+import { isEarlyDocumentary, isHumanObservation } from '../historian/EarlyDocumentary';
 import type { DocumentaryShotScale, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
 
@@ -154,7 +155,11 @@ export class CinematicSequencePlanner {
   ): CinematicPlannedShot {
     this.queue = [];
     const sequenceId = `sequence:${state.month}:${this.sequenceCounter++}:${anchor.id}`;
-    const roles = canonicalRoles(anchor);
+    const early = isEarlyDocumentary(state) && !anchor.event;
+    const intimate = early && (isHumanObservation(anchor) || anchor.kind === 'settlement-approach');
+    const roles: readonly CinematicBeatRole[] = intimate
+      ? [roleFor(anchor.kind), anchor.kind === 'worker-follow' ? 'observe' : 'detail', 'reveal']
+      : early ? [roleFor(anchor.kind)] : canonicalRoles(anchor);
     const selected: SequenceScoredCandidate[] = [];
     const usedIds = new Set<string>();
     const anchorThread = threadIdFor(anchor);
@@ -167,6 +172,10 @@ export class CinematicSequencePlanner {
       const previousScale = prior ? documentaryShotScaleFor(prior.kind) : recentScale;
       for (const scene of candidates) {
         if (usedIds.has(scene.id)) continue;
+        // An early sequence stays with the camp, and never pads scarce activity with aerials.
+        if (intimate && (distance(anchor, scene) > 12
+          || documentaryShotScaleFor(scene.kind) === 'wide'
+          || (!isHumanObservation(scene) && scene.kind !== 'infrastructure-scene'))) continue;
         const recentIndex = this.recent.findIndex(entry => entry.sceneId === scene.id);
         if (recentIndex >= 0 && scene.id !== anchor.id) continue;
 
@@ -216,7 +225,7 @@ export class CinematicSequencePlanner {
 
     let prior = previous;
     for (const role of roles) {
-      let scene = chooseForRole(role, prior);
+      let scene = intimate && selected.length === 0 ? anchor : chooseForRole(role, prior);
       if (!scene && !usedIds.has(anchor.id)) scene = anchor;
       if (!scene) continue;
       usedIds.add(scene.id);

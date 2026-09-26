@@ -84,6 +84,21 @@ function drain(planner: CinematicSequencePlanner, first: ReturnType<CinematicSeq
 }
 
 describe('CinematicSequencePlanner', () => {
+  it('opens early camp sequences on the Historian subject and stays local without aerial padding', () => {
+    const planner = new CinematicSequencePlanner();
+    const early = { ...state, arrival: { phase: 'HISTORY_RUNNING' } } as SimulationState;
+    const anchor = scene('building', 'worker-follow', 10, 10, 0.9, editorial('camp', 'detail', 0.9));
+    const shots = drain(planner, planner.plan(early, anchor, [anchor,
+      scene('resting', 'worker-follow', 11, 10, 0.7, editorial('camp', 'detail', 0.4)),
+      scene('world', 'world-establishing', 10, 10, 1, editorial('camp', 'wide')),
+      scene('remote', 'worker-follow', 50, 50, 1, editorial('other', 'detail', 1)),
+    ]));
+    expect(shots[0]!.scene.id).toBe('building');
+    expect(shots.map(shot => shot.scene.id)).toEqual(['building', 'resting']);
+    expect(shots.length).toBeLessThanOrEqual(3);
+    expect(shots.every(shot => shot.scale !== 'wide')).toBe(true);
+  });
+
   it('edits grounded scenes into establish -> approach -> observe -> detail -> reveal -> release grammar', () => {
     const planner = new CinematicSequencePlanner();
     const thread = 'settlement:a';

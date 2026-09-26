@@ -98,7 +98,8 @@ describe('Founding documentary cast 2a', () => {
     expect(release?.id).toContain('founding-release:');
     expect(release?.title).toBe('THE FIRST DAY');
     expect(release?.statement.text).toBe('The first day continues.');
-    expect(release?.kind).toBe('street-observation');
+    expect(release?.kind).toBe('worker-follow');
+    expect(simulation.state.people.some(person => person.alive && person.id === release?.subjectId)).toBe(true);
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('complete');
   });
 
