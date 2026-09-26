@@ -40,13 +40,15 @@ export interface AnimationPose {
   duration: number; // Seconds to play this frame
   pelvisRotation: number; // Rotation Y in radians
   spineRotation: number; // Curve along spine
+  spineRoll?: number;
   headRotation: number; // Head look direction
+  headPitch?: number; // Small nods/downward task attention, independent of torso pitch.
   leftShoulderRotation: number; // Upper arm rotation
-  leftElbowRotation: number; // Elbow bend (0-1)
+  leftElbowRotation: number; // Elbow flexion in radians
   rightShoulderRotation: number;
   rightElbowRotation: number;
   leftHipRotation: number;
-  leftKneeRotation: number; // 0 = straight, 1 = bent
+  leftKneeRotation: number; // Knee flexion in radians; 0 = straight
   rightHipRotation: number;
   rightKneeRotation: number;
   positionOffset: { x: number; y: number; z: number };
@@ -100,8 +102,10 @@ export interface CharacterAnimationState {
   humanSeconds: number;
   stridePhase: number;
   visualSpeed?: number;
+  gaitSpeed: number;
   ageMonths: number;
   carrying: boolean;
+  expressiveness: number;
 }
 
 /**
@@ -1017,7 +1021,7 @@ export class AnimationController {
       blendFactor: 1.0,
       playbackSpeed: 0.9 + random.float() * 0.2,
       phaseOffset: random.float(),
-      humanSeconds: 0, stridePhase: random.float() * Math.PI * 2, ageMonths: 360, carrying: false,
+      humanSeconds: 0, stridePhase: random.float() * Math.PI * 2, gaitSpeed: 0, ageMonths: 360, carrying: false, expressiveness: 0.5,
     };
 
     this.characterStates.set(personId, state);
@@ -1030,18 +1034,27 @@ export class AnimationController {
    * whenever the character is actually seen to move.
    */
   updateCharacterAnimation(personId: string, deltaTime: number, newActivity: Activity, override?: AnimationState,
-    visualSpeed?: number, ageMonths = 360, carrying = false): void {
+    visualSpeed?: number, ageMonths = 360, carrying = false, expressiveness = 0.5): void {
     const charState = this.characterStates.get(personId);
     if (!charState) return;
 
     // Map activity to animation state
     let newAnimState = override ?? this.activityToAnimationState(newActivity, charState.occupation);
+    if (visualSpeed !== undefined && visualSpeed < 0.05 && (newAnimState === 'walk' || newAnimState === 'run')) newAnimState = 'idle';
+    if (newAnimState !== charState.currentState) {
+      // Capture the displayed procedural pose, not an unrelated walk-library keyframe.
+      const held = this.getCurrentPose(personId);
+      if (held) copyPose(held, charState.previousPose);
+    }
     charState.visualSpeed = visualSpeed;
     charState.ageMonths = ageMonths;
+    charState.expressiveness = Math.max(0, Math.min(1, expressiveness));
     charState.carrying = carrying || newAnimState === 'carry';
     charState.humanSeconds += Math.max(0, deltaTime);
     if (visualSpeed !== undefined) {
-      if (visualSpeed < 0.05 && (newAnimState === 'walk' || newAnimState === 'run')) newAnimState = 'idle';
+      const targetSpeed = visualSpeed >= 0.01 ? Math.max(0, visualSpeed) : 0;
+      charState.gaitSpeed += (targetSpeed - charState.gaitSpeed) * (1 - Math.exp(-Math.max(0, deltaTime) * 14));
+      if (charState.gaitSpeed < 0.0001) charState.gaitSpeed = 0;
       const ageStride = ageMonths < 168 ? 0.75 : ageMonths > 816 ? 0.85 : 1;
       charState.stridePhase += Math.max(0, visualSpeed) * Math.max(0, deltaTime) / (0.18 * ageStride * charState.playbackSpeed) * Math.PI * 2;
     }
@@ -1055,10 +1068,8 @@ export class AnimationController {
       const newClip = this.clips.get(newAnimState);
 
       if (newClip && currentClip) {
-        const held = this.samplePose(charState);
-        if (held) copyPose(held, charState.previousPose);
         charState.currentState = newAnimState;
-        charState.blendFactor = held ? 0 : 1;
+        charState.blendFactor = 0;
         charState.elapsedTime = 0;
         charState.currentPoseIndex = 0;
         charState.poseFraction = 0;
@@ -1103,27 +1114,37 @@ export class AnimationController {
     if (!charState) return null;
     const sampled = this.samplePose(charState);
     if (!sampled) return null;
-    const blended = charState.blendFactor >= 1 ? sampled
-      : lerpPose(charState.previousPose, sampled, charState.blendFactor, this.blendBuffer);
-    return charState.visualSpeed === undefined ? blended : this.humanPose(charState, blended);
+    const posed = charState.visualSpeed === undefined ? sampled : this.humanPose(charState, sampled);
+    return charState.blendFactor >= 1 ? posed
+      : lerpPose(charState.previousPose, posed, smoothstep(charState.blendFactor), this.blendBuffer);
   }
 
   private humanPose(state: CharacterAnimationState, base: AnimationPose): AnimationPose {
     const out = copyPose(base, this.humanBuffer);
-    const speed = state.visualSpeed ?? 0;
+    const speed = state.gaitSpeed;
     const elderly = state.ageMonths > 816;
-    if (speed >= 0.05) {
-      const amplitude = Math.min(1, speed / 0.24) * (elderly ? 0.27 : 0.36);
+    if (speed > 0) {
+      const running = state.currentState === 'run';
+      const amplitude = Math.min(1, speed / 0.24) * (elderly ? 0.27 : running ? 0.55 : 0.36);
       const stride = Math.sin(state.stridePhase) * amplitude;
-      out.leftHipRotation = stride; out.rightHipRotation = -stride;
-      out.leftKneeRotation = Math.max(0, -stride) * 1.2;
-      out.rightKneeRotation = Math.max(0, stride) * 1.2;
+      // Flex the recovering leg while its opposite supports the body. Half the knee flexion
+      // is added at the hip so the ankle still traces an opposing stride, rather than scissors.
+      const recovery = Math.cos(state.stridePhase);
+      out.leftKneeRotation = Math.max(0, recovery) ** 2 * amplitude * 1.7;
+      out.rightKneeRotation = Math.max(0, -recovery) ** 2 * amplitude * 1.7;
+      out.leftHipRotation = stride + out.leftKneeRotation * 0.5;
+      out.rightHipRotation = -stride + out.rightKneeRotation * 0.5;
       out.leftShoulderRotation = state.carrying ? 0.42 : -stride * 0.8;
       out.rightShoulderRotation = state.carrying ? 0.42 : stride * 0.8;
+      out.leftElbowRotation = state.carrying ? 1.05 : (running ? 0.65 : 0.16) + Math.max(0, stride) * 0.3;
+      out.rightElbowRotation = state.carrying ? 1.05 : (running ? 0.65 : 0.18) + Math.max(0, -stride) * 0.3;
       out.spineRotation = state.carrying ? 0.12 : elderly ? 0.06 : 0.025;
-      out.positionOffset.y = Math.abs(Math.cos(state.stridePhase)) * 0.018;
+      out.pelvisRotation = Math.sin(state.stridePhase) * amplitude * 0.06;
+      // Lower the pelvis by the supporting leg's shortening. This keeps its sole at ground
+      // height and avoids the old positive bob lifting both feet clear of the terrain.
+      out.positionOffset.y = 0.45 * (Math.cos(stride) - 1);
     } else {
-      // Stop residual gait immediately, including the old pose in a transition blend.
+      // After the frozen stride settles, stationary activities own the legs again.
       if (state.currentState !== 'rest') {
         out.leftHipRotation = 0; out.rightHipRotation = 0;
       }
@@ -1152,16 +1173,71 @@ export class AnimationController {
         out.spineRotation *= veryYoung ? 0.65 : 1;
         out.leftKneeRotation *= veryYoung ? 0.62 : 1;
         out.rightKneeRotation *= veryYoung ? 0.62 : 1;
-      } else if (state.currentState === 'idle' || state.currentState === 'alert') {
+      } else if (state.currentState === 'converse-quiet') {
+        const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 19;
+        const beat = (t % 7) / 7;
+        const nod = beat < 0.18 ? Math.sin(beat / 0.18 * Math.PI) ** 2 : 0;
+        out.headPitch = nod * 0.085;
+        out.headRotation += beat > 0.65 ? Math.sin((beat - 0.65) / 0.35 * Math.PI) * 0.14 : 0;
+        out.leftShoulderRotation = 0.025;
+        out.rightShoulderRotation = -0.015;
+        out.leftElbowRotation = 0.16;
+        out.rightElbowRotation = 0.22;
+      } else if (state.currentState === 'converse' || state.currentState === 'converse-warm'
+        || state.currentState === 'converse-teach' || state.currentState === 'converse-tense') {
+        // A stable leading hand keeps speech readable without symmetrical semaphore poses.
+        const leading = Math.max(out.leftShoulderRotation, out.rightShoulderRotation) * (0.8 + state.expressiveness * 0.4);
+        const supporting = Math.min(out.leftShoulderRotation, out.rightShoulderRotation) * 0.3;
+        out.leftShoulderRotation = state.phaseOffset < 0.5 ? supporting : leading;
+        out.rightShoulderRotation = state.phaseOffset < 0.5 ? leading : supporting;
+      } else if (state.currentState === 'reflect') {
+        out.headPitch = 0.11;
+      } else if (state.currentState === 'alert') {
+        // Alertness is contained readiness, not relaxed idle or a full combat swing.
+        const t = state.humanSeconds + state.phaseOffset * 17;
+        out.headRotation = Math.sin(t * 0.65) * 0.22;
+        out.spineRotation = 0.055;
+        out.leftShoulderRotation = 0.16;
+        out.rightShoulderRotation = 0.23;
+        out.leftElbowRotation = 0.35;
+        out.rightElbowRotation = 0.42;
+      } else if (state.currentState === 'idle') {
         const t = state.humanSeconds * state.playbackSpeed + state.phaseOffset * 29;
         // A slow, smooth gesture window with long quiet intervals, not constant fidgeting.
         const p = (t % 13) / 13;
         const gesture = p < 0.32 ? Math.sin(p / 0.32 * Math.PI) ** 2 : 0;
         out.headRotation += gesture * (elderly ? 0.2 : 0.38) * Math.sin(t * 0.43);
         out.pelvisRotation += gesture * 0.075;
-        out.spineRotation += gesture * 0.04;
-        out.rightShoulderRotation += gesture * (state.carrying ? 0.06 : 0.23);
-        out.positionOffset.y -= gesture * 0.015;
+        out.spineRotation = (elderly ? 0.055 : 0.015) + Math.sin(t * 1.5) * 0.006;
+        out.spineRoll = Math.sin(t * 0.32) * (elderly ? 0.008 : 0.014);
+        out.leftShoulderRotation = -0.025 + gesture * 0.025;
+        out.rightShoulderRotation = 0.015 + gesture * 0.08;
+        out.leftElbowRotation = 0.12 + state.phaseOffset * 0.05;
+        out.rightElbowRotation = 0.17 - state.phaseOffset * 0.05;
+        out.leftKneeRotation = 0.025;
+        out.rightKneeRotation = 0.035;
+        out.positionOffset.y = -0.001;
+      }
+    }
+    if (state.carrying) {
+      out.leftShoulderRotation = 0.42;
+      out.rightShoulderRotation = 0.42;
+      out.leftElbowRotation = 1.05;
+      out.rightElbowRotation = 1.05;
+    }
+    if (speed === 0 && state.currentState !== 'rest') {
+      // Clip offsets were authored for rigid legs whose hip pivot never followed the torso.
+      // Now that both segments share the pelvis, solve a balanced crouch instead of pushing
+      // the feet through the floor. Explicit rest has its own seated contact solver.
+      const crouching = ['gather', 'farm', 'work', 'build', 'play', 'carry'].includes(state.currentState);
+      if (crouching) {
+        out.leftHipRotation = out.leftKneeRotation * 0.5;
+        out.rightHipRotation = out.rightKneeRotation * 0.5;
+        const support = Math.max(Math.cos(out.leftHipRotation), Math.cos(out.rightHipRotation));
+        out.positionOffset.y = 0.45 * (support - 1) + (state.currentState === 'play' ? Math.max(0, out.positionOffset.y) : 0);
+      } else {
+        out.leftKneeRotation = out.rightKneeRotation = 0;
+        out.positionOffset.y = 0;
       }
     }
     return out;
@@ -1278,7 +1354,9 @@ function lerpPose(from: AnimationPose, to: AnimationPose, t: number, out: Animat
   out.duration = to.duration;
   out.pelvisRotation = mix(from.pelvisRotation, to.pelvisRotation);
   out.spineRotation = mix(from.spineRotation, to.spineRotation);
+  out.spineRoll = mix(from.spineRoll ?? 0, to.spineRoll ?? 0);
   out.headRotation = mix(from.headRotation, to.headRotation);
+  out.headPitch = mix(from.headPitch ?? 0, to.headPitch ?? 0);
   out.leftShoulderRotation = mix(from.leftShoulderRotation, to.leftShoulderRotation);
   out.leftElbowRotation = mix(from.leftElbowRotation, to.leftElbowRotation);
   out.rightShoulderRotation = mix(from.rightShoulderRotation, to.rightShoulderRotation);

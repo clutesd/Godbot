@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GodboxRenderer } from '../GodboxRenderer';
 import type { MemorialSite } from '../../sim/development/types';
 import type { Settlement, SimulationState, StructurePlot, Vec2 } from '../../sim/types';
@@ -121,7 +122,7 @@ function createTerrainPatch(
     const a = index / segments * Math.PI * 2;
     const b = (index + 1) / segments * Math.PI * 2;
     const edgeA = 0.965 + (stableUnit(`${plot.id}:ground-a:${index}`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
-    const edgeB = 0.965 + (stableUnit(`${plot.id}:ground-b:${index}`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
+    const edgeB = 0.965 + (stableUnit(`${plot.id}:ground-a:${(index + 1) % segments}`) - 0.5) * (memorial.form === 'stelae' ? 0.025 : 0.085);
     const ax = Math.cos(a) * radius * ratioX * edgeA;
     const az = Math.sin(a) * radius * ratioZ * edgeA;
     const bx = Math.cos(b) * radius * ratioX * edgeB;
@@ -464,6 +465,61 @@ function addVegetation(
   }
 }
 
+/** Fine craft is merged per marker so ornament does not become dozens of draw calls. */
+function addMemorialCraft(root: THREE.Group, form: MemorialSite['form'], weathering: number,
+  accent: string, index: number): void {
+  const pieces: THREE.BufferGeometry[] = [];
+  const add = (geometry: THREE.BufferGeometry, colour: string, x: number, y: number, z: number) => {
+    geometry.translate(x, y, z);
+    const flat = geometry.index ? geometry.toNonIndexed() : geometry;
+    if (flat !== geometry) geometry.dispose();
+    flat.deleteAttribute('uv');
+    const tint = new THREE.Color(colour).lerp(new THREE.Color('#666b57'), weathering * 0.3);
+    const colours = new Float32Array(flat.getAttribute('position').count * 3);
+    for (let i = 0; i < colours.length; i += 3) tint.toArray(colours, i);
+    flat.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+    pieces.push(flat);
+  };
+  if (form === 'stelae') {
+    // Recessed inscription panel, fine border and abstract ancestral marks.
+    add(new THREE.BoxGeometry(0.115, 0.19, 0.006), '#555b55', 0, 0.26, 0.041);
+    for (const side of [-1, 1]) add(new THREE.BoxGeometry(0.009, 0.2, 0.009), accent, side * 0.064, 0.26, 0.047);
+    for (let line = 0; line < 4; line++) {
+      add(new THREE.BoxGeometry(0.06 - (line % 2) * 0.018, 0.007, 0.008), '#c8bda2', 0, 0.31 - line * 0.034, 0.049);
+    }
+  } else if (form === 'ancestor-posts') {
+    for (let band = 0; band < 3; band++) {
+      add(new THREE.CylinderGeometry(0.046, 0.049, 0.022, 8), band === 1 ? '#c4b28a' : accent, 0, 0.18 + band * 0.037, 0);
+    }
+  }
+  if (form === 'earth-mounds') {
+    for (let i = 0; i < 10; i++) {
+      const a = i / 10 * Math.PI * 2;
+      const pebble = new THREE.DodecahedronGeometry(0.042, 0);
+      pebble.scale(1, 0.6, 0.8);
+      add(pebble, i % 3 ? '#969489' : '#b4aa92', Math.cos(a) * 0.22, 0.025, Math.sin(a) * 0.29);
+    }
+  }
+  // A shallow offering bowl and a small bundle of pale flowers beside the marker.
+  const bowl = new THREE.LatheGeometry([
+    new THREE.Vector2(0, 0), new THREE.Vector2(0.045, 0.008),
+    new THREE.Vector2(0.067, 0.055), new THREE.Vector2(0.055, 0.052),
+    new THREE.Vector2(0.034, 0.018), new THREE.Vector2(0, 0.018),
+  ], 12);
+  add(bowl, '#a87655', 0.12, 0.012, 0.18);
+  for (let flower = 0; flower < 3; flower++) {
+    const x = -0.065 + flower * 0.025;
+    add(new THREE.CylinderGeometry(0.004, 0.004, 0.07, 4), '#687453', x, 0.044, 0.18);
+    add(new THREE.IcosahedronGeometry(0.018, 0), index % 2 ? '#cbb484' : '#ded3b9', x, 0.082, 0.18);
+  }
+  const geometry = mergeGeometries(pieces)!;
+  pieces.forEach(piece => piece.dispose());
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88 }));
+  mesh.name = 'memorial-carving-and-offerings';
+  mesh.castShadow = mesh.receiveShadow = true;
+  root.add(mesh);
+}
+
 function addCulturalDetails(
   root: THREE.Group,
   settlement: Settlement,
@@ -479,8 +535,8 @@ function addCulturalDetails(
   const weathering = memorialWeathering(memorial, plot.condition);
   const communal = Math.min(12, Math.ceil(Math.log2(1 + memorial.deaths)));
   const count = Math.max(memorial.events.length > 0 ? 3 : 2, Math.min(14, communal + memorial.people.length));
-  const stone = new THREE.MeshStandardMaterial({ color: '#747067', roughness: 0.98 });
-  const paleStone = new THREE.MeshStandardMaterial({ color: '#8a8478', roughness: 0.96 });
+  const stone = new THREE.MeshStandardMaterial({ color: '#777b75', roughness: 0.92 });
+  const paleStone = new THREE.MeshStandardMaterial({ color: '#b8ad95', roughness: 0.86 });
   const earth = new THREE.MeshStandardMaterial({ color: '#665b43', roughness: 1 });
   const timber = new THREE.MeshStandardMaterial({ color: '#5a4330', roughness: 1 });
   const moss = new THREE.MeshStandardMaterial({ color: '#48543d', roughness: 1 });
@@ -492,17 +548,22 @@ function addCulturalDetails(
       elevationAt(plot.worldX + x, plot.worldZ + z) - settlementY + lift,
       siteZ + z,
     );
+    // Scale the whole grave ensemble to its reserved plot, preserving room between rows.
+    object.scale.multiplyScalar(Math.min(1, radius * 0.5));
+    if (object instanceof THREE.Group) addMemorialCraft(object, memorial.form, weathering,
+      plot.development?.style.accent ?? '#bc9a66', namedDetailIndex++);
     root.add(object);
   };
+  let namedDetailIndex = 0;
 
   for (let index = 0; index < count; index += 1) {
-    const row = Math.floor(index / 5);
-    const column = index % 5;
+    const row = Math.floor(index / 4);
+    const column = index % 4;
     const ordered = memorial.form === 'stelae' || memorial.form === 'earth-mounds';
     const angle = index * 2.399 + stableUnit(`${plot.id}:detail-angle:${index}`) * 0.35;
     const radial = radius * (0.22 + Math.sqrt(index + 1) / Math.sqrt(count + 1) * 0.48);
-    let x = ordered ? (column - 2) * radius * 0.23 : Math.cos(angle) * radial;
-    let z = ordered ? (row - (Math.ceil(count / 5) - 1) / 2) * radius * 0.22 : Math.sin(angle) * radial;
+    let x = ordered ? (column < 2 ? column - 2 : column - 1) * radius * 0.29 : Math.cos(angle) * radial;
+    let z = ordered ? (row - (Math.ceil(count / 4) - 1) / 2) * radius * 0.35 : Math.sin(angle) * radial;
     x += (stableUnit(`${plot.id}:detail-x:${index}`) - 0.5) * (ordered ? 0.09 : 0.13);
     z += (stableUnit(`${plot.id}:detail-z:${index}`) - 0.5) * (ordered ? 0.08 : 0.13);
     const named = index >= Math.max(0, count - memorial.people.length);

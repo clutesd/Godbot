@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { wildlifeLife, WildlifeHarvestLedger, type WildlifeTarget } from '../../sim/wildlife/WildlifeLifecycle';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { SeededRandom } from '../../sim/prng';
 import type { TreePlacement } from './ForestPlanner';
@@ -35,6 +36,7 @@ export interface BirdDisturbanceZone {
 }
 
 interface BirdRoute {
+  id: string;
   from: TreePlacement;
   to: TreePlacement;
   cycleSeconds: number;
@@ -131,6 +133,9 @@ export class AmbientBirds {
   private readonly matrix = new THREE.Matrix4();
   private readonly scale = new THREE.Vector3();
   private readonly colour = new THREE.Color();
+  readonly harvest = new WildlifeHarvestLedger();
+  private targets: WildlifeTarget[] = [];
+  harvestTargets(): readonly WildlifeTarget[] { return this.targets.map(target => ({ ...target })); }
   private ecologyYear = 0;
   private visibleCount = 0;
   private flyingCount = 0;
@@ -172,9 +177,12 @@ export class AmbientBirds {
       .sort((left, right) => left.distance - right.distance)
       .slice(0, MAX_VISIBLE_BIRDS);
 
+    this.targets = [];
     let count = 0;
     let flying = 0;
     for (const { route } of nearby) {
+      const life = wildlifeLife(route.id, 'bird', this.ecologyYear * 12);
+      if (life.stage === 'dead' || this.harvest.has(life.id)) continue;
       const fromLifecycle = resolveTreeLifecycle(route.from, this.ecologyYear);
       const toLifecycle = resolveTreeLifecycle(route.to, this.ecologyYear);
       if (!fromLifecycle.foliageVisible || !toLifecycle.foliageVisible) continue;
@@ -194,14 +202,15 @@ export class AmbientBirds {
       this.position.set(current.x, current.y, current.z);
       this.resolveOrientation(journey, from, to, route.arc, route);
 
-      const birdScale = route.scale * (journey.flying ? 1 : 0.92);
+      this.targets.push({ id: life.id, species: 'bird', stage: life.stage, x: current.x, z: current.z });
+      const birdScale = route.scale * life.scale * (journey.flying ? 1 : 0.92);
       this.scale.setScalar(birdScale);
       this.matrix.compose(this.position, this.bodyQuaternion, this.scale);
       this.bodies.setMatrixAt(count, this.matrix);
       const baseColour = BIRD_COLOURS[route.colour] ?? BIRD_COLOURS[0];
       this.bodies.setColorAt(count, baseColour);
 
-      const flap = journey.flying ? Math.sin(elapsed * 18 + route.flapPhase) * 0.72 : 0;
+      const flap = journey.flying ? (Math.sin(elapsed * 0.8 + route.flapPhase) > 0.35 ? 0.08 : Math.sin(elapsed * 18 + route.flapPhase) * 0.72) : 0;
       const folded = journey.flying ? 1 : 0.42;
       this.writeWing(this.leftWings, count, birdScale, folded, flap, baseColour);
       this.writeWing(this.rightWings, count, birdScale, folded, -flap, baseColour);
@@ -322,6 +331,7 @@ function planBirdRoutes(seed: string, trees: readonly TreePlacement[]): BirdRout
     if (!to) continue;
     const distance = Math.hypot(to.worldX - from.worldX, to.worldZ - from.worldZ);
     routes.push({
+      id: `${seed}:bird:${routeIndex}`,
       from,
       to,
       cycleSeconds: random.range(34, 58),
@@ -341,7 +351,9 @@ function buildBirdBodyGeometry(): THREE.BufferGeometry {
   const body = new THREE.SphereGeometry(1, 6, 4).scale(0.065, 0.052, 0.12);
   const head = new THREE.SphereGeometry(1, 5, 3).scale(0.047, 0.044, 0.05).translate(0, 0.018, 0.105);
   const tail = new THREE.ConeGeometry(0.042, 0.14, 4).rotateX(-Math.PI / 2).translate(0, -0.008, -0.14);
-  const geometry = mergeGeometries([body, head, tail]);
+  const beak = new THREE.ConeGeometry(0.016, 0.06, 5).rotateX(Math.PI / 2).translate(0, 0.012, 0.17);
+  const geometry = mergeGeometries([body, head, tail, beak]);
+  beak.dispose();
   body.dispose();
   head.dispose();
   tail.dispose();

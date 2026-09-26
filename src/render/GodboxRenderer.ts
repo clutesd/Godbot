@@ -1,3 +1,6 @@
+import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
+import { socialGestureFrame } from './people/SocialGesturePresentation';
+import { HumanJointRig } from './people/HumanJointRig';
 import { createPottery, planPottery, potteryStyle, potteryTier, type PotteryAnchor } from './assets/Pottery';
 import { createResourceCargo } from './resources/ResourceCargo';
 import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
@@ -20,7 +23,7 @@ import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundin
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
-import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, type PersonVisualGround } from './people/PeopleVisualState';
+import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, turnToward, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
 import { ReactionGlyphRenderer } from './people/ReactionGlyphRenderer';
 import { HumanLifeClock } from './people/HumanLifeClock';
@@ -223,9 +226,14 @@ export class GodboxRenderer {
   private readonly peopleHeads: THREE.InstancedMesh;
   private readonly peopleArms: THREE.InstancedMesh;
   private readonly peopleLegs: THREE.InstancedMesh;
+  private readonly peopleForearms: THREE.InstancedMesh;
+  private readonly peopleShins: THREE.InstancedMesh;
+  private readonly humanJoints = new HumanJointRig();
+  private readonly socialHandTarget = new THREE.Vector3();
+  private readonly jointParent = new THREE.Matrix4();
   private readonly peopleTools: THREE.InstancedMesh;
   private readonly peopleHeadwear: THREE.InstancedMesh;
-  private readonly peopleCargo: THREE.InstancedMesh;
+  private readonly peopleCargo: CarriedMaterialRenderer;
   private readonly peopleMantles: THREE.InstancedMesh;
   /** One shared batch for role cores and lightweight silhouette accents. */
   private readonly peopleRoleAccents: THREE.InstancedMesh;
@@ -260,7 +268,6 @@ export class GodboxRenderer {
     nearestSafePoint: (point, identity) => this.nearestRenderableGround(point, identity),
   };
   private readonly personMatrix = new THREE.Matrix4();
-  private readonly limbMatrix = new THREE.Matrix4();
   private readonly personGripPosition = new THREE.Vector3();
   private readonly personColor = new THREE.Color();
   private readonly personDetailColor = new THREE.Color();
@@ -485,30 +492,34 @@ export class GodboxRenderer {
     this.peopleRoleAccents = this.cosmicAccents.mesh;
     this.peopleRoleAccents.frustumCulled = false;
     this.peopleHeads = new THREE.InstancedMesh(createCosmicHeadGeometry(), peopleMaterial, visiblePersonBudget);
-    this.peopleArms = new THREE.InstancedMesh(createCosmicArmGeometry(), peopleMaterial, visiblePersonBudget * 2);
-    this.peopleLegs = new THREE.InstancedMesh(createCosmicLegGeometry(), peopleMaterial, visiblePersonBudget * 2);
+    this.peopleArms = new THREE.InstancedMesh(createCosmicArmGeometry('upper'), peopleMaterial, visiblePersonBudget * 2);
+    this.peopleLegs = new THREE.InstancedMesh(createCosmicLegGeometry('upper'), peopleMaterial, visiblePersonBudget * 2);
+    this.peopleForearms = new THREE.InstancedMesh(createCosmicArmGeometry('lower'), peopleMaterial, visiblePersonBudget * 2);
+    this.peopleShins = new THREE.InstancedMesh(createCosmicLegGeometry('lower'), peopleMaterial, visiblePersonBudget * 2);
     this.peopleTools = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.008, 0.011, 0.34, 8), new THREE.MeshStandardMaterial({ color: '#8a6a3e', roughness: 0.88, metalness: 0.05 }), visiblePersonBudget);
     this.peopleHeadwear = new THREE.InstancedMesh(new THREE.TorusGeometry(0.049, 0.0015, 4, 14, Math.PI).rotateX(Math.PI / 2).rotateY(Math.PI), peopleMaterial, visiblePersonBudget);
-    this.peopleCargo = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), new THREE.MeshStandardMaterial({ roughness: 0.95 }), visiblePersonBudget);
+    this.peopleCargo = new CarriedMaterialRenderer(visiblePersonBudget);
     this.peopleMantles = new THREE.InstancedMesh(new THREE.ConeGeometry(0.15, 0.37, 7, 1, true).translate(0, -0.185, 0), peopleMaterial, NOTABLE_VISUAL_BUDGET);
-    this.cosmicVariations = [this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleHeadwear, this.peopleMantles].map(bindCosmicVariation);
+    this.cosmicVariations = [this.people, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleHeadwear, this.peopleMantles, this.peopleForearms, this.peopleShins].map(bindCosmicVariation);
     this.peopleMantles.castShadow = true;
     this.peopleMantles.frustumCulled = false;
     this.peopleMantles.count = 0;
     this.peopleHeads.castShadow = true;
     this.peopleArms.castShadow = true;
+    this.peopleForearms.castShadow = true;
+    this.peopleShins.castShadow = true;
     this.peopleLegs.castShadow = true;
     this.peopleTools.castShadow = true;
     this.peopleHeadwear.castShadow = true;
-    this.peopleCargo.castShadow = true;
     this.people.frustumCulled = false;
     this.peopleHeads.frustumCulled = false;
     this.peopleArms.frustumCulled = false;
+    this.peopleForearms.frustumCulled = false;
+    this.peopleShins.frustumCulled = false;
     this.peopleLegs.frustumCulled = false;
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
-    this.peopleCargo.frustumCulled = false;
-    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleTools, this.peopleHeadwear, this.peopleCargo, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
+    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins, this.peopleTools, this.peopleHeadwear, this.peopleCargo.group, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -700,10 +711,12 @@ export class GodboxRenderer {
       this.peopleRoleAccents,
       this.peopleHeads,
       this.peopleArms,
+      this.peopleForearms,
+      this.peopleShins,
       this.peopleLegs,
       this.peopleTools,
       this.peopleHeadwear,
-      this.peopleCargo,
+      this.peopleCargo.group,
       this.peopleMantles,
     ]) mesh.visible = visible;
     this.resourceWorkers.group.visible = visible;
@@ -888,19 +901,21 @@ export class GodboxRenderer {
     this.peopleRoleAccents.count = count;
     this.peopleHeads.count = count;
     this.peopleArms.count = count * 2;
+    this.peopleForearms.count = count * 2;
+    this.peopleShins.count = count * 2;
     this.peopleLegs.count = count * 2;
     this.peopleTools.count = count;
     this.peopleHeadwear.count = count;
-    this.peopleCargo.count = count;
+    this.peopleCargo.beginFrame();
     let mantles = 0;
     for (let index = 0; index < count; index += 1) {
       const person = this.visiblePeople[index];
       if (!person) continue;
       if (!person.alive) {
-        for (const mesh of [this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleTools, this.peopleHeadwear, this.peopleCargo]) {
+        for (const mesh of [this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleTools, this.peopleHeadwear]) {
           this.setInstanceTransform(mesh, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
         }
-        for (const mesh of [this.peopleArms, this.peopleLegs]) for (let side = 0; side < 2; side++) {
+        for (const mesh of [this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins]) for (let side = 0; side < 2; side++) {
           this.setInstanceTransform(mesh, index * 2 + side, 0, -100, 0, 0, 0, 0, 0, 0, 0);
         }
         continue;
@@ -945,6 +960,8 @@ export class GodboxRenderer {
         ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? local?.destination ?? base;
       const visual = this.peopleVisuals.resolve(person.id, {
         destination: aim,
+        greetingPartnerId: local?.encounter?.beat === 0 && ['hug', 'handshake'].includes(local.encounter.greeting ?? '') ? local.encounter.partnerId : undefined,
+        embracing: local?.encounter?.beat === 0 && local.encounter.greeting === 'hug',
         localMove: Boolean(firstFire || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
@@ -982,7 +999,7 @@ export class GodboxRenderer {
           : firstFireStanding ? firstFire!.animation
             : interruption || unsupportedWork || physical ? 'idle'
               : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
-        visual.speed, person.ageMonths, loaded || person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? ''));
+        visual.speed, person.ageMonths, loaded || person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? ''), person.traits.sociability);
       let pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
       const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
       const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
@@ -991,6 +1008,12 @@ export class GodboxRenderer {
       if (physicalStanding) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
       const restArticulated = detailed && restPose.blend > 0.001;
       const articulated = working || physicalStanding || physical && loaded || restArticulated;
+      const partnerId = local?.encounter?.partnerId;
+      const socialPartner = partnerId ? this.peopleVisuals.snapshot(partnerId) : undefined;
+      const socialGesture = detailed && !articulated && local?.encounter?.beat === 0 && visual.speed < WALK_SPEED_THRESHOLD
+        ? socialGestureFrame(person.id, this.localActivities.snapshot(person.id),
+          partnerId ? this.localActivities.snapshot(partnerId) : undefined,
+          this.peopleVisuals.snapshot(person.id), socialPartner) : undefined;
       if (worker) {
         const m = this.resourceWorkers.motion;
         this.actionInspections.set(person.id, { personId: person.id, actionKind: `resource-${worker.site.profile.kind}`,
@@ -1019,31 +1042,37 @@ export class GodboxRenderer {
       const ageScale = person.ageMonths < 14 * 12 ? 0.64 + person.ageMonths / (14 * 12) * 0.08 : person.ageMonths > 68 * 12 ? 0.88 : 1;
       const cosmic = cosmicAppearanceFor(person.id);
       const heightScale = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * ageScale * (person.appearance?.heightScale ?? 1) * cosmic.height;
+      visual.bodyScale = heightScale;
       const buildScale = (person.appearance?.buildScale ?? 1) * COSMIC_BUILD_MULTIPLIER * cosmic.build;
       for (const part of [0, 1, 4]) this.cosmicVariations[part]!.setXYZ(index, cosmic.seed, cosmic.nebula, cosmic.brightness);
-      for (const part of [2, 3]) for (let side = 0; side < 2; side++) this.cosmicVariations[part]!.setXYZ(index * 2 + side, cosmic.seed, cosmic.nebula, cosmic.brightness);
+      for (const part of [2, 3, 6, 7]) for (let side = 0; side < 2; side++) this.cosmicVariations[part]!.setXYZ(index * 2 + side, cosmic.seed, cosmic.nebula, cosmic.brightness);
       // The rendered terrain under the *visual* position is the only anchor: the soles sit on
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
-      const bobAmplitude = visual.speed > WALK_SPEED_THRESHOLD ? 0 : person.activity === 'rest' ? 0.003 : 0.006;
-      const bob = (0.5 + 0.5 * Math.sin(elapsedSeconds * (4.1 + stableUnit(`${person.id}:stride`) * 1.2) + stableUnit(person.id) * Math.PI * 2)) * bobAmplitude * heightScale;
-      const footY = visual.footY + (physical?.elevation ?? 0) + (articulated ? 0 : bob);
+      const footY = visual.footY + (physical?.elevation ?? 0);
       // Physical rest owns its pelvis height while it blends in/out; generic animation offsets
       // remain responsible for ordinary crouch/work. Soles stay anchored at footY.
       const poseLift = restArticulated
         ? restPose.bodyLift * heightScale
-        : Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * (articulated ? 1 : 0.35) * heightScale;
+        : Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * heightScale;
       const facing = visual.facing;
       // Ambient awareness never steers locomotion. The head acquires first; only meaningful
       // recognition produces a small delayed torso follow-through. Full-body facing remains owned
       // by actual movement, work, rest and explicit social encounters.
+      this.peopleVisuals.noticePassingPeer(person.id, deltaSeconds, peerId => {
+        const peer = this.localPeers.get(peerId);
+        const relationship = this.socialRelationshipByPair.get(socialPairKey(person.id, peerId));
+        return Boolean(peer && (person.householdId && person.householdId === peer.householdId
+          || relationship && relationship.kind !== 'rival' && relationship.strength >= 0.5));
+      }, detailed && !articulated && !local?.attentionId && person.activity !== 'flee'
+        && person.navigation?.schedulePhase !== 'emergency');
       const attentionBlend = detailed && !articulated && local?.attentionId ? local.attentionBlend ?? 0 : 0;
       const attentionTorsoBlend = Math.max(0, Math.min(1, (attentionBlend - 0.32) / 0.68));
-      const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend;
-      const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend - attentionBodyYaw;
+      const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend + (visual.passingTorsoYaw ?? 0);
+      const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend + (visual.passingHeadYaw ?? 0) - attentionBodyYaw;
       const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated));
-      const bodyPitch = bodyTilt.pitch + (restArticulated ? restPose.bodyPitch : 0);
+      const bodyPitch = bodyTilt.pitch + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
       const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
-      const bodyRoll = bodyTilt.roll + (restArticulated ? restPose.bodyRoll : 0);
+      const bodyRoll = bodyTilt.roll + (pose?.spineRoll ?? 0) + (restArticulated ? restPose.bodyRoll : 0);
       this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
@@ -1052,42 +1081,80 @@ export class GodboxRenderer {
       this.cosmicAccents.set(index, person.role, this.personMatrix, cosmic.brightness);
       this.resourceWorkers.setBodyTransform(this.personMatrix);
       this.physicalWorkers.setBodyTransform(this.personMatrix);
-      const limbScale = detailed && !articulated ? heightScale : 0.001;
+      this.jointParent.copy(this.personMatrix);
+      if (!detailed || articulated) this.jointParent.scale(this.partScale.setScalar(0.001));
       for (let side = 0; side < 2; side++) {
-        this.partPosition.set((side ? 1 : -1) * 0.12, 0.27, 0).applyMatrix4(this.personMatrix);
-        this.partQuaternion.setFromEuler(this.partEuler.set((pose?.spineRotation ?? 0)
-          + (side ? pose?.rightShoulderRotation ?? -0.06 : pose?.leftShoulderRotation ?? -0.06),
-          facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw, (side ? 1 : -1) * 0.025));
-        this.partScale.setScalar(limbScale);
-        this.limbMatrix.compose(this.partPosition, this.partQuaternion, this.partScale);
-        this.peopleArms.setMatrixAt(index * 2 + side, this.limbMatrix);
-        if (side) this.personGripPosition.set(0, -0.337, 0.012).applyMatrix4(this.limbMatrix);
+        this.humanJoints.compose(this.jointParent, (side ? 1 : -1) * 0.12, 0.27,
+          side ? pose?.rightShoulderRotation ?? 0 : pose?.leftShoulderRotation ?? 0,
+          side ? pose?.rightElbowRotation ?? 0.12 : pose?.leftElbowRotation ?? 0.12,
+          0.19, 0.18, true, (side ? 1 : -1) * 0.035);
+        if (socialGesture && socialPartner && socialGesture.weight > 0 && socialGesture.kind !== 'bow'
+          && (side === 1 || socialGesture.kind === 'hug')) {
+          const partnerScale = socialPartner.bodyScale ?? heightScale;
+          if (socialGesture.kind === 'wave') {
+            this.socialHandTarget.set(0.23 + Math.sin(socialGesture.progress * Math.PI * 6) * 0.035, 0.45, 0.05)
+              .applyMatrix4(this.jointParent);
+          } else if (socialGesture.kind === 'handshake') {
+            this.socialHandTarget.set((display.x + socialPartner.x) / 2,
+              (footY + socialPartner.footY) / 2 + Math.min(heightScale, partnerScale) * (0.55 + Math.sin(socialGesture.progress * Math.PI * 4) * 0.012),
+              (display.z + socialPartner.z) / 2);
+          } else {
+            const lateral = (side ? 1 : -1) * 0.09 * partnerScale;
+            this.socialHandTarget.set(socialPartner.x + Math.cos(facing) * lateral + Math.sin(facing) * 0.02 * partnerScale,
+              socialPartner.footY + (side ? 0.67 : 0.72) * partnerScale,
+              socialPartner.z - Math.sin(facing) * lateral + Math.cos(facing) * 0.02 * partnerScale);
+          }
+          this.socialHandTarget.lerp(this.humanJoints.tip, 1 - socialGesture.weight);
+          this.humanJoints.reach(this.jointParent, (side ? 1 : -1) * 0.12, 0.27,
+            this.socialHandTarget, 0.19, 0.18, side ? 1 : -1);
+        }
+        this.peopleArms.setMatrixAt(index * 2 + side, this.humanJoints.upper);
+        this.peopleForearms.setMatrixAt(index * 2 + side, this.humanJoints.lower);
+        if (side) this.personGripPosition.copy(this.humanJoints.tip);
         this.peopleArms.setColorAt(index * 2 + side, this.personColor);
+        this.peopleForearms.setColorAt(index * 2 + side, this.personColor);
       }
       // The smaller faceless head must follow the existing spine pose at its neck attachment.
       this.partPosition.set(0, 0.425, 0).applyMatrix4(this.personMatrix);
-      const headFacing = bodyFacing + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0);
+      const focalTarget = worker?.station.target ?? physical?.action.interactionAnchor
+        ?? (firstFire ? hearthPosition : undefined)
+        ?? (local && !local.partnerId && !local.attentionId && ['approach', 'action'].includes(local.phase) ? local.focus : undefined);
+      const focalDelta = focalTarget ? facingTarget(display, focalTarget) - bodyFacing : 0;
+      const focalYaw = focalTarget && Math.hypot(focalTarget.x - display.x, focalTarget.z - display.z) > 0.05
+        && !local?.attentionId && !visual.passingPeer
+        ? Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(focalDelta), Math.cos(focalDelta)))) : 0;
+      visual.focalHeadYaw = turnToward(visual.focalHeadYaw ?? 0, focalYaw, Math.min(0.1, Math.max(0, deltaSeconds)) * 1.8);
+      const headFacing = bodyFacing + visual.focalHeadYaw + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0);
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
-        heightScale, heightScale, heightScale, pose?.spineRotation ?? 0, headFacing, 0);
+        heightScale, heightScale, heightScale, bodyPitch + (pose?.headPitch ?? 0), headFacing, 0);
       this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
       this.reactionGlyphs.track(person.id, this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale);
-      this.reactionGlyphs.consider(person.id, { person, local, firstFire: firstFireStanding ? firstFire : undefined,
+      this.reactionGlyphs.consider(person.id, { person, local, gesture: socialGesture, firstFire: firstFireStanding ? firstFire : undefined,
         resourceKind: working ? worker?.site.profile.kind : undefined, seriousShot: reactionSeriousShot });
       const legScale = detailed && (!articulated || physical && !physicalStanding) ? heightScale : 0.001;
-      this.setLimbInstance(index * 2, display.x, footY, display.z, legScale, heightScale, facing, -0.049 * buildScale * heightScale, 0.45, pose?.leftHipRotation ?? 0, this.peopleLegs, 0);
-      this.setLimbInstance(index * 2 + 1, display.x, footY, display.z, legScale, heightScale, facing, 0.049 * buildScale * heightScale, 0.45, pose?.rightHipRotation ?? 0, this.peopleLegs, 0);
-      this.peopleLegs.setColorAt(index * 2, this.personColor);
-      this.peopleLegs.setColorAt(index * 2 + 1, this.personColor);
+      this.partPosition.set(display.x, footY + 0.45 * heightScale + poseLift, display.z);
+      this.partQuaternion.setFromEuler(this.partEuler.set(0, facing + (pose?.pelvisRotation ?? 0), 0));
+      this.jointParent.compose(this.partPosition, this.partQuaternion, this.partScale.setScalar(legScale));
+      for (let side = 0; side < 2; side++) {
+        this.humanJoints.compose(this.jointParent, (side ? 1 : -1) * 0.049 * buildScale, 0,
+          side ? pose?.rightHipRotation ?? 0 : pose?.leftHipRotation ?? 0,
+          side ? pose?.rightKneeRotation ?? 0 : pose?.leftKneeRotation ?? 0,
+          0.225, 0.225, false);
+        this.peopleLegs.setMatrixAt(index * 2 + side, this.humanJoints.upper);
+        this.peopleShins.setMatrixAt(index * 2 + side, this.humanJoints.lower);
+        this.peopleLegs.setColorAt(index * 2 + side, this.personColor);
+        this.peopleShins.setColorAt(index * 2 + side, this.personColor);
+      }
       if (restArticulated) this.restPoses.draw(restPose, display.x, footY, display.z, heightScale, buildScale,
         bodyFacing, bodyPitch, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
       const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
-      const handSwing = pose?.rightShoulderRotation ?? -0.1;
+      const handSwing = bodyPitch - (pose?.rightShoulderRotation ?? 0) - (pose?.rightElbowRotation ?? 0);
       this.setInstanceTransform(this.peopleTools, index,
         this.personGripPosition.x, this.personGripPosition.y, this.personGripPosition.z,
-        toolScale, toolScale, toolScale, handSwing + (pose?.spineRotation ?? 0), facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
+        toolScale, toolScale, toolScale, handSwing, facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw, carried === 'hoe' ? 0.7 : carried === 'staff' ? 0.02 : 0.15);
       this.personDetailColor.set(['guard', 'soldier', 'engineer', 'machinist'].includes(person.role ?? '') ? '#747d80' : carried === 'staff' ? (culture?.style.accent ?? '#d9a748') : '#7b5835');
       this.peopleTools.setColorAt(index, this.personDetailColor);
 
@@ -1099,11 +1166,10 @@ export class GodboxRenderer {
       this.peopleHeadwear.setColorAt(index, this.personColor);
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
-      const cargoScale = detailed && cargoVisible && !articulated ? heightScale : 0.001;
-      this.setInstanceTransform(this.peopleCargo, index, display.x + Math.sin(facing) * 0.17 * heightScale, footY + 0.43 * heightScale + poseLift, display.z + Math.cos(facing) * 0.17 * heightScale, cargoScale, cargoScale, cargoScale, 0, facing, carried === 'basket' ? 0.15 : 0);
-      this.personDetailColor.set(carried === 'ledger' ? (culture?.style.accent ?? '#d9a748') : '#8b6840');
-      this.peopleCargo.setColorAt(index, this.personDetailColor);
-      if (physical && articulated && detailed) this.physicalWorkers.drawPhysical(physical.motion, physical.action.interactionAnchor,
+      if (cargoVisible && !articulated) this.peopleCargo.draw(carried === 'none' ? 'bag' : carried,
+        display.x + Math.sin(facing) * 0.19 * heightScale, footY + 0.43 * heightScale + poseLift,
+        display.z + Math.cos(facing) * 0.19 * heightScale, heightScale, facing);
+      if (physical && articulated && (detailed || loaded)) this.physicalWorkers.drawPhysical(physical.motion, physical.action.interactionAnchor,
         physicalStanding ? physical.action.activeTool : 'none', physical.action.carriedObject,
         physical.action.carriedObject === 'crop' ? '#b5a159' : constructionMaterialColour(physical.material),
         loaded ? 1 : physical.blend, display.x, footY, display.z, heightScale, facing, this.personColor,
@@ -1145,10 +1211,14 @@ export class GodboxRenderer {
     this.peopleRoleAccents.instanceMatrix.needsUpdate = true;
     this.peopleHeads.instanceMatrix.needsUpdate = true;
     this.peopleArms.instanceMatrix.needsUpdate = true;
+    this.peopleForearms.instanceMatrix.needsUpdate = true;
+    if (this.peopleForearms.instanceColor) this.peopleForearms.instanceColor.needsUpdate = true;
+    this.peopleShins.instanceMatrix.needsUpdate = true;
+    if (this.peopleShins.instanceColor) this.peopleShins.instanceColor.needsUpdate = true;
     this.peopleLegs.instanceMatrix.needsUpdate = true;
     this.peopleTools.instanceMatrix.needsUpdate = true;
     this.peopleHeadwear.instanceMatrix.needsUpdate = true;
-    this.peopleCargo.instanceMatrix.needsUpdate = true;
+    this.peopleCargo.endFrame();
     this.peopleMantles.instanceMatrix.needsUpdate = true;
     if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
     if (this.peopleRoleAccents.instanceColor) this.peopleRoleAccents.instanceColor.needsUpdate = true;
@@ -1157,7 +1227,6 @@ export class GodboxRenderer {
     if (this.peopleLegs.instanceColor) this.peopleLegs.instanceColor.needsUpdate = true;
     if (this.peopleTools.instanceColor) this.peopleTools.instanceColor.needsUpdate = true;
     if (this.peopleHeadwear.instanceColor) this.peopleHeadwear.instanceColor.needsUpdate = true;
-    if (this.peopleCargo.instanceColor) this.peopleCargo.instanceColor.needsUpdate = true;
     if (this.peopleMantles.instanceColor) this.peopleMantles.instanceColor.needsUpdate = true;
   }
 
@@ -1324,17 +1393,9 @@ export class GodboxRenderer {
     return origin;
   }
 
-  private setLimbInstance(index: number, x: number, y: number, z: number, scale: number, heightScale: number, facing: number, side: number, height: number, swing: number, mesh: THREE.InstancedMesh, poseLift: number): void {
-    const sideX = Math.cos(facing) * side;
-    const sideZ = -Math.sin(facing) * side;
-    // Position the pivot (shoulder/hip) with the body's real height scale, never the LOD scale,
-    // so limbs stay attached to the torso even when the limb geometry itself is collapsed.
-    this.setInstanceTransform(mesh, index, x + sideX, y + height * heightScale + poseLift, z + sideZ, scale, scale, scale, swing, facing, 0);
-  }
-
   private setInstanceTransform(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number): void {
     this.partPosition.set(x, y, z);
-    this.partQuaternion.setFromEuler(this.partEuler.set(rotationX, rotationY, rotationZ));
+    this.partQuaternion.setFromEuler(this.partEuler.set(rotationX, rotationY, rotationZ, 'YXZ'));
     this.partScale.set(scaleX, scaleY, scaleZ);
     this.personMatrix.compose(this.partPosition, this.partQuaternion, this.partScale);
     mesh.setMatrixAt(index, this.personMatrix);

@@ -69,6 +69,27 @@ function disposeRenderer(renderer: WaterSystem) {
 }
 
 describe('Water rendering foundation', () => {
+  it('retires waterfalls and disposes their effects when their channel dries', () => {
+    const world = waterWorld();
+    const renderer = new WaterSystem(world, new TerrainSurface(world), 'changing-falls');
+    expect(renderer.report.waterfalls).toBeGreaterThan(0);
+    const sheets = renderer.group.getObjectByName('waterfall-sheets') as THREE.Mesh;
+    let disposed = false;
+    sheets.geometry.addEventListener('dispose', () => { disposed = true; });
+    world.terrain.waterLevel.fill(-1);
+    world.terrain.river.fill(0);
+    world.environmentRevision = (world.environmentRevision ?? 0) + 1;
+    renderer.syncHydrology();
+    expect(disposed).toBe(true);
+    expect(renderer.report.waterfalls).toBe(0);
+    expect(renderer.report.riverSamples).toBe(0);
+    for (const name of ['waterfall-sheets', 'waterfall-mist', 'waterfall-foam']) {
+      expect(renderer.group.getObjectByName(name)).toBeUndefined();
+    }
+    renderer.update(40);
+    disposeRenderer(renderer);
+  });
+
   it('carries geography, local weather, ice and turbulence into the authoritative inland surface', () => {
     const world = waterWorld();
     if (world.weather) {
@@ -130,7 +151,9 @@ describe('Water rendering foundation', () => {
       expect(packed.getY(i)).toBe(flows.getX(i));
       expect(packed.getZ(i)).toBe(kinds.getX(i));
     }
-    expect(shader.vertexShader).toContain('waterCurrentCoordinate');
+    expect(shader.fragmentShader).toContain('waterCurrentCoordinate');
+    expect(shader.vertexShader).not.toContain('transformed.y +=');
+    expect(shader.vertexShader).not.toContain('transformed.y -=');
     expect(shader.vertexShader).toContain('waterFreezePrevious');
     expect(shader.vertexShader).toContain('waterEmergence');
     expect(shader.fragmentShader).toContain('waterRiverTint');
@@ -156,7 +179,15 @@ describe('Water rendering foundation', () => {
   });
 
   it('shares interpolated elevations along adjacent wet samples instead of rendering terraced puddles', () => {
-    const water = buildInlandWater(waterWorld())!;
+    const world = waterWorld();
+    // This continuity fixture excludes the deliberate waterfall used by the effects tests.
+    for (let i = 0; i < world.terrain.waterLevel.length; i++) {
+      if (world.terrain.river[i]) {
+        world.terrain.waterLevel[i] = world.seaLevel + 0.07 - Math.floor(i / world.terrain.resolution) * 0.00012;
+        world.terrain.height[i] = world.terrain.waterLevel[i]! - 0.022;
+      }
+    }
+    const water = buildInlandWater(world)!;
     const positions = water.geometry.getAttribute('position');
     const seen = new Map<string, number>();
     let shared = 0;

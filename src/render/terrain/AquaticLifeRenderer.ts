@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { wildlifeLife, WildlifeHarvestLedger, type WildlifeTarget } from '../../sim/wildlife/WildlifeLifecycle';
 import type { Vec2, WorldState } from '../../sim/types';
 import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import { nearestIndex, type TerrainField } from '../../sim/terrain/TerrainField';
@@ -43,6 +44,7 @@ interface SchoolCandidate {
 }
 
 interface KoiVisual {
+  id: string;
   school: KoiSchoolPlan;
   pathOffset: number;
   lateralOffset: number;
@@ -515,10 +517,14 @@ export class AquaticLifeRenderer {
   private readonly tailQuaternion = new THREE.Quaternion();
   private readonly wagQuaternion = new THREE.Quaternion();
   private readonly yAxis = new THREE.Vector3(0, 1, 0);
+  readonly harvest = new WildlifeHarvestLedger();
+  private targets: WildlifeTarget[] = [];
+  harvestTargets(): readonly WildlifeTarget[] { return this.targets.map(target => ({ ...target })); }
   private lastTime = Number.NaN;
+  private lastLifeKey = '';
 
   constructor(
-    world: WorldState,
+    private readonly world: WorldState,
     private readonly ecology: EcologyField,
     complexity: 0 | 1 | 2,
   ) {
@@ -538,6 +544,7 @@ export class AquaticLifeRenderer {
         const pattern = patterns[Math.floor(hashUnit(`${identity}:pattern`) * patterns.length)] ?? patterns[0]!;
         const rank = count <= 1 ? 0 : index / (count - 1) - 0.5;
         this.fish.push({
+          id: identity,
           school,
           pathOffset: rank * formationLength + (hashUnit(`${identity}:path`) - 0.5) * 0.025,
           lateralOffset: (hashUnit(`${identity}:lateral`) - 0.5) * 0.9,
@@ -609,11 +616,17 @@ export class AquaticLifeRenderer {
   }
 
   private update(elapsedSeconds: number, force = false): void {
-    if (!force && Math.abs(elapsedSeconds - this.lastTime) < 0.0001) return;
+    const lifeKey = `${this.world.weather?.month ?? 0}:${this.harvest.snapshot().length}`;
+    if (!force && lifeKey === this.lastLifeKey && Math.abs(elapsedSeconds - this.lastTime) < 0.0001) return;
+    this.lastLifeKey = lifeKey;
     this.lastTime = elapsedSeconds;
 
+    this.targets = [];
     for (let index = 0; index < this.fish.length; index += 1) {
       const fish = this.fish[index]!;
+      const life = wildlifeLife(fish.id, 'fish', this.world.weather?.month ?? 0);
+      const alive = life.stage !== 'dead' && !this.harvest.has(life.id);
+      const size = alive ? fish.size * life.scale : 0;
       const school = fish.school;
       const phaseProgress = school.phase / (Math.PI * 2);
       const leaderProgress = elapsedSeconds * school.speed + phaseProgress;
@@ -638,25 +651,26 @@ export class AquaticLifeRenderer {
       const yaw = Math.atan2(sample.tangentX * routeDirection, sample.tangentZ * routeDirection)
         + Math.sin(elapsedSeconds * 0.48 + fish.phase) * 0.04;
 
+      if (alive) this.targets.push({ id: life.id, species: 'fish', stage: life.stage, x, z });
       this.position.set(x, y, z);
       this.quaternion.setFromAxisAngle(this.yAxis, yaw);
 
-      this.scale.set(0.045 * fish.size, 0.0105 * fish.size, 0.102 * fish.size);
+      this.scale.set(0.045 * size, 0.018 * size, 0.102 * size);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       this.body.setMatrixAt(index, this.matrix);
 
       const wag = Math.sin(elapsedSeconds * (6.9 + fish.size * 1.2) + fish.phase) * 0.36;
       this.wagQuaternion.setFromAxisAngle(this.yAxis, wag);
       this.tailQuaternion.copy(this.quaternion).multiply(this.wagQuaternion);
-      this.scale.setScalar(fish.size);
+      this.scale.setScalar(size);
       this.matrix.compose(this.position, this.tailQuaternion, this.scale);
       this.tails.setMatrixAt(index, this.matrix);
 
-      if (fish.patchVisible) {
-        this.patchLocal.set(0, 0.0105 * fish.size, fish.patchOffset);
+      if (fish.patchVisible && alive) {
+        this.patchLocal.set(0, 0.018 * size, fish.patchOffset * life.scale);
         this.patchLocal.applyQuaternion(this.quaternion);
         this.patchPosition.copy(this.position).add(this.patchLocal);
-        this.scale.set(0.028 * fish.size, 0.0042 * fish.size, 0.044 * fish.size);
+        this.scale.set(0.028 * size, 0.0042 * size, 0.044 * size);
       } else {
         this.patchPosition.copy(this.position);
         this.scale.setScalar(0);

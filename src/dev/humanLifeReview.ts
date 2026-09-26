@@ -1,3 +1,5 @@
+import { HumanJointRig } from '../render/people/HumanJointRig';
+import { createCosmicArmGeometry, createCosmicLegGeometry } from '../render/people/CosmicPeople';
 import { StructureNavigation } from '../sim/people/StructureNavigation';
 import { CameraDirector, type CameraSubjectPresentation } from '../render/CameraDirector';
 import { Historian } from '../historian/Historian';
@@ -158,13 +160,17 @@ const instanced = (geometry: THREE.BufferGeometry, count: number) => {
 };
 const bodies = instanced(new THREE.CapsuleGeometry(0.12, 0.34, 2, 5), people.length);
 const heads = instanced(new THREE.IcosahedronGeometry(0.12, 1), people.length);
-const arms = instanced(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 5).translate(0, -0.17, 0), people.length * 2);
-const legs = instanced(new THREE.CylinderGeometry(0.032, 0.04, 0.36, 5).translate(0, -0.18, 0), people.length * 2);
+const arms = instanced(createCosmicArmGeometry('upper'), people.length * 2);
+const forearms = instanced(createCosmicArmGeometry('lower'), people.length * 2);
+const legs = instanced(createCosmicLegGeometry('upper'), people.length * 2);
+const shins = instanced(createCosmicLegGeometry('lower'), people.length * 2);
+const joints = new HumanJointRig();
+const torso = new THREE.Matrix4(), pelvis = new THREE.Matrix4();
 const targets = instanced(new THREE.SphereGeometry(0.035, 8, 5), people.length); targets.visible = false;
 const cargo = instanced(new THREE.BoxGeometry(0.22, 0.2, 0.18), people.length);
 const skin = new THREE.Color('#d3a477'), loadColour = new THREE.Color('#8b6840');
 const transform = (mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, scale: number, pitch: number, yaw: number) => {
-  matrix.position.set(x, y, z); matrix.rotation.set(pitch, yaw, 0); matrix.scale.setScalar(scale); matrix.updateMatrix(); mesh.setMatrixAt(index, matrix.matrix);
+  matrix.position.set(x, y, z); matrix.rotation.set(pitch, yaw, 0, 'YXZ'); matrix.scale.setScalar(scale); matrix.updateMatrix(); mesh.setMatrixAt(index, matrix.matrix);
 };
 let calendarSeconds = 0, calendarMonth = 0;
 let elapsed = 0, previous = performance.now(), paused = false, frames = 0, emergency = false, holdStarted = performance.now(), contactLatch = false;
@@ -240,19 +246,26 @@ function frame(now: number): void {
     if (standing) pose = animation.resourcePose(pose, worker!.motion, worker!.blend);
     const articulated = standing || resourceStanding || loaded;
     const scale = 0.28 * (person.ageMonths < 168 ? 0.7 : person.ageMonths > 816 ? 0.88 : 1);
-    const y = visual.footY + (worker?.elevation ?? 0), lift = Math.max(-0.4, Math.min(0.1, pose.positionOffset.y)) * scale * (articulated ? 1 : 0.35);
+    const y = visual.footY + (worker?.elevation ?? 0), lift = Math.max(-0.4, Math.min(0.1, pose.positionOffset.y)) * scale;
     colour.set(['#b75436', '#335c78', '#c89d45'][index % 3]!);
     transform(bodies, index, visual.x, y + 0.44 * scale + lift, visual.z, scale, pose.spineRotation, visual.facing + pose.pelvisRotation); bodies.setColorAt(index, colour);
+    torso.copy(matrix.matrix);
     transform(heads, index, visual.x, y + 0.84 * scale + lift, visual.z, scale, 0, visual.facing + pose.headRotation); heads.setColorAt(index, skin);
     transform(cargo, index, visual.x + Math.sin(visual.facing) * scale * 0.2, y + 0.48 * scale + lift,
       visual.z + Math.cos(visual.facing) * scale * 0.2, carried && !articulated ? scale : 0, 0, visual.facing); cargo.setColorAt(index, loadColour);
+    matrix.position.set(visual.x, y + 0.45 * scale + lift, visual.z);
+    matrix.rotation.set(0, visual.facing + pose.pelvisRotation, 0);
+    matrix.scale.setScalar(articulated && !loaded ? 0 : scale); matrix.updateMatrix(); pelvis.copy(matrix.matrix);
+    if (articulated) torso.scale(matrix.scale.setScalar(0));
     for (let side = 0; side < 2; side++) {
-      const sign = side === 0 ? -1 : 1, c = Math.cos(visual.facing), s = Math.sin(visual.facing);
-      transform(arms, index * 2 + side, visual.x + c * sign * 0.15 * scale, y + 0.62 * scale + lift, visual.z - s * sign * 0.15 * scale,
-        articulated ? 0 : scale, side === 0 ? pose.leftShoulderRotation : pose.rightShoulderRotation, visual.facing);
-      transform(legs, index * 2 + side, visual.x + c * sign * 0.07 * scale, y + 0.36 * scale, visual.z - s * sign * 0.07 * scale,
-        articulated && !loaded ? 0 : scale, side === 0 ? pose.leftHipRotation : pose.rightHipRotation, visual.facing);
-      arms.setColorAt(index * 2 + side, colour); legs.setColorAt(index * 2 + side, colour);
+      const sign = side ? 1 : -1;
+      joints.compose(torso, sign * 0.12, 0.27, side ? pose.rightShoulderRotation : pose.leftShoulderRotation,
+        side ? pose.rightElbowRotation : pose.leftElbowRotation, 0.19, 0.18, true, sign * 0.035);
+      arms.setMatrixAt(index * 2 + side, joints.upper); forearms.setMatrixAt(index * 2 + side, joints.lower);
+      joints.compose(pelvis, sign * 0.049, 0, side ? pose.rightHipRotation : pose.leftHipRotation,
+        side ? pose.rightKneeRotation : pose.leftKneeRotation, 0.225, 0.225, false);
+      legs.setMatrixAt(index * 2 + side, joints.upper); shins.setMatrixAt(index * 2 + side, joints.lower);
+      for (const mesh of [arms, forearms, legs, shins]) mesh.setColorAt(index * 2 + side, colour);
     }
     if (worker && articulated) physicalRigs.drawPhysical(worker.motion, worker.action.interactionAnchor, standing ? worker.action.activeTool : 'none', worker.action.carriedObject,
       worker.action.carriedObject === 'crop' ? '#b5a159' : constructionMaterialColour(worker.material), loaded ? 1 : worker.blend,
@@ -266,7 +279,7 @@ function frame(now: number): void {
   const contact = physical.installationContact(placement.key); assembly.update(0.3, dt, contact === undefined ? undefined : contact && !contactLatch); contactLatch = contact ?? false;
   updateConstructionScaffold(scaffold, assembly.plan, assembly.plan.progress ?? 0.3, dt);
   updateConstructionWorksite(dressing, 0.3, false, physical.materialInTransit(placement.key));
-  for (const mesh of [bodies, heads, arms, legs, targets, cargo]) { mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; }
+  for (const mesh of [bodies, heads, arms, forearms, legs, shins, targets, cargo]) { mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; }
   if (element<HTMLInputElement>('autocamera').checked) director.update(dt, elapsed, state, ground.heightAt);
   else controls.update();
   renderer.render(scene, camera);

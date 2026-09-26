@@ -41,6 +41,17 @@ function manualPlan(species: LandAnimalSpecies, x: number): LandAnimalPlan {
 }
 
 describe('ambient land wildlife presentation', () => {
+  it('removes a harvested generation from rendering and camera targets', () => {
+    const { world, surface } = temperateWildlifeWorld('harvest-adapter');
+    const renderer = new LandWildlifeRenderer(world, surface, 'harvest-adapter', [], [manualPlan('elk', 0)]);
+    const target = renderer.harvestTargets(0)[0]!;
+    expect(target.stage).not.toBe('young');
+    expect(renderer.harvest.harvest(target, 'hunt', target, 1)).toBeDefined();
+    renderer.update(0);
+    expect(renderer.report.visible).toBe(0);
+    expect(renderer.cameraSubjects(0)).toHaveLength(0);
+    renderer.dispose();
+  });
   it('plans deterministic visual-only elk, fox and bear populations from habitat', () => {
     const { world, surface } = temperateWildlifeWorld();
     const before = JSON.stringify(world.cells);
@@ -48,7 +59,7 @@ describe('ambient land wildlife presentation', () => {
     const second = planLandWildlife(world, surface, 'land-wildlife');
 
     expect(first).toEqual(second);
-    expect(new Set(first.map(plan => plan.species))).toEqual(new Set(['elk', 'fox', 'bear']));
+    expect(new Set(first.map(plan => plan.species))).toEqual(new Set(['elk', 'fox', 'bear', 'squirrel']));
     expect(first.every(plan => plan.route.length >= 3)).toBe(true);
     expect(first.every(plan => plan.route.every(point => Number.isFinite(point.x) && Number.isFinite(point.z)))).toBe(true);
     expect(JSON.stringify(world.cells)).toBe(before);
@@ -64,7 +75,7 @@ describe('ambient land wildlife presentation', () => {
   });
 
   it('uses properly separated silhouettes and world scale for elk, bears and foxes', () => {
-    const heights: Record<LandAnimalSpecies, number> = { elk: 0, bear: 0, fox: 0 };
+    const heights: Record<LandAnimalSpecies, number> = { elk: 0, bear: 0, fox: 0, squirrel: 0 };
     for (const species of ['elk', 'bear', 'fox'] as const) {
       const geometry = buildLandAnimalGeometry(species);
       geometry.computeBoundingBox();

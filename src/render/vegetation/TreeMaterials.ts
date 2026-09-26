@@ -34,6 +34,20 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         #include <clipping_planes_fragment>
         ${bark ? fracture : 'if (treeCondition.x < 0.001) discard;'}
       `);
+      if (!bark && target === material) {
+        // Thin foliage scatters incident light; keep this light-dependent so nights stay dark.
+        shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `
+          #include <lights_fragment_end>
+          float canopyRim = pow(1.0 - abs(dot(normal, geometryViewDir)), 3.0);
+          vec3 leafScatter = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse * 0.35;
+          reflectedLight.indirectDiffuse += leafScatter * vec3(0.78, 1.0, 0.62) * canopyRim * 0.32;
+        `);
+        shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `
+          #include <color_fragment>
+          float crownLight = smoothstep(0.25, 1.05, treeLocal.y / max(treeHeight, 0.001));
+          diffuseColor.rgb *= mix(vec3(0.83, 0.94, 1.02), vec3(1.08, 1.04, 0.91), crownLight);
+        `);
+      }
       if (bark && target === material) {
         shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `
           #include <color_fragment>
@@ -62,7 +76,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         `);
       }
     };
-    target.customProgramCacheKey = () => `tree-v2:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
+    target.customProgramCacheKey = () => `tree-v3:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
   }
   mesh.customDepthMaterial = depth;
   mesh.customDistanceMaterial = distance;

@@ -57,7 +57,7 @@ export type CameraEnvironmentProbe = (position: THREE.Vector3, padding: number) 
 
 export interface ScenicCameraSubject {
   readonly id: string;
-  readonly species: 'elk' | 'fox' | 'bear';
+  readonly species: 'elk' | 'fox' | 'bear' | 'squirrel';
   readonly x: number;
   readonly z: number;
   readonly yaw: number;
@@ -1046,7 +1046,7 @@ export function scenicObservationFor(
       position = { x: subject.x, z: subject.z };
       title = subject.species === 'elk' ? 'Elk across the wild'
         : subject.species === 'bear' ? 'A bear in the landscape'
-          : 'A fox at the forest edge';
+          : subject.species === 'squirrel' ? 'A squirrel in the undergrowth' : 'A fox at the forest edge';
       detail = 'Wildlife moves through the same terrain as the civilization, briefly becoming part of the documentary.';
     } else {
       const cell = scenicCellFor(state, motif, key);

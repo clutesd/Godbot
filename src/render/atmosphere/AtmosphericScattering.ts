@@ -89,6 +89,8 @@ export function createAtmosphericSkyMaterial(zenith: THREE.Color, horizon: THREE
     fog: false,
     toneMapped: true,
     uniforms: {
+      uCloudTime: { value: 0 },
+      uCloudTint: { value: new THREE.Color('#e1ddd3') },
       uZenith: { value: zenith.clone() },
       uHorizon: { value: horizon.clone() },
       uSunDirection: { value: new THREE.Vector3(0.4, 0.8, 0.3).normalize() },
@@ -114,6 +116,8 @@ export function createAtmosphericSkyMaterial(zenith: THREE.Color, horizon: THREE
       }
     `,
     fragmentShader: `
+      uniform float uCloudTime;
+      uniform vec3 uCloudTint;
       uniform vec3 uZenith;
       uniform vec3 uHorizon;
       uniform vec3 uSunDirection;
@@ -138,6 +142,24 @@ export function createAtmosphericSkyMaterial(zenith: THREE.Color, horizon: THREE
         vec3 p3 = fract(vec3(p.xyx) * 0.1031);
         p3 += dot(p3, p3.yzx + 33.33);
         return fract((p3.x + p3.y) * p3.z);
+      }
+
+      float cloudNoise(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash12(i), hash12(i + vec2(1, 0)), f.x),
+          mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), f.x), f.y);
+      }
+
+      float cloudField(vec2 p) {
+        float n = 0.0;
+        float weight = 0.54;
+        for (int i = 0; i < 5; i++) {
+          n += cloudNoise(p) * weight;
+          p = mat2(1.6, -1.2, 1.2, 1.6) * p + 7.3;
+          weight *= 0.47;
+        }
+        return n;
       }
 
       void main() {
@@ -178,6 +200,28 @@ export function createAtmosphericSkyMaterial(zenith: THREE.Color, horizon: THREE
         vec3 overcast = mix(uHorizon, uSkyFill, 0.5);
         color = mix(color, overcast, uObscuration * 0.14);
         color *= 1.0 - uNightBlend * 0.13;
+
+        // Two continuous cloud decks: broad weather masses and high wind-combed veils.
+        // Dome-space projection stays stable during camera travel and has no azimuth seam.
+        vec2 cloudUV = dir.xz / (0.22 + max(dir.y, 0.0));
+        vec2 drift = vec2(uCloudTime * 0.0015, uCloudTime * 0.00045);
+        vec2 p = cloudUV * 1.35 + drift;
+        float density = cloudField(p);
+        float threshold = mix(0.53, 0.35, uObscuration);
+        float bank = smoothstep(threshold - 0.075, threshold + 0.15, density);
+        float sunwardDensity = cloudField(p + sunDir.xz * 0.12);
+        float silver = clamp((density - sunwardDensity) * 7.0, 0.0, 1.0);
+        float cloudVisibility = smoothstep(0.005, 0.10, dir.y);
+        vec3 cloudShadow = mix(uHorizon * 0.52, uZenith * 0.62, 0.55);
+        vec3 cloudLight = mix(uCloudTint * (0.12 + uDaylight * 0.72),
+          uSunColor * (0.15 + uDaylight * 0.85), sunSide * 0.48);
+        vec3 cloudColor = mix(cloudShadow, cloudLight, 0.25 + silver * 0.65);
+        cloudColor += uSunColor * silver * pow(max(mu, 0.0), 12.0)
+          * uSunDisk * 0.45;
+        color = mix(color, cloudColor, bank * cloudVisibility * 0.88);
+        float veil = smoothstep(0.52, 0.72,
+          cloudField(cloudUV * vec2(0.8, 4.5) - drift * 0.65 + 31.0));
+        color = mix(color, cloudLight, veil * cloudVisibility * (1.0 - bank) * 0.19);
 
         // Tiny blue-noise-like dither prevents mobile gradient banding without visible grain.
         color += (hash12(gl_FragCoord.xy) - 0.5) / 700.0;

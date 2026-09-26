@@ -64,17 +64,23 @@ export class BioluminescentFlora {
     const material = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.83, vertexColors: true });
     material.onBeforeCompile = shader => {
       Object.assign(shader.uniforms, ecologyUniforms(ecology));
-      shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${ECOLOGY_GLSL}\nvarying float vBioGlow;`)
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${ECOLOGY_GLSL}\nvarying float vBioGlow; varying vec3 vColonyLocal;`)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
+          vColonyLocal = position;
           vec3 colonyPosition = (modelMatrix * instanceMatrix * vec4(position, 1.0)).xyz;
           vec4 habitat = habitatAt(colonyPosition.xz);
-          vBioGlow = ecologyNight * habitat.r * (1.0 + habitat.b * 2.2);
+          vBioGlow = ecologyNight * habitat.r * (1.0 + habitat.b * 2.2)
+            * (0.82 + 0.18 * sin(ecologyTime * 0.8 + colonyPosition.x * 1.7 + colonyPosition.z));
           transformed.x += sin(ecologyTime * 0.55 + colonyPosition.x) * position.y * 0.028;
         `);
-      shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vBioGlow;')
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vColor.rgb * vBioGlow * 6.5;');
+      shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vBioGlow; varying vec3 vColonyLocal;')
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          float capEdge = smoothstep(0.055, 0.115, length(vColonyLocal.xz));
+          float gills = 0.5 + 0.5 * sin(atan(vColonyLocal.z, vColonyLocal.x) * 18.0);
+          float luminousDetail = 0.38 + capEdge * 0.5 + gills * 0.12;
+          totalEmissiveRadiance += vColor.rgb * vBioGlow * luminousDetail * 4.2;`);
     };
-    material.customProgramCacheKey = () => 'godbox-living-colonies-v1';
+    material.customProgramCacheKey = () => 'godbox-living-colonies-v2';
     const makeMesh = (kind: Kind) => {
       const mesh = new THREE.InstancedMesh(colonyGeometry(kind), material, Math.max(1, this.floraBudget));
       mesh.name = `luminous-${kind}`;
@@ -148,7 +154,7 @@ function colonyGeometry(kind: Kind): THREE.BufferGeometry {
   if (kind === 'fungus') {
     // Thin stems, domed caps and a faint gill skirt, readable even without emission.
     parts.push(new THREE.CylinderGeometry(0.012, 0.023, 0.22, 5).translate(0, 0.11, 0));
-    parts.push(new THREE.SphereGeometry(0.12, 7, 4, 0, Math.PI * 2, 0, Math.PI * 0.56).scale(1, 0.48, 1).translate(0, 0.23, 0));
+    parts.push(new THREE.SphereGeometry(0.12, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.56).scale(1, 0.48, 1).translate(0, 0.23, 0));
   } else if (kind === 'flower') {
     parts.push(new THREE.CylinderGeometry(0.009, 0.02, 0.32, 4).translate(0, 0.16, 0));
     for (let i = 0; i < 3; i++) {

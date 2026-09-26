@@ -144,7 +144,7 @@ export class FlowerField {
     stalk.dispose(); leaf.dispose(); secondLeaf.dispose();
     const bloomGeometry = flowerPetals();
     const stemMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.98, metalness: 0 });
-    const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+    const bloomMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.72, metalness: 0, vertexColors: true, side: THREE.DoubleSide });
     this.stems = new THREE.InstancedMesh(stemGeometry, stemMaterial, capacity);
     this.blooms = new THREE.InstancedMesh(bloomGeometry, bloomMaterial, capacity);
     this.heads = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.013, 0),
@@ -161,6 +161,8 @@ export class FlowerField {
     }
     this.group.add(this.understory.group, this.stems, this.blooms, this.heads);
   }
+
+  updateMotion(elapsed: number): void { this.understory.updateMotion(elapsed); }
 
   get report(): FlowerFieldReport {
     const understoryReport = this.understory.report;
@@ -324,19 +326,33 @@ function tryAddFlower(
   });
 }
 
-/** Five cupped, scalloped petals instead of a flat pentagonal marker. */
+/** Separate folded petals leave fine notches and carry a pale, translucent-looking edge. */
 function flowerPetals(): THREE.BufferGeometry {
-  const positions = [0, 0, 0];
+  const positions: number[] = [];
+  const colours: number[] = [];
   const indices: number[] = [];
-  const segments = 40;
-  for (let index = 0; index < segments; index += 1) {
-    const angle = index / segments * Math.PI * 2;
-    const radius = 0.06 * (0.73 + 0.27 * Math.cos(angle * 5));
-    positions.push(Math.cos(angle) * radius, 0.01 * (radius / 0.06) ** 2, Math.sin(angle) * radius);
-    indices.push(0, (index + 1) % segments + 1, index + 1);
+  for (let petal = 0; petal < 5; petal++) {
+    const angle = petal * Math.PI * 2 / 5;
+    const base = positions.length / 3;
+    for (let ring = 0; ring < 4; ring++) {
+      const t = ring / 3;
+      const radius = 0.009 + t * 0.057;
+      const width = 0.002 + Math.sin(t * Math.PI * 0.92) * 0.022;
+      for (let side = -1; side <= 1; side++) {
+        positions.push(Math.cos(angle) * radius - Math.sin(angle) * width * side,
+          0.018 * t * t + Math.abs(side) * 0.006 * Math.sin(t * Math.PI),
+          Math.sin(angle) * radius + Math.cos(angle) * width * side);
+        colours.push(0.72 + t * 0.28, 0.57 + t * 0.43, 0.64 + t * 0.36);
+      }
+    }
+    for (let ring = 0; ring < 3; ring++) for (let side = 0; side < 2; side++) {
+      const a = base + ring * 3 + side;
+      indices.push(a, a + 3, a + 1, a + 1, a + 3, a + 4);
+    }
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   return geometry;

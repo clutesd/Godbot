@@ -25,7 +25,7 @@ function triangleArea(position: THREE.BufferAttribute | THREE.InterleavedBufferA
 }
 
 describe('Inland water discontinuity guard', () => {
-  it('collapses a cliff-like water triangle instead of rendering a crystalline spike', () => {
+  it('packs attributes without deleting surface coverage', () => {
     const geometry = waterGeometry([
       0, 0.02, 0,
       0.5, 3.2, 0.5,
@@ -35,7 +35,7 @@ describe('Inland water discontinuity guard', () => {
 
     packInlandAttributes(geometry);
 
-    expect(triangleArea(geometry.getAttribute('position'))).toBeLessThan(1e-6);
+    expect(triangleArea(geometry.getAttribute('position'))).toBeGreaterThan(1);
     expect(geometry.getAttribute('waterPacked0').count).toBe(3);
     geometry.dispose();
   });

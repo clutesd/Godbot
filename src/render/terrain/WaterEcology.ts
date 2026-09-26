@@ -3,6 +3,7 @@ import type { WorldState } from '../../sim/types';
 import { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import { ECOLOGY_GLSL, ecologyUniforms, type EcologyField } from '../ecology/EcologyField';
 import { AquaticLifeRenderer } from './AquaticLifeRenderer';
+import { WATER_SURFACE_DETAIL_GLSL } from './WaterSurfaceDetail';
 
 /** Shader extension on the existing physical water materials; hydrology still owns the mesh.
  * One shared terrain texture gives the ocean the same shoreline as the authoritative heightfield. */
@@ -52,6 +53,7 @@ export class WaterEcology {
         #define ECOLOGY_WATER_COMPLEXITY ${this.complexity}
         ${ECOLOGY_GLSL}
         ${WATER_LIFE_GLSL}
+        ${WATER_SURFACE_DETAIL_GLSL}
         varying vec3 vEcologyWaterWorld;
         uniform sampler2D ecologyTerrain;
         uniform vec4 ecologyTerrainBounds;
@@ -95,8 +97,12 @@ export class WaterEcology {
       shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         vec2 waterP = vEcologyWaterWorld.xz;
         float waveT = ecologyTime;
-        vec2 slope = vec2(cos(waterP.x * 1.65 + waterP.y * 0.45 - waveT * 0.9),
-          sin(waterP.y * 1.9 - waterP.x * 0.32 + waveT * 0.65)) * (0.065 + bioStorm * 0.1);
+        vec2 slope = waterCurrentSlope(waterP, bioFlow, waveT, bioStorm);
+        vec3 rainRings = vec3(0.0);
+        #if ECOLOGY_WATER_COMPLEXITY > 0
+          if (bioRain > 0.01) rainRings = waterRainRings(waterP * 1.4, waveT);
+        #endif
+        slope += rainRings.xy * bioRain * 0.32;
         slope += vec2(sin(waterP.y * 7.3 + waveT * 1.8), cos(waterP.x * 8.1 - waveT * 1.6)) * (0.015 + bioRain * 0.025);
         vec3 rippleNormal = normalize((viewMatrix * vec4(normalize(vec3(-slope.x, 1.0, -slope.y)), 0.0)).xyz);
         normal = normalize(mix(normal, rippleNormal, 0.88 * (1.0 - bioIce)));
@@ -119,12 +125,20 @@ export class WaterEcology {
         #endif
         // A subdued blue sky reflection remains between the emissive organisms; physical light
         // specular/clearcoat above it still responds to the animated normals and real scene lights.
+        float shallowLight = smoothstep(0.025, 0.12, bioDepth) * (1.0 - smoothstep(0.25, 2.4, bioDepth));
+        #if ECOLOGY_WATER_COMPLEXITY > 0
+          float caustic = waterCaustics(vEcologyWaterWorld.xz - bioFlow * ecologyTime * 0.4, ecologyTime);
+          totalEmissiveRadiance += vec3(0.12, 0.43, 0.34) * caustic * shallowLight
+            * daylightWater * (1.0 - bioIce) * (1.0 - bioStorm * 0.75) * 0.28;
+          totalEmissiveRadiance += vec3(0.08, 0.32, 0.48) * rainRings.z * bioRain
+            * (1.0 - bioIce) * (0.08 + ecologyNight * surfaceLife * 0.6);
+        #endif
         float skyFresnel = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
         totalEmissiveRadiance += mix(vec3(0.13, 0.22, 0.28), vec3(0.008, 0.022, 0.065), ecologyNight)
           * skyFresnel * (1.0 - bioIce);
       `);
     };
-    material.customProgramCacheKey = () => `${originalKey}-ecology-v2-living-water-${this.complexity}`;
+    material.customProgramCacheKey = () => `${originalKey}-ecology-v3-current-caustics-${this.complexity}`;
     material.needsUpdate = true;
   }
   dispose(): void {

@@ -78,10 +78,10 @@ const PALETTE = {
   haze: new THREE.Color('#788b8b'),
 };
 
-const HORIZON_NEAR = new THREE.Color('#62777a');
-const HORIZON_MID = new THREE.Color('#718487');
-const HORIZON_FAR = new THREE.Color('#819194');
-const HORIZON_BASE = new THREE.Color('#65777a');
+const HORIZON_NEAR = new THREE.Color('#47596b');
+const HORIZON_MID = new THREE.Color('#68798a');
+const HORIZON_FAR = new THREE.Color('#8a969e');
+const HORIZON_BASE = new THREE.Color('#8a969e');
 const lerp = (a: number, b: number, amount: number): number => a + (b - a) * amount;
 
 /**
@@ -157,8 +157,8 @@ function buildLandformSpecs(signature: string, span: number): LandformSpec[] {
       centerDistance: span * (major ? 1.9 + r * 0.34 : continent ? 1.62 + r * 0.25 : 1.45 + r * 0.52),
       width: span * (major ? 1.5 + w * 0.28 : continent ? 1.15 + w * 0.32 : 0.62 + w * 0.42),
       depth: span * (major ? 0.62 + d * 0.2 : continent ? 0.9 + d * 0.18 : 0.48 + d * 0.34),
-      maxRelief: major ? 22 + h * 12 : kind === 'island-highlands' ? 12 + h * 8 : continent ? 7 + h * 5 : 9 + h * 7,
-      grid: major ? 30 : continent ? 26 : 22,
+      maxRelief: major ? 48 + h * 22 : kind === 'island-highlands' ? 12 + h * 8 : continent ? 7 + h * 5 : 9 + h * 7,
+      grid: major ? 40 : continent ? 26 : 22,
     };
   });
 }
@@ -208,7 +208,8 @@ function buildLandform(
       const brokenCoast = clamp01(edgeEnvelope * (0.78 + (macro - 0.5) * 0.58));
       const landEnvelope = smoothstep(0.08, 0.58, brokenCoast);
       const mountainWeight = spec.kind === 'mountain-chain'
-        ? Math.pow(ridge, 1.45) * (0.5 + macro * 0.5)
+        ? Math.pow(ridge, 1.65) * (0.5 + macro * 0.5)
+          * (0.55 + 0.65 * Math.exp(-Math.pow((nx + 0.22) * 3.2, 2)))
         : spec.kind === 'island-highlands'
           ? Math.pow(ridge, 1.8) * 0.72
           : spec.kind === 'foothills'
@@ -317,10 +318,10 @@ function buildHorizonBackdrop(
 }
 
 function buildHorizonRidgeSpecs(signature: string, span: number): HorizonRidgeSpec[] {
-  const baseAngles = [0.46, 3.48, 5.18];
+  const baseAngles = [0.46, 0.78, 3.9];
   const baseRadius = [2.34, 2.5, 2.68];
-  const baseArc = [1.5, 1.18, 0.98];
-  const baseRelief = [18, 13, 9];
+  const baseArc = [1.7, 2.15, 1.65];
+  const baseRelief = [38, 48, 32];
   const samples = [72, 64, 56];
   return baseAngles.map((angle, layer) => ({
     angle: angle + (stableHash(`${signature}:horizon-angle`, layer, 0) - 0.5) * 0.24,
@@ -358,7 +359,10 @@ function buildHorizonRidge(
     const ridge = ridgedSeeded(ridgeSeeds, worldX * 0.008 + 2.3, worldZ * 0.008 - 7.2);
     const arcEnvelope = Math.pow(Math.max(0, Math.sin(Math.PI * t)), 0.72);
     const broad = 0.68 + macro * 0.42;
-    const relief = spec.maxRelief * (0.28 + Math.pow(ridge, 1.55) * 0.92) * broad;
+    const massif = Math.exp(-Math.pow((t - 0.36) * 5.2, 2));
+    const teeth = Math.abs(Math.sin(t * 43.0 + layer * 2.1)) * 0.10;
+    const relief = spec.maxRelief * (0.18 + Math.pow(ridge, 2.1) * 0.64
+      + massif * 0.48 + teeth) * broad;
     // Arc endpoints submerge, so each partial skyline dies naturally into ocean/air rather than
     // exposing a vertical curtain at either end.
     const topY = surface.seaLevelY - 1.1 + arcEnvelope * (2.25 + relief);
@@ -411,7 +415,8 @@ function buildHorizonRidge(
   // Scene FogExp2 is tuned for the simulated world and would erase these extreme-distance strips
   // almost completely. They are pre-hazed and still pass through the depth-aware aerial perspective,
   // which gives weather/day-night extinction without losing the skyline in clear conditions.
-  const material = new THREE.MeshBasicMaterial({
+  const material = new THREE.MeshStandardMaterial({
+    roughness: 1,
     vertexColors: true,
     side: THREE.DoubleSide,
     fog: false,

@@ -7,6 +7,7 @@ import { conversationPodCenter, conversationPodFor, type GroupPlacement, type So
 import type { PersonVisualState } from './PeopleVisualState';
 import { planRestSpot, type RestSpotPresentation, type RestSupportFootprint } from './RestPresentation';
 import { restPreferenceFor, restTransitionSeconds, type RestStage } from './RestChoreography';
+import { socialGreetingFor, SOCIAL_GREETING_DISTANCE, SOCIAL_GREETING_SECONDS, type SocialGreeting } from './SocialGesturePresentation';
 
 /**
  * The single renderer-owned micro-life projection.
@@ -172,6 +173,7 @@ export interface SocialEncounterPresentation {
   trust: number;
   beat: number;
   pairedOffset?: Vec2;
+  greeting?: SocialGreeting;
 };
 export interface LocalActivityState {
   authority: string;
@@ -247,6 +249,7 @@ export class LocalActivityPresentation {
   private readonly previousStates = new Map<string, LocalActivityState>();
   get size(): number { return this.states.size; }
   get(id: string): Readonly<LocalActivityState> | undefined { return this.states.get(id); }
+  snapshot(id: string): Readonly<LocalActivityState> | undefined { return this.previousStates.get(id); }
   beginFrame(): void {
     this.frame++; this.previousStates.clear();
     for (const [id, state] of this.states) this.previousStates.set(id, { ...state,
@@ -1290,7 +1293,7 @@ function buildSocialEncounter(person: Person, peer: Person, relationship: Social
     }
   }
 
-  return {
+  const encounter: SocialEncounterPresentation = {
     partnerId: peer.id,
     tone,
     role,
@@ -1299,6 +1302,8 @@ function buildSocialEncounter(person: Person, peer: Person, relationship: Social
     trust,
     beat: 0,
   };
+  encounter.greeting = socialGreetingFor(person, peer, encounter);
+  return encounter;
 }
 
 function socialActionFor(encounter: SocialEncounterPresentation, baseAction: string): string {
@@ -1320,6 +1325,7 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
   clearPlayPresentation(state);
   const script = SOCIAL_SCRIPTS[encounter.tone];
   const beat = script[Math.min(encounter.beat, script.length - 1)]!;
+  const greeting = encounter.beat === 0 ? encounter.greeting : undefined;
   const peerPosition = context.visualFor?.(peer.id) ?? peer.position;
   const from = context.visual ?? state.destination;
   let dx = from.x - peerPosition.x;
@@ -1331,16 +1337,17 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
   }
   dx /= distance; dz /= distance;
   const lateralSign = unit(`${person.id}:${peer.id}:encounter-side`) < 0.5 ? -1 : 1;
-  const spacing = beat.spacing
+  const spacing = greeting ? SOCIAL_GREETING_DISTANCE[greeting] : beat.spacing
     + (encounter.tone === 'warm' || encounter.tone === 'supportive' ? -encounter.trust * 0.035 : 0)
     + (encounter.tone === 'tense' ? encounter.strength * 0.05 : 0);
-  const lateralX = -dz * beat.lateral * lateralSign;
-  const lateralZ = dx * beat.lateral * lateralSign;
+  const lateralX = greeting ? 0 : -dz * beat.lateral * lateralSign;
+  const lateralZ = greeting ? 0 : dx * beat.lateral * lateralSign;
   const candidate = {
     x: peerPosition.x + dx * spacing + lateralX,
     z: peerPosition.z + dz * spacing + lateralZ,
   };
-  if (encounter.beat === 0 && bounded(person, candidate) && localSegmentSafe(from, candidate, context)
+  if ((encounter.beat === 0 || encounter.beat === 1 && encounter.greeting && person.id < peer.id)
+    && bounded(person, candidate) && localSegmentSafe(from, candidate, context)
     && hasPeerClearance(person, candidate, context, peer.id, 0.34)) {
     state.destination = candidate;
   }
@@ -1353,18 +1360,21 @@ function applySocialBeat(person: Person, peer: Person, context: LocalActivityCon
   state.focus.z = peerPosition.z;
   state.restFacing = facingTarget(state.destination, state.focus);
   state.partnerId = peer.id;
-  const speaking = encounter.role === 'mentor' || encounter.role === 'supporter'
+  const speaking = encounter.role === 'mentor' && encounter.beat !== 2
+    || encounter.role === 'learner' && encounter.beat === 2 || encounter.role === 'supporter'
     || encounter.role === 'peer' && (person.id < peer.id) === (encounter.beat % 2 === 0);
   const sharedLaugh = encounter.tone === 'warm' && beat.animation === 'social-laugh';
   state.animation = encounter.role === 'supported' && encounter.beat === 1
     ? 'reflect'
-    : sharedLaugh ? 'social-laugh' : speaking ? beat.animation : 'converse-quiet';
+    : sharedLaugh ? 'social-laugh' : speaking ? encounter.role === 'learner' ? 'converse' : beat.animation : 'converse-quiet';
   state.action = socialActionFor(encounter, beat.action);
+  // The paired gesture layer owns the greeting envelope, not two independent clip clocks.
+  if (greeting) state.animation = 'converse-quiet';
   const relationalLinger = encounter.tone === 'tense'
     ? 0.82 + encounter.strength * 0.08
     : 0.9 + encounter.strength * 0.18 + encounter.trust * 0.14
       + (person.traits.sociability + peer.traits.sociability) * 0.05;
-  state.hold = beat.seconds * relationalLinger * (context.far ? 1.35 : 1);
+  state.hold = greeting ? SOCIAL_GREETING_SECONDS[greeting] + 0.15 : beat.seconds * relationalLinger * (context.far ? 1.35 : 1);
 }
 
 function updateAmbientAttention(person: Person, context: LocalActivityContext, state: LocalActivityState,

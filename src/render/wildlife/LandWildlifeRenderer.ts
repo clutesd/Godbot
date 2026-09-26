@@ -1,11 +1,12 @@
 import * as THREE from 'three';
+import { wildlifeLife, WildlifeHarvestLedger, type WildlifeTarget } from '../../sim/wildlife/WildlifeLifecycle';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { SeededRandom, stableHash } from '../../sim/prng';
 import type { Vec2, WorldCell, WorldState } from '../../sim/types';
 import { cellAt } from '../../sim/world';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 
-export type LandAnimalSpecies = 'elk' | 'fox' | 'bear';
+export type LandAnimalSpecies = 'elk' | 'fox' | 'bear' | 'squirrel';
 
 export interface LandAnimalPlan {
   id: string;
@@ -61,11 +62,13 @@ interface MotionSample {
   yaw: number;
   moving: boolean;
   stride: number;
+  behavior: 'travel' | 'forage' | 'rest';
 }
 
-const SPECIES: readonly LandAnimalSpecies[] = ['elk', 'fox', 'bear'];
+const SPECIES: readonly LandAnimalSpecies[] = ['elk', 'fox', 'bear', 'squirrel'];
 const UP = new THREE.Vector3(0, 1, 0);
 const PROFILE: Record<LandAnimalSpecies, SpeciesProfile> = {
+  squirrel: { viewRange: 28, maxVisible: 8, maxSlope: 0.48, routeStep: [0.5, 1.4], speed: [0.12, 0.20], scale: [0.85, 1.12] },
   // World scale is calibrated against the canonical ~0.30-unit adult humanoid. Elk shoulder
   // height is just under an adult; antlers extend well above. Bears are lower but much bulkier,
   // while a fox remains unmistakably small.
@@ -75,12 +78,14 @@ const PROFILE: Record<LandAnimalSpecies, SpeciesProfile> = {
 };
 
 const MODEL_HEIGHT: Record<LandAnimalSpecies, number> = {
+  squirrel: 0.10,
   elk: 0.52,
   bear: 0.23,
   fox: 0.12,
 };
 
 const BIOME_WEIGHT: Record<LandAnimalSpecies, Partial<Record<WorldCell['biome'], number>>> = {
+  squirrel: { forest: 1, grassland: 0.55, wetland: 0.6, highland: 0.5 },
   elk: { forest: 0.96, grassland: 1, wetland: 0.64, highland: 0.52, dryland: 0.22, mountain: 0.12 },
   fox: { forest: 0.88, grassland: 1, wetland: 0.48, highland: 0.58, dryland: 0.62, mountain: 0.22 },
   bear: { forest: 1, wetland: 0.72, highland: 0.68, grassland: 0.34, dryland: 0.12, mountain: 0.38 },
@@ -212,6 +217,7 @@ export function planLandWildlife(
   const plans: LandAnimalPlan[] = [];
   const worldScale = Math.max(0.68, Math.min(1.35, world.size / 52));
   const targets = {
+    squirrel: Math.round(8 * worldScale),
     elk: Math.max(2, Math.min(4, Math.round(2.3 * worldScale))),
     fox: Math.max(3, Math.min(7, Math.round(4.8 * worldScale))),
     bear: Math.max(2, Math.min(4, Math.round(2.4 * worldScale))),
@@ -237,7 +243,7 @@ export function planLandWildlife(
     }
   });
 
-  for (const species of ['fox', 'bear'] as const) {
+  for (const species of ['fox', 'bear', 'squirrel'] as const) {
     const territories = chooseTerritories(world, surface, species, seed, targets[species], anchors);
     territories.forEach((origin, territoryIndex) => {
       const random = new SeededRandom(`${seed}:${species}:${territoryIndex}`);
@@ -271,7 +277,7 @@ function sampleMotion(plan: LandAnimalPlan, elapsed: number): MotionSample {
   }
   const a = plan.route[aIndex] ?? plan.route[0]!;
   const b = plan.route[bIndex] ?? a;
-  const travelShare = plan.species === 'fox' ? 0.82 : plan.species === 'elk' ? 0.76 : 0.70;
+  const travelShare = plan.species === 'squirrel' ? 0.48 : plan.species === 'fox' ? 0.68 : plan.species === 'elk' ? 0.62 : 0.55;
   const moving = local < travelShare;
   const t = moving ? smooth01(local / travelShare) : 1;
   const yaw = Math.atan2(b.x - a.x, b.z - a.z);
@@ -282,7 +288,8 @@ function sampleMotion(plan: LandAnimalPlan, elapsed: number): MotionSample {
     z: a.z + (b.z - a.z) * t - localX * Math.sin(yaw) + localZ * Math.cos(yaw),
     yaw,
     moving,
-    stride: raw * Math.PI * 2 + plan.gaitPhase,
+    stride: elapsed * (plan.species === 'squirrel' ? 15 : plan.species === 'fox' ? 10 : 6) + plan.gaitPhase,
+    behavior: moving ? 'travel' : plan.species === 'bear' && local > 0.8 ? 'rest' : 'forage',
   };
 }
 
@@ -458,9 +465,26 @@ function buildFoxGeometry(): THREE.BufferGeometry {
 }
 
 export function buildLandAnimalGeometry(species: LandAnimalSpecies): THREE.BufferGeometry {
+  if (species === 'squirrel') return buildSquirrelGeometry();
   if (species === 'elk') return buildElkGeometry();
   if (species === 'bear') return buildBearGeometry();
   return buildFoxGeometry();
+}
+
+function buildSquirrelGeometry(): THREE.BufferGeometry {
+  return mergeParts([
+    spherePart([0.025, 0.027, 0.047], [0, 0.033, 0], '#8e6550'),
+    spherePart([0.023, 0.025, 0.028], [0, 0.057, 0.039], '#aa7b57'),
+    spherePart([0.016, 0.016, 0.022], [0, 0.045, 0.058], '#dfc6a0'),
+    spherePart([0.023, 0.048, 0.024], [0, 0.055, -0.05], '#916445'),
+    spherePart([0.026, 0.025, 0.025], [0, 0.086, -0.032], '#aa7b57'),
+    ...[-1, 1].flatMap(side => [
+      conePart(0.009, 0.024, [side * 0.014, 0.082, 0.038], '#654733'),
+      spherePart([0.004, 0.005, 0.004], [side * 0.019, 0.061, 0.057], '#151516'),
+      spherePart([0.009, 0.008, 0.019], [side * 0.02, 0.009, -0.022], '#624838'),
+      cylinderPart(0.005, 0.025, [side * 0.015, 0.018, 0.028], '#624838'),
+    ]),
+  ]);
 }
 
 function modelMaterial(): THREE.MeshStandardMaterial {
@@ -473,10 +497,8 @@ function modelMaterial(): THREE.MeshStandardMaterial {
 }
 
 /**
- * Purely visual roaming mammals. They do not eat, hunt, reproduce, flee, damage crops, affect
- * resources, or write simulation state. Plans are explicit and exported so future ecological
- * authority can replace presentation planning without replacing models, LOD, terrain grounding,
- * camera culling or animation.
+ * Habitat-bound mammals with simulation-month lifecycle presentation and a harvest adapter.
+ * Resource credit and saved population authority belong to the future simulation integration.
  */
 export class LandWildlifeRenderer {
   readonly group = new THREE.Group();
@@ -490,9 +512,10 @@ export class LandWildlifeRenderer {
   private readonly tint = new THREE.Color();
   private exclusions: readonly WildlifeExclusionZone[] = [];
   private visible = 0;
+  readonly harvest = new WildlifeHarvestLedger();
 
   constructor(
-    world: WorldState,
+    private readonly world: WorldState,
     private readonly surface: TerrainSurface,
     seed: string,
     anchors: readonly Vec2[] = [],
@@ -503,15 +526,16 @@ export class LandWildlifeRenderer {
     this.plans = plans ?? planLandWildlife(world, surface, seed, anchors);
     const bySpecies = (species: LandAnimalSpecies) => this.plans.filter((plan) => plan.species === species).length;
     this.meshes = {
+      squirrel: this.createSpeciesMesh('squirrel', bySpecies('squirrel')),
       elk: this.createSpeciesMesh('elk', bySpecies('elk')),
       fox: this.createSpeciesMesh('fox', bySpecies('fox')),
       bear: this.createSpeciesMesh('bear', bySpecies('bear')),
     };
-    this.group.add(this.meshes.elk, this.meshes.fox, this.meshes.bear);
+    this.group.add(this.meshes.elk, this.meshes.fox, this.meshes.bear, this.meshes.squirrel);
   }
 
   get report(): LandWildlifeReport {
-    const bySpecies = { elk: 0, fox: 0, bear: 0 };
+    const bySpecies = { elk: 0, fox: 0, bear: 0, squirrel: 0 };
     for (const plan of this.plans) bySpecies[plan.species] += 1;
     let triangles = 0;
     let drawCalls = 0;
@@ -521,6 +545,17 @@ export class LandWildlifeRenderer {
       triangles += mesh.count * (mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count) / 3;
     }
     return { planned: this.plans.length, visible: this.visible, drawCalls, triangles, bySpecies };
+  }
+
+  private life(plan: LandAnimalPlan) {
+    return wildlifeLife(plan.id, plan.species, this.world.weather?.month ?? 0);
+  }
+
+  harvestTargets(elapsed: number): WildlifeTarget[] {
+    return this.cameraSubjects(elapsed).map(subject => {
+      const life = wildlifeLife(subject.id, subject.species, this.world.weather?.month ?? 0);
+      return { ...subject, id: life.id, stage: life.stage };
+    });
   }
 
   setCamera(camera: THREE.Vector3): void {
@@ -540,6 +575,8 @@ export class LandWildlifeRenderer {
   cameraSubjects(elapsed: number): readonly WildlifeCameraSubject[] {
     const subjects: WildlifeCameraSubject[] = [];
     for (const plan of this.plans) {
+      const life = this.life(plan);
+      if (life.stage === 'dead' || this.harvest.has(life.id)) continue;
       const motion = sampleMotion(plan, elapsed);
       if (this.exclusions.some((zone) => Math.hypot(motion.x - zone.x, motion.z - zone.z) < zone.radius + 0.35)) continue;
       const ground = this.surface.heightAt(motion.x, motion.z);
@@ -555,7 +592,7 @@ export class LandWildlifeRenderer {
     for (const species of SPECIES) {
       const profile = PROFILE[species];
       const candidates = this.plans
-        .filter((plan) => plan.species === species)
+        .filter((plan) => plan.species === species && this.life(plan).stage !== 'dead' && !this.harvest.has(this.life(plan).id))
         .map((plan) => ({ plan, motion: sampleMotion(plan, elapsed) }))
         .filter(({ motion }) => Math.hypot(motion.x - this.camera.x, motion.z - this.camera.z) <= profile.viewRange)
         .sort((left, right) =>
@@ -564,6 +601,7 @@ export class LandWildlifeRenderer {
         .slice(0, profile.maxVisible);
 
       const mesh = this.meshes[species];
+      (mesh.userData['animationTime'] as { value: number }).value = elapsed;
       let count = 0;
       for (const { plan, motion } of candidates) {
         if (this.exclusions.some((zone) => Math.hypot(motion.x - zone.x, motion.z - zone.z) < zone.radius + 0.35)) continue;
@@ -572,20 +610,23 @@ export class LandWildlifeRenderer {
         if (Number.isFinite(water) && water > ground - 0.03) continue;
 
         const bobAmplitude = species === 'elk' ? 0.0055 : species === 'fox' ? 0.0032 : 0.004;
-        const bob = motion.moving ? Math.abs(Math.sin(motion.stride * (species === 'fox' ? 1.35 : 1))) * bobAmplitude : 0;
+        const bob = motion.moving ? Math.abs(Math.sin(motion.stride)) * (species === 'squirrel' ? 0.025 : bobAmplitude) : 0;
         const idleLook = motion.moving ? 0 : Math.sin(elapsed * 0.22 + plan.gaitPhase) * (species === 'fox' ? 0.24 : 0.12);
         this.position.set(motion.x, ground + bob, motion.z);
         this.quaternion.setFromAxisAngle(UP, motion.yaw + idleLook);
         const breathing = 1 + Math.sin(elapsed * 0.9 + plan.gaitPhase) * (motion.moving ? 0.004 : 0.009);
-        this.scale.set(plan.scale, plan.scale * breathing, plan.scale);
+        const size = plan.scale * this.life(plan).scale;
+        this.scale.set(size, size * breathing * (motion.behavior === 'rest' ? 0.72 : 1), size);
         this.matrix.compose(this.position, this.quaternion, this.scale);
         mesh.setMatrixAt(count, this.matrix);
+        mesh.geometry.getAttribute('wildlifeMoving').setX(count, motion.moving ? 1 : 0);
         this.tint.setRGB(plan.coat, plan.coat, plan.coat);
         mesh.setColorAt(count, this.tint);
         count += 1;
       }
       mesh.count = count;
       mesh.instanceMatrix.needsUpdate = true;
+      mesh.geometry.getAttribute('wildlifeMoving').needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       this.visible += count;
     }
@@ -601,6 +642,28 @@ export class LandWildlifeRenderer {
   private createSpeciesMesh(species: LandAnimalSpecies, capacity: number): THREE.InstancedMesh {
     const geometry = buildLandAnimalGeometry(species);
     const mesh = new THREE.InstancedMesh(geometry, modelMaterial(), Math.max(1, capacity));
+    geometry.setAttribute('wildlifeMoving', new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, capacity)), 1));
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    const time = { value: 0 };
+    mesh.userData['animationTime'] = time;
+    material.onBeforeCompile = shader => {
+      shader.uniforms['wildlifeTime'] = time;
+      shader.vertexShader = 'uniform float wildlifeTime; attribute float wildlifeMoving;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
+        #include <begin_vertex>
+        float phase = instanceMatrix[3].x * 2.1 + instanceMatrix[3].z;
+        float gait = sin(wildlifeTime * ${species === 'squirrel' ? '15.0' : species === 'fox' ? '10.0' : '6.0'} + phase + (position.x > 0.0 ? 3.14159 : 0.0) + (position.z > 0.0 ? 3.14159 : 0.0));
+        float leg = 1.0 - smoothstep(0.015, ${species === 'elk' ? '0.17' : species === 'bear' ? '0.07' : '0.035'}, position.y);
+        transformed.z += gait * leg * 0.014 * wildlifeMoving;
+        transformed.y += max(0.0, gait) * leg * 0.007 * wildlifeMoving;
+        float forage = (1.0 - wildlifeMoving) * (0.5 + 0.5 * sin(wildlifeTime * 1.5 + phase));
+        float head = smoothstep(${species === 'elk' ? '0.12, 0.22' : species === 'bear' ? '0.12, 0.20' : '0.035, 0.065'}, position.z);
+        transformed.y -= head * forage * ${species === 'elk' ? '0.09' : '0.018'};
+        transformed.x += head * forage * sin(wildlifeTime + phase) * 0.008;
+        transformed.x += sin(wildlifeTime * 2.0 + phase) * 0.006 * step(position.z, -0.12);
+      `);
+    };
+    material.customProgramCacheKey = () => `wildlife-articulation:${species}`;
     mesh.name = `land-wildlife:${species}`;
     mesh.count = 0;
     mesh.castShadow = true;

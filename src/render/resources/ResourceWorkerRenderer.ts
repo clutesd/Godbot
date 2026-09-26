@@ -1,3 +1,4 @@
+import { CarriedMaterialRenderer } from '../people/CarriedMaterialRenderer';
 import * as THREE from 'three';
 import type { Vec2 } from '../../sim/types';
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
@@ -21,7 +22,7 @@ export class ResourceWorkerRenderer {
   private readonly heads: THREE.InstancedMesh;
   private readonly chips: THREE.InstancedMesh;
   private readonly sparks: THREE.InstancedMesh;
-  private readonly loads: THREE.InstancedMesh;
+  private readonly loads = new CarriedMaterialRenderer(CAPACITY);
   private readonly baskets: THREE.InstancedMesh;
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
@@ -45,7 +46,7 @@ export class ResourceWorkerRenderer {
 
   constructor() {
     this.group.name = 'Articulated resource workers';
-    this.loads = this.pool('Contact acquired material', new THREE.BoxGeometry(1, 1, 1), '#ffffff', CAPACITY);
+    this.group.add(this.loads.group);
     this.baskets = this.pool('Worker baskets', new THREE.CylinderGeometry(0.12, 0.09, 0.16, 7, 1, true), '#8b6840', CAPACITY);
     this.limbs = this.pool('Resource worker joints', createCosmicWorkLimbGeometry(), '#ffffff', CAPACITY * 10);
     (this.limbs.material as THREE.Material).dispose();
@@ -65,7 +66,7 @@ export class ResourceWorkerRenderer {
     if (!ready) this.motion.impact = 0;
   }
 
-  beginFrame(): void { this.count = 0; this.chipCount = 0; this.sparkCount = 0; }
+  beginFrame(): void { this.loads.beginFrame(); this.count = 0; this.chipCount = 0; this.sparkCount = 0; }
 
   setBodyTransform(matrix: THREE.Matrix4): void {
     this.bodyTransform.copy(matrix); this.hasBodyTransform = true;
@@ -160,17 +161,9 @@ export class ResourceWorkerRenderer {
     const loadZ = handZ - (plant ? receive * 0.15 : 0);
     this.position.set(x + (loadX * this.cos + loadZ * this.sin) * size,
       y + handY * size, z + (loadZ * this.cos - loadX * this.sin) * size);
-    const visible = load && blend > 0.95 ? size : 0;
-    const loadShape = load === 'timber' ? [0.88, 0.105, 0.14] as const
-      : load === 'metal' ? [0.7, 0.055, 0.22] as const
-        : load === 'masonry' ? [0.32, 0.22, 0.25] as const
-          : load === 'ceramic' ? [0.34, 0.12, 0.22] as const
-            : load === 'earth' ? [0.21, 0.12, 0.21] as const
-              : [0.16, 0.1, 0.12] as const;
-    this.scale.set(visible * loadShape[0], visible * loadShape[1], visible * loadShape[2]);
+    const visible = load ? size : 0;
     this.rotation.setFromAxisAngle(this.up, facing);
-    this.matrix.compose(this.position, this.rotation, this.scale); this.loads.setMatrixAt(index, this.matrix);
-    this.colour.set(materialColour); this.loads.setColorAt(index, this.colour);
+    if (load) this.loads.draw(load, this.position.x, this.position.y, this.position.z, size, facing);
     if (load === 'earth') this.position.y -= 0.02 * size;
     else this.position.set(x + 0.32 * this.cos * size, y + (0.35 - crouch * 0.3) * size, z - 0.32 * this.sin * size);
     this.scale.setScalar(load === 'earth' ? visible * 1.4 : basket ? size : 0); this.matrix.compose(this.position, this.rotation, this.scale);
@@ -225,8 +218,9 @@ export class ResourceWorkerRenderer {
     this.heads.count = this.count;
     this.chips.count = this.chipCount;
     this.sparks.count = this.sparkCount;
-    this.loads.count = this.baskets.count = this.count;
-    for (const mesh of [this.limbs, this.handles, this.heads, this.chips, this.sparks, this.loads, this.baskets]) {
+    this.loads.endFrame();
+    this.baskets.count = this.count;
+    for (const mesh of [this.limbs, this.handles, this.heads, this.chips, this.sparks, this.baskets]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }

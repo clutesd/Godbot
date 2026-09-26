@@ -132,7 +132,7 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
   // Return down the inner wall to a closed floor: mouths read as real hollow vessels.
   const shell = [new THREE.Vector2(0, 0), ...profile, new THREE.Vector2(lip.x - 0.026, lip.y),
     ...profile.slice(0, -1).reverse().map(p => new THREE.Vector2(Math.max(0.025, p.x - 0.026), Math.max(0.035, p.y))), new THREE.Vector2(0, 0.035)];
-  const body = new THREE.LatheGeometry(shell, tier === 1 ? 7 : 12);
+  const body = new THREE.LatheGeometry(shell, tier === 1 ? 12 : 24);
   if (tier === 1) {
     const position = body.getAttribute('position');
     for (let i = 0; i < position.count; i++) {
@@ -142,9 +142,20 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
     }
     body.computeVertexNormals();
   }
+  // Kiln blush and subtle throwing lines give the clay depth without texture assets.
   add(body, clay);
+  const surface = pieces[pieces.length - 1]!;
+  const positions = surface.getAttribute('position');
+  const colours = surface.getAttribute('color');
+  for (let i = 0; i < positions.count; i++) {
+    const y = positions.getY(i), angle = Math.atan2(positions.getZ(i), positions.getX(i));
+    const blush = 0.94 + Math.sin(angle * 3 + y * 9 + style.variant) * 0.035
+      + Math.sin(y * 145) * 0.012 + y / lip.y * 0.055;
+    const tint = clay.clone().multiplyScalar(blush);
+    colours.setXYZ(i, tint.r, tint.g, tint.b);
+  }
   const ring = (r: number, y: number, tube: number, colour: string) => {
-    const g = new THREE.TorusGeometry(r, tube, 4, tier === 1 ? 7 : 12);
+    const g = new THREE.TorusGeometry(r, tube, 6, tier === 1 ? 12 : 24);
     g.rotateX(Math.PI / 2); g.translate(0, y, 0); add(g, colour);
   };
   ring(lip.x - 0.01, lip.y, tier === 3 ? 0.022 : 0.016,
@@ -162,7 +173,7 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
       const py = y - height / 2 + height * i / 4;
       return new THREE.Vector2(radiusAt(py) + 0.004, py);
     });
-    add(new THREE.LatheGeometry(points, 12), colour);
+    add(new THREE.LatheGeometry(points, 24), colour);
   };
   if (tier >= 2 && !greenware) {
     band(lip.y * 0.78, 0.045, style.primary);
@@ -207,7 +218,7 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
   if (vessel === 'jug' || vessel === 'cooking-pot' || vessel === 'ritual') {
     const handles = vessel === 'jug' ? [1] : [-1, 1];
     for (const side of handles) {
-      const g = new THREE.TorusGeometry(vessel === 'jug' ? 0.105 : 0.075, 0.024, 4, 8);
+      const g = new THREE.TorusGeometry(vessel === 'jug' ? 0.105 : 0.075, 0.024, 6, 16);
       g.scale(0.72, vessel === 'jug' ? 1.35 : 0.8, 1);
       g.translate(side * (vessel === 'jug' ? Math.max(...profile.map(p => p.x)) : shoulder.x), lip.y * 0.62, 0);
       add(g, !greenware && tier === 3 ? style.primary : clay);

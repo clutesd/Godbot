@@ -28,6 +28,9 @@ export interface PersonVisualTarget {
   smoothTravel?: boolean;
   /** Only explicit emergency authority may unlock running. */
   emergency?: boolean;
+  /** Reciprocal, presentation-only contact reservation; third-party clearance is unchanged. */
+  greetingPartnerId?: string;
+  embracing?: boolean;
 }
 
 export interface PersonVisualGround {
@@ -81,11 +84,21 @@ export interface PersonVisualState {
   /** Facing the character is easing toward, held after movement stops. */
   desiredFacing: number;
   lastFrame: number;
+  greetingPartnerId?: string;
+  embracing?: boolean;
+  bodyScale?: number;
+  focalHeadYaw?: number;
+  passingPeer?: string;
+  passingSeconds?: number;
+  passingCooldown?: number;
+  passingHeadYaw?: number;
+  passingTorsoYaw?: number;
 }
 
 export class PeopleVisualStateStore {
   private readonly states = new Map<string, PersonVisualState>();
   private frame = 0;
+  private readonly snapshots = new Map<string, PersonVisualState>();
   private readonly buckets = new Map<string, PersonVisualState[]>();
 
   get size(): number {
@@ -96,13 +109,20 @@ export class PeopleVisualStateStore {
     return this.states.get(personId);
   }
 
+  snapshot(personId: string): Readonly<PersonVisualState> | undefined {
+    return this.snapshots.get(personId);
+  }
+
   beginFrame(): void {
     this.frame += 1;
     this.buckets.clear();
+    this.snapshots.clear();
     for (const state of this.states.values()) {
       const key = `${Math.floor(state.x)}:${Math.floor(state.z)}`;
       const bucket = this.buckets.get(key) ?? [];
-      bucket.push({ ...state }); this.buckets.set(key, bucket);
+      const snapshot = { ...state };
+      this.snapshots.set(state.id, snapshot);
+      bucket.push(snapshot); this.buckets.set(key, bucket);
     }
   }
 
@@ -116,7 +136,44 @@ export class PeopleVisualStateStore {
   }
 
   clear(): void {
-    this.states.clear(); this.buckets.clear();
+    this.states.clear(); this.buckets.clear(); this.snapshots.clear();
+  }
+
+  /** Bounded spatial query over the previous frame. Recognition reads real relationships;
+   * this adds neither a social encounter nor a navigation destination. */
+  noticePassingPeer(personId: string, delta: number, recognizes: (id: string) => boolean, enabled = true): void {
+    const state = this.states.get(personId);
+    if (!state) return;
+    const dt = Math.max(0, Math.min(0.1, delta));
+    state.passingCooldown = Math.max(0, (state.passingCooldown ?? 0) - dt);
+    const peers = enabled && state.speed >= 0.05 ? this.nearby(state, 24) : [];
+    let peer = peers.find(p => p.id === state.passingPeer);
+    if (!state.passingPeer && !state.passingCooldown) {
+      let nearest = 0.9;
+      // Cap recognition work even when an unusually dense spawn occupies one bucket.
+      for (let i = 0; i < Math.min(24, peers.length); i++) {
+        const candidate = peers[i]!;
+        const distance = Math.hypot(candidate.x - state.x, candidate.z - state.z);
+        const yaw = Math.atan2(Math.sin(Math.atan2(candidate.x - state.x, candidate.z - state.z) - state.facing),
+          Math.cos(Math.atan2(candidate.x - state.x, candidate.z - state.z) - state.facing));
+        if (distance > 0.18 && distance < nearest && Math.abs(yaw) < 1.35 && recognizes(candidate.id)) {
+          nearest = distance; peer = candidate;
+        }
+      }
+      if (peer) { state.passingPeer = peer.id; state.passingSeconds = 0; }
+    }
+    state.passingSeconds = (state.passingSeconds ?? 0) + dt;
+    const age = state.passingSeconds;
+    const valid = peer && age < 1.35 && Math.hypot(peer.x - state.x, peer.z - state.z) < 1.1;
+    const yaw = valid && peer ? Math.atan2(Math.sin(Math.atan2(peer.x - state.x, peer.z - state.z) - state.facing),
+      Math.cos(Math.atan2(peer.x - state.x, peer.z - state.z) - state.facing)) : 0;
+    state.passingHeadYaw = turnToward(state.passingHeadYaw ?? 0, Math.max(-0.65, Math.min(0.65, yaw)), dt * 2.2);
+    state.passingTorsoYaw = turnToward(state.passingTorsoYaw ?? 0,
+      valid && age > 0.28 ? Math.max(-0.09, Math.min(0.09, yaw * 0.16)) : 0, dt * 0.35);
+    if (!valid && state.passingPeer) {
+      state.passingPeer = undefined;
+      state.passingCooldown = 4;
+    }
   }
 
   resolve(personId: string, target: PersonVisualTarget, deltaSeconds: number, ground: PersonVisualGround): PersonVisualState {
@@ -129,6 +186,8 @@ export class PeopleVisualStateStore {
     const state = existing ?? this.spawn(personId, resolvedTarget.destination, ground);
     if (!existing) this.states.set(personId, state);
     state.lastFrame = this.frame;
+    state.greetingPartnerId = target.greetingPartnerId;
+    state.embracing = target.embracing;
     state.arrivalEase = resolvedTarget.arrivalEase ?? false;
     state.localMove = resolvedTarget.localMove ?? false;
     state.smoothTravel = resolvedTarget.smoothTravel ?? false;
@@ -269,10 +328,13 @@ export class PeopleVisualStateStore {
     const clear = (point: Vec2) => peers.every(peer => {
       const separation = Math.hypot(state.x - peer.x, state.z - peer.z);
       // Pre-existing spawn overlap can unwind but cannot get worse.
-      return segmentDistance(state, point, peer) >= Math.min(HUMAN_RADIUS * 2 + peer.maxPhysicalSpeed * dt, separation) - 1e-7;
+      const reciprocal = state.greetingPartnerId === peer.id && peer.greetingPartnerId === state.id;
+      const clearance = reciprocal && state.embracing && peer.embracing ? 0.1 : HUMAN_RADIUS * 2;
+      return segmentDistance(state, point, peer) >= Math.min(clearance + peer.maxPhysicalSpeed * dt, separation) - 1e-7;
     });
     let threatened = false;
     for (const peer of peers) {
+      if (state.greetingPartnerId === peer.id && peer.greetingPartnerId === state.id) continue;
       if (state.id < peer.id && Math.hypot(peer.velocityX, peer.velocityZ) > 0.02) continue;
       const predicted = { x: peer.x + peer.velocityX * 0.5, z: peer.z + peer.velocityZ * 0.5 };
       const ahead = { x: state.x + (proposed.x - state.x) * 20, z: state.z + (proposed.z - state.z) * 20 };
@@ -315,11 +377,11 @@ export class PeopleVisualStateStore {
     return fallback;
   }
 
-  private nearby(state: PersonVisualState): PersonVisualState[] {
+  private nearby(state: PersonVisualState, limit = Infinity): PersonVisualState[] {
     const peers: PersonVisualState[] = [];
     const bx = Math.floor(state.x), bz = Math.floor(state.z);
     for (let x = bx - 1; x <= bx + 1; x++) for (let z = bz - 1; z <= bz + 1; z++) {
-      for (const peer of this.buckets.get(`${x}:${z}`) ?? []) if (peer.id !== state.id) peers.push(peer);
+      for (const peer of this.buckets.get(`${x}:${z}`) ?? []) if (peer.id !== state.id) { peers.push(peer); if (peers.length >= limit) return peers; }
     }
     return peers;
   }

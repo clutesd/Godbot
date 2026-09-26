@@ -791,16 +791,21 @@ describe('renderer-owned local activity', () => {
     const h = harness([mentor, learner], { relationshipFor: relationshipLookup([tie]) });
     const mentorActions = new Set<string>(), learnerActions = new Set<string>();
     const mentorBeats = new Set<number>(), learnerBeats = new Set<number>();
+    let learnerResponded = false;
     for (let frame = 0; frame < 60 * 60; frame++) {
       h.tick(1 / 60);
       const m = h.local.get('mentor'), l = h.local.get('learner');
       if (m?.encounter?.partnerId === 'learner') { mentorActions.add(m.action); mentorBeats.add(m.encounter.beat); }
       if (l?.encounter?.partnerId === 'mentor') { learnerActions.add(l.action); learnerBeats.add(l.encounter.beat); }
+      if (m?.encounter?.beat === 2 && l?.encounter?.beat === 2) {
+        learnerResponded ||= m.animation === 'converse-quiet' && l.animation === 'converse';
+      }
     }
     expect([...mentorActions]).toEqual(expect.arrayContaining(['offer-guidance', 'explain-guidance', 'check-understanding']));
     expect([...learnerActions]).toEqual(expect.arrayContaining(['seek-guidance', 'listen-to-mentor', 'consider-guidance']));
     expect(mentorBeats.size).toBeGreaterThanOrEqual(3);
     expect(learnerBeats.size).toBeGreaterThanOrEqual(3);
+    expect(learnerResponded).toBe(true);
   });
 
   it('turns recent grief between close friends into quiet support rather than cheerful generic conversation', () => {
@@ -1021,6 +1026,9 @@ describe('displacement-driven human animation', () => {
     controller.updateCharacterAnimation(p.id, 0.4, activity, 'walk', 0.4);
     controller.updateCharacterAnimation(p.id, 0.016, activity, 'walk', 0);
     expect(travelAnimationFor(0, p)).toBe('idle');
+    const phase = controller.getOrCreateCharacterState(p.id, p.occupation).stridePhase;
+    for (let frame = 0; frame < 90; frame++) controller.updateCharacterAnimation(p.id, 1 / 60, activity, 'walk', 0);
+    expect(controller.getOrCreateCharacterState(p.id, p.occupation).stridePhase).toBe(phase);
     expect(controller.getCurrentPose(p.id)!.leftHipRotation).toBe(0);
     expect(controller.getCurrentPose(p.id)!.rightHipRotation).toBe(0);
   });

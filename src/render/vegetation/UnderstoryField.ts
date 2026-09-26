@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { SeededRandom, stableHash } from '../../sim/prng';
 import { clamp01, smoothstep } from '../../sim/terrain/noise';
 import type { WorldState } from '../../sim/types';
@@ -122,6 +121,7 @@ export function resolveUnderstoryAppearance(
  */
 export class UnderstoryField {
   readonly group = new THREE.Group();
+  private readonly breezeTime = { value: 0 };
   private readonly placements: UnderstoryPlacement[];
   private readonly meshes: Record<UnderstoryKind, THREE.InstancedMesh>;
   private readonly matrix = new THREE.Matrix4();
@@ -234,12 +234,28 @@ export class UnderstoryField {
     }
   }
 
+  updateMotion(elapsed: number): void { this.breezeTime.value = elapsed; }
+
   private createMesh(name: string, geometry: THREE.BufferGeometry, capacity: number): THREE.InstancedMesh {
     const mesh = new THREE.InstancedMesh(
       geometry,
-      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.96, metalness: 0, side: THREE.DoubleSide }),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.84, metalness: 0, vertexColors: true, side: THREE.DoubleSide }),
       Math.max(1, capacity),
     );
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    material.onBeforeCompile = shader => {
+      shader.uniforms['understoryTime'] = this.breezeTime;
+      shader.vertexShader = `uniform float understoryTime;\n${shader.vertexShader}`;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
+        #include <begin_vertex>
+        vec3 plantOrigin = instanceMatrix[3].xyz;
+        float breeze = sin(understoryTime * 1.15 + plantOrigin.x * 0.61 + plantOrigin.z * 0.47);
+        float flutter = sin(understoryTime * 2.3 + plantOrigin.z + position.x * 8.0);
+        transformed.x += (breeze * 0.035 + flutter * 0.009) * position.y * position.y;
+        transformed.z += breeze * position.y * position.y * 0.018;
+      `);
+    };
+    material.customProgramCacheKey = () => 'botanical-understory-breeze-v1';
     mesh.name = `understory-${name}`;
     mesh.count = 0;
     mesh.frustumCulled = false;
@@ -372,55 +388,74 @@ function countKinds(placements: readonly UnderstoryPlacement[]): Record<Understo
   return result;
 }
 
-function buildShrubGeometry(): THREE.BufferGeometry {
-  const parts = [
-    new THREE.IcosahedronGeometry(0.34, 0).scale(1.08, 0.88, 1).translate(0, 0.34, 0),
-    new THREE.IcosahedronGeometry(0.28, 0).scale(0.92, 0.9, 1).translate(0.22, 0.42, 0.06),
-    new THREE.IcosahedronGeometry(0.26, 0).scale(1, 0.86, 0.92).translate(-0.21, 0.39, -0.08),
-    new THREE.IcosahedronGeometry(0.2, 0).scale(0.92, 0.92, 1).translate(0.02, 0.54, -0.13),
-  ];
-  const geometry = mergeGeometries(parts);
-  for (const part of parts) part.dispose();
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function buildBushGeometry(): THREE.BufferGeometry {
-  const parts = [
-    new THREE.IcosahedronGeometry(0.44, 1).scale(1.08, 0.8, 1).translate(0, 0.44, 0),
-    new THREE.IcosahedronGeometry(0.35, 0).scale(1, 0.94, 0.96).translate(0.34, 0.51, 0.1),
-    new THREE.IcosahedronGeometry(0.34, 0).scale(0.96, 0.9, 1).translate(-0.33, 0.49, -0.05),
-    new THREE.IcosahedronGeometry(0.31, 0).scale(0.92, 0.94, 1).translate(0.05, 0.61, 0.3),
-    new THREE.IcosahedronGeometry(0.27, 0).scale(1, 0.92, 0.92).translate(-0.04, 0.68, -0.27),
-  ];
-  const geometry = mergeGeometries(parts);
-  for (const part of parts) part.dispose();
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function buildFernGeometry(): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const indices: number[] = [];
-  const fronds = 10;
-  for (let frond = 0; frond < fronds; frond += 1) {
-    const angle = frond / fronds * Math.PI * 2;
-    const length = 0.48 + (frond % 3) * 0.055;
-    const width = 0.1;
-    const dx = Math.cos(angle);
-    const dz = Math.sin(angle);
-    const px = -dz;
-    const pz = dx;
+/** Folded leaf blades: a visible midrib, pointed tip and open space between sprays. */
+function leafMesh(leaves: { centre: THREE.Vector3; angle: number; length: number; width: number; lift: number; shade: number }[]): THREE.BufferGeometry {
+  const positions: number[] = [], colours: number[] = [], indices: number[] = [];
+  for (const leaf of leaves) {
+    // Fine petioles connect the foliage to its crown instead of leaving floating blades.
+    const stemBase = positions.length / 3;
+    const stemWidth = 0.003;
+    const sideways = new THREE.Vector3(-Math.sin(leaf.angle), 0, Math.cos(leaf.angle));
+    const root = new THREE.Vector3(0, 0.025, 0);
+    for (const point of [root.clone().addScaledVector(sideways, -stemWidth),
+      root.clone().addScaledVector(sideways, stemWidth),
+      leaf.centre.clone().addScaledVector(sideways, -stemWidth * 0.45),
+      leaf.centre.clone().addScaledVector(sideways, stemWidth * 0.45)]) {
+      positions.push(point.x, point.y, point.z);
+      colours.push(0.42, 0.48, 0.31);
+    }
+    indices.push(stemBase, stemBase + 2, stemBase + 1, stemBase + 1, stemBase + 2, stemBase + 3);
     const base = positions.length / 3;
-    positions.push(px * 0.02, 0.03, pz * 0.02);
-    positions.push(dx * length * 0.5 + px * width, 0.21, dz * length * 0.5 + pz * width);
-    positions.push(dx * length, 0.075, dz * length);
-    positions.push(dx * length * 0.5 - px * width, 0.21, dz * length * 0.5 - pz * width);
-    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    const { centre, angle, length, width, lift, shade } = leaf;
+    for (const [along, across, rise] of [[0, 0, 0], [0.48, -1, 0.35], [1, 0, 1], [0.48, 1, 0.35], [0.48, 0, 0.65]]) {
+      positions.push(centre.x + Math.cos(angle) * along! * length - Math.sin(angle) * across! * width,
+        centre.y + rise! * lift, centre.z + Math.sin(angle) * along! * length + Math.cos(angle) * across! * width);
+      const value = shade * (across === 0 ? 1.06 : 0.87);
+      colours.push(value * 0.93, value, value * 0.88);
+    }
+    indices.push(base, base + 4, base + 1, base + 1, base + 4, base + 2,
+      base + 2, base + 4, base + 3, base + 3, base + 4, base);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   return geometry;
+}
+
+function buildShrubGeometry(): THREE.BufferGeometry { return buildLeafyBush(0.78, 32); }
+function buildBushGeometry(): THREE.BufferGeometry { return buildLeafyBush(1, 48); }
+
+function buildLeafyBush(size: number, count: number): THREE.BufferGeometry {
+  const random = new SeededRandom(`botanical-bush:${count}`);
+  const leaves = [];
+  for (let i = 0; i < count; i++) {
+    const angle = i * 2.399963;
+    const tier = (i + 0.5) / count;
+    const radius = Math.sqrt(1 - tier) * 0.33 * size;
+    leaves.push({ centre: new THREE.Vector3(Math.cos(angle) * radius, (0.15 + tier * 0.58) * size,
+      Math.sin(angle) * radius), angle: angle + random.range(-0.35, 0.35),
+      length: random.range(0.19, 0.34) * size, width: random.range(0.055, 0.095) * size,
+      lift: random.range(-0.06, 0.14) * size, shade: 0.66 + tier * 0.3 });
+  }
+  return leafMesh(leaves);
+}
+
+function buildFernGeometry(): THREE.BufferGeometry {
+  const leaves = [];
+  for (let frond = 0; frond < 8; frond++) {
+    const angle = frond * Math.PI * 2 / 8;
+    const length = 0.42 + (frond % 3) * 0.055;
+    for (let pair = 0; pair < 5; pair++) {
+      const t = 0.18 + pair * 0.16;
+      for (const side of [-1, 1]) leaves.push({
+        centre: new THREE.Vector3(Math.cos(angle) * length * t,
+          0.035 + Math.sin(t * Math.PI * 0.85) * 0.22, Math.sin(angle) * length * t),
+        angle: angle + side * 0.85, length: 0.15 * (1 - t) + 0.025,
+        width: 0.022 * (1 - t) + 0.005, lift: -0.025, shade: 0.72 + t * 0.26,
+      });
+    }
+  }
+  return leafMesh(leaves);
 }

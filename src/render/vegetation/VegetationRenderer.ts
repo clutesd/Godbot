@@ -544,6 +544,7 @@ export class VegetationRenderer {
   setViewport(height: number, pixelRatio: number): void { this.luminousFlora?.setViewport(height, pixelRatio); }
 
   updateLeaves(elapsed: number): void {
+    this.flowers.updateMotion(elapsed);
     const delta = Math.max(0, Math.min(1, elapsed - this.previousElapsed));
     this.previousElapsed = elapsed;
     const difference = ((this.targetSeason - this.season + 18) % 12) - 6;
@@ -564,6 +565,7 @@ export class VegetationRenderer {
     positions.needsUpdate = true;
     colours.needsUpdate = true;
     this.leaves.geometry.setDrawRange(0, this.leafSites.length);
+    this.birds.setEcologyYear((wind?.month ?? this.ecologyYear * 12) / 12);
     this.birds.update(elapsed, wind?.wind ?? 0, [...this.disturbance, ...this.occupiedGround]);
     this.wildlife.update(elapsed);
   }

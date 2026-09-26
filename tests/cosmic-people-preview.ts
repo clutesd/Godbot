@@ -1,3 +1,4 @@
+import { HumanJointRig } from '../src/render/people/HumanJointRig';
 /** Manual WebGL acceptance fixture. Production assets, animation clips and real camera distances.
  * npm run dev -> /tests/cosmic-people-preview.html. Never imported by the application. */
 import * as THREE from 'three';
@@ -27,9 +28,13 @@ const roles: PersonRole[] = ['farmer', 'fisher', 'builder', 'merchant', 'guard',
 const population = Math.floor(THREE.MathUtils.clamp(Number(new URLSearchParams(location.search).get('population')) || 12, 12, 1536));
 const bodies = new THREE.InstancedMesh(createCosmicBodyGeometry(), material, population);
 const heads = new THREE.InstancedMesh(createCosmicHeadGeometry(), material, population);
-const arms = new THREE.InstancedMesh(createCosmicArmGeometry(), material, population * 2);
-const legs = new THREE.InstancedMesh(createCosmicLegGeometry(), material, population * 2);
-const meshes = [bodies, heads, arms, legs];
+const arms = new THREE.InstancedMesh(createCosmicArmGeometry('upper'), material, population * 2);
+const legs = new THREE.InstancedMesh(createCosmicLegGeometry('upper'), material, population * 2);
+const forearms = new THREE.InstancedMesh(createCosmicArmGeometry('lower'), material, population * 2);
+const shins = new THREE.InstancedMesh(createCosmicLegGeometry('lower'), material, population * 2);
+const meshes = [bodies, heads, arms, legs, forearms, shins];
+const joints = new HumanJointRig();
+const legParent = new THREE.Matrix4();
 const accents = new CosmicRoleAccents(population); accents.mesh.count = population; scene.add(accents.mesh);
 const props = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.14, 0.16), new THREE.MeshStandardMaterial({ color: '#94744a' }), population); scene.add(props);
 const variation = meshes.map(bindCosmicVariation);
@@ -54,7 +59,7 @@ const individuals = Array.from({ length: population }, (_, i) => {
   const columns = population === 12 ? 6 : Math.ceil(Math.sqrt(population));
   const x = (i % columns - (columns - 1) / 2) * 0.72, z = 0.45 - Math.floor(i / columns) * (population === 12 ? 1.35 : 0.6);
   color.set(cosmicRoleFor(role).color);
-  for (let part = 0; part < 4; part++) for (let side = 0; side < (part > 1 ? 2 : 1); side++) {
+  for (let part = 0; part < meshes.length; part++) for (let side = 0; side < (part > 1 ? 2 : 1); side++) {
     const index = part > 1 ? i * 2 + side : i;
     variation[part]!.setXYZ(index, appearance.seed, appearance.nebula, appearance.brightness);
     meshes[part]!.setColorAt(index, color);
@@ -72,7 +77,7 @@ let paused = false, seconds = 0, previous = performance.now();
 document.querySelector('#pause')!.addEventListener('click', () => { paused = !paused; });
 document.querySelector('#step')!.addEventListener('click', () => { seconds += 0.25; });
 function part(mesh: THREE.InstancedMesh, i: number, x: number, y: number, z: number, size: number, rx = 0, ry = 0) {
-  object.position.set(x, y, z); object.rotation.set(rx, ry, 0); object.scale.setScalar(size); object.updateMatrix(); mesh.setMatrixAt(i, object.matrix);
+  object.position.set(x, y, z); object.rotation.set(rx, ry, 0, 'YXZ'); object.scale.setScalar(size); object.updateMatrix(); mesh.setMatrixAt(i, object.matrix);
 }
 function frame(now: number) {
   const dt = paused ? 0 : Math.min(0.04, (now - previous) / 1000); previous = now; seconds += dt;
@@ -93,7 +98,7 @@ function frame(now: number) {
   if (width !== previousWidth || height !== previousHeight) { renderer.setSize(width, height, false); post.resize(width, height); previousWidth = width; previousHeight = height; }
   camera.aspect = width / height; camera.updateProjectionMatrix();
   const count = view === 'portrait' ? 1 : study ? 3 : population;
-  bodies.count = heads.count = accents.mesh.count = count; arms.count = legs.count = count * 2; props.count = count;
+  bodies.count = heads.count = accents.mesh.count = count; arms.count = legs.count = forearms.count = shins.count = count * 2; props.count = count;
   individuals.slice(0, count).forEach(({ id, appearance, size: s, x: originalX, z: originalZ, role }, i) => {
     const x = study ? (view === 'portrait' ? 0 : (i - 1) * 0.22) : originalX;
     const z = study ? 0 : originalZ;
@@ -105,27 +110,35 @@ function frame(now: number) {
     color.set(cosmicRoleFor(selectedRole).color);
     bodies.setColorAt(i, color); heads.setColorAt(i, color);
     for (let side = 0; side < 2; side++) { arms.setColorAt(i * 2 + side, color); legs.setColorAt(i * 2 + side, color); }
-    animations.updateCharacterAnimation(id, dt, 'rest', activity, activity === 'walk' || activity === 'carry' ? 0.3 : 0, 360, activity === 'carry');
+    animations.updateCharacterAnimation(id, dt, 'rest', activity, activity === 'run' ? 0.6 : activity === 'walk' || activity === 'carry' ? 0.3 : 0, selectedRole === 'elder' ? 900 : selectedRole === 'child' ? 100 : 360, activity === 'carry');
     let pose = animations.getCurrentPose(id)!;
     if (physical) {
       sampleResourceWorkMotion(profiles[workIndex]!, resourceWorkerVariation('cosmic-review', id, 'study'), seconds, motion);
       pose = animations.resourcePose(pose, motion, 1);
     }
-    const lift = Math.max(-0.4, Math.min(0.1, pose.positionOffset.y)) * (physical ? 1 : 0.35) * s;
+    const lift = Math.max(-0.4, Math.min(0.1, pose.positionOffset.y)) * s;
     const yaw = study ? i * Math.PI / 2 : 0.22 * Math.sin(i * 1.7);
     part(bodies, i, x, (0.44 + (physical ? 0.03 : 0)) * s + lift, z, s, pose.spineRotation, yaw + pose.pelvisRotation);
     object.scale.set(s * build, s, s * build); object.updateMatrix(); bodies.setMatrixAt(i, object.matrix);
     torsoMatrix.copy(object.matrix);
     accents.set(i, selectedRole, torsoMatrix, appearance.brightness);
     headAnchor.set(0, 0.425, 0).applyMatrix4(torsoMatrix);
-    part(heads, i, headAnchor.x, headAnchor.y, headAnchor.z, s, pose.spineRotation, yaw + pose.headRotation);
+    part(heads, i, headAnchor.x, headAnchor.y, headAnchor.z, s, pose.spineRotation + (pose.headPitch ?? 0), yaw + pose.headRotation);
+    object.position.set(x, 0.45 * s + lift, z); object.rotation.set(0, yaw + pose.pelvisRotation, 0);
+    object.scale.setScalar(physical ? 0 : s); object.updateMatrix(); legParent.copy(object.matrix);
+
     for (let side = 0; side < 2; side++) {
       const sign = side ? 1 : -1;
-      headAnchor.set(sign * 0.12, 0.27, 0).applyMatrix4(torsoMatrix);
-      part(arms, i * 2 + side, headAnchor.x, headAnchor.y, headAnchor.z, physical ? 0 : s,
-        pose.spineRotation + (side ? pose.rightShoulderRotation : pose.leftShoulderRotation), yaw + pose.pelvisRotation);
-      object.rotation.z = sign * 0.025; object.updateMatrix(); arms.setMatrixAt(i * 2 + side, object.matrix);
-      part(legs, i * 2 + side, x + Math.cos(yaw) * sign * 0.049 * build * s, 0.45 * s, z - Math.sin(yaw) * sign * 0.049 * build * s, physical ? 0 : s, side ? pose.rightHipRotation : pose.leftHipRotation, yaw);
+      joints.compose(torsoMatrix, sign * 0.12, 0.27,
+        side ? pose.rightShoulderRotation : pose.leftShoulderRotation,
+        side ? pose.rightElbowRotation : pose.leftElbowRotation, 0.19, 0.18, true, sign * 0.035);
+      if (physical) { joints.upper.scale(new THREE.Vector3(0, 0, 0)); joints.lower.scale(new THREE.Vector3(0, 0, 0)); }
+      arms.setMatrixAt(i * 2 + side, joints.upper); forearms.setMatrixAt(i * 2 + side, joints.lower);
+      joints.compose(legParent, sign * 0.049 * build, 0,
+        side ? pose.rightHipRotation : pose.leftHipRotation,
+        side ? pose.rightKneeRotation : pose.leftKneeRotation, 0.225, 0.225, false);
+      legs.setMatrixAt(i * 2 + side, joints.upper); shins.setMatrixAt(i * 2 + side, joints.lower);
+      forearms.setColorAt(i * 2 + side, color); shins.setColorAt(i * 2 + side, color);
     }
     if (physical) {
       rigs.setBodyTransform(torsoMatrix);

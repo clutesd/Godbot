@@ -65,7 +65,7 @@ export function stabilizeInlandWaterGeometry(geometry: THREE.BufferGeometry): nu
 /** Four vec4 bindings instead of fourteen individual attribute locations. Legacy named views
  * share this same buffer for hydrology inspection/tests, with no duplicated GPU storage. */
 export function packInlandAttributes(geometry: THREE.BufferGeometry): void {
-  stabilizeInlandWaterGeometry(geometry);
+  // Discontinuities are separated before shoreline clipping; never punch holes in the skin.
   const count = geometry.getAttribute('position').count;
   const packed = new Float32Array(count * 16);
   for (const [name, size, offset] of CHANNELS) {

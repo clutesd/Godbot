@@ -9,6 +9,7 @@ import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 import type { EcologyField } from '../ecology/EcologyField';
 import { WaterEcology } from './WaterEcology';
 import { packInlandAttributes, packInlandShader } from './WaterAttributes';
+import { renderedGroundSampler } from './WaterGround';
 
 export interface WaterReport {
   lakeSurfaces: number;
@@ -58,12 +59,12 @@ export class WaterSystem {
   readonly report: WaterReport;
   private readonly ocean: THREE.Mesh;
   private readonly oceanY: number;
-  private readonly foam: THREE.Points | undefined;
-  private readonly foamBase: Float32Array;
-  private readonly mist: THREE.Points | undefined;
-  private readonly waterfallSheets: THREE.Mesh | undefined;
-  private readonly plungePools: THREE.Points | undefined;
-  private readonly plungeBase: Float32Array;
+  private foam: THREE.Points | undefined;
+  private foamBase: Float32Array;
+  private mist: THREE.Points | undefined;
+  private waterfallSheets: THREE.Mesh | undefined;
+  private plungePools: THREE.Points | undefined;
+  private plungeBase: Float32Array;
   private inland: THREE.Mesh | undefined;
   private rapids: THREE.Points | undefined;
   private rapidBase: Float32Array = new Float32Array(0);
@@ -151,6 +152,9 @@ export class WaterSystem {
 
     if (this.mist) {
       // Wind carries spray, but the particle cloud remains anchored to the fall itself.
+      const spray = this.mist.material as THREE.PointsMaterial;
+      const sprayTime = spray.userData['sprayTime'] as { value: number };
+      sprayTime.value = elapsedSeconds;
       this.mist.position.x = weather.windX * weather.wind * 0.34;
       this.mist.position.z = weather.windZ * weather.wind * 0.34;
     }
@@ -198,6 +202,27 @@ export class WaterSystem {
     this.rapidBase = rapidFoam?.base ?? new Float32Array(0);
     if (this.rapids) this.group.add(this.rapids);
     this.report.rapidSites = rapidFoam?.sites ?? 0;
+    // Falls belong to current hydrology too: retired channels must not keep pouring onto dry land.
+    for (const object of [this.foam, this.mist, this.waterfallSheets, this.plungePools]) {
+      if (object) { this.group.remove(object); disposeObject(object); }
+    }
+    const falls = collectFalls(this.world);
+    const random = new SeededRandom(`${this.seed}:waterfalls`);
+    const foam = buildFoam(falls, this.world, random);
+    this.foam = foam?.points;
+    this.foamBase = foam?.base ?? new Float32Array(0);
+    this.mist = buildMist(falls, this.world, random);
+    this.waterfallSheets = buildWaterfallSheets(falls, this.world);
+    const plunge = buildPlungePools(falls, this.world, new SeededRandom(`${this.seed}:plunge-pools`));
+    this.plungePools = plunge?.points;
+    this.plungeBase = plunge?.base ?? new Float32Array(0);
+    for (const object of [this.foam, this.mist, this.waterfallSheets, this.plungePools]) {
+      if (object) this.group.add(object);
+    }
+    this.report.waterfalls = falls.length;
+    this.report.plungePools = plunge?.sites ?? 0;
+    this.report.lakeSurfaces = countChannel(this.world.terrain.lake);
+    this.report.riverSamples = countChannel(this.world.terrain.river);
     this.group.userData['materialRevision'] = (this.group.userData['materialRevision'] as number ?? 0) + 1;
   }
 
@@ -450,9 +475,18 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     shader.uniforms['waterTime'] = state.time;
     shader.uniforms['waterTransition'] = state.transition;
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterTransition;\nattribute float waterDepth;\nattribute float waterFlow;\nattribute vec2 waterFlowDirection;\nattribute float waterKind;\nattribute float waterHierarchy;\nattribute float waterRapid;\nattribute vec2 waterWindDirection;\nattribute float waterWind;\nattribute float waterRain;\nattribute float waterStorm;\nattribute float waterFreezePrevious;\nattribute float waterFreeze;\nattribute float waterSnow;\nattribute float waterEmergence;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterDepth = waterDepth;\nvWaterFlow = waterFlow;\nvWaterFlowDirection = waterFlowDirection;\nvWaterKind = waterKind;\nvWaterHierarchy = waterHierarchy;\nvWaterRapid = waterRapid;\nvWaterRain = waterRain;\nvWaterWind = waterWind;\nvWaterStorm = waterStorm;\nvWaterSnow = waterSnow;\nvWaterIce = mix(waterFreezePrevious, waterFreeze, waterTransition);\nfloat waterRiver = 1.0 - step(0.49, abs(waterKind - 1.0));\nfloat waterLake = 1.0 - step(0.49, abs(waterKind));\nfloat waterFlood = max(0.0, 1.0 - waterRiver - waterLake);\nfloat waterShoreDamping = smoothstep(0.012, 0.11, waterDepth);\nvec2 waterDirection = length(waterFlowDirection) > 0.01 ? normalize(waterFlowDirection) : vec2(0.7071, 0.7071);\nvec2 windDirection = length(waterWindDirection) > 0.01 ? normalize(waterWindDirection) : vec2(0.7071, -0.7071);\nvec2 waterAcross = vec2(-waterDirection.y, waterDirection.x);\nfloat waterCurrentCoordinate = dot(position.xz, waterDirection);\nfloat waterAcrossCoordinate = dot(position.xz, waterAcross);\nfloat windCoordinate = dot(position.xz, windDirection);\nfloat weatherEnergy = 0.65 + waterWind * 0.75 + waterStorm * 1.2;\nfloat lakeWave = sin(windCoordinate * (1.0 + waterWind * 0.6) - waterTime * (0.32 + waterWind * 0.72)) + sin(dot(position.xz, vec2(-windDirection.y, windDirection.x)) * 1.32 + waterTime * 0.27);\nfloat riverWave = sin(waterCurrentCoordinate * (1.50 + waterHierarchy * 0.55) - waterTime * (1.05 + waterFlow * 1.8) + sin(waterAcrossCoordinate * 1.9) * 0.35);\nfloat crossWind = sin(windCoordinate * 2.1 - waterTime * (0.45 + waterWind * 0.8)) * waterWind;\nfloat rapidChop = sin(waterCurrentCoordinate * 4.1 - waterTime * (2.6 + waterFlow * 2.2) + waterAcrossCoordinate * 0.7);\nfloat rainMicro = sin(position.x * 8.4 + position.z * 7.1 + waterTime * 8.7) * waterRain;\nfloat floodWave = sin(position.x * 0.62 + position.z * 0.51 + waterTime * 0.18);\nfloat waterDisplacement = lakeWave * 0.0017 * weatherEnergy * waterLake + (riverWave * (0.0018 + waterFlow * 0.0022) + crossWind * 0.0012) * waterRiver + rapidChop * waterRapid * 0.0032 * waterRiver + floodWave * 0.0007 * waterFlood + rainMicro * 0.00075;\nwaterDisplacement *= (1.0 - vWaterIce * 0.96);\ntransformed.y += waterDisplacement * waterShoreDamping;\ntransformed.y -= waterDepth * 0.84 * waterEmergence * (1.0 - waterTransition) * waterFlood;\nvWaterPosition = transformed;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterDepth = waterDepth;\nvWaterFlow = waterFlow;\nvWaterFlowDirection = waterFlowDirection;\nvWaterKind = waterKind;\nvWaterHierarchy = waterHierarchy;\nvWaterRapid = waterRapid;\nvWaterRain = waterRain;\nvWaterWind = waterWind;\nvWaterStorm = waterStorm;\nvWaterSnow = waterSnow;\nvWaterIce = mix(waterFreezePrevious, waterFreeze, waterTransition);\n// Keep shared vertices fixed; moving normals carry the waves without opening cracks.\nvWaterPosition = transformed;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat waterRiver = 1.0 - step(0.49, abs(vWaterKind - 1.0));\nfloat waterLake = 1.0 - step(0.49, abs(vWaterKind));\nfloat waterFlood = max(0.0, 1.0 - waterRiver - waterLake);\nfloat waterShallow = 1.0 - smoothstep(0.025, 0.20, vWaterDepth);\nfloat waterDeep = smoothstep(0.16, 0.82, vWaterDepth);\nfloat waterBank = 1.0 - smoothstep(0.008, 0.060, vWaterDepth);\nvec3 waterShallowTint = vec3(0.39, 0.64, 0.61);\nvec3 waterDeepTint = vec3(0.075, 0.25, 0.31);\nvec3 waterLakeTint = vec3(0.16, 0.39, 0.43);\nvec3 waterRiverTint = mix(vec3(0.17, 0.42, 0.43), vec3(0.08, 0.31, 0.36), vWaterHierarchy);\nvec3 waterFloodTint = vec3(0.30, 0.34, 0.24);\nvec3 lakeBankTint = vec3(0.25, 0.43, 0.38);\nvec3 riverBankTint = vec3(0.29, 0.32, 0.22);\nvec3 floodBankTint = vec3(0.34, 0.29, 0.18);\nvec3 bankTint = lakeBankTint * waterLake + riverBankTint * waterRiver + floodBankTint * waterFlood;\n// Semantic colour begins from interpolated depth/type instead of per-cell vertex colour.\nvec3 waterBodyTint = waterLakeTint * waterLake + waterRiverTint * waterRiver + waterFloodTint * waterFlood;\ndiffuseColor.rgb = waterBodyTint;\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterShallowTint, waterShallow * (0.28 + waterLake * 0.06));\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterDeepTint, waterDeep * (0.46 + waterRiver * 0.08));\ndiffuseColor.rgb = mix(diffuseColor.rgb, bankTint, waterBank * (0.19 + waterFlood * 0.17));\nvec2 waterDirection = length(vWaterFlowDirection) > 0.01 ? normalize(vWaterFlowDirection) : vec2(0.7071, 0.7071);\nvec2 waterAcross = vec2(-waterDirection.y, waterDirection.x);\nfloat waterCurrentCoordinate = dot(vWaterPosition.xz, waterDirection);\nfloat waterAcrossCoordinate = dot(vWaterPosition.xz, waterAcross);\nfloat lakeRipple = (sin(vWaterPosition.x * 1.55 + waterTime * (0.40 + vWaterWind * 0.45)) + sin(vWaterPosition.z * 1.39 - waterTime * 0.39)) * 0.5;\nfloat riverCurrent = sin(waterCurrentCoordinate * (2.3 + vWaterHierarchy) - waterTime * (1.7 + vWaterFlow * 2.7) + sin(waterAcrossCoordinate * 2.1) * 0.45);\nfloat currentLane = pow(max(0.0, 0.5 + 0.5 * riverCurrent), 7.0) * waterRiver;\nfloat rapidCrest = pow(max(0.0, sin(waterCurrentCoordinate * 5.2 - waterTime * (3.5 + vWaterFlow * 3.0) + waterAcrossCoordinate * 0.9)), 9.0) * vWaterRapid * waterRiver;\nfloat rainScatter = max(0.0, sin(vWaterPosition.x * 8.2 + waterTime * 8.6) * sin(vWaterPosition.z * 7.5 - waterTime * 7.9)) * vWaterRain;\nfloat waterRipple = lakeRipple * waterLake + riverCurrent * 0.55 * waterRiver + lakeRipple * 0.18 * waterFlood;\nwaterRipple *= 1.0 - vWaterIce * 0.94;\n// Slow world-space silk sits beneath the fast ripples, so the surface appears to breathe.\nfloat wanderA = sin(vWaterPosition.x * 0.73 + vWaterPosition.z * 0.41 - waterTime * 0.23);\nfloat wanderB = sin(vWaterPosition.x * -0.37 + vWaterPosition.z * 0.91 + waterTime * 0.17 + wanderA * 0.58);\nfloat wanderC = sin((vWaterPosition.x + vWaterPosition.z) * 0.19 - waterTime * 0.11 + wanderB * 0.44);\nfloat waterWander = wanderA * 0.36 + wanderB * 0.39 + wanderC * 0.25;\nfloat waterSilk = pow(max(0.0, 0.5 + 0.5 * (waterRipple * 0.56 + waterWander * 0.44)), 6.0);\nfloat waterGlint = smoothstep(0.67, 0.98, waterRipple * 0.70 + waterWander * 0.30) * smoothstep(0.025, 0.12, vWaterDepth);\nfloat shorelinePearl = waterBank * (0.5 + 0.5 * sin(vWaterPosition.x * 1.31 + vWaterPosition.z * 1.07 - waterTime * 0.34 + waterWander));\nvec3 jewelTint = mix(vec3(0.10, 0.42, 0.43), vec3(0.17, 0.51, 0.55), 0.5 + 0.5 * waterWander);\ndiffuseColor.rgb = mix(diffuseColor.rgb, jewelTint, waterSilk * (0.028 + waterLake * 0.014) * (1.0 - vWaterIce));\ndiffuseColor.rgb *= 1.0 + waterRipple * (0.012 + waterRiver * 0.010);\ndiffuseColor.rgb += vec3(0.12, 0.20, 0.20) * waterGlint * 0.16;\ndiffuseColor.rgb += vec3(0.16, 0.29, 0.25) * shorelinePearl * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb += vec3(0.10, 0.18, 0.17) * currentLane * (0.04 + vWaterFlow * 0.05) * (1.0 - vWaterIce);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.88, 0.86), rapidCrest * 0.52 * (1.0 - vWaterIce));\ndiffuseColor.rgb += vec3(0.10, 0.13, 0.13) * rainScatter * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb *= 1.0 - vWaterStorm * 0.045;\nvec3 iceTint = mix(vec3(0.43, 0.59, 0.62), vec3(0.62, 0.72, 0.73), waterLake);\ndiffuseColor.rgb = mix(diffuseColor.rgb, iceTint, vWaterIce * 0.74);\nfloat snowOnIce = smoothstep(0.72, 0.96, vWaterIce) * smoothstep(0.008, 0.07, vWaterSnow);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.88, 0.87), snowOnIce * 0.48);`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+      // Continuous world-space ripples make even the lowest detail water catch the light.
+      float rippleShore = smoothstep(0.0, 0.08, vWaterDepth) * (1.0 - vWaterIce);
+      vec2 rippleSlope = vec2(
+        cos(vWaterPosition.x * 1.65 + vWaterPosition.z * 0.45 - waterTime * 0.9),
+        sin(vWaterPosition.z * 1.9 - vWaterPosition.x * 0.32 + waterTime * 0.65)) * 0.045 * rippleShore;
+      normal = normalize((viewMatrix * vec4(normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y)), 0.0)).xyz);
+      nonPerturbedNormal = normal;
+    `);
     shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(mix(roughnessFactor, 0.68, vWaterIce * 0.78) + vWaterStorm * 0.035, 0.08, 0.92);`);
   };
   const compile = material.onBeforeCompile;
@@ -460,7 +494,7 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     compile.call(material, shader, renderer);
     shader.vertexShader = packInlandShader(shader.vertexShader);
   };
-  material.customProgramCacheKey = () => 'godbox-inland-water-v5-continuous-living-surface';
+  material.customProgramCacheKey = () => 'godbox-inland-water-v6-seamless-ground-fit';
   return material;
 }
 
@@ -483,7 +517,7 @@ function collectFalls(world: WorldState): FallSite[] {
     for (let x = 1; x < resolution - 1; x += 1) {
       const index = z * resolution + x;
       const intensity = read(fall, index);
-      if (intensity < 0.22) continue;
+      if (intensity < 0.22 || terrain.waterLevel[index]! < 0 || !terrain.river[index]) continue;
       let lowest = read(height, index);
       let lowestIndex = index;
       for (const offset of [-1, 1, -resolution, resolution]) {
@@ -586,15 +620,19 @@ function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fall
     [z1 * terrain.resolution + x0, (1 - tx) * tz],
     [z1 * terrain.resolution + x1, tx * tz],
   ];
+  const fallback = terrain.waterLevel[fallbackIndex] ?? seaLevel;
+  const localY = elevationToY(fallback, seaLevel);
   let weighted = 0;
   let weight = 0;
   for (const [index, influence] of samples) {
     const level = terrain.waterLevel[index] ?? -1;
     if (level < 0 || influence <= 0) continue;
+    // Opposite sides of a fall are separate surfaces, never a stretched ramp or a spike.
+    // The mapped waterfall sheet supplies the vertical connection.
+    if (Math.abs(elevationToY(level, seaLevel) - localY) > 0.32) continue;
     weighted += level * influence;
     weight += influence;
   }
-  const fallback = terrain.waterLevel[fallbackIndex] ?? seaLevel;
   return elevationToY(weight > 0 ? weighted / weight : fallback, seaLevel);
 }
 
@@ -625,6 +663,7 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   const colour = new THREE.Color();
   const maximumAccumulation = maxDrainageAccumulation(world);
   const currentFreeze = computeFreezeSnapshot(world);
+  const groundAt = renderedGroundSampler(world);
   type Vertex = { x: number; y: number; z: number; depth: number };
 
   for (let index = 0; index < height.length; index++) {
@@ -652,12 +691,20 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
       const vx = x + dx * step;
       const vz = z + dz * step;
       const vy = waterSurfaceYAt(world, vx, vz, index);
-      return { x: vx, y: vy, z: vz, depth: vy - surfaceHeightAt(world, vx, vz) };
+      return { x: vx, y: vy, z: vz, depth: vy - groundAt(vx, vz) };
     };
-    const center = vertex(0, 0);
-    const corners = [vertex(-0.5, -0.5), vertex(-0.5, 0.5), vertex(0.5, 0.5), vertex(0.5, -0.5)];
-    for (let side = 0; side < 4; side++) {
-      const triangle = [center, corners[side]!, corners[(side + 1) % 4]!];
+    // Half-cell quads follow the *visible ground's* alternating diagonals. Every water
+    // triangle lies inside one ground triangle, so clipping depth is exact across its face.
+    const triangles: Vertex[][] = [];
+    for (const dz of [-0.5, 0]) for (const dx of [-0.5, 0]) {
+      const a = vertex(dx, dz), b = vertex(dx + 0.5, dz);
+      const c = vertex(dx, dz + 0.5), d = vertex(dx + 0.5, dz + 0.5);
+      const gx = Math.max(0, Math.min(resolution - 2, Math.floor(index % resolution + dx)));
+      const gz = Math.max(0, Math.min(resolution - 2, Math.floor(Math.floor(index / resolution) + dz)));
+      if (((gx + gz) & 1) === 0) triangles.push([a, c, b], [b, c, d]);
+      else triangles.push([a, c, d], [a, d, b]);
+    }
+    for (const triangle of triangles) {
       const clipped: Vertex[] = [];
       for (let i = 0; i < 3; i++) {
         const a = triangle[i]!;
@@ -776,7 +823,8 @@ function buildWaterfallSheets(falls: FallSite[], world: WorldState): THREE.Mesh 
   const positions: number[] = [];
   const progress: number[] = [];
   const indices: number[] = [];
-  const segments = 9;
+  const uvs: number[] = [];
+  const segments = 16;
   for (const fall of falls) {
     const acrossX = -fall.direction[1];
     const acrossZ = fall.direction[0];
@@ -792,6 +840,7 @@ function buildWaterfallSheets(falls: FallSite[], world: WorldState): THREE.Mesh 
       for (const side of [-1, 1]) {
         positions.push(cx + acrossX * width * side, y, cz + acrossZ * width * side);
         progress.push(t);
+        uvs.push((side + 1) * 0.5, t);
       }
     }
     for (let segment = 0; segment < segments; segment += 1) {
@@ -804,6 +853,7 @@ function buildWaterfallSheets(falls: FallSite[], world: WorldState): THREE.Mesh 
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.setAttribute('fallProgress', new THREE.Float32BufferAttribute(progress, 1));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
@@ -831,12 +881,12 @@ function createWaterfallMaterial(): THREE.MeshPhysicalMaterial {
   material.userData[WATER_STATE_KEY] = state;
   material.onBeforeCompile = shader => {
     shader.uniforms['waterTime'] = state.time;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nattribute float fallProgress;\nvarying float vFallProgress;`);
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvFallProgress = fallProgress;\ntransformed.y += sin(fallProgress * 19.0 - waterTime * 6.0) * 0.008 * (0.2 + fallProgress);`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nvarying float vFallProgress;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat fallStreak = pow(max(0.0, sin(vFallProgress * 42.0 - waterTime * 9.0)), 6.0);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.95, 0.94), fallStreak * 0.32);\ndiffuseColor.a *= 0.78 + fallStreak * 0.22;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nattribute float fallProgress;\nvarying float vFallProgress;\nvarying vec2 vFallUV;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvFallProgress = fallProgress;\nvFallUV = uv;\ntransformed.y += sin(fallProgress * 19.0 - waterTime * 6.0) * 0.008 * (0.2 + fallProgress);`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nvarying float vFallProgress;\nvarying vec2 vFallUV;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat fallStreak = pow(max(0.0, sin(vFallProgress * 42.0 - waterTime * 9.0)), 6.0);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.95, 0.94), fallStreak * 0.32);\nfloat fallThread = pow(0.5 + 0.5 * sin(vFallUV.x * 73.0 + sin(vFallUV.x * 21.0) * 2.0 - waterTime * 1.3 + vFallProgress * 5.0), 5.0);\nfloat fallLace = smoothstep(0.0, 0.12, vFallUV.x) * smoothstep(0.0, 0.12, 1.0 - vFallUV.x);\nfloat fallImpact = smoothstep(0.72, 1.0, vFallProgress);\ndiffuseColor.rgb += vec3(0.12, 0.20, 0.21) * (fallThread * 0.45 + fallImpact * 0.24);\ndiffuseColor.a *= fallLace * (0.52 + fallThread * 0.26 + fallStreak * 0.16 + fallImpact * 0.15);`);
   };
-  material.customProgramCacheKey = () => 'godbox-waterfall-sheet-v1';
+  material.customProgramCacheKey = () => 'godbox-waterfall-sheet-v2-lace';
   return material;
 }
 
@@ -932,6 +982,25 @@ function buildMist(falls: FallSite[], world: WorldState, random: SeededRandom): 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const mist = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#dbe8ea', size: 2.1, map: softPointTexture(), transparent: true, opacity: 0.22, depthWrite: false, sizeAttenuation: true }));
+  const material = mist.material as THREE.PointsMaterial;
+  const sprayTime = { value: 0 };
+  material.userData['sprayTime'] = sprayTime;
+  material.onBeforeCompile = shader => {
+    shader.uniforms['sprayTime'] = sprayTime;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
+      uniform float sprayTime;
+      varying float vSprayLife;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      float phase = fract(sin(dot(position.xz, vec2(12.9898, 78.233))) * 43758.5453);
+      float age = fract(sprayTime * (0.16 + phase * 0.12) + phase);
+      vSprayLife = sin(age * 3.14159265);
+      transformed.y += age * 0.8;
+      transformed.x += sin(age * 4.0 + phase * 6.28) * age * 0.3;
+      transformed.z += cos(age * 3.0 + phase * 6.28) * age * 0.3;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vSprayLife;');
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vSprayLife * vSprayLife;');
+  };
+  material.customProgramCacheKey = () => 'godbox-waterfall-living-spray-v1';
   mist.name = 'waterfall-mist';
   mist.frustumCulled = false;
   return mist;

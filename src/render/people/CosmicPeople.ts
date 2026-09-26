@@ -126,7 +126,15 @@ export function createCosmicHeadGeometry(): THREE.BufferGeometry {
 }
 
 /** Single-mesh resting limbs retain the existing shoulder/hip pivots and instancing. */
-export function createCosmicArmGeometry(): THREE.BufferGeometry {
+export function createCosmicArmGeometry(segment?: 'upper' | 'lower'): THREE.BufferGeometry {
+  if (segment) return segment === 'upper' ? sculpt([
+    [-0.196, 0.019, 0.020, 0], [-0.15, 0.025, 0.027, 0],
+    [-0.075, 0.029, 0.03, 0], [0, 0.025, 0.026, 0], [0.012, 0, 0, 0],
+  ], 10) : sculpt([
+    [-0.18, 0.009, 0.012, 0.006], [-0.163, 0.016, 0.013, 0.006],
+    [-0.14, 0.013, 0.013, 0], [-0.08, 0.022, 0.021, 0],
+    [-0.025, 0.024, 0.023, 0], [0, 0.020, 0.021, 0], [0.009, 0, 0, 0],
+  ], 10);
   return sculpt([
     [-0.395, 0.008, 0.01, 0.018], [-0.38, 0.016, 0.013, 0.019],
     [-0.35, 0.014, 0.012, 0.014], [-0.325, 0.012, 0.013, 0.01],
@@ -137,7 +145,17 @@ export function createCosmicArmGeometry(): THREE.BufferGeometry {
   ], 10).scale(1, 0.95, 1);
 }
 
-export function createCosmicLegGeometry(): THREE.BufferGeometry {
+export function createCosmicLegGeometry(segment?: 'upper' | 'lower'): THREE.BufferGeometry {
+  if (segment) return segment === 'upper' ? sculpt([
+    [-0.225, 0.023, 0.025, 0], [-0.18, 0.027, 0.03, 0],
+    [-0.12, 0.034, 0.037, 0], [-0.045, 0.037, 0.04, 0],
+    [0.012, 0.029, 0.031, 0], [0.03, 0, 0, 0],
+  ], 10) : sculpt([
+    [-0.225, 0.019, 0.046, 0.021], [-0.213, 0.025, 0.054, 0.023],
+    [-0.19, 0.019, 0.033, 0.008], [-0.155, 0.017, 0.021, 0],
+    [-0.1, 0.024, 0.028, -0.005], [-0.045, 0.029, 0.031, 0],
+    [0, 0.024, 0.026, 0], [0.009, 0, 0, 0],
+  ], 10);
   return sculpt([
     [-0.42, 0.019, 0.046, 0.021], [-0.408, 0.025, 0.054, 0.023],
     [-0.385, 0.019, 0.033, 0.008], [-0.35, 0.016, 0.02, 0],
