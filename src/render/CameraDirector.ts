@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
 import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
-import { CinematicSequencePlanner } from './CinematicSequencePlanner';
+import { CinematicSequencePlanner, type CinematicBeatRole, type CinematicPlannedShot } from './CinematicSequencePlanner';
 import { easeCameraFov, screenSpaceComposition } from './ScreenSpaceComposition';
 import { planTerrainAwareCameraRoute, smoothCameraRoute } from './CameraRoutePlanner';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
 import { campaignFocus } from '../sim/war/Campaign';
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
-import type { AudioCategory, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
+import type { AudioCategory, DocumentaryCompletionMode, DocumentaryShotScale, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
 import { cellAt } from '../sim/world';
 import { FOUNDING_VESSEL_KEEP_OUT_RADIUS } from '../shared/FoundingCampLayout';
@@ -22,6 +22,7 @@ export interface CurrentObservation {
   interest: number;
   audioCategory: AudioCategory;
   revision: number;
+  narrationVisible: boolean;
   sceneId?: string;
   statement?: HistorianStatement;
   eventType?: SimulationState['history'][number]['type'];
@@ -101,6 +102,45 @@ export interface InteractionCameraComposition {
 }
 
 export type CameraMotion = 'hold' | 'drift' | 'truck' | 'dolly-in' | 'dolly-out' | 'crane' | 'orbit' | 'follow' | 'pullback';
+
+export interface DocumentaryCompletionInput {
+  readonly mode: DocumentaryCompletionMode | undefined;
+  readonly role: CinematicBeatRole | undefined;
+  readonly kind: ObservationKind | undefined;
+  readonly ageSeconds: number;
+  readonly durationSeconds: number;
+  readonly settled: boolean;
+  readonly subjectPresent?: boolean;
+  readonly actionProgress?: number;
+  readonly contactStrength?: number;
+  readonly partnerPresent?: boolean;
+}
+
+export function documentaryMinimumHoldSeconds(role: CinematicBeatRole | undefined, kind: ObservationKind | undefined): number {
+  if (role === 'detail' || kind === 'worker-follow' || kind === 'discovery-scene') return 7.5;
+  if (role === 'observe' || kind === 'street-observation' || kind === 'traveler-follow') return 6.5;
+  if (role === 'reveal') return 5.5;
+  if (role === 'release') return 5;
+  return 4.5;
+}
+
+/** Meaningful completion first; shot duration remains a hard editorial ceiling in CameraDirector. */
+export function documentaryShotShouldComplete(input: DocumentaryCompletionInput): boolean {
+  const minimum = documentaryMinimumHoldSeconds(input.role, input.kind);
+  if (input.ageSeconds < minimum) return false;
+  const mode = input.mode ?? 'timed';
+  if (mode === 'timed') return false;
+  if (mode === 'settled') return input.settled;
+  if (mode === 'sequence-beat') {
+    return input.settled && input.ageSeconds >= Math.max(minimum, input.durationSeconds * 0.55);
+  }
+  if (input.subjectPresent === false) return true;
+  if (input.actionProgress !== undefined || input.contactStrength !== undefined) {
+    return (input.actionProgress ?? 0) >= 0.86 || (input.contactStrength ?? 0) >= 0.7;
+  }
+  if (input.partnerPresent === false) return true;
+  return input.settled && input.ageSeconds >= Math.max(minimum, input.durationSeconds * 0.72);
+}
 
 const FRAMING: Record<ObservationKind, CameraFraming> = {
   'world-establishing': { radius: [46, 62], height: [42, 58], targetHeight: 1, durationScale: 1.25 },
@@ -1135,7 +1175,7 @@ interface CameraFlightState {
 }
 
 export class CameraDirector {
-  readonly observation: CurrentObservation = { label: 'The known world', detail: 'A new history begins.', kind: 'world-establishing', interest: 0.1, audioCategory: 'ambient-wilderness', revision: 0 };
+  readonly observation: CurrentObservation = { label: 'The known world', detail: 'A new history begins.', kind: 'world-establishing', interest: 0.1, audioCategory: 'ambient-wilderness', revision: 0, narrationVisible: true };
   private readonly desiredPosition = new THREE.Vector3();
   private readonly desiredTarget = new THREE.Vector3();
   private readonly lookTarget = new THREE.Vector3();
@@ -1176,7 +1216,7 @@ export class CameraDirector {
   private shotsSinceScenic = 1;
   private scenicShotIndex = 0;
   private readonly sequencePlanner = new CinematicSequencePlanner();
-  private activeSequence?: { id: string; ordinal: number; total: number };
+  private activeSequence?: { id: string; ordinal: number; total: number; role: CinematicBeatRole; narrate: boolean; scale: DocumentaryShotScale; threadId: string };
   private externalPoseRecoveryPending = false;
   private interruptedFlightResumePending = false;
   private manualHumanReestablishPending = false;
@@ -1370,7 +1410,7 @@ export class CameraDirector {
           if (oldest) this.acknowledgedMajorEventIds.delete(oldest);
         }
         this.chooseShot(state, elevationAt, majorEvent?.id, elapsedSeconds);
-      } else if (this.shotAge >= this.shotDuration) {
+      } else if (this.shouldCompleteCurrentShot(state) || this.shotAge >= this.shotDuration) {
         this.chooseShot(state, elevationAt, undefined, elapsedSeconds);
       }
     }
@@ -1451,17 +1491,7 @@ export class CameraDirector {
     before: THREE.Vector3, deltaSeconds: number, state: SimulationState,
     elevationAt: (x: number, z: number) => number, clearance: CameraClearance,
   ): void {
-    const subjects: THREE.Vector3[] = [];
-    if (this.currentScene && ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(this.currentScene.kind)) {
-      const actor = this.subjectPresentation?.(this.currentScene.subjectId);
-      if (actor) {
-        subjects.push(new THREE.Vector3(actor.x, actor.footY + 0.17, actor.z));
-        const partner = actor.partnerId ? this.subjectPresentation?.(actor.partnerId) : undefined;
-        if (partner) subjects.push(new THREE.Vector3(partner.x, partner.footY + 0.17, partner.z));
-        if (actor.action) subjects.push(new THREE.Vector3(actor.action.interactionAnchor.x,
-          elevationAt(actor.action.interactionAnchor.x, actor.action.interactionAnchor.z) + (actor.action.contactHeight ?? 0.14), actor.action.interactionAnchor.z));
-      }
-    }
+    const subjects = this.currentScene ? this.subjectSightlineTargets(this.currentScene, elevationAt) : [];
     const options: CameraSafetyOptions = { lensClearance: clearance.lens, sightlineClearance: clearance.sightline,
       environmentProbe: this.environmentProbe, subjects, previousPosition: before };
     const validity = cameraShotValidity(state, this.camera.position, this.desiredTarget, elevationAt, options);
@@ -1653,7 +1683,7 @@ export class CameraDirector {
       const planned = this.sequencePlanner.takePlannedShot();
       if (planned) {
         scene = planned.scene;
-        this.activeSequence = { id: planned.sequenceId, ordinal: planned.ordinal, total: planned.total };
+        this.activeSequence = this.sequenceState(planned);
       } else {
         const anchor = this.historian.chooseScene(state);
 
@@ -1677,6 +1707,14 @@ export class CameraDirector {
             humanScene = { ...anchor, id, subjectId: actor.id, kind: 'worker-follow',
               position: { x: best.view.x, z: best.view.z }, title: `${actor.name} and ${partner.name}`,
               score: best.score, interest: best.score, event: undefined,
+              editorial: {
+                threadId: actor.homeId,
+                why: 'a visible social relationship makes ordinary life historically legible',
+                activityMeaning: Math.max(0.62, best.score),
+                preferredScale: 'detail',
+                narration: 'selective',
+                completion: 'subject-action',
+              },
               statement: { id, month: state.month, text: `${actor.name} and ${partner.name} share a ${best.view.socialTone ?? 'quiet'} moment.`,
                 epistemicStatus: 'probabilistic-inference', sourceEventIds: [], sourceEntityIds: [actor.id, partner.id], sourceArchiveIds: [], claims: {} } };
           }
@@ -1698,7 +1736,7 @@ export class CameraDirector {
               !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
             const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
             scene = first.scene;
-            this.activeSequence = { id: first.sequenceId, ordinal: first.ordinal, total: first.total };
+            this.activeSequence = this.sequenceState(first);
           } else {
             scene = anchor;
             this.activeSequence = undefined;
@@ -1740,6 +1778,12 @@ export class CameraDirector {
       + (this.config.camera.shotSeconds[1] - this.config.camera.shotSeconds[0]) * (0.28 + scene.score * 0.45);
     this.currentMotion = scenicProfile ? 'follow'
       : foundingProfile?.motion ?? (releaseScene ? 'dolly-out' : openingOverview ? 'drift' : this.motionFor(scene));
+    if (!scenicProfile && !foundingProfile && !releaseScene
+      && (this.activeSequence?.role === 'observe' || this.activeSequence?.role === 'detail')
+      && (scene.editorial?.activityMeaning ?? 0) >= 0.55
+      && scene.kind !== 'traveler-follow') {
+      this.currentMotion = 'hold';
+    }
     const motionDurationScale = this.currentMotion === 'hold' ? 1.12 : this.currentMotion === 'pullback' ? 1.08 : 1;
     const editorialTiming = foundingEditorialTimingFor(scene.id);
     this.shotDuration = scenicProfile?.durationSeconds
@@ -1828,6 +1872,7 @@ export class CameraDirector {
       lensClearance: endpointClearance.lens,
       sightlineClearance: endpointClearance.sightline,
       environmentProbe: this.environmentProbe,
+      subjects: this.subjectSightlineTargets(scene, elevationAt),
     });
     if (endpoint.valid) this.desiredPosition.copy(endpoint.position);
     this.shotBasePosition.copy(this.desiredPosition);
@@ -2153,7 +2198,70 @@ export class CameraDirector {
       delete this.observation.eventType;
       delete this.observation.eventMonth;
     }
+    const narrationMode = scene.editorial?.narration ?? 'selective';
+    this.observation.narrationVisible = this.activeSequence?.narrate
+      ?? (narrationMode === 'required' || narrationMode === 'selective' && (scene.event !== undefined || scene.interest >= 0.66));
     this.observation.revision += 1;
+  }
+
+  private sequenceState(shot: CinematicPlannedShot): NonNullable<CameraDirector['activeSequence']> {
+    return {
+      id: shot.sequenceId,
+      ordinal: shot.ordinal,
+      total: shot.total,
+      role: shot.role,
+      narrate: shot.narrate,
+      scale: shot.scale,
+      threadId: shot.threadId,
+    };
+  }
+
+  private subjectSightlineTargets(
+    scene: ObservationCandidate,
+    elevationAt: (x: number, z: number) => number,
+  ): THREE.Vector3[] {
+    if (!['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)) return [];
+    const actor = this.subjectPresentation?.(scene.subjectId);
+    if (!actor) return [];
+    const subjects = [new THREE.Vector3(actor.x, actor.footY + 0.17, actor.z)];
+    const partner = actor.partnerId ? this.subjectPresentation?.(actor.partnerId) : undefined;
+    if (partner) subjects.push(new THREE.Vector3(partner.x, partner.footY + 0.17, partner.z));
+    if (actor.action) {
+      subjects.push(new THREE.Vector3(
+        actor.action.interactionAnchor.x,
+        elevationAt(actor.action.interactionAnchor.x, actor.action.interactionAnchor.z) + (actor.action.contactHeight ?? 0.14),
+        actor.action.interactionAnchor.z,
+      ));
+    }
+    return subjects;
+  }
+
+  private shouldCompleteCurrentShot(state: SimulationState): boolean {
+    const scene = this.currentScene;
+    if (!scene || isFoundingCameraScene(scene.id) || isScenicFlightScene(scene.id)) return false;
+    const settled = this.positionVelocity.length() <= 0.16
+      && this.targetVelocity.length() <= 0.2
+      && this.camera.position.distanceTo(this.desiredPosition) <= 0.45
+      && this.lookTarget.distanceTo(this.desiredTarget) <= 0.6;
+    const presentation = this.subjectPresentation?.(scene.subjectId);
+    const partnerPresent = presentation?.partnerId
+      ? Boolean(this.subjectPresentation?.(presentation.partnerId))
+      : undefined;
+    const subjectPresent = ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)
+      ? Boolean(state.people.find(person => person.alive && person.id === scene.subjectId) && presentation)
+      : undefined;
+    return documentaryShotShouldComplete({
+      mode: scene.editorial?.completion,
+      role: this.activeSequence?.role,
+      kind: scene.kind,
+      ageSeconds: this.shotAge,
+      durationSeconds: this.shotDuration,
+      settled,
+      subjectPresent,
+      actionProgress: presentation?.action?.phaseProgress,
+      contactStrength: presentation?.action?.contactStrength,
+      partnerPresent,
+    });
   }
 
   private chooseClearAzimuth(
