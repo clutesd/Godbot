@@ -603,6 +603,20 @@ function waterKindAt(world: WorldState, index: number): number {
   return WATER_FLOOD;
 }
 
+/** A mapped waterfall is the only place where neighbouring river samples are allowed to
+ * become separate surfaces. Ordinary downhill channel samples must stay connected; treating a
+ * large but continuous grade as a discontinuity produces the floating water shelves seen from
+ * low documentary camera angles. */
+function crossesMappedWaterfall(world: WorldState, a: number, b: number): boolean {
+  if (a === b) return false;
+  const { terrain } = world;
+  if (!terrain.river[a] || !terrain.river[b]) return false;
+  const downstream = terrain.drainage?.downstream;
+  if (!downstream) return false;
+  return (downstream[a] === b && (terrain.fall[a] ?? 0) >= 0.22)
+    || (downstream[b] === a && (terrain.fall[b] ?? 0) >= 0.22);
+}
+
 /** Wet-only interpolation removes terraced puddles without allowing a dry sample to become water. */
 function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fallbackIndex: number): number {
   const { terrain, seaLevel } = world;
@@ -621,15 +635,15 @@ function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fall
     [z1 * terrain.resolution + x1, tx * tz],
   ];
   const fallback = terrain.waterLevel[fallbackIndex] ?? seaLevel;
-  const localY = elevationToY(fallback, seaLevel);
   let weighted = 0;
   let weight = 0;
   for (const [index, influence] of samples) {
     const level = terrain.waterLevel[index] ?? -1;
     if (level < 0 || influence <= 0) continue;
-    // Opposite sides of a fall are separate surfaces, never a stretched ramp or a spike.
-    // The mapped waterfall sheet supplies the vertical connection.
-    if (Math.abs(elevationToY(level, seaLevel) - localY) > 0.32) continue;
+    // Do not infer a waterfall from height difference alone. That heuristic split ordinary
+    // descending rivers into disconnected horizontal plates. The hydrology already marks real
+    // falls and the dedicated waterfall sheet owns their vertical connection.
+    if (crossesMappedWaterfall(world, fallbackIndex, index)) continue;
     weighted += level * influence;
     weight += influence;
   }
