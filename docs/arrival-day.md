@@ -10,12 +10,18 @@ The simulation rebuilds the world and all subsystems and asserts that month, peo
 
 | Time | State and composition |
 | --- | --- |
-| 0–12s | Pristine landscape, deliberate drift, no people or infrastructure |
-| 13–20.6s | Staggered entries; five muted founding colors |
-| 25–34s | Individually timed braking and touchdowns at authoritative coordinates |
-| 26.7–40s | Hatches open; real people emerge in sequence and gather |
-| 40–46s | Quiet human-scale hold, upward move, Arrival Day title |
-| 46s | One `ARRIVAL_DAY` event at month zero; monthly simulation unlocked |
+| 0-4s | Brief pristine-world establishing view |
+| 5-12.6s | Staggered vessel entries; follow the first descent |
+| 17-26s | Individually braked touchdowns at authoritative coordinates |
+| 18.7-32s | Real founders emerge; move toward the first gathering |
+| 27-34s | Human-scale hold without inter-site flights |
+| 34-38s | Title over the people, without a world-scale pullback |
+| 38s | One `ARRIVAL_DAY` event at month zero; frozen orientation begins |
+
+The physical film is 38 seconds (previously 78). Orientation, two portraits and release add
+25.4 seconds of authored holds; safety-constrained travel can add time. Monthly history remains
+gated until release completes. All five landings keep deterministic ordering and original descent
+durations; entries begin eight seconds sooner. Older archived timestamps remain supported.
 
 The scene uses compact faceted capsules, heat shields, four landing feet, hinged hatches and small colored seams. Each trail has a narrow core and broad haze sampled from the same curved trajectory as its hull. Fixed-size ribbons and dust pools fade and are disposed after the sequence; only five hulls persist. Dust color reflects cold, wet, wooded or dry terrain. No blast crater or wide deforestation is introduced. Landed hull footprints exclude nearby vegetation and future building plots.
 
@@ -23,9 +29,12 @@ The existing camera director handles arrival framing and retains its current pos
 
 ### Post-title editorial contract
 
-Arrival Day remains an authored cinematic after the title, but it no longer inherits the ordinary 14–24 second documentary shot cadence. The Year-Zero orientation uses one 9.5-second thesis shot followed by five 5.8-second landing beats. Each landing has a different camera job—terrain reveal, ground approach, lateral life, geographic contrast, then a pullback handoff—while its caption is limited to one grounded sentence.
-
-The final central narration is human rather than analytical. **A FEW LIVES** frames four deterministic founders who receive no prestige, protection or simulation importance from being watched. Their portraits are brief and deliberately different in distance and motion. The last portrait is followed by a caption-free release shot: letterbox and HUD recede, `autoRun` is restored, and history advances at 0.16 months per real second while ordinary life remains visible.
+The post-title orientation stays beside the first gathering and states the premise briefly. Two
+deterministic founder portraits introduce human stakes. The final 5.2-second release follows the
+last founder and uses the renderer's actual interaction target when available, keeping people and
+activity in view instead of pulling back into trees. Cast selection grants no simulation advantage.
+The spring, terrain/forest safety, flight controller and explicit history authority barrier remain
+in place. Community geography returns through normal history rather than a five-site tour.
 
 The first-year continuity layer begins only after that release. Community revisits are spaced across authoritative months so the opening cannot collapse back into a second five-card carousel. From that point onward, founding context is part of normal documentary history rather than the Arrival Day cinematic.
 

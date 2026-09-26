@@ -1,0 +1,132 @@
+import type { SimulationState, Vec2 } from '../sim/types';
+import type { ObservationCandidate, ObservationKind } from './types';
+
+interface Snapshot {
+  id: string; name: string; position: Vec2; kind: ObservationKind;
+  values: Record<string, string | number | boolean>; activity?: string;
+  sourceIds?: string[];
+}
+interface Thread {
+  snapshot: Snapshot; text: string; month: number; importance: number;
+  revision: number; shownRevision: number; lastShown: number; resolved: boolean;
+}
+
+/** Stores copied evidence, never live simulation objects. Sampling does not consume attention. */
+export class DocumentaryMemory {
+  private previous = new Map<string, Snapshot>();
+  private readonly threads = new Map<string, Thread>();
+  private readonly shownEvents = new Set<string>();
+  private readonly spoken = new Set<string>();
+  private readonly progressRates = new Map<string, number>();
+  private month = -1;
+
+  observe(state: SimulationState): void {
+    if (state.month === this.month) return;
+    if (state.month < this.month) { this.previous.clear(); this.threads.clear(); this.shownEvents.clear(); this.spoken.clear(); this.progressRates.clear(); }
+    const snapshots: Snapshot[] = state.people.filter(p => p.alive || this.previous.has(p.id)).map(p => ({
+      id: p.id, name: p.name, position: { ...p.position }, kind: p.alive ? 'worker-follow' : 'aftermath-pullback', activity: p.activity,
+      values: { alive: p.alive, home: p.homeId, partner: p.partnerId ?? 'none', children: p.children.length, occupation: p.occupation, activity: p.activity },
+    }));
+    for (const s of state.settlements) {
+      snapshots.push({ id: s.id, name: s.name, position: { ...s.position }, kind: 'settlement-approach', values: {
+        alive: s.alive, buildings: s.buildings, 'food security band (quarters)': Math.floor(s.foodSecurity * 4), 'pollution band (fifths)': Math.floor(s.pollution * 5),
+      } });
+      const project = s.development?.project;
+      if (project) snapshots.push({ id: project.plotId, name: project.response.name,
+        position: { x: s.structurePlots?.find(p => p.id === project.plotId)?.worldX ?? s.position.x, z: s.structurePlots?.find(p => p.id === project.plotId)?.worldZ ?? s.position.z },
+        kind: 'infrastructure-scene', activity: 'construct', sourceIds: [s.id], values: { 'construction percent (rounded down)': Math.floor(project.progress * 100), blocked: (project.blockedReasons ?? []).join(', ') || 'none', stalled: state.month - (project.lastWorkMonth ?? project.startedMonth) >= 12 },
+      });
+    }
+    const next = new Map(snapshots.map(s => [s.id, s]));
+    for (const snapshot of snapshots) {
+      const before = this.previous.get(snapshot.id);
+      const changes = before ? Object.keys(snapshot.values).filter(k => snapshot.values[k] !== before.values[k]) : [];
+      const isProject = 'construction percent (rounded down)' in snapshot.values;
+      if (!changes.length && !(isProject && !before)) continue;
+      const important = changes.filter(k => k !== 'activity');
+      const pending = this.threads.get(snapshot.id);
+      if (!important.length && pending && pending.shownRevision < pending.revision && pending.importance >= 0.7) continue;
+      let text = before
+        ? `${snapshot.name}: since month ${this.month}, ${changes.map(k => `${k} changed from ${before.values[k]} to ${snapshot.values[k]}`).join('; ')}.`
+        : `${snapshot.name} is under construction; recorded progress is ${snapshot.values['construction percent (rounded down)']}% (rounded down).`;
+      if (before && isProject) {
+        const gain = Number(snapshot.values['construction percent (rounded down)']) - Number(before.values['construction percent (rounded down)']);
+        const rate = gain / Math.max(1, state.month - this.month);
+        const priorRate = this.progressRates.get(snapshot.id);
+        if (gain >= 5 && priorRate !== undefined && priorRate > 0 && rate >= priorRate * 2) text += ' Observed construction progress is advancing at least twice as fast as in the preceding observation interval.';
+        this.progressRates.set(snapshot.id, rate);
+      }
+      const old = this.threads.get(snapshot.id);
+      this.threads.set(snapshot.id, { snapshot, text, month: state.month,
+        importance: snapshot.values.alive === false ? 0.95 : important.length ? 0.78 : 0.42,
+        revision: (old?.revision ?? 0) + 1, shownRevision: old?.shownRevision ?? 0, lastShown: old?.lastShown ?? -Infinity,
+        resolved: snapshot.values.alive === false,
+      });
+    }
+    for (const [id, before] of this.previous) {
+      if (next.has(id) || !('construction percent (rounded down)' in before.values)) continue;
+      const plot = state.settlements.flatMap(s => s.structurePlots ?? []).find(p => p.id === id);
+      const old = this.threads.get(id);
+      this.progressRates.delete(id);
+      this.threads.set(id, { snapshot: before, text: `${before.name}: construction is no longer active.${plot?.development ? ' The structure remains in the settlement record.' : ' Its completion is not confirmed.'}`,
+        month: state.month, importance: 0.85, revision: (old?.revision ?? 0) + 1, shownRevision: old?.shownRevision ?? 0, lastShown: old?.lastShown ?? -Infinity, resolved: true });
+    }
+    this.previous = next;
+    this.month = state.month;
+    // Bound inactive memory without dropping an ongoing project merely because years passed.
+    for (const [id, thread] of this.threads) if (state.month - thread.month > 240 && (thread.resolved || !next.has(id))) this.threads.delete(id);
+  }
+
+  candidates(state: SimulationState): ObservationCandidate[] {
+    return [...this.threads.values()].filter(t => (t.shownRevision < t.revision || !t.resolved && state.month - t.lastShown >= 12)
+      && (state.month - t.month <= 24 || !t.resolved && this.previous.has(t.snapshot.id)))
+      .map(t => {
+        const s = this.previous.get(t.snapshot.id) ?? t.snapshot;
+        const fresh = t.shownRevision < t.revision;
+        return { id: `development:${s.id}:${t.revision}`, subjectId: s.id, kind: s.kind, position: { ...s.position }, title: s.name,
+          score: fresh ? t.importance : 0.48, interest: fresh ? t.importance : 0.4, audioCategory: 'settlement',
+          statement: { id: `development:${s.id}:${t.revision}:${state.month}`, month: state.month, text: fresh ? t.text : `Returning to ${s.name}, last observed changing in month ${t.month}.`,
+            epistemicStatus: 'recorded-fact', sourceEntityIds: s.sourceIds ?? [s.id], sourceEventIds: [], sourceArchiveIds: [], claims: {} },
+          breakdown: { novelty: fresh ? 1 : 0, magnitude: t.importance, populationAffected: 0, rarity: 0, technological: 0, political: 0, cultural: 0, consequence: t.importance, continuity: 1, repetitionPenalty: fresh ? 0 : 0.5 },
+          editorial: { subjectId: s.id, importance: t.importance, threadId: `life:${s.id}`, why: t.text,
+            activityMeaning: 0.8, preferredScale: s.kind === 'worker-follow' ? 'human' : 'medium',
+            desiredActivity: s.activity, shotPurpose: fresh ? 'witness-change' : 'follow-up',
+            narration: fresh && t.importance >= 0.7 ? 'required' : 'silent', completion: s.activity ? 'subject-action' : 'settled',
+            completionCondition: s.activity ? `Observe ${s.activity} until the action finishes or changes` : 'Settle on the changed subject and show its present condition' },
+        };
+      });
+  }
+
+  score(candidate: ObservationCandidate, state: SimulationState): number {
+    const event = candidate.event;
+    if (event) {
+      const first = !state.history.some(e => e.type === event.type && (e.month < event.month || e.month === event.month && e.id < event.id));
+      return (this.shownEvents.has(event.id) ? -1.2 : event.significance * 0.65 + (first ? 0.22 : 0))
+        + (event.causes.some(id => this.shownEvents.has(id)) ? 0.4 : 0);
+    }
+    if (candidate.id.startsWith('development:')) return 0.35;
+    if (candidate.kind === 'worker-follow' || candidate.kind === 'traveler-follow') return 0.22;
+    return -0.18;
+  }
+
+  decorate(candidate: ObservationCandidate, state: SimulationState): ObservationCandidate {
+    const event = candidate.event;
+    if (event && candidate.editorial && !candidate.statement.claims.warId) candidate.editorial.threadId = `cause:${event.id}`;
+    const cause = event?.causes.map(id => state.history.find(e => e.id === id && e.month <= event.month)).find(Boolean);
+    if (cause && candidate.editorial) {
+      candidate.editorial.threadId = `cause:${cause.id}`;
+      candidate.editorial.why = `${event?.summary} Recorded consequence of: ${cause.summary}`;
+      candidate.statement.sourceEventIds = [...new Set([...candidate.statement.sourceEventIds, cause.id])];
+    }
+    if (this.spoken.has(candidate.statement.text) && candidate.editorial) candidate.editorial.narration = 'silent';
+    return candidate;
+  }
+
+  remember(candidate: ObservationCandidate, month: number): void {
+    if (candidate.event) this.shownEvents.add(candidate.event.id);
+    if (candidate.editorial?.narration !== 'silent') this.spoken.add(candidate.statement.text);
+    if (this.spoken.size > 2048) this.spoken.delete(this.spoken.values().next().value!);
+    const t = this.threads.get(candidate.subjectId);
+    if (t && candidate.id.startsWith('development:')) { t.shownRevision = t.revision; t.lastShown = month; }
+  }
+}

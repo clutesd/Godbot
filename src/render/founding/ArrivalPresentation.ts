@@ -1,10 +1,10 @@
 import { podPosition, podTouchdown, type FoundingArrivalState } from '../../sim/founding/FoundingArrival';
 
 export const WATCHER_LINES = [
-  { start: 2.5, end: 8.5, text: 'Before them, only the world.' },
-  { start: 13.5, end: 19.5, text: 'Five vessels entered the sky.' },
-  { start: 34, end: 40, text: 'Five landings. Five beginnings.' },
-  { start: 72, end: 77, text: 'ARRIVAL DAY' },
+  { start: 0.8, end: 4.5, text: 'Before them, only the world.' },
+  { start: 5.5, end: 11.5, text: 'Five vessels entered the sky.' },
+  { start: 24, end: 30, text: 'Five landings. Five beginnings.' },
+  { start: 34, end: 37.5, text: 'ARRIVAL DAY' },
 ] as const;
 
 export function arrivalCaption(seconds: number): { text: string; opacity: number } {
@@ -39,10 +39,12 @@ export function foundingArrivalDialogue(
   };
 }
 
-export type ArrivalSequenceBeat = 'pristine' | 'descent' | 'touchdown' | 'site-flythrough' | 'handoff';
+export type ArrivalSequenceBeat = 'pristine' | 'fleet' | 'descent' | 'touchdown' | 'doorway' | 'first-steps' | 'site-flythrough' | 'handoff';
 
 export interface ArrivalSequenceFocus {
   readonly beat: ArrivalSequenceBeat;
+  /** A geographic edit, not a flight across the intervening forest. */
+  readonly shotId: string;
   readonly target: Readonly<{ x: number; y: number; z: number }>;
   readonly radius: number;
   readonly height: number;
@@ -104,191 +106,57 @@ function foundingSiteComposition(
 
 /**
  * Arrival is an authored short film rather than a surveillance pass. It establishes the untouched
- * world, follows the first vessel into touchdown, then drops to human scale and physically visits
- * all five founding sites. Each site gets a slow approach and a readable linger before the camera
- * leaves. Only after the people have been seen does the lens rise back to the world-scale handoff.
+ * world, follows the first vessel into touchdown, then drops to human scale for emergence and gathering. The title stays with
+ * the people; geography never replaces the human subject at the handoff.
  */
 export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequenceFocus {
   const t = arrival.elapsedSeconds;
-  const count = Math.max(1, arrival.pods.length);
-  const center = arrival.pods.reduce(
-    (sum, pod) => ({
-      x: sum.x + pod.position.x / count,
-      y: sum.y + pod.groundY / count,
-      z: sum.z + pod.position.z / count,
-    }),
-    { x: 0, y: 0, z: 0 },
-  );
-  const worldTarget = { x: center.x, y: center.y + 1.6, z: center.z };
   const hero = arrival.pods[0];
-
-  if (!hero || t < 12.5) {
-    return {
-      beat: 'pristine',
-      target: worldTarget,
-      radius: 52,
-      height: 37,
-      transitionSeconds: 4.2,
-      azimuthOffset: -0.04,
-      fov: 38,
-    };
-  }
-
-  const heroPosition = podPosition(hero, t);
+  if (!hero) return { beat: 'pristine', shotId: 'empty', target: { x: 0, y: 0, z: 0 }, radius: 52, height: 37, transitionSeconds: 1, azimuthOffset: 0, fov: 38 };
   const touchdown = podTouchdown(hero);
-  const heroTarget = {
-    x: heroPosition.x,
-    y: t < touchdown ? heroPosition.y : hero.groundY + 0.55,
-    z: heroPosition.z,
-  };
+  const fleetEnd = hero.entrySeconds + hero.descentSeconds * 0.3;
+  const firstSteps = touchdown + 3;
+  // The hero's last passengers have left the ramp before the film acknowledges other groups.
+  const disembarked = touchdown + 1.5 + hero.population / 5 + 3.5;
+  const others = arrival.pods.slice(1);
+  const insertDuration = 1.5;
+  const insertEnd = disembarked + others.length * insertDuration;
 
-  if (t < 16.5) {
-    const reveal = smoothstep((t - 12.5) / 4);
-    return {
-      beat: 'descent',
-      target: mixPoint(worldTarget, heroTarget, reveal),
-      radius: lerp(52, 21, reveal),
-      height: lerp(37, 11.5, reveal),
-      transitionSeconds: 3.8,
-      azimuthOffset: lerp(-0.04, 0.03, reveal),
-      fov: lerp(38, 36, reveal),
-    };
+  if (t < fleetEnd) {
+    const positions = arrival.pods.map(p => podPosition(p, t));
+    const center = positions.reduce((sum, p) => ({ x: sum.x + p.x / positions.length, y: sum.y + p.y / positions.length, z: sum.z + p.z / positions.length }), { x: 0, y: 0, z: 0 });
+    const spread = Math.max(14, ...positions.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z)));
+    return { beat: t < 1 ? 'pristine' : 'fleet', shotId: 'fleet', target: center,
+      radius: spread * 3.1, height: spread * 0.65, transitionSeconds: 0.9, azimuthOffset: 0, fov: 38 };
   }
 
-  if (t < touchdown) {
-    const descent = smoothstep((t - 16.5) / Math.max(0.1, touchdown - 16.5));
-    return {
-      beat: 'descent',
-      target: heroTarget,
-      radius: lerp(21, 10.5, descent),
-      height: lerp(11.5, 4.1, descent),
-      transitionSeconds: 3.2,
-      azimuthOffset: lerp(0.03, 0.1, descent),
-      fov: lerp(36, 34, descent),
-    };
+  if (t < disembarked) {
+    const position = podPosition(hero, t);
+    const descent = smoothstep((t - fleetEnd) / (touchdown - fleetEnd));
+    const intimacy = smoothstep((t - touchdown) / 3);
+    const composition = foundingSiteComposition(hero, 0);
+    const target = t < touchdown ? { ...position, y: position.y - 0.15 }
+      : mixPoint({ x: hero.position.x, y: hero.groundY + 0.6, z: hero.position.z }, composition.target, intimacy);
+    const radius = t < touchdown ? lerp(11, 5.5, descent) : lerp(5.5, 1.85, intimacy);
+    const height = t < touchdown ? lerp(4, 1.7, descent) : lerp(1.7, 0.92, intimacy);
+    const wideCamera = { x: hero.position.x + radius * 0.48, y: target.y + height, z: hero.position.z - radius };
+    return { beat: t < touchdown ? 'descent' : t < touchdown + 0.8 ? 'touchdown' : t < firstSteps ? 'doorway' : 'first-steps',
+      shotId: 'hero', target, cameraPosition: t < touchdown ? wideCamera : mixPoint(wideCamera, composition.closeCamera, intimacy),
+      radius, height, transitionSeconds: t < touchdown ? 0.65 : 0.45, azimuthOffset: 0, fov: lerp(36, 32, intimacy), siteIndex: 0 };
   }
 
-  if (t < 30) {
-    const settle = smoothstep((t - touchdown) / Math.max(0.1, 30 - touchdown));
-    return {
-      beat: 'touchdown',
-      target: {
-        x: hero.position.x,
-        y: hero.groundY + lerp(0.55, 0.28, settle),
-        z: hero.position.z,
-      },
-      radius: lerp(10.5, 6.2, settle),
-      height: lerp(4.1, 1.85, settle),
-      transitionSeconds: 3.2,
-      azimuthOffset: lerp(0.1, 0.16, settle),
-      fov: lerp(34, 32, settle),
-      siteIndex: 0,
-    };
+  if (t < insertEnd && others.length) {
+    const index = Math.min(others.length - 1, Math.floor((t - disembarked) / insertDuration));
+    const pod = others[index]!;
+    const shotAge = (t - disembarked) - index * insertDuration;
+    const composition = foundingSiteComposition(pod, index + 1);
+    // Each insert retains vessel, ramp and people together. No connecting aerial is needed.
+    return { beat: 'site-flythrough', shotId: `landing:${pod.id}`, target: { ...composition.target, y: pod.groundY + 0.55, z: pod.position.z - 0.65 },
+      cameraPosition: { x: pod.position.x + 2.1 - shotAge * 0.08, y: pod.groundY + 1.8, z: pod.position.z - 4.1 },
+      radius: 4.3, height: 1.8, transitionSeconds: 0.4, azimuthOffset: 0, fov: 38, siteIndex: index + 1 };
   }
 
-  const siteStart = 30;
-  const siteSeconds = 8;
-  const siteCount = arrival.pods.length;
-  const siteEnd = siteStart + siteSeconds * siteCount;
-  if (siteCount && t < siteEnd) {
-    const rawIndex = Math.floor((t - siteStart) / siteSeconds);
-    const siteIndex = Math.min(siteCount - 1, Math.max(0, rawIndex));
-    const pod = arrival.pods[siteIndex]!;
-    const composition = foundingSiteComposition(pod, siteIndex);
-    const local = clamp01((t - siteStart - siteIndex * siteSeconds) / siteSeconds);
-
-    // Site zero is already under the lens after touchdown, so it gets an especially long first
-    // look. Later sites use a three-part film grammar: shallow scenic transit, deliberate descent,
-    // then a true hold where the camera stops moving and lets the founders read.
-    if (siteIndex === 0) {
-      const approachEnd = 0.34;
-      if (local < approachEnd) {
-        const approach = smoothstep(local / approachEnd);
-        return {
-          beat: 'site-flythrough',
-          target: composition.target,
-          cameraPosition: mixPoint(composition.stagingCamera, composition.closeCamera, approach),
-          radius: lerp(4.8, 1.85, approach),
-          height: lerp(3.2, 0.92, approach),
-          transitionSeconds: 1.8,
-          azimuthOffset: 0,
-          fov: lerp(34, 31, approach),
-          siteIndex,
-        };
-      }
-      return {
-        beat: 'site-flythrough',
-        target: composition.target,
-        cameraPosition: composition.closeCamera,
-        radius: 1.85,
-        height: 0.92,
-        transitionSeconds: 1.2,
-        azimuthOffset: 0,
-        fov: 31,
-        siteIndex,
-      };
-    }
-
-    const previous = foundingSiteComposition(arrival.pods[siteIndex - 1]!, siteIndex - 1);
-    const transitEnd = 0.5;
-    const approachEnd = 0.75;
-
-    if (local < transitEnd) {
-      const transit = smoothstep(local / transitEnd);
-      const transitCamera = mixPoint(previous.closeCamera, composition.stagingCamera, transit);
-      // A shallow crane arc clears ordinary terrain/foliage without ever becoming an aerial reset.
-      transitCamera.y += Math.sin(transit * Math.PI) * 3.8;
-      return {
-        beat: 'site-flythrough',
-        target: mixPoint(previous.target, composition.target, transit),
-        cameraPosition: transitCamera,
-        radius: lerp(1.85, 5.1, transit),
-        height: transitCamera.y - lerp(previous.target.y, composition.target.y, transit),
-        transitionSeconds: 1.7,
-        azimuthOffset: 0,
-        fov: lerp(31, 35, Math.sin(transit * Math.PI)),
-        siteIndex,
-      };
-    }
-
-    if (local < approachEnd) {
-      const approach = smoothstep((local - transitEnd) / (approachEnd - transitEnd));
-      return {
-        beat: 'site-flythrough',
-        target: composition.target,
-        cameraPosition: mixPoint(composition.stagingCamera, composition.closeCamera, approach),
-        radius: lerp(5.1, 1.85, approach),
-        height: lerp(3.2, 0.92, approach),
-        transitionSeconds: 1.8,
-        azimuthOffset: 0,
-        fov: lerp(34, 31, approach),
-        siteIndex,
-      };
-    }
-
-    return {
-      beat: 'site-flythrough',
-      target: composition.target,
-      cameraPosition: composition.closeCamera,
-      radius: 1.85,
-      height: 0.92,
-      transitionSeconds: 1.2,
-      azimuthOffset: 0,
-      fov: 31,
-      siteIndex,
-    };
-  }
-
-  const handoff = smoothstep((t - siteEnd) / Math.max(0.1, 78 - siteEnd));
-  const last = arrival.pods[siteCount - 1] ?? hero;
-  const lastTarget = { x: last.position.x, y: last.groundY + 0.3, z: last.position.z };
-  return {
-    beat: 'handoff',
-    target: mixPoint(lastTarget, worldTarget, handoff),
-    radius: lerp(1.85, 54, handoff),
-    height: lerp(0.92, 32, handoff),
-    transitionSeconds: lerp(4.2, 5.2, handoff),
-    azimuthOffset: lerp(0.2, 0.02, handoff),
-    fov: lerp(31, 38, handoff),
-  };
+  const composition = foundingSiteComposition(hero, 0);
+  return { beat: 'handoff', shotId: 'handoff', target: composition.target, cameraPosition: composition.closeCamera,
+    radius: 1.85, height: 0.92, transitionSeconds: 0.5, azimuthOffset: 0, fov: 32, siteIndex: 0 };
 }

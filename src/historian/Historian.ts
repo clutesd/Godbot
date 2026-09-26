@@ -1,8 +1,10 @@
+import { earlyDocumentaryBias, isEarlyDocumentary } from './EarlyDocumentary';
+import { DocumentaryMemory } from './DocumentaryMemory';
 import type { GodboxConfig } from '../config';
 import { SeededRandom } from '../sim/prng';
 import { representedPopulation, settlementRepresentedPopulation } from '../sim/advanced/AdvancedCivilizationSystem';
 import type { HistoricalEvent, LandmarkKind, Person, Relation, SimulationState, Vec2, WorldCell } from '../sim/types';
-import type { AudioCategory, CandidateScoreBreakdown, CrossRunContext, HistorianPrediction, HistorianStatement, ObservationCandidate, ObservationKind } from './types';
+import type { AudioCategory, CandidateScoreBreakdown, CrossRunContext, DocumentaryEditorialIntent, DocumentaryShotScale, HistorianPrediction, HistorianStatement, ObservationCandidate, ObservationKind } from './types';
 import { campaignMemory, isWarEvent, liveWarStory, WAR_CHAPTERS, warEventStory, warForEvent } from './WarStory';
 import { campaignFocus } from '../sim/war/Campaign';
 
@@ -51,6 +53,7 @@ export interface HistorianOptions {
 }
 
 export class Historian {
+  private readonly documentaryMemory = new DocumentaryMemory();
   readonly statements: HistorianStatement[] = [];
   readonly predictions: HistorianPrediction[] = [];
   readonly representativePersonIds = new Set<string>();
@@ -58,6 +61,7 @@ export class Historian {
   private readonly shownSubjects = new Map<string, number>();
   private readonly shownEventTypes = new Map<HistoricalEvent['type'], number>();
   private readonly shownCenturies = new Set<number>();
+  private readonly recentEditorialSelections: Array<{ subjectId: string; kind: ObservationKind; threadId: string; scale: DocumentaryShotScale }> = [];
   private statementSequence = 1;
   private predictionSequence = 1;
   private sceneSequence = 0;
@@ -76,40 +80,48 @@ export class Historian {
     this.crossRunContext = context;
   }
 
+  /** Observe monthly changes even while the camera is holding a shot. */
+  observe(state: SimulationState): void {
+    this.documentaryMemory.observe(state);
+  }
+
   chooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
     this.refreshRepresentatives(state);
     this.resolvePredictions(state);
-    const candidates = this.candidates(state);
-    const pattern = ['ordinary', 'city', 'significant', 'ordinary', 'city', 'travel', 'ordinary', 'city', 'significant', 'context'] as const;
-    const beat = pattern[this.sceneSequence % pattern.length] ?? 'ordinary';
     this.sceneSequence += 1;
-    const preferred = candidates.filter((candidate) => {
-      if (beat === 'ordinary') return ['worker-follow', 'traveler-follow', 'street-observation'].includes(candidate.kind);
-      if (beat === 'city') return ['settlement-approach', 'street-observation', 'institution-exterior', 'city-growth-timelapse', 'infrastructure-scene'].includes(candidate.kind);
-      if (beat === 'significant') return candidate.interest >= 0.62;
-      if (beat === 'context') return candidate.kind === 'historian-context' || candidate.kind === 'world-establishing' || candidate.kind === 'city-growth-timelapse';
-      return candidate.kind === 'traveler-follow' || candidate.kind === 'regional-travel' || candidate.kind === 'landscape-pause';
-    });
-    const focusEvent = focusEventId ? state.history.find(event => event.id === focusEventId && event.month <= state.month) : undefined;
-    const focusCandidate = focusEvent ? this.eventCandidate(state, focusEvent) : undefined;
-    const focused = focusCandidate && this.validateStatement(focusCandidate.statement, state) ? focusCandidate : undefined;
-    // Stay in the same community for the next detail or medium view when one is available.
-    // Context and event beats remain free to take us elsewhere.
-    const previousPerson = state.people.find(person => person.id === this.lastSubjectId);
-    const communityId = previousPerson?.homeId ?? this.lastSubjectId;
-    const local = beat === 'ordinary' || beat === 'city' ? preferred.filter(candidate =>
-      candidate.subjectId !== this.lastSubjectId && (candidate.subjectId === communityId
-        || state.people.some(person => person.id === candidate.subjectId && person.homeId === communityId)
-        || state.institutions.some(institution => institution.id === candidate.subjectId && institution.settlementId === communityId)),
-    ) : [];
-    const pool = local.length > 0 ? local : preferred.length > 0 ? preferred : candidates;
-    pool.sort((a, b) => b.score - a.score);
-    const shortlist = pool.slice(0, Math.min(6, pool.length));
-    const choice = focused ?? shortlist[this.random.weightedIndex(shortlist.map((candidate, index) => Math.max(0.04, candidate.score * (1 - index * 0.1))))] ?? pool[0] ?? this.fallback(state);
+
+    const candidates = this.candidates(state);
+    const focusEvent = focusEventId
+      ? state.history.find(event => event.id === focusEventId && event.month <= state.month)
+      : undefined;
+    const focusCandidate = focusEvent
+      ? this.ensureEditorial(state, this.eventCandidate(state, focusEvent))
+      : undefined;
+    const focused = focusCandidate && this.validateStatement(focusCandidate.statement, state)
+      ? focusCandidate
+      : undefined;
+
+    // Editorial selection is adaptive rather than a fixed ordinary/city/context metronome. The
+    // Historian weighs consequence and activity, then uses recent documentary memory to avoid
+    // repeating subjects, scales and aerial grammar while preserving a thread when the next shot
+    // can deepen it.
+    const ranked = candidates
+      .map(candidate => ({ candidate, score: this.editorialScore(candidate) + this.documentaryMemory.score(candidate, state) + (isEarlyDocumentary(state)
+        ? earlyDocumentaryBias(candidate) + (candidate.kind === 'landscape-pause'
+          && this.recentEditorialSelections.length >= 6
+          && this.recentEditorialSelections.slice(-6).every(entry => entry.scale !== 'wide') ? 0.65 : 0)
+        : 0) }))
+      .sort((a, b) => b.score - a.score || a.candidate.id.localeCompare(b.candidate.id));
+    const choice = focused ?? ranked[0]?.candidate ?? this.ensureEditorial(state, this.fallback(state));
+
     this.shownSubjects.set(choice.subjectId, (this.shownSubjects.get(choice.subjectId) ?? 0) + 1);
     if (choice.event) this.shownEventTypes.set(choice.event.type, (this.shownEventTypes.get(choice.event.type) ?? 0) + 1);
     if (choice.id.startsWith('century:')) this.shownCenturies.add(Number(choice.id.replace('century:', '')));
     this.lastSubjectId = choice.subjectId;
+    this.rememberEditorialSelection(choice);
+    this.documentaryMemory.decorate(choice, state);
+    this.documentaryMemory.remember(choice, state.month);
+
     if (this.validateStatement(choice.statement, state)) {
       this.statements.push(choice.statement);
       if (this.statements.length > 1200) this.statements.splice(0, this.statements.length - 1200);
@@ -118,8 +130,10 @@ export class Historian {
   }
 
   candidates(state: SimulationState): ObservationCandidate[] {
+    this.documentaryMemory.observe(state);
     const candidates: ObservationCandidate[] = [];
-    const recentEvents = state.history.filter((event) => SIGNIFICANT_EVENT_TYPES.has(event.type) && event.month <= state.month && state.month - event.month <= 24);
+    const recentEvents = state.history.filter((event) => (SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65) && event.month <= state.month && state.month - event.month <= 24);
+    candidates.push(...this.documentaryMemory.candidates(state));
     const latestCampaignEvents = new Map<string, HistoricalEvent>();
     for (const event of recentEvents) {
       const war = warForEvent(state, event);
@@ -140,7 +154,9 @@ export class Historian {
     if (comparison) candidates.push(comparison);
     const landscape = this.landscapeCandidate(state);
     if (landscape) candidates.push(landscape);
-    return candidates.filter((candidate) => this.validateStatement(candidate.statement, state));
+    return candidates
+      .filter((candidate) => this.validateStatement(candidate.statement, state))
+      .map((candidate) => this.documentaryMemory.decorate(this.ensureEditorial(state, candidate), state));
   }
 
   validateStatement(statement: HistorianStatement, state: SimulationState): boolean {
@@ -232,7 +248,9 @@ export class Historian {
       const localPopulation = settlementRepresentedPopulation(state, settlement.id);
       const shown = this.shownSubjects.get(settlement.id) ?? 0;
       const base = 0.43 + Math.min(0.2, people.length / 600) + settlement.prosperity * 0.12 - shown * 0.045;
-      const kind: ObservationKind = settlement.industry.active ? 'city-growth-timelapse' : settlement.urbanization > 0.35 ? 'street-observation' : 'settlement-approach';
+      // A settlement center is geographic context, not a human subject. Reserve human-scale
+      // observation kinds for candidates that resolve to actual people.
+      const kind: ObservationKind = settlement.industry.active ? 'city-growth-timelapse' : 'settlement-approach';
       const statement = this.statement({
         month: state.month,
         text: state.month - settlement.foundedMonth >= this.config.historicalPace.generationYears * 24
@@ -253,7 +271,19 @@ export class Historian {
 
   private personCandidates(state: SimulationState): ObservationCandidate[] {
     const result: ObservationCandidate[] = [];
-    for (const id of this.representativePersonIds) {
+    // Early camps have few people: include one witness of each current activity per camp,
+    // rather than letting a small permanent cast hide building, resting or gathering.
+    const ids = new Set(this.representativePersonIds);
+    {
+      const activities = new Set<string>();
+      for (const person of state.people) {
+        const key = `${person.homeId}:${person.activity}`;
+        if (!person.alive || activities.has(key)) continue;
+        activities.add(key);
+        ids.add(person.id);
+      }
+    }
+    for (const id of ids) {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === id);
       if (!person) continue;
       const home = state.settlements.find((settlement) => settlement.id === person.homeId);
@@ -270,7 +300,7 @@ export class Historian {
       const statement = this.statement({ month: state.month, text: `${person.name}, age ${age}, is ${work}${home ? ` near ${home.name}` : ''}.${capability}${continuity}${lineage}`, epistemicStatus: 'recorded-fact', sourceEntityIds: [person.id, ...(home ? [home.id] : [])], claims: { entityIds: [person.id, ...(home ? [home.id] : [])] } });
       const unusual = person.occupation === 'keeper' || person.occupation === 'carrier' ? 0.08 : 0;
       const ordinary = person.prestige < 0.42 ? 0.07 : 0;
-      result.push(this.candidate(`person:${person.id}`, person.id, kind, person.position, person.name, statement, 0.44 + unusual + ordinary + person.prestige * 0.08 - (this.shownSubjects.get(person.id) ?? 0) * 0.065, 0.3, isTraveler ? 'ambient-wilderness' : 'settlement'));
+      result.push(this.candidate(`person:${person.id}`, person.id, kind, person.position, person.name, statement, 0.44 + unusual + ordinary + person.prestige * 0.08 - Math.min(3, this.shownSubjects.get(person.id) ?? 0) * 0.065, 0.3, isTraveler ? 'ambient-wilderness' : 'settlement'));
     }
     return result;
   }
@@ -363,7 +393,12 @@ export class Historian {
    * shots land on the great peak, the falls and the sacred lake instead of a random hillside.
    */
   private landscapeCandidate(state: SimulationState): ObservationCandidate | undefined {
-    const landmarks = state.world.landmarks;
+    const previousPerson = state.people.find(person => person.id === this.lastSubjectId);
+    const previousCamp = state.settlements.find(camp => camp.id === this.lastSubjectId);
+    const origin = previousPerson?.position ?? previousCamp?.position ?? state.arrival?.pods[0]?.position;
+    const nearby = (x: number, z: number): boolean => !isEarlyDocumentary(state) || !origin
+      || Math.hypot(x - origin.x, z - origin.z) <= 28;
+    const landmarks = state.world.landmarks.filter(landmark => nearby(landmark.worldX, landmark.worldZ));
     if (landmarks.length > 0 && this.sceneSequence % 3 !== 2) {
       const landmark = landmarks[this.random.weightedIndex(landmarks.map((candidate) => 0.25 + candidate.prominence))];
       if (landmark) {
@@ -379,12 +414,158 @@ export class Historian {
         return this.candidate(`landmark:${landmark.id}:${this.sceneSequence}`, landmark.id, kind, { x: landmark.worldX, z: landmark.worldZ }, title, statement, 0.46 + landmark.prominence * 0.2, 0.24, 'ambient-wilderness');
       }
     }
-    const cells = state.world.cells.filter((cell) => !cell.water && (cell.coast || cell.elevation > 0.73));
+    const cells = state.world.cells.filter((cell) => !cell.water && nearby(cell.worldX, cell.worldZ) && (cell.coast || cell.elevation > 0.73 || (isEarlyDocumentary(state) && (cell.river || cell.landform === 'valley'))));
     const cell = cells[this.random.int(0, cells.length)];
     if (!cell) return undefined;
-    const title = cell.coast ? 'The inhabited coast' : 'The high country';
-    const statement = this.statement({ month: state.month, text: cell.coast ? 'A coastal landscape beyond the settlements.' : 'High ground beyond the settled valleys.', epistemicStatus: 'recorded-fact', sourceEntityIds: [this.cellId(cell)], claims: { entityIds: [this.cellId(cell)] } });
+    const title = cell.river ? 'The river near camp' : cell.landform === 'valley' ? 'The neighboring valley' : cell.coast ? 'The inhabited coast' : 'The high country';
+    const statement = this.statement({ month: state.month, text: cell.river ? 'Water follows a channel through the land.' : cell.landform === 'valley' ? 'A valley opens between the surrounding slopes.' : cell.coast ? 'A coastal landscape beyond the settlements.' : 'High ground beyond the settled valleys.', epistemicStatus: 'recorded-fact', sourceEntityIds: [this.cellId(cell)], claims: { entityIds: [this.cellId(cell)] } });
     return this.candidate(`landscape:${cell.x}:${cell.z}:${this.sceneSequence}`, this.cellId(cell), this.sceneSequence % 9 === 0 ? 'night-transition' : 'landscape-pause', { x: cell.worldX, z: cell.worldZ }, title, statement, 0.42, 0.18, 'ambient-wilderness');
+  }
+
+  private ensureEditorial(state: SimulationState, candidate: ObservationCandidate): ObservationCandidate {
+    if (candidate.editorial) return candidate;
+    const person = state.people.find(subject => subject.id === candidate.subjectId);
+    const institution = state.institutions.find(subject => subject.id === candidate.subjectId);
+    const settlement = state.settlements.find(subject => subject.id === candidate.subjectId);
+    const event = candidate.event;
+    const war = event ? warForEvent(state, event) : undefined;
+    const threadId = war?.id
+      ?? person?.homeId
+      ?? institution?.settlementId
+      ?? settlement?.id
+      ?? event?.locationId
+      ?? event?.actors[0]
+      ?? candidate.subjectId;
+    const activityMeaning = person
+      ? this.activityMeaning(person)
+      : event
+        ? clamp(event.significance * 0.68 + event.magnitude * 0.32)
+        : candidate.kind === 'institution-exterior' || candidate.kind === 'infrastructure-scene'
+          ? 0.56
+          : candidate.kind === 'settlement-approach' || candidate.kind === 'city-growth-timelapse'
+            ? 0.42
+            : candidate.kind === 'landscape-pause' || candidate.kind === 'night-transition'
+              ? 0.08
+              : 0.28;
+    const preferredScale = this.documentaryScale(candidate.kind);
+    const narration: DocumentaryEditorialIntent['narration'] = event && event.significance >= 0.78
+      ? 'required'
+      : candidate.kind === 'landscape-pause' || candidate.kind === 'night-transition' || candidate.kind === 'world-establishing'
+        ? 'silent'
+        : 'selective';
+    const completion: DocumentaryEditorialIntent['completion'] = person && preferredScale !== 'wide'
+      ? 'subject-action'
+      : preferredScale === 'medium'
+        ? 'settled'
+        : 'sequence-beat';
+    const why = event
+      ? `${event.type.replaceAll('-', ' ')} changed the historical record`
+      : person
+        ? `${person.name} is ${person.activity.replaceAll('-', ' ')}; visible activity gives the history a human subject`
+        : settlement
+          ? `${settlement.name} provides geographic context for the people and institutions inside it`
+          : institution
+            ? `${institution.name} makes an institution physically legible in its community`
+            : candidate.kind === 'landscape-pause' || candidate.kind === 'world-establishing'
+              ? 'geography matters here as orientation or release, not as filler'
+              : 'this grounded subject adds context to the current historical thread';
+
+    return {
+      ...candidate,
+      editorial: { subjectId: candidate.subjectId, importance: event?.significance ?? candidate.interest,
+        desiredActivity: person?.activity, shotPurpose: event ? 'witness-change' : person ? 'observe' : 'context',
+        completionCondition: person ? `Observe ${person.activity} until the action finishes or changes` : 'Establish the subject and reveal its recorded condition',
+        threadId, why, activityMeaning, preferredScale, narration, completion },
+    };
+  }
+
+  private editorialScore(candidate: ObservationCandidate): number {
+    const editorial = candidate.editorial;
+    const recent = this.recentEditorialSelections;
+    const last = recent[recent.length - 1];
+    const lastTwo = recent.slice(-2);
+    const subjectRepeats = recent.slice(-8).filter(entry => entry.subjectId === candidate.subjectId).length;
+    const kindRepeats = recent.slice(-5).filter(entry => entry.kind === candidate.kind).length;
+    const scaleRepeats = editorial
+      ? recent.slice(-4).filter(entry => entry.scale === editorial.preferredScale).length
+      : 0;
+    const wideStreak = editorial?.preferredScale === 'wide'
+      ? lastTwo.filter(entry => entry.scale === 'wide').length
+      : 0;
+    const sameThread = Boolean(editorial && last && editorial.threadId === last.threadId);
+    const changedSubject = Boolean(last && candidate.subjectId !== last.subjectId);
+    const threadDeepening = sameThread && changedSubject ? 0.16 : 0;
+    const scaleContrast = editorial && last && editorial.preferredScale !== last.scale ? 0.09 : 0;
+    const humanAfterWide = editorial && last?.scale === 'wide'
+      && (editorial.preferredScale === 'human' || editorial.preferredScale === 'detail')
+      ? 0.16
+      : 0;
+    const revealAfterHuman = editorial && (last?.scale === 'human' || last?.scale === 'detail')
+      && sameThread && (editorial.preferredScale === 'medium' || editorial.preferredScale === 'wide')
+      ? 0.13
+      : 0;
+    const sameSubjectPenalty = last?.subjectId === candidate.subjectId ? 0.34 : 0;
+
+    return candidate.score
+      + candidate.interest * 0.12
+      + (editorial?.activityMeaning ?? 0) * 0.24
+      + threadDeepening
+      + scaleContrast
+      + humanAfterWide
+      + revealAfterHuman
+      - subjectRepeats * 0.14
+      - kindRepeats * 0.055
+      - scaleRepeats * 0.045
+      - wideStreak * 0.18
+      - sameSubjectPenalty;
+  }
+
+  private rememberEditorialSelection(candidate: ObservationCandidate): void {
+    const editorial = candidate.editorial;
+    this.recentEditorialSelections.push({
+      subjectId: candidate.subjectId,
+      kind: candidate.kind,
+      threadId: editorial?.threadId ?? candidate.subjectId,
+      scale: editorial?.preferredScale ?? this.documentaryScale(candidate.kind),
+    });
+    if (this.recentEditorialSelections.length > 18) {
+      this.recentEditorialSelections.splice(0, this.recentEditorialSelections.length - 18);
+    }
+  }
+
+  private documentaryScale(kind: ObservationKind): DocumentaryShotScale {
+    if (kind === 'worker-follow' || kind === 'discovery-scene') return 'detail';
+    if (kind === 'street-observation' || kind === 'traveler-follow') return 'human';
+    if (kind === 'settlement-approach' || kind === 'institution-exterior'
+      || kind === 'infrastructure-scene' || kind === 'atomic-threshold') return 'medium';
+    return 'wide';
+  }
+
+  private activityMeaning(person: Person): number {
+    switch (person.activity) {
+      case 'construct':
+      case 'craft':
+      case 'farm':
+      case 'gather':
+      case 'study':
+      case 'worship':
+      case 'mourn':
+      case 'patrol':
+      case 'assist':
+      case 'flee':
+        return 0.86;
+      case 'trade':
+      case 'transport':
+      case 'migrate':
+      case 'travel':
+        return 0.76;
+      case 'socialize':
+        return 0.66;
+      case 'shelter':
+        return 0.48;
+      case 'rest':
+        return 0.16;
+    }
   }
 
   private scoreEvent(state: SimulationState, event: HistoricalEvent): CandidateScoreBreakdown {
@@ -500,7 +681,7 @@ export class Historian {
   }
 
   private candidate(id: string, subjectId: string, kind: ObservationKind, position: Vec2, title: string, statement: HistorianStatement, score: number, interest: number, audioCategory: AudioCategory): ObservationCandidate {
-    const repetitionPenalty = clamp((this.shownSubjects.get(subjectId) ?? 0) * 0.08);
+    const repetitionPenalty = clamp(this.recentEditorialSelections.filter(entry => entry.subjectId === subjectId).length * 0.08);
     return { id, subjectId, kind, position, title, statement, score: clamp(score - repetitionPenalty, 0.03, 1), interest, audioCategory, breakdown: { novelty: 0.5, magnitude: interest, populationAffected: 0, rarity: 0.5, technological: 0, political: 0, cultural: 0, consequence: 0, continuity: subjectId === this.lastSubjectId ? 0.3 : 0, repetitionPenalty } };
   }
 

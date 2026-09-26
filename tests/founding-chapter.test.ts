@@ -80,8 +80,9 @@ describe('Founding Chapter 1a', () => {
     expect(scene).toBeDefined();
     expect(scene?.title).toBe(`ARRIVAL DAY · THE ${baseline?.expectedCommunityCount} LANDINGS`);
     expect(scene?.event?.type).toBe('ARRIVAL_DAY');
-    expect(scene?.statement.text).toContain('This is the last moment their histories are known together.');
-    expect(scene?.statement.text).toMatch(/From here, we watch/);
+    expect(scene?.statement.text).toContain('What will they build here?');
+    expect(scene?.kind).toBe('street-observation');
+    expect(scene?.position).not.toEqual(baseline?.center);
     expect(scene?.statement.text).not.toContain('permanent beginning of this record');
     expect(scene && historian.validateStatement(scene.statement, simulation.state)).toBe(true);
 

@@ -165,21 +165,66 @@ describe('Presentation independence', () => {
 });
 
 
-describe('documentary shot sequence', () => {
-  it('moves from a person to their community and reserves geography for context', () => {
+describe('documentary editorial judgment', () => {
+  it('prefers meaningful visible activity without falling back to a fixed aerial cadence', () => {
     const sim = new Simulation({ seed: 'documentary-sequence', startMode: 'established', startingPopulation: 120 });
     sim.state.history = [];
+    for (const person of sim.state.people.filter(person => person.alive)) person.activity = 'construct';
     const before = JSON.stringify(sim.state);
     const historian = new Historian(sim.config);
-    const scenes = Array.from({ length: 10 }, () => historian.chooseScene(sim.state));
-    for (const index of [0, 3, 6]) {
-      expect(['worker-follow', 'traveler-follow', 'street-observation']).toContain(scenes[index]!.kind);
-    }
-    const person = sim.state.people.find(p => p.id === scenes[0]!.subjectId)!;
-    expect(person).toBeDefined();
-    expect(scenes[1]!.subjectId === person.homeId || sim.state.institutions.some(i =>
-      i.id === scenes[1]!.subjectId && i.settlementId === person.homeId)).toBe(true);
-    expect(['historian-context', 'world-establishing', 'city-growth-timelapse']).toContain(scenes[9]!.kind);
+    const scenes = Array.from({ length: 8 }, () => historian.chooseScene(sim.state));
+
+    expect(['worker-follow', 'traveler-follow', 'street-observation']).toContain(scenes[0]!.kind);
+    expect(scenes[0]!.editorial?.activityMeaning).toBeGreaterThanOrEqual(0.8);
+    expect(scenes.every(scene => scene.editorial?.why.trim())).toBe(true);
+
+    const scales = scenes.map(scene => scene.editorial?.preferredScale);
+    expect(scales.filter(scale => scale === 'wide').length).toBeLessThan(scenes.length);
+    expect(scenes.some(scene => scene.editorial?.preferredScale === 'human' || scene.editorial?.preferredScale === 'detail')).toBe(true);
     expect(JSON.stringify(sim.state)).toBe(before);
+  });
+
+  it('selects the same documentary subjects for the same seed and immutable state', () => {
+    const sim = new Simulation({ seed: 'documentary-determinism', startMode: 'established', startingPopulation: 120 });
+    sim.state.history = [];
+    const before = JSON.stringify(sim.state);
+    const a = new Historian(sim.config);
+    const b = new Historian(sim.config);
+    const first = Array.from({ length: 12 }, () => a.chooseScene(sim.state)).map(scene => ({
+      id: scene.id,
+      subjectId: scene.subjectId,
+      scale: scene.editorial?.preferredScale,
+      threadId: scene.editorial?.threadId,
+    }));
+    const second = Array.from({ length: 12 }, () => b.chooseScene(sim.state)).map(scene => ({
+      id: scene.id,
+      subjectId: scene.subjectId,
+      scale: scene.editorial?.preferredScale,
+      threadId: scene.editorial?.threadId,
+    }));
+
+    expect(first).toEqual(second);
+    expect(JSON.stringify(sim.state)).toBe(before);
+  });
+
+  it('keeps consecutive documentary attention in a community thread when that deepens the story', () => {
+    const sim = new Simulation({
+      seed: 'documentary-thread',
+      startMode: 'established',
+      startingPopulation: 120,
+      settlementCount: [1, 1],
+    });
+    sim.state.history = [];
+    const historian = new Historian(sim.config);
+    const scenes = Array.from({ length: 10 }, () => historian.chooseScene(sim.state));
+    const threadedPair = scenes.some((scene, index) => {
+      const next = scenes[index + 1];
+      return Boolean(next
+        && scene.subjectId !== next.subjectId
+        && scene.editorial?.threadId
+        && scene.editorial.threadId === next.editorial?.threadId);
+    });
+
+    expect(threadedPair).toBe(true);
   });
 });

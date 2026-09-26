@@ -58,6 +58,7 @@ export function installWatcherHistorian(): void {
 }
 
 function deepenObservation(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate, state: SimulationState): void {
+  if (scene.editorial?.narration === 'silent' || scene.id.startsWith('development:')) return;
   // Campaign scenes already have a concise, evidence-specific watcher voice.
   if (scene.statement.claims.warId || (scene.event && isWarEvent(scene.event))) return;
   const statement = scene.statement;
@@ -65,14 +66,6 @@ function deepenObservation(historian: Historian, memory: ObserverMemory, scene: 
 
   if (scene.event) {
     additions.push(...eventPerspective(memory, scene.event, state, statement));
-  } else if (statement.sourceArchiveIds.length > 0) {
-    additions.push('I remember other worlds as well. Patterns repeat, but never perfectly.');
-  } else if (statement.epistemicStatus === 'probabilistic-inference') {
-    additions.push('I have watched certainty fail too often to call this destiny.');
-  } else if (scene.kind === 'historian-context' && memory.observationSequence % 2 === 0) {
-    additions.push('Time makes patterns visible that a single lifetime cannot see.');
-  } else if (memory.observationSequence % 7 === 0) {
-    additions.push('For now, history is quiet. Quiet years still become part of the age.');
   }
 
   const attentionRemark = attentionPerspective(memory, scene, state.month);
@@ -87,7 +80,7 @@ function deepenObservation(historian: Historian, memory: ObserverMemory, scene: 
 
 function eventPerspective(memory: ObserverMemory, event: HistoricalEvent, state: SimulationState, statement: HistorianStatement): string[] {
   const remarks: string[] = [];
-  const priorOfType = state.history.filter((candidate) => candidate.type === event.type && candidate.month < event.month);
+  const priorOfType = state.history.filter((candidate) => candidate.type === event.type && (candidate.month < event.month || candidate.month === event.month && candidate.id < event.id));
   const firstOfKind = priorOfType.length === 0;
   const thresholdRemark = thresholdPerspective(memory, event, state);
   if (thresholdRemark) remarks.push(thresholdRemark);
@@ -152,7 +145,9 @@ function thresholdPerspective(memory: ObserverMemory, event: HistoricalEvent, st
 
 function relatedEarlierEvent(event: HistoricalEvent, state: SimulationState): HistoricalEvent | undefined {
   const candidates = state.history.filter((candidate) => {
-    if (candidate.id === event.id || candidate.month >= event.month - 36 || candidate.significance < 0.42) return false;
+    if (candidate.id === event.id || candidate.month > event.month) return false;
+    if (event.causes.includes(candidate.id)) return true;
+    if (candidate.month >= event.month - 36 || candidate.significance < 0.42) return false;
     const samePlace = Boolean(event.locationId && candidate.locationId === event.locationId);
     const sharedActors = event.actors.some((actor) => candidate.actors.includes(actor));
     const causal = event.causes.includes(candidate.id);

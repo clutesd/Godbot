@@ -32,10 +32,10 @@ describe('Arrival Day / authoritative restart', () => {
     expect(s.state.transportation.segments).toEqual({});
     expect(s.state.world.resourceDeposits.some(d => (d.extracted ?? 0) > 0)).toBe(false);
   }, 20000);
-  it('holds time and civilization through twelve seconds of pristine world', () => {
+  it('holds time and civilization through four seconds of pristine world', () => {
     const s = new Simulation(CONFIG);
     const weather = structuredClone(s.state.weather);
-    s.step(120); s.advanceArrival(11.99); s.step(120);
+    s.step(120); s.advanceArrival(3.99); s.step(120);
     expect(s.state.arrival!.phase).toBe('PRISTINE_WORLD');
     expect(s.state.weather).toEqual(weather);
     expect(() => assertPristine(s.state)).not.toThrow();
@@ -55,7 +55,7 @@ describe('Arrival Day / authoritative restart', () => {
       expect(new Simulation({ ...CONFIG, seed }).state.arrival).toEqual(a);
     }, 15000);
   it('lands separately and opens a bare camp before the first person emerges', () => {
-    const s = new Simulation(CONFIG); s.advanceArrival(25);
+    const s = new Simulation(CONFIG); s.advanceArrival(podTouchdown(s.state.arrival!.pods[0]!));
     expect(s.state.arrival!.pods.filter(p => p.landed)).toHaveLength(1);
     expect(s.state.settlements).toHaveLength(1);
     expect(s.population).toBe(0);
@@ -65,6 +65,14 @@ describe('Arrival Day / authoritative restart', () => {
     s.step(99);
     expect(s.state.month).toBe(0);
     expect(s.state.history).toHaveLength(0);
+  });
+  it('finishes older archived landing timestamps without trapping the history gate', () => {
+    const s = new Simulation(CONFIG);
+    for (const pod of s.state.arrival!.pods) pod.entrySeconds += 8;
+    s.advanceArrival(80);
+    expect(s.state.arrival!.phase).toBe('FOUNDING_ORIENTATION');
+    expect(s.population).toBe(110);
+    expect(s.beginHistory()).toBe(true);
   });
   it('creates real founders at recorded origins with distinct knowledge and zero infrastructure', () => {
     const s = new Simulation(CONFIG); complete(s);
@@ -106,7 +114,9 @@ describe('Arrival Day / authoritative restart', () => {
     expect(pending.status).toBe('ongoing');
     expect(pending.outcome.classification).not.toBe('EXTINCT');
     expect(pending.demographicMilestones.some(m => m.kind === 'extinction')).toBe(false);
-    complete(s); complete(s);
+    complete(s);
+    s.advanceArrival(ARRIVAL_END_SECONDS);
+    expect(s.beginHistory()).toBe(false);
     const event = s.state.history.find(e => e.type === 'ARRIVAL_DAY')!;
     expect(event.month).toBe(0);
     expect(JSON.parse(String(event.context.manifest))).toHaveLength(5);

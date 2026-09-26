@@ -497,7 +497,8 @@ describe('cinematic motion', () => {
     expect(firstRecovery.destinationSceneId).toBe(autonomous.id);
     expect(firstRecovery.destinationHeight).toBeGreaterThan(manualPosition.y + 1);
 
-    for (let frame = 1; frame <= 90; frame += 1) {
+    // A fresh editorial azimuth can lengthen the route; allow two seconds to leave the manual pose.
+    for (let frame = 1; frame <= 120; frame += 1) {
       director.update(1 / 60, (frame + 1) / 60, sim.state, () => 0);
     }
 

@@ -667,9 +667,18 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     audio.update(deltaSeconds);
     if ((!arrivalFilm || (simulation.state.arrival?.elapsedSeconds ?? 0) >= 12) && view.observation.revision !== lastObservationRevision) {
       lastObservationRevision = view.observation.revision;
-      audio.transitionTo(view.observation.audioCategory, view.observation.statement?.voiceAssetId, audioEra(simulation.state));
-      evidenceElement.textContent = view.observation.statement?.epistemicStatus.replaceAll('-', ' ').toUpperCase() ?? 'RECORDED FACT';
-      evidenceElement.dataset['status'] = view.observation.statement?.epistemicStatus ?? 'recorded-fact';
+      const narrationVisible = view.observation.narrationVisible;
+      audio.transitionTo(
+        view.observation.audioCategory,
+        narrationVisible ? view.observation.statement?.voiceAssetId : undefined,
+        audioEra(simulation.state),
+      );
+      evidenceElement.textContent = narrationVisible
+        ? view.observation.statement?.epistemicStatus.replaceAll('-', ' ').toUpperCase() ?? 'RECORDED FACT'
+        : '';
+      evidenceElement.dataset['status'] = narrationVisible
+        ? view.observation.statement?.epistemicStatus ?? 'recorded-fact'
+        : 'silent';
     }
     const observedPopulation = representedPopulation(simulation.state);
     displayPopulation += (observedPopulation - displayPopulation) * Math.min(1, deltaSeconds * 4);
@@ -681,7 +690,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     setTextIfChanged(dateElement, dateText);
     setTextIfChanged(populationElement, Math.round(displayPopulation).toLocaleString());
     setTextIfChanged(placeElement, view.observation.label);
-    setTextIfChanged(activityElement, view.observation.detail);
+    setTextIfChanged(activityElement, view.observation.narrationVisible ? view.observation.detail : '');
     if (simulation.state.month - lastArchivedMonth >= 120) void persist();
     const extinct = observedPopulation === 0 || simulation.state.advanced.outcome.classification === 'EXTINCT';
     const atHorizon = simulation.state.month >= simulation.config.experiment.runYears * 12;

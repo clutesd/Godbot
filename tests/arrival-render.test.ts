@@ -373,12 +373,21 @@ describe('Arrival presentation contracts', () => {
       expect(caption.opacity).toBeLessThanOrEqual(1);
       previous = focus;
     }
-    expect([...visitedSites]).toEqual([0, 1, 2, 3, 4]);
+    expect([...visitedSites]).toEqual([0]);
+    expect(ARRIVAL_END_SECONDS).toBeLessThanOrEqual(40);
     expect(closestSiteRadius).toBeLessThan(2);
+    s.state.arrival!.elapsedSeconds = ARRIVAL_END_SECONDS;
+    const handoff = arrivalSequenceFocus(s.state.arrival!);
+    expect(handoff.beat).toBe('handoff');
+    expect(handoff.siteIndex).toBe(0);
+    expect(handoff.radius).toBeLessThan(2);
+    expect(handoff.height).toBeLessThan(1);
+    expect(handoff.cameraPosition).toBeDefined();
 
-    // Every founding site gets a true stationary close hold rather than immediately climbing away.
-    for (let siteIndex = 0; siteIndex < 5; siteIndex += 1) {
-      s.state.arrival!.elapsedSeconds = 30 + siteIndex * 8 + 6.2;
+
+    // The gathering gets a readable hold; the title never climbs back into scenery.
+    for (let siteIndex = 0; siteIndex < 1; siteIndex += 1) {
+      s.state.arrival!.elapsedSeconds = 30;
       const heldA = arrivalSequenceFocus(s.state.arrival!);
       s.state.arrival!.elapsedSeconds += 0.8;
       const heldB = arrivalSequenceFocus(s.state.arrival!);
