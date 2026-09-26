@@ -188,7 +188,9 @@ export class CinematicSequencePlanner {
         const roleFit = rolePreference(role, scene.kind);
         const activityMeaning = clamp01(scene.editorial?.activityMeaning ?? 0.25);
         const narrative = clamp01(scene.score * 0.58 + scene.interest * 0.24 + activityMeaning * 0.18);
-        const anchorBonus = scene.id === anchor.id ? 0.34 : 0;
+        const anchorBonus = scene.id === anchor.id
+          ? role === roleFor(anchor.kind) ? 0.34 : 0.04
+          : 0;
         const eventCoherence = anchor.event && scene.event?.id === anchor.event.id ? 0.2 : 0;
 
         const subjectSeen = this.recent.filter(entry => entry.subjectId === scene.subjectId).length;
