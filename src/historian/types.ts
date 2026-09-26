@@ -82,6 +82,24 @@ export interface CandidateScoreBreakdown {
   repetitionPenalty: number;
 }
 
+export type DocumentaryShotScale = 'wide' | 'medium' | 'human' | 'detail';
+export type DocumentaryNarrationMode = 'required' | 'selective' | 'silent';
+export type DocumentaryCompletionMode = 'settled' | 'subject-action' | 'sequence-beat' | 'timed';
+
+/**
+ * Presentation-only direction supplied by the Historian. None of these fields are simulation
+ * authority: they describe why a grounded scene matters and how long the documentary should stay
+ * with it before moving on.
+ */
+export interface DocumentaryEditorialIntent {
+  threadId: string;
+  why: string;
+  activityMeaning: number;
+  preferredScale: DocumentaryShotScale;
+  narration: DocumentaryNarrationMode;
+  completion: DocumentaryCompletionMode;
+}
+
 export interface ObservationCandidate {
   id: string;
   subjectId: string;
@@ -94,6 +112,7 @@ export interface ObservationCandidate {
   audioCategory: AudioCategory;
   breakdown: CandidateScoreBreakdown;
   event?: HistoricalEvent;
+  editorial?: DocumentaryEditorialIntent;
 }
 
 export interface HistorianPrediction {

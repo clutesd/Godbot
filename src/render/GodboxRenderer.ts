@@ -1130,7 +1130,7 @@ export class GodboxRenderer {
       this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
       this.reactionGlyphs.track(person.id, this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale);
-      this.reactionGlyphs.consider(person.id, { person, local, gesture: socialGesture, firstFire: firstFireStanding ? firstFire : undefined,
+      this.reactionGlyphs.consider(person.id, { person, local, firstFire: firstFireStanding ? firstFire : undefined,
         resourceKind: working ? worker?.site.profile.kind : undefined, seriousShot: reactionSeriousShot });
       const legScale = detailed && (!articulated || physical && !physicalStanding) ? heightScale : 0.001;
       this.partPosition.set(display.x, footY + 0.45 * heightScale + poseLift, display.z);

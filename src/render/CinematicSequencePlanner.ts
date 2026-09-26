@@ -1,11 +1,14 @@
-import type { ObservationCandidate, ObservationKind } from '../historian/types';
+import type { DocumentaryShotScale, ObservationCandidate, ObservationKind } from '../historian/types';
 import type { SimulationState } from '../sim/types';
 
-export type CinematicBeatRole = 'establish' | 'approach' | 'detail' | 'context' | 'release';
+export type CinematicBeatRole = 'establish' | 'approach' | 'observe' | 'detail' | 'reveal' | 'release';
 
 export interface CinematicPlannedShot {
   readonly scene: ObservationCandidate;
   readonly role: CinematicBeatRole;
+  readonly scale: DocumentaryShotScale;
+  readonly narrate: boolean;
+  readonly threadId: string;
   readonly sequenceId: string;
   readonly ordinal: number;
   readonly total: number;
@@ -17,23 +20,25 @@ interface SequenceScoredCandidate {
   score: number;
 }
 
-const WIDE_KINDS = new Set<ObservationKind>([
-  'world-establishing', 'regional-travel', 'settlement-approach', 'battle-overview',
-  'aftermath-pullback', 'city-growth-timelapse', 'landscape-pause', 'historian-context',
-  'orbital-establishing', 'civilization-ending',
+interface EditorialMemoryEntry {
+  sceneId: string;
+  subjectId: string;
+  kind: ObservationKind;
+  role: CinematicBeatRole;
+  scale: DocumentaryShotScale;
+  threadId: string;
+}
+
+const MEDIUM_KINDS = new Set<ObservationKind>([
+  'settlement-approach', 'institution-exterior', 'infrastructure-scene', 'atomic-threshold',
 ]);
 
-const PERSONAL_KINDS = new Set<ObservationKind>([
-  'street-observation', 'worker-follow', 'traveler-follow', 'discovery-scene',
+const HUMAN_KINDS = new Set<ObservationKind>([
+  'street-observation', 'traveler-follow',
 ]);
 
-const CONTEXT_KINDS = new Set<ObservationKind>([
-  'institution-exterior', 'infrastructure-scene', 'city-growth-timelapse',
-  'historian-context', 'landscape-pause',
-]);
-
-const RELEASE_KINDS = new Set<ObservationKind>([
-  'regional-travel', 'landscape-pause', 'aftermath-pullback', 'historian-context',
+const DETAIL_KINDS = new Set<ObservationKind>([
+  'worker-follow', 'discovery-scene',
 ]);
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -42,69 +47,90 @@ function distance(a: ObservationCandidate, b: ObservationCandidate): number {
   return Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
 }
 
-function roleFor(kind: ObservationKind): CinematicBeatRole {
-  if (PERSONAL_KINDS.has(kind)) return 'detail';
-  if (RELEASE_KINDS.has(kind)) return 'release';
-  if (CONTEXT_KINDS.has(kind)) return 'context';
-  if (WIDE_KINDS.has(kind)) return kind === 'settlement-approach' ? 'approach' : 'establish';
-  return 'context';
+export function documentaryShotScaleFor(kind: ObservationKind): DocumentaryShotScale {
+  if (DETAIL_KINDS.has(kind)) return 'detail';
+  if (HUMAN_KINDS.has(kind)) return 'human';
+  if (MEDIUM_KINDS.has(kind)) return 'medium';
+  return 'wide';
 }
 
-function kindContrast(previous: ObservationKind | undefined, next: ObservationKind): number {
-  if (!previous) return 0.5;
-  const previousPersonal = PERSONAL_KINDS.has(previous);
-  const nextPersonal = PERSONAL_KINDS.has(next);
-  const previousWide = WIDE_KINDS.has(previous);
-  const nextWide = WIDE_KINDS.has(next);
-  if (previousPersonal !== nextPersonal) return 1;
-  if (previousWide !== nextWide) return 0.82;
-  return previous === next ? 0.1 : 0.46;
+function roleFor(kind: ObservationKind): CinematicBeatRole {
+  if (kind === 'settlement-approach' || kind === 'regional-travel') return 'approach';
+  if (kind === 'street-observation' || kind === 'traveler-follow') return 'observe';
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 'detail';
+  if (kind === 'institution-exterior' || kind === 'infrastructure-scene' || kind === 'atomic-threshold'
+    || kind === 'city-growth-timelapse') return 'reveal';
+  if (kind === 'aftermath-pullback' || kind === 'landscape-pause' || kind === 'night-transition'
+    || kind === 'civilization-ending') return 'release';
+  return 'establish';
 }
 
 function rolePreference(role: CinematicBeatRole, kind: ObservationKind): number {
+  const scale = documentaryShotScaleFor(kind);
   switch (role) {
     case 'establish':
-      return WIDE_KINDS.has(kind) ? 1 : CONTEXT_KINDS.has(kind) ? 0.58 : 0.16;
+      return scale === 'wide' ? 1 : scale === 'medium' ? 0.5 : 0.12;
     case 'approach':
-      return kind === 'settlement-approach' ? 1
-        : kind === 'institution-exterior' || kind === 'infrastructure-scene' ? 0.78
-          : PERSONAL_KINDS.has(kind) ? 0.45 : 0.22;
+      return kind === 'settlement-approach' || kind === 'regional-travel' ? 1
+        : scale === 'medium' ? 0.82 : scale === 'human' ? 0.48 : 0.2;
+    case 'observe':
+      return kind === 'street-observation' || kind === 'traveler-follow' ? 1
+        : scale === 'detail' ? 0.76 : scale === 'medium' ? 0.42 : 0.12;
     case 'detail':
-      return PERSONAL_KINDS.has(kind) ? 1
-        : kind === 'institution-exterior' || kind === 'infrastructure-scene' ? 0.48 : 0.12;
-    case 'context':
-      return CONTEXT_KINDS.has(kind) ? 1
-        : WIDE_KINDS.has(kind) ? 0.56 : 0.28;
+      return scale === 'detail' ? 1 : scale === 'human' ? 0.62 : scale === 'medium' ? 0.3 : 0.08;
+    case 'reveal':
+      return kind === 'institution-exterior' || kind === 'infrastructure-scene'
+        || kind === 'atomic-threshold' || kind === 'city-growth-timelapse' ? 1
+        : scale === 'medium' ? 0.72 : scale === 'wide' ? 0.5 : 0.22;
     case 'release':
-      return RELEASE_KINDS.has(kind) ? 1
-        : WIDE_KINDS.has(kind) ? 0.68 : 0.18;
+      return kind === 'aftermath-pullback' || kind === 'landscape-pause' || kind === 'night-transition'
+        || kind === 'civilization-ending' ? 1 : scale === 'wide' ? 0.78 : 0.15;
   }
 }
 
-function targetRoles(anchor: ObservationCandidate): readonly CinematicBeatRole[] {
-  if (anchor.event?.type === 'battle' || anchor.kind === 'battle-overview') {
-    return ['establish', 'detail', 'context', 'release'];
+function scaleContrast(previous: DocumentaryShotScale | undefined, next: DocumentaryShotScale): number {
+  if (!previous) return 0.55;
+  if (previous === next) return 0.06;
+  const order: Record<DocumentaryShotScale, number> = { wide: 0, medium: 1, human: 2, detail: 3 };
+  const delta = Math.abs(order[previous] - order[next]);
+  return delta >= 2 ? 1 : 0.66;
+}
+
+function canonicalRoles(anchor: ObservationCandidate): readonly CinematicBeatRole[] {
+  if (anchor.kind === 'civilization-ending' || anchor.kind === 'aftermath-pullback') {
+    return ['establish', 'observe', 'detail', 'reveal', 'release'];
   }
-  if (PERSONAL_KINDS.has(anchor.kind)) {
-    return ['approach', 'detail', 'context', 'release'];
+  if (anchor.kind === 'orbital-establishing') {
+    return ['establish', 'approach', 'reveal', 'release'];
   }
-  if (anchor.kind === 'settlement-approach' || anchor.kind === 'institution-exterior' || anchor.kind === 'infrastructure-scene') {
-    return ['establish', 'approach', 'detail', 'release'];
-  }
-  return ['establish', 'approach', 'detail', 'context', 'release'];
+  return ['establish', 'approach', 'observe', 'detail', 'reveal', 'release'];
+}
+
+function threadIdFor(scene: ObservationCandidate): string {
+  return scene.editorial?.threadId ?? `subject:${scene.subjectId}`;
+}
+
+function narrationFor(scene: ObservationCandidate, role: CinematicBeatRole, isAnchor: boolean): boolean {
+  const mode = scene.editorial?.narration ?? 'selective';
+  if (mode === 'silent') return false;
+  if (mode === 'required') return role === 'observe' || role === 'detail' || role === 'reveal' || isAnchor;
+  if (role === 'establish' || role === 'approach' || role === 'release') return false;
+  if (scene.interest >= 0.78) return true;
+  return isAnchor && scene.score >= 0.72;
 }
 
 /**
  * Presentation-only multi-shot planner.
  *
- * The planner never creates facts or mutates simulation state. It only chooses an ordered subset
- * from already-grounded Historian candidates so the camera can tell a short visual story instead
- * of selecting every shot in isolation.
+ * The Historian decides why a grounded subject matters. This planner turns that intent into
+ * documentary grammar: establish -> approach -> observe -> detail -> reveal -> release. It keeps
+ * bounded editorial memory of subjects, scale, roles and threads so autonomous direction does not
+ * collapse into repeated aerials or mechanically revisit the same person.
  */
 export class CinematicSequencePlanner {
   private queue: CinematicPlannedShot[] = [];
   private sequenceCounter = 0;
-  private recentSceneIds: string[] = [];
+  private recent: EditorialMemoryEntry[] = [];
 
   clear(): void {
     this.queue = [];
@@ -116,7 +142,7 @@ export class CinematicSequencePlanner {
 
   takePlannedShot(): CinematicPlannedShot | undefined {
     const next = this.queue.shift();
-    if (next) this.remember(next.scene);
+    if (next) this.remember(next);
     return next;
   }
 
@@ -128,33 +154,53 @@ export class CinematicSequencePlanner {
   ): CinematicPlannedShot {
     this.queue = [];
     const sequenceId = `sequence:${state.month}:${this.sequenceCounter++}:${anchor.id}`;
-    const roles = targetRoles(anchor);
+    const roles = canonicalRoles(anchor);
     const selected: SequenceScoredCandidate[] = [];
     const usedIds = new Set<string>();
+    const anchorThread = threadIdFor(anchor);
+
+    const recentScale = this.recent[this.recent.length - 1]?.scale
+      ?? (previous ? documentaryShotScaleFor(previous.kind) : undefined);
 
     const chooseForRole = (role: CinematicBeatRole, prior: ObservationCandidate | undefined): ObservationCandidate | undefined => {
       let best: SequenceScoredCandidate | undefined;
+      const previousScale = prior ? documentaryShotScaleFor(prior.kind) : recentScale;
       for (const scene of candidates) {
         if (usedIds.has(scene.id)) continue;
-        if (this.recentSceneIds.includes(scene.id) && scene.id !== anchor.id) continue;
+        const recentIndex = this.recent.findIndex(entry => entry.sceneId === scene.id);
+        if (recentIndex >= 0 && scene.id !== anchor.id) continue;
 
         const geographicDistance = prior ? distance(prior, scene) : previous ? distance(previous, scene) : 0;
         const travelScore = 1 - clamp01(geographicDistance / Math.max(18, state.world.size * 0.72));
         const anchorDistance = distance(anchor, scene);
-        const locality = 1 - clamp01(anchorDistance / Math.max(14, state.world.size * 0.55));
-        const continuity = scene.subjectId === anchor.subjectId ? 1
-          : scene.position && anchor.position ? locality : 0.4;
-        const contrast = kindContrast(prior?.kind ?? previous?.kind, scene.kind);
+        const locality = 1 - clamp01(anchorDistance / Math.max(14, state.world.size * 0.5));
+        const sceneThread = threadIdFor(scene);
+        const sameThread = sceneThread === anchorThread;
+        const threadContinuity = sameThread ? 1 : locality * 0.58;
+        const scale = scene.editorial?.preferredScale ?? documentaryShotScaleFor(scene.kind);
+        const contrast = scaleContrast(previousScale, scale);
         const roleFit = rolePreference(role, scene.kind);
-        const narrative = clamp01(scene.score * 0.68 + scene.interest * 0.32);
-        const anchorBonus = scene.id === anchor.id ? 0.26 : 0;
-        const eventCoherence = anchor.event && scene.event?.id === anchor.event.id ? 0.18 : 0;
-        const repetitionPenalty = this.recentSceneIds.includes(scene.id) ? 0.35 : 0;
-        const score = roleFit * 0.34
-          + narrative * 0.23
-          + continuity * 0.17
-          + travelScore * 0.12
+        const activityMeaning = clamp01(scene.editorial?.activityMeaning ?? 0.25);
+        const narrative = clamp01(scene.score * 0.58 + scene.interest * 0.24 + activityMeaning * 0.18);
+        const anchorBonus = scene.id === anchor.id
+          ? role === roleFor(anchor.kind) ? 0.34 : 0.04
+          : 0;
+        const eventCoherence = anchor.event && scene.event?.id === anchor.event.id ? 0.2 : 0;
+
+        const subjectSeen = this.recent.filter(entry => entry.subjectId === scene.subjectId).length;
+        const scaleSeen = this.recent.slice(-3).filter(entry => entry.scale === scale).length;
+        const wideStreak = scale === 'wide'
+          ? this.recent.slice(-2).filter(entry => entry.scale === 'wide').length
+          : 0;
+        const roleSeen = this.recent.slice(-4).filter(entry => entry.role === role).length;
+        const repetitionPenalty = subjectSeen * 0.16 + scaleSeen * 0.08 + wideStreak * 0.16 + roleSeen * 0.035;
+
+        const score = roleFit * 0.3
+          + narrative * 0.25
+          + threadContinuity * 0.2
+          + travelScore * 0.1
           + contrast * 0.08
+          + locality * 0.07
           + anchorBonus
           + eventCoherence
           - repetitionPenalty;
@@ -179,8 +225,10 @@ export class CinematicSequencePlanner {
     }
 
     if (!usedIds.has(anchor.id)) {
-      const insertAt = Math.min(2, selected.length);
-      selected.splice(insertAt, 0, { scene: anchor, role: roleFor(anchor.kind), score: 0 });
+      const desiredRole = roleFor(anchor.kind);
+      const replaceAt = Math.max(0, selected.findIndex(item => item.role === desiredRole));
+      if (selected.length === 0) selected.push({ scene: anchor, role: desiredRole, score: 0 });
+      else selected[Math.min(replaceAt, selected.length - 1)] = { scene: anchor, role: desiredRole, score: 0 };
     }
 
     const compact: SequenceScoredCandidate[] = [];
@@ -188,13 +236,16 @@ export class CinematicSequencePlanner {
       const previousItem = compact[compact.length - 1];
       if (previousItem?.scene.id === item.scene.id) continue;
       compact.push(item);
-      if (compact.length >= 5) break;
+      if (compact.length >= 6) break;
     }
 
     const total = compact.length;
     const planned = compact.map((item, index): CinematicPlannedShot => ({
       scene: item.scene,
       role: item.role,
+      scale: item.scene.editorial?.preferredScale ?? documentaryShotScaleFor(item.scene.kind),
+      narrate: narrationFor(item.scene, item.role, item.scene.id === anchor.id),
+      threadId: threadIdFor(item.scene),
       sequenceId,
       ordinal: index,
       total,
@@ -203,12 +254,15 @@ export class CinematicSequencePlanner {
     const first = planned.shift() ?? {
       scene: anchor,
       role: roleFor(anchor.kind),
+      scale: anchor.editorial?.preferredScale ?? documentaryShotScaleFor(anchor.kind),
+      narrate: narrationFor(anchor, roleFor(anchor.kind), true),
+      threadId: anchorThread,
       sequenceId,
       ordinal: 0,
       total: 1,
     };
     this.queue = planned;
-    this.remember(first.scene);
+    this.remember(first);
     return first;
   }
 
@@ -216,8 +270,19 @@ export class CinematicSequencePlanner {
     this.queue = [];
   }
 
-  private remember(scene: ObservationCandidate): void {
-    this.recentSceneIds.push(scene.id);
-    if (this.recentSceneIds.length > 10) this.recentSceneIds.splice(0, this.recentSceneIds.length - 10);
+  recentEditorialMemory(): readonly EditorialMemoryEntry[] {
+    return this.recent;
+  }
+
+  private remember(shot: CinematicPlannedShot): void {
+    this.recent.push({
+      sceneId: shot.scene.id,
+      subjectId: shot.scene.subjectId,
+      kind: shot.scene.kind,
+      role: shot.role,
+      scale: shot.scale,
+      threadId: shot.threadId,
+    });
+    if (this.recent.length > 18) this.recent.splice(0, this.recent.length - 18);
   }
 }
