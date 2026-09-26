@@ -550,6 +550,22 @@ export class GodboxRenderer {
     return performance.now() - startedAt;
   }
 
+  /**
+   * Renders the authoritative opening pose without advancing observer time, Arrival time, human
+   * clocks, maintenance cadence, or simulation state. Used only behind the opening overlay so the
+   * first visible cinematic frame is already fully composed.
+   */
+  settleOpeningFrame(): void {
+    this.cameraDirector.update(0, 0, this.state, (x, z) => this.elevationAt(x, z));
+    this.skyAtmosphere.followCamera(this.camera);
+    this.foundingPods.update(this.camera);
+    this.waterSystem.update(0);
+    this.skyAtmosphere.update(0, 0);
+    this.vegetation.updateLeaves(0);
+    this.weatherRenderer.update(0, 0, this.camera);
+    this.postProcessing.render(this.ecology.night.value);
+  }
+
   setAutonomousCamera(enabled: boolean): void {
     setAutonomousCameraMode(this.manualCamera, this.cameraDirector, enabled);
   }
