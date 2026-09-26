@@ -603,6 +603,31 @@ function waterKindAt(world: WorldState, index: number): number {
   return WATER_FLOOD;
 }
 
+/** A mapped waterfall is the only place where neighbouring river samples are allowed to
+ * become separate surfaces. Ordinary downhill channel samples must stay connected; treating a
+ * large but continuous grade as a discontinuity produces the floating water shelves seen from
+ * low documentary camera angles. */
+function touchesMappedWaterfall(world: WorldState, index: number): boolean {
+  const { terrain } = world;
+  if (!terrain.river[index]) return false;
+  if ((terrain.fall[index] ?? 0) >= 0.22) return true;
+  const downstream = terrain.drainage?.downstream;
+  if (!downstream) return false;
+  const x = index % terrain.resolution;
+  const z = Math.floor(index / terrain.resolution);
+  for (let dz = -1; dz <= 1; dz += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = x + dx;
+      const nz = z + dz;
+      if (nx < 0 || nz < 0 || nx >= terrain.resolution || nz >= terrain.resolution) continue;
+      const neighbour = nz * terrain.resolution + nx;
+      if ((terrain.fall[neighbour] ?? 0) >= 0.22 && downstream[neighbour] === index) return true;
+    }
+  }
+  return false;
+}
+
 /** Wet-only interpolation removes terraced puddles without allowing a dry sample to become water. */
 function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fallbackIndex: number): number {
   const { terrain, seaLevel } = world;
@@ -627,9 +652,11 @@ function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fall
   for (const [index, influence] of samples) {
     const level = terrain.waterLevel[index] ?? -1;
     if (level < 0 || influence <= 0) continue;
-    // Opposite sides of a fall are separate surfaces, never a stretched ramp or a spike.
-    // The mapped waterfall sheet supplies the vertical connection.
-    if (Math.abs(elevationToY(level, seaLevel) - localY) > 0.32) continue;
+    // Do not infer a waterfall from height difference alone. Only a large jump touching an
+    // explicit hydrology fall is separated; ordinary descending reaches remain one surface.
+    const separatedByMappedFall = Math.abs(elevationToY(level, seaLevel) - localY) > 0.32
+      && (touchesMappedWaterfall(world, fallbackIndex) || touchesMappedWaterfall(world, index));
+    if (separatedByMappedFall) continue;
     weighted += level * influence;
     weight += influence;
   }

@@ -46,20 +46,57 @@ describe('water fits the rendered earth', () => {
     water.geometry.dispose();
   });
 
-  it('does not bridge a waterfall with a sloping crystalline surface or deleted faces', () => {
+  it('does not bridge an explicitly mapped waterfall with a sloping crystalline surface or deleted faces', () => {
     const world = fixture();
     const field = world.terrain;
+    const split = Math.floor(field.resolution / 2);
+    field.lake.fill(0);
+    field.river.fill(1);
+    field.fall.fill(0);
     for (let i = 0; i < field.height.length; i++) {
-      if (i % field.resolution < Math.floor(field.resolution / 2)) field.waterLevel[i] = world.seaLevel + 0.3;
+      if (i % field.resolution < split) field.waterLevel[i] = world.seaLevel + 0.3;
+    }
+    if (field.drainage) {
+      for (let z = 0; z < field.resolution; z++) {
+        const upstream = z * field.resolution + split - 1;
+        const downstream = upstream + 1;
+        field.drainage.downstream[upstream] = downstream;
+        field.fall[upstream] = 1;
+      }
     }
     const water = buildInlandWater(world)!;
     const p = water.geometry.getAttribute('position');
-    // Both pools remain horizontal right to their lips, with complete coverage.
+    // Both pools remain horizontal right to their lips, with complete coverage. The mapped
+    // waterfall sheet, not a stretched inland-water triangle, owns the vertical connection.
     expect(p.count).toBe(field.height.length * 24);
     for (let i = 0; i < p.count; i += 3) {
       expect(p.getY(i)).toBe(p.getY(i + 1));
       expect(p.getY(i)).toBe(p.getY(i + 2));
     }
+    water.geometry.dispose();
+  });
+
+  it('keeps an ordinary descending reach connected instead of splitting it into floating shelves', () => {
+    const world = fixture();
+    const field = world.terrain;
+    const split = Math.floor(field.resolution / 2);
+    field.lake.fill(0);
+    field.river.fill(1);
+    field.fall.fill(0);
+    for (let i = 0; i < field.height.length; i++) {
+      field.waterLevel[i] = i % field.resolution < split ? world.seaLevel + 0.16 : world.seaLevel + 0.13;
+    }
+
+    const water = buildInlandWater(world)!;
+    const p = water.geometry.getAttribute('position');
+    const boundaryX = field.originX + (split - 0.5) * field.step;
+    const boundaryY: number[] = [];
+    for (let i = 0; i < p.count; i++) {
+      if (Math.abs(p.getX(i) - boundaryX) < 1e-5) boundaryY.push(p.getY(i));
+    }
+
+    expect(boundaryY.length).toBeGreaterThan(0);
+    expect(Math.max(...boundaryY) - Math.min(...boundaryY)).toBeLessThan(0.0002);
     water.geometry.dispose();
   });
 });
