@@ -47,11 +47,6 @@ const DETAIL_KINDS = new Set<ObservationKind>([
   'worker-follow', 'discovery-scene',
 ]);
 
-const PERSONAL_KINDS = new Set<ObservationKind>([
-  ...HUMAN_KINDS,
-  ...DETAIL_KINDS,
-]);
-
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 function distance(a: ObservationCandidate, b: ObservationCandidate): number {
