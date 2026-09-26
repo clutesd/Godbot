@@ -208,7 +208,12 @@ describe('documentary editorial judgment', () => {
   });
 
   it('keeps consecutive documentary attention in a community thread when that deepens the story', () => {
-    const sim = new Simulation({ seed: 'documentary-thread', startMode: 'established', startingPopulation: 120 });
+    const sim = new Simulation({
+      seed: 'documentary-thread',
+      startMode: 'established',
+      startingPopulation: 120,
+      settlementCount: [1, 1],
+    });
     sim.state.history = [];
     const historian = new Historian(sim.config);
     const scenes = Array.from({ length: 10 }, () => historian.chooseScene(sim.state));
