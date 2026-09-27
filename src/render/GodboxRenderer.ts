@@ -20,6 +20,7 @@ import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
+import { isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
@@ -963,6 +964,7 @@ export class GodboxRenderer {
         localRevision = activityStructureSignature(structures);
         this.localStructureRevisions.set(structures, localRevision);
       }
+      const foundingCommunityRoutine = isFoundingCommunityDestinationId(person.navigation?.destinationId);
       const local = this.localActivities.resolve(person, {
         base, visual: this.peopleVisuals.get(person.id), group, people: this.localPeers,
         relationshipFor: (a, b) => this.socialRelationshipByPair.get(socialPairKey(a, b)),
@@ -1019,7 +1021,8 @@ export class GodboxRenderer {
         visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
           : firstFireStanding ? firstFire!.animation
             : interruption || unsupportedWork || physical ? 'idle'
-              : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
+              : foundingCommunityRoutine && ['assist', 'craft'].includes(person.activity) ? 'work'
+                : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
         visual.speed, person.ageMonths, loaded || person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? ''), person.traits.sociability);
       let pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
       const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
