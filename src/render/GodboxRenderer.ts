@@ -3341,11 +3341,68 @@ export class GodboxRenderer {
     }
   }
 
+  /**
+   * Apply the one-time founding ceremony to the canonical banner mesh. The mast rotates about its
+   * planted foot, travels from the landed supply yard, and the cloth only exists as a folded bundle
+   * until a founder actually unfurls it.
+   */
+  private applyFoundingStandardVisual(group: THREE.Group, settlement: Settlement): void {
+    const standard = group.userData['foundingStandardGroup'];
+    const mastRig = group.userData['foundingStandardMastRig'];
+    const clothRig = group.userData['bannerClothRig'];
+    const bundle = group.userData['foundingStandardBundle'];
+    const footing = group.userData['foundingStandardFooting'];
+    if (!(standard instanceof THREE.Group) || !(mastRig instanceof THREE.Group) || !(clothRig instanceof THREE.Group)) return;
+
+    const sample = this.foundingStandardPresentation.sample(settlement.id, this.reducedMotion.matches);
+    const finalX = Number(group.userData['foundingStandardFinalX'] ?? standard.position.x);
+    const finalY = Number(group.userData['foundingStandardFinalY'] ?? standard.position.y);
+    const finalZ = Number(group.userData['foundingStandardFinalZ'] ?? standard.position.z);
+    const finalYaw = Number(group.userData['foundingStandardFinalYaw'] ?? standard.rotation.y);
+    const supply = foundingCommunitySupplyAnchor(settlement, this.state);
+    const sourceX = supply.x - settlement.position.x;
+    const sourceZ = supply.z - settlement.position.z;
+    const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
+    const sourceY = this.elevationAt(supply.x, supply.z) - settlementY;
+
+    const transfer = sample.established ? 1 : sample.transferProgress;
+    standard.position.set(
+      THREE.MathUtils.lerp(sourceX, finalX, transfer),
+      THREE.MathUtils.lerp(sourceY, finalY, transfer),
+      THREE.MathUtils.lerp(sourceZ, finalZ, transfer),
+    );
+
+    const dx = finalX - sourceX;
+    const dz = finalZ - sourceZ;
+    const routeYaw = Math.hypot(dx, dz) > 0.05 ? Math.atan2(-dz, dx) : finalYaw;
+    const yawBlend = sample.established || ['secure', 'unfurl', 'acknowledge', 'complete'].includes(sample.phase)
+      ? 1
+      : sample.phase === 'raise' ? sample.phaseProgress : 0;
+    const yawDelta = Math.atan2(Math.sin(finalYaw - routeYaw), Math.cos(finalYaw - routeYaw));
+    standard.rotation.y = routeYaw + yawDelta * yawBlend;
+
+    mastRig.rotation.z = sample.established ? 0 : sample.polePitch;
+    mastRig.position.y = sample.phase === 'carry-pole' ? 0.42
+      : sample.phase === 'attach-cloth' ? 0.12
+        : sample.phase === 'prepare-base' ? 0.34 : 0;
+
+    const unfurl = sample.established ? 1 : sample.clothUnfurl;
+    clothRig.visible = unfurl > 0.005;
+    clothRig.scale.set(1, Math.max(0.001, unfurl), 1);
+    if (bundle instanceof THREE.Mesh) bundle.visible = !sample.established && sample.bundleVisible && unfurl < 0.88;
+    if (footing instanceof THREE.Group) {
+      const prepared = sample.phase === 'prepare-base' ? 0.35 + sample.phaseProgress * 0.65 : 1;
+      footing.scale.setScalar(sample.established ? 1 : prepared);
+    }
+  }
+
   /** Cheap, restrained wind motion; reduced-motion users get the sculpted resting shape only. */
   private updateSettlementBanners(elapsedSeconds: number): void {
-    for (const visual of this.settlementVisuals.values()) {
+    for (const [settlementId, visual] of this.settlementVisuals) {
+      const settlement = this.state.settlements.find(candidate => candidate.id === settlementId);
+      if (settlement?.foundingPodId) this.applyFoundingStandardVisual(visual.group, settlement);
       const rig = visual.group.userData['bannerClothRig'];
-      if (!(rig instanceof THREE.Group)) continue;
+      if (!(rig instanceof THREE.Group) || !rig.visible) continue;
       if (this.reducedMotion.matches) {
         rig.rotation.y = 0;
         rig.rotation.z = 0;
