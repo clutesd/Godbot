@@ -325,7 +325,10 @@ export class FoundingPodRenderer {
     for (const v of this.visuals) {
       const p = podPosition(v.pod, t);
       const age = t - podTouchdown(v.pod);
-      v.hull.visible = t >= Math.max(1, v.pod.entrySeconds - 5);
+      // A vessel does not exist on screen before its authored entry. Its entry position is
+      // deliberately outside the opening composition, so becoming visible here produces a real
+      // edge-of-frame ingress rather than a pod materializing over the landscape.
+      v.hull.visible = t >= v.pod.entrySeconds;
       v.hull.position.set(p.x, p.y, p.z);
       const settling = age >= 0 ? Math.exp(-age * 4) : 0;
       v.hull.rotation.z = age < 0 ? (1 - Math.min(1, (t - v.pod.entrySeconds) / v.pod.descentSeconds)) * 0.18 : Math.sin(age * 31) * settling * 0.015;
