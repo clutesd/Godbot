@@ -1055,6 +1055,14 @@ export class GodboxRenderer {
         && Math.hypot(visual.x - firstFire.x, visual.z - firstFire.z) < 0.08);
       const standardStanding = Boolean(foundingStandard && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
         && Math.hypot(visual.x - foundingStandard.x, visual.z - foundingStandard.z) < 0.09);
+      if (settlement && foundingStandard) {
+        this.foundingStandardPresentation.reportParticipantReady(
+          settlement.id,
+          person.id,
+          foundingStandard.phase,
+          standardStanding,
+        );
+      }
       const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
         visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
