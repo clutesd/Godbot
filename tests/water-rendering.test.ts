@@ -54,7 +54,7 @@ function shaderStub() {
   return {
     uniforms: {} as Record<string, { value: unknown }>,
     vertexShader: '#include <common>\n#include <begin_vertex>',
-    fragmentShader: '#include <common>\n#include <color_fragment>\n#include <roughnessmap_fragment>',
+    fragmentShader: '#include <common>\n#include <color_fragment>\n#include <normal_fragment_begin>\n#include <roughnessmap_fragment>',
   };
 }
 
@@ -204,12 +204,18 @@ describe('Water rendering foundation', () => {
     }
     expect(shared).toBeGreaterThan(0);
     const normals = water.geometry.getAttribute('normal');
+    const normalByPosition = new Map<string, [number, number, number]>();
     for (let index = 0; index < normals.count; index += 1) {
-      expect(normals.getX(index)).toBe(0);
-      expect(normals.getY(index)).toBe(1);
-      expect(normals.getZ(index)).toBe(0);
+      expect(normals.getY(index)).toBeGreaterThan(0.95);
+      const key = `${positions.getX(index).toFixed(4)}:${positions.getY(index).toFixed(4)}:${positions.getZ(index).toFixed(4)}`;
+      const value: [number, number, number] = [normals.getX(index), normals.getY(index), normals.getZ(index)];
+      const earlier = normalByPosition.get(key);
+      if (earlier) {
+        expect(Math.abs(earlier[0] - value[0])).toBeLessThan(1e-5);
+        expect(Math.abs(earlier[1] - value[1])).toBeLessThan(1e-5);
+        expect(Math.abs(earlier[2] - value[2])).toBeLessThan(1e-5);
+      } else normalByPosition.set(key, value);
     }
-    expect(Number(water.geometry.userData['stabilizedWaterTriangles'] ?? 0)).toBeGreaterThanOrEqual(0);
     water.geometry.dispose();
     (water.material as THREE.Material).dispose();
   });
