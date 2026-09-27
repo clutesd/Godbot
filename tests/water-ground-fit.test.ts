@@ -27,7 +27,7 @@ describe('water fits the rendered earth', () => {
     const water = buildInlandWater(world)!;
     const p = water.geometry.getAttribute('position');
     const ground = renderedGroundSampler(world);
-    const level = elevationToY(field.waterLevel[0]!, world.seaLevel) + 0.002;
+    const level = elevationToY(field.waterLevel[0]!, world.seaLevel);
     for (let i = 0; i < p.count; i += 3) {
       const area = Math.abs((p.getX(i + 1) - p.getX(i)) * (p.getZ(i + 2) - p.getZ(i))
         - (p.getZ(i + 1) - p.getZ(i)) * (p.getX(i + 2) - p.getX(i)));
@@ -40,7 +40,7 @@ describe('water fits the rendered earth', () => {
           z += p.getZ(i + j) * weights[j]!;
         }
         expect(y).toBeCloseTo(level, 5);
-        expect(y - ground(x, z)).toBeGreaterThan(-0.00001);
+        expect(y - ground(x, z)).toBeGreaterThan(0.0038);
       }
     }
     water.geometry.dispose();
