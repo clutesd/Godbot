@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import { survivalState } from '../src/sim/pressures/Survival';
+import { AnimationController } from '../src/render/animation/AnimationController';
 import {
   FIRST_FIRE_DURATION_SECONDS,
   FoundingFirstFirePresentation,
@@ -136,6 +137,20 @@ describe('founding first-fire presentation', () => {
     expect(prepareAt).toBeLessThan(strikeAt);
     expect(strikeAt).toBeLessThan(falterAt);
     expect(falterAt).toBeLessThan(catchAt);
+  });
+
+  it('gives the tender a dedicated low ignition pose instead of generic gathering', () => {
+    const controller = new AnimationController('first-fire-ignite-pose');
+    controller.getOrCreateCharacterState('tender', 'builder');
+    for (let frame = 0; frame < 40; frame += 1) {
+      controller.updateCharacterAnimation('tender', 1 / 60, 'gather', 'ignite', 0, 360);
+    }
+    const pose = controller.getCurrentPose('tender');
+    expect(pose).not.toBeNull();
+    expect(pose!.leftKneeRotation).toBeGreaterThan(0.7);
+    expect(pose!.rightKneeRotation).toBeGreaterThan(0.7);
+    expect(pose!.spineRotation).toBeGreaterThan(0.25);
+    expect(pose!.headPitch ?? 0).toBeGreaterThan(0.15);
   });
 
   it('uses one deterministic placement timeline with three builders and no material teleportation', () => {
