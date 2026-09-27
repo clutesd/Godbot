@@ -45,6 +45,7 @@ export interface FoundingArrivalState {
   minimumSeparation: number;
 }
 export const ARRIVAL_END_SECONDS = 38;
+const FOUNDING_ENTRY_ALTITUDE = 68;
 
 export function isArrivalFilmPhase(phase: ArrivalPhase | undefined): boolean {
   return phase === 'PRISTINE_WORLD' || phase === 'ARRIVAL_SEQUENCE' || phase === 'FOUNDERS_LANDED';
@@ -129,7 +130,7 @@ export function podPosition(pod: FoundingPod, seconds: number): { x: number; y: 
   const remaining = (1 - t) ** 2;
   return { x: pod.position.x + pod.entryOffset.x * remaining * (1 - t),
     z: pod.position.z + pod.entryOffset.z * remaining,
-    y: pod.groundY + 1.1 + 48 * remaining };
+    y: pod.groundY + 1.1 + FOUNDING_ENTRY_ALTITUDE * remaining };
 }
 
 /** Wall-clock director with monotonic transitions. The simulation owns all mutations. */
