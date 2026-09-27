@@ -147,8 +147,8 @@ export class FoundingStandardPresentation {
       const established = this.established.has(settlementId);
       return established ? settledSample() : hiddenSample();
     }
-    const age = this.nowSeconds - ceremony.startedAt;
-    if (age < 0) return hiddenSample();
+    if (this.nowSeconds < ceremony.startedAt) return hiddenSample();
+    const age = ceremony.ageSeconds;
 
     if (age < PREPARE_END) {
       return activeSample('prepare-base', ease(age / PREPARE_END), 0, -Math.PI / 2, false, 0);
