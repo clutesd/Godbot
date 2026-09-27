@@ -975,6 +975,23 @@ function isFoundingOverlayScene(sceneId: string | undefined): boolean {
     || sceneId?.startsWith('founding-release:'));
 }
 
+/**
+ * The opening can finish through a normal release shot or through the route watchdog if that final
+ * composition is physically unreachable. Either way, once authority is crossing into live history
+ * no later transit is allowed to relabel the world as Arrival Day.
+ */
+export function foundingTransitIsHistoryHandoff(
+  foundingPresentationDone: boolean,
+  arrivalPhase: string | undefined,
+  acquiredSceneId: string | undefined,
+  nextSceneId: string | undefined,
+): boolean {
+  return !isFoundingOverlayScene(nextSceneId)
+    && (foundingPresentationDone
+      || arrivalPhase === 'HISTORY_RUNNING'
+      || Boolean(acquiredSceneId?.startsWith('founding-release:')));
+}
+
 export type ScenicFlightMotif = 'valley' | 'forest' | 'wildlife';
 
 export interface ScenicFlightProfile {
@@ -1380,6 +1397,7 @@ export class CameraDirector {
       this.positionVelocity.multiplyScalar(0.55);
       this.targetVelocity.multiplyScalar(0.55);
     }
+    this.ensureArrivalDayCannotOutliveTheOpening(state);
     // Once a destination has been selected, finish the physical flight before making another
     // editorial decision. Major events remain in Historian memory; they never teleport the lens.
     if (this.flight) {
@@ -1940,7 +1958,12 @@ export class CameraDirector {
       this.acquiredScene && this.acquiredScene.id !== scene.id && isFoundingOverlayScene(this.acquiredScene.id),
     );
     if (leavingFoundingOverlay) {
-      const historyHandoff = Boolean(this.acquiredScene?.id.startsWith('founding-release:') && !isFoundingOverlayScene(scene.id));
+      const historyHandoff = foundingTransitIsHistoryHandoff(
+        this.foundingPresentationDone,
+        state.arrival?.phase,
+        this.acquiredScene?.id,
+        scene.id,
+      );
       this.releaseFoundingOverlayForTransit(historyHandoff);
     }
     if (distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
@@ -2190,7 +2213,7 @@ export class CameraDirector {
     this.observation.audioCategory = 'settlement';
     if (historyHandoff) {
       this.observation.label = 'History begins';
-      this.observation.detail = 'The landings are over. The record now follows what becomes of them.';
+      this.observation.detail = 'The vessels are quiet now. The first communities are beginning to diverge.';
       delete this.observation.eventType;
       delete this.observation.eventMonth;
     } else {
@@ -2203,11 +2226,27 @@ export class CameraDirector {
     this.observation.revision += 1;
   }
 
+  private ensureArrivalDayCannotOutliveTheOpening(state: SimulationState): void {
+    if (state.arrival?.phase !== 'HISTORY_RUNNING' || state.month <= 0) return;
+    if (this.observation.sceneId !== undefined || this.observation.label !== 'Arrival Day') return;
+    this.observation.label = 'The first days';
+    this.observation.detail = 'The vessels are quiet now. The first communities are beginning to diverge.';
+    delete this.observation.eventType;
+    delete this.observation.eventMonth;
+    this.observation.narrationVisible = false;
+    this.observation.revision += 1;
+  }
+
   private abandonCurrentFlight(): void {
     // A camera route is presentation, never simulation authority. If a route cannot be completed
     // safely, keep the last valid physical frame and move on rather than trapping the documentary.
     // If the unreachable destination was the final release shot, the opening must still terminate.
-    if (this.currentScene?.id.startsWith('founding-release:')) this.foundingPresentationDone = true;
+    // Commit the semantic handoff immediately as well; otherwise the last internal "Arrival Day"
+    // transit label can survive beneath a clock that has already started moving.
+    if (this.currentScene?.id.startsWith('founding-release:')) {
+      this.foundingPresentationDone = true;
+      this.releaseFoundingOverlayForTransit(true);
+    }
     this.flight = undefined;
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
