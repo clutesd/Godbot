@@ -27,6 +27,8 @@ export interface FirstFireVisualSample {
   /** Retained for compatibility; the hearth is now assembled piece-by-piece rather than scaled in. */
   hearthScale: number;
   assemblyProgress: number;
+  stonesPicked: number;
+  logsPicked: number;
   stonesPlaced: number;
   logsPlaced: number;
   assemblyComplete: boolean;
@@ -136,6 +138,8 @@ export class FoundingFirstFirePresentation {
         phaseProgress: assembly.progress,
         hearthScale: assembly.stonesPlaced + assembly.logsPlaced > 0 ? 1 : 0,
         assemblyProgress: assembly.progress,
+        stonesPicked: assembly.stonesPicked,
+        logsPicked: assembly.logsPicked,
         stonesPlaced: assembly.stonesPlaced,
         logsPlaced: assembly.logsPlaced,
         assemblyComplete: false,
@@ -151,7 +155,8 @@ export class FoundingFirstFirePresentation {
       const p = ease(ignitionAge / 1.6);
       return {
         active: true, phase: 'kindle', phaseProgress: p,
-        hearthScale: 1, assemblyProgress: 1, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
+        hearthScale: 1, assemblyProgress: 1, stonesPicked: FOUNDING_HEARTH_STONE_COUNT,
+        logsPicked: FOUNDING_HEARTH_LOG_COUNT, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
         logsPlaced: FOUNDING_HEARTH_LOG_COUNT, assemblyComplete: true,
         flameScale: 0.035 + p * 0.19,
         emberScale: 0.18 + p * 0.72,
@@ -288,7 +293,8 @@ function selectParticipants(people: readonly Person[], settlementId: string, set
 function settledVisual(): FirstFireVisualSample {
   return {
     active: false, phase: 'complete', phaseProgress: 1,
-    hearthScale: 1, assemblyProgress: 1, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
+    hearthScale: 1, assemblyProgress: 1, stonesPicked: FOUNDING_HEARTH_STONE_COUNT,
+    logsPicked: FOUNDING_HEARTH_LOG_COUNT, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
     logsPlaced: FOUNDING_HEARTH_LOG_COUNT, assemblyComplete: true,
     flameScale: 1, emberScale: 1, lightGain: 1, smokeGain: 1,
   };
@@ -297,7 +303,8 @@ function settledVisual(): FirstFireVisualSample {
 function unlitVisual(): FirstFireVisualSample {
   return {
     active: false, phase: 'complete', phaseProgress: 0,
-    hearthScale: 0, assemblyProgress: 0, stonesPlaced: 0, logsPlaced: 0, assemblyComplete: false,
+    hearthScale: 0, assemblyProgress: 0, stonesPicked: 0, logsPicked: 0,
+    stonesPlaced: 0, logsPlaced: 0, assemblyComplete: false,
     flameScale: 0, emberScale: 0, lightGain: 0, smokeGain: 0,
   };
 }
