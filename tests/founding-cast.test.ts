@@ -83,10 +83,12 @@ describe('Founding documentary cast 2a', () => {
       expect(scene?.subjectId).toBe(member.personId);
       expect(scene?.title).toContain(member.name);
       expect(scene?.title).toContain(member.settlementName);
-      expect(scene?.statement.text).toContain(`${member.arrivalAgeYears} on Arrival Day`);
+      expect(scene?.statement.text).toContain(`At ${member.arrivalAgeYears},`);
+      expect(scene?.statement.text).toContain(`stepped out of ${member.podName}`);
       expect(scene?.statement.text).not.toContain(member.name);
+      expect(scene?.statement.text).not.toContain('strongest recorded skill');
       expect(scene?.statement.text).not.toContain('We will return to');
-      expect(scene?.statement.text.length).toBeLessThan(140);
+      expect(scene?.statement.text.length).toBeLessThan(170);
       expect(historian.validateStatement(scene!.statement, simulation.state)).toBe(true);
       introduced.push(scene!.subjectId);
     }
