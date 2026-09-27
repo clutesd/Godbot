@@ -1114,7 +1114,7 @@ export class GodboxRenderer {
           side ? pose?.rightElbowRotation ?? 0.12 : pose?.leftElbowRotation ?? 0.12,
           0.19, 0.18, true, (side ? 1 : -1) * 0.035);
         if (firstFireStanding && firstFire?.interactionTarget
-          && (firstFire.assemblyPhase === 'place' || firstFire.role === 'tender')) {
+          && (firstFire.assemblyPhase === 'pickup' || firstFire.assemblyPhase === 'place' || firstFire.role === 'tender')) {
           const contact = firstFire.interactionTarget;
           const dx = contact.x - display.x;
           const dz = contact.z - display.z;
@@ -1208,9 +1208,19 @@ export class GodboxRenderer {
 
       const cargoVisible = ['basket', 'ledger', 'bag'].includes(carried) || (person.activity === 'transport' && carried === 'none');
       if (firstFire?.carriedObject) {
+        let cargoX = this.personGripPosition.x;
+        let cargoY = this.personGripPosition.y;
+        let cargoZ = this.personGripPosition.z;
+        if (firstFire.assemblyPhase === 'place' && firstFire.interactionTarget) {
+          const placement = Math.max(0, Math.min(1, firstFire.phaseProgress));
+          const groundContactY = this.elevationAt(firstFire.interactionTarget.x, firstFire.interactionTarget.z)
+            + (firstFire.carriedObject === 'stone' ? 0.055 : 0.09);
+          cargoX = THREE.MathUtils.lerp(this.personGripPosition.x, firstFire.interactionTarget.x, placement);
+          cargoY = THREE.MathUtils.lerp(this.personGripPosition.y, groundContactY, placement);
+          cargoZ = THREE.MathUtils.lerp(this.personGripPosition.z, firstFire.interactionTarget.z, placement);
+        }
         this.peopleCargo.draw(firstFire.carriedObject === 'stone' ? 'masonry' : 'timber',
-          display.x + Math.sin(facing) * 0.11 * heightScale, footY + 0.43 * heightScale + poseLift,
-          display.z + Math.cos(facing) * 0.11 * heightScale, heightScale * 0.72, facing);
+          cargoX, cargoY, cargoZ, heightScale * 0.72, facing);
       } else if (cargoVisible && !articulated) this.peopleCargo.draw(carried === 'none' ? 'bag' : carried,
         display.x + Math.sin(facing) * 0.19 * heightScale, footY + 0.43 * heightScale + poseLift,
         display.z + Math.cos(facing) * 0.19 * heightScale, heightScale, facing);
