@@ -474,11 +474,13 @@ export class Historian {
       : candidate.kind === 'landscape-pause' || candidate.kind === 'night-transition' || candidate.kind === 'world-establishing'
         ? 'silent'
         : 'selective';
-    const completion: DocumentaryEditorialIntent['completion'] = person && preferredScale !== 'wide'
-      ? 'subject-action'
-      : preferredScale === 'medium'
-        ? 'settled'
-        : 'sequence-beat';
+    const completion: DocumentaryEditorialIntent['completion'] = event?.type === 'first-fire'
+      ? 'timed'
+      : person && preferredScale !== 'wide'
+        ? 'subject-action'
+        : preferredScale === 'medium'
+          ? 'settled'
+          : 'sequence-beat';
     const why = event
       ? event.type === 'first-fire'
         ? 'the camp is turning a recorded survival milestone into a visible human act'
