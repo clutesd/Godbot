@@ -62,6 +62,55 @@ export function stabilizeInlandWaterGeometry(geometry: THREE.BufferGeometry): nu
   return collapsed;
 }
 
+/**
+ * Inland water is deliberately non-indexed so shoreline clipping can be exact, but raw per-face
+ * normals would reveal every triangle at grazing angles. Average normals for vertices that occupy
+ * the same physical point, preserving real river/lake slope while removing tessellation facets.
+ */
+export function smoothInlandWaterNormals(geometry: THREE.BufferGeometry): void {
+  const position = geometry.getAttribute('position');
+  if (!position || position.itemSize < 3 || position.count % 3 !== 0) {
+    geometry.computeVertexNormals();
+    return;
+  }
+
+  const keyFor = (index: number): string =>
+    `${position.getX(index).toFixed(4)}:${position.getY(index).toFixed(4)}:${position.getZ(index).toFixed(4)}`;
+  const accumulated = new Map<string, THREE.Vector3>();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  const face = new THREE.Vector3();
+
+  for (let start = 0; start < position.count; start += 3) {
+    a.set(position.getX(start), position.getY(start), position.getZ(start));
+    b.set(position.getX(start + 1), position.getY(start + 1), position.getZ(start + 1));
+    c.set(position.getX(start + 2), position.getY(start + 2), position.getZ(start + 2));
+    ab.subVectors(b, a);
+    ac.subVectors(c, a);
+    face.crossVectors(ab, ac);
+    if (face.lengthSq() <= 1e-12) continue;
+    for (let offset = 0; offset < 3; offset += 1) {
+      const key = keyFor(start + offset);
+      const normal = accumulated.get(key);
+      if (normal) normal.add(face);
+      else accumulated.set(key, face.clone());
+    }
+  }
+
+  const normals = new Float32Array(position.count * 3);
+  const fallback = new THREE.Vector3(0, 1, 0);
+  for (let index = 0; index < position.count; index += 1) {
+    const normal = accumulated.get(keyFor(index))?.clone().normalize() ?? fallback;
+    normals[index * 3] = normal.x;
+    normals[index * 3 + 1] = normal.y;
+    normals[index * 3 + 2] = normal.z;
+  }
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+}
+
 /** Four vec4 bindings instead of fourteen individual attribute locations. Legacy named views
  * share this same buffer for hydrology inspection/tests, with no duplicated GPU storage. */
 export function packInlandAttributes(geometry: THREE.BufferGeometry): void {
