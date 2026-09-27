@@ -104,7 +104,7 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
   const logGeometry = new THREE.CylinderGeometry(0.048, 0.067, 0.76, 7);
   for (let index = 0; index < FOUNDING_HEARTH_LOG_COUNT; index += 1) {
     const pose = foundingHearthPiecePose(seed, 'log', index);
-    const log = new THREE.Mesh(logGeometry, index === 1 ? char : timber);
+    const log = new THREE.Mesh(logGeometry, timber);
     log.position.set(pose.x, 0.09 + index * 0.012, pose.z);
     log.rotation.z = Math.PI / 2;
     log.rotation.y = pose.yaw;
