@@ -2233,9 +2233,8 @@ export class GodboxRenderer {
       settlement,
       mode: 'contact-led',
     });
-    // ConstructionAssembly intentionally shares the source vertex attributes; keep the source
-    // geometries alive for the lifetime of this site even though the source group itself is not drawn.
-    site.userData['foundingShelterSource'] = fullShelter;
+    // ConstructionAssembly shares the source vertex attributes/materials; those references remain
+    // owned by the assembly meshes even though the source group itself is never added to the scene.
     return site;
   }
 
