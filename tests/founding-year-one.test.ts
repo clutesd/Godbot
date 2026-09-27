@@ -36,7 +36,7 @@ function completeOpening(simulation: Simulation, historian: Historian): void {
     expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
   }
   expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
-  expect(chooseFoundingContinuityScene(historian, simulation.state)?.title).toBe('THE FIRST SEASONS');
+  expect(chooseFoundingContinuityScene(historian, simulation.state)?.title).toBe('THE FIRST DAYS');
   for (const community of baseline.communities) {
     simulation.step(2);
     expect(chooseFoundingContinuityScene(historian, simulation.state)?.subjectId).toBe(community.settlementId);

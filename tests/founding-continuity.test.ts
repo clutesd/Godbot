@@ -50,10 +50,24 @@ describe('Founding Chapter 1b continuity', () => {
 
     const bridge = chooseFoundingContinuityScene(historian, simulation.state);
     expect(bridge?.id).toContain('founding-continuity:bridge');
-    expect(bridge?.title).toBe('THE FIRST SEASONS');
-    expect(bridge?.statement.text).toContain('change can be measured against what each landing began with');
+    expect(bridge?.title).toBe('THE FIRST DAYS');
+    expect(bridge?.statement.text).toContain('The vessels are quiet now.');
+    expect(bridge?.statement.text).toContain('every decision begins to separate their futures');
     expect(bridge && historian.validateStatement(bridge.statement, simulation.state)).toBe(true);
     expect(foundingContinuityProgress(historian, simulation.state).bridgeShown).toBe(true);
+  });
+
+  it('still shows the first-days bridge when the browser commits Month 1 before asking for the next scene', () => {
+    const simulation = completedArrival('founding-continuity-live-handoff');
+    const historian = new Historian(simulation.config);
+    completeOrientation(simulation, historian);
+    simulation.step(1);
+
+    const bridge = chooseFoundingContinuityScene(historian, simulation.state);
+    expect(simulation.state.month).toBe(1);
+    expect(bridge?.id).toContain('founding-continuity:bridge');
+    expect(bridge?.title).toBe('THE FIRST DAYS');
+    expect(bridge?.statement.text).toContain('The vessels are quiet now.');
   });
 
   it('revisits every founding community in stable founding order with grounded then-vs-now facts', () => {
@@ -71,7 +85,8 @@ describe('Founding Chapter 1b continuity', () => {
       expect(scene).toBeDefined();
       if (scene) scenes.push(scene);
       expect(scene?.subjectId).toBe(community.settlementId);
-      expect(scene?.statement.text).toContain('after Arrival Day');
+      expect(scene?.statement.text).not.toContain('after Arrival Day');
+      expect(scene?.statement.text).toMatch(/In the first season|By month/);
       expect(scene?.statement.text).toContain(community.settlementName);
       expect(scene?.statement.claims.population?.scopeEntityId).toBe(community.settlementId);
       expect(scene && historian.validateStatement(scene.statement, simulation.state)).toBe(true);

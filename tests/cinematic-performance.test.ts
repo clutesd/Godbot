@@ -2,11 +2,33 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { PerspectiveCamera, Vector3 } from 'three';
 import { AdaptiveResolution } from '../src/render/AdaptiveResolution';
-import { CameraDirector } from '../src/render/CameraDirector';
+import { CameraDirector, foundingTransitIsHistoryHandoff } from '../src/render/CameraDirector';
 import { Simulation } from '../src/sim/Simulation';
 import { Historian } from '../src/historian/Historian';
 
 describe('cinematic motion', () => {
+  it('never restores Arrival Day after the opening authority barrier has completed', () => {
+    expect(foundingTransitIsHistoryHandoff(
+      false,
+      'FOUNDING_ORIENTATION',
+      'founding-cast:introduction:0:person-1',
+      'founding-release:event-1',
+    )).toBe(false);
+    expect(foundingTransitIsHistoryHandoff(
+      true,
+      'FOUNDING_ORIENTATION',
+      'founding-cast:introduction:0:person-1',
+      'ordinary:first-month',
+    )).toBe(true);
+    expect(foundingTransitIsHistoryHandoff(
+      false,
+      'HISTORY_RUNNING',
+      'founding-cast:introduction:0:person-1',
+      'ordinary:first-month',
+    )).toBe(true);
+  });
+
+
   it('flies to a new editorial subject without cutting or handing off narration before arrival', () => {
     const sim = new Simulation({ seed: 'continuous-camera', startMode: 'established',
       startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 },
@@ -203,7 +225,7 @@ describe('cinematic motion', () => {
     expect(choose).toHaveBeenCalledTimes(2);
     expect(director.flightTelemetry().destinationSceneId).toBe('ordinary:first-month');
     expect(director.observation.label).toBe('History begins');
-    expect(director.observation.detail).toContain('The landings are over.');
+    expect(director.observation.detail).toContain('The vessels are quiet now.');
     expect(director.observation.eventType).toBeUndefined();
     expect(director.observation.eventMonth).toBeUndefined();
   });
