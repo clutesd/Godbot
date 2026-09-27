@@ -1605,7 +1605,9 @@ export class GodboxRenderer {
     this.addRoutePortals(group, settlement, layout, era, palette);
     const axisAngle = this.random.fork(`${settlement.id}:axis`).float() * Math.PI * 2;
     if (!settlement.development && eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
-    if (settlement.alive && !bareFounderCamp) this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
+    if (settlement.alive && this.foundingStandardPresentation.shouldRender(settlement)) {
+      this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
+    }
     const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
@@ -2803,7 +2805,8 @@ export class GodboxRenderer {
     // Bucket slow wear/prestige values so settlements do not rebuild for meaningless tiny changes.
     const wearBucket = Math.round(legacy.wear * 20) / 20;
     const prestigeBucket = Math.round(legacy.prestigeTrim * 10) / 10;
-    return `${identity.id}:${legacy.site}:${legacy.mount}:${legacy.generation}:${legacy.politicalBands}:${legacy.culturalMarks}:${legacy.successionMarks}:${legacy.allianceKnots}:${wearBucket}:${legacy.repairPatches}:${Number(legacy.mourning)}:${prestigeBucket}:${legacy.fieldVariant}:${legacy.emblemVariant}:${legacy.latestChangeMonth ?? -1}`;
+    const foundingState = settlement.foundingPodId ? this.foundingStandardPresentation.stateFor(settlement.id) : 'established';
+    return `${identity.id}:${legacy.site}:${legacy.mount}:${legacy.generation}:${legacy.politicalBands}:${legacy.culturalMarks}:${legacy.successionMarks}:${legacy.allianceKnots}:${wearBucket}:${legacy.repairPatches}:${Number(legacy.mourning)}:${prestigeBucket}:${legacy.fieldVariant}:${legacy.emblemVariant}:${legacy.latestChangeMonth ?? -1}:${foundingState}`;
   }
 
   /**
@@ -2889,6 +2892,9 @@ export class GodboxRenderer {
     standard.userData['bannerIdentity'] = identity;
     standard.userData['bannerLegacy'] = legacy;
     standard.userData['bannerSite'] = legacy.site;
+    const mastRig = new THREE.Group();
+    mastRig.name = 'settlement-standard-mast-rig';
+    standard.add(mastRig);
 
     const mute = (value: THREE.ColorRepresentation, saturation: number, minimumLightness: number, maximumLightness: number, lightnessScale = 1): THREE.Color => {
       const color = new THREE.Color(value);
@@ -2913,7 +2919,7 @@ export class GodboxRenderer {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.055, poleHeight, 7), wood);
     pole.position.y = poleHeight / 2;
     pole.castShadow = true;
-    standard.add(pole);
+    mastRig.add(pole);
 
     if (dimensions.crossbar) {
       const crossbarLength = width + 0.14;
@@ -2921,14 +2927,14 @@ export class GodboxRenderer {
       crossbar.rotation.z = Math.PI / 2;
       crossbar.position.set(crossbarLength / 2 - 0.015, topY + 0.015, 0);
       crossbar.castShadow = true;
-      standard.add(crossbar);
+      mastRig.add(crossbar);
     } else {
       // Gate pennons are lashed to the pole instead of hanging from a civic crossbar.
       for (const y of [topY - 0.08, topY - height * 0.72]) {
         const tie = new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.012, 5, 8), new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.95 }));
         tie.rotation.x = Math.PI / 2;
         tie.position.set(0.015, y, 0);
-        standard.add(tie);
+        mastRig.add(tie);
       }
     }
 
@@ -2940,7 +2946,7 @@ export class GodboxRenderer {
       : new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.18, 6), finialMaterial);
     finial.position.y = poleHeight + 0.09;
     finial.castShadow = true;
-    standard.add(finial);
+    mastRig.add(finial);
 
     const clothGeometry = new THREE.PlaneGeometry(width, height, 7, 11);
     const positions = clothGeometry.attributes.position as THREE.BufferAttribute;
@@ -2994,6 +3000,16 @@ export class GodboxRenderer {
     clothRig.userData['windPhase'] = shapeSeed * Math.PI * 2;
     clothRig.userData['windStrength'] = 0.03 + stableUnit(`${identity.id}:${legacy.mount}:wind`) * 0.04;
 
+    const foldedBundle = new THREE.Mesh(
+      new THREE.CylinderGeometry(Math.max(0.035, width * 0.055), Math.max(0.035, width * 0.055), Math.min(0.42, width * 0.55), 8),
+      new THREE.MeshStandardMaterial({ color: clothColor, roughness: 0.98, metalness: 0 }),
+    );
+    foldedBundle.name = 'founding-standard-folded-cloth';
+    foldedBundle.rotation.z = Math.PI / 2;
+    foldedBundle.position.set(Math.min(0.22, width * 0.3), topY - height * 0.08, 0.028);
+    foldedBundle.castShadow = true;
+    mastRig.add(foldedBundle);
+
     const cloth = new THREE.Mesh(clothGeometry, new THREE.MeshStandardMaterial({
       color: clothColor,
       side: THREE.DoubleSide,
@@ -3034,13 +3050,39 @@ export class GodboxRenderer {
       clothRig.add(tassel);
     }
 
-    standard.add(clothRig);
+    mastRig.add(clothRig);
+    if (settlement.foundingPodId) {
+      const footing = new THREE.Group();
+      footing.name = 'founding-standard-footing';
+      footing.position.set(placement.localX, placement.localY, placement.localZ);
+      const stone = new THREE.MeshStandardMaterial({ color: '#62584a', roughness: 1, metalness: 0 });
+      for (let index = 0; index < 6; index += 1) {
+        const angle = index / 6 * Math.PI * 2;
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.07 + stableUnit(`${settlement.id}:standard-foot:${index}`) * 0.018, 0), stone);
+        rock.position.set(Math.cos(angle) * 0.11, 0.045, Math.sin(angle) * 0.11);
+        rock.scale.y = 0.72;
+        rock.castShadow = true;
+        footing.add(rock);
+      }
+      group.add(footing);
+      group.userData['foundingStandardFooting'] = footing;
+    }
+
     group.add(standard);
     group.userData['bannerClothRig'] = clothRig;
+    group.userData['foundingStandardGroup'] = standard;
+    group.userData['foundingStandardMastRig'] = mastRig;
+    group.userData['foundingStandardBundle'] = foldedBundle;
+    group.userData['foundingStandardPoleHeight'] = poleHeight;
+    group.userData['foundingStandardFinalX'] = placement.localX;
+    group.userData['foundingStandardFinalY'] = placement.localY;
+    group.userData['foundingStandardFinalZ'] = placement.localZ;
+    group.userData['foundingStandardFinalYaw'] = placement.rotationY;
     group.userData['bannerIdentity'] = identity;
     group.userData['bannerLegacy'] = legacy;
     group.userData['bannerSite'] = legacy.site;
     group.userData['bannerMeaning'] = [...identity.rationale, ...legacy.rationale];
+    if (settlement.foundingPodId) this.applyFoundingStandardVisual(group, settlement);
   }
 
   /** Heraldic field geometry kept deliberately low-poly and inside the chosen mount silhouette. */
