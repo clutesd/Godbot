@@ -254,6 +254,7 @@ describe('Water rendering foundation', () => {
     expect(shader.fragmentShader).toContain('oceanWanderA');
     expect(shader.fragmentShader).toContain('oceanSilk');
     expect(shader.fragmentShader).toContain('oceanWorldNormal');
+    expect(shader.fragmentShader).toContain('mix(normal, oceanWaveNormal, 0.68)');
     // Ocean motion is normal-driven: the giant plane must stay smooth instead of exposing its triangles.
     expect(shader.vertexShader).not.toContain('transformed.z +=');
     const y = ocean.position.y;
