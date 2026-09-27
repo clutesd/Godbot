@@ -42,7 +42,7 @@ describe('founding first-fire presentation', () => {
       stonesPlaced: 0, logsPlaced: 0, flameScale: 0, sparkGain: 0, assemblyComplete: false,
     });
 
-    presentation.update(simulation.state, 3);
+    presentation.update(simulation.state, 9);
     const building = presentation.sample(settlement.id);
     expect(building.phase).toBe('assemble-stones');
     expect(building.stonesPlaced).toBeGreaterThan(0);
@@ -200,6 +200,13 @@ describe('founding first-fire presentation', () => {
       && task.pickupEndSeconds < task.carryEndSeconds
       && task.carryEndSeconds < task.placeEndSeconds)).toBe(true);
 
+    for (let builder = 0; builder < 3; builder += 1) {
+      const own = tasks.filter(task => task.builderSlot === builder).sort((a, b) => a.startSeconds - b.startSeconds);
+      for (let index = 1; index < own.length; index += 1) {
+        expect(own[index]!.startSeconds).toBeGreaterThanOrEqual(own[index - 1]!.placeEndSeconds);
+      }
+    }
+
     for (const task of tasks) {
       const before = foundingHearthAssemblySample(task.placeEndSeconds - 0.001);
       const after = foundingHearthAssemblySample(task.placeEndSeconds + 0.001);
@@ -221,7 +228,7 @@ describe('founding first-fire presentation', () => {
     survivalState(secondSettlement!).firstFire = { month: 1, eventId: 'fire-b', plannedMonth: 1, readiness: 0.7 };
     presentation.update(simulation.state, 0);
 
-    presentation.update(simulation.state, 4);
+    presentation.update(simulation.state, 10);
     const early = [presentation.sample(firstSettlement!.id), presentation.sample(secondSettlement!.id)];
     expect(early[0]!.stonesPlaced).toBeGreaterThan(early[1]!.stonesPlaced);
     expect(early.every(sample => sample.flameScale === 0)).toBe(true);
