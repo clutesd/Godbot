@@ -185,7 +185,7 @@ describe('CinematicSequencePlanner', () => {
       scene('release', 'landscape-pause', 12, 11, 0.65, editorial(thread, 'wide', 0.05, 'silent')),
     ]));
 
-    expect(shots.map(shot => shot.role)).toEqual(['observe', 'detail', 'reveal', 'release']);
+    expect(shots.map(shot => shot.role)).toEqual(['detail', 'reveal', 'release']);
     expect(shots.some(shot => shot.role === 'establish' || shot.role === 'approach')).toBe(false);
     expect(shots.filter(shot => shot.scene.id === anchorScene.id)).toHaveLength(1);
     expect(shots.find(shot => shot.scene.id === anchorScene.id)?.narrate).toBe(true);
