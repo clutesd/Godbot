@@ -169,7 +169,8 @@ export class FoundingFirstFirePresentation {
       const flicker = reducedMotion ? 1 : 1 + Math.sin(this.nowSeconds * 12.7 + stableUnit(performance.eventId) * 8) * 0.045;
       return {
         active: true, phase: 'catch', phaseProgress: p,
-        hearthScale: 1, assemblyProgress: 1, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
+        hearthScale: 1, assemblyProgress: 1, stonesPicked: FOUNDING_HEARTH_STONE_COUNT,
+        logsPicked: FOUNDING_HEARTH_LOG_COUNT, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
         logsPlaced: FOUNDING_HEARTH_LOG_COUNT, assemblyComplete: true,
         flameScale: (0.22 + p * 0.88) * flicker,
         emberScale: 0.9 + p * 0.1,
@@ -184,7 +185,8 @@ export class FoundingFirstFirePresentation {
         + Math.sin(this.nowSeconds * 5.7 + 1.3) * 0.025;
       return {
         active: true, phase: 'gather', phaseProgress: p,
-        hearthScale: 1, assemblyProgress: 1, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
+        hearthScale: 1, assemblyProgress: 1, stonesPicked: FOUNDING_HEARTH_STONE_COUNT,
+        logsPicked: FOUNDING_HEARTH_LOG_COUNT, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
         logsPlaced: FOUNDING_HEARTH_LOG_COUNT, assemblyComplete: true,
         flameScale: (1.1 - p * 0.1) * flicker,
         emberScale: 1,
