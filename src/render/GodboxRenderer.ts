@@ -1068,8 +1068,8 @@ export class GodboxRenderer {
       const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
       const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
       if (worker) this.resourceWorkers.sample(worker, elapsedSeconds, deltaSeconds, Boolean(working && oriented));
-      if (working) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
-      if (physicalStanding) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
+      if (working && worker) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
+      if (physicalStanding && physical) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
       const restArticulated = detailed && restPose.blend > 0.001;
       const articulated = working || physicalStanding || physical && loaded || restArticulated;
       const partnerId = local?.encounter?.partnerId;
@@ -1163,7 +1163,7 @@ export class GodboxRenderer {
       const bodyPitch = bodyTilt.pitch + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
       const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
       const bodyRoll = bodyTilt.roll + (pose?.spineRoll ?? 0) + (restArticulated ? restPose.bodyRoll : 0);
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working && worker ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
       this.people.setColorAt(index, this.personColor);
@@ -1313,9 +1313,12 @@ export class GodboxRenderer {
         !physicalStanding, physical.action.contactEffect
           ?? (physical.action.actionKind.startsWith('construction-') ? 'none' : 'generic'),
         physical.action.contactHeight === undefined ? undefined : visual.footY + physical.action.contactHeight);
-      if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor, Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
-      if (working && worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
-        this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
+      if (working && worker) {
+        this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor,
+          Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
+        if (worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
+          this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
+        }
       }
 
       if (tier !== 'population' && mantles < this.peopleMantles.instanceMatrix.count) {
