@@ -49,7 +49,6 @@ export function foundingCommunityDestination(
 ): FoundingCommunityDestination | undefined {
   if (!foundingCommunityIsForming(settlement) || person.activity === 'migrate') return undefined;
 
-  const pod = state.arrival?.pods.find(candidate => candidate.id === settlement.foundingPodId && candidate.landed);
   const projectPlot = settlement.development?.project
     ? settlement.structurePlots?.find(plot => plot.id === settlement.development?.project?.plotId)
     : undefined;
