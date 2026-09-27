@@ -20,7 +20,7 @@ import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
-import { isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
+import { foundingCommunityIsForming, foundingCommunitySupplyAnchor, isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
@@ -3472,6 +3472,39 @@ export class GodboxRenderer {
     const timber = palette.getSurfaceMaterial('timber');
     const stone = palette.getSurfaceMaterial('stone');
     if (rank <= 1) {
+      if (settlement.foundingPodId && foundingCommunityIsForming(settlement)) {
+        const anchor = foundingCommunitySupplyAnchor(settlement, this.state);
+        const localX = anchor.x - settlement.position.x;
+        const localZ = anchor.z - settlement.position.z;
+        const hideMaterial = palette.getSurfaceMaterial('hide');
+        const supply = new THREE.Group();
+        supply.name = `founding-supply-yard:${settlement.id}`;
+        supply.position.set(localX, 0, localZ);
+
+        // Landed cargo remains low and rough: timber lengths, two boxes and rolled bedding/tools.
+        for (let index = 0; index < 4; index += 1) {
+          const log = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.042, 0.72, 6), timber);
+          log.rotation.z = Math.PI / 2;
+          log.rotation.y = (index - 1.5) * 0.055;
+          log.position.set((index % 2) * 0.06 - 0.03, 0.05 + Math.floor(index / 2) * 0.055, (index - 1.5) * 0.055);
+          log.castShadow = true;
+          supply.add(log);
+        }
+        for (let index = 0; index < 2; index += 1) {
+          const crate = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.18, 0.2), timber);
+          crate.position.set(0.36 + index * 0.16, 0.09 + index * 0.04, 0.08 - index * 0.13);
+          crate.rotation.y = 0.12 - index * 0.2;
+          crate.castShadow = true;
+          supply.add(crate);
+        }
+        const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.34, 8), hideMaterial);
+        roll.rotation.z = Math.PI / 2;
+        roll.position.set(-0.35, 0.09, 0.16);
+        roll.castShadow = true;
+        supply.add(roll);
+        group.add(supply);
+        this.registerSettlementObstacle(settlement.id, anchor.x, anchor.z, 0.82, 0.58, 0);
+      }
       for (let index = 0; index < 2; index += 1) {
         const angle = random.range(0, Math.PI * 2);
         const radius = random.range(1.6, 3);
