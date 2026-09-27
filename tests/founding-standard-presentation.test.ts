@@ -11,7 +11,7 @@ import {
 } from '../src/render/founding/FoundingStandardPresentation';
 
 function foundingFixture(seed = 'founding-standard-presentation') {
-  const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
+  const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 96 } });
   simulation.advanceArrival(80);
   if (!simulation.beginHistory()) throw new Error('Expected founding history to begin');
   const settlement = simulation.state.settlements.find(candidate => candidate.alive && candidate.foundingPodId);
@@ -80,17 +80,57 @@ function makeEligible(settlement: Settlement, simulation: Simulation): void {
   completeFoundingShelter(settlement, simulation);
 }
 
+function ceremonyGeometry(settlement: Settlement) {
+  return {
+    base: { x: settlement.position.x + 1.4, z: settlement.position.z + 0.4 },
+    supply: { x: settlement.position.x - 1.3, z: settlement.position.z - 0.2 },
+    poleHeight: 3.4,
+  };
+}
+
+function reportAllCurrentTargetsReady(
+  presentation: FoundingStandardPresentation,
+  simulation: Simulation,
+  settlement: Settlement,
+): void {
+  const { base, supply, poleHeight } = ceremonyGeometry(settlement);
+  const participants = presentation.participantIds(settlement.id);
+  for (const person of simulation.state.people) {
+    if (!participants.has(person.id)) continue;
+    const target = presentation.targetFor(person.id, settlement.id, base, supply, poleHeight);
+    if (target) presentation.reportParticipantReady(settlement.id, person.id, target.phase, true);
+  }
+}
+
 function seekPhase(
   presentation: FoundingStandardPresentation,
   simulation: Simulation,
-  settlementId: string,
+  settlement: Settlement,
   phase: FoundingStandardPhase,
+  startTime = 0,
 ): number {
-  for (let time = 0; time <= FOUNDING_STANDARD_DURATION_SECONDS + 3; time += 0.05) {
+  const horizon = startTime + FOUNDING_STANDARD_DURATION_SECONDS + 12;
+  for (let time = startTime; time <= horizon; time += 0.05) {
     presentation.update(simulation.state, time);
-    if (presentation.sample(settlementId).phase === phase) return time;
+    reportAllCurrentTargetsReady(presentation, simulation, settlement);
+    if (presentation.sample(settlement.id).phase === phase) return time;
   }
   throw new Error(`Could not reach founding-standard phase ${phase}`);
+}
+
+function advanceReady(
+  presentation: FoundingStandardPresentation,
+  simulation: Simulation,
+  settlement: Settlement,
+  from: number,
+  seconds: number,
+): number {
+  const end = from + seconds;
+  for (let time = from + 0.05; time <= end + 1e-6; time += 0.05) {
+    presentation.update(simulation.state, time);
+    reportAllCurrentTargetsReady(presentation, simulation, settlement);
+  }
+  return end;
 }
 
 describe('founding standard presentation', () => {
@@ -108,7 +148,7 @@ describe('founding standard presentation', () => {
     expect(foundingStandardEligible(settlement)).toBe(true);
   });
 
-  it('keeps the standard hidden until people actually begin the ceremony', () => {
+  it('keeps the standard hidden until the delayed ceremony actually begins', () => {
     const { simulation, settlement, presentation } = foundingFixture('founding-standard-hidden');
     makeEligible(settlement, simulation);
 
@@ -121,7 +161,7 @@ describe('founding standard presentation', () => {
       clothUnfurl: 0,
     });
 
-    const prepareAt = seekPhase(presentation, simulation, settlement.id, 'prepare-base');
+    const prepareAt = seekPhase(presentation, simulation, settlement, 'prepare-base');
     expect(prepareAt).toBeGreaterThan(0);
     expect(presentation.sample(settlement.id)).toMatchObject({
       active: true,
@@ -131,18 +171,41 @@ describe('founding standard presentation', () => {
     });
   });
 
+  it('does not move the mast until the assigned founder physically reaches the current work stance', () => {
+    const { simulation, settlement, presentation } = foundingFixture('founding-standard-contact-led');
+    makeEligible(settlement, simulation);
+    presentation.update(simulation.state, 0);
+
+    // Jump beyond the random start delay without reporting any human contact.
+    presentation.update(simulation.state, 2);
+    expect(presentation.sample(settlement.id)).toMatchObject({
+      phase: 'prepare-base',
+      phaseProgress: 0,
+      transferProgress: 0,
+    });
+
+    const { base, supply, poleHeight } = ceremonyGeometry(settlement);
+    const baseWorker = simulation.state.people
+      .map(person => ({ person, target: presentation.targetFor(person.id, settlement.id, base, supply, poleHeight) }))
+      .find(entry => entry.target?.role === 'base-worker');
+    expect(baseWorker?.target).toBeDefined();
+    presentation.reportParticipantReady(settlement.id, baseWorker!.person.id, 'prepare-base', true);
+    presentation.update(simulation.state, 2.1);
+    expect(presentation.sample(settlement.id).phaseProgress).toBeGreaterThan(0);
+  });
+
   it('orders the physical act as base preparation, carry, cloth attachment, raising, securing and unfurl', () => {
     const { simulation, settlement, presentation } = foundingFixture('founding-standard-sequence');
     makeEligible(settlement, simulation);
     presentation.update(simulation.state, 0);
 
-    const prepare = seekPhase(presentation, simulation, settlement.id, 'prepare-base');
-    const carry = seekPhase(presentation, simulation, settlement.id, 'carry-pole');
-    const attach = seekPhase(presentation, simulation, settlement.id, 'attach-cloth');
-    const raise = seekPhase(presentation, simulation, settlement.id, 'raise');
-    const secure = seekPhase(presentation, simulation, settlement.id, 'secure');
-    const unfurl = seekPhase(presentation, simulation, settlement.id, 'unfurl');
-    const acknowledge = seekPhase(presentation, simulation, settlement.id, 'acknowledge');
+    const prepare = seekPhase(presentation, simulation, settlement, 'prepare-base');
+    const carry = seekPhase(presentation, simulation, settlement, 'carry-pole', prepare);
+    const attach = seekPhase(presentation, simulation, settlement, 'attach-cloth', carry);
+    const raise = seekPhase(presentation, simulation, settlement, 'raise', attach);
+    const secure = seekPhase(presentation, simulation, settlement, 'secure', raise);
+    const unfurl = seekPhase(presentation, simulation, settlement, 'unfurl', secure);
+    const acknowledge = seekPhase(presentation, simulation, settlement, 'acknowledge', unfurl);
 
     expect(prepare).toBeLessThan(carry);
     expect(carry).toBeLessThan(attach);
@@ -151,19 +214,21 @@ describe('founding standard presentation', () => {
     expect(secure).toBeLessThan(unfurl);
     expect(unfurl).toBeLessThan(acknowledge);
 
-    presentation.update(simulation.state, attach + 0.7);
+    let time = advanceReady(presentation, simulation, settlement, attach, 1.2);
     const attached = presentation.sample(settlement.id);
     expect(attached.bundleVisible).toBe(true);
     expect(attached.clothUnfurl).toBe(0);
     expect(attached.polePitch).toBeCloseTo(-Math.PI / 2, 4);
 
-    presentation.update(simulation.state, raise + 2.4);
+    time = seekPhase(presentation, simulation, settlement, 'raise', time);
+    time = advanceReady(presentation, simulation, settlement, time, 2.4);
     const raising = presentation.sample(settlement.id);
     expect(raising.polePitch).toBeGreaterThan(-Math.PI / 2);
     expect(raising.polePitch).toBeLessThan(0.01);
     expect(raising.clothUnfurl).toBe(0);
 
-    presentation.update(simulation.state, unfurl + 1.7);
+    time = seekPhase(presentation, simulation, settlement, 'unfurl', time);
+    advanceReady(presentation, simulation, settlement, time, 1.7);
     const cloth = presentation.sample(settlement.id);
     expect(cloth.polePitch).toBeCloseTo(0, 4);
     expect(cloth.clothUnfurl).toBeGreaterThan(0.3);
@@ -174,26 +239,25 @@ describe('founding standard presentation', () => {
     makeEligible(settlement, simulation);
     presentation.update(simulation.state, 0);
 
-    const carryAt = seekPhase(presentation, simulation, settlement.id, 'carry-pole');
-    presentation.update(simulation.state, carryAt + 1);
+    const carryAt = seekPhase(presentation, simulation, settlement, 'carry-pole');
+    advanceReady(presentation, simulation, settlement, carryAt, 1);
     const participants = presentation.participantIds(settlement.id);
     expect(participants.size).toBeGreaterThanOrEqual(3);
 
-    const base = { x: settlement.position.x + 1.4, z: settlement.position.z + 0.4 };
-    const supply = { x: settlement.position.x - 1.3, z: settlement.position.z - 0.2 };
+    const { base, supply, poleHeight } = ceremonyGeometry(settlement);
     const carryTargets = simulation.state.people
       .filter(person => participants.has(person.id))
-      .map(person => presentation.targetFor(person.id, settlement.id, base, supply, 3.4))
+      .map(person => presentation.targetFor(person.id, settlement.id, base, supply, poleHeight))
       .filter(target => target !== undefined);
     expect(carryTargets.length).toBeGreaterThanOrEqual(2);
     expect(carryTargets.every(target => target.phase === 'carry-pole')).toBe(true);
     expect(carryTargets.every(target => target.interactionTarget !== undefined)).toBe(true);
 
-    const raiseAt = seekPhase(presentation, simulation, settlement.id, 'raise');
-    presentation.update(simulation.state, raiseAt + 2);
+    const raiseAt = seekPhase(presentation, simulation, settlement, 'raise', carryAt + 1);
+    advanceReady(presentation, simulation, settlement, raiseAt, 2);
     const raiseTargets = simulation.state.people
       .filter(person => participants.has(person.id))
-      .map(person => presentation.targetFor(person.id, settlement.id, base, supply, 3.4))
+      .map(person => presentation.targetFor(person.id, settlement.id, base, supply, poleHeight))
       .filter(target => target !== undefined);
     expect(raiseTargets.some(target => target.role === 'raiser' || target.role === 'base-worker')).toBe(true);
     expect(raiseTargets.some(target => (target.interactionHeight ?? 0) > 0.2)).toBe(true);
@@ -228,7 +292,7 @@ describe('founding standard presentation', () => {
     expect(reloaded.participantIds(settlement.id).size).toBe(0);
   });
 
-  it('is deterministic for the same world and presentation clock', () => {
+  it('is deterministic for the same readiness evidence and presentation clock', () => {
     const { simulation, settlement } = foundingFixture('founding-standard-deterministic');
     const first = new FoundingStandardPresentation(simulation.state);
     const second = new FoundingStandardPresentation(simulation.state);
@@ -236,9 +300,18 @@ describe('founding standard presentation', () => {
 
     first.update(simulation.state, 0);
     second.update(simulation.state, 0);
-    for (const time of [0.5, 2, 5, 9, 13, 17]) {
+    const participants = simulation.state.people.filter(person => first.participantIds(settlement.id).has(person.id));
+    const { base, supply, poleHeight } = ceremonyGeometry(settlement);
+
+    for (let time = 0.05; time <= 8; time += 0.05) {
       first.update(simulation.state, time);
       second.update(simulation.state, time);
+      for (const person of participants) {
+        const firstTarget = first.targetFor(person.id, settlement.id, base, supply, poleHeight);
+        const secondTarget = second.targetFor(person.id, settlement.id, base, supply, poleHeight);
+        if (firstTarget) first.reportParticipantReady(settlement.id, person.id, firstTarget.phase, true);
+        if (secondTarget) second.reportParticipantReady(settlement.id, person.id, secondTarget.phase, true);
+      }
       expect(first.sample(settlement.id)).toEqual(second.sample(settlement.id));
       expect([...first.participantIds(settlement.id)]).toEqual([...second.participantIds(settlement.id)]);
     }
