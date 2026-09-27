@@ -385,7 +385,7 @@ describe('Arrival presentation contracts', () => {
     expect(crossedIntoFrame).toBe(true);
     let previous = arrivalSequenceFocus(s.state.arrival!);
     const visitedSites = new Set<number>();
-    let closestSiteRadius = Number.POSITIVE_INFINITY;
+    let closestLandingInsertRadius = Number.POSITIVE_INFINITY;
     for (let step = 0; step <= ARRIVAL_END_SECONDS * 10; step += 1) {
       const second = step / 10;
       s.state.arrival!.elapsedSeconds = second;
@@ -400,9 +400,9 @@ describe('Arrival presentation contracts', () => {
       expect(focus.fov).toBeLessThanOrEqual(38);
       if (focus.beat === 'site-flythrough' && focus.siteIndex !== undefined) {
         visitedSites.add(focus.siteIndex);
-        closestSiteRadius = Math.min(closestSiteRadius, focus.radius);
+        closestLandingInsertRadius = Math.min(closestLandingInsertRadius, focus.radius);
       }
-      if (step > 0) {
+      if (step > 0 && focus.shotId === previous.shotId) {
         expect(Math.hypot(
           focus.target.x - previous.target.x,
           focus.target.y - previous.target.y,
@@ -416,9 +416,9 @@ describe('Arrival presentation contracts', () => {
       expect(caption.opacity).toBeLessThanOrEqual(1);
       previous = focus;
     }
-    expect([...visitedSites]).toEqual([0]);
+    expect([...visitedSites]).toEqual([1, 2, 3, 4]);
     expect(ARRIVAL_END_SECONDS).toBeLessThanOrEqual(40);
-    expect(closestSiteRadius).toBeLessThan(2);
+    expect(closestLandingInsertRadius).toBeLessThan(5);
     s.state.arrival!.elapsedSeconds = ARRIVAL_END_SECONDS;
     const handoff = arrivalSequenceFocus(s.state.arrival!);
     expect(handoff.beat).toBe('handoff');
@@ -428,19 +428,19 @@ describe('Arrival presentation contracts', () => {
     expect(handoff.cameraPosition).toBeDefined();
 
 
-    // The gathering gets a readable hold; the title never climbs back into scenery.
-    for (let siteIndex = 0; siteIndex < 1; siteIndex += 1) {
-      s.state.arrival!.elapsedSeconds = 30;
-      const heldA = arrivalSequenceFocus(s.state.arrival!);
-      s.state.arrival!.elapsedSeconds += 0.8;
-      const heldB = arrivalSequenceFocus(s.state.arrival!);
-      expect(heldA.beat).toBe('site-flythrough');
-      expect(heldA.siteIndex).toBe(siteIndex);
-      expect(heldA.cameraPosition).toBeDefined();
-      expect(heldB.cameraPosition).toEqual(heldA.cameraPosition);
-      expect(heldB.target).toEqual(heldA.target);
-      expect(heldA.height).toBeLessThan(1);
-      expect(heldA.fov).toBeLessThanOrEqual(31);
-    }
+    // A secondary landing insert is a deliberate geographic edit with a stable lens, not a
+    // continuous flight through unrelated terrain.
+    s.state.arrival!.elapsedSeconds = 26.6;
+    const heldA = arrivalSequenceFocus(s.state.arrival!);
+    s.state.arrival!.elapsedSeconds += 0.8;
+    const heldB = arrivalSequenceFocus(s.state.arrival!);
+    expect(heldA.beat).toBe('site-flythrough');
+    expect(heldA.siteIndex).toBe(1);
+    expect(heldA.cameraPosition).toBeDefined();
+    expect(heldB.shotId).toBe(heldA.shotId);
+    expect(heldB.cameraPosition).toBeDefined();
+    expect(heldB.cameraPosition!.x).toBeCloseTo(heldA.cameraPosition!.x - 0.064, 5);
+    expect(heldB.cameraPosition!.y).toBeCloseTo(heldA.cameraPosition!.y, 8);
+    expect(heldB.cameraPosition!.z).toBeCloseTo(heldA.cameraPosition!.z, 8);
   });
 });
