@@ -1939,7 +1939,10 @@ export class CameraDirector {
     const leavingFoundingOverlay = Boolean(
       this.acquiredScene && this.acquiredScene.id !== scene.id && isFoundingOverlayScene(this.acquiredScene.id),
     );
-    if (leavingFoundingOverlay) this.releaseFoundingOverlayForTransit();
+    if (leavingFoundingOverlay) {
+      const historyHandoff = Boolean(this.acquiredScene?.id.startsWith('founding-release:') && !isFoundingOverlayScene(scene.id));
+      this.releaseFoundingOverlayForTransit(historyHandoff);
+    }
     if (distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
       this.acquireCurrentScene();
       return;
@@ -2175,19 +2178,27 @@ export class CameraDirector {
     }
   }
 
-  private releaseFoundingOverlayForTransit(): void {
+  private releaseFoundingOverlayForTransit(historyHandoff: boolean): void {
     // The authored founding card has finished. Do not leave its narration pinned to the screen
-    // while the camera physically travels to the next scene. Founding completion is signalled by
-    // the release-shot barrier above, never by selecting a destination scene.
+    // while the camera physically travels to the next scene. Internal Arrival transfers remain
+    // Arrival Day because monthly authority is still frozen; only the final release crosses into
+    // live history and must drop Arrival metadata immediately.
     delete this.observation.sceneId;
     delete this.observation.statement;
-    this.observation.label = 'The first day';
-    this.observation.detail = 'History continues beyond the landings.';
     this.observation.kind = 'regional-travel';
     this.observation.interest = 0.56;
     this.observation.audioCategory = 'settlement';
-    this.observation.eventType = 'ARRIVAL_DAY';
-    this.observation.eventMonth = 0;
+    if (historyHandoff) {
+      this.observation.label = 'History begins';
+      this.observation.detail = 'The landings are over. The record now follows what becomes of them.';
+      delete this.observation.eventType;
+      delete this.observation.eventMonth;
+    } else {
+      this.observation.label = 'Arrival Day';
+      this.observation.detail = 'The first hours unfold around the landing sites.';
+      this.observation.eventType = 'ARRIVAL_DAY';
+      this.observation.eventMonth = 0;
+    }
     this.observation.narrationVisible = false;
     this.observation.revision += 1;
   }

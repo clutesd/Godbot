@@ -6,7 +6,7 @@ import { PresentationDirector } from './PresentationDirector';
 import type { CandidateScoreBreakdown, HistorianStatement, ObservationCandidate } from './types';
 
 export const FOUNDING_CAST_TARGET_SIZE = 2;
-export const FOUNDING_CAST_LATEST_INTRO_MONTH = 1;
+export const FOUNDING_CAST_LATEST_INTRO_MONTH = 0;
 export const FOUNDING_CAST_MONTHS_PER_SECOND = 0.08;
 export const FOUNDING_CAST_RELEASE_MONTHS_PER_SECOND = 0.16;
 
@@ -310,7 +310,7 @@ function releaseScene(
   const statement = {
     id: `founding-release-${arrival.id}`,
     month: state.month,
-    text: 'The first day continues.',
+    text: `The landings are over. ${baseline.expectedCommunityCount} communities now have to turn finite stores, inherited knowledge, and unfamiliar ground into a future.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [arrival.id],
     sourceEntityIds: [settlement.id],
@@ -325,7 +325,7 @@ function releaseScene(
     subjectId: person.id,
     kind: 'worker-follow',
     position: person.position,
-    title: 'THE FIRST DAY',
+    title: 'HISTORY BEGINS',
     statement,
     score: 0.86,
     interest: 0.7,

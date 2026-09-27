@@ -42,6 +42,20 @@ describe('Historian grounding', () => {
     expect(historian.validateStatement(scene.statement, simulation.state)).toBe(true);
   });
 
+  it('does not recycle Arrival Day as a live-history event for the next two years', () => {
+    const early = new Simulation({ seed: 'historian-arrival-handoff', startMode: 'arrival', world: { size: 64 } });
+    early.advanceArrival(120);
+    expect(early.beginHistory()).toBe(true);
+    early.step(1);
+    const arrival = early.state.history.find((event) => event.type === 'ARRIVAL_DAY');
+    if (!arrival) throw new Error('Expected Arrival Day in the permanent record');
+
+    const earlyHistorian = new Historian(early.config);
+    const candidates = earlyHistorian.candidates(early.state);
+    expect(candidates.some((candidate) => candidate.event?.id === arrival.id)).toBe(false);
+    expect(candidates.some((candidate) => candidate.event?.type === 'ARRIVAL_DAY')).toBe(false);
+  });
+
   it('rejects nonexistent wars', () => {
     expect(historian.validateStatement(statement({ month: simulation.state.month, sourceEntityIds: [simulation.state.settlements[0]?.id ?? ''], claims: { warId: 'war-that-never-existed' } }), simulation.state)).toBe(false);
   });

@@ -234,7 +234,7 @@ function bridgeScene(historian: Historian, state: SimulationState, baseline: Fou
   const statement = {
     id: `founding-continuity-bridge-${event.id}`,
     month: state.month,
-    text: `Arrival Day is over. The ${baseline.expectedCommunityCount} landing communities now enter their first seasons with finite stores, different inherited knowledge, and different terrain. From here, change can be measured against what each landing began with.`,
+    text: `Arrival Day is over. The ${baseline.expectedCommunityCount} landing communities enter their first seasons with finite stores, different inherited knowledge, and different terrain. From here, the record follows what each community does with those differences.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds,

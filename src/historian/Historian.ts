@@ -132,7 +132,11 @@ export class Historian {
   candidates(state: SimulationState): ObservationCandidate[] {
     this.documentaryMemory.observe(state);
     const candidates: ObservationCandidate[] = [];
-    const recentEvents = state.history.filter((event) => (SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65) && event.month <= state.month && state.month - event.month <= 24);
+    // Arrival Day is owned by the authored founding chapter. Once normal history is running,
+    // it must not re-enter the generic 24-month event window and compete with what is happening now.
+    const recentEvents = state.history.filter((event) => event.type !== 'ARRIVAL_DAY'
+      && (SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65)
+      && event.month <= state.month && state.month - event.month <= 24);
     candidates.push(...this.documentaryMemory.candidates(state));
     const latestCampaignEvents = new Map<string, HistoricalEvent>();
     for (const event of recentEvents) {

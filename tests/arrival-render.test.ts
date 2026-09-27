@@ -236,7 +236,7 @@ describe('Arrival presentation contracts', () => {
       title: 'Mara · Seed',
       text: '23 on Arrival Day.',
     });
-    expect(foundingArrivalDialogue('founding-release:event-1', 'THE FIRST DAY', 'The first day continues.')).toBeUndefined();
+    expect(foundingArrivalDialogue('founding-release:event-1', 'HISTORY BEGINS', 'The landings are over.')).toBeUndefined();
   });
 
 
