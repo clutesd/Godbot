@@ -2445,6 +2445,7 @@ export class GodboxRenderer {
       culture?.style.symbol ?? '',
       culture?.style.pattern ?? '',
       settlement.specialization,
+      settlement.survival?.firstFire?.eventId ?? '',
       settlement.development?.revision ?? 0,
       constructionBlockedReason(settlement) ?? '',
       this.eraForSettlement(settlement),
