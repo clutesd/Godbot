@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import type { MaterialPalette } from '../materials/MaterialPalette';
+import type { Vec2 } from '../../sim/types';
+import {
+  FOUNDING_HEARTH_LOG_COUNT,
+  FOUNDING_HEARTH_STONE_COUNT,
+  foundingHearthPiecePose
+} from './FoundingHearthAssembly';
 
 const fract = (value: number): number => value - Math.floor(value);
 
@@ -16,7 +22,7 @@ function stableUnit(value: string): number {
  * Physical founding-hearth dressing. This is presentation only: the caller still decides whether
  * the authoritative first-fire milestone exists and whether the hearth currently has fuel.
  */
-export function createFoundingHearthInfrastructure(palette: MaterialPalette, seed: string): THREE.Group {
+export function createFoundingHearthInfrastructure(palette: MaterialPalette, seed: string, pickupLocal: Readonly<Vec2> = { x: 0.78, z: 0 }): THREE.Group {
   const group = new THREE.Group();
   group.name = 'founding-hearth-infrastructure';
 
@@ -31,6 +37,7 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
   scorch.position.y = 0.006;
   scorch.scale.set(1, 1.08, 1);
   scorch.receiveShadow = true;
+  scorch.userData['hearthScorch'] = true;
   group.add(scorch);
 
   const ash = new THREE.Mesh(new THREE.CircleGeometry(0.39, 22), shadow);
@@ -38,15 +45,14 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
   ash.position.y = 0.012;
   ash.scale.set(1.08, 0.96, 1);
   ash.receiveShadow = true;
+  ash.userData['hearthAsh'] = true;
   group.add(ash);
 
-  for (let index = 0; index < 11; index += 1) {
-    const phase = stableUnit(`${seed}:stone:${index}`);
-    const angle = (index / 11) * Math.PI * 2 + (phase - 0.5) * 0.11;
-    const radius = 0.545 + (stableUnit(`${seed}:stone-radius:${index}`) - 0.5) * 0.055;
+  for (let index = 0; index < FOUNDING_HEARTH_STONE_COUNT; index += 1) {
+    const pose = foundingHearthPiecePose(seed, 'stone', index);
     const size = 0.075 + stableUnit(`${seed}:stone-size:${index}`) * 0.055;
     const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), stone);
-    rock.position.set(Math.cos(angle) * radius, 0.042 + size * 0.18, Math.sin(angle) * radius);
+    rock.position.set(pose.x, 0.042 + size * 0.18, pose.z);
     rock.rotation.set(
       stableUnit(`${seed}:stone-rx:${index}`) * 0.32,
       stableUnit(`${seed}:stone-ry:${index}`) * Math.PI,
@@ -56,24 +62,56 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
     rock.castShadow = true;
     rock.receiveShadow = true;
     rock.userData['hearthStone'] = true;
+    rock.userData['hearthPieceIndex'] = index;
     group.add(rock);
   }
 
-  const logGeometry = new THREE.CylinderGeometry(0.048, 0.067, 0.76, 7);
-  for (let index = 0; index < 3; index += 1) {
-    const yaw = index * Math.PI / 3 + (stableUnit(`${seed}:log-yaw:${index}`) - 0.5) * 0.18;
-    const log = new THREE.Mesh(logGeometry, index === 1 ? char : timber);
-    log.position.set(
-      Math.cos(yaw + Math.PI / 2) * 0.055,
-      0.09 + index * 0.012,
-      Math.sin(yaw + Math.PI / 2) * 0.055,
+  // Material cache: the first hearth is assembled from visible matter, not spawned geometry.
+  // Pieces disappear from this pile only when a builder's pickup beat completes.
+  for (let index = 0; index < FOUNDING_HEARTH_STONE_COUNT; index += 1) {
+    const size = 0.065 + stableUnit(`${seed}:staged-stone-size:${index}`) * 0.04;
+    const angle = stableUnit(`${seed}:staged-stone-angle:${index}`) * Math.PI * 2;
+    const radius = 0.08 + stableUnit(`${seed}:staged-stone-radius:${index}`) * 0.26;
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), stone);
+    rock.position.set(
+      pickupLocal.x + Math.cos(angle) * radius,
+      0.035 + size * 0.18,
+      pickupLocal.z + Math.sin(angle) * radius,
     );
+    rock.scale.y = 0.68 + stableUnit(`${seed}:staged-stone-flat:${index}`) * 0.36;
+    rock.rotation.y = angle;
+    rock.castShadow = true;
+    rock.receiveShadow = true;
+    rock.userData['hearthStagedStone'] = true;
+    rock.userData['hearthPieceIndex'] = index;
+    group.add(rock);
+  }
+
+  for (let index = 0; index < FOUNDING_HEARTH_LOG_COUNT; index += 1) {
+    const yaw = (index - 1) * 0.16 + stableUnit(`${seed}:staged-log-yaw:${index}`) * 0.08;
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.043, 0.06, 0.7, 7), timber);
+    log.position.set(pickupLocal.x + (index - 1) * 0.09, 0.055 + index * 0.018, pickupLocal.z + index * 0.035);
     log.rotation.z = Math.PI / 2;
     log.rotation.y = yaw;
+    log.castShadow = true;
+    log.receiveShadow = true;
+    log.userData['hearthStagedLog'] = true;
+    log.userData['hearthPieceIndex'] = index;
+    group.add(log);
+  }
+
+  const logGeometry = new THREE.CylinderGeometry(0.048, 0.067, 0.76, 7);
+  for (let index = 0; index < FOUNDING_HEARTH_LOG_COUNT; index += 1) {
+    const pose = foundingHearthPiecePose(seed, 'log', index);
+    const log = new THREE.Mesh(logGeometry, timber);
+    log.position.set(pose.x, 0.09 + index * 0.012, pose.z);
+    log.rotation.z = Math.PI / 2;
+    log.rotation.y = pose.yaw;
     log.rotation.x = (stableUnit(`${seed}:log-roll:${index}`) - 0.5) * 0.12;
     log.castShadow = true;
     log.receiveShadow = true;
     log.userData['hearthLog'] = true;
+    log.userData['hearthPieceIndex'] = index;
     group.add(log);
   }
 
@@ -84,10 +122,49 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
     coal.position.set(Math.cos(angle) * radius, 0.055, Math.sin(angle) * radius);
     coal.scale.y = 0.55 + stableUnit(`${seed}:coal-flat:${index}`) * 0.4;
     coal.rotation.y = angle;
+    coal.userData['hearthCoal'] = true;
     group.add(coal);
   }
 
   return group;
+}
+
+export function updateFoundingHearthAssembly(
+  group: THREE.Group,
+  sample: {
+    readonly stonesPicked: number;
+    readonly logsPicked: number;
+    readonly stonesPlaced: number;
+    readonly logsPlaced: number;
+    readonly assemblyComplete: boolean;
+  },
+): void {
+  // The material pile exists from the first assembly beat; the hearth itself appears only through
+  // completed hand placements. No scale-up shortcut is used anywhere in this sequence.
+  group.visible = true;
+  group.scale.setScalar(1);
+  group.traverse((object) => {
+    const pieceIndex = Number(object.userData['hearthPieceIndex'] ?? -1);
+    if (object.userData['hearthStagedStone']) {
+      object.visible = pieceIndex >= sample.stonesPicked;
+      return;
+    }
+    if (object.userData['hearthStagedLog']) {
+      object.visible = pieceIndex >= sample.logsPicked;
+      return;
+    }
+    if (object.userData['hearthStone']) {
+      object.visible = pieceIndex >= 0 && pieceIndex < sample.stonesPlaced;
+      return;
+    }
+    if (object.userData['hearthLog']) {
+      object.visible = pieceIndex >= 0 && pieceIndex < sample.logsPlaced;
+      return;
+    }
+    if (object.userData['hearthScorch'] || object.userData['hearthAsh'] || object.userData['hearthCoal']) {
+      object.visible = sample.assemblyComplete;
+    }
+  });
 }
 
 /**
