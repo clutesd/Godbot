@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import type { MaterialPalette } from '../materials/MaterialPalette';
+import {
+  FOUNDING_HEARTH_LOG_COUNT,
+  FOUNDING_HEARTH_STONE_COUNT,
+  foundingHearthPiecePose,
+  type FoundingHearthAssemblySample,
+} from './FoundingHearthAssembly';
 
 const fract = (value: number): number => value - Math.floor(value);
 
@@ -31,6 +37,7 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
   scorch.position.y = 0.006;
   scorch.scale.set(1, 1.08, 1);
   scorch.receiveShadow = true;
+  scorch.userData['hearthScorch'] = true;
   group.add(scorch);
 
   const ash = new THREE.Mesh(new THREE.CircleGeometry(0.39, 22), shadow);
@@ -38,15 +45,14 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
   ash.position.y = 0.012;
   ash.scale.set(1.08, 0.96, 1);
   ash.receiveShadow = true;
+  ash.userData['hearthAsh'] = true;
   group.add(ash);
 
-  for (let index = 0; index < 11; index += 1) {
-    const phase = stableUnit(`${seed}:stone:${index}`);
-    const angle = (index / 11) * Math.PI * 2 + (phase - 0.5) * 0.11;
-    const radius = 0.545 + (stableUnit(`${seed}:stone-radius:${index}`) - 0.5) * 0.055;
+  for (let index = 0; index < FOUNDING_HEARTH_STONE_COUNT; index += 1) {
+    const pose = foundingHearthPiecePose(seed, 'stone', index);
     const size = 0.075 + stableUnit(`${seed}:stone-size:${index}`) * 0.055;
     const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), stone);
-    rock.position.set(Math.cos(angle) * radius, 0.042 + size * 0.18, Math.sin(angle) * radius);
+    rock.position.set(pose.x, 0.042 + size * 0.18, pose.z);
     rock.rotation.set(
       stableUnit(`${seed}:stone-rx:${index}`) * 0.32,
       stableUnit(`${seed}:stone-ry:${index}`) * Math.PI,
@@ -56,24 +62,22 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
     rock.castShadow = true;
     rock.receiveShadow = true;
     rock.userData['hearthStone'] = true;
+    rock.userData['hearthPieceIndex'] = index;
     group.add(rock);
   }
 
   const logGeometry = new THREE.CylinderGeometry(0.048, 0.067, 0.76, 7);
-  for (let index = 0; index < 3; index += 1) {
-    const yaw = index * Math.PI / 3 + (stableUnit(`${seed}:log-yaw:${index}`) - 0.5) * 0.18;
+  for (let index = 0; index < FOUNDING_HEARTH_LOG_COUNT; index += 1) {
+    const pose = foundingHearthPiecePose(seed, 'log', index);
     const log = new THREE.Mesh(logGeometry, index === 1 ? char : timber);
-    log.position.set(
-      Math.cos(yaw + Math.PI / 2) * 0.055,
-      0.09 + index * 0.012,
-      Math.sin(yaw + Math.PI / 2) * 0.055,
-    );
+    log.position.set(pose.x, 0.09 + index * 0.012, pose.z);
     log.rotation.z = Math.PI / 2;
-    log.rotation.y = yaw;
+    log.rotation.y = pose.yaw;
     log.rotation.x = (stableUnit(`${seed}:log-roll:${index}`) - 0.5) * 0.12;
     log.castShadow = true;
     log.receiveShadow = true;
     log.userData['hearthLog'] = true;
+    log.userData['hearthPieceIndex'] = index;
     group.add(log);
   }
 
@@ -84,10 +88,33 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
     coal.position.set(Math.cos(angle) * radius, 0.055, Math.sin(angle) * radius);
     coal.scale.y = 0.55 + stableUnit(`${seed}:coal-flat:${index}`) * 0.4;
     coal.rotation.y = angle;
+    coal.userData['hearthCoal'] = true;
     group.add(coal);
   }
 
   return group;
+}
+
+export function updateFoundingHearthAssembly(
+  group: THREE.Group,
+  sample: Pick<FoundingHearthAssemblySample, 'stonesPlaced' | 'logsPlaced' | 'complete'>,
+): void {
+  group.visible = sample.stonesPlaced > 0 || sample.logsPlaced > 0 || sample.complete;
+  group.scale.setScalar(1);
+  group.traverse((object) => {
+    const pieceIndex = Number(object.userData['hearthPieceIndex'] ?? -1);
+    if (object.userData['hearthStone']) {
+      object.visible = pieceIndex >= 0 && pieceIndex < sample.stonesPlaced;
+      return;
+    }
+    if (object.userData['hearthLog']) {
+      object.visible = pieceIndex >= 0 && pieceIndex < sample.logsPlaced;
+      return;
+    }
+    if (object.userData['hearthScorch'] || object.userData['hearthAsh'] || object.userData['hearthCoal']) {
+      object.visible = sample.complete;
+    }
+  });
 }
 
 /**
