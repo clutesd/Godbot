@@ -2181,13 +2181,15 @@ export class CameraDirector {
     // the release-shot barrier above, never by selecting a destination scene.
     delete this.observation.sceneId;
     delete this.observation.statement;
-    this.observation.label = 'The first day';
-    this.observation.detail = 'History continues beyond the landings.';
+    this.observation.label = 'History begins';
+    this.observation.detail = 'The landings are over. The record now follows what becomes of them.';
     this.observation.kind = 'regional-travel';
     this.observation.interest = 0.56;
     this.observation.audioCategory = 'settlement';
-    this.observation.eventType = 'ARRIVAL_DAY';
-    this.observation.eventMonth = 0;
+    // Arrival pacing ends with the authored release shot. Keeping this metadata alive during the
+    // physical transfer made "The first day" survive while authoritative months were advancing.
+    delete this.observation.eventType;
+    delete this.observation.eventMonth;
     this.observation.narrationVisible = false;
     this.observation.revision += 1;
   }
