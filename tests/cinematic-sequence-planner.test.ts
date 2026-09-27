@@ -8,7 +8,7 @@ import type {
   ObservationCandidate,
   ObservationKind,
 } from '../src/historian/types';
-import type { SimulationState } from '../src/sim/types';
+import type { HistoricalEvent, SimulationState } from '../src/sim/types';
 
 function editorial(
   threadId: string,
@@ -153,6 +153,42 @@ describe('CinematicSequencePlanner', () => {
 
     expect(shots.some(shot => shot.scene.id === 'remote-detail')).toBe(false);
     expect(shots.every(shot => shot.threadId === thread)).toBe(true);
+  });
+
+  it('keeps first-fire coverage intimate instead of inserting generic aerial setup', () => {
+    const planner = new CinematicSequencePlanner();
+    const thread = 'settlement:first-fire';
+    const anchorScene = scene('fire-detail', 'discovery-scene', 10, 10, 0.94,
+      { ...editorial(thread, 'detail', 1, 'required'), completion: 'timed' });
+    anchorScene.event = {
+      id: 'event:first-fire',
+      month: 24,
+      type: 'first-fire',
+      location: { x: 10, z: 10 },
+      locationId: 'settlement:first-fire',
+      actors: ['settlement:first-fire'],
+      causes: ['founding-survival'],
+      context: { purpose: 'founding-hearth' },
+      outcome: 'A hearth is established.',
+      affectedPopulation: 18,
+      magnitude: 0.68,
+      significance: 0.68,
+      tags: ['fire-control'],
+      summary: 'The camp lights its first hearth.',
+    } satisfies HistoricalEvent;
+
+    const shots = drain(planner, planner.plan(state, anchorScene, [
+      scene('wide', 'world-establishing', 10, 11, 0.95, editorial(thread, 'wide', 0.1, 'silent')),
+      scene('observe', 'street-observation', 10.2, 10, 0.78, editorial(thread, 'human', 0.65)),
+      anchorScene,
+      scene('reveal', 'infrastructure-scene', 10, 10.2, 0.8, editorial(thread, 'medium', 0.7, 'required')),
+      scene('release', 'landscape-pause', 12, 11, 0.65, editorial(thread, 'wide', 0.05, 'silent')),
+    ]));
+
+    expect(shots.map(shot => shot.role)).toEqual(['observe', 'detail', 'reveal', 'release']);
+    expect(shots.some(shot => shot.role === 'establish' || shot.role === 'approach')).toBe(false);
+    expect(shots.filter(shot => shot.scene.id === anchorScene.id)).toHaveLength(1);
+    expect(shots.find(shot => shot.scene.id === anchorScene.id)?.narrate).toBe(true);
   });
 
   it('keeps narration selective: visual orientation and release can remain silent', () => {
