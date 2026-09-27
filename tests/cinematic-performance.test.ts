@@ -91,8 +91,10 @@ describe('cinematic motion', () => {
       if (flight.active && flight.destinationSceneId?.startsWith('founding-cast:introduction:')) {
         sawDeparture = true;
         expect(director.observation.sceneId).toBeUndefined();
-        expect(director.observation.label).toBe('The first day');
-        expect(director.observation.eventType).toBe('ARRIVAL_DAY');
+        expect(director.observation.label).toBe('History begins');
+        expect(director.observation.detail).toContain('The landings are over.');
+        expect(director.observation.eventType).toBeUndefined();
+        expect(director.observation.eventMonth).toBeUndefined();
         break;
       }
     }
