@@ -68,9 +68,11 @@ const readable = (value: string): string => value.replaceAll('-', ' ');
 const rounded = (value: number): string => Number(value.toFixed(Math.abs(value) < 10 ? 1 : 0)).toLocaleString();
 
 function elapsedLabel(months: number): string {
-  if (months <= 0) return 'At the end of Arrival Day';
-  if (months === 1) return 'One month after Arrival Day';
-  return `${months.toLocaleString()} months after Arrival Day`;
+  if (months <= 0) return 'As the landings end';
+  if (months === 1) return 'In the first month';
+  if (months <= 3) return 'In the first season';
+  if (months <= 12) return `By month ${months.toLocaleString()}`;
+  return `${months.toLocaleString()} months after landing`;
 }
 
 function breakdown(score: number): CandidateScoreBreakdown {
@@ -231,10 +233,13 @@ function bridgeScene(historian: Historian, state: SimulationState, baseline: Fou
   const sourceEntityIds = baseline.communities
     .filter(community => state.settlements.some(settlement => settlement.id === community.settlementId))
     .map(community => community.settlementId);
+  const firstLiveMonth = state.month <= baseline.eventMonth + 1;
   const statement = {
     id: `founding-continuity-bridge-${event.id}`,
     month: state.month,
-    text: `Arrival Day is over. The ${baseline.expectedCommunityCount} landing communities enter their first seasons with finite stores, different inherited knowledge, and different terrain. From here, the record follows what each community does with those differences.`,
+    text: firstLiveMonth
+      ? `The vessels are quiet now. ${baseline.expectedCommunityCount} communities have finite stores, inherited knowledge, and unfamiliar ground. From here, every decision begins to separate their futures.`
+      : `The ${baseline.expectedCommunityCount} landing communities are through their first days. Their stores, knowledge, and terrain are already producing different paths.`,
     epistemicStatus: 'recorded-fact' as const,
     sourceEventIds: [event.id],
     sourceEntityIds,
@@ -246,7 +251,7 @@ function bridgeScene(historian: Historian, state: SimulationState, baseline: Fou
     subjectId: 'world',
     kind: 'historian-context',
     position: baseline.center,
-    title: 'THE FIRST SEASONS',
+    title: firstLiveMonth ? 'THE FIRST DAYS' : 'THE FIRST SEASONS',
     statement,
     score: 0.82,
     interest: 0.82,
@@ -333,7 +338,9 @@ export function chooseFoundingContinuityScene(historian: Historian, state: Simul
   }
   if (!memory.bridgeShown) {
     memory.bridgeShown = true;
-    if (state.month <= baseline.eventMonth) {
+    // The real browser handoff commits Month 1 before the camera asks for its next scene. Let the
+    // bridge own that first live month instead of silently skipping the documentary handoff.
+    if (state.month <= baseline.eventMonth + 1) {
       const bridge = bridgeScene(historian, state, baseline);
       if (bridge) pacedStates.add(state);
       return bridge;
