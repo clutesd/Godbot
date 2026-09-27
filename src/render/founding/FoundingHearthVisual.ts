@@ -115,6 +115,34 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
     group.add(log);
   }
 
+  const tinder = new THREE.Group();
+  tinder.name = 'founding-hearth-tinder';
+  tinder.userData['hearthTinder'] = true;
+  for (let index = 0; index < 6; index += 1) {
+    const twig = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.017, 0.28 + stableUnit(`${seed}:tinder-length:${index}`) * 0.12, 5),
+      timber,
+    );
+    twig.rotation.z = Math.PI / 2;
+    twig.rotation.y = (index / 6) * Math.PI + (stableUnit(`${seed}:tinder-yaw:${index}`) - 0.5) * 0.3;
+    twig.position.set(
+      (stableUnit(`${seed}:tinder-x:${index}`) - 0.5) * 0.14,
+      0.055 + (index % 2) * 0.012,
+      (stableUnit(`${seed}:tinder-z:${index}`) - 0.5) * 0.14,
+    );
+    twig.castShadow = true;
+    tinder.add(twig);
+  }
+  const tinderGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 10, 6),
+    new THREE.MeshBasicMaterial({ color: '#ff7d32', toneMapped: false, transparent: true, opacity: 0.88 }),
+  );
+  tinderGlow.scale.set(1.15, 0.22, 1.15);
+  tinderGlow.position.y = 0.045;
+  tinderGlow.userData['hearthTinderGlow'] = true;
+  tinder.add(tinderGlow);
+  group.add(tinder);
+
   for (let index = 0; index < 7; index += 1) {
     const angle = stableUnit(`${seed}:coal-angle:${index}`) * Math.PI * 2;
     const radius = 0.08 + stableUnit(`${seed}:coal-radius:${index}`) * 0.18;
@@ -161,8 +189,51 @@ export function updateFoundingHearthAssembly(
       object.visible = pieceIndex >= 0 && pieceIndex < sample.logsPlaced;
       return;
     }
-    if (object.userData['hearthScorch'] || object.userData['hearthAsh'] || object.userData['hearthCoal']) {
-      object.visible = sample.assemblyComplete;
+    if (object.userData['hearthScorch'] || object.userData['hearthAsh'] || object.userData['hearthCoal']
+      || object.userData['hearthTinder'] || object.userData['hearthTinderGlow']) {
+      object.visible = false;
+    }
+  });
+}
+
+export function updateFoundingHearthIgnition(
+  group: THREE.Group,
+  sample: {
+    readonly phase: string;
+    readonly phaseProgress: number;
+    readonly assemblyComplete: boolean;
+    readonly tinderGlow: number;
+  },
+): void {
+  const openFlame = ['falter', 'catch', 'gather', 'settle', 'complete'].includes(sample.phase);
+  const establishedBurn = ['catch', 'gather', 'settle', 'complete'].includes(sample.phase);
+  group.traverse((object) => {
+    if (object.userData['hearthTinder']) {
+      object.visible = sample.assemblyComplete && !['gather', 'settle', 'complete'].includes(sample.phase);
+      return;
+    }
+    if (object.userData['hearthTinderGlow']) {
+      object.visible = sample.assemblyComplete && sample.tinderGlow > 0.01
+        && !['gather', 'settle', 'complete'].includes(sample.phase);
+      const scale = Math.max(0.001, sample.tinderGlow);
+      object.scale.set(1.15 * scale, 0.22 * scale, 1.15 * scale);
+      return;
+    }
+    if (object.userData['hearthCoal']) {
+      object.visible = openFlame;
+      return;
+    }
+    if (object.userData['hearthScorch']) {
+      object.visible = openFlame;
+      const scale = sample.phase === 'falter' ? 0.28 + sample.phaseProgress * 0.18
+        : sample.phase === 'catch' ? 0.46 + sample.phaseProgress * 0.54 : 1;
+      object.scale.set(scale, scale * 1.08, 1);
+      return;
+    }
+    if (object.userData['hearthAsh']) {
+      object.visible = establishedBurn;
+      const scale = sample.phase === 'catch' ? 0.3 + sample.phaseProgress * 0.7 : 1;
+      object.scale.set(1.08 * scale, 0.96 * scale, 1);
     }
   });
 }
@@ -240,6 +311,8 @@ export function updateFoundingHearthFireMotion(
   embers: THREE.Group | undefined,
   elapsedSeconds: number,
   reducedMotion: boolean,
+  flameGain = 1,
+  sparkGain = 1,
 ): void {
   const rigPhase = Number(rig.userData['phase'] ?? 0);
   for (const child of rig.children) {
@@ -249,11 +322,12 @@ export function updateFoundingHearthFireMotion(
       const baseX = Number(child.userData['baseX'] ?? child.position.x);
       const baseY = Number(child.userData['baseY'] ?? child.position.y);
       const baseZ = Number(child.userData['baseZ'] ?? child.position.z);
+      child.visible = flameGain > 0.005;
       if (reducedMotion) {
         child.position.set(baseX, baseY, baseZ);
         child.rotation.x = 0;
         child.rotation.z = 0;
-        child.scale.set(1, 1, 1);
+        child.scale.setScalar(Math.max(0.001, flameGain));
         continue;
       }
       const fast = Math.sin(elapsedSeconds * (8.1 + motion) + phase + rigPhase);
@@ -261,11 +335,15 @@ export function updateFoundingHearthFireMotion(
       child.position.set(baseX + slow * 0.014, baseY + Math.max(0, fast) * 0.018, baseZ + fast * 0.01);
       child.rotation.x = slow * 0.07;
       child.rotation.z = fast * 0.1;
-      child.scale.set(0.94 + slow * 0.045, 0.93 + fast * 0.11 + slow * 0.055, 0.94 - slow * 0.035);
+      child.scale.set(
+        (0.94 + slow * 0.045) * flameGain,
+        (0.93 + fast * 0.11 + slow * 0.055) * flameGain,
+        (0.94 - slow * 0.035) * flameGain,
+      );
       continue;
     }
     if (child.userData['hearthSpark']) {
-      if (reducedMotion) {
+      if (reducedMotion || sparkGain <= 0.01) {
         child.visible = false;
         continue;
       }
@@ -281,7 +359,7 @@ export function updateFoundingHearthFireMotion(
         Math.sin(drift + age * 1.6) * lateral,
       );
       const sparkle = Math.sin(age * Math.PI) * (1 - age * 0.55);
-      child.scale.setScalar(Math.max(0.001, sparkle));
+      child.scale.setScalar(Math.max(0.001, sparkle * sparkGain));
       child.rotation.y = elapsedSeconds * 4 + drift;
     }
   }
