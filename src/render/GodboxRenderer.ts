@@ -20,6 +20,7 @@ import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
+import { FoundingStandardPresentation, type FoundingStandardTarget } from './founding/FoundingStandardPresentation';
 import { foundingCommunityIsForming, foundingCommunitySupplyAnchor, isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
@@ -251,6 +252,7 @@ export class GodboxRenderer {
   /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
   private readonly humanLifeClock = new HumanLifeClock();
   private readonly firstFirePresentation: FoundingFirstFirePresentation;
+  private readonly foundingStandardPresentation: FoundingStandardPresentation;
   private readonly reactionGlyphs: ReactionGlyphRenderer;
   private readonly localActivities = new LocalActivityPresentation();
   private readonly localPeers = new Map<string, Person>();
@@ -405,6 +407,7 @@ export class GodboxRenderer {
   constructor(private readonly host: HTMLElement, private readonly config: GodboxConfig, private readonly state: SimulationState, historian: Historian) {
     this.random = new SeededRandom(`${config.seed}:visuals`);
     this.firstFirePresentation = new FoundingFirstFirePresentation(state);
+    this.foundingStandardPresentation = new FoundingStandardPresentation(state);
     this.reactionGlyphs = new ReactionGlyphRenderer(`${config.seed}:reaction-glyphs`);
     this.animationController = new AnimationController(`${config.seed}:humanoid-animation`);
     this.assetBuilder = new AssetBuilder(`${config.seed}:asset-builder`);
@@ -622,6 +625,13 @@ export class GodboxRenderer {
     const humanLife = this.humanLifeClock.advance(deltaSeconds);
     if (renderPolicy.updateAmbientWorldEffects) {
       this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds);
+      const blockedStandardSettlements = new Set<string>();
+      for (const settlement of this.state.settlements) {
+        if (this.firstFirePresentation.isPerforming(settlement.id)) blockedStandardSettlements.add(settlement.id);
+      }
+      if (this.foundingStandardPresentation.update(this.state, humanLife.elapsedSeconds, blockedStandardSettlements)) {
+        this.maintenance.request('settlements', true);
+      }
     }
     for (const culture of this.state.cultures) if (!this.cultureById.has(culture.id)) {
       this.cultureById.set(culture.id, culture);
