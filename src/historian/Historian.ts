@@ -200,7 +200,24 @@ export class Historian {
     const score = this.totalScore(breakdown);
     const kind = this.kindForEvent(event);
     const attributedPersonId = typeof event.context.attributedPersonId === 'string' ? event.context.attributedPersonId : undefined;
-    const attributedPerson = attributedPersonId ? state.people.find((person) => person.id === attributedPersonId) : undefined;
+    const firstFireSettlement = event.type === 'first-fire' && event.locationId
+      ? state.settlements.find((settlement) => settlement.id === event.locationId)
+      : undefined;
+    const firstFirePerson = firstFireSettlement
+      ? state.people.filter(person => person.alive && person.homeId === firstFireSettlement.id && person.health > 0.3)
+        .sort((a, b) => {
+          const adultA = a.ageMonths >= 168 ? 0 : 1;
+          const adultB = b.ageMonths >= 168 ? 0 : 1;
+          if (adultA !== adultB) return adultA - adultB;
+          const distanceA = Math.hypot(a.position.x - firstFireSettlement.position.x, a.position.z - firstFireSettlement.position.z);
+          const distanceB = Math.hypot(b.position.x - firstFireSettlement.position.x, b.position.z - firstFireSettlement.position.z);
+          if (Math.abs(distanceA - distanceB) > 0.01) return distanceA - distanceB;
+          return stableHistorianUnit(a.id) - stableHistorianUnit(b.id);
+        })[0]
+      : undefined;
+    const attributedPerson = attributedPersonId
+      ? state.people.find((person) => person.id === attributedPersonId)
+      : firstFirePerson;
     const atomicComparison = event.type === 'atomic-threshold' && (this.crossRunContext?.completedRuns ?? 0) >= 3
       ? ` ${this.crossRunContext?.atomicThresholdRuns ?? 0} previous completed civilizations reached this threshold; ${this.crossRunContext?.survivedThreeCenturiesAfterAtomic ?? 0} remained technologically intact for at least 300 years afterward.`
       : '';
@@ -452,7 +469,7 @@ export class Historian {
               ? 0.08
               : 0.28;
     const preferredScale = this.documentaryScale(candidate.kind);
-    const narration: DocumentaryEditorialIntent['narration'] = event && event.significance >= 0.78
+    const narration: DocumentaryEditorialIntent['narration'] = event && (event.significance >= 0.78 || event.type === 'first-fire')
       ? 'required'
       : candidate.kind === 'landscape-pause' || candidate.kind === 'night-transition' || candidate.kind === 'world-establishing'
         ? 'silent'
@@ -463,7 +480,9 @@ export class Historian {
         ? 'settled'
         : 'sequence-beat';
     const why = event
-      ? `${event.type.replaceAll('-', ' ')} changed the historical record`
+      ? event.type === 'first-fire'
+        ? 'the camp is turning a recorded survival milestone into a visible human act'
+        : `${event.type.replaceAll('-', ' ')} changed the historical record`
       : person
         ? `${person.name} is ${person.activity.replaceAll('-', ' ')}; visible activity gives the history a human subject`
         : settlement
@@ -597,7 +616,7 @@ export class Historian {
     if (event.type === 'atomic-threshold') return 'atomic-threshold';
     if (event.type === 'first-orbit' || event.type === 'offworld-settlement' || event.type === 'interplanetary-transition') return 'orbital-establishing';
     if (event.type === 'civilization-collapse' || event.type === 'outcome-classified' || event.type === 'observation-lost' || event.type === 'post-biological-transition' || event.type === 'planetary-stability') return 'civilization-ending';
-    if (event.type === 'discovery' || event.type === 'knowledge-rediscovered' || event.type === 'knowledge-adopted' || event.type === 'technology-transformation') return 'discovery-scene';
+    if (event.type === 'first-fire' || event.type === 'discovery' || event.type === 'knowledge-rediscovered' || event.type === 'knowledge-adopted' || event.type === 'technology-transformation') return 'discovery-scene';
     if (event.type === 'industrialization' || event.type === 'industrialization-stage') return 'city-growth-timelapse';
     if (event.type === 'infrastructure-built' || event.type === 'archive-destroyed') return 'infrastructure-scene';
     if (event.type === 'institution-formed' || event.type === 'leadership-succession') return 'institution-exterior';
@@ -621,6 +640,7 @@ export class Historian {
   }
 
   private eventText(event: HistoricalEvent): string {
+    if (event.type === 'first-fire') return `${event.summary} For the first time since landing, this camp has a communal hearth burning.`;
     if (event.type === 'atomic-threshold') return 'This civilization has discovered an energy source vastly beyond chemical combustion.';
     if (event.type === 'nuclear-weapons-developed') return `${event.summary} Its doctrine is recorded as ${String(event.context.doctrine ?? 'undetermined').replaceAll('-', ' ')}.`;
     if (event.type === 'nuclear-use' || event.type === 'nuclear-exchange') return `${event.summary} The demographic loss is recorded as ${Math.round(Number(event.context.populationLossFraction ?? 0) * 100)}%.`;
@@ -636,6 +656,7 @@ export class Historian {
   }
 
   private titleForEvent(state: SimulationState, event: HistoricalEvent): string {
+    if (event.type === 'first-fire') return 'FIRST FIRE';
     if (event.type === 'atomic-threshold') return 'ATOMIC THRESHOLD';
     if (event.type === 'first-orbit') return 'FIRST ORBIT';
     if (event.type === 'offworld-settlement') return 'FIRST OFF-WORLD SETTLEMENT';
@@ -743,4 +764,14 @@ export class Historian {
   private relationRisk(relation: Relation): number { return clamp(relation.hostility * 0.46 + relation.grievances * 0.28 + relation.territorialTension * 0.26); }
   private matchesRelation(a: string, b: string, relation: Relation): boolean { return (a === relation.a && b === relation.b) || (a === relation.b && b === relation.a); }
   private ordinalSuffix(value: number): string { const mod100 = value % 100; if (mod100 >= 11 && mod100 <= 13) return 'th'; return value % 10 === 1 ? 'st' : value % 10 === 2 ? 'nd' : value % 10 === 3 ? 'rd' : 'th'; }
+}
+
+
+function stableHistorianUnit(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0xffffffff;
 }
