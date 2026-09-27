@@ -3300,7 +3300,12 @@ export class GodboxRenderer {
       const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
       const groundY = this.elevationAt(worldX, worldZ) - settlementY;
       const visualSeed = settlement.survival?.firstFire?.eventId ?? `${this.config.seed}:${settlement.id}`;
-      const infrastructure = createFoundingHearthInfrastructure(palette, visualSeed);
+      const hearthDistance = Math.max(0.001, Math.hypot(hearthOffset.x, hearthOffset.z));
+      const pickupLocal = {
+        x: -hearthOffset.x / hearthDistance * 0.78,
+        z: -hearthOffset.z / hearthDistance * 0.78,
+      };
+      const infrastructure = createFoundingHearthInfrastructure(palette, visualSeed, pickupLocal);
       infrastructure.position.set(hearthOffset.x, groundY, hearthOffset.z);
       infrastructure.userData['foundingHearth'] = foundingHearth;
       const initial = foundingHearth
