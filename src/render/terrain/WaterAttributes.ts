@@ -101,12 +101,12 @@ export function smoothInlandWaterNormals(geometry: THREE.BufferGeometry): void {
   }
 
   const normals = new Float32Array(position.count * 3);
-  const fallback = new THREE.Vector3(0, 1, 0);
   for (let index = 0; index < position.count; index += 1) {
-    const normal = accumulated.get(keyFor(index))?.clone().normalize() ?? fallback;
-    normals[index * 3] = normal.x;
-    normals[index * 3 + 1] = normal.y;
-    normals[index * 3 + 2] = normal.z;
+    const source = accumulated.get(keyFor(index));
+    const length = source ? Math.hypot(source.x, source.y, source.z) : 0;
+    normals[index * 3] = length > 1e-12 ? source!.x / length : 0;
+    normals[index * 3 + 1] = length > 1e-12 ? source!.y / length : 1;
+    normals[index * 3 + 2] = length > 1e-12 ? source!.z / length : 0;
   }
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
 }
