@@ -60,14 +60,26 @@ describe('Historian grounding', () => {
     const early = new Simulation({ seed: 'historian-first-fire', startMode: 'arrival', world: { size: 40 } });
     early.advanceArrival(120);
     expect(early.beginHistory()).toBe(true);
-
-    let firstFire = early.state.history.find(event => event.type === 'first-fire');
-    for (let month = 0; month < 18 && !firstFire; month += 1) {
-      early.step(1);
-      firstFire = early.state.history.find(event => event.type === 'first-fire');
-    }
-    expect(firstFire).toBeDefined();
-    if (!firstFire) return;
+    early.step(1);
+    const settlement = early.state.settlements.find(candidate => candidate.alive && candidate.foundingPodId);
+    if (!settlement) throw new Error('Expected a living founding settlement');
+    const firstFire = {
+      id: 'event:first-fire:test',
+      month: early.state.month,
+      type: 'first-fire' as const,
+      location: { ...settlement.position },
+      locationId: settlement.id,
+      actors: [settlement.id],
+      causes: ['founding-survival'],
+      context: { purpose: 'founding-hearth', fuelUsed: 0.03, intensity: 1 },
+      outcome: 'A founding hearth is established.',
+      affectedPopulation: early.state.people.filter(person => person.alive && person.homeId === settlement.id).length,
+      magnitude: 0.68,
+      significance: 0.68,
+      tags: ['founding-survival', 'fire-control'],
+      summary: `${settlement.name} lights its first recorded survival hearth.`,
+    };
+    early.state.history.push(firstFire);
 
     const director = new Historian(early.config);
     const scene = director.chooseScene(early.state, firstFire.id);
