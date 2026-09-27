@@ -261,6 +261,18 @@ export class FoundingStandardPresentation {
     };
   }
 
+  participantIds(settlementId?: string): ReadonlySet<string> {
+    const ids = new Set<string>();
+    if (settlementId) {
+      for (const participant of this.active.get(settlementId)?.participants ?? []) ids.add(participant.personId);
+      return ids;
+    }
+    for (const ceremony of this.active.values()) {
+      for (const participant of ceremony.participants) ids.add(participant.personId);
+    }
+    return ids;
+  }
+
   isPerforming(settlementId: string): boolean {
     return this.active.has(settlementId);
   }
