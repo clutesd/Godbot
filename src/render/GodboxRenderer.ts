@@ -2890,7 +2890,15 @@ export class GodboxRenderer {
       localZ = anchor.localZ * scale + Math.sin(angle + Math.PI / 2) * lateral;
     };
 
-    if (legacy.site === 'civic') {
+    if (legacy.site === 'hearth') {
+      const hearth = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []);
+      if (hearth) {
+        const angle = Math.hypot(hearth.x, hearth.z) > 0.05 ? Math.atan2(hearth.z, hearth.x) : phase;
+        // Beside the communal hearth, never through its gathering/contact ring.
+        localX = hearth.x + Math.cos(angle + Math.PI / 2) * 0.72;
+        localZ = hearth.z + Math.sin(angle + Math.PI / 2) * 0.72;
+      }
+    } else if (legacy.site === 'civic') {
       const anchor = layout.anchors.civic;
       localX = anchor.localX + Math.cos(phase) * Math.min(1.35, anchor.radius * 0.7);
       localZ = anchor.localZ + Math.sin(phase) * Math.min(1.35, anchor.radius * 0.7);
