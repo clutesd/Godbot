@@ -8,7 +8,7 @@ import { elevationToY, type TerrainSurface } from './TerrainSurface';
 import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 import type { EcologyField } from '../ecology/EcologyField';
 import { WaterEcology } from './WaterEcology';
-import { packInlandAttributes, packInlandShader } from './WaterAttributes';
+import { packInlandAttributes, packInlandShader, smoothInlandWaterNormals, stabilizeInlandWaterGeometry } from './WaterAttributes';
 import { renderedGroundSampler } from './WaterGround';
 
 export interface WaterReport {
@@ -49,6 +49,8 @@ const WATER_RIVER = 1;
 const WATER_FLOOD = 2;
 const WATER_TRANSITION_SECONDS = 2.4;
 const RECESSION_WET_SECONDS = 10;
+/** Keep the visible shoreline off the exact terrain coplanar boundary: no z-fighting, bright seams or hovering slivers. */
+const SHORELINE_RENDER_DEPTH = 0.004;
 
 /**
  * Everything wet. Hydrology remains authoritative; this layer only turns that truth into a
@@ -249,7 +251,7 @@ export class WaterSystem {
       const travel = this.rapidBase[base + 6] ?? 0;
       const speed = this.rapidBase[base + 7] ?? 1;
       const progress = ((elapsedSeconds * speed + phase) % 1) - 0.5;
-      positions.setXYZ(index, x + dirX * progress * travel, y + Math.sin((progress + phase) * Math.PI * 2) * 0.006, z + dirZ * progress * travel);
+      positions.setXYZ(index, x + dirX * progress * travel, y + Math.sin((progress + phase) * Math.PI * 2) * 0.004, z + dirZ * progress * travel);
     }
     positions.needsUpdate = true;
   }
@@ -272,7 +274,7 @@ export class WaterSystem {
       const angle = phase * Math.PI * 2 + progress * 0.7;
       const radialX = Math.cos(angle) * 0.68 + dirX * 0.42;
       const radialZ = Math.sin(angle) * 0.68 + dirZ * 0.42;
-      positions.setXYZ(index, cx + radialX * radius * progress, y + Math.sin(progress * Math.PI) * 0.018, cz + radialZ * radius * progress);
+      positions.setXYZ(index, cx + radialX * radius * progress, y + Math.sin(progress * Math.PI) * 0.012, cz + radialZ * radius * progress);
     }
     positions.needsUpdate = true;
   }
@@ -445,12 +447,31 @@ function createOceanMaterial(): THREE.MeshPhysicalMaterial {
     shader.uniforms['waterRain'] = state.rain;
     shader.uniforms['waterStorm'] = state.storm;
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterWind;\nuniform float waterWindX;\nuniform float waterWindZ;\nuniform float waterStorm;\nvarying vec2 vWaterLocal;`);
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterLocal = position.xy;\nvec2 oceanWindDirection = normalize(vec2(waterWindX, waterWindZ) + vec2(0.0001));\nvec2 oceanAcross = vec2(-oceanWindDirection.y, oceanWindDirection.x);\nfloat oceanAlong = dot(position.xy, oceanWindDirection);\nfloat oceanCross = dot(position.xy, oceanAcross);\nfloat oceanEnergy = 0.62 + waterWind * 0.9 + waterStorm * 1.35;\nfloat oceanWaveA = sin(oceanAlong * 0.032 - waterTime * (0.28 + waterWind * 0.28));\nfloat oceanWaveB = sin(oceanAlong * 0.055 + oceanCross * 0.018 - waterTime * (0.21 + waterWind * 0.18));\nfloat oceanWaveC = sin(oceanCross * 0.082 + waterTime * 0.17);\ntransformed.z += (oceanWaveA * 0.020 + oceanWaveB * 0.011 + oceanWaveC * 0.004) * oceanEnergy;`);
+    // Keep the ocean geometry physically smooth. Wave shape belongs in the fragment normal; vertex
+    // displacement on the very large plane exposes its triangles as long diagonal facets at low angles.
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterLocal = position.xy;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterWind;\nuniform float waterWindX;\nuniform float waterWindZ;\nuniform float waterRain;\nuniform float waterStorm;\nvarying vec2 vWaterLocal;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nvec2 oceanWindDirection = normalize(vec2(waterWindX, waterWindZ) + vec2(0.0001));\nfloat oceanAlong = dot(vWaterLocal, oceanWindDirection);\nfloat oceanAcross = dot(vWaterLocal, vec2(-oceanWindDirection.y, oceanWindDirection.x));\nfloat oceanCrossA = sin(oceanAlong * (0.12 + waterWind * 0.05) - waterTime * (0.48 + waterWind * 0.5));\nfloat oceanCrossB = sin(oceanAcross * 0.16 + oceanAlong * 0.035 + waterTime * 0.31);\nfloat oceanRipple = (oceanCrossA + oceanCrossB) * 0.5;\n// Incommensurate world-space bands keep large water coherent without revealing the plane mesh.\nfloat oceanWanderA = sin(vWaterLocal.x * 0.071 + vWaterLocal.y * 0.043 - waterTime * 0.19);\nfloat oceanWanderB = sin(vWaterLocal.x * -0.037 + vWaterLocal.y * 0.089 + waterTime * 0.16 + oceanWanderA * 0.72);\nfloat oceanWanderC = sin((vWaterLocal.x + vWaterLocal.y) * 0.021 - waterTime * 0.075 + oceanWanderB * 0.55);\nfloat oceanBreath = oceanWanderA * 0.38 + oceanWanderB * 0.37 + oceanWanderC * 0.25;\nfloat oceanSilk = pow(max(0.0, 0.5 + 0.5 * (oceanRipple * 0.58 + oceanBreath * 0.42)), 7.0);\nfloat rainDimple = sin(vWaterLocal.x * 8.1 + waterTime * 8.4) * sin(vWaterLocal.y * 7.3 - waterTime * 7.7);\nfloat oceanGlint = smoothstep(0.66, 0.99, oceanRipple * 0.68 + oceanBreath * 0.32) * (0.08 + waterWind * 0.05);\nvec3 oceanDeep = vec3(0.055, 0.20, 0.27);\nvec3 oceanJewel = vec3(0.16, 0.48, 0.53);\ndiffuseColor.rgb = mix(diffuseColor.rgb, oceanDeep, 0.055 + max(0.0, -oceanBreath) * 0.035);\ndiffuseColor.rgb = mix(diffuseColor.rgb, oceanJewel, max(0.0, oceanBreath) * 0.055);\ndiffuseColor.rgb *= 1.0 + oceanRipple * (0.018 + waterWind * 0.010);\ndiffuseColor.rgb += vec3(0.16, 0.25, 0.26) * oceanGlint;\ndiffuseColor.rgb += vec3(0.10, 0.22, 0.24) * oceanSilk * (0.018 + waterWind * 0.012);\ndiffuseColor.rgb += vec3(0.11, 0.14, 0.15) * max(0.0, rainDimple) * waterRain * 0.045;\ndiffuseColor.rgb *= 1.0 - waterStorm * 0.07;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+vec2 oceanNormalWind = normalize(vec2(waterWindX, waterWindZ) + vec2(0.0001));
+vec2 oceanNormalAcross = vec2(-oceanNormalWind.y, oceanNormalWind.x);
+float oceanNormalAlong = dot(vWaterLocal, oceanNormalWind);
+float oceanNormalCross = dot(vWaterLocal, oceanNormalAcross);
+float oceanNormalEnergy = 0.62 + waterWind * 0.9 + waterStorm * 1.35;
+float oceanNormalA = oceanNormalAlong * 0.032 - waterTime * (0.28 + waterWind * 0.28);
+float oceanNormalB = oceanNormalAlong * 0.055 + oceanNormalCross * 0.018 - waterTime * (0.21 + waterWind * 0.18);
+float oceanNormalC = oceanNormalCross * 0.082 + waterTime * 0.17;
+float oceanSlopeAlong = (cos(oceanNormalA) * 0.020 * 0.032 + cos(oceanNormalB) * 0.011 * 0.055) * oceanNormalEnergy;
+float oceanSlopeAcross = (cos(oceanNormalB) * 0.011 * 0.018 + cos(oceanNormalC) * 0.004 * 0.082) * oceanNormalEnergy;
+vec2 oceanGradient = oceanNormalWind * oceanSlopeAlong + oceanNormalAcross * oceanSlopeAcross;
+vec3 oceanWorldNormal = normalize(vec3(-oceanGradient.x * 8.0, 1.0, -oceanGradient.y * 8.0));
+vec3 oceanWaveNormal = normalize((viewMatrix * vec4(oceanWorldNormal, 0.0)).xyz);
+// Preserve any ecology/rain micro-detail already applied earlier in the material chain.
+normal = normalize(mix(normal, oceanWaveNormal, 0.68));
+nonPerturbedNormal = normal;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor + waterStorm * 0.08 + waterRain * 0.04, 0.08, 0.9);`);
   };
-  material.customProgramCacheKey = () => 'godbox-ocean-water-v4-living-surface';
+  material.customProgramCacheKey = () => 'godbox-ocean-water-v6-layered-smooth-surface';
   return material;
 }
 
@@ -477,14 +498,16 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterTransition;\nattribute float waterDepth;\nattribute float waterFlow;\nattribute vec2 waterFlowDirection;\nattribute float waterKind;\nattribute float waterHierarchy;\nattribute float waterRapid;\nattribute vec2 waterWindDirection;\nattribute float waterWind;\nattribute float waterRain;\nattribute float waterStorm;\nattribute float waterFreezePrevious;\nattribute float waterFreeze;\nattribute float waterSnow;\nattribute float waterEmergence;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
     shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterDepth = waterDepth;\nvWaterFlow = waterFlow;\nvWaterFlowDirection = waterFlowDirection;\nvWaterKind = waterKind;\nvWaterHierarchy = waterHierarchy;\nvWaterRapid = waterRapid;\nvWaterRain = waterRain;\nvWaterWind = waterWind;\nvWaterStorm = waterStorm;\nvWaterSnow = waterSnow;\nvWaterIce = mix(waterFreezePrevious, waterFreeze, waterTransition);\n// Keep shared vertices fixed; moving normals carry the waves without opening cracks.\nvWaterPosition = transformed;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat waterRiver = 1.0 - step(0.49, abs(vWaterKind - 1.0));\nfloat waterLake = 1.0 - step(0.49, abs(vWaterKind));\nfloat waterFlood = max(0.0, 1.0 - waterRiver - waterLake);\nfloat waterShallow = 1.0 - smoothstep(0.025, 0.20, vWaterDepth);\nfloat waterDeep = smoothstep(0.16, 0.82, vWaterDepth);\nfloat waterBank = 1.0 - smoothstep(0.008, 0.060, vWaterDepth);\nvec3 waterShallowTint = vec3(0.39, 0.64, 0.61);\nvec3 waterDeepTint = vec3(0.075, 0.25, 0.31);\nvec3 waterLakeTint = vec3(0.16, 0.39, 0.43);\nvec3 waterRiverTint = mix(vec3(0.17, 0.42, 0.43), vec3(0.08, 0.31, 0.36), vWaterHierarchy);\nvec3 waterFloodTint = vec3(0.30, 0.34, 0.24);\nvec3 lakeBankTint = vec3(0.25, 0.43, 0.38);\nvec3 riverBankTint = vec3(0.29, 0.32, 0.22);\nvec3 floodBankTint = vec3(0.34, 0.29, 0.18);\nvec3 bankTint = lakeBankTint * waterLake + riverBankTint * waterRiver + floodBankTint * waterFlood;\n// Semantic colour begins from interpolated depth/type instead of per-cell vertex colour.\nvec3 waterBodyTint = waterLakeTint * waterLake + waterRiverTint * waterRiver + waterFloodTint * waterFlood;\ndiffuseColor.rgb = waterBodyTint;\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterShallowTint, waterShallow * (0.28 + waterLake * 0.06));\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterDeepTint, waterDeep * (0.46 + waterRiver * 0.08));\ndiffuseColor.rgb = mix(diffuseColor.rgb, bankTint, waterBank * (0.19 + waterFlood * 0.17));\nvec2 waterDirection = length(vWaterFlowDirection) > 0.01 ? normalize(vWaterFlowDirection) : vec2(0.7071, 0.7071);\nvec2 waterAcross = vec2(-waterDirection.y, waterDirection.x);\nfloat waterCurrentCoordinate = dot(vWaterPosition.xz, waterDirection);\nfloat waterAcrossCoordinate = dot(vWaterPosition.xz, waterAcross);\nfloat lakeRipple = (sin(vWaterPosition.x * 1.55 + waterTime * (0.40 + vWaterWind * 0.45)) + sin(vWaterPosition.z * 1.39 - waterTime * 0.39)) * 0.5;\nfloat riverCurrent = sin(waterCurrentCoordinate * (2.3 + vWaterHierarchy) - waterTime * (1.7 + vWaterFlow * 2.7) + sin(waterAcrossCoordinate * 2.1) * 0.45);\nfloat currentLane = pow(max(0.0, 0.5 + 0.5 * riverCurrent), 7.0) * waterRiver;\nfloat rapidCrest = pow(max(0.0, sin(waterCurrentCoordinate * 5.2 - waterTime * (3.5 + vWaterFlow * 3.0) + waterAcrossCoordinate * 0.9)), 9.0) * vWaterRapid * waterRiver;\nfloat rainScatter = max(0.0, sin(vWaterPosition.x * 8.2 + waterTime * 8.6) * sin(vWaterPosition.z * 7.5 - waterTime * 7.9)) * vWaterRain;\nfloat waterRipple = lakeRipple * waterLake + riverCurrent * 0.55 * waterRiver + lakeRipple * 0.18 * waterFlood;\nwaterRipple *= 1.0 - vWaterIce * 0.94;\n// Slow world-space silk sits beneath the fast ripples, so the surface appears to breathe.\nfloat wanderA = sin(vWaterPosition.x * 0.73 + vWaterPosition.z * 0.41 - waterTime * 0.23);\nfloat wanderB = sin(vWaterPosition.x * -0.37 + vWaterPosition.z * 0.91 + waterTime * 0.17 + wanderA * 0.58);\nfloat wanderC = sin((vWaterPosition.x + vWaterPosition.z) * 0.19 - waterTime * 0.11 + wanderB * 0.44);\nfloat waterWander = wanderA * 0.36 + wanderB * 0.39 + wanderC * 0.25;\nfloat waterSilk = pow(max(0.0, 0.5 + 0.5 * (waterRipple * 0.56 + waterWander * 0.44)), 6.0);\nfloat waterGlint = smoothstep(0.67, 0.98, waterRipple * 0.70 + waterWander * 0.30) * smoothstep(0.025, 0.12, vWaterDepth);\nfloat shorelinePearl = waterBank * (0.5 + 0.5 * sin(vWaterPosition.x * 1.31 + vWaterPosition.z * 1.07 - waterTime * 0.34 + waterWander));\nvec3 jewelTint = mix(vec3(0.10, 0.42, 0.43), vec3(0.17, 0.51, 0.55), 0.5 + 0.5 * waterWander);\ndiffuseColor.rgb = mix(diffuseColor.rgb, jewelTint, waterSilk * (0.028 + waterLake * 0.014) * (1.0 - vWaterIce));\ndiffuseColor.rgb *= 1.0 + waterRipple * (0.012 + waterRiver * 0.010);\ndiffuseColor.rgb += vec3(0.12, 0.20, 0.20) * waterGlint * 0.16;\ndiffuseColor.rgb += vec3(0.16, 0.29, 0.25) * shorelinePearl * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb += vec3(0.10, 0.18, 0.17) * currentLane * (0.04 + vWaterFlow * 0.05) * (1.0 - vWaterIce);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.88, 0.86), rapidCrest * 0.52 * (1.0 - vWaterIce));\ndiffuseColor.rgb += vec3(0.10, 0.13, 0.13) * rainScatter * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb *= 1.0 - vWaterStorm * 0.045;\nvec3 iceTint = mix(vec3(0.43, 0.59, 0.62), vec3(0.62, 0.72, 0.73), waterLake);\ndiffuseColor.rgb = mix(diffuseColor.rgb, iceTint, vWaterIce * 0.74);\nfloat snowOnIce = smoothstep(0.72, 0.96, vWaterIce) * smoothstep(0.008, 0.07, vWaterSnow);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.88, 0.87), snowOnIce * 0.48);`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat waterRiver = 1.0 - step(0.49, abs(vWaterKind - 1.0));\nfloat waterLake = 1.0 - step(0.49, abs(vWaterKind));\nfloat waterFlood = max(0.0, 1.0 - waterRiver - waterLake);\nfloat waterShallow = 1.0 - smoothstep(0.025, 0.20, vWaterDepth);\nfloat waterDeep = smoothstep(0.16, 0.82, vWaterDepth);\nfloat waterBank = 1.0 - smoothstep(0.008, 0.060, vWaterDepth);\nvec3 waterShallowTint = vec3(0.39, 0.64, 0.61);\nvec3 waterDeepTint = vec3(0.075, 0.25, 0.31);\nvec3 waterLakeTint = vec3(0.16, 0.39, 0.43);\nvec3 waterRiverTint = mix(vec3(0.17, 0.42, 0.43), vec3(0.08, 0.31, 0.36), vWaterHierarchy);\nvec3 waterFloodTint = vec3(0.30, 0.34, 0.24);\nvec3 lakeBankTint = vec3(0.25, 0.43, 0.38);\nvec3 riverBankTint = vec3(0.29, 0.32, 0.22);\nvec3 floodBankTint = vec3(0.34, 0.29, 0.18);\nvec3 bankTint = lakeBankTint * waterLake + riverBankTint * waterRiver + floodBankTint * waterFlood;\n// Semantic colour begins from interpolated depth/type instead of per-cell vertex colour.\nvec3 waterBodyTint = waterLakeTint * waterLake + waterRiverTint * waterRiver + waterFloodTint * waterFlood;\ndiffuseColor.rgb = waterBodyTint;\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterShallowTint, waterShallow * (0.28 + waterLake * 0.06));\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterDeepTint, waterDeep * (0.46 + waterRiver * 0.08));\ndiffuseColor.rgb = mix(diffuseColor.rgb, bankTint, waterBank * (0.19 + waterFlood * 0.17));\nvec2 waterDirection = length(vWaterFlowDirection) > 0.01 ? normalize(vWaterFlowDirection) : vec2(0.7071, 0.7071);\nvec2 waterAcross = vec2(-waterDirection.y, waterDirection.x);\nfloat waterCurrentCoordinate = dot(vWaterPosition.xz, waterDirection);\nfloat waterAcrossCoordinate = dot(vWaterPosition.xz, waterAcross);\nfloat lakeRipple = (sin(vWaterPosition.x * 0.86 + waterTime * (0.34 + vWaterWind * 0.36)) + sin(vWaterPosition.z * 0.74 - waterTime * 0.31)) * 0.5;\nfloat riverCurrent = sin(waterCurrentCoordinate * (1.5 + vWaterHierarchy * 0.65) - waterTime * (1.45 + vWaterFlow * 2.2) + sin(waterAcrossCoordinate * 1.35) * 0.38);\nfloat currentLane = pow(max(0.0, 0.5 + 0.5 * riverCurrent), 7.0) * waterRiver;\nfloat rapidCrest = pow(max(0.0, sin(waterCurrentCoordinate * 5.2 - waterTime * (3.5 + vWaterFlow * 3.0) + waterAcrossCoordinate * 0.9)), 9.0) * vWaterRapid * waterRiver;\nfloat rainScatter = max(0.0, sin(vWaterPosition.x * 8.2 + waterTime * 8.6) * sin(vWaterPosition.z * 7.5 - waterTime * 7.9)) * vWaterRain;\nfloat waterRipple = lakeRipple * waterLake + riverCurrent * 0.55 * waterRiver + lakeRipple * 0.18 * waterFlood;\nwaterRipple *= 1.0 - vWaterIce * 0.94;\n// Slow world-space silk sits beneath the fast ripples, so the surface appears to breathe.\nfloat wanderA = sin(vWaterPosition.x * 0.31 + vWaterPosition.z * 0.19 - waterTime * 0.19);\nfloat wanderB = sin(vWaterPosition.x * -0.17 + vWaterPosition.z * 0.39 + waterTime * 0.15 + wanderA * 0.52);\nfloat wanderC = sin((vWaterPosition.x + vWaterPosition.z) * 0.085 - waterTime * 0.09 + wanderB * 0.40);\nfloat waterWander = wanderA * 0.36 + wanderB * 0.39 + wanderC * 0.25;\nfloat waterSilk = pow(max(0.0, 0.5 + 0.5 * (waterRipple * 0.48 + waterWander * 0.52)), 5.0);\nfloat waterGlint = smoothstep(0.67, 0.98, waterRipple * 0.70 + waterWander * 0.30) * smoothstep(0.025, 0.12, vWaterDepth);\nfloat shorelinePearl = waterBank * (0.5 + 0.5 * sin(vWaterPosition.x * 1.31 + vWaterPosition.z * 1.07 - waterTime * 0.34 + waterWander));\nvec3 jewelTint = mix(vec3(0.10, 0.42, 0.43), vec3(0.17, 0.51, 0.55), 0.5 + 0.5 * waterWander);\ndiffuseColor.rgb = mix(diffuseColor.rgb, jewelTint, waterSilk * (0.028 + waterLake * 0.014) * (1.0 - vWaterIce));\ndiffuseColor.rgb *= 1.0 + waterRipple * (0.006 + waterRiver * 0.006);\ndiffuseColor.rgb += vec3(0.12, 0.20, 0.20) * waterGlint * 0.16;\ndiffuseColor.rgb += vec3(0.16, 0.29, 0.25) * shorelinePearl * 0.028 * (1.0 - vWaterIce);\ndiffuseColor.rgb += vec3(0.10, 0.18, 0.17) * currentLane * (0.04 + vWaterFlow * 0.05) * (1.0 - vWaterIce);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.88, 0.86), rapidCrest * 0.52 * (1.0 - vWaterIce));\ndiffuseColor.rgb += vec3(0.10, 0.13, 0.13) * rainScatter * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb *= 1.0 - vWaterStorm * 0.045;\nvec3 iceTint = mix(vec3(0.43, 0.59, 0.62), vec3(0.62, 0.72, 0.73), waterLake);\ndiffuseColor.rgb = mix(diffuseColor.rgb, iceTint, vWaterIce * 0.74);\nfloat snowOnIce = smoothstep(0.72, 0.96, vWaterIce) * smoothstep(0.008, 0.07, vWaterSnow);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.88, 0.87), snowOnIce * 0.48);`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
       // Continuous world-space ripples make even the lowest detail water catch the light.
       float rippleShore = smoothstep(0.0, 0.08, vWaterDepth) * (1.0 - vWaterIce);
       vec2 rippleSlope = vec2(
-        cos(vWaterPosition.x * 1.65 + vWaterPosition.z * 0.45 - waterTime * 0.9),
-        sin(vWaterPosition.z * 1.9 - vWaterPosition.x * 0.32 + waterTime * 0.65)) * 0.045 * rippleShore;
-      normal = normalize((viewMatrix * vec4(normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y)), 0.0)).xyz);
+        cos(vWaterPosition.x * 0.88 + vWaterPosition.z * 0.31 - waterTime * 0.72),
+        sin(vWaterPosition.z * 0.97 - vWaterPosition.x * 0.24 + waterTime * 0.54)) * 0.026 * rippleShore;
+      vec3 broadWaterNormal = normalize((viewMatrix * vec4(normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y)), 0.0)).xyz);
+      // Blend into the smooth geometric/ecology normal instead of replacing real river slope.
+      normal = normalize(mix(normal, broadWaterNormal, 0.40));
       nonPerturbedNormal = normal;
     `);
     shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(mix(roughnessFactor, 0.68, vWaterIce * 0.78) + vWaterStorm * 0.035, 0.08, 0.92);`);
@@ -494,7 +517,7 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     compile.call(material, shader, renderer);
     shader.vertexShader = packInlandShader(shader.vertexShader);
   };
-  material.customProgramCacheKey = () => 'godbox-inland-water-v6-seamless-ground-fit';
+  material.customProgramCacheKey = () => 'godbox-inland-water-v8-layered-continuous-surface';
   return material;
 }
 
@@ -709,10 +732,17 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
       for (let i = 0; i < 3; i++) {
         const a = triangle[i]!;
         const b = triangle[(i + 1) % 3]!;
-        if (a.depth > 0) clipped.push(a);
-        if ((a.depth > 0) !== (b.depth > 0)) {
-          const t = a.depth / (a.depth - b.depth);
-          clipped.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, depth: 0 });
+        const aDepth = a.depth - SHORELINE_RENDER_DEPTH;
+        const bDepth = b.depth - SHORELINE_RENDER_DEPTH;
+        if (aDepth > 0) clipped.push(a);
+        if ((aDepth > 0) !== (bDepth > 0)) {
+          const t = aDepth / (aDepth - bDepth);
+          clipped.push({
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t,
+            z: a.z + (b.z - a.z) * t,
+            depth: SHORELINE_RENDER_DEPTH,
+          });
         }
       }
       for (let i = 1; i < clipped.length - 1; i++) {
@@ -722,7 +752,7 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
           const shallowToDeep = clamp01(depth * 0.72 + currentFlow * 0.18 + hierarchy * 0.12);
           colour.copy(bank).lerp(shallow, bankToShallow).lerp(deep, shallowToDeep);
           if (kind === WATER_FLOOD) colour.lerp(flood, 0.42);
-          positions.push(p.x, p.y + 0.002, p.z);
+          positions.push(p.x, p.y, p.z);
           colors.push(colour.r, colour.g, colour.b);
           depths.push(depth);
           flows.push(currentFlow);
@@ -760,8 +790,13 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   geometry.setAttribute('waterFreeze', new THREE.Float32BufferAttribute(freezes, 1));
   geometry.setAttribute('waterSnow', new THREE.Float32BufferAttribute(snows, 1));
   geometry.setAttribute('waterEmergence', new THREE.Float32BufferAttribute(emergences, 1));
+  // Waterfalls and abrupt hydrology discontinuities must never become tall triangular curtains.
+  // Collapse only the impossible outlier triangles; the dedicated waterfall sheet supplies the drop.
+  const stabilized = stabilizeInlandWaterGeometry(geometry);
+  geometry.userData['stabilizedWaterTriangles'] = stabilized;
+  // Preserve real river/lake slope while sharing lighting across clipped triangle boundaries.
+  smoothInlandWaterNormals(geometry);
   packInlandAttributes(geometry);
-  geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   const mesh = new THREE.Mesh(geometry, createInlandMaterial());
   mesh.name = 'inland-water';
@@ -788,7 +823,7 @@ function buildRapidFoam(world: WorldState, random: SeededRandom): RapidFoam | un
   for (const site of sites) {
     const x = terrain.originX + site.index % terrain.resolution * terrain.step;
     const z = terrain.originZ + Math.floor(site.index / terrain.resolution) * terrain.step;
-    const y = waterSurfaceYAt(world, x, z, site.index) + 0.015;
+    const y = waterSurfaceYAt(world, x, z, site.index) + 0.008;
     const perSite = 2 + Math.round(site.intensity * 4);
     const acrossX = -site.direction[1];
     const acrossZ = site.direction[0];
@@ -903,10 +938,10 @@ function buildPlungePools(falls: FallSite[], world: WorldState, random: SeededRa
       const phase = random.float();
       const radius = world.terrain.step * random.range(0.18, 0.68) * (0.7 + fall.intensity * 0.5);
       positions[cursor * 3] = centerX;
-      positions[cursor * 3 + 1] = fall.bottomY + 0.035;
+      positions[cursor * 3 + 1] = fall.bottomY + 0.018;
       positions[cursor * 3 + 2] = centerZ;
       const offset = cursor * 8;
-      base[offset] = centerX; base[offset + 1] = fall.bottomY + 0.035; base[offset + 2] = centerZ;
+      base[offset] = centerX; base[offset + 1] = fall.bottomY + 0.018; base[offset + 2] = centerZ;
       base[offset + 3] = fall.direction[0]; base[offset + 4] = fall.direction[1];
       base[offset + 5] = phase; base[offset + 6] = radius; base[offset + 7] = random.range(0.28, 0.62) * (0.8 + fall.intensity * 0.5);
       cursor += 1;

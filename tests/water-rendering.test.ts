@@ -54,7 +54,7 @@ function shaderStub() {
   return {
     uniforms: {} as Record<string, { value: unknown }>,
     vertexShader: '#include <common>\n#include <begin_vertex>',
-    fragmentShader: '#include <common>\n#include <color_fragment>\n#include <roughnessmap_fragment>',
+    fragmentShader: '#include <common>\n#include <color_fragment>\n#include <normal_fragment_begin>\n#include <roughnessmap_fragment>',
   };
 }
 
@@ -203,6 +203,19 @@ describe('Water rendering foundation', () => {
       }
     }
     expect(shared).toBeGreaterThan(0);
+    const normals = water.geometry.getAttribute('normal');
+    const normalByPosition = new Map<string, [number, number, number]>();
+    for (let index = 0; index < normals.count; index += 1) {
+      expect(normals.getY(index)).toBeGreaterThan(0.95);
+      const key = `${positions.getX(index).toFixed(4)}:${positions.getY(index).toFixed(4)}:${positions.getZ(index).toFixed(4)}`;
+      const value: [number, number, number] = [normals.getX(index), normals.getY(index), normals.getZ(index)];
+      const earlier = normalByPosition.get(key);
+      if (earlier) {
+        expect(Math.abs(earlier[0] - value[0])).toBeLessThan(1e-5);
+        expect(Math.abs(earlier[1] - value[1])).toBeLessThan(1e-5);
+        expect(Math.abs(earlier[2] - value[2])).toBeLessThan(1e-5);
+      } else normalByPosition.set(key, value);
+    }
     water.geometry.dispose();
     (water.material as THREE.Material).dispose();
   });
@@ -240,6 +253,10 @@ describe('Water rendering foundation', () => {
     expect(shader.uniforms['waterWind']!.value).toBe(0.9);
     expect(shader.fragmentShader).toContain('oceanWanderA');
     expect(shader.fragmentShader).toContain('oceanSilk');
+    expect(shader.fragmentShader).toContain('oceanWorldNormal');
+    expect(shader.fragmentShader).toContain('mix(normal, oceanWaveNormal, 0.68)');
+    // Ocean motion is normal-driven: the giant plane must stay smooth instead of exposing its triangles.
+    expect(shader.vertexShader).not.toContain('transformed.z +=');
     const y = ocean.position.y;
     const rapidPositions = rapidFoam!.geometry.getAttribute('position');
     const plungePositions = plunge!.geometry.getAttribute('position');

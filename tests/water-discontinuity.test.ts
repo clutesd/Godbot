@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { packInlandAttributes, stabilizeInlandWaterGeometry } from '../src/render/terrain/WaterAttributes';
+import { packInlandAttributes, smoothInlandWaterNormals, stabilizeInlandWaterGeometry } from '../src/render/terrain/WaterAttributes';
 
 const scalarChannels = [
   'waterDepth', 'waterFlow', 'waterKind', 'waterHierarchy', 'waterRapid', 'waterWind',
@@ -53,6 +53,21 @@ describe('Inland water discontinuity guard', () => {
     const after = geometry.getAttribute('position');
     expect([after.getY(0), after.getY(1), after.getY(2)]).toEqual(before);
     expect(triangleArea(after)).toBeGreaterThan(0.2);
+    geometry.dispose();
+  });
+
+  it('shares lighting normals across duplicate clipped vertices without flattening real slope', () => {
+    const geometry = waterGeometry([
+      0, 0.10, 0, 0, 0.11, 1, 1, 0.12, 0,
+      1, 0.12, 0, 0, 0.11, 1, 1, 0.13, 1,
+    ]);
+    smoothInlandWaterNormals(geometry);
+    const normals = geometry.getAttribute('normal');
+    expect(normals.getY(0)).toBeGreaterThan(0.95);
+    // Shared physical points receive the same averaged normal even though the geometry is non-indexed.
+    expect(normals.getX(2)).toBeCloseTo(normals.getX(3), 6);
+    expect(normals.getY(2)).toBeCloseTo(normals.getY(3), 6);
+    expect(normals.getZ(2)).toBeCloseTo(normals.getZ(3), 6);
     geometry.dispose();
   });
 
