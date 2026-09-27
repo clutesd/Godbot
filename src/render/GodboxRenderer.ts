@@ -2221,7 +2221,7 @@ export class GodboxRenderer {
     const scaffold = createConstructionScaffold(
       assembly.plan,
       palette,
-      constructionScaffoldSurface('primitive', placement.role, response.material),
+      constructionScaffoldSurface(developmentPresentationEra(response), placement.role, response.material),
     );
     updateConstructionScaffold(scaffold, assembly.plan, visualProgress);
     if (visualProgress < 1) site.add(scaffold);
@@ -2233,9 +2233,9 @@ export class GodboxRenderer {
       settlement,
       mode: 'contact-led',
     });
-    fullShelter.traverse(object => {
-      if (object instanceof THREE.Mesh) object.geometry.dispose();
-    });
+    // ConstructionAssembly intentionally shares the source vertex attributes; keep the source
+    // geometries alive for the lifetime of this site even though the source group itself is not drawn.
+    site.userData['foundingShelterSource'] = fullShelter;
     return site;
   }
 
