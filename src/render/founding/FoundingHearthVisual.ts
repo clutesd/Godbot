@@ -4,8 +4,7 @@ import type { Vec2 } from '../../sim/types';
 import {
   FOUNDING_HEARTH_LOG_COUNT,
   FOUNDING_HEARTH_STONE_COUNT,
-  foundingHearthPiecePose,
-  type FoundingHearthAssemblySample,
+  foundingHearthPiecePose
 } from './FoundingHearthAssembly';
 
 const fract = (value: number): number => value - Math.floor(value);
@@ -132,7 +131,13 @@ export function createFoundingHearthInfrastructure(palette: MaterialPalette, see
 
 export function updateFoundingHearthAssembly(
   group: THREE.Group,
-  sample: Pick<FoundingHearthAssemblySample, 'stonesPicked' | 'logsPicked' | 'stonesPlaced' | 'logsPlaced' | 'complete'>,
+  sample: {
+    readonly stonesPicked: number;
+    readonly logsPicked: number;
+    readonly stonesPlaced: number;
+    readonly logsPlaced: number;
+    readonly assemblyComplete: boolean;
+  },
 ): void {
   // The material pile exists from the first assembly beat; the hearth itself appears only through
   // completed hand placements. No scale-up shortcut is used anywhere in this sequence.
@@ -157,7 +162,7 @@ export function updateFoundingHearthAssembly(
       return;
     }
     if (object.userData['hearthScorch'] || object.userData['hearthAsh'] || object.userData['hearthCoal']) {
-      object.visible = sample.complete;
+      object.visible = sample.assemblyComplete;
     }
   });
 }
