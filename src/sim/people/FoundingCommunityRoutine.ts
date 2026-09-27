@@ -107,7 +107,7 @@ export function foundingCommunityDestination(
   }
 
   const chore = foundingCommunityChore(person, settlement, state);
-  const work = choreDestination(chore, person, settlement, state, pod?.position, shelter
+  const work = choreDestination(chore, person, settlement, state, shelter
     ? { x: shelter.worldX, z: shelter.worldZ }
     : undefined, hearth, campCenter);
   if (!work) return undefined;
@@ -142,7 +142,6 @@ function choreDestination(
   person: Person,
   settlement: Settlement,
   state: SimulationState,
-  pod: Vec2 | undefined,
   shelter: Vec2 | undefined,
   hearth: Vec2 | undefined,
   campCenter: Vec2,
