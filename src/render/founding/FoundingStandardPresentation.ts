@@ -1,5 +1,5 @@
 import type { Person, Settlement, SimulationState, Vec2 } from '../../sim/types';
-import { usableStructure, SHELTER_USABLE_PROGRESS } from '../../sim/development/Shelter';
+import { usableStructure } from '../../sim/development/Shelter';
 
 export type FoundingStandardPhase =
   | 'prepare-base'
@@ -84,11 +84,13 @@ export class FoundingStandardPresentation {
   update(
     state: Pick<SimulationState, 'settlements' | 'people'>,
     elapsedSeconds: number,
+    blockedSettlementIds: ReadonlySet<string> = new Set(),
   ): boolean {
     this.nowSeconds = Math.max(0, elapsedSeconds);
     let changed = false;
     const newlyReady = state.settlements
       .filter(settlement => foundingStandardEligible(settlement)
+        && !blockedSettlementIds.has(settlement.id)
         && !this.established.has(settlement.id)
         && !this.active.has(settlement.id))
       .sort((a, b) => a.foundedMonth - b.foundedMonth || stableUnit(a.id) - stableUnit(b.id));
@@ -268,13 +270,13 @@ export function foundingStandardEligible(
   settlement: Pick<Settlement, 'alive' | 'foundingPodId' | 'survival' | 'development' | 'structurePlots'>,
 ): boolean {
   if (!settlement.alive || !settlement.foundingPodId || !settlement.survival?.firstFire?.eventId) return false;
-  const project = settlement.development?.project;
-  const activeShelterUsable = Boolean(project?.response.adaptation && project.progress >= SHELTER_USABLE_PROGRESS);
+  // Wait for a completed physical shelter, not merely an economically authorized project
+  // percentage. That keeps the ceremony downstream of the contact-led construction presentation.
   const completedShelter = (settlement.structurePlots ?? []).some(plot =>
     usableStructure(plot)
     && (plot.development?.services.housing ?? 0) > 0,
   );
-  return activeShelterUsable || completedShelter;
+  return completedShelter;
 }
 
 function selectParticipants(people: readonly Person[], settlement: Settlement): Participant[] {
