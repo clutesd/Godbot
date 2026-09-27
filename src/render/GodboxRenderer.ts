@@ -63,7 +63,7 @@ import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
 import { constructionBlockedReason } from './construction/ConstructionActionPresentation';
 import { constructionPresentationBucket, constructionPresentationProgress, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from './construction/ConstructionVisualGrammar';
-import { ConstructionAssembly, type ConstructionAssemblyPlan } from './construction/ConstructionAssembly';
+import { ConstructionAssembly, type ConstructionAssemblyMode, type ConstructionAssemblyPlan } from './construction/ConstructionAssembly';
 import { createConstructionScaffold, updateConstructionScaffold } from './construction/ConstructionScaffold';
 import { updateConstructionWorksite } from './construction/ConstructionWorksite';
 import { constructionMaterialColour } from './construction/ConstructionChoreography';
@@ -300,7 +300,7 @@ export class GodboxRenderer {
   private readonly skyZenith = new THREE.Color();
   private readonly skyHorizon = new THREE.Color();
   private readonly skyColor = new THREE.Color();
-  private readonly constructionAssemblies = new Map<string, { site: THREE.Group; assembly: ConstructionAssembly; scaffold: THREE.Group; settlement: Settlement; contact?: boolean }>();
+  private readonly constructionAssemblies = new Map<string, { site: THREE.Group; assembly: ConstructionAssembly; scaffold: THREE.Group; settlement: Settlement; mode?: ConstructionAssemblyMode; contact?: boolean }>();
   private readonly settlementVisuals = new Map<string, SettlementVisual>();
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
   private readonly settlementSolidObstacles = new Map<string, PedestrianFootprint[]>();
@@ -641,7 +641,12 @@ export class GodboxRenderer {
         if (!entry.site.parent || project?.plotId !== key) { this.constructionAssemblies.delete(key); continue; }
         const paid = constructionPresentationProgress(entry.settlement);
         const contact = this.physicalWork.installationContact(key);
-        entry.assembly.update(paid, deltaSeconds, contact === undefined ? undefined : contact && !entry.contact);
+        entry.assembly.update(
+          paid,
+          deltaSeconds,
+          contact === undefined ? undefined : contact && !entry.contact,
+          entry.mode ?? 'bounded',
+        );
         entry.contact = contact;
         updateConstructionScaffold(entry.scaffold, entry.assembly.plan, entry.assembly.plan.progress ?? paid, deltaSeconds);
         const dressing = entry.site.getObjectByName(`construction-worksite:${key}`);
@@ -1548,10 +1553,14 @@ export class GodboxRenderer {
     if (activeSite) {
       const response = settlement.development?.project?.response;
       if (response?.adaptation) {
-        const mesh = createSurvivalStructure(response, constructionProgress, activeSite.width, activeSite.depth, palette, this.shelterGroundAt(activeSite));
-        mesh.position.set(activeSite.localX, this.elevationAt(activeSite.worldX, activeSite.worldZ) - settlementY, activeSite.localZ);
-        mesh.rotation.y = activeSite.rotationY; mesh.userData['placementKey'] = activeSite.key;
-        group.add(mesh);
+        group.add(this.createActiveSurvivalConstructionSite(
+          activeSite,
+          response,
+          settlementY,
+          constructionProgress,
+          palette,
+          settlement,
+        ));
       } else group.add(this.createActiveConstructionSite(
         activeSite,
         response?.style ?? cultureStyle,
@@ -2156,6 +2165,78 @@ export class GodboxRenderer {
       }
     }
     return scaffold;
+  }
+
+  /**
+   * Founding shelters use the same physical workface contract as later construction. Economic
+   * progress only authorizes pieces; actual posts, wall fabric and roof courses seat on visible
+   * assembler contact beats so the camp is made by people rather than by monthly state changes.
+   */
+  private createActiveSurvivalConstructionSite(
+    placement: BuildingPlacement,
+    response: DevelopmentResponse,
+    settlementY: number,
+    progress: number,
+    palette: MaterialPalette,
+    settlement: Settlement,
+  ): THREE.Group {
+    const site = new THREE.Group();
+    site.position.set(placement.localX, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.localZ);
+    site.rotation.y = placement.rotationY;
+    site.userData['placementKey'] = placement.key;
+    site.userData['constructionSite'] = true;
+    site.userData['foundingShelterAssembly'] = true;
+
+    const paidProgress = Math.max(0, Math.min(1, progress));
+    const fullShelter = createSurvivalStructure(
+      response,
+      1,
+      placement.width,
+      placement.depth,
+      palette,
+      this.shelterGroundAt(placement),
+    );
+    const assembly = new ConstructionAssembly(fullShelter, 1, placement.key, response.material ?? 'timber');
+    const previous = this.constructionAssemblies.get(placement.key)?.assembly.plan.progress;
+    // A new shelter begins as bare prepared ground. Rebuilds inherit only what workers have already
+    // seated; they never jump forward to the latest monthly paid-progress snapshot.
+    assembly.update(Math.min(paidProgress, previous ?? 0));
+    site.add(assembly.group);
+    placement.constructionPlan = assembly.plan;
+    placement.constructionWidth = assembly.plan.width;
+    placement.constructionDepth = assembly.plan.depth;
+
+    const visualProgress = assembly.plan.progress ?? 0;
+    const presentation = constructionStagePresentation(visualProgress);
+    site.userData['constructionStage'] = presentation.stage;
+    site.userData['constructionProgress'] = paidProgress;
+    site.userData['constructionPresentationProgress'] = visualProgress;
+    site.userData['constructionReveal'] = presentation.phase;
+    site.userData['constructionFinishing'] = presentation.finishing;
+    site.userData['constructionTargetRole'] = placement.role;
+    site.userData['constructionFootprintWidth'] = assembly.plan.width;
+    site.userData['constructionFootprintDepth'] = assembly.plan.depth;
+    site.userData['constructionTargetHeight'] = assembly.plan.height;
+
+    const scaffold = createConstructionScaffold(
+      assembly.plan,
+      palette,
+      constructionScaffoldSurface('primitive', placement.role, response.material),
+    );
+    updateConstructionScaffold(scaffold, assembly.plan, visualProgress);
+    if (visualProgress < 1) site.add(scaffold);
+    decorateConstructionWorksite(site, settlement, palette);
+    this.constructionAssemblies.set(placement.key, {
+      site,
+      assembly,
+      scaffold,
+      settlement,
+      mode: 'contact-led',
+    });
+    fullShelter.traverse(object => {
+      if (object instanceof THREE.Mesh) object.geometry.dispose();
+    });
+    return site;
   }
 
   /**
