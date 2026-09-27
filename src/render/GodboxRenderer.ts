@@ -981,9 +981,10 @@ export class GodboxRenderer {
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
         localSpeed: ((person.activity === 'flee' ? 0.85
-          : ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local?.action ?? '') ? 0.53
-            : local?.action.startsWith('play-') ? (person.ageMonths < 36 ? 0.24 : 0.44)
-              : local ? 0.27 : 0.38)
+          : firstFire ? 0.5
+            : ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local?.action ?? '') ? 0.53
+              : local?.action.startsWith('play-') ? (person.ageMonths < 36 ? 0.24 : 0.44)
+                : local ? 0.27 : 0.38)
           + stableUnit(`${person.id}:pace`) * 0.02) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.94 : 1),
         arrivalEase: Boolean(worker || physical),
         ...(!worker && !physical && !firstFire && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
