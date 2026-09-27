@@ -175,6 +175,14 @@ describe('Arrival presentation contracts', () => {
     const camera = new THREE.PerspectiveCamera(); camera.position.set(35, 40, 50);
     view.update(camera);
     expect(view.root.children.filter(o => o instanceof THREE.Group && o.visible)).toHaveLength(0);
+
+    // Vessels remain absent through the pristine opening and only become renderable at their
+    // authored entry time. No hull may materialize early over the landscape.
+    const firstPod = s.state.arrival!.pods[0]!;
+    s.state.arrival!.elapsedSeconds = firstPod.entrySeconds - 0.01;
+    view.update(camera);
+    expect(view.root.children.filter(o => o instanceof THREE.Group && o.visible)).toHaveLength(0);
+    s.state.arrival!.elapsedSeconds = 0;
     const objects = [...view.root.children];
     for (let i = 0; i < (ARRIVAL_END_SECONDS - 1) * 10; i++) { s.advanceArrival(0.1); view.update(camera); }
     expect(view.root.children).toEqual(objects);
@@ -340,6 +348,41 @@ describe('Arrival presentation contracts', () => {
       expect(podPosition(pod, finish + 5)).toEqual(podPosition(pod, finish));
     }
     expect(new Set(s.state.arrival!.pods.map(p => p.entrySeconds)).size).toBe(5);
+
+    // The hero vessel starts outside the authored 16:9 opening frame, then crosses into view.
+    const hero = s.state.arrival!.pods[0]!;
+    s.state.arrival!.elapsedSeconds = hero.entrySeconds;
+    const ingress = arrivalSequenceFocus(s.state.arrival!);
+    expect(ingress.beat).toBe('fleet');
+    expect(ingress.cameraPosition).toBeDefined();
+    const ingressCamera = new THREE.PerspectiveCamera(ingress.fov, 16 / 9, 0.01, 500);
+    ingressCamera.position.set(ingress.cameraPosition!.x, ingress.cameraPosition!.y, ingress.cameraPosition!.z);
+    ingressCamera.lookAt(ingress.target.x, ingress.target.y, ingress.target.z);
+    ingressCamera.updateMatrixWorld(true);
+    const projectionView = new THREE.Matrix4().multiplyMatrices(ingressCamera.projectionMatrix, ingressCamera.matrixWorldInverse);
+    const ingressFrustum = new THREE.Frustum().setFromProjectionMatrix(projectionView);
+    const start = podPosition(hero, hero.entrySeconds);
+    expect(ingressFrustum.containsPoint(new THREE.Vector3(start.x, start.y, start.z))).toBe(false);
+
+    let crossedIntoFrame = false;
+    for (let sample = 1; sample <= 36; sample += 1) {
+      s.state.arrival!.elapsedSeconds = hero.entrySeconds + sample / 10;
+      const focus = arrivalSequenceFocus(s.state.arrival!);
+      if (!focus.cameraPosition) continue;
+      ingressCamera.fov = focus.fov;
+      ingressCamera.updateProjectionMatrix();
+      ingressCamera.position.set(focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z);
+      ingressCamera.lookAt(focus.target.x, focus.target.y, focus.target.z);
+      ingressCamera.updateMatrixWorld(true);
+      projectionView.multiplyMatrices(ingressCamera.projectionMatrix, ingressCamera.matrixWorldInverse);
+      ingressFrustum.setFromProjectionMatrix(projectionView);
+      const p = podPosition(hero, s.state.arrival!.elapsedSeconds);
+      if (ingressFrustum.containsPoint(new THREE.Vector3(p.x, p.y, p.z))) {
+        crossedIntoFrame = true;
+        break;
+      }
+    }
+    expect(crossedIntoFrame).toBe(true);
     let previous = arrivalSequenceFocus(s.state.arrival!);
     const visitedSites = new Set<number>();
     let closestSiteRadius = Number.POSITIVE_INFINITY;
@@ -352,7 +395,7 @@ describe('Arrival presentation contracts', () => {
       if (focus.cameraPosition) {
         expect([focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z].every(Number.isFinite)).toBe(true);
       }
-      expect(['pristine', 'descent', 'touchdown', 'site-flythrough', 'handoff']).toContain(focus.beat);
+      expect(['pristine', 'fleet', 'descent', 'touchdown', 'doorway', 'first-steps', 'site-flythrough', 'handoff']).toContain(focus.beat);
       expect(focus.fov).toBeGreaterThanOrEqual(30);
       expect(focus.fov).toBeLessThanOrEqual(38);
       if (focus.beat === 'site-flythrough' && focus.siteIndex !== undefined) {
