@@ -465,11 +465,13 @@ float oceanSlopeAlong = (cos(oceanNormalA) * 0.020 * 0.032 + cos(oceanNormalB) *
 float oceanSlopeAcross = (cos(oceanNormalB) * 0.011 * 0.018 + cos(oceanNormalC) * 0.004 * 0.082) * oceanNormalEnergy;
 vec2 oceanGradient = oceanNormalWind * oceanSlopeAlong + oceanNormalAcross * oceanSlopeAcross;
 vec3 oceanWorldNormal = normalize(vec3(-oceanGradient.x * 8.0, 1.0, -oceanGradient.y * 8.0));
-normal = normalize((viewMatrix * vec4(oceanWorldNormal, 0.0)).xyz);
+vec3 oceanWaveNormal = normalize((viewMatrix * vec4(oceanWorldNormal, 0.0)).xyz);
+// Preserve any ecology/rain micro-detail already applied earlier in the material chain.
+normal = normalize(mix(normal, oceanWaveNormal, 0.68));
 nonPerturbedNormal = normal;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor + waterStorm * 0.08 + waterRain * 0.04, 0.08, 0.9);`);
   };
-  material.customProgramCacheKey = () => 'godbox-ocean-water-v5-smooth-surface';
+  material.customProgramCacheKey = () => 'godbox-ocean-water-v6-layered-smooth-surface';
   return material;
 }
 
@@ -503,7 +505,9 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
       vec2 rippleSlope = vec2(
         cos(vWaterPosition.x * 0.88 + vWaterPosition.z * 0.31 - waterTime * 0.72),
         sin(vWaterPosition.z * 0.97 - vWaterPosition.x * 0.24 + waterTime * 0.54)) * 0.026 * rippleShore;
-      normal = normalize((viewMatrix * vec4(normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y)), 0.0)).xyz);
+      vec3 broadWaterNormal = normalize((viewMatrix * vec4(normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y)), 0.0)).xyz);
+      // Blend into the smooth geometric/ecology normal instead of replacing real river slope.
+      normal = normalize(mix(normal, broadWaterNormal, 0.40));
       nonPerturbedNormal = normal;
     `);
     shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(mix(roughnessFactor, 0.68, vWaterIce * 0.78) + vWaterStorm * 0.035, 0.08, 0.92);`);
@@ -513,7 +517,7 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     compile.call(material, shader, renderer);
     shader.vertexShader = packInlandShader(shader.vertexShader);
   };
-  material.customProgramCacheKey = () => 'godbox-inland-water-v7-soft-continuous-surface';
+  material.customProgramCacheKey = () => 'godbox-inland-water-v8-layered-continuous-surface';
   return material;
 }
 
