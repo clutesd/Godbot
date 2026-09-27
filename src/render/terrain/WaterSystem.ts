@@ -8,7 +8,7 @@ import { elevationToY, type TerrainSurface } from './TerrainSurface';
 import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 import type { EcologyField } from '../ecology/EcologyField';
 import { WaterEcology } from './WaterEcology';
-import { packInlandAttributes, packInlandShader, smoothInlandWaterNormals, stabilizeInlandWaterGeometry } from './WaterAttributes';
+import { packInlandAttributes, packInlandShader, smoothInlandWaterNormals } from './WaterAttributes';
 import { renderedGroundSampler } from './WaterGround';
 
 export interface WaterReport {
@@ -49,8 +49,16 @@ const WATER_RIVER = 1;
 const WATER_FLOOD = 2;
 const WATER_TRANSITION_SECONDS = 2.4;
 const RECESSION_WET_SECONDS = 10;
-/** Keep the visible shoreline off the exact terrain coplanar boundary: no z-fighting, bright seams or hovering slivers. */
-const SHORELINE_RENDER_DEPTH = 0.004;
+/**
+ * Inland water is contoured from the canonical hydrology samples instead of drawing one visible
+ * square per sample. Four render subdivisions are presentation-only: simulation authority remains
+ * the original waterLevel mask.
+ */
+const WATER_CONTOUR_SUBDIVISIONS = 4;
+const WATER_COVERAGE_THRESHOLD = 0.5;
+/** Tiny physical clearance only at the terrain intersection; polygon offset handles the depth fight. */
+const SHORELINE_RENDER_DEPTH = 0.00025;
+const WATER_DISCONTINUITY_Y = 0.32;
 
 /**
  * Everything wet. Hydrology remains authoritative; this layer only turns that truth into a
@@ -487,6 +495,9 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
     roughness: 0.22,
     metalness: 0.01,
     depthWrite: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
     clearcoat: 0.62,
     clearcoatRoughness: 0.2,
   });
@@ -626,43 +637,170 @@ function waterKindAt(world: WorldState, index: number): number {
   return WATER_FLOOD;
 }
 
-/** Wet-only interpolation removes terraced puddles without allowing a dry sample to become water. */
-function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, fallbackIndex: number): number {
+/** A fine sample is inland-wet only when the canonical hydrology owns water there. */
+function inlandWetSample(world: WorldState, index: number): boolean {
+  return index >= 0
+    && index < world.terrain.waterLevel.length
+    && world.terrain.waterLevel[index]! >= 0
+    && world.terrain.height[index]! >= world.seaLevel;
+}
+
+/**
+ * Bilinear coverage over the binary hydrology mask. The 0.5 contour is the same nearest-sample
+ * authority boundary used by simulation queries on straight banks, while corners and bends become
+ * continuous instead of visible square tiles.
+ */
+function inlandWetCoverageAt(world: WorldState, worldX: number, worldZ: number): number {
+  const { terrain } = world;
+  const fx = (worldX - terrain.originX) / terrain.step;
+  const fz = (worldZ - terrain.originZ) / terrain.step;
+  const x0 = Math.floor(fx), z0 = Math.floor(fz);
+  const tx = fx - x0, tz = fz - z0;
+  const wet = (x: number, z: number): number => {
+    if (x < 0 || z < 0 || x >= terrain.resolution || z >= terrain.resolution) return 0;
+    return inlandWetSample(world, z * terrain.resolution + x) ? 1 : 0;
+  };
+  const a = wet(x0, z0), b = wet(x0 + 1, z0);
+  const c = wet(x0, z0 + 1), d = wet(x0 + 1, z0 + 1);
+  const top = a + (b - a) * tx;
+  const bottom = c + (d - c) * tx;
+  return top + (bottom - top) * tz;
+}
+
+/** Nearest canonical wet sample for categorical flow/type/weather attributes. */
+function dominantWetSampleAt(world: WorldState, worldX: number, worldZ: number): number {
+  const { terrain } = world;
+  const fx = (worldX - terrain.originX) / terrain.step;
+  const fz = (worldZ - terrain.originZ) / terrain.step;
+  const cx = Math.round(fx), cz = Math.round(fz);
+  let best = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let radius = 0; radius <= 2 && best < 0; radius += 1) {
+    for (let dz = -radius; dz <= radius; dz += 1) for (let dx = -radius; dx <= radius; dx += 1) {
+      if (radius > 0 && Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
+      const x = cx + dx, z = cz + dz;
+      if (x < 0 || z < 0 || x >= terrain.resolution || z >= terrain.resolution) continue;
+      const index = z * terrain.resolution + x;
+      if (!inlandWetSample(world, index)) continue;
+      const distance = (x - fx) ** 2 + (z - fz) ** 2;
+      if (distance < bestDistance) { best = index; bestDistance = distance; }
+    }
+  }
+  return best;
+}
+
+/**
+ * One canonical water height for a world position. Every triangle that touches the same position
+ * receives the same Y, which closes cracks. Real falls remain separate surfaces: samples more than
+ * WATER_DISCONTINUITY_Y apart are never blended into a diagonal crystalline ramp.
+ */
+function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, preferredIndex?: number): number {
   const { terrain, seaLevel } = world;
-  const fx = Math.min(terrain.resolution - 1, Math.max(0, (worldX - terrain.originX) / terrain.step));
-  const fz = Math.min(terrain.resolution - 1, Math.max(0, (worldZ - terrain.originZ) / terrain.step));
-  const x0 = Math.floor(fx);
-  const z0 = Math.floor(fz);
-  const x1 = Math.min(terrain.resolution - 1, x0 + 1);
-  const z1 = Math.min(terrain.resolution - 1, z0 + 1);
-  const tx = fx - x0;
-  const tz = fz - z0;
-  const samples: Array<readonly [number, number]> = [
-    [z0 * terrain.resolution + x0, (1 - tx) * (1 - tz)],
-    [z0 * terrain.resolution + x1, tx * (1 - tz)],
-    [z1 * terrain.resolution + x0, (1 - tx) * tz],
-    [z1 * terrain.resolution + x1, tx * tz],
-  ];
-  const fallback = terrain.waterLevel[fallbackIndex] ?? seaLevel;
-  const localY = elevationToY(fallback, seaLevel);
-  let weighted = 0;
-  let weight = 0;
-  for (const [index, influence] of samples) {
-    const level = terrain.waterLevel[index] ?? -1;
-    if (level < 0 || influence <= 0) continue;
-    // Opposite sides of a fall are separate surfaces, never a stretched ramp or a spike.
-    // The mapped waterfall sheet supplies the vertical connection.
-    if (Math.abs(elevationToY(level, seaLevel) - localY) > 0.32) continue;
+  const fx = (worldX - terrain.originX) / terrain.step;
+  const fz = (worldZ - terrain.originZ) / terrain.step;
+  const x0 = Math.floor(fx), z0 = Math.floor(fz);
+  const tx = fx - x0, tz = fz - z0;
+  const weightedSamples: Array<readonly [number, number]> = [];
+  for (const [x, z, influence] of [
+    [x0, z0, (1 - tx) * (1 - tz)],
+    [x0 + 1, z0, tx * (1 - tz)],
+    [x0, z0 + 1, (1 - tx) * tz],
+    [x0 + 1, z0 + 1, tx * tz],
+  ] as const) {
+    if (x < 0 || z < 0 || x >= terrain.resolution || z >= terrain.resolution || influence <= 0) continue;
+    const index = z * terrain.resolution + x;
+    if (inlandWetSample(world, index)) weightedSamples.push([index, influence]);
+  }
+
+  let reference = preferredIndex ?? -1;
+  if (!inlandWetSample(world, reference)) {
+    reference = weightedSamples.reduce((best, sample) => sample[1] > best[1] ? sample : best, [-1, -1] as readonly [number, number])[0];
+  }
+  if (!inlandWetSample(world, reference)) reference = dominantWetSampleAt(world, worldX, worldZ);
+  if (!inlandWetSample(world, reference)) return Number.NEGATIVE_INFINITY;
+
+  const referenceLevel = terrain.waterLevel[reference]!;
+  const referenceY = elevationToY(referenceLevel, seaLevel);
+  let weighted = 0, weight = 0;
+  for (const [index, influence] of weightedSamples) {
+    const level = terrain.waterLevel[index]!;
+    if (Math.abs(elevationToY(level, seaLevel) - referenceY) > WATER_DISCONTINUITY_Y) continue;
     weighted += level * influence;
     weight += influence;
   }
-  return elevationToY(weight > 0 ? weighted / weight : fallback, seaLevel);
+  return elevationToY(weight > 1e-9 ? weighted / weight : referenceLevel, seaLevel);
 }
 
-/** Mesh the canonical fine hydrology cells. No visual-only widening onto dry banks. */
+interface InlandVertex {
+  x: number;
+  z: number;
+  coverage: number;
+  y: number;
+  depth: number;
+}
+
+function clipWaterPolygon(
+  polygon: readonly InlandVertex[],
+  scalar: (vertex: InlandVertex) => number,
+  threshold: number,
+  sample: (x: number, z: number) => InlandVertex,
+): InlandVertex[] {
+  if (!polygon.length) return [];
+  const output: InlandVertex[] = [];
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i]!;
+    const b = polygon[(i + 1) % polygon.length]!;
+    const av = scalar(a) - threshold;
+    const bv = scalar(b) - threshold;
+    const aInside = av >= 0;
+    const bInside = bv >= 0;
+    if (aInside) output.push(a);
+    if (aInside === bInside) continue;
+    const denominator = av - bv;
+    const t = Math.abs(denominator) < 1e-9 ? 0.5 : av / denominator;
+    output.push(sample(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t));
+  }
+  return output;
+}
+
+/** Keep a waterfall discontinuity horizontal on one side instead of deleting triangle coverage. */
+function stabilizeWaterTriangle(triangle: readonly InlandVertex[], groundAt: (x: number, z: number) => number): InlandVertex[] {
+  const points = triangle.map(point => ({ ...point }));
+  let low = 0, high = 0;
+  for (let i = 1; i < 3; i += 1) {
+    if (points[i]!.y < points[low]!.y) low = i;
+    if (points[i]!.y > points[high]!.y) high = i;
+  }
+  const span = points[high]!.y - points[low]!.y;
+  const horizontal = Math.max(
+    Math.hypot(points[0]!.x - points[1]!.x, points[0]!.z - points[1]!.z),
+    Math.hypot(points[1]!.x - points[2]!.x, points[1]!.z - points[2]!.z),
+    Math.hypot(points[2]!.x - points[0]!.x, points[2]!.z - points[0]!.z),
+  );
+  if (span <= Math.max(0.68, horizontal * 0.85)) return points;
+  const middle = [0, 1, 2].find(index => index !== low && index !== high)!;
+  const highGap = points[high]!.y - points[middle]!.y;
+  const lowGap = points[middle]!.y - points[low]!.y;
+  const outlier = highGap >= lowGap ? high : low;
+  const anchor = outlier === high
+    ? (points[low]!.y > points[middle]!.y ? low : middle)
+    : (points[high]!.y < points[middle]!.y ? high : middle);
+  points[outlier]!.y = points[anchor]!.y;
+  points[outlier]!.depth = Math.max(SHORELINE_RENDER_DEPTH, points[outlier]!.y - groundAt(points[outlier]!.x, points[outlier]!.z));
+  return points;
+}
+
+/**
+ * Build a single contoured inland-water skin from authoritative hydrology.
+ *
+ * The old renderer drew a literal square around every wet sample and then collapsed steep
+ * triangles to zero area. That made hydrology resolution visible as square chunks, diagonal mesh
+ * lines and real holes. This contour pass keeps the exact simulation samples as authority but
+ * presents their union as one continuous surface with shared positions and no deleted faces.
+ */
 export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, previousFreeze?: Float32Array): THREE.Mesh | undefined {
-  const { terrain, seaLevel } = world;
-  const { resolution, step, originX, originZ, waterLevel, flow, height } = terrain;
+  const { terrain } = world;
+  const { resolution, step, originX, originZ, waterLevel, height } = terrain;
   const positions: number[] = [];
   const colors: number[] = [];
   const depths: number[] = [];
@@ -687,91 +825,120 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   const maximumAccumulation = maxDrainageAccumulation(world);
   const currentFreeze = computeFreezeSnapshot(world);
   const groundAt = renderedGroundSampler(world);
-  type Vertex = { x: number; y: number; z: number; depth: number };
+  const subdivisions = WATER_CONTOUR_SUBDIVISIONS;
+  const fineStep = step / subdivisions;
+  const half = subdivisions / 2;
+  const fineSegments = resolution * subdivisions;
+  const startX = originX - step * 0.5;
+  const startZ = originZ - step * 0.5;
+  const candidateCells = new Set<number>();
 
-  for (let index = 0; index < height.length; index++) {
-    if (waterLevel[index]! < 0 || height[index]! < seaLevel) continue;
-    const x = originX + index % resolution * step;
-    const z = originZ + Math.floor(index / resolution) * step;
-    const currentFlow = flow[index] ?? 0;
-    const direction = flowDirectionAt(world, index);
-    const kind = waterKindAt(world, index);
-    const hierarchy = waterHierarchyAt(world, index, maximumAccumulation);
-    const rapid = rapidIntensityAt(world, index);
-    const localWeather = weatherAt(world, x, z);
+  // Only contour the neighbourhood of real wet samples: quality scales with water, not map area.
+  for (let index = 0; index < height.length; index += 1) {
+    if (!inlandWetSample(world, index)) continue;
+    const sampleX = index % resolution;
+    const sampleZ = Math.floor(index / resolution);
+    const centreX = half + sampleX * subdivisions;
+    const centreZ = half + sampleZ * subdivisions;
+    for (let dz = -half; dz < half; dz += 1) for (let dx = -half; dx < half; dx += 1) {
+      const x = centreX + dx, z = centreZ + dz;
+      if (x < 0 || z < 0 || x >= fineSegments || z >= fineSegments) continue;
+      candidateCells.add(z * fineSegments + x);
+    }
+  }
+
+  const sampleVertex = (x: number, z: number): InlandVertex => {
+    const coverage = inlandWetCoverageAt(world, x, z);
+    const source = dominantWetSampleAt(world, x, z);
+    const y = waterSurfaceYAt(world, x, z, source);
+    return { x, z, coverage, y, depth: Number.isFinite(y) ? y - groundAt(x, z) : Number.NEGATIVE_INFINITY };
+  };
+
+  const emit = (point: InlandVertex): void => {
+    const source = dominantWetSampleAt(world, point.x, point.z);
+    if (source < 0) return;
+    const currentFlow = terrain.flow[source] ?? 0;
+    const direction = flowDirectionAt(world, source);
+    const kind = waterKindAt(world, source);
+    const hierarchy = waterHierarchyAt(world, source, maximumAccumulation);
+    const rapid = rapidIntensityAt(world, source);
+    const localWeather = weatherAt(world, point.x, point.z);
     const windX = localWeather?.windX ?? world.weather?.windX ?? 1;
     const windZ = localWeather?.windZ ?? world.weather?.windZ ?? 0;
     const windLength = Math.hypot(windX, windZ);
     const wind = clamp01(localWeather?.wind ?? world.weather?.wind ?? 0);
-    const rain = localWeather && (localWeather.precipitation === 'rain' || localWeather.precipitation === 'mixed') ? clamp01(localWeather.intensity) : 0;
+    const rain = localWeather && (localWeather.precipitation === 'rain' || localWeather.precipitation === 'mixed')
+      ? clamp01(localWeather.intensity) : 0;
     const storm = stormIntensity(localWeather);
-    const frozen = currentFreeze[index] ?? 0;
-    const priorFrozen = previousFreeze?.[index] ?? frozen;
+    const frozen = currentFreeze[source] ?? 0;
+    const priorFrozen = previousFreeze?.[source] ?? frozen;
     const snow = localWeather?.snowpack ?? 0;
-    const emergence = previousWet && !previousWet[index] && kind === WATER_FLOOD ? 1 : 0;
+    const emergence = previousWet && !previousWet[source] && kind === WATER_FLOOD ? 1 : 0;
+    const depth = Math.max(SHORELINE_RENDER_DEPTH, point.depth);
+    const bankToShallow = clamp01(depth / 0.16);
+    const shallowToDeep = clamp01(depth * 0.72 + currentFlow * 0.18 + hierarchy * 0.12);
+    colour.copy(bank).lerp(shallow, bankToShallow).lerp(deep, shallowToDeep);
+    if (kind === WATER_FLOOD) colour.lerp(flood, 0.42);
 
-    const vertex = (dx: number, dz: number): Vertex => {
-      const vx = x + dx * step;
-      const vz = z + dz * step;
-      const vy = waterSurfaceYAt(world, vx, vz, index);
-      return { x: vx, y: vy, z: vz, depth: vy - groundAt(vx, vz) };
-    };
-    // Half-cell quads follow the *visible ground's* alternating diagonals. Every water
-    // triangle lies inside one ground triangle, so clipping depth is exact across its face.
-    const triangles: Vertex[][] = [];
-    for (const dz of [-0.5, 0]) for (const dx of [-0.5, 0]) {
-      const a = vertex(dx, dz), b = vertex(dx + 0.5, dz);
-      const c = vertex(dx, dz + 0.5), d = vertex(dx + 0.5, dz + 0.5);
-      const gx = Math.max(0, Math.min(resolution - 2, Math.floor(index % resolution + dx)));
-      const gz = Math.max(0, Math.min(resolution - 2, Math.floor(Math.floor(index / resolution) + dz)));
-      if (((gx + gz) & 1) === 0) triangles.push([a, c, b], [b, c, d]);
-      else triangles.push([a, c, d], [a, d, b]);
-    }
-    for (const triangle of triangles) {
-      const clipped: Vertex[] = [];
-      for (let i = 0; i < 3; i++) {
-        const a = triangle[i]!;
-        const b = triangle[(i + 1) % 3]!;
-        const aDepth = a.depth - SHORELINE_RENDER_DEPTH;
-        const bDepth = b.depth - SHORELINE_RENDER_DEPTH;
-        if (aDepth > 0) clipped.push(a);
-        if ((aDepth > 0) !== (bDepth > 0)) {
-          const t = aDepth / (aDepth - bDepth);
-          clipped.push({
-            x: a.x + (b.x - a.x) * t,
-            y: a.y + (b.y - a.y) * t,
-            z: a.z + (b.z - a.z) * t,
-            depth: SHORELINE_RENDER_DEPTH,
-          });
+    positions.push(point.x, point.y, point.z);
+    colors.push(colour.r, colour.g, colour.b);
+    depths.push(depth);
+    flows.push(currentFlow);
+    directions.push(direction[0], direction[1]);
+    kinds.push(kind);
+    hierarchies.push(hierarchy);
+    rapids.push(rapid);
+    windDirections.push(windLength > 0.001 ? windX / windLength : 1, windLength > 0.001 ? windZ / windLength : 0);
+    winds.push(wind);
+    rains.push(rain);
+    storms.push(storm);
+    freezePrevious.push(priorFrozen);
+    freezes.push(frozen);
+    snows.push(snow);
+    emergences.push(emergence);
+  };
+
+  const emitTriangle = (triangle: readonly InlandVertex[]): void => {
+    if (triangle.length !== 3) return;
+    const stable = stabilizeWaterTriangle(triangle, groundAt);
+    const area = Math.abs(
+      (stable[1]!.x - stable[0]!.x) * (stable[2]!.z - stable[0]!.z)
+      - (stable[1]!.z - stable[0]!.z) * (stable[2]!.x - stable[0]!.x),
+    );
+    if (area <= 1e-10) return;
+    stable.forEach(emit);
+  };
+
+  const orderedCells = [...candidateCells].sort((a, b) => a - b);
+  for (const cell of orderedCells) {
+    const fineX = cell % fineSegments;
+    const fineZ = Math.floor(cell / fineSegments);
+    const x0 = startX + fineX * fineStep;
+    const z0 = startZ + fineZ * fineStep;
+    const a = sampleVertex(x0, z0);
+    const b = sampleVertex(x0 + fineStep, z0);
+    const c = sampleVertex(x0, z0 + fineStep);
+    const d = sampleVertex(x0 + fineStep, z0 + fineStep);
+    const rawTriangles = ((fineX + fineZ) & 1) === 0
+      ? [[a, c, b], [b, c, d]]
+      : [[a, c, d], [a, d, b]];
+
+    for (const raw of rawTriangles) {
+      let polygon = clipWaterPolygon(raw, vertex => vertex.coverage, WATER_COVERAGE_THRESHOLD, sampleVertex);
+      if (polygon.length < 3) continue;
+      polygon = clipWaterPolygon(polygon, vertex => vertex.depth, SHORELINE_RENDER_DEPTH, (x, z) => {
+        const vertex = sampleVertex(x, z);
+        // Pin the actual terrain intersection exactly, rather than leaving a floating interpolated lip.
+        if (Number.isFinite(vertex.y) && vertex.depth < SHORELINE_RENDER_DEPTH * 1.5) {
+          vertex.y = groundAt(x, z) + SHORELINE_RENDER_DEPTH;
+          vertex.depth = SHORELINE_RENDER_DEPTH;
         }
-      }
-      for (let i = 1; i < clipped.length - 1; i++) {
-        for (const p of [clipped[0]!, clipped[i]!, clipped[i + 1]!]) {
-          const depth = Math.max(0, p.depth);
-          const bankToShallow = clamp01(depth / 0.16);
-          const shallowToDeep = clamp01(depth * 0.72 + currentFlow * 0.18 + hierarchy * 0.12);
-          colour.copy(bank).lerp(shallow, bankToShallow).lerp(deep, shallowToDeep);
-          if (kind === WATER_FLOOD) colour.lerp(flood, 0.42);
-          positions.push(p.x, p.y, p.z);
-          colors.push(colour.r, colour.g, colour.b);
-          depths.push(depth);
-          flows.push(currentFlow);
-          directions.push(direction[0], direction[1]);
-          kinds.push(kind);
-          hierarchies.push(hierarchy);
-          rapids.push(rapid);
-          windDirections.push(windLength > 0.001 ? windX / windLength : 1, windLength > 0.001 ? windZ / windLength : 0);
-          winds.push(wind);
-          rains.push(rain);
-          storms.push(storm);
-          freezePrevious.push(priorFrozen);
-          freezes.push(frozen);
-          snows.push(snow);
-          emergences.push(emergence);
-        }
-      }
+        return vertex;
+      });
+      for (let i = 1; i < polygon.length - 1; i += 1) emitTriangle([polygon[0]!, polygon[i]!, polygon[i + 1]!]);
     }
   }
+
   if (!positions.length) return undefined;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -790,11 +957,7 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   geometry.setAttribute('waterFreeze', new THREE.Float32BufferAttribute(freezes, 1));
   geometry.setAttribute('waterSnow', new THREE.Float32BufferAttribute(snows, 1));
   geometry.setAttribute('waterEmergence', new THREE.Float32BufferAttribute(emergences, 1));
-  // Waterfalls and abrupt hydrology discontinuities must never become tall triangular curtains.
-  // Collapse only the impossible outlier triangles; the dedicated waterfall sheet supplies the drop.
-  const stabilized = stabilizeInlandWaterGeometry(geometry);
-  geometry.userData['stabilizedWaterTriangles'] = stabilized;
-  // Preserve real river/lake slope while sharing lighting across clipped triangle boundaries.
+  geometry.userData['waterContourSubdivisions'] = WATER_CONTOUR_SUBDIVISIONS;
   smoothInlandWaterNormals(geometry);
   packInlandAttributes(geometry);
   geometry.computeBoundingSphere();
