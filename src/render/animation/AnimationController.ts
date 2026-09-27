@@ -17,6 +17,7 @@ export type AnimationState =
   | 'carry'
   | 'work'
   | 'gather'
+  | 'ignite'
   | 'build'
   | 'farm'
   | 'play'
@@ -400,6 +401,70 @@ export class AnimationController {
       isLooping: true,
       canInterruptFrom: new Set(['idle', 'work']),
       blendDuration: 0.5,
+    });
+
+    // Ignite: low, deliberate tinder work. The renderer steers the hands to the hearth contact
+    // point; this clip supplies the kneeling body mechanics and repeated close hand motion.
+    const ignitePoses: AnimationPose[] = [
+      {
+        name: 'ignite-settle-kneel',
+        duration: 0.55,
+        pelvisRotation: 0,
+        spineRotation: 0.34,
+        headRotation: 0,
+        headPitch: 0.22,
+        leftShoulderRotation: 0.46,
+        leftElbowRotation: 0.92,
+        rightShoulderRotation: 0.48,
+        rightElbowRotation: 0.94,
+        leftHipRotation: 0.4,
+        leftKneeRotation: 0.92,
+        rightHipRotation: 0.42,
+        rightKneeRotation: 0.96,
+        positionOffset: { x: 0, y: -0.22, z: 0.015 },
+      },
+      {
+        name: 'ignite-strike',
+        duration: 0.32,
+        pelvisRotation: 0.035,
+        spineRotation: 0.4,
+        headRotation: 0.02,
+        headPitch: 0.27,
+        leftShoulderRotation: 0.58,
+        leftElbowRotation: 1.02,
+        rightShoulderRotation: 0.7,
+        rightElbowRotation: 0.76,
+        leftHipRotation: 0.42,
+        leftKneeRotation: 0.98,
+        rightHipRotation: 0.45,
+        rightKneeRotation: 1.02,
+        positionOffset: { x: 0, y: -0.235, z: 0.028 },
+      },
+      {
+        name: 'ignite-shield-ember',
+        duration: 0.48,
+        pelvisRotation: -0.025,
+        spineRotation: 0.43,
+        headRotation: -0.02,
+        headPitch: 0.3,
+        leftShoulderRotation: 0.62,
+        leftElbowRotation: 1.08,
+        rightShoulderRotation: 0.6,
+        rightElbowRotation: 1.06,
+        leftHipRotation: 0.43,
+        leftKneeRotation: 1.0,
+        rightHipRotation: 0.44,
+        rightKneeRotation: 1.0,
+        positionOffset: { x: 0, y: -0.24, z: 0.02 },
+      },
+    ];
+
+    this.clips.set('ignite', {
+      state: 'ignite',
+      poses: ignitePoses,
+      isLooping: true,
+      canInterruptFrom: new Set(['idle', 'gather', 'build']),
+      blendDuration: 0.28,
     });
 
     // Build: reaching upward, placing objects
@@ -1229,7 +1294,7 @@ export class AnimationController {
       // Clip offsets were authored for rigid legs whose hip pivot never followed the torso.
       // Now that both segments share the pelvis, solve a balanced crouch instead of pushing
       // the feet through the floor. Explicit rest has its own seated contact solver.
-      const crouching = ['gather', 'farm', 'work', 'build', 'play', 'carry'].includes(state.currentState);
+      const crouching = ['gather', 'ignite', 'farm', 'work', 'build', 'play', 'carry'].includes(state.currentState);
       if (crouching) {
         out.leftHipRotation = out.leftKneeRotation * 0.5;
         out.rightHipRotation = out.rightKneeRotation * 0.5;

@@ -20,7 +20,7 @@ import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
-import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion } from './founding/FoundingHearthVisual';
+import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
@@ -1044,16 +1044,20 @@ export class GodboxRenderer {
           personId: person.id,
           actionKind: assembling
             ? `founding-hearth-${firstFire.assemblyPhase}-${firstFire.pieceKind ?? 'material'}`
-            : firstFire.role === 'tender' ? 'founding-first-fire-tend' : 'founding-first-fire-witness',
+            : firstFire.role === 'tender'
+              ? `founding-first-fire-${firstFire.ceremonyPhase ?? 'tend'}`
+              : 'founding-first-fire-witness',
           authoritativeActivity: person.activity,
           sourceAuthority: assembling
             ? 'recorded first-fire event; deterministic presentation-only hearth assembly'
-            : 'recorded first-fire event; presentation-only gathering',
+            : firstFire.role === 'tender'
+              ? 'recorded first-fire event; deterministic presentation-only ignition choreography'
+              : 'recorded first-fire event; presentation-only gathering',
           targetId: firstFire.eventId,
           targetKind: firstFire.pieceKind ?? 'founding-hearth',
           interactionAnchor: firstFire.interactionTarget ?? hearthPosition,
           locomotionTarget: { x: firstFire.x, z: firstFire.z },
-          phase: assembling ? firstFire.assemblyPhase! : firstFire.role === 'tender' ? 'tend' : 'gather',
+          phase: assembling ? firstFire.assemblyPhase! : firstFire.role === 'tender' ? firstFire.ceremonyPhase ?? 'tend' : 'gather',
           phaseProgress: firstFire.phaseProgress,
           activeTool: 'none',
           carriedObject: firstFire.carriedObject,
@@ -1090,7 +1094,7 @@ export class GodboxRenderer {
       const attentionTorsoBlend = Math.max(0, Math.min(1, (attentionBlend - 0.32) / 0.68));
       const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend + (visual.passingTorsoYaw ?? 0);
       const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend + (visual.passingHeadYaw ?? 0) - attentionBodyYaw;
-      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated));
+      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated || firstFireStanding));
       const bodyPitch = bodyTilt.pitch + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
       const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
       const bodyRoll = bodyTilt.roll + (pose?.spineRoll ?? 0) + (restArticulated ? restPose.bodyRoll : 0);
@@ -1109,15 +1113,17 @@ export class GodboxRenderer {
           side ? pose?.rightShoulderRotation ?? 0 : pose?.leftShoulderRotation ?? 0,
           side ? pose?.rightElbowRotation ?? 0.12 : pose?.leftElbowRotation ?? 0.12,
           0.19, 0.18, true, (side ? 1 : -1) * 0.035);
-        if (firstFireStanding && firstFire?.assemblyPhase === 'place' && firstFire.interactionTarget) {
+        if (firstFireStanding && firstFire?.interactionTarget
+          && (firstFire.assemblyPhase === 'place' || firstFire.role === 'tender')) {
           const contact = firstFire.interactionTarget;
           const dx = contact.x - display.x;
           const dz = contact.z - display.z;
           const length = Math.max(0.001, Math.hypot(dx, dz));
-          const lateral = (side ? 1 : -1) * 0.018;
+          const lateral = (side ? 1 : -1) * (firstFire.role === 'tender' ? 0.012 : 0.018);
+          const contactHeight = firstFire.role === 'tender' ? 0.085 : 0.055;
           this.socialHandTarget.set(
             contact.x - dz / length * lateral,
-            this.elevationAt(contact.x, contact.z) + 0.055,
+            this.elevationAt(contact.x, contact.z) + contactHeight,
             contact.z + dx / length * lateral,
           );
           this.humanJoints.reach(this.jointParent, (side ? 1 : -1) * 0.12, 0.27,
@@ -1555,7 +1561,8 @@ export class GodboxRenderer {
       const rig = createFoundingHearthFlameRig(`${this.config.seed}:${settlement.id}`);
       rig.position.set(hearthOffset.x, groundY, hearthOffset.z);
       rig.userData['survivalFire'] = true;
-      rig.scale.set(firstFireVisual.flameScale * 0.96, firstFireVisual.flameScale, firstFireVisual.flameScale * 0.96);
+      rig.scale.setScalar(1);
+      rig.visible = firstFireVisual.flameScale > 0.005 || firstFireVisual.sparkGain > 0.01;
       group.userData['foundingHearthFlameRig'] = rig;
       group.add(rig);
     }
@@ -3159,15 +3166,22 @@ export class GodboxRenderer {
       const infrastructure = visual.group.userData['foundingHearthInfrastructure'];
       if (infrastructure instanceof THREE.Group) {
         updateFoundingHearthAssembly(infrastructure, sample);
+        updateFoundingHearthIgnition(infrastructure, sample);
       }
       const rig = visual.group.userData['foundingHearthFlameRig'];
       const embers = visual.group.userData['foundingHearthEmbers'];
       const emberGroup = embers instanceof THREE.Group ? embers : undefined;
       if (rig instanceof THREE.Group) {
-        const scale = Math.max(0.001, sample.flameScale);
-        rig.visible = scale > 0.01;
-        rig.scale.set(scale * 0.96, scale, scale * 0.96);
-        updateFoundingHearthFireMotion(rig, emberGroup, elapsedSeconds, this.reducedMotion.matches);
+        rig.visible = sample.flameScale > 0.005 || sample.sparkGain > 0.01;
+        rig.scale.setScalar(1);
+        updateFoundingHearthFireMotion(
+          rig,
+          emberGroup,
+          elapsedSeconds,
+          this.reducedMotion.matches,
+          sample.flameScale,
+          sample.sparkGain,
+        );
       }
       if (emberGroup) {
         emberGroup.visible = sample.emberScale > 0.01;
@@ -3311,7 +3325,10 @@ export class GodboxRenderer {
       const initial = foundingHearth
         ? this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches)
         : undefined;
-      if (initial) updateFoundingHearthAssembly(infrastructure, initial);
+      if (initial) {
+        updateFoundingHearthAssembly(infrastructure, initial);
+        updateFoundingHearthIgnition(infrastructure, initial);
+      }
       group.userData['foundingHearthInfrastructure'] = infrastructure;
       group.add(infrastructure);
 
