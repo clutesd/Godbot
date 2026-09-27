@@ -139,6 +139,45 @@ describe('founding first-fire presentation', () => {
     expect(falterAt).toBeLessThan(catchAt);
   });
 
+  it('keeps a hearth piece in the founder hand until the visible ground placement completes', () => {
+    const simulation = new Simulation({ seed: 'first-fire-hand-placement' });
+    const settlement = simulation.state.settlements[0]!;
+    settlement.foundingPodId = 'pod-placement';
+    const presentation = new FoundingFirstFirePresentation(simulation.state);
+    survivalState(settlement).firstFire = { month: 1, eventId: 'first-fire:placement' };
+    presentation.update(simulation.state, 0);
+
+    const hearth = { x: settlement.position.x + 1.8, z: settlement.position.z + 0.1 };
+    let pickup:
+      | NonNullable<ReturnType<FoundingFirstFirePresentation['targetFor']>>
+      | undefined;
+    let placing:
+      | NonNullable<ReturnType<FoundingFirstFirePresentation['targetFor']>>
+      | undefined;
+
+    for (let time = 0; time < FOUNDING_HEARTH_ASSEMBLY_SECONDS && (!pickup || !placing); time += 0.05) {
+      presentation.update(simulation.state, time);
+      for (const person of simulation.state.people.filter(candidate => candidate.homeId === settlement.id)) {
+        const target = presentation.targetFor(person.id, settlement.id, hearth, person.position, settlement.position);
+        if (!target || target.role !== 'builder') continue;
+        if (!pickup && target.assemblyPhase === 'pickup') pickup = target;
+        if (!placing && target.assemblyPhase === 'place' && target.carriedObject) placing = target;
+      }
+    }
+
+    expect(pickup).toBeDefined();
+    expect(pickup?.carriedObject).toBeUndefined();
+    expect(pickup?.interactionTarget).toEqual({ x: pickup?.x, z: pickup?.z });
+    expect(placing).toBeDefined();
+    expect(placing?.carriedObject).toMatch(/stone|timber/);
+    expect(placing?.interactionTarget).toBeDefined();
+    expect(Math.hypot(
+      (placing?.interactionTarget?.x ?? 0) - (placing?.x ?? 0),
+      (placing?.interactionTarget?.z ?? 0) - (placing?.z ?? 0),
+    )).toBeGreaterThan(0.2);
+    expect(placing?.contactStrength).toBeGreaterThanOrEqual(0);
+  });
+
   it('gives the tender a dedicated low ignition pose instead of generic gathering', () => {
     const controller = new AnimationController('first-fire-ignite-pose');
     controller.getOrCreateCharacterState('tender', 'builder');
