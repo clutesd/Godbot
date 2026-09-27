@@ -56,6 +56,44 @@ describe('Historian grounding', () => {
     expect(candidates.some((candidate) => candidate.event?.type === 'ARRIVAL_DAY')).toBe(false);
   });
 
+  it('directs a first-fire milestone as a required human-scale documentary scene', () => {
+    const early = new Simulation({ seed: 'historian-first-fire', startMode: 'arrival', world: { size: 40 } });
+    early.advanceArrival(120);
+    expect(early.beginHistory()).toBe(true);
+    early.step(1);
+    const settlement = early.state.settlements.find(candidate => candidate.alive && candidate.foundingPodId);
+    if (!settlement) throw new Error('Expected a living founding settlement');
+    const firstFire = {
+      id: 'event:first-fire:test',
+      month: early.state.month,
+      type: 'first-fire' as const,
+      location: { ...settlement.position },
+      locationId: settlement.id,
+      actors: [settlement.id],
+      causes: ['founding-survival'],
+      context: { purpose: 'founding-hearth', fuelUsed: 0.03, intensity: 1 },
+      outcome: 'A founding hearth is established.',
+      affectedPopulation: early.state.people.filter(person => person.alive && person.homeId === settlement.id).length,
+      magnitude: 0.68,
+      significance: 0.68,
+      tags: ['founding-survival', 'fire-control'],
+      summary: `${settlement.name} lights its first recorded survival hearth.`,
+    };
+    early.state.history.push(firstFire);
+
+    const director = new Historian(early.config);
+    const scene = director.chooseScene(early.state, firstFire.id);
+    expect(scene.event?.type).toBe('first-fire');
+    expect(scene.title).toBe('FIRST FIRE');
+    expect(scene.kind).toBe('discovery-scene');
+    expect(scene.editorial?.preferredScale).toBe('detail');
+    expect(scene.editorial?.narration).toBe('required');
+    expect(scene.editorial?.completion).toBe('timed');
+    expect(scene.statement.text).toContain('communal hearth');
+    expect(early.state.people.some(person => person.id === scene.subjectId && person.alive)).toBe(true);
+    expect(director.validateStatement(scene.statement, early.state)).toBe(true);
+  });
+
   it('rejects nonexistent wars', () => {
     expect(historian.validateStatement(statement({ month: simulation.state.month, sourceEntityIds: [simulation.state.settlements[0]?.id ?? ''], claims: { warId: 'war-that-never-existed' } }), simulation.state)).toBe(false);
   });

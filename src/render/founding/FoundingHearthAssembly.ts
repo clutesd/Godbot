@@ -8,7 +8,7 @@ export const FOUNDING_HEARTH_LOG_COUNT = 3;
 export const FOUNDING_HEARTH_BUILDER_COUNT = 3;
 
 /** Assembly finishes before the existing ignition performance begins. */
-export const FOUNDING_HEARTH_ASSEMBLY_SECONDS = 10.6;
+export const FOUNDING_HEARTH_ASSEMBLY_SECONDS = 36;
 
 export interface FoundingHearthPiecePose {
   readonly kind: FoundingHearthPieceKind;
@@ -68,27 +68,30 @@ export function foundingHearthPiecePose(seed: string, kind: FoundingHearthPieceK
 export function foundingHearthAssemblyTasks(): readonly FoundingHearthAssemblyTask[] {
   const tasks: FoundingHearthAssemblyTask[] = [];
   for (let index = 0; index < FOUNDING_HEARTH_STONE_COUNT; index += 1) {
-    const start = index * 0.58;
+    // The same builder receives every third task, leaving ~6.6 seconds between assignments.
+    // That is long enough to physically return to the material cache, pick up, walk back and
+    // complete a visible hand-to-ground placement at normal GODBOX walking speed.
+    const start = index * 2.2;
     tasks.push({
       kind: 'stone',
       index,
       builderSlot: index % FOUNDING_HEARTH_BUILDER_COUNT,
       startSeconds: start,
-      pickupEndSeconds: start + 0.45,
-      carryEndSeconds: start + 1.35,
-      placeEndSeconds: start + 1.72,
+      pickupEndSeconds: start + 2.6,
+      carryEndSeconds: start + 5.4,
+      placeEndSeconds: start + 6.3,
     });
   }
   for (let index = 0; index < FOUNDING_HEARTH_LOG_COUNT; index += 1) {
-    const start = 8 + index * 0.18;
+    const start = 29 + index * 0.25;
     tasks.push({
       kind: 'log',
       index,
       builderSlot: index % FOUNDING_HEARTH_BUILDER_COUNT,
       startSeconds: start,
-      pickupEndSeconds: start + 0.5,
-      carryEndSeconds: start + 1.55,
-      placeEndSeconds: start + 2.0,
+      pickupEndSeconds: start + 2.2,
+      carryEndSeconds: start + 5.2,
+      placeEndSeconds: start + 6.0,
     });
   }
   return Object.freeze(tasks);

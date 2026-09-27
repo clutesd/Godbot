@@ -267,7 +267,8 @@ export class FoundingFirstFirePresentation {
       const pickup = foundingHearthPickupPoint(hearth, settlement, performance.eventId, participant.builderSlot);
       const piece = foundingHearthPiecePose(performance.eventId, task.kind, task.index);
       const placement = foundingHearthPlacementStance(hearth, piece, participant.builderSlot);
-      const interactionTarget = { x: hearth.x + piece.x, z: hearth.z + piece.z };
+      const placementTarget = { x: hearth.x + piece.x, z: hearth.z + piece.z };
+      const interactionTarget = taskPhase.phase === 'pickup' ? pickup : placementTarget;
       const target = taskPhase.phase === 'pickup' ? pickup : placement;
       return {
         ...target,
@@ -283,7 +284,7 @@ export class FoundingFirstFirePresentation {
           ? task.kind === 'stone' ? 'stone' : 'timber'
           : undefined,
         interactionTarget,
-        contactStrength: taskPhase.phase === 'place' ? taskPhase.progress : 0,
+        contactStrength: taskPhase.phase === 'pickup' || taskPhase.phase === 'place' ? taskPhase.progress : 0,
       };
     }
 
