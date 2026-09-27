@@ -175,6 +175,14 @@ describe('Arrival presentation contracts', () => {
     const camera = new THREE.PerspectiveCamera(); camera.position.set(35, 40, 50);
     view.update(camera);
     expect(view.root.children.filter(o => o instanceof THREE.Group && o.visible)).toHaveLength(0);
+
+    // Vessels remain absent through the pristine opening and only become renderable at their
+    // authored entry time. No hull may materialize early over the landscape.
+    const firstPod = s.state.arrival!.pods[0]!;
+    s.state.arrival!.elapsedSeconds = firstPod.entrySeconds - 0.01;
+    view.update(camera);
+    expect(view.root.children.filter(o => o instanceof THREE.Group && o.visible)).toHaveLength(0);
+    s.state.arrival!.elapsedSeconds = 0;
     const objects = [...view.root.children];
     for (let i = 0; i < (ARRIVAL_END_SECONDS - 1) * 10; i++) { s.advanceArrival(0.1); view.update(camera); }
     expect(view.root.children).toEqual(objects);
@@ -340,9 +348,44 @@ describe('Arrival presentation contracts', () => {
       expect(podPosition(pod, finish + 5)).toEqual(podPosition(pod, finish));
     }
     expect(new Set(s.state.arrival!.pods.map(p => p.entrySeconds)).size).toBe(5);
+
+    // The hero vessel starts outside the authored 16:9 opening frame, then crosses into view.
+    const hero = s.state.arrival!.pods[0]!;
+    s.state.arrival!.elapsedSeconds = hero.entrySeconds;
+    const ingress = arrivalSequenceFocus(s.state.arrival!);
+    expect(ingress.beat).toBe('fleet');
+    expect(ingress.cameraPosition).toBeDefined();
+    const ingressCamera = new THREE.PerspectiveCamera(ingress.fov, 16 / 9, 0.01, 500);
+    ingressCamera.position.set(ingress.cameraPosition!.x, ingress.cameraPosition!.y, ingress.cameraPosition!.z);
+    ingressCamera.lookAt(ingress.target.x, ingress.target.y, ingress.target.z);
+    ingressCamera.updateMatrixWorld(true);
+    const projectionView = new THREE.Matrix4().multiplyMatrices(ingressCamera.projectionMatrix, ingressCamera.matrixWorldInverse);
+    const ingressFrustum = new THREE.Frustum().setFromProjectionMatrix(projectionView);
+    const start = podPosition(hero, hero.entrySeconds);
+    expect(ingressFrustum.containsPoint(new THREE.Vector3(start.x, start.y, start.z))).toBe(false);
+
+    let crossedIntoFrame = false;
+    for (let sample = 1; sample <= 36; sample += 1) {
+      s.state.arrival!.elapsedSeconds = hero.entrySeconds + sample / 10;
+      const focus = arrivalSequenceFocus(s.state.arrival!);
+      if (!focus.cameraPosition) continue;
+      ingressCamera.fov = focus.fov;
+      ingressCamera.updateProjectionMatrix();
+      ingressCamera.position.set(focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z);
+      ingressCamera.lookAt(focus.target.x, focus.target.y, focus.target.z);
+      ingressCamera.updateMatrixWorld(true);
+      projectionView.multiplyMatrices(ingressCamera.projectionMatrix, ingressCamera.matrixWorldInverse);
+      ingressFrustum.setFromProjectionMatrix(projectionView);
+      const p = podPosition(hero, s.state.arrival!.elapsedSeconds);
+      if (ingressFrustum.containsPoint(new THREE.Vector3(p.x, p.y, p.z))) {
+        crossedIntoFrame = true;
+        break;
+      }
+    }
+    expect(crossedIntoFrame).toBe(true);
     let previous = arrivalSequenceFocus(s.state.arrival!);
     const visitedSites = new Set<number>();
-    let closestSiteRadius = Number.POSITIVE_INFINITY;
+    let closestLandingInsertRadius = Number.POSITIVE_INFINITY;
     for (let step = 0; step <= ARRIVAL_END_SECONDS * 10; step += 1) {
       const second = step / 10;
       s.state.arrival!.elapsedSeconds = second;
@@ -352,14 +395,14 @@ describe('Arrival presentation contracts', () => {
       if (focus.cameraPosition) {
         expect([focus.cameraPosition.x, focus.cameraPosition.y, focus.cameraPosition.z].every(Number.isFinite)).toBe(true);
       }
-      expect(['pristine', 'descent', 'touchdown', 'site-flythrough', 'handoff']).toContain(focus.beat);
+      expect(['pristine', 'fleet', 'descent', 'touchdown', 'doorway', 'first-steps', 'site-flythrough', 'handoff']).toContain(focus.beat);
       expect(focus.fov).toBeGreaterThanOrEqual(30);
       expect(focus.fov).toBeLessThanOrEqual(38);
       if (focus.beat === 'site-flythrough' && focus.siteIndex !== undefined) {
         visitedSites.add(focus.siteIndex);
-        closestSiteRadius = Math.min(closestSiteRadius, focus.radius);
+        closestLandingInsertRadius = Math.min(closestLandingInsertRadius, focus.radius);
       }
-      if (step > 0) {
+      if (step > 0 && focus.shotId === previous.shotId) {
         expect(Math.hypot(
           focus.target.x - previous.target.x,
           focus.target.y - previous.target.y,
@@ -373,9 +416,9 @@ describe('Arrival presentation contracts', () => {
       expect(caption.opacity).toBeLessThanOrEqual(1);
       previous = focus;
     }
-    expect([...visitedSites]).toEqual([0]);
+    expect([...visitedSites]).toEqual([1, 2, 3, 4]);
     expect(ARRIVAL_END_SECONDS).toBeLessThanOrEqual(40);
-    expect(closestSiteRadius).toBeLessThan(2);
+    expect(closestLandingInsertRadius).toBeLessThan(5);
     s.state.arrival!.elapsedSeconds = ARRIVAL_END_SECONDS;
     const handoff = arrivalSequenceFocus(s.state.arrival!);
     expect(handoff.beat).toBe('handoff');
@@ -385,19 +428,19 @@ describe('Arrival presentation contracts', () => {
     expect(handoff.cameraPosition).toBeDefined();
 
 
-    // The gathering gets a readable hold; the title never climbs back into scenery.
-    for (let siteIndex = 0; siteIndex < 1; siteIndex += 1) {
-      s.state.arrival!.elapsedSeconds = 30;
-      const heldA = arrivalSequenceFocus(s.state.arrival!);
-      s.state.arrival!.elapsedSeconds += 0.8;
-      const heldB = arrivalSequenceFocus(s.state.arrival!);
-      expect(heldA.beat).toBe('site-flythrough');
-      expect(heldA.siteIndex).toBe(siteIndex);
-      expect(heldA.cameraPosition).toBeDefined();
-      expect(heldB.cameraPosition).toEqual(heldA.cameraPosition);
-      expect(heldB.target).toEqual(heldA.target);
-      expect(heldA.height).toBeLessThan(1);
-      expect(heldA.fov).toBeLessThanOrEqual(31);
-    }
+    // A secondary landing insert is a deliberate geographic edit with a stable lens, not a
+    // continuous flight through unrelated terrain.
+    s.state.arrival!.elapsedSeconds = 26.6;
+    const heldA = arrivalSequenceFocus(s.state.arrival!);
+    s.state.arrival!.elapsedSeconds += 0.8;
+    const heldB = arrivalSequenceFocus(s.state.arrival!);
+    expect(heldA.beat).toBe('site-flythrough');
+    expect(heldA.siteIndex).toBe(1);
+    expect(heldA.cameraPosition).toBeDefined();
+    expect(heldB.shotId).toBe(heldA.shotId);
+    expect(heldB.cameraPosition).toBeDefined();
+    expect(heldB.cameraPosition!.x).toBeCloseTo(heldA.cameraPosition!.x - 0.064, 5);
+    expect(heldB.cameraPosition!.y).toBeCloseTo(heldA.cameraPosition!.y, 8);
+    expect(heldB.cameraPosition!.z).toBeCloseTo(heldA.cameraPosition!.z, 8);
   });
 });

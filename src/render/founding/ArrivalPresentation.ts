@@ -105,6 +105,29 @@ function foundingSiteComposition(
 }
 
 /**
+ * The opening lens looks across the hero landing corridor rather than straight down it. That keeps
+ * the untouched world readable while the first vessel begins beyond the frame and crosses into it.
+ */
+function openingWorldComposition(pod: FoundingArrivalState['pods'][number]): {
+  target: Readonly<{ x: number; y: number; z: number }>;
+  camera: Readonly<{ x: number; y: number; z: number }>;
+} {
+  const length = Math.max(0.001, Math.hypot(pod.entryOffset.x, pod.entryOffset.z));
+  const approachX = pod.entryOffset.x / length;
+  const approachZ = pod.entryOffset.z / length;
+  const sideX = -approachZ;
+  const sideZ = approachX;
+  return {
+    target: { x: pod.position.x, y: pod.groundY + 3.8, z: pod.position.z },
+    camera: {
+      x: pod.position.x + sideX * 34,
+      y: pod.groundY + 24,
+      z: pod.position.z + sideZ * 34,
+    },
+  };
+}
+
+/**
  * Arrival is an authored short film rather than a surveillance pass. It establishes the untouched
  * world, follows the first vessel into touchdown, then drops to human scale for emergence and gathering. The title stays with
  * the people; geography never replaces the human subject at the handoff.
@@ -122,12 +145,20 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
   const insertDuration = 1.5;
   const insertEnd = disembarked + others.length * insertDuration;
 
+  const opening = openingWorldComposition(hero);
+  if (t < hero.entrySeconds) {
+    return { beat: 'pristine', shotId: 'pristine-world', target: opening.target, cameraPosition: opening.camera,
+      radius: 42, height: 24, transitionSeconds: 0.9, azimuthOffset: 0, fov: 38, siteIndex: 0 };
+  }
+
   if (t < fleetEnd) {
-    const positions = arrival.pods.map(p => podPosition(p, t));
-    const center = positions.reduce((sum, p) => ({ x: sum.x + p.x / positions.length, y: sum.y + p.y / positions.length, z: sum.z + p.z / positions.length }), { x: 0, y: 0, z: 0 });
-    const spread = Math.max(14, ...positions.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z)));
-    return { beat: t < 1 ? 'pristine' : 'fleet', shotId: 'fleet', target: center,
-      radius: spread * 3.1, height: spread * 0.65, transitionSeconds: 0.9, azimuthOffset: 0, fov: 38 };
+    const position = podPosition(hero, t);
+    // Hold the landscape for the first instant of entry, then pan into the vessel only after it has
+    // physically crossed toward the frame. The lens never chases an invisible off-screen subject.
+    const reveal = smoothstep((t - hero.entrySeconds - 0.55) / Math.max(0.1, fleetEnd - hero.entrySeconds - 0.8));
+    const vesselTarget = { x: position.x, y: position.y - 0.3, z: position.z };
+    return { beat: 'fleet', shotId: 'fleet-ingress', target: mixPoint(opening.target, vesselTarget, reveal), cameraPosition: opening.camera,
+      radius: 42, height: 24, transitionSeconds: 0.72, azimuthOffset: 0, fov: 38, siteIndex: 0 };
   }
 
   if (t < disembarked) {
