@@ -800,7 +800,7 @@ function stabilizeWaterTriangle(triangle: readonly InlandVertex[], groundAt: (x:
  */
 export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, previousFreeze?: Float32Array): THREE.Mesh | undefined {
   const { terrain } = world;
-  const { resolution, step, originX, originZ, waterLevel, height } = terrain;
+  const { resolution, step, originX, originZ, height } = terrain;
   const positions: number[] = [];
   const colors: number[] = [];
   const depths: number[] = [];
