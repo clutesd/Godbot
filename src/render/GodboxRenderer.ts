@@ -20,6 +20,7 @@ import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
 import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
+import { FoundingStandardPresentation, type FoundingStandardTarget } from './founding/FoundingStandardPresentation';
 import { foundingCommunityIsForming, foundingCommunitySupplyAnchor, isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
@@ -251,6 +252,7 @@ export class GodboxRenderer {
   /** Real-time presentation clock; never derived from simulation month/day or Historian pacing. */
   private readonly humanLifeClock = new HumanLifeClock();
   private readonly firstFirePresentation: FoundingFirstFirePresentation;
+  private readonly foundingStandardPresentation: FoundingStandardPresentation;
   private readonly reactionGlyphs: ReactionGlyphRenderer;
   private readonly localActivities = new LocalActivityPresentation();
   private readonly localPeers = new Map<string, Person>();
@@ -405,6 +407,7 @@ export class GodboxRenderer {
   constructor(private readonly host: HTMLElement, private readonly config: GodboxConfig, private readonly state: SimulationState, historian: Historian) {
     this.random = new SeededRandom(`${config.seed}:visuals`);
     this.firstFirePresentation = new FoundingFirstFirePresentation(state);
+    this.foundingStandardPresentation = new FoundingStandardPresentation(state);
     this.reactionGlyphs = new ReactionGlyphRenderer(`${config.seed}:reaction-glyphs`);
     this.animationController = new AnimationController(`${config.seed}:humanoid-animation`);
     this.assetBuilder = new AssetBuilder(`${config.seed}:asset-builder`);
@@ -622,6 +625,16 @@ export class GodboxRenderer {
     const humanLife = this.humanLifeClock.advance(deltaSeconds);
     if (renderPolicy.updateAmbientWorldEffects) {
       this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds);
+      const blockedStandardSettlements = new Set<string>();
+      for (const settlement of this.state.settlements) {
+        if (this.firstFirePresentation.isPerforming(settlement.id)) blockedStandardSettlements.add(settlement.id);
+      }
+      if (this.foundingStandardPresentation.update(this.state, humanLife.elapsedSeconds, blockedStandardSettlements)) {
+        // Ceremony participants must be admitted to the visible-person budget immediately, even if
+        // the simulation month/population did not change.
+        this.visiblePeopleMonth = -1;
+        this.maintenance.request('settlements', true);
+      }
     }
     for (const culture of this.state.cultures) if (!this.cultureById.has(culture.id)) {
       this.cultureById.set(culture.id, culture);
@@ -942,10 +955,10 @@ export class GodboxRenderer {
       const settlement = this.workSettlements.get(person.homeId);
       const weather = settlement ? this.state.weather.cells[settlement.cellIndex] : undefined;
       const interruption = workInterruption(person, weather);
-      const worker = binding && !interruption && resourceWorkerCanPresent(person, binding.site.assignment) ? binding : undefined;
+      let worker = binding && !interruption && resourceWorkerCanPresent(person, binding.site.assignment) ? binding : undefined;
       const project = settlement?.development?.project;
       const site = project ? this.settlementBuildingPlacements.get(person.homeId)?.find(p => p.key === project.plotId) : undefined;
-      const physical = this.physicalWork.plan(person, settlement, site, this.farmFields.fields.get(person.homeId), weather,
+      let physical = this.physicalWork.plan(person, settlement, site, this.farmFields.fields.get(person.homeId), weather,
         (a, b) => this.resourceWork.safeSegment(a, b));
       const base = this.personDisplayTarget(person, group);
       const currentPresentation = this.peopleVisuals.get(person.id);
@@ -958,6 +971,27 @@ export class GodboxRenderer {
       const firstFire = firstFireCandidate && this.personStandable(firstFireCandidate.x, firstFireCandidate.z)
         && this.resourceWork.safeSegment(currentPresentation ? { x: currentPresentation.x, z: currentPresentation.z } : base, firstFireCandidate)
         ? firstFireCandidate : undefined;
+
+      let foundingStandard: FoundingStandardTarget | undefined;
+      if (settlement && !interruption && !firstFire && this.foundingStandardPresentation.isPerforming(settlement.id)) {
+        const settlementVisual = this.settlementVisuals.get(settlement.id)?.group;
+        const localX = Number(settlementVisual?.userData['foundingStandardFinalX']);
+        const localZ = Number(settlementVisual?.userData['foundingStandardFinalZ']);
+        const poleHeight = Number(settlementVisual?.userData['foundingStandardPoleHeight']);
+        if (settlementVisual && Number.isFinite(localX) && Number.isFinite(localZ) && Number.isFinite(poleHeight)) {
+          const standardBase = { x: settlement.position.x + localX, z: settlement.position.z + localZ };
+          const supply = foundingCommunitySupplyAnchor(settlement, this.state);
+          const candidate = this.foundingStandardPresentation.targetFor(person.id, settlement.id, standardBase, supply, poleHeight);
+          if (candidate && this.personStandable(candidate.x, candidate.z)
+            && this.resourceWork.safeSegment(currentPresentation ? { x: currentPresentation.x, z: currentPresentation.z } : base, candidate)) {
+            foundingStandard = candidate;
+            // The ceremony is presentation-only, but for its few participants it temporarily owns
+            // the body instead of letting simultaneous routine/resource work pull them elsewhere.
+            worker = undefined;
+            physical = undefined;
+          }
+        }
+      }
       const structures = this.settlementBuildingPlacements.get(person.homeId) ?? NO_ACTIVITY_STRUCTURES;
       let localRevision = this.localStructureRevisions.get(structures);
       if (localRevision === undefined) {
@@ -972,11 +1006,11 @@ export class GodboxRenderer {
         safeSegment: (a, b) => this.resourceWork.safeSegment(a, b),
         revision: localRevision,
         visualFor: (id) => this.localPeerPositions.get(id),
-        blocked: Boolean(worker || physical || interruption || firstFire || person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'),
+        blocked: Boolean(worker || physical || interruption || firstFire || foundingStandard || person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'),
         far: Math.hypot(this.camera.position.x - base.x, this.camera.position.z - base.z) > 35,
       }, deltaSeconds);
       const aim = worker ? resourceWorkAlternateAnchor(worker.site.profile, worker.variation, elapsedSeconds)
-        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? local?.destination ?? base;
+        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? foundingStandard ?? local?.destination ?? base;
       const foundingPod = person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'
         ? this.state.arrival?.pods.find(p => p.id === person.foundingOrigin?.podId) : undefined;
       const egress = foundingPod ? arrivalFounderPose(person, foundingPod, this.state.arrival!.elapsedSeconds, this.personGround.heightAt) : undefined;
@@ -984,19 +1018,21 @@ export class GodboxRenderer {
         destination: aim,
         greetingPartnerId: local?.encounter?.beat === 0 && ['hug', 'handshake'].includes(local.encounter.greeting ?? '') ? local.encounter.partnerId : undefined,
         embracing: local?.encounter?.beat === 0 && local.encounter.greeting === 'hug',
-        localMove: Boolean(firstFire || local && local.action !== 'arrive'),
+        localMove: Boolean(firstFire || foundingStandard || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
         localSpeed: ((person.activity === 'flee' ? 0.85
           : firstFire ? 0.5
+            : foundingStandard ? 0.48
             : ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local?.action ?? '') ? 0.53
               : local?.action.startsWith('play-') ? (person.ageMonths < 36 ? 0.24 : 0.44)
                 : local ? 0.27 : 0.38)
           + stableUnit(`${person.id}:pace`) * 0.02) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.94 : 1),
-        arrivalEase: Boolean(worker || physical),
-        ...(!worker && !physical && !firstFire && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
+        arrivalEase: Boolean(worker || physical || foundingStandard),
+        ...(!worker && !physical && !firstFire && !foundingStandard && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
-          : physical ? facingTarget(physical.action.locomotionTarget, physical.action.interactionAnchor) : firstFire?.restFacing ?? local?.restFacing ?? base.restFacing,
+          : physical ? facingTarget(physical.action.locomotionTarget, physical.action.interactionAnchor)
+            : firstFire?.restFacing ?? foundingStandard?.restFacing ?? local?.restFacing ?? base.restFacing,
       }, deltaSeconds, this.personGround);
       const display = visual;
       const tier = visualTierFor(person);
@@ -1010,17 +1046,29 @@ export class GodboxRenderer {
         : 0;
       const restPose = this.restPoses.resolve(person.id, restReady ? local?.rest : undefined,
         restReady ? local?.restStage : undefined, deltaSeconds, person.ageMonths, restAttentionYaw);
-      const loaded = physical?.action.carriedObject !== undefined || firstFire?.carriedObject !== undefined;
+      const standardCarrying = foundingStandard?.phase === 'carry-pole';
+      const loaded = physical?.action.carriedObject !== undefined || firstFire?.carriedObject !== undefined || standardCarrying;
       const travel = travelAnimationFor(visual.speed, person);
       const playfulRun = Boolean(local && ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local.action)
         && visual.speed >= WALK_SPEED_THRESHOLD);
       const firstFireStanding = Boolean(firstFire && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
         && Math.hypot(visual.x - firstFire.x, visual.z - firstFire.z) < 0.08);
+      const standardStanding = Boolean(foundingStandard && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
+        && Math.hypot(visual.x - foundingStandard.x, visual.z - foundingStandard.z) < 0.09);
+      if (settlement && foundingStandard) {
+        this.foundingStandardPresentation.reportParticipantReady(
+          settlement.id,
+          person.id,
+          foundingStandard.phase,
+          standardStanding,
+        );
+      }
       const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
         visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
           : firstFireStanding ? firstFire!.animation
-            : interruption || unsupportedWork || physical ? 'idle'
+            : standardStanding ? foundingStandard!.animation
+              : interruption || unsupportedWork || physical ? 'idle'
               : foundingCommunityRoutine && ['assist', 'craft'].includes(person.activity) ? 'work'
                 : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
         visual.speed, person.ageMonths, loaded || person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? ''), person.traits.sociability);
@@ -1028,8 +1076,8 @@ export class GodboxRenderer {
       const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
       const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
       if (worker) this.resourceWorkers.sample(worker, elapsedSeconds, deltaSeconds, Boolean(working && oriented));
-      if (working) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
-      if (physicalStanding) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
+      if (working && worker) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
+      if (physicalStanding && physical) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
       const restArticulated = detailed && restPose.blend > 0.001;
       const articulated = working || physicalStanding || physical && loaded || restArticulated;
       const partnerId = local?.encounter?.partnerId;
@@ -1046,6 +1094,22 @@ export class GodboxRenderer {
           phase: !working || !oriented ? 'approach' : m.impact > 0 ? 'contact' : m.held > 0 ? 'transfer' : 'prepare-recover',
           phaseProgress: m.impact, activeTool: worker.site.profile.tool, carriedObject: working && m.held > 0 ? worker.site.assignment.resourceId : undefined,
           contactStrength: working && oriented ? m.impact : 0 });
+      }
+      if (foundingStandard && standardStanding) {
+        this.actionInspections.set(person.id, {
+          personId: person.id,
+          actionKind: `founding-standard-${foundingStandard.phase}-${foundingStandard.role}`,
+          authoritativeActivity: person.activity,
+          sourceAuthority: 'authoritative hearth + completed shelter; deterministic presentation-only founding-standard ceremony',
+          targetId: foundingStandard.ceremonyId,
+          targetKind: 'founding-standard',
+          interactionAnchor: foundingStandard.interactionTarget ?? { x: foundingStandard.x, z: foundingStandard.z },
+          locomotionTarget: { x: foundingStandard.x, z: foundingStandard.z },
+          phase: foundingStandard.phase,
+          phaseProgress: foundingStandard.phaseProgress,
+          activeTool: 'none',
+          contactStrength: foundingStandard.contactStrength ?? 0,
+        });
       }
       if (firstFire && firstFireStanding && hearthPosition) {
         const assembling = firstFire.role === 'builder' && firstFire.assemblyPhase !== undefined;
@@ -1103,11 +1167,11 @@ export class GodboxRenderer {
       const attentionTorsoBlend = Math.max(0, Math.min(1, (attentionBlend - 0.32) / 0.68));
       const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend + (visual.passingTorsoYaw ?? 0);
       const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend + (visual.passingHeadYaw ?? 0) - attentionBodyYaw;
-      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated || firstFireStanding));
+      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated || firstFireStanding || standardStanding));
       const bodyPitch = bodyTilt.pitch + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
       const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
       const bodyRoll = bodyTilt.roll + (pose?.spineRoll ?? 0) + (restArticulated ? restPose.bodyRoll : 0);
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
+      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working && worker ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
       this.people.setColorAt(index, this.personColor);
@@ -1122,6 +1186,20 @@ export class GodboxRenderer {
           side ? pose?.rightShoulderRotation ?? 0 : pose?.leftShoulderRotation ?? 0,
           side ? pose?.rightElbowRotation ?? 0.12 : pose?.leftElbowRotation ?? 0.12,
           0.19, 0.18, true, (side ? 1 : -1) * 0.035);
+        if (standardStanding && foundingStandard?.interactionTarget) {
+          const contact = foundingStandard.interactionTarget;
+          const dx = contact.x - display.x;
+          const dz = contact.z - display.z;
+          const length = Math.max(0.001, Math.hypot(dx, dz));
+          const lateral = (side ? 1 : -1) * 0.015;
+          this.socialHandTarget.set(
+            contact.x - dz / length * lateral,
+            this.elevationAt(contact.x, contact.z) + (foundingStandard.interactionHeight ?? 0.15),
+            contact.z + dx / length * lateral,
+          );
+          this.humanJoints.reach(this.jointParent, (side ? 1 : -1) * 0.12, 0.27,
+            this.socialHandTarget, 0.19, 0.18, side ? 1 : -1);
+        }
         if (firstFireStanding && firstFire?.interactionTarget
           && (firstFire.assemblyPhase === 'pickup' || firstFire.assemblyPhase === 'place' || firstFire.role === 'tender')) {
           const contact = firstFire.interactionTarget;
@@ -1167,6 +1245,7 @@ export class GodboxRenderer {
       // The smaller faceless head must follow the existing spine pose at its neck attachment.
       this.partPosition.set(0, 0.425, 0).applyMatrix4(this.personMatrix);
       const focalTarget = worker?.station.target ?? physical?.action.interactionAnchor
+        ?? foundingStandard?.interactionTarget
         ?? (firstFire ? hearthPosition : undefined)
         ?? (local && !local.partnerId && !local.attentionId && ['approach', 'action'].includes(local.phase) ? local.focus : undefined);
       const focalDelta = focalTarget ? facingTarget(display, focalTarget) - bodyFacing : 0;
@@ -1242,9 +1321,12 @@ export class GodboxRenderer {
         !physicalStanding, physical.action.contactEffect
           ?? (physical.action.actionKind.startsWith('construction-') ? 'none' : 'generic'),
         physical.action.contactHeight === undefined ? undefined : visual.footY + physical.action.contactHeight);
-      if (working) this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor, Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
-      if (working && worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
-        this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
+      if (working && worker) {
+        this.resourceWorkers.draw(worker, display.x, footY, display.z, heightScale, facing, this.personColor,
+          Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 18);
+        if (worker.site.tree && worker.blend > 0.95 && !this.reducedMotion.matches) {
+          this.vegetation.resourceImpact(worker.site.tree.renderId, this.resourceWorkers.motion.impact);
+        }
       }
 
       if (tier !== 'population' && mantles < this.peopleMantles.instanceMatrix.count) {
@@ -1360,10 +1442,12 @@ export class GodboxRenderer {
       undefined,
       this.physicalWork.constructionCrewAuthority(),
     );
+    const protectedFoundingStandard = this.foundingStandardPresentation.participantIds();
     this.visiblePeople = alive
-      // Notable/historical lives remain first. Then reserve up to three people per live project so
-      // a crowded settlement cannot render an active worksite with nobody visibly building it.
+      // Notable/historical lives remain first. Then preserve live construction and one-time
+      // founding-standard participants so a crowded settlement cannot hide the people doing the act.
       .sort((a, b) => tierRank(b) - tierRank(a)
+        || Number(protectedFoundingStandard.has(b.id)) - Number(protectedFoundingStandard.has(a.id))
         || Number(protectedConstruction.has(b.id)) - Number(protectedConstruction.has(a.id))
         || Number(this.resourceWork.sites.has(`${b.homeId}\u0000${b.navigation?.destinationId ?? ''}`))
           - Number(this.resourceWork.sites.has(`${a.homeId}\u0000${a.navigation?.destinationId ?? ''}`))
@@ -1595,7 +1679,9 @@ export class GodboxRenderer {
     this.addRoutePortals(group, settlement, layout, era, palette);
     const axisAngle = this.random.fork(`${settlement.id}:axis`).float() * Math.PI * 2;
     if (!settlement.development && eraRank(era) >= 2) this.addCeremonialAxis(group, palette, profile, era, axisAngle);
-    if (settlement.alive && !bareFounderCamp) this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
+    if (settlement.alive && this.foundingStandardPresentation.shouldRender(settlement)) {
+      this.addBanner(group, settlement, layout, bannerIdentity, bannerLegacy, settlement.institutionIds.length);
+    }
     const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
@@ -2793,7 +2879,8 @@ export class GodboxRenderer {
     // Bucket slow wear/prestige values so settlements do not rebuild for meaningless tiny changes.
     const wearBucket = Math.round(legacy.wear * 20) / 20;
     const prestigeBucket = Math.round(legacy.prestigeTrim * 10) / 10;
-    return `${identity.id}:${legacy.site}:${legacy.mount}:${legacy.generation}:${legacy.politicalBands}:${legacy.culturalMarks}:${legacy.successionMarks}:${legacy.allianceKnots}:${wearBucket}:${legacy.repairPatches}:${Number(legacy.mourning)}:${prestigeBucket}:${legacy.fieldVariant}:${legacy.emblemVariant}:${legacy.latestChangeMonth ?? -1}`;
+    const foundingState = settlement.foundingPodId ? this.foundingStandardPresentation.stateFor(settlement.id) : 'established';
+    return `${identity.id}:${legacy.site}:${legacy.mount}:${legacy.generation}:${legacy.politicalBands}:${legacy.culturalMarks}:${legacy.successionMarks}:${legacy.allianceKnots}:${wearBucket}:${legacy.repairPatches}:${Number(legacy.mourning)}:${prestigeBucket}:${legacy.fieldVariant}:${legacy.emblemVariant}:${legacy.latestChangeMonth ?? -1}:${foundingState}`;
   }
 
   /**
@@ -2811,7 +2898,15 @@ export class GodboxRenderer {
       localZ = anchor.localZ * scale + Math.sin(angle + Math.PI / 2) * lateral;
     };
 
-    if (legacy.site === 'civic') {
+    if (legacy.site === 'hearth') {
+      const hearth = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []);
+      if (hearth) {
+        const angle = Math.hypot(hearth.x, hearth.z) > 0.05 ? Math.atan2(hearth.z, hearth.x) : phase;
+        // Beside the communal hearth, never through its gathering/contact ring.
+        localX = hearth.x + Math.cos(angle + Math.PI / 2) * 0.72;
+        localZ = hearth.z + Math.sin(angle + Math.PI / 2) * 0.72;
+      }
+    } else if (legacy.site === 'civic') {
       const anchor = layout.anchors.civic;
       localX = anchor.localX + Math.cos(phase) * Math.min(1.35, anchor.radius * 0.7);
       localZ = anchor.localZ + Math.sin(phase) * Math.min(1.35, anchor.radius * 0.7);
@@ -2879,6 +2974,9 @@ export class GodboxRenderer {
     standard.userData['bannerIdentity'] = identity;
     standard.userData['bannerLegacy'] = legacy;
     standard.userData['bannerSite'] = legacy.site;
+    const mastRig = new THREE.Group();
+    mastRig.name = 'settlement-standard-mast-rig';
+    standard.add(mastRig);
 
     const mute = (value: THREE.ColorRepresentation, saturation: number, minimumLightness: number, maximumLightness: number, lightnessScale = 1): THREE.Color => {
       const color = new THREE.Color(value);
@@ -2903,7 +3001,7 @@ export class GodboxRenderer {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.055, poleHeight, 7), wood);
     pole.position.y = poleHeight / 2;
     pole.castShadow = true;
-    standard.add(pole);
+    mastRig.add(pole);
 
     if (dimensions.crossbar) {
       const crossbarLength = width + 0.14;
@@ -2911,14 +3009,14 @@ export class GodboxRenderer {
       crossbar.rotation.z = Math.PI / 2;
       crossbar.position.set(crossbarLength / 2 - 0.015, topY + 0.015, 0);
       crossbar.castShadow = true;
-      standard.add(crossbar);
+      mastRig.add(crossbar);
     } else {
       // Gate pennons are lashed to the pole instead of hanging from a civic crossbar.
       for (const y of [topY - 0.08, topY - height * 0.72]) {
         const tie = new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.012, 5, 8), new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.95 }));
         tie.rotation.x = Math.PI / 2;
         tie.position.set(0.015, y, 0);
-        standard.add(tie);
+        mastRig.add(tie);
       }
     }
 
@@ -2930,7 +3028,7 @@ export class GodboxRenderer {
       : new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.18, 6), finialMaterial);
     finial.position.y = poleHeight + 0.09;
     finial.castShadow = true;
-    standard.add(finial);
+    mastRig.add(finial);
 
     const clothGeometry = new THREE.PlaneGeometry(width, height, 7, 11);
     const positions = clothGeometry.attributes.position as THREE.BufferAttribute;
@@ -2984,6 +3082,16 @@ export class GodboxRenderer {
     clothRig.userData['windPhase'] = shapeSeed * Math.PI * 2;
     clothRig.userData['windStrength'] = 0.03 + stableUnit(`${identity.id}:${legacy.mount}:wind`) * 0.04;
 
+    const foldedBundle = new THREE.Mesh(
+      new THREE.CylinderGeometry(Math.max(0.035, width * 0.055), Math.max(0.035, width * 0.055), Math.min(0.42, width * 0.55), 8),
+      new THREE.MeshStandardMaterial({ color: clothColor, roughness: 0.98, metalness: 0 }),
+    );
+    foldedBundle.name = 'founding-standard-folded-cloth';
+    foldedBundle.rotation.z = Math.PI / 2;
+    foldedBundle.position.set(Math.min(0.22, width * 0.3), topY - height * 0.08, 0.028);
+    foldedBundle.castShadow = true;
+    mastRig.add(foldedBundle);
+
     const cloth = new THREE.Mesh(clothGeometry, new THREE.MeshStandardMaterial({
       color: clothColor,
       side: THREE.DoubleSide,
@@ -3024,13 +3132,39 @@ export class GodboxRenderer {
       clothRig.add(tassel);
     }
 
-    standard.add(clothRig);
+    mastRig.add(clothRig);
+    if (settlement.foundingPodId) {
+      const footing = new THREE.Group();
+      footing.name = 'founding-standard-footing';
+      footing.position.set(placement.localX, placement.localY, placement.localZ);
+      const stone = new THREE.MeshStandardMaterial({ color: '#62584a', roughness: 1, metalness: 0 });
+      for (let index = 0; index < 6; index += 1) {
+        const angle = index / 6 * Math.PI * 2;
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.07 + stableUnit(`${settlement.id}:standard-foot:${index}`) * 0.018, 0), stone);
+        rock.position.set(Math.cos(angle) * 0.11, 0.045, Math.sin(angle) * 0.11);
+        rock.scale.y = 0.72;
+        rock.castShadow = true;
+        footing.add(rock);
+      }
+      group.add(footing);
+      group.userData['foundingStandardFooting'] = footing;
+    }
+
     group.add(standard);
     group.userData['bannerClothRig'] = clothRig;
+    group.userData['foundingStandardGroup'] = standard;
+    group.userData['foundingStandardMastRig'] = mastRig;
+    group.userData['foundingStandardBundle'] = foldedBundle;
+    group.userData['foundingStandardPoleHeight'] = poleHeight;
+    group.userData['foundingStandardFinalX'] = placement.localX;
+    group.userData['foundingStandardFinalY'] = placement.localY;
+    group.userData['foundingStandardFinalZ'] = placement.localZ;
+    group.userData['foundingStandardFinalYaw'] = placement.rotationY;
     group.userData['bannerIdentity'] = identity;
     group.userData['bannerLegacy'] = legacy;
     group.userData['bannerSite'] = legacy.site;
     group.userData['bannerMeaning'] = [...identity.rationale, ...legacy.rationale];
+    if (settlement.foundingPodId) this.applyFoundingStandardVisual(group, settlement);
   }
 
   /** Heraldic field geometry kept deliberately low-poly and inside the chosen mount silhouette. */
@@ -3289,11 +3423,76 @@ export class GodboxRenderer {
     }
   }
 
+  /**
+   * Apply the one-time founding ceremony to the canonical banner mesh. The mast rotates about its
+   * planted foot, travels from the landed supply yard, and the cloth only exists as a folded bundle
+   * until a founder actually unfurls it.
+   */
+  private applyFoundingStandardVisual(group: THREE.Group, settlement: Settlement): void {
+    const standard = group.userData['foundingStandardGroup'];
+    const mastRig = group.userData['foundingStandardMastRig'];
+    const clothRig = group.userData['bannerClothRig'];
+    const bundle = group.userData['foundingStandardBundle'];
+    const footing = group.userData['foundingStandardFooting'];
+    if (!(standard instanceof THREE.Group) || !(mastRig instanceof THREE.Group) || !(clothRig instanceof THREE.Group)) return;
+
+    const sample = this.foundingStandardPresentation.sample(settlement.id, this.reducedMotion.matches);
+    const ceremonyVisible = sample.active || sample.established;
+    standard.visible = ceremonyVisible;
+    if (footing instanceof THREE.Group) footing.visible = ceremonyVisible;
+    if (!ceremonyVisible) {
+      clothRig.visible = false;
+      if (bundle instanceof THREE.Mesh) bundle.visible = false;
+      return;
+    }
+    const finalX = Number(group.userData['foundingStandardFinalX'] ?? standard.position.x);
+    const finalY = Number(group.userData['foundingStandardFinalY'] ?? standard.position.y);
+    const finalZ = Number(group.userData['foundingStandardFinalZ'] ?? standard.position.z);
+    const finalYaw = Number(group.userData['foundingStandardFinalYaw'] ?? standard.rotation.y);
+    const supply = foundingCommunitySupplyAnchor(settlement, this.state);
+    const sourceX = supply.x - settlement.position.x;
+    const sourceZ = supply.z - settlement.position.z;
+    const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
+    const sourceY = this.elevationAt(supply.x, supply.z) - settlementY;
+
+    const transfer = sample.established ? 1 : sample.transferProgress;
+    standard.position.set(
+      THREE.MathUtils.lerp(sourceX, finalX, transfer),
+      THREE.MathUtils.lerp(sourceY, finalY, transfer),
+      THREE.MathUtils.lerp(sourceZ, finalZ, transfer),
+    );
+
+    const dx = finalX - sourceX;
+    const dz = finalZ - sourceZ;
+    const routeYaw = Math.hypot(dx, dz) > 0.05 ? Math.atan2(-dz, dx) : finalYaw;
+    const yawBlend = sample.established || ['secure', 'unfurl', 'acknowledge', 'complete'].includes(sample.phase)
+      ? 1
+      : sample.phase === 'raise' ? sample.phaseProgress : 0;
+    const yawDelta = Math.atan2(Math.sin(finalYaw - routeYaw), Math.cos(finalYaw - routeYaw));
+    standard.rotation.y = routeYaw + yawDelta * yawBlend;
+
+    mastRig.rotation.z = sample.established ? 0 : sample.polePitch;
+    mastRig.position.y = sample.phase === 'carry-pole' ? 0.42
+      : sample.phase === 'attach-cloth' ? 0.12
+        : sample.phase === 'prepare-base' ? 0.34 : 0;
+
+    const unfurl = sample.established ? 1 : sample.clothUnfurl;
+    clothRig.visible = unfurl > 0.005;
+    clothRig.scale.set(1, Math.max(0.001, unfurl), 1);
+    if (bundle instanceof THREE.Mesh) bundle.visible = !sample.established && sample.bundleVisible && unfurl < 0.88;
+    if (footing instanceof THREE.Group) {
+      const prepared = sample.phase === 'prepare-base' ? 0.35 + sample.phaseProgress * 0.65 : 1;
+      footing.scale.setScalar(sample.established ? 1 : prepared);
+    }
+  }
+
   /** Cheap, restrained wind motion; reduced-motion users get the sculpted resting shape only. */
   private updateSettlementBanners(elapsedSeconds: number): void {
-    for (const visual of this.settlementVisuals.values()) {
+    for (const [settlementId, visual] of this.settlementVisuals) {
+      const settlement = this.state.settlements.find(candidate => candidate.id === settlementId);
+      if (settlement?.foundingPodId) this.applyFoundingStandardVisual(visual.group, settlement);
       const rig = visual.group.userData['bannerClothRig'];
-      if (!(rig instanceof THREE.Group)) continue;
+      if (!(rig instanceof THREE.Group) || !rig.visible) continue;
       if (this.reducedMotion.matches) {
         rig.rotation.y = 0;
         rig.rotation.z = 0;
