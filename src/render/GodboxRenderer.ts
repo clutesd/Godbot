@@ -1094,7 +1094,7 @@ export class GodboxRenderer {
       const attentionTorsoBlend = Math.max(0, Math.min(1, (attentionBlend - 0.32) / 0.68));
       const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend + (visual.passingTorsoYaw ?? 0);
       const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend + (visual.passingHeadYaw ?? 0) - attentionBodyYaw;
-      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated));
+      const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated || firstFireStanding));
       const bodyPitch = bodyTilt.pitch + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
       const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
       const bodyRoll = bodyTilt.roll + (pose?.spineRoll ?? 0) + (restArticulated ? restPose.bodyRoll : 0);
