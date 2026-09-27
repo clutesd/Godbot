@@ -1859,7 +1859,7 @@ export class CameraDirector {
       if (scene.event?.type === 'first-fire') {
         // Stay long enough to witness assembly contact, ignition, the falter, successful catch and
         // the first witnesses arriving. This is a milestone, not a cutaway.
-        this.shotDuration = Math.max(this.shotDuration, 26);
+        this.shotDuration = Math.max(this.shotDuration, 30);
       } else if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
         this.shotDuration = Math.max(this.shotDuration, 20);
       } else if (scene.kind === 'street-observation') {
