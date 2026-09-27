@@ -296,17 +296,18 @@ export class FoundingFirstFirePresentation {
       const radius = 0.47;
       const x = hearth.x + Math.cos(angle) * radius;
       const z = hearth.z + Math.sin(angle) * radius;
+      const activelyIgniting = ['prepare-tinder', 'strike', 'ember', 'falter', 'catch'].includes(sample.phase);
+      const contactStrength = sample.phase === 'strike' ? 0.85
+        : sample.phase === 'prepare-tinder' ? 0.32
+          : ['ember', 'falter', 'catch'].includes(sample.phase) ? 0.62 : 0;
       return {
         x, z,
         eventId: performance.eventId,
         role,
-        animation: ['prepare-tinder', 'strike', 'ember', 'falter', 'catch'].includes(sample.phase) ? 'ignite' : 'converse-warm',
+        animation: activelyIgniting ? 'ignite' : 'converse-warm',
         restFacing: Math.atan2(hearth.x - x, hearth.z - z),
         phaseProgress: sample.phaseProgress,
-        interactionTarget: { x: hearth.x, z: hearth.z },
-        contactStrength: sample.phase === 'strike' ? 0.85
-          : sample.phase === 'prepare-tinder' ? 0.32
-            : ['ember', 'falter', 'catch'].includes(sample.phase) ? 0.62 : 0,
+        ...(activelyIgniting ? { interactionTarget: { x: hearth.x, z: hearth.z }, contactStrength } : {}),
         ceremonyPhase: sample.phase,
       };
     }
