@@ -10,6 +10,10 @@ export interface FoundingCommunityDestination {
   point: Vec2;
 }
 
+export function isFoundingCommunityDestinationId(destinationId: string | undefined): boolean {
+  return Boolean(destinationId?.includes(':founding-'));
+}
+
 export type FoundingCommunityChore =
   | 'shelter-support'
   | 'supply-yard'
