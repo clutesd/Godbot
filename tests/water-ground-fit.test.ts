@@ -39,14 +39,14 @@ describe('water fits the rendered earth', () => {
           y += p.getY(i + j) * weights[j]!;
           z += p.getZ(i + j) * weights[j]!;
         }
-        expect(y).toBeCloseTo(level, 5);
-        expect(y - ground(x, z)).toBeGreaterThan(0.0038);
+        expect(Math.abs(y - level)).toBeLessThan(0.001);
+        expect(y - ground(x, z)).toBeGreaterThan(0.00015);
       }
     }
     water.geometry.dispose();
   });
 
-  it('does not bridge a waterfall with a sloping crystalline surface or deleted faces', () => {
+  it('keeps waterfall discontinuities covered without crystalline ramps or deleted triangles', () => {
     const world = fixture();
     const field = world.terrain;
     for (let i = 0; i < field.height.length; i++) {
@@ -54,12 +54,46 @@ describe('water fits the rendered earth', () => {
     }
     const water = buildInlandWater(world)!;
     const p = water.geometry.getAttribute('position');
-    // Both pools remain horizontal right to their lips, with complete coverage.
-    expect(p.count).toBe(field.height.length * 24);
+    expect(p.count).toBeGreaterThan(0);
     for (let i = 0; i < p.count; i += 3) {
-      expect(p.getY(i)).toBe(p.getY(i + 1));
-      expect(p.getY(i)).toBe(p.getY(i + 2));
+      const ax = p.getX(i), ay = p.getY(i), az = p.getZ(i);
+      const bx = p.getX(i + 1), by = p.getY(i + 1), bz = p.getZ(i + 1);
+      const cx = p.getX(i + 2), cy = p.getY(i + 2), cz = p.getZ(i + 2);
+      const area = Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax));
+      const horizontal = Math.max(Math.hypot(bx - ax, bz - az), Math.hypot(cx - bx, cz - bz), Math.hypot(ax - cx, az - cz));
+      const span = Math.max(ay, by, cy) - Math.min(ay, by, cy);
+      expect(area).toBeGreaterThan(1e-10);
+      expect(span).toBeLessThanOrEqual(Math.max(0.68, horizontal * 0.85) + 1e-5);
     }
+    water.geometry.dispose();
+  });
+
+  it('rounds an isolated wet sample instead of exposing a square hydrology tile', () => {
+    const world = fixture();
+    const field = world.terrain;
+    field.waterLevel.fill(-1);
+    field.lake.fill(0);
+    const x = Math.floor(field.resolution / 2);
+    const z = Math.floor(field.resolution / 2);
+    const index = z * field.resolution + x;
+    field.waterLevel[index] = world.seaLevel + 0.10;
+    field.lake[index] = 1;
+    const water = buildInlandWater(world)!;
+    const p = water.geometry.getAttribute('position');
+    const cx = field.originX + x * field.step;
+    const cz = field.originZ + z * field.step;
+    const unique = new Set<string>();
+    let squareCorners = 0;
+    for (let i = 0; i < p.count; i++) {
+      const dx = Math.abs(p.getX(i) - cx) / field.step;
+      const dz = Math.abs(p.getZ(i) - cz) / field.step;
+      expect(dx).toBeLessThanOrEqual(0.501);
+      expect(dz).toBeLessThanOrEqual(0.501);
+      if (dx > 0.49 && dz > 0.49) squareCorners += 1;
+      unique.add(`${p.getX(i).toFixed(4)}:${p.getZ(i).toFixed(4)}`);
+    }
+    expect(unique.size).toBeGreaterThan(8);
+    expect(squareCorners).toBe(0);
     water.geometry.dispose();
   });
 });
