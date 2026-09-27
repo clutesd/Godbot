@@ -39,11 +39,11 @@ vec2 waterCurrentSlope(vec2 p, vec2 flow, float time, float storm) {
   vec2 across = vec2(-direction.y, direction.x);
   vec2 q = p - flow * time;
   float along = dot(q, direction), crosswise = dot(q, across);
-  float bend = sin(crosswise * 1.7 + sin(along * 0.37) * 0.6);
-  vec2 slope = direction * cos(along * 3.1 + bend * 1.2) * (0.045 + speed * 0.16);
-  slope += across * sin(crosswise * 2.3 + along * 0.6 - time * 0.27) * 0.035;
-  slope += vec2(cos(p.x * 1.65 + p.y * 0.45 - time * 0.9),
-    sin(p.y * 1.9 - p.x * 0.32 + time * 0.65)) * (0.025 + storm * 0.1);
+  float bend = sin(crosswise * 1.05 + sin(along * 0.29) * 0.52);
+  vec2 slope = direction * cos(along * 1.65 + bend * 1.05) * (0.028 + speed * 0.11);
+  slope += across * sin(crosswise * 1.25 + along * 0.42 - time * 0.23) * 0.024;
+  slope += vec2(cos(p.x * 0.90 + p.y * 0.31 - time * 0.72),
+    sin(p.y * 1.05 - p.x * 0.24 + time * 0.54)) * (0.018 + storm * 0.075);
   return slope;
 }
 `;
