@@ -96,11 +96,25 @@ describe('Founding documentary cast 2a', () => {
 
     const release = chooseFoundingCastScene(historian, simulation.state);
     expect(release?.id).toContain('founding-release:');
-    expect(release?.title).toBe('THE FIRST DAY');
-    expect(release?.statement.text).toBe('The first day continues.');
+    expect(release?.title).toBe('HISTORY BEGINS');
+    expect(release?.statement.text).toContain('The landings are over.');
+    expect(release?.statement.text).toContain('communities now have to turn finite stores');
     expect(release?.kind).toBe('worker-follow');
     expect(simulation.state.people.some(person => person.alive && person.id === release?.subjectId)).toBe(true);
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('complete');
+  });
+
+  it('never carries an Arrival-Day cast beat into Month 1', () => {
+    const simulation = completedArrival('founding-cast-day-zero-only');
+    const historian = new Historian(simulation.config);
+    completeOrientation(simulation, historian);
+
+    expect(chooseFoundingCastScene(historian, simulation.state)).toBeDefined();
+    expect(simulation.beginHistory()).toBe(true);
+    simulation.step(1);
+    expect(simulation.state.month).toBe(1);
+    expect(chooseFoundingCastScene(historian, simulation.state)).toBeUndefined();
+    expect(foundingCastProgress(historian, simulation.state).phase).toBe('missed');
   });
 
   it('resumes midway through founder introductions without replaying completed beats', () => {
