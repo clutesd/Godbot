@@ -231,9 +231,10 @@ function supplyAnchor(
   if (!pod) return ringPoint(settlement.position, `${seed}:${settlement.id}:supply-anchor`, 1.45, 0);
   const dx = target.x - pod.x;
   const dz = target.z - pod.z;
-  const length = Math.max(0.001, Math.hypot(dx, dz));
-  const ux = dx / length;
-  const uz = dz / length;
+  const rawLength = Math.hypot(dx, dz);
+  const fallbackAngle = stableUnit(`${seed}:${settlement.id}:supply-direction`) * Math.PI * 2;
+  const ux = rawLength > 0.05 ? dx / rawLength : Math.cos(fallbackAngle);
+  const uz = rawLength > 0.05 ? dz / rawLength : Math.sin(fallbackAngle);
   const side = stableUnit(`${seed}:${settlement.id}:supply-side`) < 0.5 ? -1 : 1;
   return {
     x: pod.x + ux * 1.45 - uz * 0.72 * side,
