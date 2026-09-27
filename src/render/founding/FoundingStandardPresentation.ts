@@ -51,6 +51,9 @@ interface ActiveStandard {
   readonly ceremonyId: string;
   readonly startedAt: number;
   readonly participants: readonly Participant[];
+  ageSeconds: number;
+  lastUpdateSeconds: number;
+  readonly readyPhaseByPerson: Map<string, FoundingStandardPhase>;
 }
 
 const PREPARE_END = 2.1;
@@ -105,12 +108,22 @@ export class FoundingStandardPresentation {
         ceremonyId,
         startedAt,
         participants: selectParticipants(state.people, settlement),
+        ageSeconds: 0,
+        lastUpdateSeconds: this.nowSeconds,
+        readyPhaseByPerson: new Map(),
       });
       changed = true;
     }
 
     for (const [settlementId, ceremony] of this.active) {
-      if (this.nowSeconds - ceremony.startedAt < FOUNDING_STANDARD_DURATION_SECONDS) continue;
+      const delta = Math.max(0, Math.min(0.1, this.nowSeconds - ceremony.lastUpdateSeconds));
+      ceremony.lastUpdateSeconds = this.nowSeconds;
+      if (this.nowSeconds < ceremony.startedAt) continue;
+
+      const phase = phaseForAge(ceremony.ageSeconds);
+      if (ceremonyCanAdvance(ceremony, phase)) ceremony.ageSeconds += delta;
+      if (ceremony.ageSeconds < FOUNDING_STANDARD_DURATION_SECONDS) continue;
+
       this.active.delete(settlementId);
       this.established.add(settlementId);
       changed = true;
@@ -176,8 +189,7 @@ export class FoundingStandardPresentation {
   ): FoundingStandardTarget | undefined {
     const ceremony = this.active.get(settlementId);
     if (!ceremony) return;
-    const age = this.nowSeconds - ceremony.startedAt;
-    if (age < 0 || age >= FOUNDING_STANDARD_DURATION_SECONDS) return;
+    if (this.nowSeconds < ceremony.startedAt || ceremony.ageSeconds >= FOUNDING_STANDARD_DURATION_SECONDS) return;
     const participant = ceremony.participants.find(candidate => candidate.personId === personId);
     if (!participant) return;
     const sample = this.sample(settlementId);
@@ -266,6 +278,23 @@ export class FoundingStandardPresentation {
     };
   }
 
+  /**
+   * Renderer feedback only. A ceremony phase advances when the founders assigned to that physical
+   * act have actually reached their current stance. Readiness is tagged with the phase so stale
+   * contact can never leak into the next beat.
+   */
+  reportParticipantReady(
+    settlementId: string,
+    personId: string,
+    phase: FoundingStandardPhase,
+    ready: boolean,
+  ): void {
+    const ceremony = this.active.get(settlementId);
+    if (!ceremony || !ceremony.participants.some(candidate => candidate.personId === personId)) return;
+    if (ready) ceremony.readyPhaseByPerson.set(personId, phase);
+    else if (ceremony.readyPhaseByPerson.get(personId) === phase) ceremony.readyPhaseByPerson.delete(personId);
+  }
+
   participantIds(settlementId?: string): ReadonlySet<string> {
     const ids = new Set<string>();
     if (settlementId) {
@@ -322,6 +351,47 @@ function foundingWorkRank(person: Person): number {
   if (['artisan', 'keeper'].includes(person.occupation)) return 1;
   if (person.occupation === 'forager' || person.occupation === 'farmer') return 2;
   return 3;
+}
+
+function phaseForAge(age: number): FoundingStandardPhase {
+  if (age < PREPARE_END) return 'prepare-base';
+  if (age < CARRY_END) return 'carry-pole';
+  if (age < ATTACH_END) return 'attach-cloth';
+  if (age < RAISE_END) return 'raise';
+  if (age < SECURE_END) return 'secure';
+  if (age < UNFURL_END) return 'unfurl';
+  if (age < FOUNDING_STANDARD_DURATION_SECONDS) return 'acknowledge';
+  return 'complete';
+}
+
+function ceremonyCanAdvance(ceremony: ActiveStandard, phase: FoundingStandardPhase): boolean {
+  if (phase === 'acknowledge' || phase === 'complete') return true;
+  const ready = (participant: Participant): boolean =>
+    ceremony.readyPhaseByPerson.get(participant.personId) === phase;
+  const base = ceremony.participants.find(participant => participant.role === 'base-worker');
+  const binder = ceremony.participants.find(participant => participant.role === 'binder') ?? base;
+  const raisers = ceremony.participants.filter(participant => participant.role !== 'binder');
+
+  switch (phase) {
+    case 'prepare-base':
+      return Boolean(base && ready(base));
+    case 'carry-pole': {
+      const carriers = raisers.filter(ready).length;
+      return carriers >= Math.min(2, raisers.length);
+    }
+    case 'attach-cloth':
+      return Boolean(binder && ready(binder));
+    case 'raise': {
+      const lifting = raisers.filter(ready).length;
+      return lifting >= Math.min(2, raisers.length);
+    }
+    case 'secure':
+      return Boolean(base && ready(base));
+    case 'unfurl':
+      return Boolean(binder && ready(binder));
+    default:
+      return true;
+  }
 }
 
 function activeSample(
