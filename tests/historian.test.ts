@@ -56,6 +56,32 @@ describe('Historian grounding', () => {
     expect(candidates.some((candidate) => candidate.event?.type === 'ARRIVAL_DAY')).toBe(false);
   });
 
+  it('directs a first-fire milestone as a required human-scale documentary scene', () => {
+    const early = new Simulation({ seed: 'historian-first-fire', startMode: 'arrival', world: { size: 40 } });
+    early.advanceArrival(120);
+    expect(early.beginHistory()).toBe(true);
+
+    let firstFire = early.state.history.find(event => event.type === 'first-fire');
+    for (let month = 0; month < 18 && !firstFire; month += 1) {
+      early.step(1);
+      firstFire = early.state.history.find(event => event.type === 'first-fire');
+    }
+    expect(firstFire).toBeDefined();
+    if (!firstFire) return;
+
+    const director = new Historian(early.config);
+    const scene = director.chooseScene(early.state, firstFire.id);
+    expect(scene.event?.type).toBe('first-fire');
+    expect(scene.title).toBe('FIRST FIRE');
+    expect(scene.kind).toBe('discovery-scene');
+    expect(scene.editorial?.preferredScale).toBe('detail');
+    expect(scene.editorial?.narration).toBe('required');
+    expect(scene.editorial?.completion).toBe('timed');
+    expect(scene.statement.text).toContain('communal hearth');
+    expect(early.state.people.some(person => person.id === scene.subjectId && person.alive)).toBe(true);
+    expect(director.validateStatement(scene.statement, early.state)).toBe(true);
+  });
+
   it('rejects nonexistent wars', () => {
     expect(historian.validateStatement(statement({ month: simulation.state.month, sourceEntityIds: [simulation.state.settlements[0]?.id ?? ''], claims: { warId: 'war-that-never-existed' } }), simulation.state)).toBe(false);
   });
