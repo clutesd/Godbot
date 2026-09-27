@@ -169,7 +169,7 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
 const DOCUMENTARY_BREAK_TYPES = new Set([
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
   'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended',
-  'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'harvest-crisis', 'recovery', 'cultural-shift',
+  'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'first-fire', 'harvest-crisis', 'recovery', 'cultural-shift',
   'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-weapons-developed', 'nuclear-restraint', 'nuclear-crisis',
   'nuclear-use', 'nuclear-exchange', 'pandemic', 'ecological-crisis', 'climate-crisis', 'resource-crisis', 'autonomous-weapons-crisis',
   'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'fermi-question',
@@ -1856,7 +1856,11 @@ export class CameraDirector {
     // human observation after Arrival; applying them to founding cast/release beats stretches a
     // deliberately paced 6–8 second sequence into 18–20 second stalls.
     if (!editorialTiming && !scenicProfile) {
-      if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
+      if (scene.event?.type === 'first-fire') {
+        // Stay long enough to witness assembly contact, ignition, the falter, successful catch and
+        // the first witnesses arriving. This is a milestone, not a cutaway.
+        this.shotDuration = Math.max(this.shotDuration, 26);
+      } else if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
         this.shotDuration = Math.max(this.shotDuration, 20);
       } else if (scene.kind === 'street-observation') {
         this.shotDuration = Math.max(this.shotDuration, 18);
