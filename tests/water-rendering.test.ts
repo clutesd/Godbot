@@ -203,6 +203,13 @@ describe('Water rendering foundation', () => {
       }
     }
     expect(shared).toBeGreaterThan(0);
+    const normals = water.geometry.getAttribute('normal');
+    for (let index = 0; index < normals.count; index += 1) {
+      expect(normals.getX(index)).toBe(0);
+      expect(normals.getY(index)).toBe(1);
+      expect(normals.getZ(index)).toBe(0);
+    }
+    expect(Number(water.geometry.userData['stabilizedWaterTriangles'] ?? 0)).toBeGreaterThanOrEqual(0);
     water.geometry.dispose();
     (water.material as THREE.Material).dispose();
   });
@@ -240,6 +247,9 @@ describe('Water rendering foundation', () => {
     expect(shader.uniforms['waterWind']!.value).toBe(0.9);
     expect(shader.fragmentShader).toContain('oceanWanderA');
     expect(shader.fragmentShader).toContain('oceanSilk');
+    expect(shader.fragmentShader).toContain('oceanWorldNormal');
+    // Ocean motion is normal-driven: the giant plane must stay smooth instead of exposing its triangles.
+    expect(shader.vertexShader).not.toContain('transformed.z +=');
     const y = ocean.position.y;
     const rapidPositions = rapidFoam!.geometry.getAttribute('position');
     const plungePositions = plunge!.geometry.getAttribute('position');
