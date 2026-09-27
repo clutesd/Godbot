@@ -79,6 +79,9 @@ function deepenObservation(historian: Historian, memory: ObserverMemory, scene: 
 }
 
 function eventPerspective(memory: ObserverMemory, event: HistoricalEvent, state: SimulationState, statement: HistorianStatement): string[] {
+  // Arrival Day already has an authored opening voice. Do not decorate it with generic
+  // "first recorded event" language if it is explicitly revisited later.
+  if (event.type === 'ARRIVAL_DAY') return [];
   const remarks: string[] = [];
   const priorOfType = state.history.filter((candidate) => candidate.type === event.type && (candidate.month < event.month || candidate.month === event.month && candidate.id < event.id));
   const firstOfKind = priorOfType.length === 0;
