@@ -169,7 +169,7 @@ function choreDestination(
       };
     }
     case 'supply-yard': {
-      const anchor = supplyAnchor(settlement, pod, shelter, state.seed);
+      const anchor = foundingCommunitySupplyAnchor(settlement, state, shelter);
       return {
         kind: 'warehouse',
         activity: person.occupation === 'artisan' ? 'craft' : 'assist',
@@ -203,6 +203,22 @@ function choreDestination(
     case 'children-nearby':
       return undefined;
   }
+}
+
+export function foundingCommunitySupplyAnchor(
+  settlement: Settlement,
+  state: SimulationState,
+  knownShelter?: Vec2,
+): Vec2 {
+  const pod = state.arrival?.pods.find(candidate => candidate.id === settlement.foundingPodId && candidate.landed);
+  const projectPlot = settlement.development?.project
+    ? settlement.structurePlots?.find(plot => plot.id === settlement.development?.project?.plotId)
+    : undefined;
+  const firstUsable = settlement.structurePlots?.find(plot => plot.development?.status === 'active');
+  const shelter = knownShelter ?? (projectPlot ?? firstUsable
+    ? { x: (projectPlot ?? firstUsable)!.worldX, z: (projectPlot ?? firstUsable)!.worldZ }
+    : undefined);
+  return supplyAnchor(settlement, pod?.position, shelter, state.seed);
 }
 
 function supplyAnchor(
