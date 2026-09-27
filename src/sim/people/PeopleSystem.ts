@@ -26,6 +26,8 @@ import {
 } from './ResourceWorkRouting';
 import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../terrain/SurfaceGeometry';
 import { memorialVisitPlan } from './MemorialBehavior';
+import { foundingCommunityDestination } from './FoundingCommunityRoutine';
+import { foundingHearthWorldPosition } from '../../shared/FoundingCampLayout';
 
 interface ScheduledDestination {
   kind: DestinationKind;
@@ -383,6 +385,7 @@ export class PeopleSystem {
     const shiftedHour = (state.month * 3
       + Math.floor(stableUnit(`${person.id}:schedule`) * (settlement.foundingPodId ? 24 : 3))) % 24;
     const building = isEstablishmentBuilder(state, person);
+    const fireTender = isEstablishmentFireTender(state, person);
     const winter = state.month % 12 <= 1 || state.month % 12 >= 10;
     if (person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
       return { kind: 'home', phase: 'home', activity: 'rest', reason: physicalRestSite(state, person) ? 'resting in available physical shelter' : 'resting at the household camp' };
@@ -392,23 +395,34 @@ export class PeopleSystem {
     if (shiftedHour < 8) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'commute');
       if (building) return { kind: 'construction-site', phase: 'commute', activity: 'travel', reason: 'carrying supplies to the active shelter project' };
+      const founding = foundingCommunityDestination(person, settlement, state, shiftedHour);
+      if (founding) return founding;
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'commute', activity: 'travel', reason: `taking the morning route to ${humanDestination(kind)}` };
     }
     if (shiftedHour < 16) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'work');
       if (building) return { kind: 'construction-site', phase: 'work', activity: 'construct', reason: 'helping build physical protection for the settlement' };
-      if (isEstablishmentFireTender(state, person)) return { kind: 'plaza', phase: 'work', activity: 'craft',
-        destinationId: `${settlement.id}:survival-fire`, point: { x: settlement.position.x, z: settlement.position.z + 1.6 },
-        reason: 'tending the camp fire with this month\'s gathered fuel' };
+      if (fireTender) {
+        const hearth = foundingHearthWorldPosition(settlement, state.arrival?.pods ?? []);
+        return { kind: 'plaza', phase: 'work', activity: 'craft',
+          destinationId: `${settlement.id}:survival-fire`, point: hearth ?? { x: settlement.position.x, z: settlement.position.z + 1.6 },
+          reason: 'tending the camp fire with this month\'s gathered fuel' };
+      }
+      const founding = foundingCommunityDestination(person, settlement, state, shiftedHour);
+      if (founding) return founding;
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'work', activity: activityForRole(role, kind), reason: `working at ${humanDestination(kind)}` };
     }
     if (shiftedHour < 19) {
+      const founding = foundingCommunityDestination(person, settlement, state, shiftedHour);
+      if (founding) return founding;
       const marketDay = state.month % 4 !== 0 || ['trader', 'merchant', 'transporter', 'dock-worker'].includes(role);
       const kind: DestinationKind = marketDay ? 'market' : 'plaza';
       return { kind, phase: 'meal', activity: role === 'trader' || role === 'merchant' ? 'trade' : 'socialize', reason: `joining activity at ${humanDestination(kind)}` };
     }
+    const foundingEvening = foundingCommunityDestination(person, settlement, state, shiftedHour);
+    if (foundingEvening) return foundingEvening;
     if (['priest', 'ritual-specialist'].includes(role) || (state.month + Math.floor(stableUnit(person.id) * 4)) % 5 === 0) {
       return { kind: 'shrine', phase: 'ritual', activity: 'worship', reason: 'attending an evening gathering at the shrine' };
     }
