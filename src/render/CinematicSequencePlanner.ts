@@ -101,7 +101,7 @@ function canonicalRoles(anchor: ObservationCandidate): readonly CinematicBeatRol
   if (anchor.event?.type === 'first-fire') {
     // The viewer should stay with the people and hearth: observe the builders, move into hand/tinder
     // detail, reveal the successful flame, then release. No generic aerial establishing detour.
-    return ['observe', 'detail', 'reveal', 'release'];
+    return ['detail', 'reveal', 'release'];
   }
   if (anchor.kind === 'civilization-ending' || anchor.kind === 'aftermath-pullback') {
     return ['establish', 'observe', 'detail', 'reveal', 'release'];
