@@ -135,6 +135,8 @@ describe('Water rendering foundation', () => {
     expect(material).toBeInstanceOf(THREE.MeshPhysicalMaterial);
     expect(material.transparent).toBe(false);
     expect(material.depthWrite).toBe(true);
+    expect(material.polygonOffset).toBe(true);
+    expect(material.polygonOffsetFactor).toBeLessThan(0);
     expect(material.clearcoat).toBeGreaterThan(0);
     // The diagnostic per-cell colour attribute stays on the geometry, but the visible material
     // must not multiply it back into checkerboard patches.
@@ -203,6 +205,7 @@ describe('Water rendering foundation', () => {
       }
     }
     expect(shared).toBeGreaterThan(0);
+    expect(water.geometry.userData['waterContourSubdivisions']).toBe(4);
     const normals = water.geometry.getAttribute('normal');
     const normalByPosition = new Map<string, [number, number, number]>();
     for (let index = 0; index < normals.count; index += 1) {
