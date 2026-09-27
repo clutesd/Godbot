@@ -176,6 +176,8 @@ export class FoundingStandardPresentation {
   ): FoundingStandardTarget | undefined {
     const ceremony = this.active.get(settlementId);
     if (!ceremony) return;
+    const age = this.nowSeconds - ceremony.startedAt;
+    if (age < 0 || age >= FOUNDING_STANDARD_DURATION_SECONDS) return;
     const participant = ceremony.participants.find(candidate => candidate.personId === personId);
     if (!participant) return;
     const sample = this.sample(settlementId);
@@ -203,7 +205,9 @@ export class FoundingStandardPresentation {
     }
 
     if (sample.phase === 'attach-cloth') {
-      if (participant.role !== 'binder') {
+      const hasBinder = ceremony.participants.some(candidate => candidate.role === 'binder');
+      const attaching = participant.role === 'binder' || !hasBinder && participant.role === 'base-worker';
+      if (!attaching) {
         if (participant.role !== 'raiser') return;
         const grip = offset(base, route, participant.slot === 1 ? 0.72 : 1.45);
         const stance = offset(grip, side, participant.slot === 1 ? 0.22 : -0.22);
@@ -240,7 +244,8 @@ export class FoundingStandardPresentation {
     }
 
     if (sample.phase === 'unfurl') {
-      if (participant.role !== 'binder') return;
+      const hasBinder = ceremony.participants.some(candidate => candidate.role === 'binder');
+      if (participant.role !== 'binder' && (hasBinder || participant.role !== 'base-worker')) return;
       const stance = offset(base, side, -0.58);
       const cord = offset(base, side, -0.08);
       return target(ceremony, participant, stance, cord, 'build', sample, 0.78, 0.64);
@@ -307,7 +312,7 @@ function selectParticipants(people: readonly Person[], settlement: Settlement): 
 
   return candidates.map((person, index) => ({
     personId: person.id,
-    role: index === 0 ? 'base-worker' : index === candidates.length - 1 && candidates.length >= 4 ? 'binder' : 'raiser',
+    role: index === 0 ? 'base-worker' : index === candidates.length - 1 && candidates.length >= 3 ? 'binder' : 'raiser',
     slot: index,
   }));
 }
@@ -396,7 +401,7 @@ function polePoint(
   distance: number,
   pitch: number,
 ): { point: Vec2; height: number } {
-  const horizontalScale = Math.cos(pitch);
+  const horizontalScale = Math.cos(pitch + Math.PI / 2);
   return {
     point: {
       x: base.x + horizontal.x * distance * horizontalScale,
