@@ -45,7 +45,7 @@ export interface FirstFireVisualSample {
 export interface FirstFireStagingTarget extends Vec2 {
   readonly eventId: string;
   readonly role: FirstFireParticipantRole;
-  readonly animation: 'gather' | 'build' | 'converse-warm';
+  readonly animation: 'gather' | 'build' | 'ignite' | 'converse-warm';
   readonly restFacing: number;
   readonly phaseProgress: number;
   readonly assemblyPhase?: FoundingHearthAssemblyPhase;
@@ -243,6 +243,7 @@ export class FoundingFirstFirePresentation {
       flameScale: 1, emberScale: 1, lightGain: 1.04 - p * 0.04,
       smokeGain: 1.06 - p * 0.06, tinderGlow: 1, sparkGain: 0.5,
     };
+  }
 
   targetFor(
     personId: string,
