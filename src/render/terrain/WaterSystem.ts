@@ -919,7 +919,12 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
     const b = sampleVertex(x0 + fineStep, z0);
     const c = sampleVertex(x0, z0 + fineStep);
     const d = sampleVertex(x0 + fineStep, z0 + fineStep);
-    const rawTriangles = ((fineX + fineZ) & 1) === 0
+    // Follow the rendered terrain triangle orientation, not the presentation sub-grid.
+    // Every clipped water triangle therefore stays inside one planar ground triangle, making
+    // shoreline/terrain intersection exact even around sharp islands and ridges.
+    const groundX = Math.max(0, Math.min(resolution - 2, Math.floor((x0 - originX) / step + 1e-9)));
+    const groundZ = Math.max(0, Math.min(resolution - 2, Math.floor((z0 - originZ) / step + 1e-9)));
+    const rawTriangles = ((groundX + groundZ) & 1) === 0
       ? [[a, c, b], [b, c, d]]
       : [[a, c, d], [a, d, b]];
 
