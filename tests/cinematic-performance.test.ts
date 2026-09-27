@@ -91,10 +91,10 @@ describe('cinematic motion', () => {
       if (flight.active && flight.destinationSceneId?.startsWith('founding-cast:introduction:')) {
         sawDeparture = true;
         expect(director.observation.sceneId).toBeUndefined();
-        expect(director.observation.label).toBe('History begins');
-        expect(director.observation.detail).toContain('The landings are over.');
-        expect(director.observation.eventType).toBeUndefined();
-        expect(director.observation.eventMonth).toBeUndefined();
+        expect(director.observation.label).toBe('Arrival Day');
+        expect(director.observation.detail).toContain('first hours');
+        expect(director.observation.eventType).toBe('ARRIVAL_DAY');
+        expect(director.observation.eventMonth).toBe(0);
         break;
       }
     }
@@ -202,6 +202,10 @@ describe('cinematic motion', () => {
     director.update(1 / 60, frame / 60, sim.state, () => 0);
     expect(choose).toHaveBeenCalledTimes(2);
     expect(director.flightTelemetry().destinationSceneId).toBe('ordinary:first-month');
+    expect(director.observation.label).toBe('History begins');
+    expect(director.observation.detail).toContain('The landings are over.');
+    expect(director.observation.eventType).toBeUndefined();
+    expect(director.observation.eventMonth).toBeUndefined();
   });
 
   it('abandons an impossible physical route instead of trapping the documentary forever', () => {
