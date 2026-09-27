@@ -630,6 +630,9 @@ export class GodboxRenderer {
         if (this.firstFirePresentation.isPerforming(settlement.id)) blockedStandardSettlements.add(settlement.id);
       }
       if (this.foundingStandardPresentation.update(this.state, humanLife.elapsedSeconds, blockedStandardSettlements)) {
+        // Ceremony participants must be admitted to the visible-person budget immediately, even if
+        // the simulation month/population did not change.
+        this.visiblePeopleMonth = -1;
         this.maintenance.request('settlements', true);
       }
     }
@@ -1068,7 +1071,7 @@ export class GodboxRenderer {
       if (working) pose = this.animationController.resourcePose(pose, this.resourceWorkers.motion, worker.blend);
       if (physicalStanding) pose = this.animationController.resourcePose(pose, physical.motion, physical.blend);
       const restArticulated = detailed && restPose.blend > 0.001;
-      const articulated = working || physicalStanding || physical && loaded || standardStanding || restArticulated;
+      const articulated = working || physicalStanding || physical && loaded || restArticulated;
       const partnerId = local?.encounter?.partnerId;
       const socialPartner = partnerId ? this.peopleVisuals.snapshot(partnerId) : undefined;
       const socialGesture = detailed && !articulated && local?.encounter?.beat === 0 && visual.speed < WALK_SPEED_THRESHOLD
@@ -3415,6 +3418,14 @@ export class GodboxRenderer {
     if (!(standard instanceof THREE.Group) || !(mastRig instanceof THREE.Group) || !(clothRig instanceof THREE.Group)) return;
 
     const sample = this.foundingStandardPresentation.sample(settlement.id, this.reducedMotion.matches);
+    const ceremonyVisible = sample.active || sample.established;
+    standard.visible = ceremonyVisible;
+    if (footing instanceof THREE.Group) footing.visible = ceremonyVisible;
+    if (!ceremonyVisible) {
+      clothRig.visible = false;
+      if (bundle instanceof THREE.Mesh) bundle.visible = false;
+      return;
+    }
     const finalX = Number(group.userData['foundingStandardFinalX'] ?? standard.position.x);
     const finalY = Number(group.userData['foundingStandardFinalY'] ?? standard.position.y);
     const finalZ = Number(group.userData['foundingStandardFinalZ'] ?? standard.position.z);
