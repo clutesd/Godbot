@@ -8,7 +8,7 @@ import { elevationToY, type TerrainSurface } from './TerrainSurface';
 import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 import type { EcologyField } from '../ecology/EcologyField';
 import { WaterEcology } from './WaterEcology';
-import { packInlandAttributes, packInlandShader, stabilizeInlandWaterGeometry } from './WaterAttributes';
+import { packInlandAttributes, packInlandShader, smoothInlandWaterNormals, stabilizeInlandWaterGeometry } from './WaterAttributes';
 import { renderedGroundSampler } from './WaterGround';
 
 export interface WaterReport {
@@ -790,11 +790,8 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   // Collapse only the impossible outlier triangles; the dedicated waterfall sheet supplies the drop.
   const stabilized = stabilizeInlandWaterGeometry(geometry);
   geometry.userData['stabilizedWaterTriangles'] = stabilized;
-  // Inland water is a continuous optical surface. Flat per-triangle normals on this deliberately
-  // non-indexed shoreline mesh reveal the tessellation even when the geometry itself is correct.
-  const normals = new Float32Array(positions.length);
-  for (let index = 1; index < normals.length; index += 3) normals[index] = 1;
-  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  // Preserve real river/lake slope while sharing lighting across clipped triangle boundaries.
+  smoothInlandWaterNormals(geometry);
   packInlandAttributes(geometry);
   geometry.computeBoundingSphere();
   const mesh = new THREE.Mesh(geometry, createInlandMaterial());
