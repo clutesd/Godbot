@@ -102,12 +102,15 @@ export function constructionActiveWorkZone(plan: ConstructionAssemblyPlan, progr
 }
 
 /** Per-site index buffers; shared attributes/materials. Updating paid progress only changes draw ranges. */
+export type ConstructionAssemblyMode = 'bounded' | 'contact-led';
+
 export class ConstructionAssembly {
   readonly group = new THREE.Group();
   readonly plan: ConstructionAssemblyPlan;
   private readonly batches: { mesh: THREE.Mesh; pieces: ConstructionPiece[]; counts: number[] }[] = [];
   private readonly moving: THREE.Mesh;
   private lastPiece = -1;
+  private contactSeatTarget: number | undefined;
 
   constructor(source: THREE.Object3D, fit: number, seed: string, material: StructureMaterial) {
     this.plan = constructionAssemblyPlan(source, fit, seed, material);
@@ -141,17 +144,32 @@ export class ConstructionAssembly {
     this.group.add(this.moving);
   }
 
-  update(progress: number, delta?: number, installationContact?: boolean): void {
+  update(progress: number, delta?: number, installationContact?: boolean, mode: ConstructionAssemblyMode = 'bounded'): void {
     const authoritative = Math.max(0, Math.min(1, progress));
-    let paid = delta === undefined || this.plan.progress === undefined || authoritative === 1 ? authoritative
-      : Math.min(authoritative, Math.max(authoritative - 0.08, this.plan.progress + Math.max(0, Math.min(0.1, delta)) * 0.04));
-    if (delta !== undefined && installationContact !== undefined && this.plan.progress !== undefined && authoritative < 1) {
-      const next = this.plan.pieces[constructionActivePiece(this.plan, this.plan.progress)];
-      if (next) {
-        // Seat already-paid fabric on a contact beat. Bound the lag so hidden/interrupted crews
-        // never become an alternative authority over the project's outcome.
-        const limit = installationContact ? next.endProgress : next.startProgress + (next.endProgress - next.startProgress) * 0.6;
-        paid = Math.min(authoritative, Math.max(this.plan.progress, authoritative - 0.08, Math.min(paid, limit), installationContact ? next.endProgress : 0));
+    let paid: number;
+    if (mode === 'contact-led' && delta !== undefined && this.plan.progress !== undefined) {
+      paid = Math.min(authoritative, this.plan.progress);
+      const next = this.plan.pieces[constructionActivePiece(this.plan, paid)];
+      if (installationContact && next && authoritative > next.startProgress + 1e-6) {
+        this.contactSeatTarget = Math.min(authoritative, next.endProgress);
+      }
+      if (this.contactSeatTarget !== undefined && next) {
+        const target = Math.min(authoritative, this.contactSeatTarget);
+        const span = Math.max(0.001, next.endProgress - next.startProgress);
+        paid = Math.min(target, paid + Math.max(0, Math.min(0.1, delta)) * span / 0.52);
+        if (paid >= target - 1e-6) this.contactSeatTarget = undefined;
+      }
+    } else {
+      paid = delta === undefined || this.plan.progress === undefined || authoritative === 1 ? authoritative
+        : Math.min(authoritative, Math.max(authoritative - 0.08, this.plan.progress + Math.max(0, Math.min(0.1, delta)) * 0.04));
+      if (delta !== undefined && installationContact !== undefined && this.plan.progress !== undefined && authoritative < 1) {
+        const next = this.plan.pieces[constructionActivePiece(this.plan, this.plan.progress)];
+        if (next) {
+          // Seat already-paid fabric on a contact beat. Bound the lag so hidden/interrupted crews
+          // never become an alternative authority over the project's outcome.
+          const limit = installationContact ? next.endProgress : next.startProgress + (next.endProgress - next.startProgress) * 0.6;
+          paid = Math.min(authoritative, Math.max(this.plan.progress, authoritative - 0.08, Math.min(paid, limit), installationContact ? next.endProgress : 0));
+        }
       }
     }
     this.plan.progress = paid;
