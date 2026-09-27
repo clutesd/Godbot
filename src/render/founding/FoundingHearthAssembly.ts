@@ -30,6 +30,8 @@ export interface FoundingHearthAssemblyTask {
 
 export interface FoundingHearthAssemblySample {
   readonly progress: number;
+  readonly stonesPicked: number;
+  readonly logsPicked: number;
   readonly stonesPlaced: number;
   readonly logsPlaced: number;
   readonly complete: boolean;
@@ -98,6 +100,8 @@ export function foundingHearthAssemblySample(ageSeconds: number): FoundingHearth
   const age = Math.max(0, ageSeconds);
   return {
     progress: clamp01(age / FOUNDING_HEARTH_ASSEMBLY_SECONDS),
+    stonesPicked: TASKS.filter(task => task.kind === 'stone' && age >= task.pickupEndSeconds).length,
+    logsPicked: TASKS.filter(task => task.kind === 'log' && age >= task.pickupEndSeconds).length,
     stonesPlaced: TASKS.filter(task => task.kind === 'stone' && age >= task.placeEndSeconds).length,
     logsPlaced: TASKS.filter(task => task.kind === 'log' && age >= task.placeEndSeconds).length,
     complete: age >= FOUNDING_HEARTH_ASSEMBLY_SECONDS,
