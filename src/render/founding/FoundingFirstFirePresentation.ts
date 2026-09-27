@@ -197,7 +197,8 @@ export class FoundingFirstFirePresentation {
     const p = ease((ignitionAge - 7.2) / (IGNITION_DURATION_SECONDS - 7.2));
     return {
       active: true, phase: 'settle', phaseProgress: p,
-      hearthScale: 1, assemblyProgress: 1, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
+      hearthScale: 1, assemblyProgress: 1, stonesPicked: FOUNDING_HEARTH_STONE_COUNT,
+      logsPicked: FOUNDING_HEARTH_LOG_COUNT, stonesPlaced: FOUNDING_HEARTH_STONE_COUNT,
       logsPlaced: FOUNDING_HEARTH_LOG_COUNT, assemblyComplete: true,
       flameScale: 1,
       emberScale: 1,
