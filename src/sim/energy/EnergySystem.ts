@@ -68,6 +68,10 @@ function constructPlants(state: SimulationState, s: Settlement): void {
   if (knows(s, 'battery-storage') && e.storageCapacity < storageTarget) {
     e.storageCapacity += buildWork(state, s, { copper: 1, iron: 1 }, Math.min(0.5, (storageTarget - e.storageCapacity) / 8)) * 8;
   }
+  if (knows(s, 'battery-storage') && e.storageState && e.storageState.condition < 0.85) {
+    const refurbishment = buildWork(state, s, { copper: 0.18, steel: 0.12 }, 0.2);
+    e.storageState.condition = Math.min(1, e.storageState.condition + refurbishment * 0.08);
+  }
 }
 function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: number): number {
   p.output = 0; p.fuelUsed = 0; p.fuelKind = undefined; p.heatInput = 0; p.conversionLoss = 0;
