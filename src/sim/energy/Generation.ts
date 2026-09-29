@@ -26,7 +26,7 @@ export const GENERATORS: readonly GeneratorDefinition[] = [
   { kind: 'wind', carrier: 'electric', capacity: 28, knowledge: ['electric-grid', 'precision-manufacturing'], cost: { steel: 5, copper: 3 }, work: 12 },
   { kind: 'solar', carrier: 'electric', capacity: 24, knowledge: ['photovoltaics'], cost: { silicon: 4, copper: 3 }, work: 10 },
   { kind: 'gas', carrier: 'electric', capacity: 65, knowledge: ['internal-combustion', 'electric-grid'], cost: { steel: 8, copper: 4 }, work: 16 },
-  { kind: 'nuclear', carrier: 'electric', capacity: 220, knowledge: ['nuclear-energy', 'industrial-chemistry', 'precision-manufacturing', 'grid-management'], cost: { steel: 25, copper: 12, stone: 30, 'nuclear-fuel': 2 }, work: 60, fuel: 'nuclear-fuel', efficiency: 120, cooling: true },
+  { kind: 'nuclear', carrier: 'electric', capacity: 220, knowledge: ['nuclear-energy', 'industrial-chemistry', 'precision-manufacturing', 'grid-management'], cost: { steel: 25, copper: 12, stone: 30 }, work: 60, fuel: 'nuclear-fuel', efficiency: 600, cooling: true },
 ];
 
 export const generatorDefinition = (kind: GeneratorKind): GeneratorDefinition => GENERATORS.find(g => g.kind === kind)!;
