@@ -97,15 +97,36 @@ export function planHydraulicVisualSite(
   const river = pointForIndex(world, bestIndex);
   const [flowX, flowZ] = flowDirection(world, bestIndex);
   const acrossX = -flowZ, acrossZ = flowX;
-  const towardOrigin = (origin.x - river.x) * acrossX + (origin.z - river.z) * acrossZ;
-  const bankSide: 1 | -1 = towardOrigin >= 0 ? 1 : -1;
-  const bankOffset = field.step * 1.15;
+
+  const dryBank = (side: 1 | -1): Vec2 | undefined => {
+    for (let step = 1; step <= 5; step += 1) {
+      const distance = field.step * (0.8 + step * 0.55);
+      const x = river.x + acrossX * distance * side;
+      const z = river.z + acrossZ * distance * side;
+      const gx = Math.min(field.resolution - 1, Math.max(0, Math.round((x - field.originX) / field.step)));
+      const gz = Math.min(field.resolution - 1, Math.max(0, Math.round((z - field.originZ) / field.step)));
+      const index = gz * field.resolution + gx;
+      const wet = Boolean(field.river[index] || field.lake[index] || (field.waterLevel[index] ?? -1) >= 0);
+      if (!wet && (field.height[index] ?? 0) >= world.seaLevel) return { x, z };
+    }
+    return undefined;
+  };
+
+  const positive = dryBank(1);
+  const negative = dryBank(-1);
+  const distanceToOrigin = (point: Vec2): number => Math.hypot(point.x - origin.x, point.z - origin.z);
+  const bankSide: 1 | -1 = positive && negative
+    ? distanceToOrigin(positive) <= distanceToOrigin(negative) ? 1 : -1
+    : positive ? 1 : -1;
+  const bank = (bankSide > 0 ? positive : negative)
+    ?? { x: river.x + acrossX * field.step * 1.3 * bankSide, z: river.z + acrossZ * field.step * 1.3 * bankSide };
+
   const waterLevel = field.waterLevel[bestIndex] ?? world.seaLevel;
   return {
     riverX: river.x,
     riverZ: river.z,
-    bankX: river.x + acrossX * bankOffset * bankSide,
-    bankZ: river.z + acrossZ * bankOffset * bankSide,
+    bankX: bank.x,
+    bankZ: bank.z,
     waterY: elevationToY(waterLevel, world.seaLevel),
     flowX,
     flowZ,
