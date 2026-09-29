@@ -136,8 +136,7 @@ export function planHydraulicVisualSite(
   };
 }
 
-/** Local +Z follows downstream and local +X points to the selected bank. */
+/** Local +Z always follows downstream; callers mirror bank-side machinery with site.bankSide. */
 export function hydraulicRotationY(site: HydraulicVisualSite): number {
-  const downstreamYaw = Math.atan2(site.flowX, site.flowZ);
-  return site.bankSide > 0 ? downstreamYaw : downstreamYaw + Math.PI;
+  return Math.atan2(site.flowX, site.flowZ);
 }
