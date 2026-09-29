@@ -127,10 +127,13 @@ export function advanceEnergy(state: SimulationState): void {
   const world = energyWorld(state);
   if (world.month === state.month) return;
   world.month = state.month;
-  const living = state.settlements.filter(s => s.alive);
+  const living = state.settlements.filter(s => s.alive).sort((a, b) => a.id.localeCompare(b.id));
   const consumers = new Map<string, ElectricConsumer[]>();
+  // Establish every settlement's demand before construction decisions so regional plant sizing can
+  // see the same authoritative month rather than depending on settlement iteration order.
   for (const s of living) {
     const e = energyAt(s), population = settlementRepresentedPopulation(state, s.id);
+    prepareStorageMonth(e);
     e.materialDemand = {};
     e.ledgers = { thermal: ledger(), mechanical: ledger(), electric: ledger() };
     const thermal = e.ledgers.thermal;
@@ -139,27 +142,58 @@ export function advanceEnergy(state: SimulationState): void {
     e.ledgers.mechanical.demand = knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 : 0;
     consumers.set(s.id, knows(s, 'electrical-generation') ? prepareElectricDemand(s, population) : prepareElectricDemand(s, 0));
     if (!knows(s, 'electrical-generation')) {
-      const service = energyAt(s).service;
+      const service = e.service;
       service.demand.essential = service.demand.productive = service.demand.discretionary = service.demand.critical = 0;
       e.ledgers.electric.demand = 0;
       consumers.set(s.id, []);
     }
-    constructPlants(state, s);
   }
+  for (const s of living) constructPlants(state, s);
   constructGrid(state);
   for (const l of world.lines) { l.flow = 0; l.condition = Math.max(0, l.condition - 0.001); }
-  const totalDemand = living.reduce((n, s) => n + energyAt(s).ledgers.electric.demand + Math.max(0, energyAt(s).storageCapacity - energyAt(s).storage), 0);
-  const sources: { s: Settlement; node: string; available: number; storage: boolean }[] = [];
+
+  const sources: { s: Settlement; node: string; available: number; storage: boolean; kind?: GeneratorKind }[] = [];
+  // Mechanical plants remain local. Electrical plants are dispatched by connected grid island below.
   for (const s of living) {
     const e = energyAt(s);
     for (const p of e.plants) {
-      const carrier = generatorDefinition(p.kind).carrier, l = e.ledgers[carrier];
-      const output = operate(state, s, p, carrier === 'electric' ? totalDemand : Math.max(0, l.demand - l.supplied));
+      const carrier = generatorDefinition(p.kind).carrier;
+      if (carrier === 'electric') continue;
+      const l = e.ledgers[carrier];
+      const output = operate(state, s, p, Math.max(0, l.demand - l.supplied));
       l.generated += output;
-      if (carrier === 'electric') sources.push({ s, node: p.id, available: output, storage: false });
-      else l.supplied += output;
+      l.supplied += output;
     }
-    sources.push({ s, node: s.id, available: Math.min(e.storage, e.storageCapacity * 0.25), storage: true });
+  }
+
+  const dispatched = new Set<string>();
+  for (const host of living) {
+    if (dispatched.has(host.id)) continue;
+    const component = gridComponent(state, host);
+    for (const member of component) dispatched.add(member.id);
+    const componentDemand = gridComponentDemand(state, host);
+    let remainingDemand = componentDemand;
+    let storageHeadroom = gridComponentStorageInputCapacity(state, host);
+    const plants = component.flatMap(s => energyAt(s).plants
+      .filter(p => generatorDefinition(p.kind).carrier === 'electric')
+      .map(p => ({ s, p })))
+      .sort((a, b) => dispatchPriority(a.p.kind) - dispatchPriority(b.p.kind)
+        || a.s.id.localeCompare(b.s.id) || a.p.id.localeCompare(b.p.id));
+
+    for (const { s, p } of plants) {
+      const g = generatorDefinition(p.kind), l = energyAt(s).ledgers.electric;
+      const before = remainingDemand;
+      const request = generationDispatchRequest(p.kind, p, g.capacity, componentDemand, remainingDemand, storageHeadroom);
+      const output = operate(state, s, p, request);
+      l.generated += output;
+      sources.push({ s, node: p.id, available: output, storage: false, kind: p.kind });
+      remainingDemand = Math.max(0, remainingDemand - Math.min(before, output));
+      storageHeadroom = Math.max(0, storageHeadroom - Math.max(0, output - before));
+    }
+  }
+  for (const s of living) {
+    const available = storageDischargeOutputCapacity(energyAt(s));
+    if (available > 0) sources.push({ s, node: s.id, available, storage: true });
   }
   // Serve critical loads before ordinary life, production and discretionary demand. Every priority
   // first consumes local generation/storage, then may import remaining power across commissioned lines.
@@ -170,7 +204,9 @@ export function advanceEnergy(state: SimulationState): void {
     const receiverEnergy = energyAt(consumer.settlement);
     const ordered = sources
       .filter(source => (source.s.id === consumer.settlement.id) === local)
-      .sort((a, b) => Number(a.storage) - Number(b.storage) || a.s.id.localeCompare(b.s.id) || a.node.localeCompare(b.node));
+      .sort((a, b) => Number(a.storage) - Number(b.storage)
+        || dispatchPriority(a.kind ?? 'generator') - dispatchPriority(b.kind ?? 'generator')
+        || a.s.id.localeCompare(b.s.id) || a.node.localeCompare(b.node));
     for (const source of ordered) {
       if (need <= 1e-9 || source.available <= 1e-9) continue;
       const flow = deliver(world.lines, source.node, consumer.node, source.available, need);
@@ -180,11 +216,12 @@ export function advanceEnergy(state: SimulationState): void {
       consumer.supplied += flow.received;
       receiverEnergy.service.supplied[consumer.priority] += flow.received;
       receiverEnergy.ledgers.electric.supplied += flow.received;
-      const donor = energyAt(source.s).ledgers.electric;
+      const donorEnergy = energyAt(source.s), donor = donorEnergy.ledgers.electric;
       donor.losses += flow.sent - flow.received;
       if (source.storage) {
-        energyAt(source.s).storage = Math.max(0, energyAt(source.s).storage - flow.sent);
-        donor.discharged += flow.sent;
+        const transfer = dischargeStorage(donorEnergy, flow.sent);
+        donor.discharged += transfer.output;
+        donor.losses += transfer.loss;
       }
       if (source.s.id !== consumer.settlement.id) {
         donor.exported += flow.received;
@@ -200,13 +237,44 @@ export function advanceEnergy(state: SimulationState): void {
     for (const consumer of priorityConsumers) serve(consumer, true);
     for (const consumer of priorityConsumers) serve(consumer, false);
   }
+  // Surplus generation can charge any battery on the commissioned regional island; local storage
+  // is preferred to avoid unnecessary line losses.
   for (const source of sources.filter(s => !s.storage)) {
-    const e = energyAt(source.s), l = e.ledgers.electric;
-    const charge = deliver(world.lines, source.node, source.s.id, source.available, Math.max(0, e.storageCapacity - e.storage) / 0.9);
-    e.storage += charge.received * 0.9; l.charged += charge.received * 0.9;
-    l.losses += charge.sent - charge.received * 0.9;
-    l.curtailed += source.available - charge.sent;
+    const donor = energyAt(source.s).ledgers.electric;
+    const sinks = gridComponent(state, source.s)
+      .filter(s => energyAt(s).storageCapacity > 0)
+      .sort((a, b) => Number(b.id === source.s.id) - Number(a.id === source.s.id) || a.id.localeCompare(b.id));
+    for (const sink of sinks) {
+      if (source.available <= 1e-9) break;
+      const sinkEnergy = energyAt(sink);
+      const capacity = storageChargeInputCapacity(sinkEnergy);
+      if (capacity <= 1e-9) continue;
+      const charge = deliver(world.lines, source.node, sink.id, source.available, capacity);
+      if (charge.received <= 0) continue;
+      const transfer = chargeStorage(sinkEnergy, charge.received);
+      source.available = Math.max(0, source.available - charge.sent);
+      sinkEnergy.ledgers.electric.charged += transfer.output;
+      donor.losses += charge.sent - charge.received + transfer.loss;
+      if (sink.id !== source.s.id) {
+        donor.exported += charge.received;
+        sinkEnergy.ledgers.electric.imported += charge.received;
+      }
+    }
+    donor.curtailed += source.available;
   }
+  // Sustained operation near line limits accelerates wear; automatic grid management reduces that
+  // stress on regional interties without creating extra capacity.
+  const settlementsById = new Map(living.map(s => [s.id, s] as const));
+  for (const line of world.lines) {
+    const available = Math.max(1e-9, line.capacity * Math.max(0.1, line.condition));
+    const utilization = Math.min(1, line.flow / available);
+    const regional = line.capacity > 80;
+    const a = settlementsById.get(line.from), b = settlementsById.get(line.to);
+    const managed = regional && !!a && !!b && knows(a, 'grid-management') && knows(b, 'grid-management');
+    const stressWear = Math.max(0, utilization - 0.8) * (managed ? 0.0015 : 0.005);
+    line.condition = Math.max(0, line.condition - stressWear);
+  }
+
   for (const s of living) {
     const e = energyAt(s), l = e.ledgers.electric;
     e.reliability = l.demand > 0 ? Math.min(1, l.supplied / l.demand) : 1;
@@ -216,5 +284,6 @@ export function advanceEnergy(state: SimulationState): void {
     e.shortageMonths = e.reliability < 0.8 ? e.shortageMonths + 1 : Math.max(0, e.shortageMonths - 1);
     s.infrastructure.power = l.demand > 0 ? e.reliability * Math.min(1, l.supplied / 25) : 0;
     if (e.lit) milestone(state, s, 'first-illuminated-settlement', 'Electric light reaches occupied buildings.');
+    finalizeStorageMonth(e);
   }
 }
