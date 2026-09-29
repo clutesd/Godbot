@@ -5,7 +5,20 @@ export type GeneratorKind = 'animal' | 'waterwheel' | 'windmill' | 'steam' | 'ge
 export type PowerPriority = 'critical' | 'essential' | 'productive' | 'discretionary';
 export const POWER_PRIORITIES: readonly PowerPriority[] = ['critical', 'essential', 'productive', 'discretionary'] as const;
 
-export interface EnergyPlant { id: string; plotId: string; kind: GeneratorKind; progress: number; condition: number; output: number; fuelUsed: number; status: 'construction' | 'running' | 'idle' | 'failed'; }
+export interface EnergyPlant {
+  id: string;
+  plotId: string;
+  kind: GeneratorKind;
+  progress: number;
+  condition: number;
+  output: number;
+  fuelUsed: number;
+  /** Current-month operating telemetry; optional for archive compatibility. */
+  fuelKind?: string;
+  heatInput?: number;
+  conversionLoss?: number;
+  status: 'construction' | 'running' | 'idle' | 'failed';
+}
 export interface PowerLine { id: string; from: string; to: string; points: Vec2[]; capacity: number; loss: number; progress: number; condition: number; flow: number; }
 export interface EnergyLedger { demand: number; generated: number; supplied: number; imported: number; exported: number; losses: number; curtailed: number; charged: number; discharged: number; }
 export interface PowerServiceLedger { demand: Record<PowerPriority, number>; supplied: Record<PowerPriority, number>; }
