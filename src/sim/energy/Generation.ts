@@ -19,13 +19,13 @@ export const GENERATORS: readonly GeneratorDefinition[] = [
   { kind: 'animal', carrier: 'mechanical', capacity: 2, knowledge: ['wheel-axle', 'animal-husbandry'], cost: { timber: 3 }, work: 2, fuel: 'food', efficiency: 2 },
   { kind: 'waterwheel', carrier: 'mechanical', capacity: 8, knowledge: ['rotary-machinery'], cost: { timber: 6, stone: 2 }, work: 4 },
   { kind: 'windmill', carrier: 'mechanical', capacity: 7, knowledge: ['rotary-machinery'], cost: { timber: 7, textile: 1 }, work: 4 },
-  { kind: 'steam', carrier: 'mechanical', capacity: 16, knowledge: ['mechanical-power', 'iron-working'], cost: { iron: 5, stone: 3 }, work: 8, fuel: 'coal', efficiency: 4, cooling: true },
-  { kind: 'generator', carrier: 'electric', capacity: 14, knowledge: ['electrical-generation', 'mechanical-power'], cost: { iron: 4, copper: 3 }, work: 8, fuel: 'coal', efficiency: 3, cooling: true },
-  { kind: 'coal', carrier: 'electric', capacity: 55, knowledge: ['electric-grid', 'precision-manufacturing'], cost: { steel: 8, copper: 5, stone: 10 }, work: 18, fuel: 'coal', efficiency: 5, cooling: true },
+  { kind: 'steam', carrier: 'mechanical', capacity: 16, knowledge: ['mechanical-power', 'iron-working'], cost: { iron: 5, stone: 3 }, work: 8, cooling: true },
+  { kind: 'generator', carrier: 'electric', capacity: 14, knowledge: ['electrical-generation', 'mechanical-power'], cost: { iron: 4, copper: 3 }, work: 8, cooling: true },
+  { kind: 'coal', carrier: 'electric', capacity: 55, knowledge: ['electric-grid', 'precision-manufacturing'], cost: { steel: 8, copper: 5, stone: 10 }, work: 18, cooling: true },
   { kind: 'hydro', carrier: 'electric', capacity: 65, knowledge: ['electrical-generation', 'civic-administration'], cost: { steel: 5, copper: 4, stone: 20 }, work: 24 },
   { kind: 'wind', carrier: 'electric', capacity: 28, knowledge: ['electric-grid', 'precision-manufacturing'], cost: { steel: 5, copper: 3 }, work: 12 },
   { kind: 'solar', carrier: 'electric', capacity: 24, knowledge: ['photovoltaics'], cost: { silicon: 4, copper: 3 }, work: 10 },
-  { kind: 'gas', carrier: 'electric', capacity: 65, knowledge: ['internal-combustion', 'electric-grid'], cost: { steel: 8, copper: 4 }, work: 16, fuel: 'natural-gas', efficiency: 8 },
+  { kind: 'gas', carrier: 'electric', capacity: 65, knowledge: ['internal-combustion', 'electric-grid'], cost: { steel: 8, copper: 4 }, work: 16 },
   { kind: 'nuclear', carrier: 'electric', capacity: 220, knowledge: ['nuclear-energy', 'industrial-chemistry', 'precision-manufacturing', 'grid-management'], cost: { steel: 25, copper: 12, stone: 30, 'nuclear-fuel': 2 }, work: 60, fuel: 'nuclear-fuel', efficiency: 120, cooling: true },
 ];
 
@@ -118,7 +118,8 @@ export function eligibleGenerator(state: SimulationState, s: Settlement, g: Gene
   if (!g.knowledge.every(k => knows(s, k))) return false;
   const cell = state.world.cells[s.cellIndex];
   if (!cell) return false;
-  if (g.cooling && !(cell.river && cell.flow > 0.04 || cell.lake)) return false;
+  const managedWater = Math.max(s.development?.water?.availability ?? 0, cell.lake ? 1 : 0, cell.river ? cell.flow : 0);
+  if (g.cooling && managedWater <= 0.04) return false;
   if (g.kind === 'hydro' || g.kind === 'waterwheel') return cell.river && cell.flow > 0.08;
   if (g.kind === 'nuclear') {
     return s.industry.active

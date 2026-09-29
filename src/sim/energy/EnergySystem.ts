@@ -3,6 +3,7 @@ import { hasKnowledgeCapability as knows } from '../knowledge/CapabilityContract
 import { materialEconomy, takeMaterial } from '../resources/Inventory';
 import { settlementRepresentedPopulation } from '../Population';
 import type { Settlement, SimulationState } from '../types';
+import { combustionFromFuel, combustionFuelPotential, isCombustionKind, planCombustion } from './Combustion';
 import { GENERATORS, eligibleGenerator, environmentFactor, generatorDefinition } from './Generation';
 import { buildWork, constructGrid, deliver } from './Transmission';
 import { prepareElectricDemand, type ElectricConsumer } from './Demand';
@@ -27,8 +28,14 @@ function constructPlants(state: SimulationState, s: Settlement): void {
       const choices = GENERATORS.filter(g => eligibleGenerator(state, s, g) && e.ledgers[g.carrier].demand > e.plants.filter(p => p.progress >= 1 && generatorDefinition(p.kind).carrier === g.carrier).reduce((n, p) => n + p.output, 0) * 1.15);
       choices.sort((a, b) => score(b) - score(a));
       function score(g: typeof GENERATORS[number]): number {
-        const fuel = g.fuel === 'food' ? s.resources.food : g.fuel ? s.localMaterials[g.fuel] ?? (g.fuel === 'coal' ? s.localMaterials.timber ?? 0 : 0) : 10;
-        return Math.min(g.capacity * environmentFactor(state, s, g.kind), e.ledgers[g.carrier].demand * 1.3) * Math.min(1, fuel / 3) / g.work;
+        const fuelReadiness = isCombustionKind(g.kind)
+          ? Math.min(1, combustionFuelPotential(s, g.kind) / Math.max(1, g.capacity * 0.25))
+          : g.fuel === 'food'
+            ? Math.min(1, s.resources.food / 3)
+            : g.fuel
+              ? Math.min(1, (s.localMaterials[g.fuel] ?? 0) / 3)
+              : 1;
+        return Math.min(g.capacity * environmentFactor(state, s, g.kind), e.ledgers[g.carrier].demand * 1.3) * fuelReadiness / g.work;
       }
       const chosen = choices.find(g => score(g) > 0 && Object.entries(g.cost).every(([id, n]) => (s.localMaterials[id] ?? 0) >= n * 0.1));
       if (!chosen) continue;
@@ -45,30 +52,42 @@ function constructPlants(state: SimulationState, s: Settlement): void {
   if (knows(s, 'battery-storage') && e.storageCapacity < e.ledgers.electric.demand * 2) e.storageCapacity += buildWork(state, s, { copper: 1, iron: 1 }, 0.5) * 8;
 }
 function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: number): number {
-  p.output = 0; p.fuelUsed = 0;
+  p.output = 0; p.fuelUsed = 0; p.fuelKind = undefined; p.heatInput = 0; p.conversionLoss = 0;
   if (p.progress < 1) { p.status = 'construction'; return 0; }
   const g = generatorDefinition(p.kind), site = s.structurePlots?.find(x => x.id === p.plotId);
   if (!site || site.development?.status !== 'active' || site.accessRestricted || !eligibleGenerator(state, s, g)) { p.status = 'idle'; return 0; }
   const weather = state.weather.cells[s.cellIndex];
   p.condition = Math.max(0, p.condition - 0.002 - Math.max(0, (weather?.wind ?? 0) - 0.8) * 0.04 - (site.floodDepth ?? 0) * 0.03);
   if (p.condition < 0.9) p.condition = Math.min(1, p.condition + buildWork(state, s, { [g.carrier === 'mechanical' ? 'timber' : 'iron']: 0.2 }, 0.1) * 0.1);
-  const cooling = !g.cooling ? 1 : Math.min(1, (s.development?.water?.availability ?? state.world.cells[s.cellIndex]?.flow ?? 0) * 2);
+  const cell = state.world.cells[s.cellIndex];
+  const coolingWater = Math.max(s.development?.water?.availability ?? 0, cell?.lake ? 1 : 0, cell?.river ? cell.flow : 0);
+  const cooling = !g.cooling ? 1 : Math.min(1, coolingWater * 2);
   if (p.condition < (p.kind === 'nuclear' ? 0.8 : 0.25) || cooling < (p.kind === 'nuclear' ? 0.65 : 0.05)) { p.status = 'failed'; return 0; }
   let output = Math.min(need, g.capacity * environmentFactor(state, s, p.kind) * p.condition * cooling * site.condition);
-  if (g.fuel) {
-    let fuel = g.fuel;
-    if (fuel === 'coal' && !((s.localMaterials.coal ?? 0) > 0)) fuel = 'timber';
-    const efficiency = (g.efficiency ?? 1) * (fuel === 'timber' ? 0.5 : 1);
-    energyAt(s).materialDemand[fuel] = output / efficiency * 2;
-    materialEconomy(s).demand[fuel] = Math.max(materialEconomy(s).demand[fuel] ?? 0, output / efficiency * 2);
-    if (fuel === 'food') { p.fuelUsed = Math.min(Math.max(0, s.resources.food - settlementRepresentedPopulation(state, s.id)), output / efficiency); s.resources.food -= p.fuelUsed; }
-    else {
-      const reserve = fuel === 'timber' ? s.survival?.cold.fuelNeed ?? 0 : 0;
-      p.fuelUsed = takeMaterial(s, fuel, Math.min(output / efficiency, Math.max(0, (s.localMaterials[fuel] ?? 0) - reserve)));
+  if (isCombustionKind(p.kind)) {
+    const plan = planCombustion(s, p.kind, output);
+    energyAt(s).materialDemand[plan.fuel] = Math.max(energyAt(s).materialDemand[plan.fuel] ?? 0, plan.fuelRequired * 2);
+    materialEconomy(s).demand[plan.fuel] = Math.max(materialEconomy(s).demand[plan.fuel] ?? 0, plan.fuelRequired * 2);
+    p.fuelUsed = takeMaterial(s, plan.fuel, plan.fuelUsed);
+    const actual = combustionFromFuel(p.kind, plan.fuel, p.fuelUsed);
+    p.fuelKind = plan.fuel;
+    p.heatInput = actual.heatInput;
+    p.conversionLoss = actual.conversionLoss;
+    output = Math.min(output, actual.output);
+    s.pollution = Math.min(1, s.pollution + actual.pollution);
+  } else if (g.fuel) {
+    const efficiency = g.efficiency ?? 1;
+    energyAt(s).materialDemand[g.fuel] = Math.max(energyAt(s).materialDemand[g.fuel] ?? 0, output / efficiency * 2);
+    materialEconomy(s).demand[g.fuel] = Math.max(materialEconomy(s).demand[g.fuel] ?? 0, output / efficiency * 2);
+    if (g.fuel === 'food') {
+      p.fuelUsed = Math.min(Math.max(0, s.resources.food - settlementRepresentedPopulation(state, s.id)), output / efficiency);
+      s.resources.food -= p.fuelUsed;
+    } else {
+      p.fuelUsed = takeMaterial(s, g.fuel, output / efficiency);
     }
+    p.fuelKind = g.fuel;
     output = p.fuelUsed * efficiency;
     if (p.kind === 'nuclear' && p.fuelUsed > 0) s.localMaterials['spent-nuclear-fuel'] = (s.localMaterials['spent-nuclear-fuel'] ?? 0) + p.fuelUsed;
-    if (fuel !== 'food' && fuel !== 'nuclear-fuel') s.pollution = Math.min(1, s.pollution + p.fuelUsed * 0.0002);
   }
   p.output = Math.max(0, output); p.status = output > 0 ? 'running' : 'idle';
   if (output > 0) {
