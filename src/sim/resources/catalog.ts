@@ -151,7 +151,7 @@ export interface RecipeDefinition {
 
 export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
   { id: 'nuclear-fuel', name: 'Nuclear fuel fabrication', description: 'Industrial separation and fabrication of safeguarded reactor fuel from mined ore.',
-    requiredKnowledge: [{ id: 'nuclear-energy', minPractice: 0.55 }, { id: 'industrial-chemistry', minPractice: 0.6 }],
+    requiredKnowledge: [{ id: 'nuclear-fission', minPractice: 0.55 }, { id: 'industrial-chemistry', minPractice: 0.6 }, { id: 'precision-manufacturing', minPractice: 0.5 }],
     inputs: { 'uranium-ore': 5, steel: 0.5 }, outputs: { 'nuclear-fuel': 0.5 }, craftOccupations: ['artisan', 'keeper'],
     requiredInfrastructure: { factories: 0.2, power: 0.2 }, minIndustrialIntensity: 0.32,
     baseEfficiency: 0.7, failureRisk: 0.05, labour: 2, researchWork: 5 },
