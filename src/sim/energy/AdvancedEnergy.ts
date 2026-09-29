@@ -19,8 +19,10 @@ export function usableStorageCapacity(energy: SettlementEnergy): number {
 }
 
 export function prepareStorageMonth(energy: SettlementEnergy): void {
-  energy.storageState ??= { condition: 1, cycles: 0, throughput: 0 };
+  energy.storageState ??= { condition: 1, cycles: 0, throughput: 0, charged: 0, discharged: 0 };
   energy.storageState.throughput = 0;
+  energy.storageState.charged = 0;
+  energy.storageState.discharged = 0;
   energy.storage = Math.min(Math.max(0, energy.storage), usableStorageCapacity(energy));
 }
 
@@ -28,13 +30,15 @@ export function storageChargeInputCapacity(energy: SettlementEnergy): number {
   if (energy.storageCapacity <= 0) return 0;
   const usable = usableStorageCapacity(energy);
   const room = Math.max(0, usable - energy.storage);
-  const rate = energy.storageCapacity * BATTERY_RATE_FRACTION * (energy.storageState?.condition ?? 1);
+  const state = energy.storageState ?? { condition: 1, cycles: 0, throughput: 0, charged: 0, discharged: 0 };
+  const rate = Math.max(0, energy.storageCapacity * BATTERY_RATE_FRACTION * state.condition - state.charged);
   return Math.max(0, Math.min(rate, room / BATTERY_CHARGE_EFFICIENCY));
 }
 
 export function storageDischargeOutputCapacity(energy: SettlementEnergy): number {
   if (energy.storageCapacity <= 0 || energy.storage <= 0) return 0;
-  const rate = energy.storageCapacity * BATTERY_RATE_FRACTION * (energy.storageState?.condition ?? 1);
+  const state = energy.storageState ?? { condition: 1, cycles: 0, throughput: 0, charged: 0, discharged: 0 };
+  const rate = Math.max(0, energy.storageCapacity * BATTERY_RATE_FRACTION * state.condition - state.discharged);
   return Math.max(0, Math.min(rate, energy.storage * BATTERY_DISCHARGE_EFFICIENCY));
 }
 
@@ -42,8 +46,9 @@ export function chargeStorage(energy: SettlementEnergy, requestedInput: number):
   const input = Math.min(Math.max(0, requestedInput), storageChargeInputCapacity(energy));
   const output = input * BATTERY_CHARGE_EFFICIENCY;
   energy.storage += output;
-  energy.storageState ??= { condition: 1, cycles: 0, throughput: 0 };
+  energy.storageState ??= { condition: 1, cycles: 0, throughput: 0, charged: 0, discharged: 0 };
   energy.storageState.throughput += input;
+  energy.storageState.charged += input;
   return { input, output, loss: input - output };
 }
 
@@ -51,8 +56,9 @@ export function dischargeStorage(energy: SettlementEnergy, requestedOutput: numb
   const output = Math.min(Math.max(0, requestedOutput), storageDischargeOutputCapacity(energy));
   const input = output / BATTERY_DISCHARGE_EFFICIENCY;
   energy.storage = Math.max(0, energy.storage - input);
-  energy.storageState ??= { condition: 1, cycles: 0, throughput: 0 };
+  energy.storageState ??= { condition: 1, cycles: 0, throughput: 0, charged: 0, discharged: 0 };
   energy.storageState.throughput += input;
+  energy.storageState.discharged += output;
   return { input, output, loss: input - output };
 }
 
