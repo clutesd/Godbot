@@ -257,15 +257,16 @@ export class EnergyRenderer {
 
   private drawWatermill(root: THREE.Group, machine: EnergyMachineVisual, site?: HydraulicVisualSite): void {
     const mill = this.namedGroup(root, 'Riverside watermill');
-    this.box(mill, 0.48, 0.48, 0.15, 0.9, 0.82, 0.82, this.wood, 'Watermill house');
+    const bankSide = site?.bankSide ?? 1;
+    this.box(mill, 0.48 * bankSide, 0.48, 0.15, 0.9, 0.82, 0.82, this.wood, 'Watermill house');
     const roof = new THREE.Mesh(new THREE.ConeGeometry(0.72, 0.48, 4), this.brick);
     roof.name = 'Watermill roof';
-    roof.position.set(0.48, 1.05, 0.15);
+    roof.position.set(0.48 * bankSide, 1.05, 0.15);
     roof.rotation.y = Math.PI / 4;
     mill.add(roof);
 
     const wheel = this.namedGroup(mill, 'Waterwheel assembly');
-    wheel.position.set(-0.5, 0.5, 0.12);
+    wheel.position.set(-0.5 * bankSide, 0.5, 0.12);
     const radius = 0.62;
     for (let ringIndex = 0; ringIndex < 2; ringIndex++) {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.055, 6, 24), this.wood);
@@ -284,23 +285,24 @@ export class EnergyRenderer {
     machine.rotor = wheel;
 
     const race = this.namedGroup(mill, 'Watermill millrace');
-    this.box(race, -0.72, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank A');
-    this.box(race, -0.3, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank B');
-    this.box(race, -0.51, 0.03, -0.68, 0.34, 0.06, 1.35, this.darkMetal, 'Millrace channel bed');
+    this.box(race, -0.72 * bankSide, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank A');
+    this.box(race, -0.3 * bankSide, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank B');
+    this.box(race, -0.51 * bankSide, 0.03, -0.68, 0.34, 0.06, 1.35, this.darkMetal, 'Millrace channel bed');
     const sluice = this.namedGroup(mill, 'Watermill sluice gate');
-    this.box(sluice, -0.51, 0.34, -1.25, 0.44, 0.5, 0.07, this.wood, 'Watermill sluice board');
-    for (const x of [-0.71, -0.31]) this.box(sluice, x, 0.46, -1.25, 0.05, 0.82, 0.05, this.wood, 'Watermill sluice post');
+    this.box(sluice, -0.51 * bankSide, 0.34, -1.25, 0.44, 0.5, 0.07, this.wood, 'Watermill sluice board');
+    for (const x of [-0.71, -0.31]) this.box(sluice, x * bankSide, 0.46, -1.25, 0.05, 0.82, 0.05, this.wood, 'Watermill sluice post');
 
     const gears = this.namedGroup(mill, 'Watermill gearing');
     const gear = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.055, 6, 16), this.darkMetal);
     gear.name = 'Watermill gear wheel';
-    gear.position.set(0.34, 0.44, 0.45);
+    gear.position.set(0.34 * bankSide, 0.44, 0.45);
     gears.add(gear);
   }
 
   private drawHydro(root: THREE.Group, site?: HydraulicVisualSite): void {
     const hydro = this.namedGroup(root, 'Hydroelectric dam complex');
     const span = 2.5 + Math.min(1.2, (site?.flow ?? 0) * 1.4);
+    const bankSide = site?.bankSide ?? 1;
     this.box(hydro, 0, 0.72, 0, span, 1.42, 0.42, this.concrete, 'Hydro dam wall');
 
     const spillway = this.namedGroup(hydro, 'Hydro spillway');
@@ -310,24 +312,24 @@ export class EnergyRenderer {
     }
 
     const intake = this.namedGroup(hydro, 'Hydro intake');
-    this.box(intake, -span * 0.32, 0.55, -0.31, 0.5, 0.72, 0.18, this.darkMetal, 'Hydro intake rack');
-    for (let i = -2; i <= 2; i++) this.box(intake, -span * 0.32 + i * 0.08, 0.55, -0.42, 0.025, 0.66, 0.03, this.metal, 'Hydro intake bar');
+    this.box(intake, -span * 0.32 * bankSide, 0.55, -0.31, 0.5, 0.72, 0.18, this.darkMetal, 'Hydro intake rack');
+    for (let i = -2; i <= 2; i++) this.box(intake, -span * 0.32 * bankSide + i * 0.08, 0.55, -0.42, 0.025, 0.66, 0.03, this.metal, 'Hydro intake bar');
 
     const powerhouse = this.namedGroup(hydro, 'Hydroelectric powerhouse');
-    powerhouse.position.set(span * 0.46, 0, 0.6);
+    powerhouse.position.set(span * 0.46 * bankSide, 0, 0.6);
     this.box(powerhouse, 0, 0.48, 0, 0.9, 0.82, 0.72, this.concrete, 'Hydro powerhouse building');
     this.box(powerhouse, 0, 0.93, 0, 0.98, 0.08, 0.8, this.darkMetal, 'Hydro powerhouse roof');
     for (let i = -1; i <= 1; i++) this.cylinder(powerhouse, i * 0.24, 0.38, 0.39, 0.11, 0.11, 0.34, this.metal, 'Hydro turbine housing');
 
     const penstocks = this.namedGroup(hydro, 'Hydro penstocks');
-    for (const x of [span * 0.25, span * 0.42]) {
+    for (const x of [span * 0.25 * bankSide, span * 0.42 * bankSide]) {
       const pipe = this.cylinder(penstocks, x, 0.42, 0.32, 0.08, 0.08, 0.9, this.metal, 'Hydro penstock');
       pipe.rotation.x = Math.PI / 2.35;
     }
 
     const tailrace = this.namedGroup(hydro, 'Hydro tailrace');
-    this.box(tailrace, span * 0.46, 0.16, 1.02, 0.74, 0.22, 0.78, this.concrete, 'Hydro tailrace apron');
-    for (const x of [span * 0.32, span * 0.46, span * 0.6]) {
+    this.box(tailrace, span * 0.46 * bankSide, 0.16, 1.02, 0.74, 0.22, 0.78, this.concrete, 'Hydro tailrace apron');
+    for (const x of [span * 0.32 * bankSide, span * 0.46 * bankSide, span * 0.6 * bankSide]) {
       this.box(tailrace, x, 0.22, 1.34, 0.12, 0.28, 0.08, this.panel, 'Hydro tailrace outlet');
     }
   }
