@@ -8,6 +8,7 @@ import {
 } from '../src/sim/energy/Combustion';
 import { eligibleGenerator, generatorDefinition } from '../src/sim/energy/Generation';
 import { MATERIAL_BY_ID } from '../src/sim/resources/catalog';
+import { survivalState } from '../src/sim/pressures/Survival';
 import { learn, societyFixture } from './fixtures/settlementDevelopment';
 
 describe('combustion and steam energy chain', () => {
@@ -27,11 +28,7 @@ describe('combustion and steam energy chain', () => {
     settlement.localMaterials.coal = 0;
     settlement.localMaterials.charcoal = 0;
     settlement.localMaterials.timber = 12;
-    settlement.survival ??= {
-      cold: { fuelNeed: 10, fuelUsed: 0, warmth: 1, exposure: 0, coldMonths: 0 },
-      water: { need: 0, supplied: 0, quality: 1, shortageMonths: 0 },
-      establishment: { strength: 0, constructionLabour: 0, materialDemand: {} },
-    };
+    survivalState(settlement).cold.fuelNeed = 10;
 
     expect(combustionFuelAvailable(settlement, 'timber')).toBeCloseTo(2);
     expect(preferredCombustionFuel(settlement, 'steam')).toBe('timber');
