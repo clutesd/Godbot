@@ -70,7 +70,9 @@ export function poweredProductivity(s: Settlement): number {
   const mechanical = energy.ledgers.mechanical;
   const productiveElectricDemand = energy.service?.demand.productive ?? energy.ledgers.electric.demand;
   const productiveElectricSupply = energy.service?.supplied.productive ?? energy.ledgers.electric.supplied;
-  const demand = mechanical.demand + productiveElectricDemand;
+  // Mechanical shaft power and electricity are alternative ways to satisfy the same productive
+  // energy service as civilizations electrify; do not double-charge a factory for both carriers.
+  const demand = Math.max(mechanical.demand, productiveElectricDemand);
   if (demand <= 0) return 1;
   const coverage = Math.min(1, (mechanical.supplied + productiveElectricSupply) / demand);
   const mechanizedShare = Math.min(0.88,
