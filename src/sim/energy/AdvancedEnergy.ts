@@ -126,7 +126,7 @@ export function nuclearBuildJustified(state: SimulationState, settlement: Settle
   const demand = gridComponentDemand(state, settlement);
   // A reactor should only appear where an existing electrical system can absorb a meaningful
   // fraction of its output. Regional interconnection can justify it even if the host is smaller.
-  return demand >= 42 && energyAt(settlement).reliability >= 0.55;
+  return demand >= 70 && energyAt(settlement).reliability >= 0.6;
 }
 
 export function nuclearDispatchTarget(
@@ -138,10 +138,10 @@ export function nuclearDispatchTarget(
 ): number {
   if (componentDemand <= 0) return 0;
   const previous = Math.max(0, plant.output);
-  const minimumStable = capacity * 0.52;
+  const minimumStable = capacity * 0.45;
   const preferred = Math.min(capacity * 0.92,
     Math.max(minimumStable, Math.min(componentDemand * 0.72, remainingDemand + storageInputCapacity)));
-  if (previous <= 0) return componentDemand >= capacity * 0.18 ? Math.min(preferred, capacity * 0.58) : 0;
+  if (previous <= 0) return componentDemand >= capacity * 0.3 ? Math.min(preferred, capacity * 0.55) : 0;
   const downRamp = capacity * 0.12;
   const upRamp = capacity * 0.08;
   return Math.max(0, Math.min(previous + upRamp, Math.max(previous - downRamp, preferred)));
