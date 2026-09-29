@@ -89,15 +89,19 @@ export class ResourceSystem {
     return events;
   }
   private discover(state: SimulationState, s: Settlement, nearby: ResourceDeposit[], budget: LabourBudget, events: ResourceEventDraft[]): void {
-    const explorers = budget.forager ?? 0;
-    if (explorers <= 0) return;
+    // Emergency gatherers can see nearby surface timber/stone without a professional
+    // forager. Looking farther afield uses their reserved time at reduced efficiency.
+    const gatherers = (['farmer', 'builder', 'artisan', 'carrier', 'keeper'] as const)
+      .reduce((sum, occupation) => sum + (budget[occupation] ?? 0), 0);
+    const explorers = (budget.forager ?? 0) + ((s.survival?.establishment?.gatheringLabour ?? 0) > 0 ? gatherers * 0.7 : 0);
+    if (explorers + gatherers <= 0) return;
     for (const deposit of nearby) {
       if (s.discoveredDeposits.includes(deposit.id) || deposit.depleted) continue;
       const distance = Math.hypot(deposit.worldX - s.position.x, deposit.worldZ - s.position.z) / state.world.cellSize;
       const readiness = discoveryReadiness(s, deposit);
       // Surface materials in the camp's immediate catchment are visible without years of prospecting.
       const visible = distance <= 2 && (deposit.exposure ?? 1) >= 0.5 && ['timber', 'stone'].includes(deposit.resourceId);
-      if (readiness <= 0 || !visible && !this.random.chance(0.06 * readiness * Math.min(2, explorers / 3) / (1 + distance * 0.25)) || !this.access!.resolve(s, deposit)) continue;
+      if (readiness <= 0 || !visible && (explorers <= 0 || !this.random.chance(0.06 * readiness * Math.min(2, explorers / 3) / (1 + distance * 0.25))) || !this.access!.resolve(s, deposit)) continue;
       discoverProvince(s, deposit, state.month);
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += 0.05;
@@ -108,7 +112,7 @@ export class ResourceSystem {
         events.push(this.siteEvent(s, deposit, 'resource-deposit-discovered', `${s.name} located ${definition.name.toLowerCase()}; extraction still requires labour and access.`, [readiness > (deposit.exposure ?? 1) ? 'prospecting' : 'exploration']));
       }
     }
-    materialEconomy(s).labourUsed += useLabour(budget, ['forager'], Math.min(0.2, explorers));
+    materialEconomy(s).labourUsed += useLabour(budget, ['forager', 'farmer', 'builder', 'artisan', 'carrier', 'keeper'], Math.min(0.2, explorers + gatherers));
   }
   private deliver(state: SimulationState, s: Settlement, deposits: Map<string, ResourceDeposit>): void {
     const economy = materialEconomy(s);
@@ -129,8 +133,12 @@ export class ResourceSystem {
     const value = (d: ResourceDeposit) => d.quality * (d.accessibility ?? 1) / ((this.access!.resolve(s, d)?.cost ?? Infinity) * (1 + (d.extractionDifficulty ?? 0)));
     const queue = nearby.filter(d => s.discoveredDeposits.includes(d.id) && depositControlled(state, s, d) && extractableQuantity(s, d) > 0
       && (s.localMaterials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))
-      .map(d => ({ d, value: value(d), need: (s.localMaterials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6) }))
-      .sort((a, b) => a.need - b.need || b.value - a.value || a.d.id.localeCompare(b.d.id)).map(item => item.d);
+      .map(d => ({ d, value: value(d), need: (s.localMaterials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6),
+        urgent: Math.max(0, (s.survival?.establishment?.materialDemand[d.resourceId] ?? 0) - (s.localMaterials[d.resourceId] ?? 0)
+          - economy.inTransit.filter(t => t.resourceId === d.resourceId).reduce((n, t) => n + t.quantity, 0)) > 0 }))
+      // A zero-stock luxury/prospecting material must not consume the workers reserved
+      // for an unfinished shelter or seasonal fuel. All extraction still pays its full cost.
+      .sort((a, b) => Number(b.urgent) - Number(a.urgent) || a.need - b.need || b.value - a.value || a.d.id.localeCompare(b.d.id)).map(item => item.d);
     for (const deposit of queue) {
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       const available = extractableQuantity(s, deposit);

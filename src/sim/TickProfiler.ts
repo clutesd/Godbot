@@ -10,7 +10,7 @@ export type TickPhase =
   | 'people'
   | 'wars'
   | 'migration'
-  | 'annual-partnerships'
+  | 'quarterly-partnerships'
   | 'annual-diplomacy'
   | 'annual-institutions'
   | 'annual-politics'
@@ -112,7 +112,7 @@ export class TickProfiler {
     const phases: Partial<Record<TickPhase, TickPhaseStats>> = {};
     const phaseNames: TickPhase[] = [
       'weather', 'environment', 'survival-planning', 'resources', 'economy', 'knowledge-month',
-      'transport-trade', 'survival-resolution', 'people', 'wars', 'migration', 'annual-partnerships',
+      'transport-trade', 'survival-resolution', 'people', 'wars', 'migration', 'quarterly-partnerships',
       'annual-diplomacy', 'annual-institutions', 'annual-politics', 'knowledge-year', 'annual-culture',
       'settlement-change', 'advanced-month', 'advanced-year', 'bookkeeping', 'history-trim',
     ];

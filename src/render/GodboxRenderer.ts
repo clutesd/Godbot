@@ -1,3 +1,4 @@
+import type { FreightTrip } from '../sim/transport/types';
 import { EnergyRenderer } from './energy/EnergyRenderer';
 import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
 import { socialGestureFrame } from './people/SocialGesturePresentation';
@@ -3637,7 +3638,7 @@ export class GodboxRenderer {
       const stock = Object.entries(settlement.localMaterials).filter(([, amount]) => amount > 0.1).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
       const item = stock[index % Math.max(1, stock.length)];
       if (item) {
-        const cargo = createResourceCargo({ materialId: item[0], quantity: Math.min(item[1], 4), mode: 'road' } as import('../sim/transport/types').FreightTrip);
+        const cargo = createResourceCargo({ materialId: item[0], quantity: Math.min(item[1], 4), mode: 'road' } as FreightTrip);
         if (cargo) { cargo.position.set(0, 0.52, 0); stall.add(cargo); }
       }
       const basket = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.075, 0.15, 8), new THREE.MeshStandardMaterial({ color: '#b99561', roughness: 1 }));

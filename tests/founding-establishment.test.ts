@@ -59,7 +59,10 @@ describe('Arrival to physical establishment', () => {
       }
       capacities.push(shelterCapacity(s, state).capacity);
       for (const p of residents(state, s)) {
-        expect(p.occupation).toBe(origins.get(p.id));
+        // Arrival now includes dependents and elders: normal maturation/retirement
+        // may change careers; emergency construction itself must not do so.
+        if (origins.has(p.id) && !['adulthood', 'retirement'].includes(p.career?.reason ?? '')) expect(p.occupation).toBe(origins.get(p.id));
+        if (!origins.has(p.id)) expect(p.occupation).toBe('child');
         if (isEstablishmentBuilder(state, p)) {
           buildersShown++;
           expect(resourceWorkAssignmentForPerson(state, p, state.seed)).toBeUndefined();

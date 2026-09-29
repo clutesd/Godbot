@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "sim": "tsx src/headless.ts",
     "batch": "tsx src/batch.ts",
-    "pacing": "tsx src/pacing.ts"
+    "pacing": "tsx src/pacing.ts",
+    "demography": "tsx scripts/demographic-seeds.ts"
   },
   "dependencies": {
     "three": "^0.185.1"

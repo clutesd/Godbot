@@ -1,3 +1,4 @@
+import { balanceFounderTrades, combinedSurvivalHazard, conceptionChance, founderLife, linkFoundingFamilies, migrationHouseholds, syncDemographicHouseholds } from './people/Demography';
 import { advanceEnergy } from './energy/EnergySystem';
 import { poweredProductivity } from './energy/types';
 import { tradeOpportunity } from './transport/FreightEconomy';
@@ -324,11 +325,20 @@ export class Simulation {
       for (const domain of pod.domains) camp.knowledge.experimentation[domain] += 0.09;
       for (const id of pod.knowledge) {
         if (!KNOWLEDGE_BY_ID.has(id)) throw new Error(`Unknown founding knowledge: ${id}`);
-        camp.knowledge.records[id] = { id, theory: 0.58, practice: 0.02, discoveredMonth: 0, lastUsedMonth: 0,
+        const inherited = camp.knowledge.records[id];
+        camp.knowledge.records[id] = { id, theory: Math.max(0.58, inherited?.theory ?? 0), practice: Math.max(0.02, inherited?.practice ?? 0), discoveredMonth: 0, lastUsedMonth: 0,
           originSettlementId: camp.id, lineageId: `${pod.id}:${id}`, parentLineages: [], source: 'inheritance', dormant: false };
       }
       initializeSettlementDevelopment(this.state, camp, []);
     }, (pod, count) => this.emergeFounders(pod, count), () => {
+      for (const pod of arrival.pods) {
+        const founders = pod.personIds.map(id => this.state.people.find(p => p.id === id)!);
+        linkFoundingFamilies(founders, this.state.month);
+        balanceFounderTrades(founders);
+        const camp = this.state.settlements.find(s => s.id === pod.settlementId)!;
+        for (const person of founders) this.peopleSystem.refreshIdentity(person, camp, this.state);
+      }
+      syncDemographicHouseholds(this.state);
       this.initializeRelations();
       this.rebuildLookupIndexes();
       this.recomputeCultureShares();
@@ -357,14 +367,17 @@ export class Simulation {
     const culture = this.state.cultures.find(c => camp.cultureShares[c.id])!;
     while (pod.personIds.length < count) {
       const i = pod.personIds.length;
-      const person = this.createPerson(camp, culture, this.random.int(18 * 12, 51 * 12), `${pod.groupId}:household:${Math.floor(i / 4)}`);
+      const life = founderLife(pod.groupId, i);
+      const person = this.createPerson(camp, culture, life.ageMonths, life.householdId);
+      person.sex = life.sex;
+      this.peopleSystem.refreshIdentity(person, camp, this.state);
       const angle = -Math.PI / 2 + (i % 7 - 3) * 0.22;
       const position = { x: pod.position.x + Math.cos(angle) * (1.7 + Math.floor(i / 7) * 0.45), z: pod.position.z + Math.sin(angle) * (1.7 + Math.floor(i / 7) * 0.45) };
       person.position = position;
       person.target = { ...position };
       person.activity = 'socialize';
       person.foundingOrigin = { podId: pod.id, groupId: pod.groupId, position: { ...pod.position }, emergedSeconds: this.state.arrival!.elapsedSeconds };
-      person.expertise = pod.domains.map(domain => ({ domain, competence: this.random.range(0.15, 0.5), lastPractisedMonth: 0 }));
+      person.expertise = pod.domains.map(domain => ({ domain, competence: this.random.range(0.15, 0.5) * Math.min(1, person.ageMonths / (18 * 12)), lastPractisedMonth: 0 }));
       if (person.navigation) { person.navigation.destinationKind = 'plaza'; person.navigation.reason = 'emerging from the founding vessel'; person.navigation.waypoints = []; }
       this.state.people.push(person);
       pod.personIds.push(person.id);
@@ -497,10 +510,10 @@ export class Simulation {
     }
     this.tickProfiler.record('survival-resolution', phaseStarted);
 
-    if (annual) {
+    if (this.state.month % 3 === 1) {
       phaseStarted = this.tickProfiler.start();
       this.formPartnerships();
-      this.tickProfiler.record('annual-partnerships', phaseStarted);
+      this.tickProfiler.record('quarterly-partnerships', phaseStarted);
     }
 
     phaseStarted = this.tickProfiler.start();
@@ -568,6 +581,7 @@ export class Simulation {
 
     phaseStarted = this.tickProfiler.start();
     this.state.stats.peakPopulation = Math.max(this.state.stats.peakPopulation, this.population);
+    syncDemographicHouseholds(this.state);
     for (const settlement of this.state.settlements) reconcileBulkStocks(settlement);
     this.importanceSystem.ingest(this.state);
     this.state.notableFigures = this.importanceSystem.roster(this.state.people);
@@ -1025,7 +1039,10 @@ export class Simulation {
         this.peopleSystem.refreshIdentity(person, settlement, this.state);
         this.importanceSystem.evaluate(person, this.state, this.state.month);
       }
-      const nutritionalChange = (settlement.foodSecurity - 0.46) * 0.026;
+      // Reserves measure resilience, not meals eaten. The food ledger owns nutritional injury.
+      const ledger = settlement.survival?.food;
+      const intake = ledger && ledger.need > 0 ? clamp(ledger.consumed / ledger.need) : settlement.foodSecurity;
+      const nutritionalChange = intake * 0.014;
       person.health = clamp(person.health + nutritionalChange + survivalHealthChange(settlement) + this.random.range(-0.008, 0.008));
       person.energy = clamp(person.energy + (settlement.foodSecurity - 0.38) * 0.11 + this.random.range(-0.12, 0.1));
       const contribution = person.occupation === 'keeper' ? settlement.knowledge.literacy : person.occupation === 'builder' ? settlement.buildings / 30 : person.occupation === 'carrier' ? this.routesAt(settlement.id).length / 8 : 0;
@@ -1037,24 +1054,35 @@ export class Simulation {
       const exposureHazard = survivalMortality(settlement, 'cold');
       const medicalProtection = this.knowledgeSystem.healthProtection(settlement);
       const pollutionHazard = settlement.pollution * 0.009;
-      if (this.random.chance((annualMortality * (1 - medicalProtection * 0.42) + healthHazard * (1 - medicalProtection * 0.28) + scarcityHazard + exposureHazard + pollutionHazard) / 12)) {
+      if (this.random.chance((annualMortality * (1 - medicalProtection * 0.42) + combinedSurvivalHazard(healthHazard * (1 - medicalProtection * 0.28), scarcityHazard, exposureHazard) + pollutionHazard) / 12)) {
         deaths.push({ person, cause: exposureHazard > Math.max(scarcityHazard, healthHazard, annualMortality) ? 'exposure'
           : scarcityHazard > healthHazard && scarcityHazard > annualMortality ? 'scarcity' : ageYears > 68 ? 'age' : 'illness' });
         continue;
       }
-      if (person.sex === 'female' && ageYears >= 18 && ageYears <= 41 && person.partnerId && settlement.foodSecurity > 0.28) {
+      // Gestation survives a partner's death or separation; new conceptions require a co-resident partner.
+      if (person.pregnancy && (person.health < 0.3 || (settlement.survival?.deprivation ?? 0) > 2)
+        && this.random.chance(0.03 + Math.max(0, 0.3 - person.health) * 0.3)) {
+        person.pregnancy = undefined;
+        person.reproductiveRecoveryUntilMonth = this.state.month + 6;
+      }
+      if (person.sex === 'female') {
         const localPopulation = settlementRepresentedPopulation(this.state, settlement.id, this.peopleAt(settlement.id));
         const cell = this.state.world.cells[settlement.cellIndex];
         const carryingCapacity = 52 + (cell?.habitability ?? 0.5) * 175 + settlement.buildings * 4;
         const pressureFactor = clamp(1.25 - localPopulation / carryingCapacity, 0.05, 1);
-        const birthChance = 0.0105 * pressureFactor * popLimitFactor * (0.62 + person.health * 0.52)
-          * (1 - clamp((settlement.survival?.deprivation ?? 0) / 4) * 0.85);
-        if (this.random.chance(birthChance)) {
-          const partner = this.person(person.partnerId);
+        if (!person.pregnancy && this.random.chance(conceptionChance(person, this.person(person.partnerId ?? ''), settlement,
+          this.state.month, pressureFactor, popLimitFactor))) {
+          person.pregnancy = { dueMonth: this.state.month + 9, fatherId: person.partnerId! };
+        }
+        if (person.pregnancy && this.state.month >= person.pregnancy.dueMonth) {
+          const fatherId = person.pregnancy.fatherId;
+          const partner = this.person(fatherId);
+          person.pregnancy = undefined;
+          person.lastBirthMonth = this.state.month;
           const otherCulture = partner ? this.culture(partner.cultureId) : undefined;
           const culture = otherCulture && this.random.chance(0.5) ? otherCulture : this.culture(person.cultureId);
           if (culture) {
-            const child = this.createPerson(settlement, culture, 0, person.householdId, partner ? [person.id, partner.id] : [person.id]);
+            const child = this.createPerson(settlement, culture, 0, person.householdId, [person.id, fatherId]);
             child.health = clamp((person.health + (partner?.health ?? person.health)) / 2 + this.random.range(-0.08, 0.08));
             person.children.push(child.id);
             if (partner) partner.children.push(child.id);
@@ -1096,6 +1124,9 @@ export class Simulation {
         man.partnerId = woman.id;
         const householdId = woman.householdId;
         man.householdId = householdId;
+        for (const dependent of this.peopleAt(settlement.id)) {
+          if (dependent.ageMonths < 18 * 12 && dependent.parents.includes(man.id)) dependent.householdId = householdId;
+        }
       }
     }
   }
@@ -1105,23 +1136,48 @@ export class Simulation {
     person.energy = clamp(person.energy - (person.activity === 'rest' ? -0.02 : person.navigation?.traveling ? 0.055 : 0.035));
   }
 
+  /** Plan each route once and commit only complete households; never split dependents on a failed path. */
+  private planHouseholdMigration(people: readonly Person[], target: Settlement, route?: TradeRoute): Map<string, Person> {
+    const households = new Map<string, Person[]>();
+    for (const person of people) {
+      const family = households.get(person.householdId) ?? [];
+      family.push(person); households.set(person.householdId, family);
+    }
+    const plans = new Map<string, Person>();
+    for (const family of households.values()) {
+      const planned = family.map(person => ({ ...person }));
+      if (planned.every(person => this.peopleSystem.beginMigration(person, target, this.state, route))) {
+        for (const person of planned) plans.set(person.id, person);
+      }
+    }
+    return plans;
+  }
+
   private seekRefuge(person: Person): void {
     const source = this.settlement(person.homeId);
     const targets = this.livingSettlements().sort((a, b) => distance(a.position, source?.position ?? person.position) - distance(b.position, source?.position ?? person.position));
     for (const target of targets) {
-      if (!this.peopleSystem.beginMigration(person, target, this.state, source ? this.route(source.id, target.id) : undefined)) continue;
-      const old = this.peopleBySettlement.get(person.homeId);
-      const index = old?.indexOf(person) ?? -1;
-      if (old && index >= 0) old.splice(index, 1);
-      person.homeId = target.id;
-      person.displacedSinceMonth = undefined;
-      const residents = this.peopleBySettlement.get(target.id) ?? [];
-      residents.push(person); this.peopleBySettlement.set(target.id, residents);
-      this.state.stats.migrations++;
-      this.addEvent({ type: 'major-migration', location: target.position, locationId: target.id, actors: [person.id],
+      const family = this.peopleAt(person.homeId).filter(p => p.alive && p.householdId === person.householdId);
+      if (!family.length) family.push(person);
+      const route = source ? this.route(source.id, target.id) : undefined;
+      const plans = this.planHouseholdMigration(family, target, route);
+      if (plans.size !== family.length) continue;
+      for (const member of family) {
+        const plan = plans.get(member.id)!;
+        member.activity = plan.activity; member.target = plan.target; member.navigation = plan.navigation;
+        const old = this.peopleBySettlement.get(member.homeId);
+        const index = old?.indexOf(member) ?? -1;
+        if (old && index >= 0) old.splice(index, 1);
+        member.homeId = target.id;
+        member.displacedSinceMonth = undefined;
+        const residents = this.peopleBySettlement.get(target.id) ?? [];
+        residents.push(member); this.peopleBySettlement.set(target.id, residents);
+      }
+      this.state.stats.migrations += family.length;
+      this.addEvent({ type: 'major-migration', location: target.position, locationId: target.id, actors: family.map(p => p.id),
         causes: ['settlement-abandonment'], context: { source: source?.id ?? '', destination: target.id, expertise: (person.expertise ?? []).map(e => e.domain).join(',') },
-        outcome: 'A displaced survivor found refuge.', affectedPopulation: this.state.advanced.scale === 'modern-statistical' ? 0 : 1,
-        significance: 0.35, summary: `${person.name} seeks refuge in ${target.name}.` });
+        outcome: 'A displaced household found refuge.', affectedPopulation: this.state.advanced.scale === 'modern-statistical' ? 0 : family.length,
+        significance: 0.35, summary: `${person.name}'s household seeks refuge in ${target.name}.` });
       return;
     }
   }
@@ -1130,7 +1186,8 @@ export class Simulation {
     const settlements = this.livingSettlements();
     for (const source of settlements) {
       const sourcePeople = this.peopleAt(source.id);
-      if (sourcePeople.length < 14) continue;
+      const catastrophic = (source.survival?.deprivation ?? 0) >= 4 || (source.survival?.exposureDose ?? 0) >= 6 || source.conflictPressure > 0.8;
+      if (sourcePeople.length < 14 && !catastrophic) continue;
       const sourceCell = this.state.world.cells[source.cellIndex];
       const capacity = 52 + (sourceCell?.habitability ?? 0.5) * 175 + source.buildings * 4;
       const candidates = settlements.filter((candidate) => candidate.id !== source.id)
@@ -1167,13 +1224,13 @@ export class Simulation {
       });
       if (!target) continue;
       connectedRoute = this.route(source.id, target.id);
-      const movers = sourcePeople
-        .filter((person) => person.ageMonths > 14 * 12 && person.ageMonths < 58 * 12)
-        .sort((a, b) => (b.traits.riskTolerance + b.traits.ambition) - (a.traits.riskTolerance + a.traits.ambition))
-        .slice(0, Math.max(2, Math.min(9, Math.ceil(pressure * 7))));
+      const movers = migrationHouseholds(sourcePeople, pressure, catastrophic);
       const moved: Person[] = [];
+      const plans = this.planHouseholdMigration(movers, target, connectedRoute);
       for (const person of movers) {
-        if (!this.peopleSystem.beginMigration(person, target, this.state, connectedRoute)) continue;
+        const plan = plans.get(person.id);
+        if (!plan) continue;
+        person.activity = plan.activity; person.target = plan.target; person.navigation = plan.navigation;
         const indexedSource = this.peopleBySettlement.get(source.id);
         const indexedPosition = indexedSource?.indexOf(person) ?? -1;
         if (indexedSource && indexedPosition >= 0) indexedSource.splice(indexedPosition, 1);
@@ -1873,8 +1930,11 @@ export class Simulation {
         const target = this.livingSettlements().filter((other) => other.id !== settlement.id).sort((a, b) => distance(a.position, settlement.position) - distance(b.position, settlement.position))[0];
         const evacuationRoute = target ? this.route(settlement.id, target.id) : undefined;
         for (const person of people) person.displacedSinceMonth ??= this.state.month;
+        const plans = target ? this.planHouseholdMigration(people, target, evacuationRoute) : new Map<string, Person>();
         if (target) for (const person of [...people]) {
-          if (!this.peopleSystem.beginMigration(person, target, this.state, evacuationRoute)) continue;
+          const plan = plans.get(person.id);
+          if (!plan) continue;
+          person.activity = plan.activity; person.target = plan.target; person.navigation = plan.navigation;
           const sourceIndex = people.indexOf(person);
           if (sourceIndex >= 0) people.splice(sourceIndex, 1);
           person.homeId = target.id;
@@ -1882,6 +1942,7 @@ export class Simulation {
           const targetPeople = this.peopleBySettlement.get(target.id) ?? [];
           targetPeople.push(person);
           this.peopleBySettlement.set(target.id, targetPeople);
+          this.state.stats.migrations++;
         }
         const exhaustedDistricts = this.state.world.resourceDeposits.filter(d => !d.renewable && d.depleted && d.discoveredBy[settlement.id] !== undefined
           && (materialEconomy(settlement).experience[d.resourceId] ?? 0) > 0).length;

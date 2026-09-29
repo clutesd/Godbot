@@ -435,6 +435,10 @@ export interface Person {
   parents: string[];
   children: string[];
   partnerId?: string;
+  /** Absolute simulation months; optional for older archives. */
+  pregnancy?: { dueMonth: number; fatherId: string };
+  lastBirthMonth?: number;
+  reproductiveRecoveryUntilMonth?: number;
   householdId: string;
   homeId: string;
   cultureId: string;

@@ -29,7 +29,7 @@ describe('tick performance instrumentation', () => {
     expect(profile.annual.count).toBe(3);
     expect(profile.phases.weather?.count).toBe(36);
     expect(profile.phases.people?.count).toBe(36);
-    expect(profile.phases['annual-partnerships']?.count).toBe(3);
+    expect(profile.phases['quarterly-partnerships']?.count).toBe(12);
     expect(profile.phases['knowledge-year']?.count).toBe(3);
     expect(profile.phases['settlement-change']?.count).toBe(3);
     expect(profile.slowestTicks.length).toBeGreaterThan(0);

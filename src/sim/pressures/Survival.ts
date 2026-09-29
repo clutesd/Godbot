@@ -100,7 +100,7 @@ export function foodResponseOptions(s: Settlement, fertility: number, land: bool
   const options: FoodOption[] = [{ kind: 'wait', weight: 0.25 + (1 - urgency) * 0.7 }];
   if (land && fertility > 0.08 && workers > 0) {
     options.push({ kind: 'forage', weight: 0.4 + unit(fertility) * 0.7 + (1 - (d?.longTermOrientation ?? 0.5)) * 0.5 + intensity * 0.6 });
-    if (capabilityPractice(s, 'crop-selection', 'adopted') >= 0.15) options.push({ kind: 'cultivate', weight: 0.3 + unit(fertility) + (d?.longTermOrientation ?? 0.5) + intensity * 0.4 });
+    if (canOrganizeCultivation(s)) options.push({ kind: 'cultivate', weight: 0.3 + unit(fertility) + (d?.longTermOrientation ?? 0.5) + intensity * 0.4 });
   }
   if (s.resources.food > 0) options.push({ kind: 'ration', weight: 0.25 + urgency * 0.7 + (d?.cooperation ?? 0.5) * 0.4 });
   return options.map(option => ({ ...option, weight: option.weight * Math.exp(Math.max(-1, Math.min(1,
@@ -129,7 +129,12 @@ export function chooseFoodResponse(state: SimulationState, s: Settlement, popula
     [pressure.eventId, ...pressure.causes, ...(memory?.eventId ? [memory.eventId] : [])], population);
   survival.response = { kind, startedMonth: state.month, untilMonth: state.month + 2, pressureEventId: pressure.eventId,
     eventId: event.id, baselinePressure: pressure.intensity, extraProduction: 0, foodSaved: 0, labourSpent: 0 };
-  survival.nextDecisionMonth = state.month + 6;
+  survival.nextDecisionMonth = state.month + (survival.deprivation > 0.5 ? 3 : 6);
+}
+
+/** Existing farmers already grow food; they can supervise helpers without advanced crop selection. */
+function canOrganizeCultivation(s: Settlement): boolean {
+  return capabilityPractice(s, 'crop-selection', 'adopted') >= 0.15 || (s.agriculture?.labour ?? 0) >= 1;
 }
 
 /** Reallocate ONLY unreserved economy time. Resources, soldiers, industry and infrastructure keep their budgets. */
@@ -139,9 +144,9 @@ export function allocateSurvivalLabour(s: Settlement, summary: LabourSummary): L
   summary.survivalReassigned = 0;
   const response = survival.response;
   if (!response || summary.month > response.untilMonth || !['forage', 'cultivate'].includes(response.kind)) return allocateEstablishmentLabour(s, summary);
-  if (response.kind === 'cultivate' && capabilityPractice(s, 'crop-selection', 'adopted') < 0.15) return allocateEstablishmentLabour(s, summary);
+  if (response.kind === 'cultivate' && !canOrganizeCultivation(s)) return allocateEstablishmentLabour(s, summary);
   const destination = response.kind === 'forage' ? 'forager' : 'farmer';
-  const share = (0.15 + (survival.observations.food?.urgency ?? 0) * 0.25)
+  const share = (0.15 + (survival.observations.food?.urgency ?? 0) * 0.25 + unit(survival.deprivation / 3) * 0.35)
     / (1 + (survival.establishment?.shelterUrgency ?? 0) * 0.5);
   for (const source of ['builder', 'artisan', 'carrier', 'keeper'] as const) {
     const spend = positive(summary.economy[source] ?? 0) * share;
@@ -212,7 +217,11 @@ function allocateEstablishmentLabour(s: Settlement, summary: LabourSummary): Lab
   const active = Boolean(project?.response.adaptation);
   const missing = Object.entries(e.materialDemand).reduce((n, [id, amount]) => n + Math.max(0, amount - (s.localMaterials[id] ?? 0)), 0);
   const gatheringShare = missing > 0.05 ? 0.55 : 0.15;
-  const urgency = Math.max(active ? e.shelterUrgency : 0, missing > 0 ? e.preparedness * 0.5 : 0);
+  const stalled = project ? unit((summary.month - (project.lastWorkMonth ?? project.startedMonth) - 3) / 12) : 0;
+  // A usable roof at 75% completion reduces exposure, but must not remove nearly all
+  // work from its unfinished walls. Food urgency still limits the shared allocation.
+  const urgency = Math.max(active ? Math.max(e.shelterUrgency, project!.progress >= 0.75 ? 0.4 : 0) : 0,
+    missing > 0 ? Math.max(e.preparedness * 0.5, stalled * 0.6) : 0);
   const share = unit(urgency * 0.75 / (1 + e.foodUrgency * 1.5));
   e.constructionLabour = 0; e.gatheringLabour = 0; e.heatingLabour = 0; e.constructionByOccupation = {}; e.heatingByOccupation = {};
   for (const source of ['farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const) {
@@ -406,7 +415,9 @@ export function resolveSurvival(state: SimulationState, s: Settlement, populatio
   const catchup = Math.min(positive(s.resources.food), Math.max(0, ledger.target - ledger.consumed));
   s.resources.food -= catchup; ledger.consumed += catchup;
   const deficit = ledger.need > 0 ? unit(1 - ledger.consumed / ledger.need) : 0;
-  survival.deprivation = Math.max(0, Math.min(12, finite(survival.deprivation) + deficit - (deficit < 0.02 ? 0.35 : 0)));
+  // A fading nutritional debt: a mild ration cannot accumulate into the same injury as
+  // years without meals. Complete starvation still exceeds the severe threshold in a year.
+  survival.deprivation = Math.max(0, Math.min(12, finite(survival.deprivation) * 0.92 + deficit - (deficit < 0.02 ? 0.35 : 0)));
   survival.exposureDose = Math.max(0, Math.min(12, finite(survival.exposureDose) + survival.cold.exposure - 0.18));
   updateFoodSecurity(s, population);
   const pressure = observeFood(s, population, state.month);
@@ -444,7 +455,10 @@ export function resolveSurvival(state: SimulationState, s: Settlement, populatio
 export function survivalHealthChange(s: Settlement): number {
   const survival = s.survival;
   if (!survival) return 0;
-  return -unit(survival.deprivation / 4) * 0.035 - survival.cold.exposure * 0.008 - unit(survival.exposureDose / 6) * 0.009;
+  const deficit = survival.food && survival.food.need > 0 ? unit(1 - survival.food.consumed / survival.food.need) : 0;
+  // Acute and accumulated injury describe the same pressure, not independent penalties.
+  return -Math.max(deficit * 0.045, unit(survival.deprivation / 4) * 0.025)
+    - Math.max(survival.cold.exposure * 0.008, unit(survival.exposureDose / 6) * 0.009);
 }
 export function survivalMortality(s: Settlement, cause?: 'food' | 'cold'): number {
   // Annual hazard, charged monthly by existing demographic authority. One missed meal is not lethal.
