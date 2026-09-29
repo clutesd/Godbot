@@ -59,7 +59,9 @@ function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: nu
   const weather = state.weather.cells[s.cellIndex];
   p.condition = Math.max(0, p.condition - 0.002 - Math.max(0, (weather?.wind ?? 0) - 0.8) * 0.04 - (site.floodDepth ?? 0) * 0.03);
   if (p.condition < 0.9) p.condition = Math.min(1, p.condition + buildWork(state, s, { [g.carrier === 'mechanical' ? 'timber' : 'iron']: 0.2 }, 0.1) * 0.1);
-  const cooling = !g.cooling ? 1 : Math.min(1, (s.development?.water?.availability ?? state.world.cells[s.cellIndex]?.flow ?? 0) * 2);
+  const cell = state.world.cells[s.cellIndex];
+  const coolingWater = Math.max(s.development?.water?.availability ?? 0, cell?.lake ? 1 : 0, cell?.river ? cell.flow : 0);
+  const cooling = !g.cooling ? 1 : Math.min(1, coolingWater * 2);
   if (p.condition < (p.kind === 'nuclear' ? 0.8 : 0.25) || cooling < (p.kind === 'nuclear' ? 0.65 : 0.05)) { p.status = 'failed'; return 0; }
   let output = Math.min(need, g.capacity * environmentFactor(state, s, p.kind) * p.condition * cooling * site.condition);
   if (isCombustionKind(p.kind)) {
