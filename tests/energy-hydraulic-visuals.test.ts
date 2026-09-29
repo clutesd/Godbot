@@ -3,6 +3,7 @@ import { EnergyRenderer } from '../src/render/energy/EnergyRenderer';
 import { planHydraulicVisualSite } from '../src/render/energy/HydraulicPresentation';
 import { energyAt, type EnergyPlant } from '../src/sim/energy/types';
 import { nearestIndex } from '../src/sim/terrain/TerrainField';
+import { surfaceHeightAt } from '../src/sim/terrain/SurfaceGeometry';
 import type { Settlement, SimulationState } from '../src/sim/types';
 import { societyFixture } from './fixtures/settlementDevelopment';
 
@@ -90,7 +91,7 @@ describe('primitive and hydraulic energy presentation', () => {
 
     const expected = planHydraulicVisualSite(state.world, { x: plot.worldX, z: plot.worldZ })!;
     const renderer = new EnergyRenderer();
-    renderer.update(state, 1, () => 0);
+    renderer.update(state, 1, (x, z) => surfaceHeightAt(state.world, x, z));
 
     const root = renderer.group.getObjectByName('Energy plant waterwheel:wheel-visual')!;
     expect(root.position.x).toBeCloseTo(expected.bankX, 5);
@@ -100,6 +101,12 @@ describe('primitive and hydraulic energy presentation', () => {
     expect(renderer.group.getObjectByName('Watermill millrace')).toBeDefined();
     expect(renderer.group.getObjectByName('Watermill sluice gate')).toBeDefined();
     expect(renderer.group.getObjectByName('Watermill gearing')).toBeDefined();
+
+    const wheel = renderer.group.getObjectByName('Waterwheel assembly')!;
+    const worldWheelCenter = root.position.y + wheel.position.y * root.scale.y;
+    const wheelRadius = 0.62 * root.scale.y;
+    expect(expected.waterY).toBeGreaterThan(worldWheelCenter - wheelRadius);
+    expect(expected.waterY).toBeLessThan(worldWheelCenter + wheelRadius);
 
     renderer.dispose();
   });
@@ -113,11 +120,12 @@ describe('primitive and hydraulic energy presentation', () => {
 
     const expected = planHydraulicVisualSite(state.world, { x: plot.worldX, z: plot.worldZ })!;
     const renderer = new EnergyRenderer();
-    renderer.update(state, 1, () => 0);
+    renderer.update(state, 1, (x, z) => surfaceHeightAt(state.world, x, z));
 
     const root = renderer.group.getObjectByName('Energy plant hydro:hydro-visual')!;
     expect(root.position.x).toBeCloseTo(expected.riverX, 5);
     expect(root.position.z).toBeCloseTo(expected.riverZ, 5);
+    expect(root.position.y).toBeCloseTo(surfaceHeightAt(state.world, expected.riverX, expected.riverZ), 5);
     expect(renderer.group.getObjectByName('Hydroelectric dam complex')).toBeDefined();
     expect(renderer.group.getObjectByName('Hydro dam wall')).toBeDefined();
     expect(renderer.group.getObjectByName('Hydro spillway')).toBeDefined();
