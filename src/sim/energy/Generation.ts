@@ -118,7 +118,8 @@ export function eligibleGenerator(state: SimulationState, s: Settlement, g: Gene
   if (!g.knowledge.every(k => knows(s, k))) return false;
   const cell = state.world.cells[s.cellIndex];
   if (!cell) return false;
-  if (g.cooling && !(cell.river && cell.flow > 0.04 || cell.lake)) return false;
+  const managedWater = Math.max(s.development?.water?.availability ?? 0, cell.lake ? 1 : 0, cell.river ? cell.flow : 0);
+  if (g.cooling && managedWater <= 0.04) return false;
   if (g.kind === 'hydro' || g.kind === 'waterwheel') return cell.river && cell.flow > 0.08;
   if (g.kind === 'nuclear') {
     return s.industry.active
