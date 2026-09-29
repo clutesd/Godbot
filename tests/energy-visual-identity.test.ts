@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { EnergyRenderer } from '../src/render/energy/EnergyRenderer';
 import { energyAt, type EnergyPlant, type GeneratorKind } from '../src/sim/energy/types';
 import { societyFixture } from './fixtures/settlementDevelopment';
