@@ -223,9 +223,11 @@ export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
   { id: 'nuclear-fuel', name: 'Fabricated nuclear fuel', spoilage: 0 },
   { id: 'spent-nuclear-fuel', name: 'Contained spent nuclear fuel', spoilage: 0 },
   { id: 'silicon', name: 'Purified silicon', spoilage: 0 },
-  ...RESOURCE_CATALOG.map(r => ({ id: r.id, name: r.name, spoilage: r.category === 'plant' ? 0.015 : 0, fuelHeat: r.id === 'timber' ? 0.35 : undefined })),
-  // Clay is still supplied by the supplemental legacy deposit pass, but generic recipes may consume it.
+  ...RESOURCE_CATALOG.map(r => ({ id: r.id, name: r.name, spoilage: r.category === 'plant' ? 0.015 : 0,
+    fuelHeat: r.id === 'timber' ? 0.35 : r.id === 'natural-gas' ? 1.2 : undefined })),
+  // Clay and coal are still supplied by the supplemental legacy deposit pass, but generic systems consume canonical localMaterials.
   { id: 'clay', name: 'Clay', spoilage: 0 },
+  { id: 'coal', name: 'Coal', spoilage: 0, fuelHeat: 1.05 },
   { id: 'charcoal', name: 'Charcoal', spoilage: 0, fuelHeat: 0.8 },
   { id: 'herbal-remedy', name: 'Herbal remedies', spoilage: 0.01 },
   { id: 'bronze', name: 'Bronze', spoilage: 0 }, { id: 'iron-tools', name: 'Forged iron', spoilage: 0 },
