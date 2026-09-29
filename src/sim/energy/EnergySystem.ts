@@ -3,11 +3,25 @@ import { hasKnowledgeCapability as knows } from '../knowledge/CapabilityContract
 import { materialEconomy, takeMaterial } from '../resources/Inventory';
 import { settlementRepresentedPopulation } from '../Population';
 import type { Settlement, SimulationState } from '../types';
+import {
+  chargeStorage,
+  dispatchPriority,
+  dischargeStorage,
+  finalizeStorageMonth,
+  generationDispatchRequest,
+  gridComponent,
+  gridComponentDemand,
+  gridComponentStorageInputCapacity,
+  nuclearBuildJustified,
+  prepareStorageMonth,
+  storageChargeInputCapacity,
+  storageDischargeOutputCapacity,
+} from './AdvancedEnergy';
 import { combustionFromFuel, combustionFuelPotential, isCombustionKind, planCombustion } from './Combustion';
 import { GENERATORS, eligibleGenerator, environmentFactor, generatorDefinition } from './Generation';
 import { buildWork, constructGrid, deliver } from './Transmission';
 import { prepareElectricDemand, type ElectricConsumer } from './Demand';
-import { POWER_PRIORITIES, energyAt, energyWorld, ledger, powerServiceCoverage, type EnergyPlant } from './types';
+import { POWER_PRIORITIES, energyAt, energyWorld, ledger, powerServiceCoverage, type EnergyPlant, type GeneratorKind } from './types';
 
 function milestone(state: SimulationState, s: Settlement, key: string, description: string, plant?: EnergyPlant): void {
   const world = energyWorld(state);
@@ -28,6 +42,7 @@ function constructPlants(state: SimulationState, s: Settlement): void {
       const choices = GENERATORS.filter(g => eligibleGenerator(state, s, g) && e.ledgers[g.carrier].demand > e.plants.filter(p => p.progress >= 1 && generatorDefinition(p.kind).carrier === g.carrier).reduce((n, p) => n + p.output, 0) * 1.15);
       choices.sort((a, b) => score(b) - score(a));
       function score(g: typeof GENERATORS[number]): number {
+        if (g.kind === 'nuclear' && !nuclearBuildJustified(state, s)) return 0;
         const fuelReadiness = isCombustionKind(g.kind)
           ? Math.min(1, combustionFuelPotential(s, g.kind) / Math.max(1, g.capacity * 0.25))
           : g.fuel === 'food'
@@ -49,7 +64,10 @@ function constructPlants(state: SimulationState, s: Settlement): void {
       plant.progress = Math.min(1, plant.progress + buildWork(state, s, costs, Math.min(1, (1 - plant.progress) * g.work)) / g.work);
     }
   }
-  if (knows(s, 'battery-storage') && e.storageCapacity < e.ledgers.electric.demand * 2) e.storageCapacity += buildWork(state, s, { copper: 1, iron: 1 }, 0.5) * 8;
+  const storageTarget = e.ledgers.electric.demand * (knows(s, 'grid-management') ? 3 : 2);
+  if (knows(s, 'battery-storage') && e.storageCapacity < storageTarget) {
+    e.storageCapacity += buildWork(state, s, { copper: 1, iron: 1 }, Math.min(0.5, (storageTarget - e.storageCapacity) / 8)) * 8;
+  }
 }
 function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: number): number {
   p.output = 0; p.fuelUsed = 0; p.fuelKind = undefined; p.heatInput = 0; p.conversionLoss = 0;
@@ -57,12 +75,18 @@ function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: nu
   const g = generatorDefinition(p.kind), site = s.structurePlots?.find(x => x.id === p.plotId);
   if (!site || site.development?.status !== 'active' || site.accessRestricted || !eligibleGenerator(state, s, g)) { p.status = 'idle'; return 0; }
   const weather = state.weather.cells[s.cellIndex];
-  p.condition = Math.max(0, p.condition - 0.002 - Math.max(0, (weather?.wind ?? 0) - 0.8) * 0.04 - (site.floodDepth ?? 0) * 0.03);
-  if (p.condition < 0.9) p.condition = Math.min(1, p.condition + buildWork(state, s, { [g.carrier === 'mechanical' ? 'timber' : 'iron']: 0.2 }, 0.1) * 0.1);
+  p.condition = Math.max(0, p.condition - (p.kind === 'nuclear' ? 0.0012 : 0.002)
+    - Math.max(0, (weather?.wind ?? 0) - 0.8) * 0.04 - (site.floodDepth ?? 0) * 0.03);
+  if (p.condition < 0.92) {
+    const maintenance = p.kind === 'nuclear' ? { steel: 0.2, copper: 0.08 }
+      : { [g.carrier === 'mechanical' ? 'timber' : 'iron']: 0.2 };
+    p.condition = Math.min(1, p.condition + buildWork(state, s, maintenance, 0.1) * (p.kind === 'nuclear' ? 0.14 : 0.1));
+  }
   const cell = state.world.cells[s.cellIndex];
   const coolingWater = Math.max(s.development?.water?.availability ?? 0, cell?.lake ? 1 : 0, cell?.river ? cell.flow : 0);
   const cooling = !g.cooling ? 1 : Math.min(1, coolingWater * 2);
-  if (p.condition < (p.kind === 'nuclear' ? 0.8 : 0.25) || cooling < (p.kind === 'nuclear' ? 0.65 : 0.05)) { p.status = 'failed'; return 0; }
+  if (p.condition < (p.kind === 'nuclear' ? 0.82 : 0.25)) { p.status = 'failed'; return 0; }
+  if (cooling < (p.kind === 'nuclear' ? 0.65 : 0.05)) { p.status = 'idle'; return 0; }
   let output = Math.min(need, g.capacity * environmentFactor(state, s, p.kind) * p.condition * cooling * site.condition);
   if (isCombustionKind(p.kind)) {
     const plan = planCombustion(s, p.kind, output);
@@ -77,8 +101,9 @@ function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: nu
     s.pollution = Math.min(1, s.pollution + actual.pollution);
   } else if (g.fuel) {
     const efficiency = g.efficiency ?? 1;
-    energyAt(s).materialDemand[g.fuel] = Math.max(energyAt(s).materialDemand[g.fuel] ?? 0, output / efficiency * 2);
-    materialEconomy(s).demand[g.fuel] = Math.max(materialEconomy(s).demand[g.fuel] ?? 0, output / efficiency * 2);
+    const reserveMonths = p.kind === 'nuclear' ? 6 : 2;
+    energyAt(s).materialDemand[g.fuel] = Math.max(energyAt(s).materialDemand[g.fuel] ?? 0, output / efficiency * reserveMonths);
+    materialEconomy(s).demand[g.fuel] = Math.max(materialEconomy(s).demand[g.fuel] ?? 0, output / efficiency * reserveMonths);
     if (g.fuel === 'food') {
       p.fuelUsed = Math.min(Math.max(0, s.resources.food - settlementRepresentedPopulation(state, s.id)), output / efficiency);
       s.resources.food -= p.fuelUsed;
