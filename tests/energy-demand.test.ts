@@ -69,7 +69,8 @@ describe('authoritative energy demand', () => {
     energy.service.supplied.critical = 0;
     expect(poweredProductivity(settlement)).toBeCloseTo(starved, 6);
 
-    energy.ledgers.mechanical.supplied = 10;
+    // A mature electric system can replace legacy shaft/mechanical service rather than being
+    // penalized for both carriers simultaneously.
     energy.service.supplied.productive = 20;
     expect(poweredProductivity(settlement)).toBeCloseTo(1, 6);
   });
