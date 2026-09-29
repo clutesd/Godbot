@@ -80,7 +80,16 @@ export function combustionFuelAvailable(settlement: Settlement, fuel: Combustion
 
 export function preferredCombustionFuel(settlement: Settlement, kind: CombustionKind): CombustionFuel {
   const profile = MACHINE_PROFILE[kind];
-  return profile.fuels.find(fuel => combustionFuelAvailable(settlement, fuel) > 1e-9) ?? profile.fuels[0]!;
+  let selected = profile.fuels[0]!;
+  let bestPotential = 0;
+  for (const fuel of profile.fuels) {
+    const potential = combustionFuelAvailable(settlement, fuel) * combustionUsefulPerFuel(kind, fuel);
+    if (potential > bestPotential + 1e-9) {
+      selected = fuel;
+      bestPotential = potential;
+    }
+  }
+  return selected;
 }
 
 export function combustionFuelPotential(settlement: Settlement, kind: CombustionKind): number {
