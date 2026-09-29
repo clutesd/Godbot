@@ -86,8 +86,22 @@ export class EnergyRenderer {
         }
       }
       if ((s.energy?.storageCapacity ?? 0) > 0) {
-        const box = new THREE.Group(); box.position.set(s.position.x, height(s.position.x, s.position.z), s.position.z); this.group.add(box);
-        this.box(box, -0.4, 0.25, 0, 0.45, 0.5, 0.35, this.panel);
+        const bank = new THREE.Group();
+        bank.position.set(s.position.x, height(s.position.x, s.position.z), s.position.z);
+        this.group.add(bank);
+        const capacity = s.energy!.storageCapacity;
+        const condition = s.energy!.storageState?.condition ?? 1;
+        const usable = Math.max(0.001, capacity * Math.max(0.55, condition));
+        const charge = Math.max(0, Math.min(1, s.energy!.storage / usable));
+        const units = Math.max(1, Math.min(6, Math.ceil(capacity / 32)));
+        for (let i = 0; i < units; i++) {
+          const x = (i - (units - 1) / 2) * 0.42;
+          this.box(bank, x, 0.27, 0, 0.34, 0.54, 0.34, this.metal);
+          const fill = Math.max(0.03, charge * 0.42);
+          this.box(bank, x, 0.08 + fill / 2, 0.19, 0.25, fill, 0.035, this.panel);
+        }
+        // A low service cabinet makes larger battery installations read as deliberate grid infrastructure.
+        this.box(bank, 0, 0.12, -0.28, Math.max(0.5, units * 0.3), 0.24, 0.18, this.concrete);
       }
     }
     for (const line of state.energy?.lines ?? []) this.drawLine(line, height);

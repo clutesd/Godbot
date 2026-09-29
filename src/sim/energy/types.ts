@@ -22,6 +22,14 @@ export interface EnergyPlant {
 export interface PowerLine { id: string; from: string; to: string; points: Vec2[]; capacity: number; loss: number; progress: number; condition: number; flow: number; }
 export interface EnergyLedger { demand: number; generated: number; supplied: number; imported: number; exported: number; losses: number; curtailed: number; charged: number; discharged: number; }
 export interface PowerServiceLedger { demand: Record<PowerPriority, number>; supplied: Record<PowerPriority, number>; }
+export interface EnergyStorageState {
+  condition: number;
+  cycles: number;
+  /** Current-month charge + discharge energy handled by the battery. */
+  throughput: number;
+  charged: number;
+  discharged: number;
+}
 export interface SettlementEnergy {
   plants: EnergyPlant[];
   materialDemand: Record<string, number>;
@@ -29,6 +37,8 @@ export interface SettlementEnergy {
   service: PowerServiceLedger;
   storage: number;
   storageCapacity: number;
+  /** Optional for archive compatibility; initialized lazily by the advanced storage model. */
+  storageState?: EnergyStorageState;
   shortageMonths: number;
   reliability: number;
   lit: boolean;
