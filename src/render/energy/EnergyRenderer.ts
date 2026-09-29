@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import type { SimulationState } from '../../sim/types';
 import type { EnergyPlant, PowerLine } from '../../sim/energy/types';
 import { generatorDefinition } from '../../sim/energy/Generation';
+import { hydraulicRotationY, planHydraulicVisualSite, type HydraulicVisualSite } from './HydraulicPresentation';
 
 interface EnergyMachineVisual {
   plant: EnergyPlant;
   rotor?: THREE.Group;
+  rotorAxis?: 'z' | 'y';
   piston?: THREE.Mesh;
   plumes: THREE.Group[];
   lamp: THREE.Mesh;
@@ -88,7 +90,11 @@ export class EnergyRenderer {
     for (const machine of this.machines) {
       const running = machine.plant.status === 'running';
       const factor = machine.plant.output / generatorDefinition(machine.plant.kind).capacity;
-      if (machine.rotor) machine.rotor.rotation.z = elapsed * Math.min(3, factor * 6) * Number(running);
+      if (machine.rotor) {
+        const rotation = elapsed * Math.min(3, factor * 6) * Number(running);
+        if (machine.rotorAxis === 'y') machine.rotor.rotation.y = rotation;
+        else machine.rotor.rotation.z = rotation;
+      }
       if (machine.piston) machine.piston.position.x = running ? Math.sin(elapsed * 4) * 0.18 : 0;
       for (const plume of machine.plumes) {
         plume.visible = running;
@@ -124,16 +130,31 @@ export class EnergyRenderer {
         const root = new THREE.Group();
         root.name = `Energy plant ${plant.kind}:${plant.id}`;
         const scale = Math.min(1, Math.max(0.25, plot.radius / 2));
-        const x = plot.worldX + plot.radius * 0.6;
-        const z = plot.worldZ;
-        root.position.set(x, height(x, z), z);
+        const hydraulic = plant.kind === 'waterwheel' || plant.kind === 'hydro'
+          ? planHydraulicVisualSite(state.world, { x: plot.worldX, z: plot.worldZ })
+          : undefined;
+        const defaultX = plot.worldX + plot.radius * 0.6;
+        const defaultZ = plot.worldZ;
+        const x = plant.kind === 'waterwheel' && hydraulic ? hydraulic.bankX
+          : plant.kind === 'hydro' && hydraulic ? hydraulic.riverX
+            : defaultX;
+        const z = plant.kind === 'waterwheel' && hydraulic ? hydraulic.bankZ
+          : plant.kind === 'hydro' && hydraulic ? hydraulic.riverZ
+            : defaultZ;
+        // Hydraulic structures sit on rendered terrain. Their water-facing machinery is positioned
+        // relative to the authoritative river surface so steep banks do not leave wheels/dams floating.
+        const y = height(x, z);
+        root.position.set(x, y, z);
+        if (hydraulic) root.rotation.y = hydraulicRotationY(hydraulic);
         root.scale.setScalar(scale);
         this.group.add(root);
 
         const base = Math.max(0.05, plant.progress);
         const baseWidth = plant.kind === 'coal' ? 2.3 : plant.kind === 'gas' ? 2 : plant.kind === 'steam' ? 1.8 : 1.3;
         const baseDepth = plant.kind === 'coal' ? 1.45 : plant.kind === 'gas' ? 1.25 : 1;
-        this.box(root, 0, 0.1, 0, baseWidth, 0.2, baseDepth, this.concrete, 'Energy plant foundation');
+        if (plant.kind !== 'waterwheel' && plant.kind !== 'hydro') {
+          this.box(root, 0, 0.1, 0, baseWidth, 0.2, baseDepth, this.concrete, 'Energy plant foundation');
+        }
 
         const lamp = this.box(root, baseWidth * 0.38, 0.4, baseDepth * 0.38, 0.1, 0.12, 0.1,
           new THREE.MeshStandardMaterial({ color: '#e4b26b' }), 'Energy plant status lamp');
@@ -145,12 +166,16 @@ export class EnergyRenderer {
           continue;
         }
 
-        if (['wind', 'windmill', 'waterwheel', 'animal'].includes(plant.kind)) {
+        if (plant.kind === 'animal') {
+          this.drawAnimalPower(root, machine);
+        } else if (plant.kind === 'waterwheel') {
+          this.drawWatermill(root, machine, hydraulic);
+        } else if (plant.kind === 'wind' || plant.kind === 'windmill') {
           this.drawRotaryPrimitive(root, machine, plant.kind);
         } else if (plant.kind === 'solar') {
           this.drawSolar(root);
         } else if (plant.kind === 'hydro') {
-          this.drawHydro(root);
+          this.drawHydro(root, hydraulic);
         } else if (plant.kind === 'nuclear') {
           this.drawNuclear(root, machine);
         } else if (plant.kind === 'steam') {
@@ -170,26 +195,20 @@ export class EnergyRenderer {
     for (const line of state.energy?.lines ?? []) this.drawLine(line, height);
   }
 
-  private drawRotaryPrimitive(root: THREE.Group, machine: EnergyMachineVisual, kind: EnergyPlant['kind']): void {
-    const tall = kind === 'wind' ? 4.2 : kind === 'windmill' ? 2.5 : 0.7;
+  private drawRotaryPrimitive(root: THREE.Group, machine: EnergyMachineVisual, kind: 'wind' | 'windmill'): void {
+    const tall = kind === 'wind' ? 4.2 : 2.5;
     this.cylinder(root, 0, tall / 2, 0, 0.07, kind === 'windmill' ? 0.5 : 0.12, tall,
       kind === 'wind' ? this.concrete : this.wood, `${kind} tower`);
     const rotor = this.namedGroup(root, `${kind} rotor`);
     rotor.position.set(0, tall, 0.25);
     machine.rotor = rotor;
-    const blades = kind === 'wind' ? 3 : kind === 'waterwheel' ? 10 : 4;
-    const radius = kind === 'wind' ? 1.25 : kind === 'windmill' ? 0.95 : 0.6;
+    const blades = kind === 'wind' ? 3 : 4;
+    const radius = kind === 'wind' ? 1.25 : 0.95;
     for (let i = 0; i < blades; i++) {
       const arm = new THREE.Group();
       arm.rotation.z = i * Math.PI * 2 / blades;
       rotor.add(arm);
-      this.box(arm, 0, radius * 0.5, 0, kind === 'waterwheel' ? 0.2 : 0.1, radius, 0.08,
-        kind === 'wind' ? this.concrete : this.wood);
-    }
-    if (kind === 'waterwheel') {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.06, 5, 20), this.wood);
-      ring.name = 'Waterwheel rim';
-      rotor.add(ring);
+      this.box(arm, 0, radius * 0.5, 0, 0.1, radius, 0.08, kind === 'wind' ? this.concrete : this.wood);
     }
   }
 
@@ -202,10 +221,124 @@ export class EnergyRenderer {
     }
   }
 
-  private drawHydro(root: THREE.Group): void {
-    const hydro = this.namedGroup(root, 'Hydroelectric powerhouse');
-    this.box(hydro, 0, 0.65, 0, 1.7, 1.3, 0.5, this.concrete, 'Hydro concrete mass');
-    for (let i = -1; i <= 1; i++) this.box(hydro, i * 0.45, 0.4, 0.3, 0.2, 0.65, 0.16, this.panel, 'Hydro turbine bay');
+  private drawAnimalPower(root: THREE.Group, machine: EnergyMachineVisual): void {
+    const works = this.namedGroup(root, 'Animal power works');
+    this.box(works, 0, 0.08, 0, 1.75, 0.14, 1.75, this.wood, 'Animal power threshing floor');
+    this.cylinder(works, 0, 0.58, 0, 0.14, 0.18, 1.05, this.wood, 'Animal capstan post');
+    const drum = this.cylinder(works, 0, 0.34, 0, 0.28, 0.28, 0.4, this.darkMetal, 'Animal capstan drum');
+    drum.rotation.y = Math.PI / 8;
+
+    const sweep = this.namedGroup(works, 'Animal capstan sweep');
+    for (const angle of [0, Math.PI / 2]) {
+      const beam = this.box(sweep, 0, 0.72, 0, 2.2, 0.09, 0.09, this.wood, 'Animal sweep beam');
+      beam.rotation.y = angle;
+    }
+    machine.rotor = sweep;
+    machine.rotorAxis = 'y';
+
+    const harness = this.namedGroup(sweep, 'Animal harness traces');
+    for (const side of [-1, 1]) {
+      const animal = this.namedGroup(harness, `Draft animal ${side < 0 ? 'A' : 'B'}`);
+      animal.position.set(side * 0.92, 0.45, 0.18 * side);
+      this.box(animal, 0, 0, 0, 0.42, 0.24, 0.2, this.wood, 'Draft animal body');
+      this.box(animal, side * 0.22, 0.08, 0, 0.15, 0.16, 0.14, this.wood, 'Draft animal head');
+      for (const z of [-0.07, 0.07]) {
+        this.box(animal, -0.12, -0.2, z, 0.05, 0.32, 0.05, this.darkMetal, 'Draft animal leg');
+        this.box(animal, 0.12, -0.2, z, 0.05, 0.32, 0.05, this.darkMetal, 'Draft animal leg');
+      }
+    }
+
+    const drive = this.namedGroup(works, 'Animal belt drive');
+    this.horizontalCylinder(drive, 0, 0.3, -0.58, 0.11, 0.55, this.darkMetal, 'Animal drive shaft');
+    const pulley = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.035, 6, 18), this.darkMetal);
+    pulley.name = 'Animal drive pulley';
+    pulley.position.set(0.32, 0.3, -0.58);
+    pulley.rotation.y = Math.PI / 2;
+    drive.add(pulley);
+  }
+
+  private drawWatermill(root: THREE.Group, machine: EnergyMachineVisual, site?: HydraulicVisualSite): void {
+    const mill = this.namedGroup(root, 'Riverside watermill');
+    const bankSide = site?.bankSide ?? 1;
+    this.box(mill, 0.48 * bankSide, 0.48, 0.15, 0.9, 0.82, 0.82, this.wood, 'Watermill house');
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(0.72, 0.48, 4), this.brick);
+    roof.name = 'Watermill roof';
+    roof.position.set(0.48 * bankSide, 1.05, 0.15);
+    roof.rotation.y = Math.PI / 4;
+    mill.add(roof);
+
+    const wheel = this.namedGroup(mill, 'Waterwheel assembly');
+    const radius = 0.62;
+    const localWaterY = site
+      ? (site.waterY - root.position.y) / Math.max(0.001, root.scale.y)
+      : 0.18;
+    // Keep the lower paddles in the real river surface instead of pinning the wheel to bank grade.
+    const wheelCenterY = localWaterY + radius * 0.34;
+    wheel.position.set(-0.5 * bankSide, wheelCenterY, 0.12);
+    for (let ringIndex = 0; ringIndex < 2; ringIndex++) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.055, 6, 24), this.wood);
+      ring.name = 'Waterwheel rim';
+      ring.position.z = (ringIndex - 0.5) * 0.18;
+      wheel.add(ring);
+    }
+    for (let i = 0; i < 12; i++) {
+      const paddle = new THREE.Group();
+      paddle.rotation.z = i * Math.PI * 2 / 12;
+      wheel.add(paddle);
+      this.box(paddle, 0, radius * 0.48, 0, 0.24, radius * 0.92, 0.24, this.wood, 'Waterwheel paddle');
+    }
+    const axle = this.cylinder(wheel, 0, 0, 0, 0.07, 0.07, 0.48, this.darkMetal, 'Waterwheel axle');
+    axle.rotation.x = Math.PI / 2;
+    machine.rotor = wheel;
+
+    const race = this.namedGroup(mill, 'Watermill millrace');
+    this.box(race, -0.72 * bankSide, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank A');
+    this.box(race, -0.3 * bankSide, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank B');
+    this.box(race, -0.51 * bankSide, 0.03, -0.68, 0.34, 0.06, 1.35, this.darkMetal, 'Millrace channel bed');
+    const sluice = this.namedGroup(mill, 'Watermill sluice gate');
+    this.box(sluice, -0.51 * bankSide, 0.34, -1.25, 0.44, 0.5, 0.07, this.wood, 'Watermill sluice board');
+    for (const x of [-0.71, -0.31]) this.box(sluice, x * bankSide, 0.46, -1.25, 0.05, 0.82, 0.05, this.wood, 'Watermill sluice post');
+
+    const gears = this.namedGroup(mill, 'Watermill gearing');
+    const gear = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.055, 6, 16), this.darkMetal);
+    gear.name = 'Watermill gear wheel';
+    gear.position.set(0.34 * bankSide, 0.44, 0.45);
+    gears.add(gear);
+  }
+
+  private drawHydro(root: THREE.Group, site?: HydraulicVisualSite): void {
+    const hydro = this.namedGroup(root, 'Hydroelectric dam complex');
+    const span = 2.5 + Math.min(1.2, (site?.flow ?? 0) * 1.4);
+    const bankSide = site?.bankSide ?? 1;
+    this.box(hydro, 0, 0.72, 0, span, 1.42, 0.42, this.concrete, 'Hydro dam wall');
+
+    const spillway = this.namedGroup(hydro, 'Hydro spillway');
+    for (const x of [-0.72, -0.24, 0.24, 0.72]) {
+      this.box(spillway, x, 0.68, 0.24, 0.32, 0.82, 0.08, this.darkMetal, 'Hydro spillway gate');
+      this.box(spillway, x, 1.18, 0.22, 0.38, 0.08, 0.12, this.metal, 'Hydro spillway gantry');
+    }
+
+    const intake = this.namedGroup(hydro, 'Hydro intake');
+    this.box(intake, -span * 0.32 * bankSide, 0.55, -0.31, 0.5, 0.72, 0.18, this.darkMetal, 'Hydro intake rack');
+    for (let i = -2; i <= 2; i++) this.box(intake, -span * 0.32 * bankSide + i * 0.08, 0.55, -0.42, 0.025, 0.66, 0.03, this.metal, 'Hydro intake bar');
+
+    const powerhouse = this.namedGroup(hydro, 'Hydroelectric powerhouse');
+    powerhouse.position.set(span * 0.46 * bankSide, 0, 0.6);
+    this.box(powerhouse, 0, 0.48, 0, 0.9, 0.82, 0.72, this.concrete, 'Hydro powerhouse building');
+    this.box(powerhouse, 0, 0.93, 0, 0.98, 0.08, 0.8, this.darkMetal, 'Hydro powerhouse roof');
+    for (let i = -1; i <= 1; i++) this.cylinder(powerhouse, i * 0.24, 0.38, 0.39, 0.11, 0.11, 0.34, this.metal, 'Hydro turbine housing');
+
+    const penstocks = this.namedGroup(hydro, 'Hydro penstocks');
+    for (const x of [span * 0.25 * bankSide, span * 0.42 * bankSide]) {
+      const pipe = this.cylinder(penstocks, x, 0.42, 0.32, 0.08, 0.08, 0.9, this.metal, 'Hydro penstock');
+      pipe.rotation.x = Math.PI / 2.35;
+    }
+
+    const tailrace = this.namedGroup(hydro, 'Hydro tailrace');
+    this.box(tailrace, span * 0.46 * bankSide, 0.16, 1.02, 0.74, 0.22, 0.78, this.concrete, 'Hydro tailrace apron');
+    for (const x of [span * 0.32 * bankSide, span * 0.46 * bankSide, span * 0.6 * bankSide]) {
+      this.box(tailrace, x, 0.22, 1.34, 0.12, 0.28, 0.08, this.panel, 'Hydro tailrace outlet');
+    }
   }
 
   private drawNuclear(root: THREE.Group, machine: EnergyMachineVisual): void {
