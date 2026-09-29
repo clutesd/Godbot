@@ -21,6 +21,7 @@ export type AnimationState =
   | 'build'
   | 'farm'
   | 'play'
+  | 'dance'
   | 'converse'
   | 'social-wave'
   | 'social-laugh'
@@ -148,6 +149,24 @@ export class AnimationController {
     this.createWalkRunClips();
     this.createActivityClips();
     this.createSpecialStateClips();
+    this.clips.set('dance', {
+      state: 'dance', isLooping: true, blendDuration: 0.45,
+      canInterruptFrom: new Set<AnimationState>(['idle', 'walk', 'converse-warm', 'ignite']),
+      poses: Array.from({ length: 8 }, (_, index): AnimationPose => {
+        const beat = index / 8 * Math.PI * 2;
+        const sway = Math.sin(beat);
+        return { ...emptyPose(), name: `dance-step-${index}`, duration: 0.24,
+          pelvisRotation: sway * 0.22, spineRotation: 0.035, spineRoll: sway * 0.09,
+          headRotation: -sway * 0.16,
+          leftShoulderRotation: 0.85 + Math.cos(beat) * 0.48,
+          rightShoulderRotation: 0.85 - Math.cos(beat) * 0.48,
+          leftElbowRotation: 0.75 + sway * 0.25, rightElbowRotation: 0.75 - sway * 0.25,
+          leftHipRotation: Math.max(0, sway) * 0.32, rightHipRotation: Math.max(0, -sway) * 0.32,
+          leftKneeRotation: 0.12 + Math.max(0, sway) * 0.5,
+          rightKneeRotation: 0.12 + Math.max(0, -sway) * 0.5,
+          positionOffset: { x: 0, y: -0.015 + Math.sin(beat * 2) * 0.022, z: 0 } };
+      }),
+    });
   }
 
   private createIdleClips(): void {
@@ -1188,7 +1207,7 @@ export class AnimationController {
     const out = copyPose(base, this.humanBuffer);
     const speed = state.gaitSpeed;
     const elderly = state.ageMonths > 816;
-    if (speed > 0) {
+    if (speed > 0 && state.currentState !== 'dance') {
       const running = state.currentState === 'run';
       const amplitude = Math.min(1, speed / 0.24) * (elderly ? 0.27 : running ? 0.55 : 0.36);
       const stride = Math.sin(state.stridePhase) * amplitude;
@@ -1210,7 +1229,7 @@ export class AnimationController {
       out.positionOffset.y = 0.45 * (Math.cos(stride) - 1);
     } else {
       // After the frozen stride settles, stationary activities own the legs again.
-      if (state.currentState !== 'rest') {
+      if (state.currentState !== 'rest' && state.currentState !== 'dance') {
         out.leftHipRotation = 0; out.rightHipRotation = 0;
       }
       if (state.currentState === 'rest') {

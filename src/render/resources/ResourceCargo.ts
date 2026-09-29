@@ -1,18 +1,22 @@
 import * as THREE from 'three';
 import type { FreightTrip } from '../../sim/transport/types';
-import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
+import { resourceBundleGeometry, resourceLogGeometry, resourceToolHeadGeometry } from './ResourceWorkGeometry';
 import { storedMaterialColour } from './ResourceFlowPresentation';
 import { isMinedMaterial, mineralCargoGeometry, mineralVisualProfile } from './MineralPresentation';
 
 /** Attached to the existing authoritative vehicle; never advances a route or invents freight. */
 export function createResourceCargo(trip: FreightTrip): THREE.InstancedMesh | undefined {
-  const id = trip.materialId ?? trip.material;
+  const id = trip.materialId ?? trip.material ?? trip.resource;
   if (!id || !Number.isFinite(trip.quantity) || trip.quantity <= 0) return undefined;
   const timber = id === 'timber';
   const plant = /fiber|flora|herb/.test(id);
   const mineral = isMinedMaterial(id);
   const mineralProfile = mineral ? mineralVisualProfile(id) : undefined;
-  const geometry = timber ? resourceLogGeometry() : plant ? resourceBundleGeometry()
+  const geometry = id === 'pottery'
+    ? new THREE.LatheGeometry([new THREE.Vector2(0.045, 0), new THREE.Vector2(0.08, 0.04), new THREE.Vector2(0.075, 0.1), new THREE.Vector2(0.04, 0.14), new THREE.Vector2(0.045, 0.15)], 8)
+    : id === 'iron-tools' ? resourceToolHeadGeometry()
+    : id === 'textile' ? resourceBundleGeometry()
+    : id === 'food' || /grain|rice|wheat/.test(id) ? new THREE.SphereGeometry(0.09, 6, 4) : timber ? resourceLogGeometry() : plant ? resourceBundleGeometry()
     : mineral ? mineralCargoGeometry(id) : new THREE.BoxGeometry(0.19, 0.055, 0.12);
   const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshStandardMaterial({
     color: timber ? '#ffffff' : mineralProfile?.baseColour ?? storedMaterialColour(id),

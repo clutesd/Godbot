@@ -1,3 +1,4 @@
+import { acquireProposal } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import {
   chooseFoundingChapterScene,
@@ -76,7 +77,7 @@ describe('Founding Chapter 1a', () => {
     expect(ready.phase).toBe('ready');
     expect(ready.totalBeats).toBe(1);
 
-    const scene = chooseFoundingChapterScene(historian, simulation.state);
+    const scene = acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state));
     expect(scene).toBeDefined();
     expect(scene?.title).toBe(`ARRIVAL DAY · THE ${baseline?.expectedCommunityCount} LANDINGS`);
     expect(scene?.event?.type).toBe('ARRIVAL_DAY');
@@ -88,18 +89,18 @@ describe('Founding Chapter 1a', () => {
 
     expect(historian.statements).toHaveLength(1);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('does not replay the Month-Zero overview after authoritative time advances', () => {
     const simulation = completedArrival('founding-chapter-continuity');
     const historian = new Historian(simulation.config);
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeDefined();
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
     expect(simulation.beginHistory()).toBe(true);
     simulation.step(6);
     expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('does not replay the Year-Zero orientation on a newly created Historian after history begins', () => {
@@ -109,25 +110,25 @@ describe('Founding Chapter 1a', () => {
     // This is the narrow resume seam that previously recreated a ready opening at Month 0.
     const monthZeroHistorian = new Historian(simulation.config);
     expect(foundingChapterProgress(monthZeroHistorian, simulation.state).phase).toBe('complete');
-    expect(chooseFoundingChapterScene(monthZeroHistorian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(monthZeroHistorian, simulation.state, chooseFoundingChapterScene(monthZeroHistorian, simulation.state))).toBeUndefined();
 
     simulation.step(1);
     const laterHistorian = new Historian(simulation.config);
     expect(foundingChapterProgress(laterHistorian, simulation.state).phase).toBe('complete');
-    expect(chooseFoundingChapterScene(laterHistorian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(laterHistorian, simulation.state, chooseFoundingChapterScene(laterHistorian, simulation.state))).toBeUndefined();
   });
 
   it('restores a completed orientation cursor from archived Day-0 statements', () => {
     const simulation = completedArrival('founding-chapter-restore-cursor');
     const firstHistorian = new Historian(simulation.config);
-    expect(chooseFoundingChapterScene(firstHistorian, simulation.state)).toBeDefined();
+    expect(acquireProposal(firstHistorian, simulation.state, chooseFoundingChapterScene(firstHistorian, simulation.state))).toBeDefined();
     const archived = [...firstHistorian.statements];
 
     const resumedHistorian = new Historian(simulation.config);
     expect(foundingChapterProgress(resumedHistorian, simulation.state).phase).toBe('ready');
     restoreFoundingChapterProgress(resumedHistorian, simulation.state, archived);
     expect(foundingChapterProgress(resumedHistorian, simulation.state).phase).toBe('complete');
-    expect(chooseFoundingChapterScene(resumedHistorian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(resumedHistorian, simulation.state, chooseFoundingChapterScene(resumedHistorian, simulation.state))).toBeUndefined();
   });
 
   it('keeps the single overview grounded even if one founding settlement is unavailable', () => {
@@ -143,7 +144,7 @@ describe('Founding Chapter 1a', () => {
     const reconstructed = foundingChapterBaseline(simulation.state);
     expect(reconstructed?.communities.some(community => community.settlementId === missing.settlementId)).toBe(true);
 
-    const overview = chooseFoundingChapterScene(historian, simulation.state);
+    const overview = acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state));
     expect(overview).toBeDefined();
     expect(overview?.id).toContain('founding:overview:');
     expect(overview && historian.validateStatement(overview.statement, simulation.state)).toBe(true);

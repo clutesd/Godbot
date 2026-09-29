@@ -30,13 +30,13 @@ export class FoundingPodRenderer {
   private readonly effectSphere = new THREE.Sphere();
   private readonly trailTail = new THREE.Vector3();
   private readonly hullMaterial = new THREE.MeshStandardMaterial({
-    color: '#88714e', roughness: 0.47, metalness: 0.76, vertexColors: true,
+    color: '#d1c4a5', roughness: 0.58, metalness: 0.38, vertexColors: true,
   });
   private readonly shieldMaterial = new THREE.MeshStandardMaterial({
-    color: '#293d3b', roughness: 0.86, metalness: 0.32,
+    color: '#374c50', roughness: 0.68, metalness: 0.3,
   });
   private readonly collarMaterial = new THREE.MeshStandardMaterial({
-    color: '#a88b55', roughness: 0.57, metalness: 0.72,
+    color: '#b6a177', roughness: 0.42, metalness: 0.55,
   });
   private readonly hullGeometry = this.relicShell();
 
@@ -44,10 +44,10 @@ export class FoundingPodRenderer {
   private relicShell(): THREE.BufferGeometry {
     const geometry = new THREE.LatheGeometry([
       new THREE.Vector2(0.78, -0.85), new THREE.Vector2(0.88, -0.65),
-      new THREE.Vector2(0.76, -0.38), new THREE.Vector2(0.58, 0.48),
+      new THREE.Vector2(0.76, -0.38), new THREE.Vector2(0.664, 0.08), new THREE.Vector2(0.58, 0.48),
       new THREE.Vector2(0.48, 0.72), new THREE.Vector2(0.32, 0.91),
       new THREE.Vector2(0.26, 1.02),
-    ], 10).toNonIndexed();
+    ], 40).toNonIndexed();
     // A real opening, not a door painted over a solid hull. Remove only the front lower panels.
     const source = geometry.getAttribute('position');
     const panels: number[] = [];
@@ -64,16 +64,20 @@ export class FoundingPodRenderer {
     const positions = geometry.getAttribute('position');
     const colors: number[] = [];
     for (let i = 0; i < positions.count; i += 3) {
-      const weather = (Math.sin(i * 12.9898 + 17.2) * 43758.5453) % 1;
-      const color = new THREE.Color(weather > 0.35 ? '#688a77' : '#c1ad88');
-      color.multiplyScalar(0.7 + Math.abs(weather) * 0.3);
+      // Panel-wide patina, not unrelated dark triangles across the hull.
+      const x = (positions.getX(i) + positions.getX(i + 1) + positions.getX(i + 2)) / 3;
+      const z = (positions.getZ(i) + positions.getZ(i + 1) + positions.getZ(i + 2)) / 3;
+      const y = (positions.getY(i) + positions.getY(i + 1) + positions.getY(i + 2)) / 3;
+      const panel = Math.floor((Math.atan2(x, z) + Math.PI) / (Math.PI / 5));
+      const color = new THREE.Color('#ffffff').lerp(new THREE.Color('#78988c'),
+        0.08 + (panel % 3) * 0.025 + Math.max(0, -y - 0.35) * 0.28);
       for (let j = 0; j < 3; j++) colors.push(color.r, color.g, color.b);
     }
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     return geometry;
   }
-  private readonly shieldGeometry = new THREE.CylinderGeometry(0.95, 0.69, 0.3, 10);
-  private readonly bandGeometry = new THREE.TorusGeometry(0.73, 0.028, 5, 20);
+  private readonly shieldGeometry = new THREE.CylinderGeometry(0.9, 0.74, 0.22, 40);
+  private readonly bandGeometry = new THREE.TorusGeometry(0.728, 0.012, 8, 64);
   private readonly hatchGeometry = new THREE.BoxGeometry(0.62, ARRIVAL_HATCH.length, 0.05);
   private readonly runeStrokeGeometry = new THREE.BoxGeometry(0.016, 0.24, 0.012);
 
@@ -107,23 +111,20 @@ export class FoundingPodRenderer {
     const place = (geometry: THREE.BufferGeometry, bucket: THREE.BufferGeometry[],
       x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): void => {
       const matrix = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z),
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)), new THREE.Vector3(1, 1, 1));
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz, 'YXZ')), new THREE.Vector3(1, 1, 1));
       const flat = geometry.index ? geometry.toNonIndexed() : geometry.clone();
       flat.applyMatrix4(matrix); bucket.push(flat); geometry.dispose();
     };
     for (const [y, radius, thickness] of [[-0.83, 0.87, 0.055], [-0.62, 0.9, 0.045],
       [0.49, 0.59, 0.038], [0.74, 0.48, 0.035], [1.05, 0.3, 0.035]] as const) {
-      place(new THREE.TorusGeometry(radius, thickness, 4, 10), bronze, 0, y, 0, Math.PI / 2);
+      place(new THREE.TorusGeometry(radius, thickness * 0.6, 8, 40), bronze, 0, y, 0, Math.PI / 2);
     }
     for (let i = 0; i < 10; i++) {
       const angle = i * Math.PI * 2 / 10;
-      // Raised structural ribs frame the narrow inscription tablets.
-      place(new THREE.BoxGeometry(0.065, 1.28, 0.08), bronze,
-        Math.sin(angle) * 0.73, -0.06, Math.cos(angle) * 0.73,
-        -0.23 * Math.cos(angle), angle, 0.23 * Math.sin(angle));
-      place(new THREE.BoxGeometry(0.17, 0.42, 0.12), stone,
-        Math.sin(angle) * 0.34, 1.1 + (i % 2) * 0.09, Math.cos(angle) * 0.34, 0, angle);
-      place(new THREE.OctahedronGeometry(0.075, 0), bronze,
+      // Slim meridian seams follow the taper; no oversized cage around the capsule.
+      if (Math.cos(angle) > -0.8) place(new THREE.BoxGeometry(0.024, 0.91, 0.028), bronze,
+        Math.sin(angle) * 0.675, 0.055, Math.cos(angle) * 0.675, -0.206, angle);
+      place(new THREE.CylinderGeometry(0.028, 0.028, 0.016, 8), bronze,
         Math.sin(angle) * 0.91, -0.61, Math.cos(angle) * 0.91);
       for (let mark = 0; mark < 3; mark++) {
         place(new THREE.BoxGeometry(0.022, 0.045 + mark * 0.014, 0.018), bronze,
@@ -133,12 +134,15 @@ export class FoundingPodRenderer {
     }
     for (let i = 0; i < 4; i++) {
       const angle = i * Math.PI / 2 + Math.PI / 4;
-      place(new THREE.BoxGeometry(0.18, 0.68, 0.25), stone,
-        Math.sin(angle) * 0.88, -0.72, Math.cos(angle) * 0.88,
-        -0.35 * Math.cos(angle), angle, 0.35 * Math.sin(angle));
-      place(new THREE.BoxGeometry(0.31, 0.12, 0.4), bronze,
-        Math.sin(angle), -1.035, Math.cos(angle), 0, angle);
+      place(new THREE.CylinderGeometry(0.065, 0.08, 0.48, 10), stone,
+        Math.sin(angle) * 0.9, -0.78, Math.cos(angle) * 0.9, -0.48, angle);
+      place(new THREE.CylinderGeometry(0.034, 0.034, 0.3, 10), bronze,
+        Math.sin(angle) * 0.99, -0.92, Math.cos(angle) * 0.99, -0.48, angle);
+      place(new THREE.CylinderGeometry(0.19, 0.22, 0.07, 12), stone,
+        Math.sin(angle) * 1.04, -1.055, Math.cos(angle) * 1.04);
     }
+    place(new THREE.CylinderGeometry(0.23, 0.31, 0.11, 32), stone, 0, 1.04, 0);
+    place(new THREE.SphereGeometry(0.235, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), bronze, 0, 1.095, 0);
     for (const [parts, material, name] of [
       [bronze, this.collarMaterial, 'relic-bronze-ribs'],
       [stone, this.shieldMaterial, 'relic-crown-and-buttresses'],
@@ -148,10 +152,10 @@ export class FoundingPodRenderer {
       hull.add(mesh); parts.forEach(part => part.dispose());
     }
     const heart = new THREE.Mesh(new THREE.OctahedronGeometry(0.19), light);
-    heart.name = 'sealed-crown-heart'; heart.position.y = 1.14; heart.scale.y = 1.45;
+    heart.name = 'sealed-crown-heart'; heart.position.y = 1.28; heart.scale.set(0.35, 0.22, 0.35);
     hull.add(heart);
     const seal = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.023, 4, 10), this.collarMaterial);
-    seal.name = 'crown-astrolabe'; seal.position.y = 1.16; seal.rotation.x = 0.35;
+    seal.name = 'crown-astrolabe'; seal.position.y = 1.105; seal.rotation.x = Math.PI / 2;
     hull.add(seal);
     const hatch = new THREE.Group();
     hatch.position.set(0, ARRIVAL_HATCH.sill - 1.1, ARRIVAL_HATCH.z);
@@ -159,6 +163,18 @@ export class FoundingPodRenderer {
     door.name = 'dark-bronze-hatch';
     door.position.y = ARRIVAL_HATCH.length / 2;
     hatch.add(door);
+    // Inset walking surface and non-slip transverse treads move with the actual hatch hinge.
+    const treadParts: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 7; i++) place(new THREE.BoxGeometry(0.49, 0.016, 0.016), treadParts,
+      0, 0.09 + i * (ARRIVAL_HATCH.length - 0.18) / 6, 0.034);
+    const treads = new THREE.Mesh(mergeGeometries(treadParts)!, this.collarMaterial);
+    treads.name = 'hatch-non-slip-treads'; hatch.add(treads); treadParts.forEach(g => g.dispose());
+    for (const side of [-1, 1]) {
+      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.82, 0.07), this.collarMaterial);
+      jamb.position.set(side * 0.34, -0.34, -0.65); jamb.name = 'hatch-pressure-frame'; hull.add(jamb);
+      const guide = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.48, 0.014), light);
+      guide.position.set(side * 0.305, -0.34, -0.69); guide.name = 'hatch-guide-light'; hull.add(guide);
+    }
     hull.add(hatch);
     const interior = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.82), new THREE.MeshBasicMaterial({ color: '#101a19', side: THREE.DoubleSide }));
     interior.name = 'open-hatch-interior';
@@ -242,15 +258,18 @@ export class FoundingPodRenderer {
     // them feel like one old written system while the site color makes each vessel culturally legible.
     for (let face = 0; face < 10; face++) {
       const angle = (face + 0.5) * Math.PI * 2 / 10;
+      // Leave the hatch corridor clear of inscription panels.
+      if (Math.sin(angle) < -0.8) continue;
       const y = -0.03;
       const taper = THREE.MathUtils.clamp((y + 0.825) / 1.65, 0, 1);
       const radius = THREE.MathUtils.lerp(0.92, 0.48, taper) - 0.015;
       const glyph = new THREE.Group();
       glyph.name = `rune-${face + 1}`;
       glyph.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+      glyph.rotation.order = 'YXZ';
       glyph.rotation.y = Math.PI / 2 - angle;
       glyph.rotation.x = -0.206;
-      const tablet = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.66, 0.045), this.shieldMaterial);
+      const tablet = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.6, 0.025), this.shieldMaterial);
       tablet.name = 'recessed-inscription-tablet';
       tablet.position.z = -0.014; glyph.add(tablet);
 

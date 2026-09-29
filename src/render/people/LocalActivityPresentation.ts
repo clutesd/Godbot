@@ -5,6 +5,7 @@ import { resourceVisualUnit as unit } from '../../sim/resources/ResourceWorkPres
 import { atInteraction, facingTarget } from './PhysicalActionPresentation';
 import { conversationPodCenter, conversationPodFor, type GroupPlacement, type SocialGroup, type SocialPod } from './PeoplePresentation';
 import type { PersonVisualState } from './PeopleVisualState';
+import type { IndoorSleepingArea } from './IndoorSleepingArea';
 import { planRestSpot, type RestSpotPresentation, type RestSupportFootprint } from './RestPresentation';
 import { restPreferenceFor, restTransitionSeconds, type RestStage } from './RestChoreography';
 import { socialGreetingFor, SOCIAL_GREETING_DISTANCE, SOCIAL_GREETING_SECONDS, type SocialGreeting } from './SocialGesturePresentation';
@@ -42,6 +43,7 @@ const MUTUAL_YIELD_RADIUS = 0.95;
 const MUTUAL_YIELD_SECONDS = 0.58;
 export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
+  sleepingArea?: IndoorSleepingArea;
 }
 export interface LocalActivityContext {
   base: GroupPlacement;

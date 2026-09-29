@@ -43,7 +43,7 @@ export type ArrivalSequenceBeat = 'pristine' | 'fleet' | 'descent' | 'touchdown'
 
 export interface ArrivalSequenceFocus {
   readonly beat: ArrivalSequenceBeat;
-  /** A geographic edit, not a flight across the intervening forest. */
+  /** Beat identity for telemetry; a new ID never implies a camera cut. */
   readonly shotId: string;
   readonly target: Readonly<{ x: number; y: number; z: number }>;
   readonly radius: number;
@@ -141,9 +141,6 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
   const firstSteps = touchdown + 3;
   // The hero's last passengers have left the ramp before the film acknowledges other groups.
   const disembarked = touchdown + 1.5 + hero.population / 5 + 3.5;
-  const others = arrival.pods.slice(1);
-  const insertDuration = 1.5;
-  const insertEnd = disembarked + others.length * insertDuration;
 
   const opening = openingWorldComposition(hero);
   if (t < hero.entrySeconds) {
@@ -172,22 +169,12 @@ export function arrivalSequenceFocus(arrival: FoundingArrivalState): ArrivalSequ
     const height = t < touchdown ? lerp(4, 1.7, descent) : lerp(1.7, 0.92, intimacy);
     const wideCamera = { x: hero.position.x + radius * 0.48, y: target.y + height, z: hero.position.z - radius };
     return { beat: t < touchdown ? 'descent' : t < touchdown + 0.8 ? 'touchdown' : t < firstSteps ? 'doorway' : 'first-steps',
-      shotId: 'hero', target, cameraPosition: t < touchdown ? wideCamera : mixPoint(wideCamera, composition.closeCamera, intimacy),
+      shotId: 'hero', target, cameraPosition: t < touchdown ? mixPoint(opening.camera, wideCamera, descent) : mixPoint(wideCamera, composition.closeCamera, intimacy),
       radius, height, transitionSeconds: t < touchdown ? 0.65 : 0.45, azimuthOffset: 0, fov: lerp(36, 32, intimacy), siteIndex: 0 };
   }
 
-  if (t < insertEnd && others.length) {
-    const index = Math.min(others.length - 1, Math.floor((t - disembarked) / insertDuration));
-    const pod = others[index]!;
-    const shotAge = (t - disembarked) - index * insertDuration;
-    const composition = foundingSiteComposition(pod, index + 1);
-    // Each insert retains vessel, ramp and people together. No connecting aerial is needed.
-    return { beat: 'site-flythrough', shotId: `landing:${pod.id}`, target: { ...composition.target, y: pod.groundY + 0.55, z: pod.position.z - 0.65 },
-      cameraPosition: { x: pod.position.x + 2.1 - shotAge * 0.08, y: pod.groundY + 1.8, z: pod.position.z - 4.1 },
-      radius: 4.3, height: 1.8, transitionSeconds: 0.4, azimuthOffset: 0, fov: 38, siteIndex: index + 1 };
-  }
 
   const composition = foundingSiteComposition(hero, 0);
-  return { beat: 'handoff', shotId: 'handoff', target: composition.target, cameraPosition: composition.closeCamera,
+  return { beat: 'handoff', shotId: 'hero', target: composition.target, cameraPosition: composition.closeCamera,
     radius: 1.85, height: 0.92, transitionSeconds: 0.5, azimuthOffset: 0, fov: 32, siteIndex: 0 };
 }

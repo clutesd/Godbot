@@ -1,7 +1,7 @@
 export function footerMarkup(): string {
   return `
     <footer class="runline">
-      <button class="audio-toggle" id="restart" type="button">RESTART</button>
+      <button class="audio-toggle" id="restart" type="button" aria-label="Restart observation" title="Begin a new world · use /restart seed to replay this world">RESTART</button>
       <span id="observation">OBSERVATION 01</span>
       <button class="audio-toggle pulse" id="camera-mode-toggle" type="button" aria-pressed="true" aria-label="Switch to manual camera control" title="Switch to manual camera control"><i></i> AUTONOMOUS</button>
       <span id="seed">SEED &middot; -</span>
@@ -41,7 +41,7 @@ export function syncRestartToggle(button: HTMLButtonElement, restarting: boolean
     button.removeAttribute('aria-busy');
     button.setAttribute('aria-label', 'Restart observation');
   }
-  button.title = restarting ? 'Restarting observation' : 'Restart observation';
+  button.title = restarting ? 'Restarting observation' : 'Begin a new world · use /restart seed to replay this world';
 }
 
 export function showCameraArchived(button: HTMLButtonElement, world: HTMLElement): void {

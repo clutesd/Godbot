@@ -487,13 +487,9 @@ export function installFoundingCharacterMemory(): void {
     return pool;
   };
 
-  const chooseScene = Historian.prototype.chooseScene;
-  Historian.prototype.chooseScene = function characterMemoryChooseScene(
-    this: Historian,
-    state: SimulationState,
-    focusEventId?: string,
-  ): ObservationCandidate {
-    const scene = chooseScene.call(this, state, focusEventId);
-    return observeFoundingCharacterScene(this, state, scene);
+  const acquireScene = Historian.prototype.acquireScene;
+  Historian.prototype.acquireScene = function characterMemoryAcquireScene(scene, state): void {
+    observeFoundingCharacterScene(this, state, scene);
+    acquireScene.call(this, scene, state);
   };
 }

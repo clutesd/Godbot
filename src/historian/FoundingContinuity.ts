@@ -222,7 +222,6 @@ function changeFacts(snapshot: FoundingCommunitySnapshot, community: FoundingCom
 
 function rememberStatement(historian: Historian, scene: ObservationCandidate, state: SimulationState): ObservationCandidate | undefined {
   if (!historian.validateStatement(scene.statement, state)) return undefined;
-  if (!historian.statements.some(statement => statement.id === scene.statement.id)) historian.statements.push(scene.statement);
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return scene;
 }
@@ -337,12 +336,14 @@ export function chooseFoundingContinuityScene(historian: Historian, state: Simul
     memory = memoryFor(historian);
   }
   if (!memory.bridgeShown) {
-    memory.bridgeShown = true;
     // The real browser handoff commits Month 1 before the camera asks for its next scene. Let the
     // bridge own that first live month instead of silently skipping the documentary handoff.
     if (state.month <= baseline.eventMonth + 1) {
       const bridge = bridgeScene(historian, state, baseline);
-      if (bridge) pacedStates.add(state);
+      if (bridge) {
+        historian.whenAcquired(bridge.id, () => { memory.bridgeShown = true; });
+        pacedStates.add(state);
+      }
       return bridge;
     }
   }
@@ -357,8 +358,10 @@ export function chooseFoundingContinuityScene(historian: Historian, state: Simul
   for (const community of unvisited.sort((a, b) => a.order - b.order)) {
     const scene = communityScene(historian, state, baseline, community);
     if (!scene) continue;
-    memory.visitedSettlementIds.add(community.settlementId);
-    memory.lastVisitMonth = state.month;
+    historian.whenAcquired(scene.id, () => {
+      memory.visitedSettlementIds.add(community.settlementId);
+      memory.lastVisitMonth = state.month;
+    });
     pacedStates.add(state);
     return scene;
   }

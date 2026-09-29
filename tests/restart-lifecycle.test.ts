@@ -2,6 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { performAtomicRestart } from '../src/ui/RestartLifecycle';
 
 describe('atomic browser restart lifecycle', () => {
+  it('keeps the old scene alive until the transition has covered it', async () => {
+    const order: string[] = [];
+    let finishCover!: () => void;
+    const covering = new Promise<void>(resolve => { finishCover = resolve; });
+    const restart = performAtomicRestart({
+      seed: 'covered-world', coverCurrent: () => covering,
+      retireCurrent: () => { order.push('retire'); },
+      beginFresh: async () => { order.push('fresh'); },
+      setBusy: busy => { order.push(busy ? 'busy' : 'ready'); }, onFailure: vi.fn(),
+    });
+    expect(order).toEqual(['busy']);
+    finishCover(); await restart;
+    expect(order).toEqual(['busy', 'retire', 'fresh', 'ready']);
+  });
   it('retires the old observation before constructing the fresh Arrival world', async () => {
     const order: string[] = [];
     const busy: boolean[] = [];

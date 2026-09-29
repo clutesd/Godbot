@@ -168,7 +168,6 @@ export function foundingYearOneSnapshot(state: SimulationState): FoundingYearOne
 
 function rememberStatement(historian: Historian, scene: ObservationCandidate, state: SimulationState): ObservationCandidate | undefined {
   if (!historian.validateStatement(scene.statement, state)) return undefined;
-  if (!historian.statements.some(statement => statement.id === scene.statement.id)) historian.statements.push(scene.statement);
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return scene;
 }
@@ -409,8 +408,10 @@ export function chooseFoundingYearOneScene(historian: Historian, state: Simulati
     : beat === 1
       ? divergenceScene(historian, state, memory.baseline, memory.snapshot)
       : unresolvedScene(historian, state, memory.baseline, memory.snapshot);
-  memory.nextBeat += 1;
-  if (memory.nextBeat >= 3) memory.complete = true;
+  if (scene) historian.whenAcquired(scene.id, () => {
+    memory.nextBeat = beat + 1;
+    if (memory.nextBeat >= 3) memory.complete = true;
+  });
   if (!scene) {
     if (memory.complete) releasePayoff(historian, state);
     return undefined;

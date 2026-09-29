@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { conformGroundGeometry, renderedGroundSampler } from '../terrain/ConformingGround';
 import { farmGeometries, farmGeometry, farmPoint, type FarmGeometry } from '../../shared/FarmGeometry';
 import type { SimulationState } from '../../sim/types';
 import { farmPresentationState, type FarmPresentationState, type FarmStage } from './FarmActionPresentation';
@@ -109,6 +110,7 @@ export class FarmFieldRenderer {
   }
 
   update(state: SimulationState, heightAt: (x: number, z: number) => number, standable: (x: number, z: number) => boolean): void {
+    heightAt = renderedGroundSampler(state.world.terrain, heightAt);
     this.fields.clear();
     this.renderedFields.clear();
     const surfaces = {
@@ -264,13 +266,13 @@ export class FarmFieldRenderer {
       }
     }
 
-    this.finishSurface(this.soil, surfaces.soil);
-    this.finishSurface(this.furrows, surfaces.furrows);
-    this.finishSurface(this.moisture, surfaces.moisture);
+    this.finishSurface(this.soil, surfaces.soil, state, heightAt);
+    this.finishSurface(this.furrows, surfaces.furrows, state, heightAt);
+    this.finishSurface(this.moisture, surfaces.moisture, state, heightAt);
     this.finish(this.stems, counts.stems);
     this.finish(this.leaves, counts.leaves);
     this.finish(this.heads, counts.heads);
-    this.finishSurface(this.borders, surfaces.borders);
+    this.finishSurface(this.borders, surfaces.borders, state, heightAt);
     this.finish(this.bundles, counts.bundles);
     this.finish(this.sacks, counts.sacks);
     this.finish(this.markers, counts.markers);
@@ -286,9 +288,11 @@ export class FarmFieldRenderer {
     return mesh;
   }
 
-  private finishSurface(mesh: THREE.Mesh, batch: DrapedSurfaceBatch): void {
+  private finishSurface(mesh: THREE.Mesh, batch: DrapedSurfaceBatch, state: SimulationState, heightAt: (x: number, z: number) => number): void {
     const previous = mesh.geometry;
-    mesh.geometry = batch.build();
+    const source = batch.build();
+    mesh.geometry = conformGroundGeometry(source, state.world.terrain, heightAt);
+    source.dispose();
     mesh.visible = batch.triangleCount > 0;
     previous.dispose();
   }

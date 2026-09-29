@@ -1,3 +1,4 @@
+import { acquireProposal } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import {
   chooseFoundingChapterScene,
@@ -34,12 +35,12 @@ function completeOrientation(simulation: Simulation, historian: Historian): void
   if (!baseline) throw new Error('Expected founding baseline');
   let safety = baseline.communities.length + 2;
   while (foundingChapterProgress(historian, simulation.state).phase !== 'complete' && safety > 0) {
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeDefined();
     safety -= 1;
   }
   expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
   // The next lookup releases the Month-Zero presentation hold after the final shot has finished.
-  expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
+  expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeUndefined();
 }
 
 describe('Founding Chapter 1b continuity', () => {
@@ -48,7 +49,7 @@ describe('Founding Chapter 1b continuity', () => {
     const historian = new Historian(simulation.config);
     completeOrientation(simulation, historian);
 
-    const bridge = chooseFoundingContinuityScene(historian, simulation.state);
+    const bridge = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(bridge?.id).toContain('founding-continuity:bridge');
     expect(bridge?.title).toBe('THE FIRST DAYS');
     expect(bridge?.statement.text).toContain('The vessels are quiet now.');
@@ -63,7 +64,7 @@ describe('Founding Chapter 1b continuity', () => {
     completeOrientation(simulation, historian);
     simulation.step(1);
 
-    const bridge = chooseFoundingContinuityScene(historian, simulation.state);
+    const bridge = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(simulation.state.month).toBe(1);
     expect(bridge?.id).toContain('founding-continuity:bridge');
     expect(bridge?.title).toBe('THE FIRST DAYS');
@@ -76,12 +77,12 @@ describe('Founding Chapter 1b continuity', () => {
     const baseline = foundingChapterBaseline(simulation.state);
     if (!baseline) throw new Error('Expected founding baseline');
     completeOrientation(simulation, historian);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))).toBeDefined();
 
     const scenes = [];
     for (const community of baseline.communities) {
       simulation.step(2);
-      const scene = chooseFoundingContinuityScene(historian, simulation.state);
+      const scene = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
       expect(scene).toBeDefined();
       if (scene) scenes.push(scene);
       expect(scene?.subjectId).toBe(community.settlementId);
@@ -94,25 +95,25 @@ describe('Founding Chapter 1b continuity', () => {
 
     expect(scenes).toHaveLength(baseline.communities.length);
     expect(foundingContinuityProgress(historian, simulation.state).complete).toBe(true);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('never turns first-year continuity into another same-month carousel', () => {
     const simulation = completedArrival('founding-continuity-month-spacing');
     const historian = new Historian(simulation.config);
     completeOrientation(simulation, historian);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)?.id).toContain('founding-continuity:bridge');
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))?.id).toContain('founding-continuity:bridge');
 
     simulation.step(1);
-    const first = chooseFoundingContinuityScene(historian, simulation.state);
+    const first = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(first?.id).toContain('founding-continuity:community');
     expect(first?.statement.month).toBe(1);
 
     // A second camera selection in the same authoritative month must fall through to ordinary history.
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))).toBeUndefined();
 
     simulation.step(1);
-    const second = chooseFoundingContinuityScene(historian, simulation.state);
+    const second = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(second?.id).toContain('founding-continuity:community');
     expect(second?.statement.month).toBe(2);
     expect(second?.subjectId).not.toBe(first?.subjectId);
@@ -125,7 +126,7 @@ describe('Founding Chapter 1b continuity', () => {
     const community = baseline?.communities[0];
     if (!baseline || !community) throw new Error('Expected founding community');
     completeOrientation(simulation, historian);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))).toBeDefined();
 
     const settlement = simulation.state.settlements.find(candidate => candidate.id === community.settlementId);
     if (!settlement) throw new Error('Expected founding settlement');
@@ -137,7 +138,7 @@ describe('Founding Chapter 1b continuity', () => {
     settlement.resources.food = community.supplies.food * 0.55;
     settlement.localMaterials['timber'] = community.supplies.timber * 2;
 
-    const scene = chooseFoundingContinuityScene(historian, simulation.state);
+    const scene = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(scene?.subjectId).toBe(community.settlementId);
     expect(scene?.statement.text).toContain('permanent structure');
     expect(scene?.statement.text).toMatch(/Food stores have fallen|Timber stores have risen/);
@@ -165,25 +166,25 @@ describe('Founding Chapter 1b continuity', () => {
     simulation.step(6);
     const historian = new Historian(simulation.config);
 
-    const scene = chooseFoundingContinuityScene(historian, simulation.state);
+    const scene = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     const baseline = foundingChapterBaseline(simulation.state);
     expect(scene?.id).toContain('founding-continuity:community');
     expect(scene?.subjectId).toBe(baseline?.communities[0]?.settlementId);
-    expect(foundingContinuityProgress(historian, simulation.state).bridgeShown).toBe(true);
+    expect(foundingContinuityProgress(historian, simulation.state).bridgeShown).toBe(false);
   });
 
   it('does not start a fresh first-year chapter after the primary window has passed', () => {
     const simulation = completedArrival('founding-continuity-late-resume');
     simulation.step(FOUNDING_CONTINUITY_PRIMARY_END_MONTH + 1);
     const historian = new Historian(simulation.config);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('expires the special continuity layer after its interruption grace window', () => {
     const simulation = completedArrival('founding-continuity-expiry');
     simulation.step(FOUNDING_CONTINUITY_GRACE_END_MONTH + 1);
     const historian = new Historian(simulation.config);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('uses a deliberate first-year pace after the frozen opening hands off authority', () => {
@@ -204,7 +205,7 @@ describe('Founding Chapter 1b continuity', () => {
     installFoundingContinuityPacing();
     const presentation = new PresentationDirector(simulation.config);
 
-    const orientation = chooseFoundingChapterScene(historian, simulation.state);
+    const orientation = acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state));
     expect(orientation).toBeDefined();
     expect(simulation.config.autoRun).toBe(originalAutoRun);
     expect(simulation.state.month).toBe(0);
@@ -220,7 +221,7 @@ describe('Founding Chapter 1b continuity', () => {
     expect(simulation.beginHistory()).toBe(true);
     expect(simulation.historyRunning).toBe(true);
 
-    const bridge = chooseFoundingContinuityScene(historian, simulation.state);
+    const bridge = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(bridge).toBeDefined();
     expect(presentation.tickBudget(simulation.state)).toBeGreaterThan(0);
     const speed = presentation.targetSpeed(simulation.state, { kind: bridge!.kind, interest: bridge!.interest });

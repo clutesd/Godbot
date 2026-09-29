@@ -146,6 +146,7 @@ describe('typed transport capital', () => {
     aInventory.stock.stone = 0;
     bInventory.stock.stone = 0;
 
+    f.route.transport!.deliveries = 2;
     f.state.month = 1;
     f.system.advanceMonth();
     const segments = Object.values(f.state.transportation.segments);

@@ -134,9 +134,10 @@ export class RestPoseRenderer {
     const eased = smoothstep(state.blend);
     const transitionProgress = state.stage === 'rising' ? 1 - state.blend : state.blend;
     const transitionPulse = state.stage === 'settled' ? 0 : Math.sin(THREE.MathUtils.clamp(transitionProgress, 0, 1) * Math.PI);
-    const phase = restMotionPhase(personId, state.settledSeconds);
+    const sleeping = state.spot?.posture === 'sleep';
+    const phase = restMotionPhase(personId, state.settledSeconds * (sleeping ? 0.6 : 1));
     const breathing = state.stage === 'settled' ? Math.sin(phase) * 0.0035 : 0;
-    const attention = state.stage === 'settled'
+    const attention = !sleeping && state.stage === 'settled'
       ? restAttentionWindow(personId, state.settledSeconds) * THREE.MathUtils.clamp(attentionYaw, -0.62, 0.62)
       : 0;
     const ageLean = ageMonths >= 68 * 12 ? 0.018 : ageMonths < 14 * 12 ? -0.008 : 0;
@@ -238,6 +239,21 @@ export function restJointPlan(posture: RestPosture | undefined, blend: number,
   style?: RestStyle, stage: RestStage = 'settled', transitionPulse = 0,
   breathing = 0, attentionYaw = 0, ageLean = 0): RestJointPlan {
   const t = THREE.MathUtils.clamp(blend, 0, 1);
+  if (posture === 'sleep') {
+    // Recline as one body, with the head behind the pelvis and the feet forward on the mat.
+    const side: RestSidePlan = {
+      kneeX: 0.065, kneeY: 0.11, kneeZ: 0.215, ankleX: 0.065, ankleY: 0.075, ankleZ: 0.43,
+      elbowX: 0.14, elbowY: 0.11, elbowZ: -0.12, handX: 0.10, handY: 0.14, handZ: 0.055,
+    };
+    const standing: RestSidePlan = {
+      kneeX: 0.052, kneeY: 0.235, kneeZ: 0.012, ankleX: 0.049, ankleY: 0.02, ankleZ: 0.02,
+      elbowX: 0.12, elbowY: 0.52, elbowZ: 0, handX: 0.12, handY: 0.34, handZ: 0,
+    };
+    return { blend: t, bodyLift: t === 0 ? 0 : (-0.33 + breathing * 0.35) * t,
+      bodyPitch: t === 0 ? 0 : -Math.PI / 2 * t, bodyYaw: 0, bodyRoll: 0, headYaw: 0,
+      left: mixSide(standing, { ...side, handX: 0.07, handY: 0.15 + breathing, handZ: -0.015 }, t),
+      right: mixSide(standing, { ...side, kneeX: 0.073, kneeY: 0.12, handX: 0.12, handY: 0.105, handZ: 0.08 }, t) };
+  }
   const supported = posture === 'supported-sit';
   const resolvedStyle = style ?? (supported ? 'supported-knees' : 'ground-open');
   const bodyLiftTarget = supported ? -0.225 : -0.255;

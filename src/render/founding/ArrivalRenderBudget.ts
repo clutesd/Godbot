@@ -26,8 +26,7 @@ export function arrivalRenderPolicy(state: SimulationState): ArrivalRenderPolicy
     active,
     animateHumans: !active || humanSequence,
     refreshWorldPresentation: !active,
-    // The camera now visits all five sites at ground level. Refreshing vegetation LOD during the
-    // site tour prevents a beautiful low shot from inheriting the opening's single-site LOD.
+    // Refresh detail as the committed hero shot reaches the ground.
     refreshVegetationLod: !active || humanSequence,
     updateAmbientWorldEffects: !active,
   };

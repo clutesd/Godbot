@@ -96,7 +96,7 @@ describe('Arrival camera occlusion avoidance', () => {
       .toBeCloseTo(Math.hypot(authored.x - target.x, authored.z - target.z), 5);
   });
 
-  it('raises or changes side in dense forest and never returns a worse founding sightline', () => {
+  it('preserves the authored angle in dense forest because vegetation is camera-soft', () => {
     const simulation = new Simulation({ seed: 'arrival-dense-forest-camera', startingPopulation: 80 });
     for (const cell of simulation.state.world.cells) {
       cell.water = false;
@@ -113,7 +113,8 @@ describe('Arrival camera occlusion avoidance', () => {
 
     expect(before).toBeGreaterThan(0.1);
     expect(resolved.forestObstruction).toBeLessThanOrEqual(before);
-    expect(resolved.lift > 0 || resolved.angularCorrection !== 0).toBe(true);
+    expect(resolved.lift).toBe(0);
+    expect(resolved.angularCorrection).toBe(0);
   });
 });
 

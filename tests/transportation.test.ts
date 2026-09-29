@@ -1,3 +1,5 @@
+import { materialEconomy } from '../src/sim/resources/Inventory';
+import { freightVehicle, railReady } from '../src/sim/transport/FreightEconomy';
 import { describe, expect, it, vi } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import type { Settlement, TradeRoute, Vec2, WorldCell, WorldState } from '../src/sim/types';
@@ -277,9 +279,11 @@ function freightFixture() {
     settlement.prosperity = 0.8;
     settlement.buildings = 1;
     settlement.resources = { food: 100, wood: 100, minerals: 100, goods: i ? 0 : 200, wealth: 100 };
-    settlement.localMaterials = { timber: 100, stone: 100 };
+    settlement.localMaterials = { timber: 20, stone: 20, pottery: i ? 0 : 40 };
+    settlement.knowledge.records = {};
     settlement.materialEconomy = undefined;
   }
+  materialEconomy(b!).demand.pottery = 10;
   const route: TradeRoute = { id: 'freight-test', a: a!.id, b: b!.id, active: true, mode: 'land', volume: 1,
     ageMonths: 0, caravanProgress: 0, caravanDirection: 1, knowledgeFlow: 0, cumulativeKnowledge: 0 };
   const system = new TransportationSystem(state);
@@ -349,8 +353,10 @@ describe('Simulated construction and purposeful freight', () => {
     }
     const original = route.transport!.trip!;
     const originalMode = original.mode;
-    for (const town of [a, b]) { town.infrastructure.rail = 0.6; grant(town, 'rail-transport'); }
-    for (let month = state.month + 1; month < 300 && route.transport!.path?.mode !== 'rail'; month++) { state.month = month; system.advanceMonth(); }
+    for (const town of [a, b]) { town.infrastructure.rail = 0.6; town.infrastructure.workshops = 0.8; grant(town, 'rail-transport'); grant(town, 'iron-working'); grant(town, 'mechanical-power'); }
+    route.transport!.deliveries = 20; route.transport!.recentFreight = 200;
+    for (const town of [a, b]) { town.localMaterials.steel = 100; town.localMaterials.lumber = 100; }
+    for (let month = state.month + 1; month < 600 && route.transport!.path?.mode !== 'rail'; month++) { state.month = month; route.transport!.recentFreight = 100; system.advanceMonth(); }
     expect(route.transport!.path?.mode).toBe('rail');
     expect(original.mode).toBe(originalMode);
     expect(Object.values(state.transportation.stops).filter(s => s.kind === 'station').every(s => s.status === 'complete')).toBe(true);
@@ -366,11 +372,11 @@ describe('Simulated construction and purposeful freight', () => {
     expect(train.distance).toBe(0);
   });
 
-  it('waits for complete infrastructure and delivers reserved cargo only after arrival', () => {
+  it('uses early footpaths and delivers reserved catalog cargo only after arrival', () => {
     const { state, system, route, a, b } = freightFixture();
-    const initialGoods = b.resources.goods;
+    const initialGoods = b.localMaterials.pottery!;
     expect(system.advanceFreight(route, a, b)).toBeUndefined();
-    expect(route.transport?.trip).toBeUndefined();
+    expect(route.transport?.trip?.vehicle).toBe('basket');
     for (let month = 1; month < 180 && !route.transport?.trip; month++) {
       state.month = month;
       system.advanceMonth();
@@ -378,22 +384,26 @@ describe('Simulated construction and purposeful freight', () => {
     }
     const trip = route.transport!.trip!;
     expect(trip).toBeDefined();
-    expect(trip.reason).toBe('trade');
+    expect(trip.reason).toBe('scarcity-relief');
     expect(trip.origin).not.toBe(trip.destination);
-    expect(b.resources.goods).toBe(initialGoods);
+    expect(b.localMaterials.pottery).toBe(initialGoods);
     expect(trip.quantity).toBeGreaterThan(0);
-    expect(system.network.pathValid(trip.path)).toBe(true);
+    expect(trip.path.segmentIds).toHaveLength(0);
+    expect(new WalkabilityLayer(state.world).routeIsValid(trip.path.points)).toBe(true);
     const quantity = trip.quantity;
     let delivery;
     while (trip.status !== 'arrived') { state.month++; delivery = system.advanceFreight(route, a, b); }
     expect(delivery?.id).toBe(trip.id);
-    expect(b.resources.goods).toBeCloseTo(initialGoods + quantity * 0.96);
+    expect(b.localMaterials.pottery).toBeCloseTo(initialGoods + quantity * 0.96);
     expect(system.advanceFreight(route, a, b)).toBeUndefined();
     expect(route.transport!.nextDispatchMonth).toBeGreaterThan(state.month);
   });
 
   it('halts a vehicle on a disconnected network without changing mode or delivering cargo', () => {
     const { state, system, route, a, b } = freightFixture();
+    route.transport!.deliveries = 3;
+    grant(a, 'wheel-axle');
+    route.transport!.nextDispatchMonth = 160;
     for (let month = 1; month < 180 && !route.transport!.trip; month++) {
       state.month = month; system.advanceMonth(); system.advanceFreight(route, a, b);
     }
@@ -415,6 +425,8 @@ describe('Simulated construction and purposeful freight', () => {
     expect(route.transport!.path).toBeDefined();
     a.resources = { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 };
     b.resources = { ...a.resources };
+    a.localMaterials = {}; b.localMaterials = {};
+    materialEconomy(b).demand = {};
     system.advanceFreight(route, a, b);
     expect(route.transport!.trip).toBeUndefined();
   });
@@ -431,5 +443,105 @@ describe('Simulated construction and purposeful freight', () => {
     expect(b.route).toEqual(a.route);
     expect(b.a.resources).toEqual(a.a.resources);
     expect(b.b.resources).toEqual(a.b.resources);
+  });
+});
+
+describe('organic freight progression', () => {
+  it('does not infer advanced transport from time, wealth or raw knowledge scores', () => {
+    const { a, b, route } = freightFixture();
+    const path = { ...route.transport!.path!, segmentIds: ['completed-road'] };
+    a.resources.wealth = 100000;
+    route.transport!.deliveries = 50; route.transport!.recentFreight = 100;
+    grant(a, 'internal-combustion'); grant(a, 'rail-transport');
+    expect(freightVehicle(a, b, route, path, 10)).toBe('merchant');
+    expect(railReady(a, b, route)).toBe(false);
+    grant(a, 'wheel-axle'); grant(a, 'animal-husbandry');
+    expect(freightVehicle(a, b, route, path, 10)).toBe('caravan');
+    expect(freightVehicle(a, b, route, path, 0.5)).toBe('merchant');
+    grant(a, 'precision-manufacturing'); a.infrastructure.factories = 0.8;
+    a.infrastructure.roads = b.infrastructure.roads = 0.8;
+    materialEconomy(a).energySupplied = 2; a.localMaterials.charcoal = 1; a.localMaterials.steel = 1;
+    expect(freightVehicle(a, b, route, path, 10)).toBe('truck');
+    a.knowledge.records['internal-combustion']!.adoptedMonth = undefined;
+    a.knowledge.records['internal-combustion']!.transformedMonth = undefined;
+    expect(freightVehicle(a, b, route, path, 10)).toBe('caravan');
+    expect(freightVehicle(a, b, route, { ...path, segmentIds: [] }, 10)).toBe('merchant');
+  });
+
+  it('requires sustained deliveries and engineering at both ends before rail investment', () => {
+    const { a, b, route } = freightFixture();
+    for (const s of [a, b]) {
+      for (const id of ['rail-transport', 'iron-working', 'mechanical-power']) grant(s, id);
+      s.infrastructure.rail = 0.8; s.infrastructure.workshops = 0.8;
+    }
+    expect(railReady(a, b, route)).toBe(false);
+    route.transport!.deliveries = 8; route.transport!.recentFreight = 12;
+    expect(railReady(a, b, route)).toBe(true);
+    b.knowledge.records['iron-working']!.dormant = true;
+    expect(railReady(a, b, route)).toBe(false);
+  });
+
+  it('reroutes a loaded pedestrian from its current position after a local flood', () => {
+    const { state, system, route, a, b } = freightFixture();
+    system.advanceFreight(route, a, b);
+    const trip = route.transport!.trip!;
+    const sourceStock = a.localMaterials.pottery;
+    const blockedPoint = positionAlongPath(trip.path, trip.path.length / 2)!.position;
+    setFloodedAt(state.world, blockedPoint, true); state.world.environmentRevision!++;
+    state.month++;
+    system.advanceFreight(route, a, b);
+    expect(trip.status).toBe('moving');
+    expect(new WalkabilityLayer(state.world).routeIsValid(trip.path.points)).toBe(true);
+    expect(a.localMaterials.pottery).toBe(sourceStock);
+    expect(b.localMaterials.pottery).toBe(0);
+  });
+});
+
+
+describe('freight conservation and operating constraints', () => {
+  it('accounts for rejected cargo and never counts full warehouses as successful throughput', () => {
+    const { state, system, route, a, b } = freightFixture();
+    const before = a.localMaterials.pottery!;
+    system.advanceFreight(route, a, b);
+    const trip = route.transport!.trip!;
+    expect(trip.phase).toBe('loading');
+    expect(trip.quantity).toBeLessThanOrEqual(0.6);
+    expect(a.localMaterials.pottery! + trip.quantity).toBeCloseTo(before);
+    b.localMaterials.stone = 10000;
+    for (let step = 0; step < 100 && trip.status !== 'arrived'; step++) { state.month++; system.advanceFreight(route, a, b); }
+    expect(trip.status).toBe('arrived');
+    expect(trip.deliveredQuantity).toBe(0);
+    expect(trip.lostQuantity).toBeCloseTo(trip.quantity);
+    expect(route.transport!.deliveries).toBe(0);
+    expect(route.transport!.recentFreight).toBe(0);
+    const stock = b.localMaterials.pottery;
+    system.advanceFreight(route, a, b);
+    expect(b.localMaterials.pottery).toBe(stock);
+  });
+
+  it('requires each motor freight operating input and keeps small loads on older transport', () => {
+    const { a, b, route } = freightFixture();
+    const path = { ...route.transport!.path!, segmentIds: ['road'] };
+    for (const id of ['wheel-axle', 'animal-husbandry', 'internal-combustion', 'precision-manufacturing']) grant(a, id);
+    route.transport!.deliveries = 12; route.transport!.recentFreight = 20;
+    a.infrastructure.roads = b.infrastructure.roads = 0.8; a.infrastructure.factories = 0.8;
+    materialEconomy(a).energySupplied = 2; a.localMaterials.charcoal = 1; a.localMaterials.steel = 1;
+    expect(freightVehicle(a, b, route, path, 10)).toBe('truck');
+    expect(freightVehicle(a, b, route, path, 0.4)).toBe('merchant');
+    for (const id of ['charcoal', 'steel']) {
+      a.localMaterials[id] = 0;
+      expect(freightVehicle(a, b, route, path, 10)).toBe('caravan');
+      a.localMaterials[id] = 1;
+    }
+    materialEconomy(a).energySupplied = 0;
+    expect(freightVehicle(a, b, route, path, 10)).toBe('caravan');
+    materialEconomy(a).energySupplied = 2; b.infrastructure.roads = 0;
+    expect(freightVehicle(a, b, route, path, 10)).toBe('caravan');
+  });
+
+  it('does not turn unused surveyed roads into funded infrastructure', () => {
+    const { state, system } = freightFixture();
+    for (let month = 1; month <= 24; month++) { state.month = month; system.advanceMonth(); }
+    expect(Object.values(state.transportation.segments).every(s => s.work === 0)).toBe(true);
   });
 });

@@ -279,8 +279,7 @@ function firstFireReadiness(state: SimulationState, s: Settlement, population: n
  * Need/readiness sets the order; touchdown time breaks close calls; hash is only the final tie-break.
  */
 export function foundingFirstFirePlan(state: SimulationState, s: Settlement, population: number): FoundingFirstFirePlan | undefined {
-  if (!s.foundingPodId) return;
-  const founding = state.settlements.filter(candidate => candidate.foundingPodId && candidate.alive);
+  const founding = state.settlements.filter(candidate => candidate.alive && !candidate.survival?.firstFire);
   const ranked = founding.map(candidate => {
     const candidatePopulation = candidate.id === s.id
       ? population
@@ -319,7 +318,7 @@ export function foundingFirstFirePlan(state: SimulationState, s: Settlement, pop
  */
 function maintainFoundingHearth(state: SimulationState, s: Settlement, population: number): void {
   const survival = survivalState(s);
-  if (!s.foundingPodId || capabilityPractice(s, 'fire-control', 'adopted') < 0.15 || population <= 0) {
+  if (capabilityPractice(s, 'fire-control', 'adopted') < 0.15 || population <= 0) {
     if (s.foundingPodId) survival.hearth = { ...survival.hearth, fuelNeed: 0, fuelUsed: 0 };
     return;
   }
@@ -350,7 +349,7 @@ function maintainFoundingHearth(state: SimulationState, s: Settlement, populatio
     survival.hearth.fuelUsed = ignitionFuel;
     const drivers = plan.drivers;
     const event = record(state, s, 'first-fire', `${s.name} lights its first recorded survival hearth.`,
-      { foundingPodId: s.foundingPodId, fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth',
+      { ...(s.foundingPodId ? { foundingPodId: s.foundingPodId } : {}), fuelUsed: ignitionFuel, fuelNeed: ignitionNeed, purpose: 'founding-hearth',
         plannedMonth: plan.plannedMonth, ignitionReadiness: plan.readiness, ignitionRank: plan.rank,
         coldUrgency: drivers.coldUrgency, shelterNeed: drivers.shelterNeed,
         woodland: drivers.woodland, fuelSecurity: drivers.fuelSecurity, intensity: 1 },
@@ -359,6 +358,8 @@ function maintainFoundingHearth(state: SimulationState, s: Settlement, populatio
     return;
   }
 
+  // Established towns already pay for heating through the ordinary cold/fuel ledger.
+  if (!s.foundingPodId) { survival.hearth = { ...survival.hearth, fuelNeed: 0, fuelUsed: 0 }; return; }
   const fuelNeed = positive(population) * FOUNDING_HEARTH_FUEL_PER_PERSON;
   const fuelUsed = takeMaterial(s, 'timber', fuelNeed);
   survival.hearth = { ...survival.hearth, fuelNeed, fuelUsed };

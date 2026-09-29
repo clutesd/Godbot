@@ -218,19 +218,21 @@ simulation.beginHistory();
     }
   });
 
-  it('does not create a first-fire milestone for non-founding settlements', () => {
+  it('records one fuel-backed first fire for settlements without landing pods too', () => {
     const { state, s, population } = fixture();
     delete s.foundingPodId;
-    state.weather.cells[s.cellIndex]!.temperature = 0;
+    state.weather.cells[s.cellIndex]!.temperature = 0.9;
     s.structurePlots = []; s.localMaterials = {}; s.materialEconomy = undefined;
     addMaterial(s, 'timber', 10);
     learn(s, 'fire-control');
 
-    state.month = 1; applyCold(state, s, population);
-    expect(s.survival!.cold.fuelUsed).toBeGreaterThan(0);
-    expect(s.survival!.firstFire).toBeUndefined();
-    expect(s.survival!.hearth).toBeUndefined();
-    expect(state.history.some(e => e.type === 'first-fire' && e.locationId === s.id)).toBe(false);
+    state.month = foundingFirstFirePlan(state, s, population)!.plannedMonth;
+    const before = s.localMaterials.timber!;
+    applyCold(state, s, population);
+    expect(s.survival!.firstFire).toBeDefined();
+    expect(s.localMaterials.timber).toBeLessThan(before);
+    state.month++; applyCold(state, s, population);
+    expect(state.history.filter(e => e.type === 'first-fire' && e.locationId === s.id)).toHaveLength(1);
   });
 });
 

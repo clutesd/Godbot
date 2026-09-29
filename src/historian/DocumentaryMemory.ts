@@ -83,13 +83,22 @@ export class DocumentaryMemory {
       .map(t => {
         const s = this.previous.get(t.snapshot.id) ?? t.snapshot;
         const fresh = t.shownRevision < t.revision;
-        return { id: `development:${s.id}:${t.revision}`, subjectId: s.id, kind: s.kind, position: { ...s.position }, title: s.name,
+        const deceased = s.values.alive === false ? state.people.find(person => person.id === s.id) : undefined;
+        const builder = s.activity === 'construct' && s.kind === 'infrastructure-scene'
+          ? state.people.filter(person => person.alive && s.sourceIds?.includes(person.homeId) && person.activity === 'construct')
+            .sort((a, b) => Math.hypot(a.position.x - s.position.x, a.position.z - s.position.z)
+              - Math.hypot(b.position.x - s.position.x, b.position.z - s.position.z))[0] : undefined;
+        const mourner = deceased ? state.people.find(person => person.alive && (person.partnerId === deceased.id || person.parents.includes(deceased.id)))
+          ?? state.people.find(person => person.alive && person.homeId === deceased.homeId) : undefined;
+        const person = builder ?? mourner;
+        const kind: ObservationKind = builder ? 'worker-follow' : mourner ? 'street-observation' : s.kind;
+        return { id: `development:${s.id}:${t.revision}`, subjectId: person?.id ?? s.id, kind, position: { ...(person?.position ?? s.position) }, title: s.name,
           score: fresh ? t.importance : 0.48, interest: fresh ? t.importance : 0.4, audioCategory: 'settlement',
           statement: { id: `development:${s.id}:${t.revision}:${state.month}`, month: state.month, text: fresh ? t.text : `Returning to ${s.name}, last observed changing in month ${t.month}.`,
             epistemicStatus: 'recorded-fact', sourceEntityIds: s.sourceIds ?? [s.id], sourceEventIds: [], sourceArchiveIds: [], claims: {} },
           breakdown: { novelty: fresh ? 1 : 0, magnitude: t.importance, populationAffected: 0, rarity: 0, technological: 0, political: 0, cultural: 0, consequence: t.importance, continuity: 1, repetitionPenalty: fresh ? 0 : 0.5 },
           editorial: { subjectId: s.id, importance: t.importance, threadId: `life:${s.id}`, why: t.text,
-            activityMeaning: 0.8, preferredScale: s.kind === 'worker-follow' ? 'human' : 'medium',
+            activityMeaning: 0.8, preferredScale: person || s.kind === 'worker-follow' ? 'human' : 'medium',
             desiredActivity: s.activity, shotPurpose: fresh ? 'witness-change' : 'follow-up',
             narration: fresh && t.importance >= 0.7 ? 'required' : 'silent', completion: s.activity ? 'subject-action' : 'settled',
             completionCondition: s.activity ? `Observe ${s.activity} until the action finishes or changes` : 'Settle on the changed subject and show its present condition' },
@@ -126,7 +135,7 @@ export class DocumentaryMemory {
     if (candidate.event) this.shownEvents.add(candidate.event.id);
     if (candidate.editorial?.narration !== 'silent') this.spoken.add(candidate.statement.text);
     if (this.spoken.size > 2048) this.spoken.delete(this.spoken.values().next().value!);
-    const t = this.threads.get(candidate.subjectId);
+    const t = this.threads.get(candidate.editorial?.subjectId ?? candidate.subjectId);
     if (t && candidate.id.startsWith('development:')) { t.shownRevision = t.revision; t.lastShown = month; }
   }
 }

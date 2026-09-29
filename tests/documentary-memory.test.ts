@@ -1,3 +1,4 @@
+import { observeScene } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import { DocumentaryMemory } from '../src/historian/DocumentaryMemory';
 import { Historian } from '../src/historian/Historian';
@@ -74,9 +75,10 @@ describe('documentary observation memory', () => {
     state.month++;
     person.alive = false;
     memory.observe(state);
-    const death = memory.candidates(state).find(c => c.subjectId === person.id)!;
+    const death = memory.candidates(state).find(c => c.editorial?.subjectId === person.id)!;
     expect(death.interest).toBeGreaterThan(changed.interest);
-    expect(death.kind).toBe('aftermath-pullback');
+    expect(death.kind).toBe('street-observation');
+    expect(state.people.find(candidate => candidate.id === death.subjectId)?.alive).toBe(true);
     expect(death.statement.text).toContain('alive changed from true to false');
   });
 
@@ -118,13 +120,13 @@ describe('documentary observation memory', () => {
 
   it('keeps quiet mature years human, varied, and silent on repeated evidence', () => {
     const state = fixture(), historian = new Historian(simulation.config);
-    const scenes = Array.from({ length: 30 }, () => historian.chooseScene(state));
+    const scenes = Array.from({ length: 30 }, () => observeScene(historian, state));
     expect(scenes.filter(c => c.kind === 'worker-follow' || c.kind === 'traveler-follow').length).toBeGreaterThan(20);
     expect(new Set(scenes.map(c => c.subjectId)).size).toBeGreaterThan(4);
     const focusedEvent = event(state, 'repeat', 0.9);
     state.history.push(focusedEvent);
-    historian.chooseScene(state, focusedEvent.id);
-    expect(historian.chooseScene(state, focusedEvent.id).editorial?.narration).toBe('silent');
+    observeScene(historian, state, focusedEvent.id);
+    expect(observeScene(historian, state, focusedEvent.id).editorial?.narration).toBe('silent');
   });
 
   it('selects deterministically without mutating frozen simulation evidence', () => {
@@ -136,8 +138,8 @@ describe('documentary observation memory', () => {
     };
     const before = JSON.stringify(state);
     freeze(state);
-    expect(Array.from({ length: 15 }, () => a.chooseScene(state).id))
-      .toEqual(Array.from({ length: 15 }, () => b.chooseScene(state).id));
+    expect(Array.from({ length: 15 }, () => observeScene(a, state).id))
+      .toEqual(Array.from({ length: 15 }, () => observeScene(b, state).id));
     expect(JSON.stringify(state)).toBe(before);
   });
 
@@ -145,7 +147,7 @@ describe('documentary observation memory', () => {
     const watched = new Simulation({ seed: 'documentary-isolation', startingPopulation: 24 });
     const control = new Simulation({ seed: 'documentary-isolation', startingPopulation: 24 });
     const historian = new Historian(watched.config);
-    for (let i = 0; i < 3; i++) { historian.chooseScene(watched.state); watched.step(1); control.step(1); }
+    for (let i = 0; i < 3; i++) { observeScene(historian, watched.state); watched.step(1); control.step(1); }
     expect(watched.state).toEqual(control.state);
   });
 });

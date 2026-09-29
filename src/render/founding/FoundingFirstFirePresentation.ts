@@ -17,8 +17,9 @@ import {
 export type FirstFirePhase = 'assemble-stones' | 'assemble-logs' | 'prepare-tinder' | 'strike' | 'ember' | 'falter' | 'catch' | 'gather' | 'settle' | 'complete';
 export type FirstFireParticipantRole = 'builder' | 'tender' | 'witness';
 
-const IGNITION_DURATION_SECONDS = 12;
+const IGNITION_DURATION_SECONDS = 28;
 export const FIRST_FIRE_DURATION_SECONDS = FOUNDING_HEARTH_ASSEMBLY_SECONDS + IGNITION_DURATION_SECONDS;
+export const FIRST_FIRE_CAMERA_GRACE_SECONDS = 8;
 
 export interface FirstFireVisualSample {
   active: boolean;
@@ -45,7 +46,7 @@ export interface FirstFireVisualSample {
 export interface FirstFireStagingTarget extends Vec2 {
   readonly eventId: string;
   readonly role: FirstFireParticipantRole;
-  readonly animation: 'gather' | 'build' | 'ignite' | 'converse-warm';
+  readonly animation: 'gather' | 'build' | 'ignite' | 'converse-warm' | 'dance';
   readonly restFacing: number;
   readonly phaseProgress: number;
   readonly assemblyPhase?: FoundingHearthAssemblyPhase;
@@ -62,6 +63,7 @@ interface Participant {
   builderSlot?: number;
   radius: number;
   angleJitter: number;
+  danceAngle: number;
   witnessDelay: number;
 }
 
@@ -82,9 +84,15 @@ interface ActiveFirstFire {
 export class FoundingFirstFirePresentation {
   private readonly knownEventBySettlement = new Map<string, string>();
   private readonly active = new Map<string, ActiveFirstFire>();
+  private readonly pendingSince = new Map<string, number>();
   private nowSeconds = 0;
   /** Prevents simultaneous same-tick milestones from reading as synchronized scripted cues. */
   private nextAvailableStartSeconds = 0;
+  revision = 0;
+
+  participantIds(): ReadonlySet<string> {
+    return new Set([...this.active.values()].flatMap(performance => performance.participants.map(person => person.personId)));
+  }
 
   constructor(state: Pick<SimulationState, 'settlements'>) {
     for (const settlement of state.settlements) {
@@ -93,11 +101,11 @@ export class FoundingFirstFirePresentation {
     }
   }
 
-  update(state: Pick<SimulationState, 'settlements' | 'people'>, elapsedSeconds: number): void {
+  update(state: Pick<SimulationState, 'settlements' | 'people'>, elapsedSeconds: number, acquiredEventId?: string): void {
     this.nowSeconds = Math.max(0, elapsedSeconds);
     const pending = state.settlements.filter(settlement => {
       const eventId = settlement.survival?.firstFire?.eventId;
-      return Boolean(eventId && this.knownEventBySettlement.get(settlement.id) !== eventId);
+      return Boolean(settlement.alive && eventId && this.knownEventBySettlement.get(settlement.id) !== eventId);
     }).sort((a, b) => {
       const aFire = a.survival!.firstFire!;
       const bFire = b.survival!.firstFire!;
@@ -108,6 +116,15 @@ export class FoundingFirstFirePresentation {
 
     for (const settlement of pending) {
       const eventId = settlement.survival!.firstFire!.eventId;
+      const queuedAt = this.pendingSince.get(eventId) ?? this.nowSeconds;
+      this.pendingSince.set(eventId, queuedAt);
+      // Give a nearby documentary shot a chance to arrive, but every community celebrates even
+      // when the camera chooses another story. Camera selection cannot own settlement life.
+      if (acquiredEventId !== undefined && acquiredEventId !== eventId
+        && this.nowSeconds - queuedAt < FIRST_FIRE_CAMERA_GRACE_SECONDS) continue;
+      const participants = selectParticipants(state.people, settlement.id, settlement.position);
+      if (!participants.length) continue;
+      this.pendingSince.delete(eventId);
       this.knownEventBySettlement.set(settlement.id, eventId);
       const naturalDelay = 0.28 + stableUnit(`${eventId}:presentation-delay`) * 0.52;
       const startedAt = Math.max(this.nowSeconds + naturalDelay, this.nextAvailableStartSeconds);
@@ -117,11 +134,16 @@ export class FoundingFirstFirePresentation {
         settlementId: settlement.id,
         eventId,
         startedAt,
-        participants: selectParticipants(state.people, settlement.id, settlement.position),
+        participants,
       });
+      this.revision++;
     }
     for (const [settlementId, performance] of this.active) {
-      if (this.nowSeconds - performance.startedAt >= FIRST_FIRE_DURATION_SECONDS) this.active.delete(settlementId);
+      if (this.nowSeconds - performance.startedAt >= FIRST_FIRE_DURATION_SECONDS) { this.active.delete(settlementId); this.revision++; }
+      else {
+        const eligible = new Set(state.people.filter(person => person.alive && person.homeId === settlementId && person.health > 0.3).map(person => person.id));
+        performance.participants = performance.participants.filter(person => eligible.has(person.personId));
+      }
     }
   }
 
@@ -222,8 +244,8 @@ export class FoundingFirstFirePresentation {
         sparkGain: 0.22 + p * 0.72,
       };
     }
-    if (ignitionAge < 10.3) {
-      const p = ease((ignitionAge - 7.6) / 2.7);
+    if (ignitionAge < 25) {
+      const p = ease((ignitionAge - 7.6) / 17.4);
       const flicker = reducedMotion ? 1 : 1
         + Math.sin(this.nowSeconds * 9.3 + stableUnit(performance.eventId) * 11) * 0.05
         + Math.sin(this.nowSeconds * 5.7 + 1.3) * 0.022;
@@ -237,7 +259,7 @@ export class FoundingFirstFirePresentation {
         sparkGain: 0.72 - p * 0.22,
       };
     }
-    const p = ease((ignitionAge - 10.3) / (IGNITION_DURATION_SECONDS - 10.3));
+    const p = ease((ignitionAge - 25) / (IGNITION_DURATION_SECONDS - 25));
     return {
       active: true, phase: 'settle', phaseProgress: p, ...assembled,
       flameScale: 1, emberScale: 1, lightGain: 1.04 - p * 0.04,
@@ -251,6 +273,7 @@ export class FoundingFirstFirePresentation {
     hearth: Readonly<Vec2>,
     current: Readonly<Vec2>,
     settlement: Readonly<Vec2> = current,
+    reducedMotion = false,
   ): FirstFireStagingTarget | undefined {
     const performance = this.active.get(settlementId);
     if (!performance) return;
@@ -291,6 +314,18 @@ export class FoundingFirstFirePresentation {
     const ignitionAge = age - FOUNDING_HEARTH_ASSEMBLY_SECONDS;
     const role: FirstFireParticipantRole = participant.builderSlot === 0 ? 'tender' : 'witness';
     const sample = this.sample(settlementId);
+
+    if (ignitionAge >= 9 + participant.witnessDelay * 0.16) {
+      // Each founder owns a separated place in the circle. Small side steps keep the dance
+      // grounded without chasing a continuously rotating destination or crossing the fire.
+      const beat = ignitionAge - 9;
+      const angle = participant.danceAngle + (reducedMotion ? 0 : Math.sin(beat * 0.85) * 0.055);
+      const radius = 1.05 + participant.radius * 0.2;
+      const x = hearth.x + Math.cos(angle) * radius;
+      const z = hearth.z + Math.sin(angle) * radius;
+      return { x, z, eventId: performance.eventId, role, animation: reducedMotion || sample.phase === 'settle' ? 'converse-warm' : 'dance',
+        restFacing: Math.atan2(hearth.x - x, hearth.z - z), phaseProgress: sample.phaseProgress, ceremonyPhase: sample.phase };
+    }
 
     if (role === 'tender') {
       const angle = stableUnit(`${performance.eventId}:${personId}:tender`) * Math.PI * 2;
@@ -345,13 +380,14 @@ function selectParticipants(people: readonly Person[], settlementId: string, set
       const distanceB = Math.hypot(b.position.x - settlement.x, b.position.z - settlement.z);
       if (Math.abs(distanceA - distanceB) > 0.01) return distanceA - distanceB;
       return stableUnit(a.id) - stableUnit(b.id);
-    }).slice(0, 5);
+    }).slice(0, 8);
 
   return candidates.map((person, index) => ({
     personId: person.id,
     builderSlot: index < FOUNDING_HEARTH_BUILDER_COUNT ? index : undefined,
     radius: index === 0 ? 0.58 : 0.76 + stableUnit(`${person.id}:first-fire-radius`) * 0.12,
     angleJitter: (stableUnit(`${person.id}:first-fire-angle`) - 0.5) * 0.46,
+    danceAngle: index / candidates.length * Math.PI * 2 + stableUnit(`${settlementId}:dance-circle`) * Math.PI * 2,
     witnessDelay: index === 0 ? 0 : 5.55 + (index - 1) * 0.42 + stableUnit(`${person.id}:first-fire-witness-delay`) * 0.16,
   }));
 }

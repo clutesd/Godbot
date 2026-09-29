@@ -7,6 +7,8 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
   state.setUsage(THREE.DynamicDrawUsage);
   mesh.geometry.setAttribute('treeState', state);
   const material = mesh.material as THREE.MeshStandardMaterial;
+  const cameraSoftness = { value: 0 };
+  material.userData['cameraSoftDistance'] = cameraSoftness;
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   const distance = new THREE.MeshDistanceMaterial();
   const bark = kind === 'bark';
@@ -19,6 +21,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
   for (const target of [material, depth, distance]) {
     target.onBeforeCompile = shader => {
       shader.uniforms['treeHeight'] = { value: height };
+      if (target === material) shader.uniforms['cameraSoftDistance'] = cameraSoftness;
       shader.vertexShader = `attribute vec4 treeState; ${bark ? '' : 'attribute vec3 canopyAnchor;'}
         ${declarations}\n${shader.vertexShader}`;
       shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
@@ -34,6 +37,19 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         #include <clipping_planes_fragment>
         ${bark ? fracture : 'if (treeCondition.x < 0.001) discard;'}
       `);
+      if (target === material) {
+        shader.fragmentShader = 'uniform float cameraSoftDistance;\n' + shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
+          #include <clipping_planes_fragment>
+          // Dither the foreground corridor only. Shadows and world ecology remain intact.
+          float depthToLens = vViewPosition.z;
+          float corridor = 1.0 - smoothstep(0.35, 1.1, length(vViewPosition.xy));
+          float foreground = (1.0 - smoothstep(cameraSoftDistance - 0.6, cameraSoftDistance, depthToLens))
+            * step(0.0, depthToLens) * step(0.01, cameraSoftDistance);
+          float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+          if (noise < corridor * foreground) discard;
+        `);
+      }
       if (!bark && target === material) {
         // Thin foliage scatters incident light; keep this light-dependent so nights stay dark.
         shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `
@@ -76,7 +92,7 @@ export function bindTreeMaterial(mesh: THREE.InstancedMesh, kind: 'bark' | 'foli
         `);
       }
     };
-    target.customProgramCacheKey = () => `tree-v3:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
+    target.customProgramCacheKey = () => `tree-v4:${kind}:${bark && family === 'birch' ? 'birch' : 'standard'}:${target.type}`;
   }
   mesh.customDepthMaterial = depth;
   mesh.customDistanceMaterial = distance;

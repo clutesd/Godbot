@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { renderedGroundSampler } from '../src/render/terrain/ConformingGround';
 import { vegetationFixture } from './fixtures/vegetation';
 import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { farmGeometries, farmGeometry, farmPlotRotation } from '../src/shared/FarmGeometry';
@@ -124,12 +125,13 @@ describe('farm field visual polish', () => {
     renderer.update(state, heightAt, () => true);
 
     const soil = mesh(renderer, 'Cultivated farm soil');
+    const renderedHeightAt = renderedGroundSampler(state.world.terrain, heightAt);
     const position = soil.geometry.getAttribute('position');
     expect(position.count).toBeGreaterThan(40);
     let minY = Infinity, maxY = -Infinity;
     for (let index = 0; index < position.count; index++) {
       const x = position.getX(index), y = position.getY(index), z = position.getZ(index);
-      const lift = y - heightAt(x, z);
+      const lift = y - renderedHeightAt(x, z);
       expect(lift).toBeGreaterThan(0.003);
       expect(lift).toBeLessThan(0.006);
       minY = Math.min(minY, y);
@@ -140,7 +142,7 @@ describe('farm field visual polish', () => {
     const rowMesh = mesh(renderer, 'Cultivated farm furrows');
     const rows = rowMesh.geometry.getAttribute('position');
     const rowGroundOffsets = Array.from({ length: rows.count }, (_, index) =>
-      rows.getY(index) - heightAt(rows.getX(index), rows.getZ(index)));
+      rows.getY(index) - renderedHeightAt(rows.getX(index), rows.getZ(index)));
     expect(Math.min(...rowGroundOffsets)).toBeGreaterThan(0.009);
     expect(Math.max(...rowGroundOffsets)).toBeLessThan(0.036);
     expect(Math.max(...rowGroundOffsets) - Math.min(...rowGroundOffsets)).toBeGreaterThan(0.02);

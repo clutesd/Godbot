@@ -207,3 +207,17 @@ describe('canonical material economy', () => {
     expect(settlement.materials?.lifetimeExtracted.clay).toBe(lifetimeAfterFirst);
   });
 });
+
+
+it('reconciles construction withdrawals before planning material production', () => {
+  const sim = simulation('production-after-construction');
+  const s = sim.state.settlements[0]!;
+  ensureMaterialInventory(s);
+  installKnowledge(s, 'leverage'); installKnowledge(s, 'precision-tools');
+  addMaterial(s, 'timber', 20);
+  s.resources.wood = 0; // A legacy builder spent the published timber projection.
+  sim.state.month++;
+  expect(() => advanceMaterialProcessing(sim.state, s, peopleAt(sim, s))).not.toThrow();
+  expect(s.localMaterials.timber).toBe(0);
+  expect(s.resources.wood).toBe(0);
+});

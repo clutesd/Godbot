@@ -1,3 +1,7 @@
+import { advanceEnergy } from './energy/EnergySystem';
+import { poweredProductivity } from './energy/types';
+import { tradeOpportunity } from './transport/FreightEconomy';
+import { firstMilestones } from '../historian/Milestones';
 import { emitEvent } from './History';
 import { adaptFoodCareer, applyCold, beginFoodMonth, chooseFoodResponse, observeEstablishment, resolveSurvival, survivalHealthChange, survivalMortality } from './pressures/Survival';
 import { assertPristine, createFoundingArrival, FoundingArrivalDirector, isArrivalFilmPhase, isFoundingOrientationPhase, type FoundingPod } from './founding/FoundingArrival';
@@ -464,6 +468,7 @@ export class Simulation {
     this.tickProfiler.record('survival-planning', phaseStarted);
 
     phaseStarted = this.tickProfiler.start();
+    advanceEnergy(this.state);
     this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
     this.tickProfiler.record('resources', phaseStarted);
 
@@ -589,10 +594,11 @@ export class Simulation {
 
     // Compact in place first. Routine events are by far the common retention case, so avoid
     // allocating several ~50k-entry arrays every time history crosses the cap.
+    const milestoneIds = new Set(firstMilestones(this.state.history).map(event => event.id));
     let write = 0;
     for (let read = 0; read < this.state.history.length; read += 1) {
       const event = this.state.history[read]!;
-      if (excess > 0 && event.significance < 0.3) {
+      if (excess > 0 && event.significance < 0.3 && !milestoneIds.has(event.id)) {
         excess -= 1;
         continue;
       }
@@ -617,7 +623,7 @@ export class Simulation {
     const anchors: HistoricalEvent[] = [];
     const ordinary: HistoricalEvent[] = [];
     for (const event of this.state.history) {
-      if (event.type === 'ARRIVAL_DAY') anchors.push(event);
+      if (event.type === 'ARRIVAL_DAY' || milestoneIds.has(event.id)) anchors.push(event);
       else ordinary.push(event);
     }
     this.state.history = this.state.history.length <= limit
@@ -943,7 +949,7 @@ export class Simulation {
       const mineralUse = Math.min(settlement.resources.minerals, artisans * 0.03 + settlement.buildings * 0.012 + settlement.infrastructure.workshops * 0.12);
       balance.wood = woodDemand - woodUse;
       balance.minerals = mineralDemand - mineralUse;
-      balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods - population * (0.016 + settlement.urbanization * 0.006);
+      balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods * poweredProductivity(settlement) - population * (0.016 + settlement.urbanization * 0.006);
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
       for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) {
         settlement.resources[key] = Math.max(0, settlement.resources[key] + balance[key]);
@@ -1215,8 +1221,29 @@ export class Simulation {
         continue;
       }
       route.ageMonths += 1;
+      const previousTrip = route.transport?.trip?.id;
       const delivered = this.transportationSystem.advanceFreight(route, a, b);
-      const exchanged = delivered?.quantity ?? 0;
+      const trip = route.transport?.trip;
+      if (trip && trip.id !== previousTrip) {
+        const vehicle = trip.vehicle ?? 'basket';
+        const milestone = vehicle === 'train' ? 'rail-connection' : vehicle === 'truck' ? 'motor-freight' : vehicle === 'caravan' ? 'caravan' : 'merchant';
+        const economy = materialEconomy(a);
+        if (economy.lastEventMonth[`trade-milestone:${milestone}`] === undefined) {
+          economy.lastEventMonth[`trade-milestone:${milestone}`] = this.state.month;
+          this.addEvent({ type: 'resource-trade', location: (trip.origin === a.id ? a : b).position, locationId: trip.origin, actors: [a.id, b.id],
+            causes: ['real-surplus', 'destination-shortage', 'transport-capability'], context: { milestone, vehicle, route: route.id, quantity: trip.quantity },
+            outcome: 'Loaded goods leave local stock for a reachable trading partner.', significance: 0.82, tags: ['trade', 'milestone', milestone],
+            summary: `${a.name} and ${b.name} begin ${milestone.replaceAll('-', ' ')} service.` });
+        }
+      }
+      if (delivered && (route.transport?.deliveries ?? 0) >= 8 && (route.transport?.recentFreight ?? 0) >= 10) {
+        const economy = materialEconomy(a);
+        if (economy.lastEventMonth[`major-route:${route.id}`] === undefined) {
+          economy.lastEventMonth[`major-route:${route.id}`] = this.state.month;
+          this.addEvent({ type: 'resource-trade', location: a.position, locationId: a.id, actors: [a.id, b.id], causes: ['repeated-deliveries'], context: { milestone: 'major-trade-route', route: route.id }, outcome: 'Sustained freight supports a regional trade corridor.', significance: 0.86, tags: ['trade', 'milestone'], summary: `${a.name} and ${b.name} sustain a major trade route.` });
+        }
+      }
+      const exchanged = delivered?.deliveredQuantity ?? delivered?.quantity ?? 0;
       if (exchanged > 0) {
         const gain = exchanged * 0.022;
         a.resources.wealth += gain;
@@ -1233,6 +1260,14 @@ export class Simulation {
         }
       }
       if (delivered) {
+        if (route.transport?.deliveries === 2) {
+          for (const town of [a, b]) {
+            const economy = materialEconomy(town);
+            if (economy.lastEventMonth['trade-milestone:market'] !== undefined) continue;
+            economy.lastEventMonth['trade-milestone:market'] = this.state.month;
+            this.addEvent({ type: 'resource-trade', location: town.position, locationId: town.id, actors: [town.id], causes: ['repeated-deliveries', 'local-surplus'], context: { milestone: 'market', route: route.id }, outcome: 'Regular exchange draws vendors and customers to a local market.', significance: 0.8, tags: ['trade', 'market', 'milestone'], summary: `A regular market emerges at ${town.name}.` });
+          }
+        }
         const deliveredMaterial = delivered.material ?? delivered.materialId;
         if (deliveredMaterial) {
           const target = delivered.destination === a.id ? a : b;
@@ -1296,10 +1331,10 @@ export class Simulation {
       relation.hostility = clamp(relation.hostility * 0.95 + relation.territorialTension * 0.042 + relation.grievances * 0.032 + (1 - relation.culturalAffinity) * 0.012 - (connected ? 0.008 : 0) + this.random.range(-0.018, 0.018));
       relation.trust = clamp(relation.trust + (connected ? 0.012 : -0.007) + relation.culturalAffinity * 0.006 - relation.hostility * 0.016);
       const tradeInterest = mean([cultureA?.dimensions.tradeOrientation ?? 0.5, cultureB?.dimensions.tradeOrientation ?? 0.5]);
-      if (!tradeRoute && !this.warBetween(a.id, b.id) && relation.trust + relation.culturalAffinity + tradeInterest > 1.35 && this.random.chance(clamp((0.28 + tradeInterest * 0.28) * this.config.society.tradeConnectivity))) {
+      if (!tradeRoute && !this.warBetween(a.id, b.id) && relation.trust + relation.culturalAffinity + tradeInterest > 1.35 && tradeOpportunity(a, b) * this.config.society.tradeConnectivity > 0.08) {
         this.establishTrade(a, b, relation);
       } else if (tradeRoute) {
-        tradeRoute.volume = clamp(tradeRoute.volume + relation.trust * 0.035 - relation.hostility * 0.06, 0, 2.4);
+        tradeRoute.volume = clamp(0.42 + (tradeRoute.transport?.recentFreight ?? 0) / 12 - relation.hostility * 0.1, 0.1, 2.4);
       }
       if (!relation.allied && relation.trust > 0.72 && relation.tradeDependency > 0.2 && relation.hostility < 0.25 && this.random.chance(0.06)) {
         relation.allied = true;
@@ -1359,7 +1394,7 @@ export class Simulation {
     relation.tradeDependency = 0.08;
     this.addEvent({
       type: 'trade-route-established', location: { x: (a.position.x + b.position.x) / 2, z: (a.position.z + b.position.z) / 2 }, actors: [a.id, b.id],
-      causes: ['complementary-surplus', 'mutual-trust'], context: { distance: distance(a.position, b.position), mode: route.mode }, outcome: 'The communities commission a surveyed trade corridor; exchange awaits completed infrastructure.',
+      causes: ['complementary-surplus', 'mutual-trust'], context: { distance: distance(a.position, b.position), mode: route.mode }, outcome: 'The communities commission a surveyed trade corridor; carriers begin on passable paths and repeated deliveries finance infrastructure.',
       affectedPopulation: settlementRepresentedPopulation(this.state, a.id, this.peopleAt(a.id)) + settlementRepresentedPopulation(this.state, b.id, this.peopleAt(b.id)), magnitude: 0.58, significance: 0.62, tags: ['trade', 'route', route.mode], summary: `A trade corridor is commissioned between ${a.name} and ${b.name}.`,
     });
   }

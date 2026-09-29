@@ -1,3 +1,5 @@
+import { recordFootTrafficSegment } from '../people/FootTraffic';
+import { freightVehicle, FREIGHT_CAPACITY, FREIGHT_SPEED, railReady, tradeOpportunity } from './FreightEconomy';
 import { infrastructureLabourBudget } from '../people/HumanCapital';
 import { settlementRepresentedPopulation } from '../Population';
 import { createSettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
@@ -10,14 +12,14 @@ import {
   dispatchMaterialShipment,
 } from '../resources/MaterialLogistics';
 import type { MaterialKind } from '../resources/MaterialEconomy';
-import { addMaterial, materialEconomy, takeMaterial } from '../resources/Inventory';
+import { addMaterial, materialEconomy, reconcileBulkStocks, storageRoom, takeMaterial } from '../resources/Inventory';
 import { consumeMaterial } from '../resources/MaterialUse';
 import { surfaceHeightAt, surfaceWaterAt } from '../terrain/SurfaceGeometry';
 import type { Settlement, SimulationState, TradeRoute } from '../types';
 import { RoutePlanner, type PlannedEdge } from './RoutePlanner';
 import { distance, edgeKey, landAllowed, navigableAt, pointKey, snowTravelMultiplier, surveyEdge } from './TerrainTraversal';
-import { positionAlongPath, TransportNetwork } from './TransportNetwork';
-import type { FreightTrip, NetworkMode, TransportProject, TransportSegment, TransportStop } from './types';
+import { pathLength, positionAlongPath, segmentUsable, TransportNetwork } from './TransportNetwork';
+import type { FreightTrip, NetworkMode, TransportProject, TransportSegment, TransportStop, TraversalPath } from './types';
 
 interface CapitalRequirement {
   id: string;
@@ -105,9 +107,10 @@ export class TransportationSystem {
       const water = this.planConnection(route.id, a, b, 'water');
       if (water) projects.push(water.id);
     }
-    if (!projects.length) return false;
-    route.mode = road ? 'land' : 'water';
-    route.transport = { projectIds: projects, nextDispatchMonth: this.state.month + Math.floor(stableHash(route.id, 0, 0) * 9) };
+    const footpath = this.footPath(a, b);
+    if (!projects.length && !footpath) return false;
+    route.mode = road || footpath ? 'land' : 'water';
+    route.transport = { projectIds: projects, path: footpath, nextDispatchMonth: this.state.month };
     return true;
   }
 
@@ -119,12 +122,7 @@ export class TransportationSystem {
         const a = state.settlements.find(s => s.id === route.a);
         const b = state.settlements.find(s => s.id === route.b);
         if (!a?.alive || !b?.alive) continue;
-        const railA = capabilityPractice(a, 'rail-transport', 'transformed');
-        const railB = capabilityPractice(b, 'rail-transport', 'transformed');
-        if (railA > 0.34 && railB > 0.34
-          && Math.min(a.infrastructure.rail, b.infrastructure.rail) > 0.16 && route.volume > 0.5) {
-          this.addUpgrade(route, a, b, 'rail');
-        }
+        if (railReady(a, b, route)) this.addUpgrade(route, a, b, 'rail');
         if (this.canShip(a) && this.canShip(b) && route.volume > 0.5) this.addUpgrade(route, a, b, 'water');
       }
     }
@@ -132,17 +130,28 @@ export class TransportationSystem {
     this.network.refresh();
     for (const route of state.tradeRoutes) {
       if (!route.transport) continue;
+      route.transport.recentFreight = (route.transport.recentFreight ?? 0) * 0.985;
       const projects = route.transport.projectIds.map(id => state.transportation.projects[id]).filter((p): p is TransportProject => Boolean(p));
       // A rail upgrade does not change the mode of an already dispatched vehicle.
       const ordered = projects.sort((a, b) => ({ rail: 0, water: 1, road: 2 })[a.mode] - ({ rail: 0, water: 1, road: 2 })[b.mode]);
       route.transport.path = undefined;
       for (const project of ordered) {
+        if (project.mode === 'rail') {
+          const a = state.settlements.find(s => s.id === route.a);
+          const b = state.settlements.find(s => s.id === route.b);
+          if (!a || !b || !railReady(a, b, route) || tradeOpportunity(a, b) < 2) continue;
+        }
         if (!project.stopIds.every(id => state.transportation.stops[id]?.status === 'complete')) continue;
         const path = this.network.findPath(project.from, project.to, project.mode);
         if (!path) continue;
         route.transport.path = path;
         route.mode = path.mode === 'water' ? 'water' : 'land';
         break;
+      }
+      if (!route.transport.path && route.active) {
+        const a = state.settlements.find(s => s.id === route.a);
+        const b = state.settlements.find(s => s.id === route.b);
+        if (a?.alive && b?.alive) route.transport.path = this.footPath(a, b);
       }
       route.weatherBlocked = !route.transport.path;
     }
@@ -155,29 +164,67 @@ export class TransportationSystem {
     if (!transport) return undefined;
     const trip = transport.trip;
     if (trip && trip.status !== 'arrived') {
-      if (blockaded || !route.active || !a.alive || !b.alive || !this.network.pathValid(trip.path)) {
+      if (!blockaded && route.active && a.alive && b.alive && !this.validPath(trip.path) && trip.path.segmentIds.length) this.rerouteFreight(trip);
+      if (!blockaded && route.active && a.alive && b.alive && !this.validPath(trip.path) && trip.mode === 'walk') {
+        const current = positionAlongPath(trip.path, trip.distance)?.position;
+        const destination = trip.destination === a.id ? a : b;
+        const detour = current ? this.footPath({ ...a, position: current }, destination) : undefined;
+        if (detour) { trip.path = detour; trip.distance = 0; }
+      }
+      if (blockaded || !route.active || !a.alive || !b.alive || !this.validPath(trip.path)) {
         trip.status = 'blocked';
         return undefined;
       }
       trip.status = 'moving';
-      const speed = { walk: 0.9, road: 1.6, rail: 3.8, water: 2.1 }[trip.mode];
+      if (trip.phase === 'loading' && this.state.month < (trip.phaseUntil ?? 0)) return undefined;
+      if (trip.phase === 'loading') trip.phase = 'travel';
+      const speed = trip.vehicle ? FREIGHT_SPEED[trip.vehicle] : { walk: 0.9, road: 1.6, rail: 3.8, water: 2.1 }[trip.mode];
       const position = positionAlongPath(trip.path, trip.distance)?.position ?? trip.path.points[0]!;
       const maintenance = Math.min(a.infrastructure.roads, b.infrastructure.roads);
       const weatherCost = snowTravelMultiplier(this.state.world, position, trip.mode, maintenance);
-      trip.distance = Math.min(trip.path.length, trip.distance + speed / weatherCost);
+      const previousDistance = trip.distance;
+      trip.distance = Math.min(trip.path.length, trip.distance + speed / weatherCost * (trip.mode === 'road' ? 0.75 + maintenance * 0.5 : 1));
+      if (trip.mode !== 'water' && trip.mode !== 'rail') {
+        for (let d = previousDistance; d < trip.distance; d += 0.25) {
+          const from = positionAlongPath(trip.path, d)!.position;
+          const to = positionAlongPath(trip.path, Math.min(d + 0.25, trip.distance))!.position;
+          recordFootTrafficSegment(this.state.world, from, to, this.state.month, trip.origin, 1 + trip.quantity * 0.1);
+        }
+      }
       route.caravanProgress = trip.path.length ? trip.distance / trip.path.length : 0;
       if (trip.distance < trip.path.length) return undefined;
+      if (trip.phase !== 'unloading') {
+        trip.phase = 'unloading';
+        const access = trip.mode === 'water' ? pathLength(this.state.transportation.stops[`${trip.destination}:water`]?.access ?? []) : 0;
+        trip.phaseUntil = this.state.month + 1 + Math.ceil(access / 0.9);
+        return undefined;
+      }
+      if (this.state.month < (trip.phaseUntil ?? 0)) return undefined;
       trip.status = 'arrived';
       const target = trip.destination === a.id ? a : b;
       const source = trip.origin === a.id ? a : b;
-      if (trip.material) deliverMaterialShipment(source, target, trip.material, trip.quantity, 0.96, this.state.month);
-      else if (trip.materialId) addMaterial(target, trip.materialId, trip.quantity * 0.96);
-      else if (trip.resource) target.resources[trip.resource] += trip.quantity * 0.96;
+      if (trip.material) trip.deliveredQuantity = deliverMaterialShipment(source, target, trip.material, trip.quantity, 0.96, this.state.month);
+      else if (trip.materialId) {
+        trip.deliveredQuantity = addMaterial(target, trip.materialId, trip.quantity * 0.96);
+        const economy = materialEconomy(target);
+        economy.imports[trip.materialId] = (economy.imports[trip.materialId] ?? 0) + trip.deliveredQuantity;
+      } else if (trip.resource) { trip.deliveredQuantity = trip.quantity * 0.96; target.resources[trip.resource] += trip.deliveredQuantity; }
       else throw new Error(`freight trip ${trip.id} has no cargo`);
+      trip.lostQuantity = trip.quantity - trip.deliveredQuantity;
+      transport.deliveries = (transport.deliveries ?? 0) + (trip.deliveredQuantity > 0 ? 1 : 0);
+      transport.deliveredQuantity = (transport.deliveredQuantity ?? 0) + trip.deliveredQuantity;
+      transport.recentFreight = (transport.recentFreight ?? 0) + trip.deliveredQuantity;
+      transport.lastDeliveryMonth = this.state.month;
+      route.volume = Math.min(2.4, 0.42 + transport.recentFreight / 12);
+      for (const id of trip.path.segmentIds) {
+        const segment = this.state.transportation.segments[id];
+        if (segment?.mode === 'road') { a.infrastructure.roads = Math.min(1, a.infrastructure.roads + 0.001); b.infrastructure.roads = Math.min(1, b.infrastructure.roads + 0.001); }
+      }
       transport.nextDispatchMonth = this.state.month + 3 + Math.floor(stableHash(route.id, this.state.month, 0) * 13);
       return trip;
     }
-    if (blockaded || !route.active || !a.alive || !b.alive || this.state.month < transport.nextDispatchMonth || !transport.path || !this.network.pathValid(transport.path)) return undefined;
+    if (blockaded || !route.active || !a.alive || !b.alive || this.state.month < transport.nextDispatchMonth || !transport.path || !this.validPath(transport.path)) return undefined;
+    reconcileBulkStocks(a); reconcileBulkStocks(b);
     const population = (id: string): number => Math.max(1, settlementRepresentedPopulation(this.state, id));
     const aPopulation = population(a.id);
     const bPopulation = population(b.id);
@@ -192,13 +239,14 @@ export class TransportationSystem {
       reason: FreightTrip['reason'];
     } | undefined;
 
-    const materialShipment = chooseMaterialShipment(a, b, route.volume);
+    const capacity = (source: Settlement, target: Settlement): number => FREIGHT_CAPACITY[freightVehicle(source, target, route, transport.path!, 40)];
+    const materialShipment = chooseMaterialShipment(a, b, Math.max(route.volume, capacity(a, b) / 4.2, capacity(b, a) / 4.2));
     if (materialShipment) {
       const quantity = dispatchMaterialShipment(
         materialShipment.source,
         materialShipment.target,
         materialShipment.material,
-        materialShipment.quantity,
+        Math.min(materialShipment.quantity, FREIGHT_CAPACITY[freightVehicle(materialShipment.source, materialShipment.target, route, transport.path, materialShipment.quantity)]),
         this.state.month,
       );
       if (quantity > 0.08) shipment = {
@@ -214,11 +262,12 @@ export class TransportationSystem {
       const ids = [...new Set([...Object.keys(materialEconomy(a).demand), ...Object.keys(materialEconomy(b).demand)])].sort();
       for (const materialId of ids) {
         for (const [source, target] of [[a, b], [b, a]] as const) {
+          if (source.materialUse?.criticalInputs.includes(materialId as MaterialKind) || (source.materialUse?.materials[materialId as MaterialKind]?.pressure ?? 0) > 0.28) continue;
           const sourceDemand = materialEconomy(source).demand[materialId] ?? 0;
           const targetDemand = materialEconomy(target).demand[materialId] ?? 0;
-          const surplus = Math.max(0, (source.localMaterials[materialId] ?? 0) - sourceDemand * 2);
-          const shortage = Math.max(0, targetDemand - (target.localMaterials[materialId] ?? 0));
-          const quantity = Math.min(surplus * 0.32, shortage, route.volume * 4.2);
+          const surplus = Math.max(0, (source.localMaterials[materialId] ?? 0) - Math.max(0.4, sourceDemand * 6));
+          const shortage = Math.max(0, targetDemand * 4 - (target.localMaterials[materialId] ?? 0));
+          const quantity = Math.min(storageRoom(target), surplus * 0.32, shortage, FREIGHT_CAPACITY[freightVehicle(source, target, route, transport.path, shortage)]);
           if (quantity <= 0.08 || quantity <= (shipment?.quantity ?? 0)) continue;
           shipment = { source, target, materialId, quantity, reason: 'scarcity-relief' };
         }
@@ -227,11 +276,12 @@ export class TransportationSystem {
     }
 
     if (!shipment) {
-      for (const resource of ['food', 'wood', 'minerals', 'goods'] as const) {
+      for (const resource of ['food'] as const) {
         const gap = a.resources[resource] / aPopulation - b.resources[resource] / bPopulation;
         const source = gap > 0 ? a : b;
         const target = gap > 0 ? b : a;
-        const quantity = Math.min(Math.abs(gap) * route.volume * 1.8, source.resources[resource] * 0.04, route.volume * 6);
+        if (source.foodSecurity <= 1.1 || target.foodSecurity >= 0.9) continue;
+        const quantity = Math.min(FREIGHT_CAPACITY[freightVehicle(source, target, route, transport.path, Math.abs(gap))], Math.abs(gap) * route.volume * 1.8, source.resources[resource] * 0.04, route.volume * 6);
         if (quantity > 0.08 && quantity > (shipment?.quantity ?? 0)) shipment = { source, target, resource, quantity, reason: 'trade' };
       }
       if (shipment?.resource) shipment.source.resources[shipment.resource] -= shipment.quantity;
@@ -241,10 +291,15 @@ export class TransportationSystem {
     if (!shipment) return undefined;
     const path = transport.path;
     const reverse = shipment.source.id === b.id;
-    const mode = path.mode === 'road' && capabilityPractice(shipment.source, 'wheel-axle', 'adopted') < 0.22 ? 'walk' : path.mode;
+    const vehicle = freightVehicle(shipment.source, shipment.target, route, path, shipment.quantity);
+    const mode = path.mode === 'road' && ['basket', 'merchant', 'pack-animal'].includes(vehicle) ? 'walk' : path.mode;
+    if (vehicle === 'truck') {
+      takeMaterial(shipment.source, 'charcoal', 0.1);
+      takeMaterial(shipment.source, (shipment.source.localMaterials.steel ?? 0) >= 0.05 ? 'steel' : 'iron-tools', 0.05);
+    }
     transport.trip = {
       id: `${route.id}:freight:${this.state.month}`, origin: shipment.source.id, destination: shipment.target.id,
-      reason: shipment.reason, mode, resource: shipment.resource, material: shipment.material, materialId: shipment.materialId,
+      reason: shipment.reason, mode, vehicle, phase: 'loading', phaseUntil: this.state.month + 1 + (mode === 'water' ? Math.ceil(pathLength(this.state.transportation.stops[`${shipment.source.id}:water`]?.access ?? []) / 0.9) : 0), resource: shipment.resource, material: shipment.material, materialId: shipment.materialId,
       quantity: shipment.quantity, departedMonth: this.state.month,
       distance: 0, status: 'moving',
       path: { ...path, points: (reverse ? [...path.points].reverse() : path.points).map(p => ({ ...p })), segmentIds: reverse ? [...path.segmentIds].reverse() : [...path.segmentIds] },
@@ -252,6 +307,47 @@ export class TransportationSystem {
     route.caravanProgress = 0;
     route.caravanDirection = reverse ? -1 : 1;
     return undefined;
+  }
+
+  /** Keep the current segment and exact physical progress; only replace the untravelled network. */
+  private rerouteFreight(trip: FreightTrip): void {
+    const destination = pointKey(trip.path.points[trip.path.points.length - 1]!);
+    const position = positionAlongPath(trip.path, trip.distance)?.position;
+    if (!position) return;
+    const direct = this.network.findPath(pointKey(position), destination, trip.path.mode);
+    if (direct && distance(position, direct.points[0]!) < 1e-6) {
+      trip.path = direct; trip.distance = 0; return;
+    }
+    let traversed = 0;
+    let node = pointKey(trip.path.points[0]!);
+    for (const id of trip.path.segmentIds) {
+      const segment = this.state.transportation.segments[id];
+      if (!segment) return;
+      const forward = segment.from === node;
+      const end = forward ? segment.to : segment.from;
+      if (trip.distance < traversed + segment.length) {
+        if (!segmentUsable(this.state.world, segment)) return;
+        const tail = this.network.findPath(end, destination, trip.path.mode);
+        if (!tail) return;
+        const current = forward ? segment.points : [...segment.points].reverse();
+        const points = [...current, ...tail.points.slice(1)].map(p => ({ ...p }));
+        trip.path = { mode: trip.path.mode, points, segmentIds: [id, ...tail.segmentIds], length: pathLength(points) };
+        trip.distance -= traversed;
+        return;
+      }
+      traversed += segment.length; node = end;
+    }
+  }
+
+  private validPath(path: TraversalPath): boolean {
+    return path.segmentIds.length ? this.network.pathValid(path) : path.mode === 'road' && this.walking.routeIsValid(path.points);
+  }
+
+  private footPath(a: Settlement, b: Settlement): TraversalPath | undefined {
+    const route = this.walking.route(a.position, b.position);
+    if (!route.length || distance(route[route.length - 1]!, b.position) > 0.05) return undefined;
+    const points = [a.position, ...route].map(p => ({ ...p, y: surfaceHeightAt(this.state.world, p.x, p.z) }));
+    return { mode: 'road', points, segmentIds: [], length: pathLength(points) };
   }
 
   private addUpgrade(route: TradeRoute, a: Settlement, b: Settlement, mode: NetworkMode): void {
@@ -323,9 +419,15 @@ export class TransportationSystem {
     const b = this.state.settlements.find(s => s.id === project.b);
     if (!a?.alive || !b?.alive || Math.min(a.foodSecurity, b.foodSecurity) < 0.35) return;
     if (project.reason === 'trade' && !this.state.tradeRoutes.some(r => r.active && r.transport?.projectIds.includes(project.id))) return;
-    if (project.mode === 'rail'
-      && Math.min(capabilityPractice(a, 'rail-transport', 'transformed'), capabilityPractice(b, 'rail-transport', 'transformed')) <= 0.34) return;
+    if (project.mode === 'rail') {
+      const route = this.state.tradeRoutes.find(r => r.transport?.projectIds.includes(project.id));
+      if (!route || ![a, b].every(s => capabilityPractice(s, 'rail-transport', 'transformed') > 0.34 && capabilityPractice(s, 'iron-working', 'adopted') > 0.3 && capabilityPractice(s, 'mechanical-power', 'adopted') > 0.3)) return;
+    }
     if (project.mode === 'water' && (!this.canShip(a) || !this.canShip(b))) return;
+    if (project.reason === 'trade' && project.mode === 'road') {
+      const route = this.state.tradeRoutes.find(r => r.transport?.projectIds.includes(project.id));
+      if ((route?.transport?.deliveries ?? 0) < 2 && !(project.segmentIds.some(id => network.segments[id]?.kind === 'bridge') && tradeOpportunity(a, b) > 0.08)) return;
+    }
     const aLabour = infrastructureLabourBudget(this.state, a), bLabour = infrastructureLabourBudget(this.state, b);
     let work = Math.min(0.22 + Math.min(a.prosperity, b.prosperity) * 0.28, aLabour.remaining + bLabour.remaining);
     let cursor = project.from;

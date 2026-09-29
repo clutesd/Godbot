@@ -37,12 +37,19 @@ export function installWatcherHistorian(): void {
   if (installed) return;
   installed = true;
 
+  const acquireScene = Historian.prototype.acquireScene;
+  Historian.prototype.acquireScene = function watcherAcquireScene(scene, state): void {
+    const memory = memoryFor(this);
+    memory.observationSequence += 1;
+    rememberAttention(memory, scene.subjectId, state.month);
+    acquireScene.call(this, scene, state);
+  };
+
   const chooseScene = Historian.prototype.chooseScene;
   Historian.prototype.chooseScene = function watcherChooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
     const scene = chooseScene.call(this, state, focusEventId);
     const memory = memoryFor(this);
-    memory.observationSequence += 1;
-    rememberAttention(memory, scene.subjectId, state.month);
+
 
     const originalText = scene.statement.text;
     const originalSources = [...scene.statement.sourceEventIds];

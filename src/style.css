@@ -141,6 +141,25 @@ body { min-width: 320px; }
   animation: opening-ready 1.05s cubic-bezier(.22, .61, .36, 1) forwards;
 }
 .opening.departed { opacity: 0; visibility: hidden; }
+.opening.restarting { transition: opacity .24s ease, visibility 0s; }
+.opening.failed .opening-mark { animation: none; border-color: #a99a82; }
+#restart {
+  min-height: 44px;
+  min-width: 96px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease;
+}
+#restart:hover:not(:disabled), #restart:focus-visible {
+  background: rgba(239, 183, 88, .055);
+  border-color: rgba(239, 183, 88, .28);
+}
+#restart:active:not(:disabled) { background: rgba(239, 183, 88, .12); }
+#restart[aria-busy="true"] { cursor: progress; }
+@media (prefers-reduced-motion: reduce) {
+  .opening.restarting, #restart { transition: none; }
+}
 .arrival-caption {
   position: absolute;
   z-index: 9;

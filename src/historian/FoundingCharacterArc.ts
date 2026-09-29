@@ -423,16 +423,18 @@ export function chooseFoundingCharacterEndingScene(
       claims: { entityIds: sourceEntityIds },
     };
     if (!historian.validateStatement(statement, state)) continue;
-    if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
     if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
-    record.endingEventId = endingKey;
-    memory.completedPersonIds.add(person.id);
+    historian.whenAcquired(statement.id, () => {
+      record.endingEventId = endingKey;
+      memory.completedPersonIds.add(person.id);
+    });
     pacingModes.set(state, 'ending');
+    const witness = livingSuccessors[0] ?? state.people.find(candidate => candidate.alive && candidate.homeId === person.homeId);
     return {
       id: statement.id,
-      subjectId: person.id,
-      kind: 'aftermath-pullback',
-      position: deathPosition(state, record, death),
+      subjectId: witness?.id ?? person.id,
+      kind: witness ? 'street-observation' : 'aftermath-pullback',
+      position: witness?.position ?? deathPosition(state, record, death),
       title: `${person.name} · ${age.toLocaleString()} YEARS`,
       statement,
       score: 0.97,
@@ -556,6 +558,12 @@ export function installFoundingCharacterArcs(): void {
     return pool;
   };
 
+  const acquireScene = Historian.prototype.acquireScene;
+  Historian.prototype.acquireScene = function arcAcquireScene(scene, state): void {
+    const snapshot = scene.statement.observerMemory;
+    if (snapshot?.kind === 'founding-character') rememberObservation(this, state, snapshot);
+    acquireScene.call(this, scene, state);
+  };
   const chooseScene = Historian.prototype.chooseScene;
   Historian.prototype.chooseScene = function characterArcChooseScene(
     this: Historian,
@@ -568,8 +576,6 @@ export function installFoundingCharacterArcs(): void {
     if (ending) return ending;
     const scene = chooseScene.call(this, state);
     restoreCanonicalArcStatement(this, scene);
-    const snapshot = scene.statement.observerMemory;
-    if (snapshot?.kind === 'founding-character') rememberObservation(this, state, snapshot);
     if (scene.id.startsWith('founding-character-arc:')) pacingModes.set(state, 'arc');
     return scene;
   };

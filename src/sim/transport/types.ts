@@ -3,6 +3,7 @@ import type { Vec2 } from '../types';
 
 export type NetworkMode = 'road' | 'rail' | 'water';
 export type TransportMode = NetworkMode | 'walk';
+export type FreightVehicle = 'basket' | 'merchant' | 'pack-animal' | 'cart' | 'caravan' | 'barge' | 'train' | 'truck';
 export type LegacyFreightResource = 'food' | 'wood' | 'minerals' | 'goods';
 export interface RoutePoint extends Vec2 { y: number }
 export interface TransportSegment {
@@ -57,6 +58,9 @@ export interface FreightTrip {
   destination: string;
   reason: 'trade' | 'scarcity-relief';
   mode: TransportMode;
+  vehicle?: FreightVehicle;
+  phase?: 'loading' | 'travel' | 'unloading';
+  phaseUntil?: number;
   /** Legacy aggregate freight retained during the migration. Exactly one cargo field is set. */
   resource?: LegacyFreightResource;
   /** Typed physical material freight selected from real destination shortages and source surplus. */
@@ -64,12 +68,19 @@ export interface FreightTrip {
   /** Catalog material freight from the local resource economy. */
   materialId?: string;
   quantity: number;
+  deliveredQuantity?: number;
+  lostQuantity?: number;
   departedMonth: number;
   path: TraversalPath;
   distance: number;
   status: 'moving' | 'blocked' | 'arrived';
 }
 export interface RouteTransport {
+  /** Real delivered throughput, never diplomatic enthusiasm. */
+  deliveredQuantity?: number;
+  deliveries?: number;
+  recentFreight?: number;
+  lastDeliveryMonth?: number;
   projectIds: string[];
   path?: TraversalPath;
   nextDispatchMonth: number;

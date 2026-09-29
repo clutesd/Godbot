@@ -14,7 +14,7 @@ describe('founding hearth visual rig', () => {
     const tongues = first.children.filter(child => child.userData['hearthFlameTongue']);
     const sparks = first.children.filter(child => child.userData['hearthSpark']);
     expect(tongues).toHaveLength(6);
-    expect(sparks).toHaveLength(7);
+    expect(sparks).toHaveLength(16);
     expect(embers.children.filter(child => child.userData['hearthEmber'])).toHaveLength(9);
 
     const firstTongue = tongues[0]!;

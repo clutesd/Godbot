@@ -1,3 +1,4 @@
+import { EnergyRenderer } from './energy/EnergyRenderer';
 import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
 import { socialGestureFrame } from './people/SocialGesturePresentation';
 import { HumanJointRig } from './people/HumanJointRig';
@@ -31,6 +32,12 @@ import { LocalActivityPresentation, activityStructureSignature, clearActivityStr
 import { ReactionGlyphRenderer } from './people/ReactionGlyphRenderer';
 import { HumanLifeClock } from './people/HumanLifeClock';
 import { RestPoseRenderer } from './people/RestPoseRenderer';
+import { SleepPresentation, solarHour } from './people/SleepPresentation';
+import { SleepGlyphRenderer } from './people/SleepGlyphRenderer';
+import { createSleepingBedding } from './people/SleepingBedding';
+import { indoorSleepingSpots, sleepAreaFloor, type IndoorSleepingArea } from './people/IndoorSleepingArea';
+import { usableStructure } from '../sim/development/Shelter';
+import { sleepSchedule } from '../sim/people/SleepSchedule';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
 import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicBodyMaterial, createCosmicReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { AssetBuilder } from './assets/AssetBuilder';
@@ -113,6 +120,7 @@ interface SmokeSource {
 }
 
 interface BuildingPlacement {
+  sleepingArea?: IndoorSleepingArea;
   development?: DevelopmentResponse;
   key: string;
   localX: number;
@@ -215,8 +223,12 @@ export const NOTABLE_VISUAL_BUDGET = 32;
 export class GodboxRenderer {
   private readonly foundingPods: FoundingPodRenderer;
   private arrivalLightingSeconds = 0;
+  private visibleSolarHour = 12;
+  private readonly sleepingPeople = new SleepPresentation();
+  private readonly sleepGlyphs = new SleepGlyphRenderer();
   readonly observation: CurrentObservation;
   private readonly renderer: THREE.WebGLRenderer;
+  private readonly energyRenderer = new EnergyRenderer();
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 900);
   private readonly cameraDirector: CameraDirector;
@@ -434,11 +446,11 @@ export class GodboxRenderer {
       historian,
       (personId) => this.inspectCameraSubject(personId),
       () => [...this.localPeers.keys()],
-      (position, padding) => this.vegetation.cameraLensObstruction(position, padding),
+      undefined,
       (elapsedSeconds) => this.vegetation.wildlifeCameraSubjects(elapsedSeconds),
     );
     this.foundingPods = new FoundingPodRenderer(state);
-    this.scene.add(this.foundingPods.root);
+    this.scene.add(this.foundingPods.root, this.energyRenderer.group);
     this.observation = this.cameraDirector.observation;
     this.manualCamera = new ManualCameraController(this.camera, this.renderer.domElement);
 
@@ -527,6 +539,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins, this.peopleTools, this.peopleHeadwear, this.peopleCargo.group, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
+    this.scene.add(this.sleepGlyphs.group);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -624,7 +637,12 @@ export class GodboxRenderer {
     // people themselves become the subject of the Arrival film.
     const humanLife = this.humanLifeClock.advance(deltaSeconds);
     if (renderPolicy.updateAmbientWorldEffects) {
-      this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds);
+      const fireRevision = this.firstFirePresentation.revision;
+      this.firstFirePresentation.update(this.state, humanLife.elapsedSeconds, this.cameraDirector.current()?.event?.id ?? '');
+      if (fireRevision !== this.firstFirePresentation.revision) {
+        this.visiblePeopleMonth = -1;
+        this.maintenance.request('settlements', true);
+      }
       const blockedStandardSettlements = new Set<string>();
       for (const settlement of this.state.settlements) {
         if (this.firstFirePresentation.isPerforming(settlement.id)) blockedStandardSettlements.add(settlement.id);
@@ -678,6 +696,7 @@ export class GodboxRenderer {
 
     // Water, sky and lightweight vegetation motion remain live throughout the prologue. These are
     // visible atmospheric cues, unlike settlement/human bookkeeping that cannot change yet.
+    this.energyRenderer.update(this.state, elapsedSeconds, (x, z) => this.elevationAt(x, z));
     this.waterSystem.update(elapsedSeconds);
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
     this.vegetation.updateLeaves(elapsedSeconds);
@@ -694,6 +713,7 @@ export class GodboxRenderer {
 
     if (this.manualCamera.active) this.manualCamera.update(deltaSeconds);
     else this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
+    this.vegetation.softenCameraCorridor(this.camera.position, this.manualCamera.active ? this.camera.position : this.cameraDirector.framingTarget());
     this.skyAtmosphere.followCamera(this.camera);
     this.foundingPods.update(this.camera);
 
@@ -752,6 +772,7 @@ export class GodboxRenderer {
     this.resourceWorkers.group.visible = visible;
     this.physicalWorkers.group.visible = visible;
     this.restPoses.group.visible = visible;
+    this.sleepGlyphs.group.visible = visible;
     this.reactionGlyphs.group.visible = visible;
   }
 
@@ -832,6 +853,7 @@ export class GodboxRenderer {
     }
 
     const obstacles: PedestrianFootprint[] = [...this.humanStructureSources.values()].flat().map(structure => ({
+      key: structure.key,
       worldX: structure.worldX, worldZ: structure.worldZ, width: structure.width, depth: structure.depth, rotationY: structure.rotationY,
     }));
 
@@ -899,6 +921,7 @@ export class GodboxRenderer {
   }
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
+    this.sleepingPeople.beginFrame(this.state.people);
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
     this.refreshHumanNavigation();
@@ -916,6 +939,7 @@ export class GodboxRenderer {
     this.peopleVisuals.beginFrame();
     this.localActivities.beginFrame();
     const reactionSeriousShot = this.observation.audioCategory === 'conflict' || this.observation.audioCategory === 'tragedy';
+    this.sleepGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.reducedMotion.matches, reactionSeriousShot);
     this.reactionGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.cameraDirector.current()?.subjectId,
       reactionSeriousShot, this.reducedMotion.matches);
     this.localPeers.clear();
@@ -963,14 +987,16 @@ export class GodboxRenderer {
       const base = this.personDisplayTarget(person, group);
       const currentPresentation = this.peopleVisuals.get(person.id);
       const hearthPosition = settlement ? foundingHearthWorldPosition(settlement, this.state.arrival?.pods ?? []) : undefined;
-      const firstFireCandidate: FirstFireStagingTarget | undefined = settlement && hearthPosition && !worker && !physical && !interruption
+      const firstFireCandidate: FirstFireStagingTarget | undefined = settlement && hearthPosition && !interruption
+        && !['migrate', 'transport'].includes(person.activity)
         ? this.firstFirePresentation.targetFor(person.id, settlement.id, hearthPosition,
           currentPresentation ? { x: currentPresentation.x, z: currentPresentation.z } : base,
-          settlement.position)
+          settlement.position, this.reducedMotion.matches)
         : undefined;
       const firstFire = firstFireCandidate && this.personStandable(firstFireCandidate.x, firstFireCandidate.z)
         && this.resourceWork.safeSegment(currentPresentation ? { x: currentPresentation.x, z: currentPresentation.z } : base, firstFireCandidate)
         ? firstFireCandidate : undefined;
+      if (firstFire) { worker = undefined; physical = undefined; }
 
       let foundingStandard: FoundingStandardTarget | undefined;
       if (settlement && !interruption && !firstFire && this.foundingStandardPresentation.isPerforming(settlement.id)) {
@@ -993,6 +1019,32 @@ export class GodboxRenderer {
         }
       }
       const structures = this.settlementBuildingPlacements.get(person.homeId) ?? NO_ACTIVITY_STRUCTURES;
+      const sleepStructures = structures.map(structure => {
+        const plot = settlement?.structurePlots?.find(p => p.id === structure.key);
+        return plot && !usableStructure(plot) ? { ...structure, sleepingArea: undefined } : structure;
+      });
+      const sleepRoutine = sleepSchedule(person, this.visibleSolarHour);
+      const sleepDue = Boolean(settlement && sleepRoutine.returningHome
+        && !interruption && !firstFire && !foundingStandard
+        && (!person.foundingOrigin || this.state.arrival?.phase === 'HISTORY_RUNNING'));
+      const scheduledSleepSpot = this.sleepingPeople.resolve(person, sleepDue, settlement?.position ?? base, sleepStructures,
+        point => this.personStandable(point.x, point.z), (a, b) => this.personGround.safeSegment!(a, b) && this.resourceWork.safeSegment(a, b),
+        (a, b, area) => this.humanNavigation.clear(a, b, area) && this.resourceWork.safeSegment(a, b));
+      const previousRest = this.restPoses.get(person.id);
+      const wakingSpot = !sleepDue && !interruption && !firstFire && !foundingStandard
+        && previousRest?.spot?.posture === 'sleep' && previousRest.blend > 0.001 ? previousRest.spot : undefined;
+      const sleepSpot = scheduledSleepSpot ?? wakingSpot;
+      const sleepAccess = this.sleepingPeople.accessFor(person.id, currentPresentation ?? base, sleepSpot, sleepStructures);
+      const sleepClear = (a: Vec2, b: Vec2): boolean => this.humanNavigation.clear(a, b, sleepAccess)
+        && this.vegetation.pedestrianSegmentClear(a, b) && this.terrainDecor.pedestrianSegmentClear(a, b)
+        && this.resourceWork.safeSegment(a, b);
+      const movementGround: PersonVisualGround = sleepAccess ? {
+        ...this.personGround,
+        heightAt: (x, z) => sleepAreaFloor(sleepAccess, { x, z }, this.elevationAt(x, z)),
+        safeSegment: sleepClear,
+        detour: (a, b) => this.humanNavigation.detour(a, b, sleepClear, sleepAccess),
+      } : this.personGround;
+      if (sleepSpot) { worker = undefined; physical = undefined; }
       let localRevision = this.localStructureRevisions.get(structures);
       if (localRevision === undefined) {
         localRevision = activityStructureSignature(structures);
@@ -1006,11 +1058,11 @@ export class GodboxRenderer {
         safeSegment: (a, b) => this.resourceWork.safeSegment(a, b),
         revision: localRevision,
         visualFor: (id) => this.localPeerPositions.get(id),
-        blocked: Boolean(worker || physical || interruption || firstFire || foundingStandard || person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'),
+        blocked: Boolean(sleepSpot || worker || physical || interruption || firstFire || foundingStandard || person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'),
         far: Math.hypot(this.camera.position.x - base.x, this.camera.position.z - base.z) > 35,
       }, deltaSeconds);
       const aim = worker ? resourceWorkAlternateAnchor(worker.site.profile, worker.variation, elapsedSeconds)
-        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? foundingStandard ?? local?.destination ?? base;
+        ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? foundingStandard ?? sleepSpot?.destination ?? local?.destination ?? base;
       const foundingPod = person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'
         ? this.state.arrival?.pods.find(p => p.id === person.foundingOrigin?.podId) : undefined;
       const egress = foundingPod ? arrivalFounderPose(person, foundingPod, this.state.arrival!.elapsedSeconds, this.personGround.heightAt) : undefined;
@@ -1018,7 +1070,7 @@ export class GodboxRenderer {
         destination: aim,
         greetingPartnerId: local?.encounter?.beat === 0 && ['hug', 'handshake'].includes(local.encounter.greeting ?? '') ? local.encounter.partnerId : undefined,
         embracing: local?.encounter?.beat === 0 && local.encounter.greeting === 'hug',
-        localMove: Boolean(firstFire || foundingStandard || local && local.action !== 'arrive'),
+        localMove: Boolean(sleepSpot || firstFire || foundingStandard || local && local.action !== 'arrive'),
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
         localSpeed: ((person.activity === 'flee' ? 0.85
@@ -1029,30 +1081,39 @@ export class GodboxRenderer {
                 : local ? 0.27 : 0.38)
           + stableUnit(`${person.id}:pace`) * 0.02) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.94 : 1),
         arrivalEase: Boolean(worker || physical || foundingStandard),
-        ...(!worker && !physical && !firstFire && !foundingStandard && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
+        ...(!sleepSpot && !worker && !physical && !firstFire && !foundingStandard && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
         restFacing: worker ? Math.atan2(worker.station.target.x - aim.x, worker.station.target.z - aim.z)
           : physical ? facingTarget(physical.action.locomotionTarget, physical.action.interactionAnchor)
-            : firstFire?.restFacing ?? foundingStandard?.restFacing ?? local?.restFacing ?? base.restFacing,
-      }, deltaSeconds, this.personGround);
+            : firstFire?.restFacing ?? foundingStandard?.restFacing ?? sleepSpot?.facing ?? local?.restFacing ?? base.restFacing,
+      }, deltaSeconds, movementGround);
       const display = visual;
       const tier = visualTierFor(person);
       const detailed = tier !== 'population' || Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
       this.animationController.getOrCreateCharacterState(person.id, person.occupation);
       if (physical) this.physicalWork.advance(person, physical, visual, deltaSeconds);
       const physicalStanding = physical && physical.ready && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
+      const sleepReady = Boolean(scheduledSleepSpot && sleepSpot && sleepRoutine.sleeping && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
+        && Math.hypot(visual.x - sleepSpot.destination.x, visual.z - sleepSpot.destination.z) < 0.1);
       const restReady = Boolean(local?.rest && local.phase === 'action' && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD);
       const restAttentionYaw = restReady && local
         ? Math.atan2(Math.sin(facingTarget(visual, local.focus) - visual.facing), Math.cos(facingTarget(visual, local.focus) - visual.facing))
         : 0;
-      const restPose = this.restPoses.resolve(person.id, restReady ? local?.rest : undefined,
-        restReady ? local?.restStage : undefined, deltaSeconds, person.ageMonths, restAttentionYaw);
+      const restPose = this.restPoses.resolve(person.id, sleepReady ? sleepSpot : restReady ? local?.rest : undefined,
+        sleepReady ? 'settled' : wakingSpot ? 'rising' : restReady ? local?.restStage : undefined, deltaSeconds, person.ageMonths, restAttentionYaw);
+      if (sleepSpot) this.actionInspections.set(person.id, {
+        personId: person.id, actionKind: wakingSpot ? 'wake-up' : sleepReady ? 'sleep' : 'return-to-sleeping-space',
+        authoritativeActivity: person.activity, sourceAuthority: 'household sleep schedule sampled against the visible solar clock',
+        targetId: sleepSpot.key, targetKind: 'sleeping-space', interactionAnchor: sleepSpot.destination,
+        locomotionTarget: sleepSpot.destination, phase: wakingSpot ? 'rising' : sleepReady ? 'sleeping' : 'return-home',
+        phaseProgress: sleepReady ? restPose.blend : 0, activeTool: 'none', contactStrength: 0,
+      });
       const standardCarrying = foundingStandard?.phase === 'carry-pole';
       const loaded = physical?.action.carriedObject !== undefined || firstFire?.carriedObject !== undefined || standardCarrying;
       const travel = travelAnimationFor(visual.speed, person);
       const playfulRun = Boolean(local && ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local.action)
         && visual.speed >= WALK_SPEED_THRESHOLD);
-      const firstFireStanding = Boolean(firstFire && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
-        && Math.hypot(visual.x - firstFire.x, visual.z - firstFire.z) < 0.08);
+      const firstFireStanding = Boolean(firstFire && (firstFire.animation === 'dance' ? visual.speed < 0.16 : !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD)
+        && Math.hypot(visual.x - firstFire.x, visual.z - firstFire.z) < (firstFire.animation === 'dance' ? 0.18 : 0.08));
       const standardStanding = Boolean(foundingStandard && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD
         && Math.hypot(visual.x - foundingStandard.x, visual.z - foundingStandard.z) < 0.09);
       if (settlement && foundingStandard) {
@@ -1065,13 +1126,15 @@ export class GodboxRenderer {
       }
       const unsupportedWork = ['farm', 'construct', 'gather'].includes(person.activity) && !worker && !physical;
       if (detailed) this.animationController.updateCharacterAnimation(person.id, deltaSeconds, person.activity,
-        visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
+        firstFireStanding && firstFire?.animation === 'dance' ? 'dance'
+          : sleepReady ? 'rest'
+          : visual.speed >= WALK_SPEED_THRESHOLD ? loaded ? 'carry' : playfulRun ? 'run' : travel
           : firstFireStanding ? firstFire!.animation
             : standardStanding ? foundingStandard!.animation
               : interruption || unsupportedWork || physical ? 'idle'
               : foundingCommunityRoutine && ['assist', 'craft'].includes(person.activity) ? 'work'
                 : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
-        visual.speed, person.ageMonths, loaded || person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? ''), person.traits.sociability);
+        visual.speed, person.ageMonths, loaded || !sleepSpot && !firstFire && (person.activity === 'transport' || ['bag', 'basket'].includes(person.appearance?.carriedItem ?? '')), person.traits.sociability);
       let pose = detailed ? this.animationController.getCurrentPose(person.id) : null;
       const oriented = worker && Math.cos(visual.facing - facingTarget(aim, worker.station.target)) > 0.94;
       const working = worker && detailed && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
@@ -1115,7 +1178,7 @@ export class GodboxRenderer {
         const assembling = firstFire.role === 'builder' && firstFire.assemblyPhase !== undefined;
         this.actionInspections.set(person.id, {
           personId: person.id,
-          actionKind: assembling
+          actionKind: firstFire.animation === 'dance' ? 'founding-first-fire-dance' : assembling
             ? `founding-hearth-${firstFire.assemblyPhase}-${firstFire.pieceKind ?? 'material'}`
             : firstFire.role === 'tender'
               ? `founding-first-fire-${firstFire.ceremonyPhase ?? 'tend'}`
@@ -1168,9 +1231,10 @@ export class GodboxRenderer {
       const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend + (visual.passingTorsoYaw ?? 0);
       const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend + (visual.passingHeadYaw ?? 0) - attentionBodyYaw;
       const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated || firstFireStanding || standardStanding));
-      const bodyPitch = bodyTilt.pitch + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
-      const bodyFacing = facing + (pose?.pelvisRotation ?? 0) + attentionBodyYaw + (restArticulated ? restPose.bodyYaw : 0);
-      const bodyRoll = bodyTilt.roll + (pose?.spineRoll ?? 0) + (restArticulated ? restPose.bodyRoll : 0);
+      const bodyPitch = (restPose.spot?.posture === 'sleep' ? 0 : bodyTilt.pitch) + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
+      const sleepingPose = restPose.spot?.posture === 'sleep';
+      const bodyFacing = facing + (sleepingPose ? 0 : (pose?.pelvisRotation ?? 0) + attentionBodyYaw) + (restArticulated ? restPose.bodyYaw : 0);
+      const bodyRoll = (sleepingPose ? 0 : bodyTilt.roll + (pose?.spineRoll ?? 0)) + (restArticulated ? restPose.bodyRoll : 0);
       this.setInstanceTransform(this.people, index, display.x, footY + (0.44 + (working && worker ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
       const culture = this.cultureById.get(person.cultureId);
       this.personColor.set(cosmicRoleFor(person.role).color);
@@ -1207,7 +1271,9 @@ export class GodboxRenderer {
           const dz = contact.z - display.z;
           const length = Math.max(0.001, Math.hypot(dx, dz));
           const lateral = (side ? 1 : -1) * (firstFire.role === 'tender' ? 0.012 : 0.018);
-          const contactHeight = firstFire.role === 'tender' ? 0.085 : 0.055;
+          const strikeLift = firstFire.ceremonyPhase === 'strike' && side === 1
+            ? Math.max(0, Math.sin(firstFire.phaseProgress * Math.PI * 4)) * 0.12 : 0;
+          const contactHeight = firstFire.role === 'tender' ? 0.085 + strikeLift : 0.055;
           this.socialHandTarget.set(
             contact.x - dz / length * lateral,
             this.elevationAt(contact.x, contact.z) + contactHeight,
@@ -1253,11 +1319,13 @@ export class GodboxRenderer {
         && !local?.attentionId && !visual.passingPeer
         ? Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(focalDelta), Math.cos(focalDelta)))) : 0;
       visual.focalHeadYaw = turnToward(visual.focalHeadYaw ?? 0, focalYaw, Math.min(0.1, Math.max(0, deltaSeconds)) * 1.8);
-      const headFacing = bodyFacing + visual.focalHeadYaw + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0);
+      const headFacing = restPose.spot?.posture === 'sleep' ? bodyFacing : bodyFacing + visual.focalHeadYaw + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0);
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
-        heightScale, heightScale, heightScale, bodyPitch + (pose?.headPitch ?? 0), headFacing, 0);
+        heightScale, heightScale, heightScale, bodyPitch + (sleepingPose ? 0 : pose?.headPitch ?? 0), headFacing, 0);
       this.personHeadwearPosition.set(0, 0.019, 0).applyMatrix4(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
+      if (!visual.traveling && restPose.spot?.posture === 'sleep') this.sleepGlyphs.draw(person.id,
+        this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale, restPose.blend);
       this.reactionGlyphs.track(person.id, this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale);
       this.reactionGlyphs.consider(person.id, { person, local, firstFire: firstFireStanding ? firstFire : undefined,
         resourceKind: working ? worker?.site.profile.kind : undefined, seriousShot: reactionSeriousShot });
@@ -1279,7 +1347,7 @@ export class GodboxRenderer {
         bodyFacing, bodyPitch, this.personColor);
       const carried = person.appearance?.carriedItem ?? 'none';
       const longTool = ['hoe', 'hammer', 'staff', 'toolkit'].includes(carried);
-      const toolScale = detailed && longTool && !articulated ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
+      const toolScale = detailed && longTool && !articulated && !firstFire && !sleepSpot ? heightScale * (tier === 'population' ? 1 : 1.12) : 0.001;
       const handSwing = bodyPitch - (pose?.rightShoulderRotation ?? 0) - (pose?.rightElbowRotation ?? 0);
       this.setInstanceTransform(this.peopleTools, index,
         this.personGripPosition.x, this.personGripPosition.y, this.personGripPosition.z,
@@ -1288,7 +1356,7 @@ export class GodboxRenderer {
       this.peopleTools.setColorAt(index, this.personDetailColor);
 
       const headwear = tier === 'population' ? person.appearance?.headwear ?? 'none' : notableHeadwear(person);
-      const hatScale = !detailed || headwear === 'none' ? 0.001 : heightScale;
+      const hatScale = sleepSpot || !detailed || headwear === 'none' ? 0.001 : heightScale;
       const hatWidth = headwear === 'brim' ? 1.03 : headwear === 'helmet' ? 1 : 0.99;
       const hatHeight = headwear === 'cap' ? 0.52 : headwear === 'brim' ? 0.32 : 0.86;
       this.setInstanceTransform(this.peopleHeadwear, index, this.personHeadwearPosition.x, this.personHeadwearPosition.y, this.personHeadwearPosition.z, hatScale * hatWidth, hatScale * hatHeight, hatScale * hatWidth, pose?.spineRotation ?? 0, headFacing, 0);
@@ -1309,7 +1377,7 @@ export class GodboxRenderer {
         }
         this.peopleCargo.draw(firstFire.carriedObject === 'stone' ? 'masonry' : 'timber',
           cargoX, cargoY, cargoZ, heightScale * 0.72, facing);
-      } else if (cargoVisible && !articulated) this.peopleCargo.draw(carried === 'none' ? 'bag' : carried,
+      } else if (cargoVisible && !articulated && !firstFire && !sleepSpot) this.peopleCargo.draw(carried === 'none' ? 'bag' : carried,
         display.x + Math.sin(facing) * 0.19 * heightScale, footY + 0.43 * heightScale + poseLift,
         display.z + Math.cos(facing) * 0.19 * heightScale, heightScale, facing);
       if (physical && articulated && (detailed || loaded)) this.physicalWorkers.drawPhysical(physical.motion, physical.action.interactionAnchor,
@@ -1329,7 +1397,7 @@ export class GodboxRenderer {
         }
       }
 
-      if (tier !== 'population' && mantles < this.peopleMantles.instanceMatrix.count) {
+      if (!sleepSpot && tier !== 'population' && mantles < this.peopleMantles.instanceMatrix.count) {
         // Notable lives read at documentary distance through one extra silhouette element only.
         const mantleScale = heightScale * (tier === 'historical' ? 1.06 : 1);
         this.setInstanceTransform(this.peopleMantles, mantles, display.x, footY + 0.7 * heightScale + poseLift, display.z, mantleScale * buildScale, mantleScale, mantleScale * buildScale, 0, facing, 0);
@@ -1443,10 +1511,12 @@ export class GodboxRenderer {
       this.physicalWork.constructionCrewAuthority(),
     );
     const protectedFoundingStandard = this.foundingStandardPresentation.participantIds();
+    const protectedFirstFire = this.firstFirePresentation.participantIds();
     this.visiblePeople = alive
       // Notable/historical lives remain first. Then preserve live construction and one-time
       // founding-standard participants so a crowded settlement cannot hide the people doing the act.
-      .sort((a, b) => tierRank(b) - tierRank(a)
+      .sort((a, b) => Number(protectedFirstFire.has(b.id)) - Number(protectedFirstFire.has(a.id))
+        || tierRank(b) - tierRank(a)
         || Number(protectedFoundingStandard.has(b.id)) - Number(protectedFoundingStandard.has(a.id))
         || Number(protectedConstruction.has(b.id)) - Number(protectedConstruction.has(a.id))
         || Number(this.resourceWork.sites.has(`${b.homeId}\u0000${b.navigation?.destinationId ?? ''}`))
@@ -1661,7 +1731,7 @@ export class GodboxRenderer {
     const firstFireVisual = this.firstFirePresentation.sample(settlement.id, this.reducedMotion.matches);
     const survivalFireActive = foundingHearthBurning(settlement) || firstFireVisual.active;
     if (survivalFireActive) {
-      const hearthOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []) ?? { x: 0, z: 1.6 };
+      const hearthOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []) ?? { x: 0, z: 0 };
       const hearthWorldX = settlement.position.x + hearthOffset.x;
       const hearthWorldZ = settlement.position.z + hearthOffset.z;
       const groundY = this.elevationAt(hearthWorldX, hearthWorldZ) - settlementY;
@@ -1686,7 +1756,8 @@ export class GodboxRenderer {
     const politySize = this.state.polities.find((polity) => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
     if (!settlement.development && importance >= 1 && eraRank(era) >= 2) this.addLandmark(group, settlement, cultureStyle, era, axisAngle, settlementY);
-    if (!settlement.development && routeCount > 0 && eraRank(era) >= 2) this.addMarket(group, settlement, layout, culture, Math.min(4, routeCount));
+    const tradingDeliveries = this.state.tradeRoutes.filter(r => r.a === settlement.id || r.b === settlement.id).reduce((sum, r) => sum + (r.transport?.deliveries ?? 0), 0);
+    if (routeCount > 0 && tradingDeliveries >= 2) this.addMarket(group, settlement, layout, culture, Math.min(6, 1 + Math.floor(tradingDeliveries / 4)));
     if (politySize > 1) this.addWaystones(group, settlement, culture, Math.min(5, politySize));
     const smokeSources: SmokeSource[] = [];
     if (survivalFireActive) {
@@ -2063,11 +2134,27 @@ export class GodboxRenderer {
       placement.worldZ - x * sine + z * cosine) - center;
   }
 
+  private installSleepingArea(placement: BuildingPlacement, building: THREE.Object3D,
+    width: number, depth: number, floorHeight: number, doorWidth: number): void {
+    if (!['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(placement.role)
+      || placement.development && (placement.development.services.housing ?? 0) <= 0) return;
+    const area: IndoorSleepingArea = { key: placement.key, worldX: placement.worldX, worldZ: placement.worldZ,
+      rotationY: placement.rotationY, width, depth, doorWidth,
+      floorY: this.elevationAt(placement.worldX, placement.worldZ) + floorHeight + 0.02,
+      plotWidth: placement.width, plotDepth: placement.depth };
+    const spots = indoorSleepingSpots(area);
+    if (!spots.length) return;
+    placement.sleepingArea = area;
+    building.add(createSleepingBedding(area, building.scale.x, floorHeight));
+  }
+
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number): THREE.Object3D {
     if (placement.development?.adaptation) {
       const building = createSurvivalStructure(placement.development, 1, placement.width, placement.depth, this.getPalette(cultureStyle, era), this.shelterGroundAt(placement));
       building.position.set(placement.localX, terrainY, placement.localZ); building.rotation.y = placement.rotationY;
       building.userData['placementKey'] = placement.key;
+      this.installSleepingArea(placement, building, placement.width * 0.72, placement.depth * 0.7,
+        Number(building.userData['foundationLift'] ?? 0) + 0.05, placement.width * 0.30);
       return building;
     }
     const stage = this.constructionStageFor(placement.key);
@@ -2108,6 +2195,10 @@ export class GodboxRenderer {
     building.position.set(placement.localX + structureOffsetX, groundedTerrainY, placement.localZ + structureOffsetZ);
     building.rotation.y = placement.rotationY;
     building.scale.setScalar(fit);
+    if (stage >= BUILD_STAGE.ROOF) this.installSleepingArea(placement, building,
+      Number(building.userData['bodyWidth'] ?? 0) * fit, Number(building.userData['bodyDepth'] ?? 0) * fit,
+      Number(building.userData['floorHeight'] ?? 0) * fit,
+      Number(building.userData['doorWidth'] ?? 0) * fit);
     building.userData['placementKey'] = placement.key;
     building.userData['worldX'] = placement.worldX;
     building.userData['worldZ'] = placement.worldZ;
@@ -2627,12 +2718,14 @@ export class GodboxRenderer {
     // Categorical state belongs directly in the signature; only continuous numeric state is
     // quantized. Keeping these domains separate also prevents string/undefined arithmetic.
     return [
+      Math.min(6, Math.floor(this.state.tradeRoutes.filter(r => r.a === settlement.id || r.b === settlement.id).reduce((n, r) => n + (r.transport?.deliveries ?? 0), 0) / 2)),
       potteryTier(settlement),
       culture?.id ?? '',
       culture?.style.symbol ?? '',
       culture?.style.pattern ?? '',
       settlement.specialization,
       settlement.survival?.firstFire?.eventId ?? '',
+      this.firstFirePresentation.isPerforming(settlement.id) ? 'celebrating-fire' : 'ordinary-hearth',
       settlement.development?.revision ?? 0,
       constructionBlockedReason(settlement) ?? '',
       this.eraForSettlement(settlement),
@@ -3541,6 +3634,14 @@ export class GodboxRenderer {
       const secondPost = posts.clone();
       secondPost.position.x = 0.38;
       stall.add(table, canopy, posts, secondPost);
+      const stock = Object.entries(settlement.localMaterials).filter(([, amount]) => amount > 0.1).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      const item = stock[index % Math.max(1, stock.length)];
+      if (item) {
+        const cargo = createResourceCargo({ materialId: item[0], quantity: Math.min(item[1], 4), mode: 'road' } as import('../sim/transport/types').FreightTrip);
+        if (cargo) { cargo.position.set(0, 0.52, 0); stall.add(cargo); }
+      }
+      const basket = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.075, 0.15, 8), new THREE.MeshStandardMaterial({ color: '#b99561', roughness: 1 }));
+      basket.position.set(-0.3, 0.56, 0); stall.add(basket);
       stall.rotation.y = -angle + Math.PI / 2;
       group.add(stall);
       this.registerSettlementObstacle(settlement.id, position.worldX, position.worldZ, 0.85, 0.48, stall.rotation.y);
@@ -3593,9 +3694,9 @@ export class GodboxRenderer {
       entries.push({ light, base, flicker, ...(kind ? { kind } : {}), ...(settlementId ? { settlementId } : {}) });
     };
 
-    if (rank <= 1) {
+    if (rank <= 1 || this.firstFirePresentation.isPerforming(settlement.id)) {
       const foundingOffset = foundingSettlementHearthOffset(settlement, this.state.arrival?.pods ?? []);
-      const foundingHearth = Boolean(settlement.foundingPodId);
+      const foundingHearth = Boolean(settlement.foundingPodId || settlement.survival?.firstFire);
       // A landing reserves this ground for a future communal hearth, but does not visually invent
       // one. The ash bed and stone ring become visible only after the authoritative first-fire
       // milestone has been recorded.
@@ -3626,7 +3727,7 @@ export class GodboxRenderer {
       group.add(infrastructure);
 
       // Once earned, the physical hearth remains even if fuel later runs out.
-      if (foundingHearth && (!foundingOffset || (!foundingHearthBurning(settlement) && !initial?.active))) return entries;
+      if (foundingHearth && ((settlement.foundingPodId && !foundingOffset) || (!foundingHearthBurning(settlement) && !initial?.active))) return entries;
       const embers = createFoundingHearthEmbers(visualSeed);
       embers.position.set(hearthOffset.x, groundY + 0.072, hearthOffset.z);
       embers.userData['hearthEmbers'] = true;
@@ -3667,6 +3768,9 @@ export class GodboxRenderer {
    * These are the background verbs of daily life the buildings alone cannot speak.
    */
   private addEraDressing(group: THREE.Group, settlement: Settlement, era: Era, palette: MaterialPalette, random: SeededRandom): void {
+    // Physical settlements render paid structures, cargo and work through their owning
+    // systems. Era decoration otherwise invents racks and wells at first arrival.
+    if (settlement.development) return;
     const rank = eraRank(era);
     const timber = palette.getSurfaceMaterial('timber');
     const stone = palette.getSurfaceMaterial('stone');
@@ -3824,6 +3928,7 @@ export class GodboxRenderer {
    * yard for crafters, a caravan rest for traders. Deterministic per settlement.
    */
   private addSpecializationDressing(group: THREE.Group, settlement: Settlement, era: Era, palette: MaterialPalette, smokeSources: SmokeSource[], routeCount: number): void {
+    if (settlement.development) return;
     const rank = eraRank(era);
     if (rank < 1) return;
     const random = this.random.fork(`${settlement.id}:specialization`);
@@ -3924,7 +4029,8 @@ export class GodboxRenderer {
     }
 
     // Heavy trade earns a caravan rest regardless of base specialization.
-    if ((settlement.specialization === 'exchange' || routeCount >= 3) && rank >= 2) {
+    const freightVolume = this.state.tradeRoutes.filter(r => r.active && (r.a === settlement.id || r.b === settlement.id)).reduce((n, r) => n + (r.transport?.recentFreight ?? 0), 0);
+    if (freightVolume >= 10 && (settlement.specialization === 'exchange' || routeCount >= 2)) {
       const restX = Math.cos(angle + Math.PI * 0.66) * (baseRadius - 0.5);
       const restZ = Math.sin(angle + Math.PI * 0.66) * (baseRadius - 0.5);
       for (const [sx, sz] of [[-0.5, -0.35], [0.5, -0.35], [0, 0.45]] as const) {
@@ -4090,7 +4196,7 @@ export class GodboxRenderer {
     this.weatherRenderer.bindScene(this.scene);
   }
 
-  private createCaravan(): THREE.Group {
+  private createCaravan(animalDrawn = false): THREE.Group {
     const caravan = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.38, 0.7), new THREE.MeshStandardMaterial({ color: '#d8a849', roughness: 0.78 }));
     const canopy = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.62, 4), new THREE.MeshStandardMaterial({ color: '#31506a', roughness: 0.86 }));
@@ -4098,6 +4204,11 @@ export class GodboxRenderer {
     canopy.rotation.x = Math.PI / 2;
     canopy.position.y = 0.35;
     caravan.add(body, canopy);
+    for (const x of [-0.27, 0.27]) for (const z of [-0.23, 0.23]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.065, 8), new THREE.MeshStandardMaterial({ color: '#46372c' }));
+      wheel.rotation.z = Math.PI / 2; wheel.position.set(x, -0.1, z); caravan.add(wheel);
+    }
+    const animal = animalDrawn ? this.createPackAnimal() : this.createFreightCarrier(); animal.position.set(0, -0.25, 0.95); caravan.add(animal);
     return caravan;
   }
 
@@ -4126,6 +4237,11 @@ export class GodboxRenderer {
       trim.position.set(0, 0.18, index * 0.86);
       train.add(carriage, trim);
     }
+    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.07, 0.32, 8), trimMaterial); chimney.position.set(0, 0.39, 0.35); train.add(chimney);
+    for (const x of [-0.33, 0.33]) for (const z of [-0.37, 0, 0.37]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.06, 10), bodyMaterial);
+      wheel.rotation.z = Math.PI / 2; wheel.position.set(x, -0.2, z); train.add(wheel);
+    }
     return train;
   }
 
@@ -4143,7 +4259,8 @@ export class GodboxRenderer {
       if (!vehicle) {
         const origin = this.state.settlements.find(s => s.id === trip.origin);
         if (!origin) continue;
-        vehicle = trip.mode === 'water' ? this.createBoat() : trip.mode === 'rail' ? this.createTrain(origin) : trip.mode === 'walk' ? this.createFreightCarrier() : this.createCaravan();
+        vehicle = trip.vehicle === 'truck' ? this.createMotorFreight() : trip.vehicle === 'pack-animal' ? this.createPackAnimal() : trip.mode === 'water' ? this.createBoat() : trip.mode === 'rail' ? this.createTrain(origin) : trip.mode === 'walk' ? this.createFreightCarrier() : this.createCaravan(trip.vehicle === 'caravan');
+        if (trip.vehicle === 'caravan') { const trailer = this.createCaravan(true); trailer.position.z = -1.05; vehicle.add(trailer); }
         const cargo = createResourceCargo(trip);
         if (cargo) {
           vehicle.add(cargo);
@@ -4155,7 +4272,7 @@ export class GodboxRenderer {
         this.caravanGroup.add(vehicle);
       }
       const pose = positionAlongPath(trip.path, trip.distance);
-      vehicle.visible = Boolean(pose && trip.status === 'moving');
+      vehicle.visible = Boolean(pose);
       if (!pose) continue;
       vehicle.position.set(pose.position.x, pose.position.y + (trip.mode === 'walk' ? 0 : 0.29), pose.position.z);
       if (trip.mode === 'water') vehicle.position.y = this.terrainSurface.waterYAt(pose.position.x, pose.position.z) + 0.18;
@@ -4163,11 +4280,38 @@ export class GodboxRenderer {
     }
   }
 
+  private createPackAnimal(): THREE.Group {
+    const animal = new THREE.Group();
+    animal.name = 'Pack animal';
+    const hide = new THREE.MeshStandardMaterial({ color: '#87684c', roughness: 1 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.23, 0.48), hide); body.position.y = 0.3;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.24, 0.19), hide); head.position.set(0, 0.45, 0.27);
+    animal.add(body, head);
+    for (const x of [-0.08, 0.08]) for (const z of [-0.17, 0.17]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.25, 0.055), hide); leg.position.set(x, 0.125, z); animal.add(leg);
+    }
+    return animal;
+  }
+
+  private createMotorFreight(): THREE.Group {
+    const truck = new THREE.Group(); truck.name = 'Motor freight';
+    const metal = new THREE.MeshStandardMaterial({ color: '#597b7b', metalness: 0.4, roughness: 0.6 });
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.18, 0.95), metal); bed.position.z = -0.15;
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.46, 0.4), metal); cab.position.set(0, 0.18, 0.48);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.17, 0.02), new THREE.MeshStandardMaterial({ color: '#acd0d8' })); glass.position.set(0, 0.27, 0.69);
+    truck.add(bed, cab, glass);
+    for (const x of [-0.3, 0.3]) for (const z of [-0.43, 0.43]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.09, 10), new THREE.MeshStandardMaterial({ color: '#252528' }));
+      wheel.rotation.z = Math.PI / 2; wheel.position.set(x, -0.13, z); truck.add(wheel);
+    }
+    return truck;
+  }
+
   private createFreightCarrier(): THREE.Group {
     const carrier = new THREE.Group();
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.29, 3, 5), createCosmicBodyMaterial(false));
     body.position.y = 0.27;
-    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.19, 0.13), new THREE.MeshStandardMaterial({ color: '#b59c6c' }));
+    const pack = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.065, 0.19, 8), new THREE.MeshStandardMaterial({ color: '#b59c6c', roughness: 1 }));
     pack.name = 'Generic freight pack';
     pack.position.set(0, 0.27, -0.11);
     carrier.add(body, pack);
@@ -4175,6 +4319,7 @@ export class GodboxRenderer {
   }
 
   private updateDayNight(elapsedSeconds: number): void {
+    this.visibleSolarHour = solarHour(elapsedSeconds);
     const phase = (elapsedSeconds / 58 + 0.16) % 1;
     const daylight = THREE.MathUtils.smoothstep(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 0.12, 0.72);
     this.ecology.animate(elapsedSeconds, daylight);
@@ -4217,7 +4362,8 @@ export class GodboxRenderer {
         const illumination = hearth
           ? Math.min(1, night + (1 - night) * (firstFire.active ? 0.34 : 0.12))
           : night;
-        const gain = hearth ? firstFire.lightGain : 1;
+        const settlement = this.state.settlements.find(s => s.id === settlementId);
+        const gain = hearth ? firstFire.lightGain : settlement?.energy && (settlement.energy.ledgers.electric.demand > 0) ? settlement.energy.reliability : 1;
         entry.light.intensity = illumination * entry.base * wobble * gain * (1 + visual.powerLevel * 1.9);
       }
     }
@@ -4377,6 +4523,7 @@ export class GodboxRenderer {
   }
 
   dispose(): void {
+    this.energyRenderer.dispose();
     this.manualCamera.dispose();
     this.foundingPods.dispose();
     this.postProcessing.dispose();
@@ -4387,6 +4534,7 @@ export class GodboxRenderer {
     this.peopleVisuals.clear();
     this.localActivities.clear();
     this.reactionGlyphs.dispose();
+    this.sleepGlyphs.dispose();
     this.localPeers.clear();
     this.localPeerPositions.clear();
     this.animationController.dispose();

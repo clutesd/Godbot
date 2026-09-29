@@ -248,18 +248,47 @@ export function createFoundingHearthFlameRig(seed: string): THREE.Group {
   rig.userData['phase'] = stableUnit(`${seed}:flame-phase`) * Math.PI * 2;
 
   const materials = [
-    new THREE.MeshBasicMaterial({ color: '#e94d1c', toneMapped: false }),
-    new THREE.MeshBasicMaterial({ color: '#ff8a25', toneMapped: false }),
-    new THREE.MeshBasicMaterial({ color: '#ffc64f', toneMapped: false }),
-    new THREE.MeshBasicMaterial({ color: '#fff0ad', toneMapped: false }),
+    new THREE.MeshBasicMaterial({ color: '#ed4312', toneMapped: false, transparent: true, opacity: 0.62, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ color: '#ff922c', toneMapped: false, transparent: true, opacity: 0.78, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ color: '#ffd76a', toneMapped: false, transparent: true, opacity: 0.9, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ color: '#fff4c2', toneMapped: false, transparent: true, opacity: 0.95, depthWrite: false }),
   ];
+  const fireTime = { value: 0 };
+  const fireMotion = { value: 1 };
+  rig.userData['fireTime'] = fireTime;
+  rig.userData['fireMotion'] = fireMotion;
+  for (const material of materials) {
+    material.onBeforeCompile = shader => {
+      shader.uniforms['fireTime'] = fireTime;
+      shader.uniforms['fireMotion'] = fireMotion;
+      shader.vertexShader = 'uniform float fireTime; uniform float fireMotion; varying float flameHeight;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
+        #include <begin_vertex>
+        flameHeight = uv.y;
+        float tip = uv.y * uv.y;
+        transformed.x += tip * (sin(uv.y * 9.0 - fireTime * 5.8 + position.z * 17.0) * 0.055
+          + sin(fireTime * 2.3 + uv.y * 4.0) * 0.035) * fireMotion;
+        transformed.z += tip * cos(uv.y * 7.0 - fireTime * 4.1 + position.x * 21.0) * 0.045 * fireMotion;
+      `);
+      shader.fragmentShader = 'varying float flameHeight;\n' + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', `
+        diffuseColor.a *= (1.0 - smoothstep(0.6, 1.0, flameHeight)) * 0.8 + 0.2;
+        #include <opaque_fragment>
+      `);
+    };
+    material.customProgramCacheKey = () => 'founding-flowing-flame-v1';
+  }
 
   for (let index = 0; index < 6; index += 1) {
     const warm = index < 2 ? 0 : index < 4 ? 1 : index === 4 ? 2 : 3;
-    const height = 0.25 + stableUnit(`${seed}:tongue-height:${index}`) * 0.24;
+    const height = (0.42 + stableUnit(`${seed}:tongue-height:${index}`) * 0.32) * (index === 5 ? 0.65 : 1);
     const width = 0.075 + stableUnit(`${seed}:tongue-width:${index}`) * 0.065;
-    const geometry = new THREE.ConeGeometry(width, height, 7, 2);
-    geometry.translate(0, height / 2, 0);
+    // Rounded fuel-fed base, broad belly and a curling tapered tip, with enough rings to flow.
+    const geometry = new THREE.LatheGeometry(Array.from({ length: 13 }, (_, ring) => {
+      const t = ring / 12;
+      const radius = width * (0.62 + Math.sin(t * Math.PI) * 0.65) * (1 - t) ** 0.8;
+      return new THREE.Vector2(Math.max(0.001, radius), t * height);
+    }), 10);
     const tongue = new THREE.Mesh(geometry, materials[warm]!);
     const angle = index * 2.399 + stableUnit(`${seed}:tongue-angle:${index}`) * 0.5;
     const radius = index === 5 ? 0.015 : 0.025 + stableUnit(`${seed}:tongue-radius:${index}`) * 0.11;
@@ -275,7 +304,7 @@ export function createFoundingHearthFlameRig(seed: string): THREE.Group {
   }
 
   const sparkMaterial = new THREE.MeshBasicMaterial({ color: '#ffd36b', toneMapped: false });
-  for (let index = 0; index < 7; index += 1) {
+  for (let index = 0; index < 16; index += 1) {
     const spark = new THREE.Mesh(new THREE.OctahedronGeometry(0.012 + stableUnit(`${seed}:spark-size:${index}`) * 0.009, 0), sparkMaterial);
     spark.userData['hearthSpark'] = true;
     spark.userData['phase'] = stableUnit(`${seed}:spark-phase:${index}`);
@@ -315,6 +344,8 @@ export function updateFoundingHearthFireMotion(
   sparkGain = 1,
 ): void {
   const rigPhase = Number(rig.userData['phase'] ?? 0);
+  if (rig.userData['fireTime']) rig.userData['fireTime'].value = reducedMotion ? 0 : elapsedSeconds;
+  if (rig.userData['fireMotion']) rig.userData['fireMotion'].value = reducedMotion ? 0 : 1;
   for (const child of rig.children) {
     if (child.userData['hearthFlameTongue']) {
       const phase = Number(child.userData['phase'] ?? 0);
@@ -352,10 +383,10 @@ export function updateFoundingHearthFireMotion(
       const speed = Number(child.userData['speed'] ?? 0.45);
       const drift = Number(child.userData['drift'] ?? 0);
       const age = fract(elapsedSeconds * speed + phase);
-      const lateral = 0.025 + age * 0.11;
+      const lateral = 0.025 + age * age * 0.3;
       child.position.set(
         Math.cos(drift + age * 1.9) * lateral,
-        0.16 + age * 0.78,
+        0.12 + age * (1.05 + speed * 0.5),
         Math.sin(drift + age * 1.6) * lateral,
       );
       const sparkle = Math.sin(age * Math.PI) * (1 - age * 0.55);

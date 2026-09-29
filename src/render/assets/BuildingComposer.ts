@@ -543,6 +543,8 @@ export function composeBuilding(
   group.userData['grammarEra'] = grammar.era;
   group.userData['bodyWidth'] = grammar.width;
   group.userData['bodyDepth'] = grammar.depth;
+  group.userData['floorHeight'] = plinthTop;
+  group.userData['doorWidth'] = Math.min(grammar.width * 0.3, 0.34);
   group.userData['wallTop'] = wallTop;
   group.userData['vernacularFabric'] = (rank <= 1 || grammar.development?.level === 1)
     && ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);

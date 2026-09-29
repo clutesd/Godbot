@@ -1,3 +1,4 @@
+import { acquireProposal } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import {
   chooseFoundingCastScene,
@@ -30,10 +31,10 @@ function completeOrientation(simulation: Simulation, historian: Historian): void
   if (!baseline) throw new Error('Expected founding baseline');
   let guard = baseline.communities.length + 2;
   while (foundingChapterProgress(historian, simulation.state).phase !== 'complete' && guard-- > 0) {
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeDefined();
   }
   expect(foundingChapterProgress(historian, simulation.state).phase).toBe('complete');
-  expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
+  expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeUndefined();
 }
 
 describe('Founding documentary cast 2a', () => {
@@ -77,7 +78,7 @@ describe('Founding documentary cast 2a', () => {
 
     const introduced: string[] = [];
     for (let index = 0; index < cast.length; index += 1) {
-      const scene = chooseFoundingCastScene(historian, simulation.state);
+      const scene = acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state));
       const member = cast[index]!;
       expect(scene?.id).toBe(`founding-cast:introduction:${index}:${member.personId}`);
       expect(scene?.subjectId).toBe(member.personId);
@@ -96,7 +97,7 @@ describe('Founding documentary cast 2a', () => {
     expect(introduced).toEqual(cast.map(member => member.personId));
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('introducing');
 
-    const release = chooseFoundingCastScene(historian, simulation.state);
+    const release = acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state));
     expect(release?.id).toContain('founding-release:');
     expect(release?.title).toBe('HISTORY BEGINS');
     expect(release?.statement.text).toContain('The landings are over.');
@@ -111,11 +112,11 @@ describe('Founding documentary cast 2a', () => {
     const historian = new Historian(simulation.config);
     completeOrientation(simulation, historian);
 
-    expect(chooseFoundingCastScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state))).toBeDefined();
     expect(simulation.beginHistory()).toBe(true);
     simulation.step(1);
     expect(simulation.state.month).toBe(1);
-    expect(chooseFoundingCastScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state))).toBeUndefined();
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('missed');
   });
 
@@ -125,7 +126,7 @@ describe('Founding documentary cast 2a', () => {
     completeOrientation(simulation, firstHistorian);
     const cast = foundingDocumentaryCast(simulation.state);
 
-    const firstPortrait = chooseFoundingCastScene(firstHistorian, simulation.state);
+    const firstPortrait = acquireProposal(firstHistorian, simulation.state, chooseFoundingCastScene(firstHistorian, simulation.state));
     expect(firstPortrait?.subjectId).toBe(cast[0]?.personId);
     const archived = [...firstHistorian.statements];
 
@@ -137,7 +138,7 @@ describe('Founding documentary cast 2a', () => {
     expect(foundingCastProgress(resumedHistorian, simulation.state).introducedPersonIds)
       .toEqual([cast[0]!.personId]);
 
-    const nextPortrait = chooseFoundingCastScene(resumedHistorian, simulation.state);
+    const nextPortrait = acquireProposal(resumedHistorian, simulation.state, chooseFoundingCastScene(resumedHistorian, simulation.state));
     expect(nextPortrait?.subjectId).toBe(cast[1]?.personId);
     expect(nextPortrait?.id).toContain('founding-cast:introduction:1:');
   });
@@ -148,9 +149,9 @@ describe('Founding documentary cast 2a', () => {
     completeOrientation(simulation, firstHistorian);
     const cast = foundingDocumentaryCast(simulation.state);
     for (let index = 0; index < cast.length; index += 1) {
-      expect(chooseFoundingCastScene(firstHistorian, simulation.state)?.subjectId).toBe(cast[index]!.personId);
+      expect(acquireProposal(firstHistorian, simulation.state, chooseFoundingCastScene(firstHistorian, simulation.state))?.subjectId).toBe(cast[index]!.personId);
     }
-    expect(chooseFoundingCastScene(firstHistorian, simulation.state)?.id).toContain('founding-release:');
+    expect(acquireProposal(firstHistorian, simulation.state, chooseFoundingCastScene(firstHistorian, simulation.state))?.id).toContain('founding-release:');
     const archived = [...firstHistorian.statements];
 
     const resumedHistorian = new Historian(simulation.config);
@@ -159,9 +160,9 @@ describe('Founding documentary cast 2a', () => {
 
     const progress = foundingCastProgress(resumedHistorian, simulation.state);
     expect(progress.introducedPersonIds).toEqual(cast.map(member => member.personId));
-    const replayedRelease = chooseFoundingCastScene(resumedHistorian, simulation.state);
+    const replayedRelease = acquireProposal(resumedHistorian, simulation.state, chooseFoundingCastScene(resumedHistorian, simulation.state));
     expect(replayedRelease?.id).toContain('founding-release:');
-    expect(chooseFoundingCastScene(resumedHistorian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(resumedHistorian, simulation.state, chooseFoundingCastScene(resumedHistorian, simulation.state))).toBeUndefined();
   });
 
   it('keeps portraits cinematic while authoritative history remains frozen at Day 0', () => {
@@ -174,7 +175,7 @@ describe('Founding documentary cast 2a', () => {
 
     const cast = foundingDocumentaryCast(simulation.state);
     for (let index = 0; index < cast.length; index += 1) {
-      const portrait = chooseFoundingCastScene(historian, simulation.state);
+      const portrait = acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state));
       expect(portrait?.id).toContain(`founding-cast:introduction:${index}:`);
       expect(simulation.config.autoRun).toBe(originalAutoRun);
       expect(simulation.historyRunning).toBe(false);
@@ -190,7 +191,7 @@ describe('Founding documentary cast 2a', () => {
       })).toBeCloseTo(0.08, 5);
     }
 
-    const release = chooseFoundingCastScene(historian, simulation.state);
+    const release = acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state));
     expect(release?.id).toContain('founding-release:');
     expect(simulation.config.autoRun).toBe(originalAutoRun);
     expect(simulation.historyRunning).toBe(false);
@@ -214,7 +215,7 @@ describe('Founding documentary cast 2a', () => {
       simulation.state.people.find(person => person.id === member.personId)?.historical?.status,
     ]));
 
-    const scene = chooseFoundingCastScene(historian, simulation.state);
+    const scene = acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state));
     const person = simulation.state.people.find(candidate => candidate.id === scene?.subjectId);
     expect(person).toBeDefined();
     expect(scene?.statement.text).toContain('on Arrival Day');
@@ -236,6 +237,6 @@ describe('Founding documentary cast 2a', () => {
     const historian = new Historian(simulation.config);
     expect(foundingDocumentaryCast(simulation.state)).toHaveLength(0);
     expect(foundingCastProgress(historian, simulation.state).phase).toBe('unavailable');
-    expect(chooseFoundingCastScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingCastScene(historian, simulation.state))).toBeUndefined();
   });
 });

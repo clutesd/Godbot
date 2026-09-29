@@ -26,6 +26,7 @@ import {
   type DevelopmentBlocker,
   type DevelopmentCandidateDecision,
   type DevelopmentResponse,
+  type DevelopmentProject,
   type MemorialSite,
   type ServiceSupply,
   type SettlementNeed,
@@ -49,7 +50,7 @@ const RESOURCE_BLOCK_CODE: Record<keyof ResourceStock, DevelopmentBlockCode> = {
 
 function connected(state: SimulationState, route: TradeRoute): boolean {
   const path = route.transport?.path;
-  return Boolean(route.active && !route.weatherBlocked && path && path.segmentIds.length > 0
+  return Boolean(route.active && !route.weatherBlocked && path && (path.segmentIds.length > 0 || (route.transport?.deliveries ?? 0) >= 2)
     && path.segmentIds.every(id => state.transportation.segments[id]?.status === 'complete'));
 }
 
@@ -187,14 +188,17 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
         if (maxLevel === 2 && knows('mechanical-power', 0.45) && c.artisans >= 5 && s.resources.wood > 12) maxLevel = 3;
       } else { form = 'store'; names = ['food store', 'granary', 'storage and processing court']; if (knows('pottery-firing', 0.2)) maxLevel = 2; }
       break;
-    case 'trade':
+    case 'trade': {
       if (c.routes === 0) return undefined;
       sponsor = institution(c, 'merchant-association');
-      form = d.tradeOrientation > 0.55 ? 'gathering' : 'store';
+      const freight = s.materialLogistics ? Object.values(s.materialLogistics.lifetimeImports).reduce((n, q) => n + (q ?? 0), 0) : 0;
+      const catalogImports = Object.values(s.materialEconomy?.imports ?? {}).reduce((n, q) => n + q, 0);
+      form = freight + catalogImports >= 12 ? 'store' : 'gathering';
       names = form === 'gathering' ? ['market stalls', 'market hall', 'commercial court'] : ['exchange store', 'trade warehouse', 'distribution court'];
       if (sponsor && knows('counting-measure', 0.25)) maxLevel = 2;
       if (maxLevel === 2 && c.routes >= 2 && knows('civic-administration') && knows('improved-roads')) maxLevel = 3;
       break;
+    }
     case 'government':
       sponsor = institution(c, 'council');
       form = d.hierarchy < 0.45 || s.politicalPower.kinship > s.politicalPower.institutional ? 'gathering' : 'hall';
@@ -328,6 +332,13 @@ export function initializeSettlementDevelopment(state: SimulationState, settleme
   if (settlement.development) return;
   const c = developmentContext(state, settlement, residents);
   settlement.development = { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: -12, nextAttemptMonth: state.month, revision: 0 };
+  if (settlement.foundingPodId) {
+    // Independent planning seasons, reproducible without consuming simulation randomness.
+    // Emergency shelter continues to be considered every month by planEstablishment.
+    const season = 1 + seedHash(`${settlement.id}:planning-season`) % 3;
+    settlement.development.evaluatedMonth = state.month + season - 3;
+    settlement.development.nextAttemptMonth = state.month + season;
+  }
   for (const plot of settlement.structurePlots ?? []) {
     if (plot.development) continue;
     const response = responseForNeed(c, 'housing')!;
@@ -461,7 +472,19 @@ export function planEstablishment(state: SimulationState, settlement: Settlement
   return events;
 }
 
-/** One evaluation per year, one funded project at a time, no random draws. */
+/** Paid fabric needs several observable work stages, even with a large workforce.
+ * Calendar time never grants work, and stalled projects cannot bank instant completion.
+ */
+export function constructionProgressAllowance(project: DevelopmentProject, month: number): number {
+  if (month < project.startedMonth || project.lastWorkMonth === month) return 0;
+  const response = project.response;
+  if (response.adaptation) return response.adaptation === 'hut' ? 0.2 : 0.45;
+  if (month === project.startedMonth) return 0;
+  const stages = response.form === 'field' || response.form === 'marker' || response.form === 'gathering' ? 3 : 4;
+  return 1 / (stages + Math.max(0, response.level - 1) * 2);
+}
+
+/** Camps reconsider seasonal needs; established towns plan annually. One project at a time. */
 export function advanceSettlementDevelopment(state: SimulationState, settlement: Settlement, residents: Person[], workRate: number): KnowledgeEventDraft[] {
   initializeSettlementDevelopment(state, settlement, residents);
   const dev = settlement.development!;
@@ -484,7 +507,8 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     }
     dev.project = undefined; dev.revision++;
   }
-  if (state.month - dev.evaluatedMonth >= 12) {
+  const planningInterval = settlement.foundingPodId && state.month < 60 ? 3 : 12;
+  if (state.month - dev.evaluatedMonth >= planningInterval) {
     refreshMemorials(state, settlement);
     const c = developmentContext(state, settlement, residents);
     const { pressures, informal } = evaluatePressures(c);
@@ -597,10 +621,16 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         candidates.push(candidate);
         dev.project = { plotId: plot.id, response, action, startedMonth: state.month, progress: 0, spent: stock(), materialRequirements, materialSpent: {} };
         dev.lastAttempt = { month: state.month, outcome: 'started', selectedNeed: need, plotId: plot.id, candidates };
+        events.push({ type: 'response-attempted', location: { x: plot.worldX, z: plot.worldZ }, locationId: settlement.id,
+          actors: [settlement.id, plot.id, ...(response.institutionId ? [response.institutionId] : [])], causes: response.reasons,
+          context: { project: plot.id, need, action, materials: JSON.stringify(materialRequirements), labourRequired: response.labor },
+          summary: `${settlement.name} begins work on ${response.name}.`,
+          outcome: 'The site is reserved. Materials must be delivered and the structure assembled before it provides service.',
+          significance: 0.4, tags: ['settlement-development', 'construction', need] });
         dev.revision++; break;
       }
       if (!dev.project) dev.lastAttempt = { month: state.month, outcome: needs.length > 0 ? 'blocked' : 'no-pressure', candidates };
-      dev.nextAttemptMonth = state.month + 12;
+      dev.nextAttemptMonth = state.month + planningInterval;
     }
   }
   const project = dev.project;
@@ -618,6 +648,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       * Math.max(0, 1 - (weather?.snowpack ?? 0) * 0.55 - (weather?.blizzard ?? 0) * 0.3 - (weather?.floodDepth ?? 0));
     const availableWork = project.response.adaptation ? adaptationWork : workRate;
     project.blockedReasons = [
+      ...(!project.response.adaptation && state.month === project.startedMonth ? ['site-preparation'] : []),
       ...(!plot ? ['missing-plot'] : []), ...(plot?.fire ? ['fire'] : []),
       ...((plot?.floodDepth ?? 0) > 0.06 ? ['flooded-site'] : []),
       ...(availableWork <= 0 ? ['no-available-construction-work'] : []),
@@ -626,10 +657,10 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     ];
     if (!plot || plot.fire || !supported || supported.level < project.response.level || patronLost || materialLost || (plot.floodDepth ?? 0) > 0.06) {
       if (state.month - project.startedMonth > 120) abandonProject();
-    } else if (availableWork > 0) {
+    } else if (availableWork > 0 && project.lastWorkMonth !== state.month) {
       const physicalLimit = project.materialRequirements ? maxMaterialProgressIncrement(settlement, project.materialRequirements) : 1;
       const progress = Math.max(0, Math.min(1 - project.progress, availableWork / project.response.labor, physicalLimit,
-        project.response.adaptation ? 0.45 : 1,
+        constructionProgressAllowance(project, state.month),
         ...Object.entries(project.response.materialCost ?? {}).filter(([, n]) => n > 0).map(([id, n]) => (settlement.localMaterials[id] ?? 0) / n),
         ...STOCK_KEYS.filter(key => project.response.cost[key] > 0).map(key => settlement.resources[key] / project.response.cost[key])));
       if (project.progress + progress >= 1 - 1e-8 && !validPlot(state, plot)) return events;
@@ -664,6 +695,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         plot.char = 0;
         const event = historyEvent(settlement, plot, record);
         event.context = { ...event.context, temporary: project.response.temporary ?? false, adaptation: project.response.adaptation ?? 'ordinary',
+          constructionMonths: state.month - project.startedMonth,
           capacity: (project.response.services.housing ?? 0) * 17, labourSpent: project.labourSpent,
           materialsSpent: JSON.stringify(project.materialSpent ?? {}) };
         events.push(event); dev.project = undefined; dev.revision++;

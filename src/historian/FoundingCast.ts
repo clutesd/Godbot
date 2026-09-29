@@ -221,7 +221,6 @@ function introductionScene(
     claims: { entityIds: [person.id, settlement.id], eventType: 'ARRIVAL_DAY' as const },
   };
   if (!historian.validateStatement(statement, state)) return undefined;
-  if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return {
     id: `founding-cast:introduction:${castIndex}:${member.personId}`,
@@ -317,7 +316,6 @@ function releaseScene(
     claims: { entityIds: [settlement.id], eventType: 'ARRIVAL_DAY' as const },
   };
   if (!historian.validateStatement(statement, state)) return undefined;
-  if (!historian.statements.some(existing => existing.id === statement.id)) historian.statements.push(statement);
   if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return {
     id: `founding-release:${arrival.id}`,
@@ -360,7 +358,7 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
     if (memory.introducedPersonIds.has(member.personId)) continue;
     const scene = introductionScene(historian, state, baseline, member, castIndex);
     if (!scene) continue;
-    memory.introducedPersonIds.add(member.personId);
+    historian.whenAcquired(scene.id, () => memory.introducedPersonIds.add(member.personId));
     holdIntroduction(historian, state, memory);
     return scene;
   }
@@ -368,7 +366,7 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
   if (!memory.releaseShown && memory.introducedPersonIds.size >= memory.members.length) {
     const release = releaseScene(historian, state, baseline, memory);
     if (release) {
-      memory.releaseShown = true;
+      historian.whenAcquired(release.id, () => { memory.releaseShown = true; });
       releaseStates.add(state);
       return release;
     }
@@ -449,6 +447,14 @@ export function installFoundingCast(): void {
     return pool;
   };
 
+  const acquireScene = Historian.prototype.acquireScene;
+  Historian.prototype.acquireScene = function castAcquireScene(scene, state): void {
+    const memory = memories.get(this);
+    if (memory && !scene.id.startsWith('founding-cast:') && memory.introducedPersonIds.has(scene.subjectId)) {
+      memory.normalAppearances.set(scene.subjectId, (memory.normalAppearances.get(scene.subjectId) ?? 0) + 1);
+    }
+    acquireScene.call(this, scene, state);
+  };
   const chooseScene = Historian.prototype.chooseScene;
   Historian.prototype.chooseScene = function castChooseScene(
     this: Historian,
@@ -463,10 +469,6 @@ export function installFoundingCast(): void {
     const introduction = chooseFoundingCastScene(this, state);
     if (introduction) return introduction;
     const scene = chooseScene.call(this, state);
-    const memory = memories.get(this);
-    if (memory && memory.introducedPersonIds.has(scene.subjectId)) {
-      memory.normalAppearances.set(scene.subjectId, (memory.normalAppearances.get(scene.subjectId) ?? 0) + 1);
-    }
     return scene;
   };
 }

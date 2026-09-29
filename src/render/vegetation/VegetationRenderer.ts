@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { farmGeometries } from '../../shared/FarmGeometry';
 import { SeededRandom, stableHash } from '../../sim/prng';
 import { tornadoExposure } from '../../sim/weather/Tornado';
 import { cellAt } from '../../sim/world';
@@ -326,7 +327,13 @@ export class VegetationRenderer {
    */
   setDisturbance(settlements: readonly Settlement[], artifacts: readonly { x: number; z: number; radius: number }[] = []): void {
     this.occupiedGround = settlements.flatMap(settlement => (settlement.structurePlots ?? []).map(plot =>
-      ({ x: plot.worldX, z: plot.worldZ, radius: plot.radius + 0.35 })));
+      ({ x: plot.worldX, z: plot.worldZ,
+        radius: Math.max(plot.radius, Math.hypot(plot.width, plot.depth) / 2,
+          plot.development?.memorial ? 1.1 : 0) + 0.35 })));
+    // Legacy/fallback farms have no structure plot, but still own cultivated ground.
+    this.occupiedGround.push(...settlements.flatMap(s => farmGeometries(s).map(field => ({
+      x: field.center.x, z: field.center.z, radius: Math.hypot(field.width, field.depth) / 2 + 0.35,
+    }))));
     this.occupiedGround.push(...artifacts);
     this.syncManagedPlantings(settlements);
     const currentYear = Math.floor((this.world.weather?.month ?? this.ecologyYear * 12) / 12);
@@ -375,6 +382,17 @@ export class VegetationRenderer {
   }
 
   /** Re-sorts every placement into the near or far tier. Called at the structural update rate. */
+  /** Uniform-only update: camera softness never mutates placements, ecology or collision. */
+  softenCameraCorridor(camera: THREE.Vector3, target: THREE.Vector3): void {
+    const distance = camera.distanceTo(target);
+    for (const buckets of [this.nearBuckets, this.farBuckets]) for (const bucket of buckets.values()) {
+      for (const mesh of [bucket.bark, bucket.foliage]) {
+        const uniform = (mesh.material as THREE.Material).userData['cameraSoftDistance'] as { value: number } | undefined;
+        if (uniform) uniform.value = distance;
+      }
+    }
+  }
+
   updateLod(camera: THREE.Vector3): void {
     this.birds.setCamera(camera);
     this.wildlife.setCamera(camera);

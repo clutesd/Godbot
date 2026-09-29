@@ -38,6 +38,7 @@ export function foundingHearthWorldPosition(
   settlement: Pick<Settlement, 'foundingPodId' | 'position'>,
   pods: readonly Pick<FoundingPod, 'id' | 'entryOffset'>[],
 ): Vec2 | undefined {
+  if (!settlement.foundingPodId) return { ...settlement.position };
   const offset = foundingSettlementHearthOffset(settlement, pods);
   return offset ? { x: settlement.position.x + offset.x, z: settlement.position.z + offset.z } : undefined;
 }

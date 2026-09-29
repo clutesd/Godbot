@@ -4,6 +4,7 @@ import { survivalState } from '../src/sim/pressures/Survival';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import {
   FIRST_FIRE_DURATION_SECONDS,
+  FIRST_FIRE_CAMERA_GRACE_SECONDS,
   FoundingFirstFirePresentation,
   type FirstFirePhase,
 } from '../src/render/founding/FoundingFirstFirePresentation';
@@ -29,6 +30,63 @@ function seekPhase(
 }
 
 describe('founding first-fire presentation', () => {
+  it('celebrates every settlement once even if the camera never selects its event', () => {
+    const simulation = new Simulation({ seed: 'every-settlement-celebrates', settlementCount: [3, 3], world: { size: 24 } });
+    const presentation = new FoundingFirstFirePresentation(simulation.state);
+    for (const settlement of simulation.state.settlements) {
+      survivalState(settlement).firstFire = { month: 1, eventId: `fire:${settlement.id}` };
+    }
+    presentation.update(simulation.state, 0, 'unrelated-event');
+    const danced = new Set<string>();
+    for (let time = FIRST_FIRE_CAMERA_GRACE_SECONDS; time < FIRST_FIRE_DURATION_SECONDS + 35; time += 0.5) {
+      presentation.update(simulation.state, time, 'unrelated-event');
+      for (const settlement of simulation.state.settlements) {
+        for (const person of simulation.state.people.filter(p => p.homeId === settlement.id)) {
+          const target = presentation.targetFor(person.id, settlement.id, settlement.position, person.position);
+          if (target?.animation === 'dance') danced.add(settlement.id);
+        }
+      }
+    }
+    expect(danced.size).toBe(simulation.state.settlements.length);
+    const revision = presentation.revision;
+    presentation.update(simulation.state, 1000, 'unrelated-event');
+    expect(presentation.revision).toBe(revision);
+    expect(presentation.participantIds().size).toBe(0);
+  });
+  it('celebrates the lit fire in a separated dance circle, then settles and releases everyone', () => {
+    const simulation = new Simulation({ seed: 'fire-dancing', world: { size: 24 } });
+    const settlement = simulation.state.settlements[0]!;
+    const presentation = new FoundingFirstFirePresentation(simulation.state);
+    survivalState(settlement).firstFire = { month: 1, eventId: 'dance-fire' };
+    presentation.update(simulation.state, 0);
+    presentation.update(simulation.state, FOUNDING_HEARTH_ASSEMBLY_SECONDS + 15);
+    const hearth = settlement.position;
+    const people = simulation.state.people.filter(p => p.homeId === settlement.id);
+    const targets = people.map(p => presentation.targetFor(p.id, settlement.id, hearth, p.position)).filter(t => t !== undefined);
+    expect(targets.length).toBeGreaterThan(1);
+    expect(targets.every(t => t.animation === 'dance')).toBe(true);
+    for (const target of targets) expect(Math.hypot(target.x - hearth.x, target.z - hearth.z)).toBeGreaterThan(1);
+    for (let i = 0; i < targets.length; i++) for (let j = i + 1; j < targets.length; j++) {
+      expect(Math.hypot(targets[i]!.x - targets[j]!.x, targets[i]!.z - targets[j]!.z)).toBeGreaterThan(0.7);
+    }
+    for (const p of people) {
+      const reduced = presentation.targetFor(p.id, settlement.id, hearth, p.position, hearth, true);
+      if (reduced) expect(reduced.animation).toBe('converse-warm');
+    }
+    presentation.update(simulation.state, FIRST_FIRE_DURATION_SECONDS + 2);
+    expect(presentation.isPerforming(settlement.id)).toBe(false);
+    expect(presentation.sample(settlement.id).flameScale).toBe(1);
+  });
+
+  it('keeps dance steps articulated even with a small side-step speed', () => {
+    const animator = new AnimationController();
+    animator.getOrCreateCharacterState('dancer', 'forager');
+    animator.updateCharacterAnimation('dancer', 1, 'socialize', 'dance', 0.04, 360, false, 0.8);
+    const pose = animator.getCurrentPose('dancer')!;
+    expect(pose.leftShoulderRotation).toBeGreaterThan(0.3);
+    expect(pose.rightShoulderRotation).toBeGreaterThan(0.3);
+    expect(Math.max(pose.leftKneeRotation, pose.rightKneeRotation)).toBeGreaterThan(0.15);
+  });
   it('physically assembles the hearth before any ignition can begin', () => {
     const simulation = new Simulation({ seed: 'first-fire-presentation' });
     const settlement = simulation.state.settlements[0]!;

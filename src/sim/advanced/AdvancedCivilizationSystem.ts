@@ -305,7 +305,7 @@ export class AdvancedCivilizationSystem {
     if (advanced.atomic.thresholdMonth === undefined) return events;
     const regulator = advanced.institutions.find((institution) => institution.kind === 'atomic-regulator');
     const targets = {
-      energy: clamp(this.knowledge(state, 'nuclear-energy') * 0.76 + advanced.environment.resourcePressure * 0.12 + advanced.environment.climateStress * 0.12),
+      energy: clamp(state.settlements.reduce((n, s) => n + (s.energy?.plants.filter(p => p.kind === 'nuclear').reduce((sum, p) => sum + p.output, 0) ?? 0), 0) / Math.max(1, state.settlements.reduce((n, s) => n + (s.energy?.ledgers.electric.demand ?? 0), 0))),
       medicine: clamp(this.knowledge(state, 'nuclear-medicine') * 0.72 + advanced.sectors.health * 0.28),
       research: clamp(fission * 0.55 + advanced.sectors.science * 0.45),
       propulsion: clamp(this.knowledge(state, 'nuclear-propulsion') * 0.72 + advanced.sectors.aerospace * 0.28),

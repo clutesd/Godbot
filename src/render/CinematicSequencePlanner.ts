@@ -98,7 +98,7 @@ function scaleContrast(previous: DocumentaryShotScale | undefined, next: Documen
 }
 
 function canonicalRoles(anchor: ObservationCandidate): readonly CinematicBeatRole[] {
-  if (anchor.event?.type === 'first-fire') {
+  if (anchor.event && (anchor.kind === 'worker-follow' || anchor.kind === 'discovery-scene' || anchor.kind === 'street-observation')) {
     // The viewer should stay with the people and hearth: observe the builders, move into hand/tinder
     // detail, reveal the successful flame, then release. No generic aerial establishing detour.
     return ['detail', 'reveal', 'release'];

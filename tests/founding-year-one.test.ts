@@ -1,3 +1,4 @@
+import { acquireProposal } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import {
   chooseFoundingChapterScene,
@@ -33,13 +34,13 @@ function completeOpening(simulation: Simulation, historian: Historian): void {
   if (!baseline) throw new Error('Expected founding baseline');
   let guard = baseline.communities.length + 2;
   while (foundingChapterProgress(historian, simulation.state).phase !== 'complete' && guard-- > 0) {
-    expect(chooseFoundingChapterScene(historian, simulation.state)).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeDefined();
   }
-  expect(chooseFoundingChapterScene(historian, simulation.state)).toBeUndefined();
-  expect(chooseFoundingContinuityScene(historian, simulation.state)?.title).toBe('THE FIRST DAYS');
+  expect(acquireProposal(historian, simulation.state, chooseFoundingChapterScene(historian, simulation.state))).toBeUndefined();
+  expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))?.title).toBe('THE FIRST DAYS');
   for (const community of baseline.communities) {
     simulation.step(2);
-    expect(chooseFoundingContinuityScene(historian, simulation.state)?.subjectId).toBe(community.settlementId);
+    expect(acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state))?.subjectId).toBe(community.settlementId);
   }
   expect(foundingContinuityProgress(historian, simulation.state).complete).toBe(true);
 }
@@ -69,14 +70,14 @@ describe('Founding Chapter 1c Year-One payoff', () => {
     const historian = new Historian(simulation.config);
     simulation.step(11);
     expect(foundingYearOneProgress(historian, simulation.state).phase).toBe('waiting');
-    expect(chooseFoundingYearOneScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))).toBeUndefined();
 
     simulation.step(1);
     expect(foundingYearOneProgress(historian, simulation.state).phase).toBe('ready');
     const scenes = [
-      chooseFoundingYearOneScene(historian, simulation.state),
-      chooseFoundingYearOneScene(historian, simulation.state),
-      chooseFoundingYearOneScene(historian, simulation.state),
+      acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state)),
+      acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state)),
+      acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state)),
     ];
     expect(scenes.map(scene => scene?.title)).toEqual([
       'ONE YEAR AFTER ARRIVAL',
@@ -97,13 +98,13 @@ describe('Founding Chapter 1c Year-One payoff', () => {
     completeOpening(simulation, historian);
     if (simulation.state.month < FOUNDING_YEAR_ONE_MONTH) simulation.step(FOUNDING_YEAR_ONE_MONTH - simulation.state.month);
 
-    const first = chooseFoundingYearOneScene(historian, simulation.state);
+    const first = acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state));
     expect(first?.title).toBe('ONE YEAR AFTER ARRIVAL');
     expect(simulation.config.autoRun).toBe(false);
-    expect(chooseFoundingYearOneScene(historian, simulation.state)?.title).toBe('THE LANDINGS DIVERGE');
-    expect(chooseFoundingYearOneScene(historian, simulation.state)?.title).toBe('WHAT REMAINS UNRESOLVED');
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))?.title).toBe('THE LANDINGS DIVERGE');
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))?.title).toBe('WHAT REMAINS UNRESOLVED');
     // The following selection releases the hold before normal history resumes.
-    expect(chooseFoundingYearOneScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))).toBeUndefined();
     expect(simulation.config.autoRun).toBe(originalAutoRun);
   });
 
@@ -119,9 +120,9 @@ describe('Founding Chapter 1c Year-One payoff', () => {
     settlement.resources.food = Math.min(settlement.resources.food, firstCommunity.supplies.food * 0.25);
 
     const historian = new Historian(simulation.config);
-    expect(chooseFoundingYearOneScene(historian, simulation.state)).toBeDefined();
-    expect(chooseFoundingYearOneScene(historian, simulation.state)).toBeDefined();
-    const unresolved = chooseFoundingYearOneScene(historian, simulation.state);
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))).toBeDefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))).toBeDefined();
+    const unresolved = acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state));
     expect(unresolved?.title).toBe('WHAT REMAINS UNRESOLVED');
     expect(unresolved?.statement.text).toMatch(/food security|food reserve/);
     expect(unresolved && historian.validateStatement(unresolved.statement, simulation.state)).toBe(true);
@@ -132,7 +133,7 @@ describe('Founding Chapter 1c Year-One payoff', () => {
     simulation.step(14);
     const historian = new Historian(simulation.config);
     expect(foundingYearOneProgress(historian, simulation.state).phase).toBe('ready');
-    expect(chooseFoundingYearOneScene(historian, simulation.state)?.title).toBe('ONE YEAR AFTER ARRIVAL');
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))?.title).toBe('ONE YEAR AFTER ARRIVAL');
   });
 
   it('does not replay the founding-year retrospective on a much later resume', () => {
@@ -140,13 +141,13 @@ describe('Founding Chapter 1c Year-One payoff', () => {
     simulation.step(FOUNDING_YEAR_ONE_LATEST_START_MONTH + 1);
     const historian = new Historian(simulation.config);
     expect(foundingYearOneProgress(historian, simulation.state).phase).toBe('missed');
-    expect(chooseFoundingYearOneScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('does nothing for non-arrival starts', () => {
     const simulation = new Simulation({ seed: 'founding-year-one-bootstrap', startMode: 'established' });
     const historian = new Historian(simulation.config);
     expect(foundingYearOneProgress(historian, simulation.state).phase).toBe('unavailable');
-    expect(chooseFoundingYearOneScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingYearOneScene(historian, simulation.state))).toBeUndefined();
   });
 });

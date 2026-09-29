@@ -1,3 +1,4 @@
+import { observeScene } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import { Historian } from '../src/historian/Historian';
 import { isEarlyDocumentary, isHumanObservation } from '../src/historian/EarlyDocumentary';
@@ -11,10 +12,10 @@ describe('early documentary direction', () => {
     sim.state.month = month;
     const before = JSON.stringify(sim.state);
     const a = new Historian(sim.config), b = new Historian(sim.config);
-    const scenes = Array.from({ length: 60 }, () => a.chooseScene(sim.state));
+    const scenes = Array.from({ length: 60 }, () => observeScene(a, sim.state));
     expect(scenes.filter(isHumanObservation).length).toBeGreaterThanOrEqual(42);
     expect(new Set(scenes.filter(isHumanObservation).map(scene => scene.subjectId)).size).toBeGreaterThan(4);
-    expect(Array.from({ length: 60 }, () => b.chooseScene(sim.state).id)).toEqual(scenes.map(scene => scene.id));
+    expect(Array.from({ length: 60 }, () => observeScene(b, sim.state).id)).toEqual(scenes.map(scene => scene.id));
     expect(JSON.stringify(sim.state)).toBe(before);
     expect(isEarlyDocumentary(sim.state)).toBe(true);
     sim.state.month = 61;

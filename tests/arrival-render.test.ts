@@ -197,7 +197,7 @@ describe('Arrival presentation contracts', () => {
     expect(view.root.children).toHaveLength(0);
   }, 15000);
 
-  it('skins every founding vessel as a bronze relic with site-colored luminous runes', () => {
+  it('skins every founding vessel with a readable ceramic-bronze hull and site-colored luminous runes', () => {
     const s = new Simulation({ seed: 'arrival-bronze-runes', startMode: 'arrival' });
     const view = new FoundingPodRenderer(s.state);
 
@@ -213,8 +213,12 @@ describe('Arrival presentation contracts', () => {
       const shell = hull.getObjectByName('bronze-hull') as THREE.Mesh | undefined;
       expect(shell).toBeDefined();
       const shellMaterial = shell!.material as THREE.MeshStandardMaterial;
-      expect(shellMaterial.metalness).toBeGreaterThan(0.7);
-      expect(shellMaterial.roughness).toBeLessThan(0.5);
+      expect(shellMaterial.metalness).toBeLessThan(0.5);
+      expect(shellMaterial.roughness).toBeGreaterThan(0.5);
+      expect(hull.getObjectByName('hatch-non-slip-treads')).toBeDefined();
+      expect(hull.getObjectByName('hatch-guide-light')).toBeDefined();
+      shell!.geometry.computeBoundingBox();
+      expect(shell!.geometry.boundingBox!.max.y).toBeLessThan(1.1);
 
       const runes = hull.getObjectByName('ancient-runes');
       expect(runes).toBeDefined();
@@ -385,7 +389,7 @@ describe('Arrival presentation contracts', () => {
     expect(crossedIntoFrame).toBe(true);
     let previous = arrivalSequenceFocus(s.state.arrival!);
     const visitedSites = new Set<number>();
-    let closestLandingInsertRadius = Number.POSITIVE_INFINITY;
+
     for (let step = 0; step <= ARRIVAL_END_SECONDS * 10; step += 1) {
       const second = step / 10;
       s.state.arrival!.elapsedSeconds = second;
@@ -400,7 +404,7 @@ describe('Arrival presentation contracts', () => {
       expect(focus.fov).toBeLessThanOrEqual(38);
       if (focus.beat === 'site-flythrough' && focus.siteIndex !== undefined) {
         visitedSites.add(focus.siteIndex);
-        closestLandingInsertRadius = Math.min(closestLandingInsertRadius, focus.radius);
+
       }
       if (step > 0 && focus.shotId === previous.shotId) {
         expect(Math.hypot(
@@ -416,9 +420,9 @@ describe('Arrival presentation contracts', () => {
       expect(caption.opacity).toBeLessThanOrEqual(1);
       previous = focus;
     }
-    expect([...visitedSites]).toEqual([1, 2, 3, 4]);
+    expect([...visitedSites]).toEqual([]);
     expect(ARRIVAL_END_SECONDS).toBeLessThanOrEqual(40);
-    expect(closestLandingInsertRadius).toBeLessThan(5);
+
     s.state.arrival!.elapsedSeconds = ARRIVAL_END_SECONDS;
     const handoff = arrivalSequenceFocus(s.state.arrival!);
     expect(handoff.beat).toBe('handoff');
@@ -434,12 +438,12 @@ describe('Arrival presentation contracts', () => {
     const heldA = arrivalSequenceFocus(s.state.arrival!);
     s.state.arrival!.elapsedSeconds += 0.8;
     const heldB = arrivalSequenceFocus(s.state.arrival!);
-    expect(heldA.beat).toBe('site-flythrough');
-    expect(heldA.siteIndex).toBe(1);
+    expect(heldA.beat).toBe('handoff');
+    expect(heldA.siteIndex).toBe(0);
     expect(heldA.cameraPosition).toBeDefined();
     expect(heldB.shotId).toBe(heldA.shotId);
     expect(heldB.cameraPosition).toBeDefined();
-    expect(heldB.cameraPosition!.x).toBeCloseTo(heldA.cameraPosition!.x - 0.064, 5);
+    expect(heldB.cameraPosition!.x).toBeCloseTo(heldA.cameraPosition!.x, 5);
     expect(heldB.cameraPosition!.y).toBeCloseTo(heldA.cameraPosition!.y, 8);
     expect(heldB.cameraPosition!.z).toBeCloseTo(heldA.cameraPosition!.z, 8);
   });

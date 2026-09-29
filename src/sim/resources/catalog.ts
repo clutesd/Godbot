@@ -50,6 +50,12 @@ export interface ResourceDefinition {
 }
 
 export const RESOURCE_CATALOG: readonly ResourceDefinition[] = [
+  { id: 'natural-gas', name: 'Natural gas reservoir', category: 'mineral', renewable: false,
+    description: 'Finite gas trapped in sedimentary formations, recovered through engineered wells.',
+    biomes: ['grassland', 'dryland', 'wetland'], geology: { families: ['sedimentary'], minPotential: 0.45 },
+    minMinerals: 0.25, rarity: 0.14, baseQuality: 0.7, regenRate: 0, depositCapacityRange: [300, 900],
+    gatherOccupations: ['artisan'], gatherYieldPerWorker: 0.8, understandingKnowledge: 'industrial-chemistry',
+    extractionKnowledge: 'internal-combustion', surfaceShare: 0, ecologicalDamage: 0.06, researchDomain: 'energy' },
   {
     id: 'wild-herbs', name: 'Wild medicinal herbs', category: 'plant', renewable: true,
     description: 'Flowering, rooted, and aromatic plants gathered from healthy ground cover; a source of medicine, dye, and poison alike.',
@@ -144,6 +150,15 @@ export interface RecipeDefinition {
 }
 
 export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
+  { id: 'nuclear-fuel', name: 'Nuclear fuel fabrication', description: 'Industrial separation and fabrication of safeguarded reactor fuel from mined ore.',
+    requiredKnowledge: [{ id: 'nuclear-energy', minPractice: 0.55 }, { id: 'industrial-chemistry', minPractice: 0.6 }],
+    inputs: { 'uranium-ore': 5, steel: 0.5 }, outputs: { 'nuclear-fuel': 0.5 }, craftOccupations: ['artisan', 'keeper'],
+    requiredInfrastructure: { factories: 0.2, power: 0.2 }, minIndustrialIntensity: 0.32,
+    baseEfficiency: 0.7, failureRisk: 0.05, labour: 2, researchWork: 5 },
+  { id: 'silicon-refining', name: 'Semiconductor refining', description: 'Purification of mineral silica using high heat and precision chemical processing.',
+    requiredKnowledge: [{ id: 'photovoltaics', minPractice: 0.5 }], inputs: { stone: 3, charcoal: 2 }, outputs: { silicon: 1 },
+    craftOccupations: ['artisan'], requiredInfrastructure: { factories: 0.15, power: 0.1 },
+    baseEfficiency: 0.6, failureRisk: 0.12, labour: 1.5, researchWork: 3 },
   {
     id: 'herbal-remedy', name: 'Herbal remedy preparation',
     description: 'Drying and compounding wild herbs into a usable medicine.',
@@ -205,6 +220,9 @@ export const RECIPE_BY_ID = new Map(RECIPE_CATALOG.map((definition) => [definiti
 
 export interface MaterialDefinition { id: string; name: string; spoilage: number; fuelHeat?: number }
 export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
+  { id: 'nuclear-fuel', name: 'Fabricated nuclear fuel', spoilage: 0 },
+  { id: 'spent-nuclear-fuel', name: 'Contained spent nuclear fuel', spoilage: 0 },
+  { id: 'silicon', name: 'Purified silicon', spoilage: 0 },
   ...RESOURCE_CATALOG.map(r => ({ id: r.id, name: r.name, spoilage: r.category === 'plant' ? 0.015 : 0, fuelHeat: r.id === 'timber' ? 0.35 : undefined })),
   // Clay is still supplied by the supplemental legacy deposit pass, but generic recipes may consume it.
   { id: 'clay', name: 'Clay', spoilage: 0 },

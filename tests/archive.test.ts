@@ -1,3 +1,4 @@
+import { observeScene } from './observe-scene';
 import { indexedDB } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { Historian } from '../src/historian/Historian';
@@ -23,7 +24,7 @@ describe('Historian archive persistence', () => {
     const simulation = new Simulation({ seed: 'archived-world', startingPopulation: 180 });
     simulation.step(40 * 12);
     const historian = new Historian(simulation.config, { observationNumber: 1 });
-    for (let index = 0; index < 8; index += 1) historian.chooseScene(simulation.state);
+    for (let index = 0; index < 8; index += 1) observeScene(historian, simulation.state);
 
     const store = new HistorianArchiveStore(indexedDB);
     const observationNumber = await store.nextObservationNumber();

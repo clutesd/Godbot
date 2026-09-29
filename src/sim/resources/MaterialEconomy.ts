@@ -2,7 +2,7 @@ import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
 import type { Person, Settlement, SimulationState } from '../types';
-import { addMaterial, publishBulkStocks, takeMaterial } from './Inventory';
+import { addMaterial, publishBulkStocks, reconcileBulkStocks, takeMaterial } from './Inventory';
 
 export const RAW_MATERIAL_KINDS = [
   'timber',
@@ -290,6 +290,8 @@ export function advanceMaterialProcessing(
   if (!settlement.alive || inventory.lastProcessedMonth === state.month) {
     return { processed: false, capacity: 0, usedCapacity: 0, recipes: {} };
   }
+  // Reconcile legacy construction/repair spending before sizing a recipe, not during its first withdrawal.
+  reconcileBulkStocks(settlement);
   inventory.lastProcessedMonth = state.month;
   const budget = resourceLabourBudget(state, settlement, residents);
   const mechanization = 1 + settlement.infrastructure.workshops + settlement.infrastructure.factories * 2 + settlement.industry.intensity;

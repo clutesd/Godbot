@@ -1,3 +1,4 @@
+import { observeScene } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import { Historian } from '../src/historian/Historian';
 import { PresentationDirector } from '../src/historian/PresentationDirector';
@@ -26,7 +27,7 @@ describe('Historian grounding', () => {
   const historian = new Historian(simulation.config);
 
   it('accepts generated statements only when their sources exist at observation time', () => {
-    const scenes = Array.from({ length: 32 }, () => historian.chooseScene(simulation.state));
+    const scenes = Array.from({ length: 32 }, () => observeScene(historian, simulation.state));
     expect(scenes.every((scene) => historian.validateStatement(scene.statement, simulation.state))).toBe(true);
     expect(new Set(scenes.map((scene) => scene.subjectId)).size).toBeGreaterThan(5);
     expect(scenes.some((scene) => scene.kind === 'worker-follow' || scene.kind === 'traveler-follow')).toBe(true);
@@ -36,7 +37,7 @@ describe('Historian grounding', () => {
   it('can focus a newly detected major event without changing its factual source', () => {
     const event = historian.candidates(simulation.state).find((candidate) => candidate.event)?.event;
     if (!event) throw new Error('Expected an observable historical event');
-    const scene = historian.chooseScene(simulation.state, event.id);
+    const scene = observeScene(historian, simulation.state, event.id);
     expect(scene.event?.id).toBe(event.id);
     expect(scene.statement.sourceEventIds).toContain(event.id);
     expect(historian.validateStatement(scene.statement, simulation.state)).toBe(true);
@@ -82,7 +83,7 @@ describe('Historian grounding', () => {
     early.state.history.push(firstFire);
 
     const director = new Historian(early.config);
-    const scene = director.chooseScene(early.state, firstFire.id);
+    const scene = observeScene(director, early.state, firstFire.id);
     expect(scene.event?.type).toBe('first-fire');
     expect(scene.title).toBe('FIRST FIRE');
     expect(scene.kind).toBe('discovery-scene');
@@ -164,7 +165,7 @@ describe('Presentation independence', () => {
     const historian = new Historian(observed.config);
     const presentation = new PresentationDirector(observed.config);
     observed.step(80 * 12);
-    const scene = historian.chooseScene(observed.state);
+    const scene = observeScene(historian, observed.state);
     presentation.update(1 / 60, observed.state, scene);
     control.step(80 * 12);
     expect(observed.summary()).toEqual(control.summary());
@@ -224,7 +225,7 @@ describe('documentary editorial judgment', () => {
     for (const person of sim.state.people.filter(person => person.alive)) person.activity = 'construct';
     const before = JSON.stringify(sim.state);
     const historian = new Historian(sim.config);
-    const scenes = Array.from({ length: 8 }, () => historian.chooseScene(sim.state));
+    const scenes = Array.from({ length: 8 }, () => observeScene(historian, sim.state));
 
     expect(['worker-follow', 'traveler-follow', 'street-observation']).toContain(scenes[0]!.kind);
     expect(scenes[0]!.editorial?.activityMeaning).toBeGreaterThanOrEqual(0.8);
@@ -242,13 +243,13 @@ describe('documentary editorial judgment', () => {
     const before = JSON.stringify(sim.state);
     const a = new Historian(sim.config);
     const b = new Historian(sim.config);
-    const first = Array.from({ length: 12 }, () => a.chooseScene(sim.state)).map(scene => ({
+    const first = Array.from({ length: 12 }, () => observeScene(a, sim.state)).map(scene => ({
       id: scene.id,
       subjectId: scene.subjectId,
       scale: scene.editorial?.preferredScale,
       threadId: scene.editorial?.threadId,
     }));
-    const second = Array.from({ length: 12 }, () => b.chooseScene(sim.state)).map(scene => ({
+    const second = Array.from({ length: 12 }, () => observeScene(b, sim.state)).map(scene => ({
       id: scene.id,
       subjectId: scene.subjectId,
       scale: scene.editorial?.preferredScale,
@@ -268,7 +269,7 @@ describe('documentary editorial judgment', () => {
     });
     sim.state.history = [];
     const historian = new Historian(sim.config);
-    const scenes = Array.from({ length: 10 }, () => historian.chooseScene(sim.state));
+    const scenes = Array.from({ length: 10 }, () => observeScene(historian, sim.state));
     const threadedPair = scenes.some((scene, index) => {
       const next = scenes[index + 1];
       return Boolean(next

@@ -1,3 +1,5 @@
+import { FIRST_FIRE_DURATION_SECONDS } from './founding/FoundingFirstFirePresentation';
+import { firstMilestones } from '../historian/Milestones';
 import { isEarlyDocumentary } from '../historian/EarlyDocumentary';
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
@@ -74,6 +76,7 @@ export interface CameraSafetyOptions {
   readonly previousPosition?: THREE.Vector3;
   readonly environmentProbe?: CameraEnvironmentProbe;
   readonly subjects?: readonly THREE.Vector3[];
+  readonly preserveDirection?: boolean;
 }
 
 export interface CameraSafetyResolution {
@@ -668,16 +671,6 @@ export function cameraLensObstruction(
 
   if (environmentProbe) {
     obstruction = Math.max(obstruction, environmentProbe(position, padding));
-  } else {
-    // Fallback for tests/dev consumers without renderer geometry: reject only the densest local canopy.
-    const cell = cellAt(state.world, position.x, position.z);
-    if (cell && !cell.water) {
-      const standing = clamp01(cell.wood / Math.max(0.01, cell.forestCapacity ?? cell.wood));
-      const canopyTop = elevationAt(position.x, position.z) + 3.8 + standing * 2.6;
-      if (standing > 0.72 && position.y < canopyTop && position.y > elevationAt(position.x, position.z) + 0.2) {
-        obstruction = Math.max(obstruction, (standing - 0.72) * 1.8);
-      }
-    }
   }
 
   return obstruction;
@@ -688,11 +681,11 @@ export function cameraLensObstruction(
  * Renderer placements take precedence over the coarse forest-cell fallback.
  */
 export function cameraSubjectVisibility(
-  state: SimulationState, from: THREE.Vector3, target: THREE.Vector3,
-  elevationAt: (x: number, z: number) => number, probe?: CameraEnvironmentProbe,
+  _state: SimulationState, from: THREE.Vector3, target: THREE.Vector3,
+  _elevationAt: (x: number, z: number) => number, probe?: CameraEnvironmentProbe,
   halfWidth = 0.16,
 ): number {
-  if (!probe) return 1 - clamp01(forestSightlineObstruction(state.world, from, target, elevationAt));
+  if (!probe) return 1;
   const right = new THREE.Vector3(target.z - from.z, 0, from.x - target.x).normalize();
   const end = new THREE.Vector3(), point = new THREE.Vector3();
   let visible = 0;
@@ -846,8 +839,21 @@ export function resolveCameraSafety(
     if (validity.valid && !cut) cut = result;
     return result;
   };
-  const authored = evaluate(authoredPosition.clone());
+  const correctedAuthored = authoredPosition.clone();
+  if (options.preserveDirection) correctedAuthored.y = Math.max(correctedAuthored.y,
+    elevationAt(correctedAuthored.x, correctedAuthored.z) + (options.lensClearance ?? 0.42));
+  const authored = evaluate(correctedAuthored);
   if (authored.valid && !authored.requiresCut) return authored;
+  if (options.preserveDirection) {
+    // A committed shot may slide gently, but never audition orbit angles or escape above foliage.
+    for (const slide of [0.25, -0.25, 0.5, -0.5]) {
+      const point = correctedAuthored.clone().addScaledVector(right, slide);
+      point.y = Math.max(point.y, elevationAt(point.x, point.z) + (options.lensClearance ?? 0.42));
+      const result = evaluate(point);
+      if (result.valid && !result.requiresCut) return result;
+    }
+    return authored;
+  }
   const stages: THREE.Vector3[][] = [];
   stages.push([0.35, -0.35, 0.7, -0.7, 1.2, -1.2].map(slide => authoredPosition.clone().addScaledVector(right, slide)));
   const offsets = [Math.PI / 18, -Math.PI / 18, Math.PI / 9, -Math.PI / 9, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI / 2, -Math.PI / 2, Math.PI];
@@ -933,7 +939,7 @@ export function resolveFoundingSightline(
         Math.max(authoredPosition.y + lift, elevationAt(x, z) + lensClearance),
         z,
       );
-      const forestObstruction = forestSightlineObstruction(state.world, position, target, elevationAt);
+      const forestObstruction = 0;
       const structureObstruction = structureSightlineObstruction(state, position, target, elevationAt);
       const actualLift = Math.max(0, position.y - authoredPosition.y);
       const score = structureObstruction * 8
@@ -956,7 +962,7 @@ export function resolveFoundingSightline(
 
   return best ?? {
     position: authoredPosition.clone(),
-    forestObstruction: forestSightlineObstruction(state.world, authoredPosition, target, elevationAt),
+    forestObstruction: 0,
     structureObstruction: structureSightlineObstruction(state, authoredPosition, target, elevationAt),
     angularCorrection: 0,
     lift: 0,
@@ -1212,6 +1218,29 @@ export class CameraDirector {
   private readonly gazeFlightAcceleration = new THREE.Vector3();
   private flight?: CameraFlightState;
   private acquiredScene?: ObservationCandidate;
+  private observationState?: SimulationState;
+  private milestoneHistory?: SimulationState['history'];
+  private milestoneHistoryLength = -1;
+  private milestoneMonth = -1;
+  private milestoneEvents: SimulationState['history'] = [];
+  private mustWitnessEvents(state: SimulationState): SimulationState['history'] {
+    if (this.milestoneHistory !== state.history || this.milestoneHistoryLength !== state.history.length || this.milestoneMonth !== state.month) {
+      this.milestoneEvents = firstMilestones(state.history);
+      this.milestoneHistory = state.history;
+      this.milestoneHistoryLength = state.history.length;
+      this.milestoneMonth = state.month;
+    }
+    return this.milestoneEvents;
+  }
+  readonly sceneLifecycle = new Map<string, 'proposed' | 'reserved' | 'traveling' | 'acquired' | 'performed' | 'released'>();
+  readonly sceneTransitions: Array<{ sceneId: string; phase: 'proposed' | 'reserved' | 'traveling' | 'acquired' | 'performed' | 'released' }> = [];
+  private transitionScene(sceneId: string, phase: typeof this.sceneTransitions[number]['phase']): void {
+    if (this.sceneLifecycle.get(sceneId) === phase) return;
+    this.sceneLifecycle.set(sceneId, phase);
+    this.sceneTransitions.push({ sceneId, phase });
+    if (this.sceneTransitions.length > 256) this.sceneTransitions.shift();
+    if (this.sceneLifecycle.size > 512) this.sceneLifecycle.delete(this.sceneLifecycle.keys().next().value!);
+  }
   private routeCheckSeconds = 0;
   private readonly shotBasePosition = new THREE.Vector3();
   private readonly shotBaseTarget = new THREE.Vector3();
@@ -1236,7 +1265,6 @@ export class CameraDirector {
   private lastScannedHistoryLength = -1;
   private lastScannedMonth = -1;
   private arrivalActive = false;
-  private arrivalShotId = '';
   private foundingPresentationDone = false;
   private arrivalSafetySeconds = 0;
   private arrivalSafetyInitialized = false;
@@ -1264,16 +1292,16 @@ export class CameraDirector {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
+    this.observationState = state;
     this.historian.observe(state);
     if (state.arrival && isArrivalFilmPhase(state.arrival.phase)) {
       const focus = arrivalSequenceFocus(state.arrival);
-      const edit = this.arrivalShotId !== focus.shotId && !this.externalPoseRecoveryPending;
+      const edit = !this.arrivalActive && !this.externalPoseRecoveryPending;
       if (edit) {
         this.arrivalSafetySeconds = 0;
         this.arrivalSafetyInitialized = false;
         this.arrivalSafetyOffset.set(0, 0, 0);
       }
-      this.arrivalShotId = focus.shotId;
       const target = focus.target;
       this.desiredTarget.set(target.x, target.y, target.z);
 
@@ -1309,6 +1337,7 @@ export class CameraDirector {
         const safety = resolveCameraSafety(state, authored, this.desiredTarget, elevationAt, {
           lensClearance: 0.72,
           sightlineClearance: 0.22,
+          preserveDirection: true,
           // Do not ask the survey to validate a long swept route. The real lens advances only a
           // small spring step each frame and is guarded below against entering rendered geometry.
           environmentProbe: this.environmentProbe,
@@ -1321,8 +1350,7 @@ export class CameraDirector {
       }
       this.desiredPosition.copy(authored).add(this.arrivalSafetyOffset);
 
-      // Cut between separate landing sites; never spend a shot traveling through unrelated forest.
-      // Movement within each composition still uses the continuous camera spring.
+      // Initialize once; every subsequent beat preserves lens position, gaze and momentum.
       if (edit) {
         this.camera.position.copy(this.desiredPosition);
         this.lookTarget.copy(this.desiredTarget);
@@ -1333,7 +1361,7 @@ export class CameraDirector {
         this.camera.updateProjectionMatrix();
       }
 
-      advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, focus.transitionSeconds);
+      advanceCameraSpring(this.camera.position, this.positionVelocity, this.desiredPosition, deltaSeconds, this.externalPoseRecoveryPending ? Math.max(3, focus.transitionSeconds) : focus.transitionSeconds);
       advanceCameraSpring(this.lookTarget, this.targetVelocity, this.desiredTarget, deltaSeconds, focus.transitionSeconds / 1.14);
       this.arrivalActive = true;
 
@@ -1387,7 +1415,6 @@ export class CameraDirector {
       // Preserve the final human-scale pose as the starting point for the Historian handoff. Reset
       // transient recovery state, but do not mark the camera unsafe or force a first-frame snap.
       this.arrivalActive = false;
-      this.arrivalShotId = '';
       this.arrivalSafetySeconds = 0;
       this.arrivalSafetyInitialized = false;
       this.arrivalSafetyOffset.set(0, 0, 0);
@@ -1451,13 +1478,14 @@ export class CameraDirector {
         : this.currentScene?.kind === 'street-observation' ? 14
           : this.currentScene?.kind === 'traveler-follow' ? 12
             : 6;
-    const mayInterrupt = this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
+    const milestoneHold = this.currentScene?.event && this.mustWitnessEvents(state).some(event => event.id === this.currentScene?.event?.id);
+    const mayInterrupt = (!milestoneHold || this.shotAge >= this.shotDuration) && this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
     if (!justCompletedFoundingRelease && !awaitingHistoryAuthority) {
       if (!this.currentScene || (majorEvent && mayInterrupt)) {
-        if (majorEvent) this.acknowledgedMajorEventIds.add(majorEvent.id);
+
         if (this.acknowledgedMajorEventIds.size > 2048) {
           const oldest = this.acknowledgedMajorEventIds.values().next().value as string | undefined;
-          if (oldest) this.acknowledgedMajorEventIds.delete(oldest);
+          if (oldest && !this.mustWitnessEvents(state).some(event => event.id === oldest)) this.acknowledgedMajorEventIds.delete(oldest);
         }
         this.chooseShot(state, elevationAt, majorEvent?.id, elapsedSeconds);
       } else if (this.shouldCompleteCurrentShot(state) || this.shotAge >= this.shotDuration) {
@@ -1600,6 +1628,8 @@ export class CameraDirector {
     }
   }
 
+  framingTarget(): THREE.Vector3 { return this.lookTarget.clone(); }
+
   current(): ObservationCandidate | undefined {
     // During a flight the documentary still belongs to the last acquired scene. After Arrival there
     // may not be one yet; returning undefined is preferable to pretending the remote destination has
@@ -1724,6 +1754,12 @@ export class CameraDirector {
     focusEventId?: string,
     elapsedSeconds = 0,
   ): void {
+    if (this.acquiredScene && this.sceneLifecycle.get(this.acquiredScene.id) === 'acquired') {
+      if (this.shotAge >= documentaryMinimumHoldSeconds(this.activeSequence?.role, this.acquiredScene.kind)) {
+        this.transitionScene(this.acquiredScene.id, 'performed');
+      }
+      this.transitionScene(this.acquiredScene.id, 'released');
+    }
     let scene: ObservationCandidate;
     if (focusEventId) {
       this.sequencePlanner.interrupt();
@@ -1824,6 +1860,8 @@ export class CameraDirector {
       }
     }
     this.lastHumanShot = scene.id.startsWith('human:');
+    this.transitionScene(scene.id, 'proposed');
+    this.transitionScene(scene.id, 'reserved');
     this.currentScene = scene;
     this.shotAge = 0;
     this.trackingInitialized = false;
@@ -1859,7 +1897,7 @@ export class CameraDirector {
       if (scene.event?.type === 'first-fire') {
         // Stay long enough to witness assembly contact, ignition, the falter, successful catch and
         // the first witnesses arriving. This is a milestone, not a cutaway.
-        this.shotDuration = Math.max(this.shotDuration, 30);
+        this.shotDuration = Math.max(this.shotDuration, FIRST_FIRE_DURATION_SECONDS + 2);
       } else if (scene.kind === 'worker-follow' || scene.kind === 'discovery-scene') {
         this.shotDuration = Math.max(this.shotDuration, 20);
       } else if (scene.kind === 'street-observation') {
@@ -1946,8 +1984,9 @@ export class CameraDirector {
     if (endpoint.valid) this.desiredPosition.copy(endpoint.position);
     this.shotBasePosition.copy(this.desiredPosition);
 
+    this.transitionScene(scene.id, 'traveling');
     const initialStartup = !this.safetyInitialized && !this.acquiredScene && !this.arrivalActive;
-    if (initialStartup) {
+    if (initialStartup && endpoint.valid) {
       this.camera.position.copy(this.shotBasePosition);
       this.lookTarget.copy(this.shotBaseTarget);
       this.positionVelocity.set(0, 0, 0);
@@ -1970,7 +2009,7 @@ export class CameraDirector {
       );
       this.releaseFoundingOverlayForTransit(historyHandoff);
     }
-    if (distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
+    if (endpoint.valid && distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
       this.acquireCurrentScene();
       return;
     }
@@ -2195,7 +2234,11 @@ export class CameraDirector {
 
     if (flight.phase === 'approach'
       && cameraFlightSettled(this.camera.position, this.positionVelocity, flight.destinationPosition, 0.65)
-      && gazeAcquired) {
+      && gazeAcquired
+      && cameraShotValidity(state, this.camera.position, flight.destinationTarget, elevationAt, {
+        environmentProbe: this.environmentProbe,
+        lensClearance: cameraClearanceForScene(this.currentScene.kind, this.currentScene.id).lens,
+      }).valid) {
       this.flight = undefined;
       this.flightAcceleration.set(0, 0, 0);
       this.gazeFlightAcceleration.set(0, 0, 0);
@@ -2247,10 +2290,7 @@ export class CameraDirector {
     // If the unreachable destination was the final release shot, the opening must still terminate.
     // Commit the semantic handoff immediately as well; otherwise the last internal "Arrival Day"
     // transit label can survive beneath a clock that has already started moving.
-    if (this.currentScene?.id.startsWith('founding-release:')) {
-      this.foundingPresentationDone = true;
-      this.releaseFoundingOverlayForTransit(true);
-    }
+    if (this.currentScene) this.transitionScene(this.currentScene.id, 'released');
     this.flight = undefined;
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
@@ -2274,6 +2314,9 @@ export class CameraDirector {
     this.externalPoseRecoveryPending = false;
     this.interruptedFlightResumePending = false;
     this.acquiredScene = this.currentScene;
+    this.transitionScene(this.currentScene.id, 'acquired');
+    if (this.currentScene.event) this.acknowledgedMajorEventIds.add(this.currentScene.event.id);
+    if (this.observationState) this.historian.acquireScene(this.currentScene, this.observationState);
     this.commitObservation(this.currentScene);
     this.shotAge = 0;
     this.trackingInitialized = false;
@@ -2349,6 +2392,7 @@ export class CameraDirector {
   private shouldCompleteCurrentShot(state: SimulationState): boolean {
     const scene = this.currentScene;
     if (!scene || isFoundingCameraScene(scene.id) || isScenicFlightScene(scene.id)) return false;
+    if (scene.event && this.mustWitnessEvents(state).some(event => event.id === scene.event?.id)) return false;
     const desiredActivity = scene.editorial?.desiredActivity;
     if (desiredActivity && this.shotAge >= 6) {
       const person = state.people.find(p => p.id === scene.subjectId);
@@ -2415,7 +2459,7 @@ export class CameraDirector {
       });
       const fallbackForest = this.environmentProbe
         ? 0
-        : forestSightlineObstruction(state.world, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
+        : 0;
       const structureObstruction = structureSightlineObstruction(state, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
       const hardPenalty = validity.valid ? 0 : 12;
       const visibilityPenalty = (1 - validity.subjectVisibility) * 3.4;
@@ -2757,6 +2801,9 @@ export class CameraDirector {
   }
 
   private findMajorEvent(state: SimulationState): SimulationState['history'][number] | undefined {
+    const pendingMilestone = this.mustWitnessEvents(state).find(event => event.month <= state.month
+      && !this.acknowledgedMajorEventIds.has(event.id));
+    if (pendingMilestone) return pendingMilestone;
     if (this.lastScannedHistoryLength === state.history.length && this.lastScannedMonth === state.month) {
       return this.latestMajorEvent && !this.acknowledgedMajorEventIds.has(this.latestMajorEvent.id) ? this.latestMajorEvent : undefined;
     }
@@ -2817,8 +2864,7 @@ export function resolveHumanSightline(state: SimulationState, authored: THREE.Ve
     const point = new THREE.Vector3(x, Math.max(authored.y + lift, elevationAt(x, z) + 0.42), z);
     let obstruction = 0;
     for (const subject of subjects) obstruction = Math.max(obstruction,
-      forestSightlineObstruction(state.world, point, subject, elevationAt)
-      + structureSightlineObstruction(state, point, subject, elevationAt) * 8);
+      structureSightlineObstruction(state, point, subject, elevationAt) * 8);
     const score = obstruction * 10 + Math.abs(offset) * 0.025 + lift * 0.05;
     if (score < bestScore) { best = point; bestScore = score; }
     if (obstruction < 0.02) return point;

@@ -144,6 +144,7 @@ function presentationTrace(seed: string, years: number, pace: GodboxTimePresetNa
   const historian = new Historian(simulation.config);
   const director = new PresentationDirector(simulation.config);
   let scene = historian.chooseScene(simulation.state);
+  historian.acquireScene(scene, simulation.state);
   let shotAge = 0;
   let shotDuration = durationForScene(simulation, scene.score, scene.kind);
   let accumulator = 0;
@@ -163,6 +164,7 @@ function presentationTrace(seed: string, years: number, pace: GodboxTimePresetNa
     shotAge += deltaSeconds;
     if (shotAge >= shotDuration) {
       scene = historian.chooseScene(simulation.state);
+      historian.acquireScene(scene, simulation.state);
       shotAge = 0;
       shotDuration = durationForScene(simulation, scene.score, scene.kind);
       shots += 1;

@@ -1,6 +1,7 @@
 import type { Vec2 } from '../../sim/types';
 import type { SocialGroup } from './PeoplePresentation';
 import type { RestPreference } from './RestChoreography';
+import type { IndoorSleepingArea } from './IndoorSleepingArea';
 
 /**
  * Presentation-only physical contract for rest.
@@ -9,8 +10,8 @@ import type { RestPreference } from './RestChoreography';
  * visible, collision-safe support point represents that rest during documentary presentation.
  * It never writes simulation state.
  */
-export type RestPosture = 'supported-sit' | 'ground-sit';
-export type RestSupportKind = 'structure-edge' | 'ground';
+export type RestPosture = 'supported-sit' | 'ground-sit' | 'sleep';
+export type RestSupportKind = 'structure-edge' | 'ground' | 'bed';
 
 export interface RestSupportFootprint {
   key: string;
@@ -22,6 +23,7 @@ export interface RestSupportFootprint {
 }
 
 export interface RestSpotPresentation {
+  indoor?: IndoorSleepingArea;
   /** Stable key used as a presentation reservation. */
   key: string;
   destination: Vec2;

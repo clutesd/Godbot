@@ -28,6 +28,7 @@ import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../terrain/SurfaceGeometry'
 import { memorialVisitPlan } from './MemorialBehavior';
 import { foundingCommunityDestination } from './FoundingCommunityRoutine';
 import { foundingHearthWorldPosition } from '../../shared/FoundingCampLayout';
+import { sleepSchedule } from './SleepSchedule';
 
 interface ScheduledDestination {
   kind: DestinationKind;
@@ -218,13 +219,15 @@ export class PeopleSystem {
     if (resourceSchedule?.kind === 'construction-site' && navigation?.destinationKind !== 'construction-site') {
       if (navigation) navigation.traveling = false;
     }
+    const schedule = resourceSchedule ?? this.scheduleFor(person, settlement, state);
+    if (schedule.activity === 'rest' && schedule.reason.startsWith('sleeping')
+      && navigation?.traveling && navigation.destinationKind !== 'home') navigation.traveling = false;
     if (navigation?.traveling) {
       const speed = navigation.crossingMode === 'rail' ? 3.2 : 2 + person.traits.conscientiousness * 0.5;
       this.advanceAlongRoute(person, speed, settlement, state);
       return;
     }
 
-    const schedule = resourceSchedule ?? this.scheduleFor(person, settlement, state);
     const destinationId = schedule.destinationId ?? this.destinationId(person, settlement, schedule.kind);
     if (navigation && navigation.destinationId === destinationId && isResourceWorkDestinationId(destinationId)) {
       // Changing from the commute phase to the work phase at the same physical site must not rebuild
@@ -304,7 +307,8 @@ export class PeopleSystem {
     const rank = settlementEraRank(settlement, state);
     if (['factory-worker', 'engineer', 'machinist', 'manager', 'energy-technician', 'medical-worker', 'logistics-worker'].includes(role)) return rank >= 4;
     if (['scientist', 'researcher', 'machine-systems-specialist', 'space-worker'].includes(role)) return rank >= 5;
-    if (['administrator', 'scholar', 'railway-worker', 'merchant'].includes(role)) return rank >= 3;
+    if (role === 'merchant') return state.tradeRoutes.some(r => r.active && (r.a === settlement.id || r.b === settlement.id) && (r.transport?.deliveries ?? 0) >= 2);
+    if (['administrator', 'scholar', 'railway-worker'].includes(role)) return rank >= 3;
     if (['guard', 'soldier'].includes(role)) return rank >= 1;
     return true;
   }
@@ -338,7 +342,7 @@ export class PeopleSystem {
         if (rank >= 4 && settlement.infrastructure.rail > 0.16 && draw < 0.18) return 'railway-worker';
         if ((this.world.cells[settlement.cellIndex]?.coast || settlement.infrastructure.ports > 0.08) && draw < 0.38) return draw < 0.18 ? 'sailor' : 'dock-worker';
         if (rank >= 4 && draw < 0.56) return 'logistics-worker';
-        return draw < 0.72 ? 'transporter' : rank >= 3 ? 'merchant' : 'trader';
+        return draw < 0.72 ? 'transporter' : this.roleSupported('merchant', settlement, state) ? 'merchant' : 'trader';
       case 'keeper':
         if ((temple || state.cultures.find((culture) => culture.id === person.cultureId)?.dimensions.religiousTendency) && draw < 0.25) return rank >= 2 ? 'priest' : 'ritual-specialist';
         if (rank >= 5 && archive && draw < 0.52) return draw < 0.39 ? 'scientist' : 'researcher';
@@ -386,9 +390,15 @@ export class PeopleSystem {
       + Math.floor(stableUnit(`${person.id}:schedule`) * (settlement.foundingPodId ? 24 : 3))) % 24;
     const building = isEstablishmentBuilder(state, person);
     const fireTender = isEstablishmentFireTender(state, person);
-    const winter = state.month % 12 <= 1 || state.month % 12 >= 10;
-    if (person.energy < 0.23 || shiftedHour < (winter ? 6 : 5) || shiftedHour >= 22) {
-      return { kind: 'home', phase: 'home', activity: 'rest', reason: physicalRestSite(state, person) ? 'resting in available physical shelter' : 'resting at the household camp' };
+    const sleep = sleepSchedule(person, shiftedHour);
+    if (person.energy < 0.23 || sleep.sleeping) {
+      return { kind: 'home', phase: 'home', activity: 'rest', reason: sleep.sleeping
+        ? `${sleep.nightShift ? 'sleeping after night duty' : 'sleeping on the household schedule'}${physicalRestSite(state, person) ? ' in available shelter' : ' at camp'}`
+        : 'recovering energy at home' };
+    }
+    if (sleep.nightShift && (shiftedHour >= 21 || shiftedHour < 8)) {
+      const kind = this.workDestination(role, settlement);
+      return { kind, phase: 'work', activity: activityForRole(role, kind), reason: 'working the assigned night shift' };
     }
     const memorial = memorialVisitPlan(person, settlement, state, shiftedHour);
     if (memorial) return memorial;

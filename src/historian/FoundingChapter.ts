@@ -181,8 +181,6 @@ export function foundingChapterBaseline(state: SimulationState): FoundingChapter
 
 function rememberStatement(historian: Historian, scene: ObservationCandidate, state: SimulationState): ObservationCandidate | undefined {
   if (!historian.validateStatement(scene.statement, state)) return undefined;
-  if (!historian.statements.some(statement => statement.id === scene.statement.id)) historian.statements.push(scene.statement);
-  if (historian.statements.length > 1200) historian.statements.splice(0, historian.statements.length - 1200);
   return scene;
 }
 
@@ -281,10 +279,9 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
     return undefined;
   }
 
-  memory.nextBeat = 1;
-  memory.complete = true;
   const scene = overviewScene(historian, state, memory.baseline);
   if (scene) {
+    historian.whenAcquired(scene.id, () => { memory.nextBeat = 1; memory.complete = true; });
     holdFoundingChapter(historian, state, memory);
     return scene;
   }

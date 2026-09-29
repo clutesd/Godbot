@@ -121,7 +121,7 @@ app.innerHTML = `
       <p id="opening-observation">OBSERVATION 001</p>
       <small id="world-name">A world is being remembered</small>
       <small id="opening-seed">SEED -</small>
-      <small id="opening-status">History is the protagonist.</small>
+      <small id="opening-status" role="status" aria-live="polite" aria-atomic="true">History is the protagonist.</small>
     </div>
   </main>
 `;
@@ -173,7 +173,7 @@ function writeAudioMutedPreference(muted: boolean): void {
 }
 
 let activeAudio: AudioDirector | undefined;
-let activeCameraView: { autonomousCamera: boolean; setAutonomousCamera(enabled: boolean): void } | undefined;
+let activeCameraView: { autonomousCamera: boolean; setAutonomousCamera(enabled: boolean): void; dispose(): void } | undefined;
 let requestedAutonomousCamera = true;
 let audioMuted = readAudioMutedPreference();
 
@@ -250,7 +250,7 @@ let activeRun: { retire: (reason: string) => void } | undefined;
 let activeSeed = '';
 let rafId = 0;
 let openingTimeout = 0;
-let restartInProgress = false;
+let restartInProgress = true;
 
 function generateSeed(): string {
   const values = new Uint32Array(2);
@@ -259,10 +259,24 @@ function generateSeed(): string {
 }
 
 function reportRestartFailure(error: unknown): void {
+  const failedRun = activeRun;
+  activeRun = undefined;
+  if (failedRun) failedRun.retire('Observation initialization failed.');
+  else {
+    // Shader warmup can fail before the run installs its full retirement callback.
+    activeCameraView?.dispose();
+    activeCameraView = undefined;
+    activeAudio?.stop();
+    activeAudio = undefined;
+  }
   const detail = error instanceof Error ? error.message : String(error);
   activityElement.textContent = `The observation could not restart: ${detail}`;
   evidenceElement.textContent = 'RESTART FAILURE';
   openingStatusElement.textContent = `RESTART FAILURE · ${detail}`;
+  openingElement.classList.remove('departed', 'ready', 'preparing', 'restarting');
+  openingElement.classList.add('failed');
+  openingTitleElement.textContent = 'A pause in history';
+  openingStatusElement.textContent = 'Unable to prepare this world. Select Restart to try again.';
   console.error('GODBOX restart failed', error);
 }
 
@@ -276,6 +290,13 @@ async function restartObservation(seed: string): Promise<void> {
   try {
     await performAtomicRestart({
       seed,
+      coverCurrent: async () => {
+        // Two frame boundaries let the browser paint before costly disposal/construction.
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          await new Promise<void>(resolve => window.setTimeout(resolve, 240));
+        }
+      },
       retireCurrent: () => {
         window.clearTimeout(openingTimeout);
         const current = activeRun;
@@ -286,9 +307,15 @@ async function restartObservation(seed: string): Promise<void> {
       setBusy: (busy) => {
         syncRestartToggle(restartButtonElement, busy);
         if (busy) {
-          openingElement.classList.remove('departed', 'ending');
+          openingElement.classList.add('restarting');
+          openingElement.classList.remove('departed', 'ending', 'ready', 'failed');
           openingStatusElement.textContent = 'Restarting the observation…';
           arrivalCaptionElement.style.opacity = '0';
+          commandLineElement.hidden = true;
+          commandInputElement.blur();
+          if (document.pointerLockElement) document.exitPointerLock();
+        } else {
+          openingElement.classList.remove('restarting');
         }
       },
       onFailure: reportRestartFailure,
@@ -385,15 +412,18 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   // must never leave the previous civilization frozen on screen.
   openingTitleElement.textContent = 'GODBOX';
   openingStatusElement.textContent = 'Preparing the observation…';
-  openingElement.classList.remove('departed', 'ending', 'ready');
+  openingElement.classList.remove('departed', 'ending', 'ready', 'failed');
   openingElement.classList.add('preparing');
   arrivalCaptionElement.style.opacity = '0';
   await nextFrame();
+  await nextFrame();
+  openingElement.classList.remove('restarting');
 
   const preview = import.meta.env.DEV && new URLSearchParams(location.search).has('arrival-preview');
   if (preview && seedOverride === undefined) seedOverride = 'arrival-day-preview';
   const baseConfig = configWith({ ...GODBOX_CONFIG, startMode: 'arrival' });
   const archiveStore = new HistorianArchiveStore(preview ? null : globalThis.indexedDB);
+  try {
   const previousRuns = await archiveStore.list();
   const resumable = seedOverride === undefined && baseConfig.experiment.resumeOngoing
     ? matchingOngoingRun(previousRuns, experimentFingerprint(baseConfig), baseConfig.seed)
@@ -557,6 +587,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   await persist();
 
   const frame = (now: number): void => {
+    if (disposed) return;
     if (document.hidden) {
       lastTime = now;
       rafId = window.requestAnimationFrame(frame);
@@ -773,11 +804,22 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     openingElement.classList.remove('departed');
     openingTimeout = window.setTimeout(() => openingElement.classList.add('departed'), resumable ? 1000 : 2800);
   }
+  } catch (error) {
+    archiveStore.close();
+    throw error;
+  }
 }
 
+syncRestartToggle(restartButtonElement, true);
+restartButtonElement.textContent = 'PREPARING…';
+restartButtonElement.setAttribute('aria-label', 'Preparing observation');
 void beginObservation().catch((error: unknown) => {
   const detail = error instanceof Error ? error.message : String(error);
   activityElement.textContent = `The observation could not begin: ${detail}`;
   evidenceElement.textContent = 'LOCAL FAILURE';
   openingStatusElement.textContent = `LOCAL FAILURE · ${detail}`;
+  reportRestartFailure(error);
+}).finally(() => {
+  restartInProgress = false;
+  syncRestartToggle(restartButtonElement, false);
 });

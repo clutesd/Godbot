@@ -1,3 +1,4 @@
+import { firstMilestones } from './Milestones';
 import { earlyDocumentaryBias, isEarlyDocumentary } from './EarlyDocumentary';
 import { DocumentaryMemory } from './DocumentaryMemory';
 import type { GodboxConfig } from '../config';
@@ -53,6 +54,9 @@ export interface HistorianOptions {
 }
 
 export class Historian {
+  private readonly acquisitionCallbacks = new Map<string, () => void>();
+  whenAcquired(sceneId: string, callback: () => void): void { this.acquisitionCallbacks.set(sceneId, callback); }
+
   private readonly documentaryMemory = new DocumentaryMemory();
   readonly statements: HistorianStatement[] = [];
   readonly predictions: HistorianPrediction[] = [];
@@ -114,29 +118,37 @@ export class Historian {
       .sort((a, b) => b.score - a.score || a.candidate.id.localeCompare(b.candidate.id));
     const choice = focused ?? ranked[0]?.candidate ?? this.ensureEditorial(state, this.fallback(state));
 
+    this.documentaryMemory.decorate(choice, state);
+    return choice;
+  }
+
+  /** Selection is a proposal. Only the physical camera can acknowledge an observation. */
+  acquireScene(choice: ObservationCandidate, state: SimulationState): void {
+    this.acquisitionCallbacks.get(choice.id)?.();
+    this.acquisitionCallbacks.delete(choice.id);
     this.shownSubjects.set(choice.subjectId, (this.shownSubjects.get(choice.subjectId) ?? 0) + 1);
     if (choice.event) this.shownEventTypes.set(choice.event.type, (this.shownEventTypes.get(choice.event.type) ?? 0) + 1);
     if (choice.id.startsWith('century:')) this.shownCenturies.add(Number(choice.id.replace('century:', '')));
     this.lastSubjectId = choice.subjectId;
     this.rememberEditorialSelection(choice);
-    this.documentaryMemory.decorate(choice, state);
     this.documentaryMemory.remember(choice, state.month);
 
     if (this.validateStatement(choice.statement, state)) {
-      this.statements.push(choice.statement);
+      if (!this.statements.some(statement => statement.id === choice.statement.id)) this.statements.push(choice.statement);
       if (this.statements.length > 1200) this.statements.splice(0, this.statements.length - 1200);
     }
-    return choice;
   }
+
 
   candidates(state: SimulationState): ObservationCandidate[] {
     this.documentaryMemory.observe(state);
     const candidates: ObservationCandidate[] = [];
     // Arrival Day is owned by the authored founding chapter. Once normal history is running,
     // it must not re-enter the generic 24-month event window and compete with what is happening now.
+    const milestones = new Set(firstMilestones(state.history).map(event => event.id));
     const recentEvents = state.history.filter((event) => event.type !== 'ARRIVAL_DAY'
-      && (SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65)
-      && event.month <= state.month && state.month - event.month <= 24);
+      && (milestones.has(event.id) || SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65)
+      && event.month <= state.month && (milestones.has(event.id) || state.month - event.month <= 24));
     candidates.push(...this.documentaryMemory.candidates(state));
     const latestCampaignEvents = new Map<string, HistoricalEvent>();
     for (const event of recentEvents) {
@@ -198,7 +210,7 @@ export class Historian {
     const memory = campaignMemory(state, event);
     const breakdown = this.scoreEvent(state, event);
     const score = this.totalScore(breakdown);
-    const kind = this.kindForEvent(event);
+    let kind = this.kindForEvent(event);
     const attributedPersonId = typeof event.context.attributedPersonId === 'string' ? event.context.attributedPersonId : undefined;
     const firstFireSettlement = event.type === 'first-fire' && event.locationId
       ? state.settlements.find((settlement) => settlement.id === event.locationId)
@@ -215,9 +227,20 @@ export class Historian {
           return stableHistorianUnit(a.id) - stableHistorianUnit(b.id);
         })[0]
       : undefined;
-    const attributedPerson = attributedPersonId
-      ? state.people.find((person) => person.id === attributedPersonId)
-      : firstFirePerson;
+    const familyIds = typeof event.context.familyIds === 'string' ? event.context.familyIds.split(',') : [];
+    const activity = event.type === 'death' || Number(event.context.burials) > 0 ? 'mourn'
+      : event.type === 'infrastructure-built' ? 'construct'
+        : event.type === 'recipe-learned' ? 'craft' : 'gather';
+    const attributedPerson = state.people.find(person => person.alive && person.id === attributedPersonId)
+      ?? firstFirePerson ?? state.people.find(person => person.alive && event.actors.includes(person.id))
+      ?? state.people.find(person => person.alive && familyIds.includes(person.id))
+      ?? state.people.filter(person => person.alive && person.homeId === event.locationId)
+        .sort((a, b) => Number(b.activity === activity) - Number(a.activity === activity)
+          || Math.hypot(a.position.x - (event.location?.x ?? 0), a.position.z - (event.location?.z ?? 0))
+            - Math.hypot(b.position.x - (event.location?.x ?? 0), b.position.z - (event.location?.z ?? 0)))[0];
+    if (attributedPerson && ['infrastructure-built', 'resource-deposit-discovered', 'recipe-learned', 'death'].includes(event.type)) {
+      kind = event.type === 'death' ? 'street-observation' : 'worker-follow';
+    }
     const atomicComparison = event.type === 'atomic-threshold' && (this.crossRunContext?.completedRuns ?? 0) >= 3
       ? ` ${this.crossRunContext?.atomicThresholdRuns ?? 0} previous completed civilizations reached this threshold; ${this.crossRunContext?.survivedThreeCenturiesAfterAtomic ?? 0} remained technologically intact for at least 300 years afterward.`
       : '';

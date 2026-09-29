@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { conformGroundGeometry, renderedGroundSampler } from '../terrain/ConformingGround';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GodboxRenderer } from '../GodboxRenderer';
 import type { MemorialSite } from '../../sim/development/types';
@@ -955,6 +956,7 @@ export function createMemorialSiteLandscape(
   elevationAt: (x: number, z: number) => number,
 ): THREE.Group {
   const landscape = new THREE.Group();
+  elevationAt = renderedGroundSampler(state.world.terrain, elevationAt);
   landscape.name = 'memorial-site-landscape';
   let sites = 0;
   let pathTiles = 0;
@@ -973,7 +975,12 @@ export function createMemorialSiteLandscape(
     site.userData['memorialForm'] = memorial.form;
     site.userData['memorialAgeBand'] = memorial.ageBand;
     site.userData['landscapeLanguage'] = profile.language;
-    site.add(createTerrainPatch(settlement, plot, memorial, settlementY, elevationAt, radius));
+    const ground = createTerrainPatch(settlement, plot, memorial, settlementY, elevationAt, radius);
+    const originalGround = ground.geometry;
+    ground.geometry = conformGroundGeometry(originalGround, state.world.terrain, elevationAt,
+      { x: plot.worldX, y: settlementY, z: plot.worldZ });
+    originalGround.dispose();
+    site.add(ground);
     addBoundaryAndEntrance(site, settlement, plot, memorial, settlementY, elevationAt, radius, profile);
     addVegetation(site, settlement, plot, memorial, settlementY, elevationAt, radius, profile);
     addCulturalDetails(site, settlement, plot, memorial, settlementY, elevationAt, radius);

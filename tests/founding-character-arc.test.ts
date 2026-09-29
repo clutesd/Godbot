@@ -1,3 +1,4 @@
+import { acquireProposal } from './observe-scene';
 import { describe, expect, it } from 'vitest';
 import { foundingDocumentaryCast, type FoundingCastMember } from '../src/historian/FoundingCast';
 import {
@@ -165,14 +166,14 @@ describe('Founding character life arcs 2c', () => {
     simulation.state.month = 54;
     killPeople(simulation.state, [person], 'age');
 
-    const ending = chooseFoundingCharacterEndingScene(historian, simulation.state);
+    const ending = acquireProposal(historian, simulation.state, chooseFoundingCharacterEndingScene(historian, simulation.state));
     expect(ending).toBeDefined();
     expect(ending?.title).toContain(person.name);
     expect(ending?.statement.text).toContain('This life is complete in the record');
     expect(ending?.statement.sourceEventIds.some(id => simulation.state.history.find(event => event.id === id)?.type === 'death')).toBe(true);
     expect(ending && historian.validateStatement(ending.statement, simulation.state)).toBe(true);
     expect(foundingCharacterArcStatus(historian, person.id)?.completed).toBe(true);
-    expect(chooseFoundingCharacterEndingScene(historian, simulation.state)).toBeUndefined();
+    expect(acquireProposal(historian, simulation.state, chooseFoundingCharacterEndingScene(historian, simulation.state))).toBeUndefined();
   });
 
   it('preserves an ending across archive restoration so a reload does not replay the memorial', () => {
@@ -185,13 +186,13 @@ describe('Founding character life arcs 2c', () => {
     if (!person) throw new Error('Expected founder');
     simulation.state.month = 60;
     killPeople(simulation.state, [person], 'age');
-    const ending = chooseFoundingCharacterEndingScene(historian, simulation.state);
+    const ending = acquireProposal(historian, simulation.state, chooseFoundingCharacterEndingScene(historian, simulation.state));
     if (!ending) throw new Error('Expected ending');
 
     const restored = new Historian(simulation.config);
     restoreFoundingCharacterArcs(restored, simulation.state, [...scenes.map(scene => scene.statement), ending.statement]);
     expect(foundingCharacterArcStatus(restored, person.id)?.completed).toBe(true);
-    expect(chooseFoundingCharacterEndingScene(restored, simulation.state)).toBeUndefined();
+    expect(acquireProposal(restored, simulation.state, chooseFoundingCharacterEndingScene(restored, simulation.state))).toBeUndefined();
   });
 
   it('can close an ordinary watched life without manufacturing fame or simulation importance', () => {
@@ -210,7 +211,7 @@ describe('Founding character life arcs 2c', () => {
     simulation.state.month = 42;
     killPeople(simulation.state, [person], 'age');
 
-    const ending = chooseFoundingCharacterEndingScene(historian, simulation.state);
+    const ending = acquireProposal(historian, simulation.state, chooseFoundingCharacterEndingScene(historian, simulation.state));
     expect(ending).toBeDefined();
     expect((person.historical?.status ?? 'ordinary')).toBe(statusBefore);
     expect(ending?.statement.text).toContain('I had watched this life once before its ending');
