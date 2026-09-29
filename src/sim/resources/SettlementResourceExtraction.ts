@@ -10,7 +10,7 @@ import {
   recordMaterialExtraction,
   type RawMaterialKind,
 } from './MaterialEconomy';
-import { storageRoom } from './Inventory';
+import { materialEconomy, storageRoom } from './Inventory';
 import { recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import {
   extractDeposit,
@@ -219,12 +219,13 @@ function requestedSupplementalRenewables(
 
 function requestedSupplementalDeposit(settlement: Settlement, kind: SupplementalDeposit): number {
   const operatingDemand = settlement.materialUse?.materials[kind]?.demand ?? 0;
+  const energyAndTradeDemand = materialEconomy(settlement).demand[kind] ?? 0;
   const baseTarget = kind === 'clay'
     ? 4 + settlement.infrastructure.workshops * 8 + settlement.infrastructure.factories * 2
     : kind === 'coal'
       ? 4 + settlement.industry.intensity * 12 + settlement.infrastructure.factories * 6
       : 1 + settlement.infrastructure.power * 2;
-  const target = Math.max(baseTarget, operatingDemand * 6);
+  const target = Math.max(baseTarget, operatingDemand * 6, energyAndTradeDemand * 2);
   return Math.max(0, target - materialAmount(settlement, kind));
 }
 
