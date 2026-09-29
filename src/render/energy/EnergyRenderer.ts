@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { SimulationState } from '../../sim/types';
-import type { EnergyPlant, PowerLine } from '../../sim/energy/types';
+import type { EnergyPlant, PowerLine, GridNode } from '../../sim/energy/types';
 import { generatorDefinition } from '../../sim/energy/Generation';
 import { hydraulicRotationY, planHydraulicVisualSite, type HydraulicVisualSite } from './HydraulicPresentation';
 
@@ -18,6 +18,9 @@ export class EnergyRenderer {
   readonly group = new THREE.Group();
   private signature = '';
   private machines: EnergyMachineVisual[] = [];
+  private equipmentMaterials: THREE.Material[] = [];
+  private terminals = new Map<string, number>();
+  private supports = new Set<string>();
 
   private readonly metal = new THREE.MeshStandardMaterial({ color: '#627078', metalness: 0.65, roughness: 0.4 });
   private readonly darkMetal = new THREE.MeshStandardMaterial({ color: '#343d42', metalness: 0.72, roughness: 0.38 });
@@ -81,7 +84,8 @@ export class EnergyRenderer {
   }
 
   update(state: SimulationState, elapsed: number, height: (x: number, z: number) => number): void {
-    const signature = `${state.month}:${state.settlements.length}:${state.energy?.lines.length ?? 0}`;
+    const signature = `${state.month}:${state.settlements.length}:` + (state.energy?.lines ?? []).map(l => `${l.id}:${l.progress}:${l.condition}:${l.retired}`).join('|')
+      + (state.energy?.nodes ?? []).map(n => `${n.id}:${n.progress}:${n.condition}:${n.capacity}:${n.retired}`).join('|');
     if (signature !== this.signature) {
       this.signature = signature;
       this.rebuild(state, height);
@@ -116,12 +120,21 @@ export class EnergyRenderer {
       if (o instanceof THREE.Mesh || o instanceof THREE.Line) o.geometry.dispose();
     });
     for (const machine of this.machines) (machine.lamp.material as THREE.Material).dispose();
+    for (const material of this.equipmentMaterials) material.dispose();
+    this.equipmentMaterials = [];
     this.group.clear();
     this.machines = [];
   }
 
   private rebuild(state: SimulationState, height: (x: number, z: number) => number): void {
     this.clear();
+    this.supports.clear(); this.terminals.clear();
+    for (const node of state.energy?.nodes ?? []) {
+      const regional = state.energy?.lines.some(l => !l.retired && l.class === 'transmission' && (l.from === node.id || l.to === node.id));
+      this.terminals.set(node.id, regional ? 2.8 : node.kind === 'junction' || node.kind === 'transformer' ? 1.8
+        : node.kind === 'service' ? 1.2 : node.kind === 'storage' ? 0.7
+          : node.kind === 'substation' || node.kind === 'switchyard' ? node.capacity < 100 ? 1.1 : 0.94 : 0.95);
+    }
     for (const settlement of state.settlements.filter(s => s.alive)) {
       for (const plant of settlement.energy?.plants ?? []) {
         const plot = settlement.structurePlots?.find(p => p.id === plant.plotId);
@@ -189,10 +202,11 @@ export class EnergyRenderer {
         }
       }
 
-      if ((settlement.energy?.storageCapacity ?? 0) > 0) this.drawBatteryBank(settlement, height);
+      if ((settlement.energy?.storageCapacity ?? 0) > 0) this.drawBatteryBank(settlement, height, state.energy?.nodes?.find(n => n.settlementId === settlement.id && n.kind === 'storage'), !!state.energy?.topologyVersion);
     }
 
-    for (const line of state.energy?.lines ?? []) this.drawLine(line, height);
+    for (const node of state.energy?.nodes ?? []) this.drawGridNode(node, state, height);
+    for (const line of state.energy?.lines ?? []) if (!line.retired) this.drawLine(line, height);
   }
 
   private drawRotaryPrimitive(root: THREE.Group, machine: EnergyMachineVisual, kind: 'wind' | 'windmill'): void {
@@ -482,10 +496,14 @@ export class EnergyRenderer {
   private drawBatteryBank(
     settlement: SimulationState['settlements'][number],
     height: (x: number, z: number) => number,
+    node?: GridNode,
+    physical = false,
   ): void {
+    if (physical && (!node || node.retired || node.progress <= 0)) return;
     const bank = new THREE.Group();
     bank.name = `Battery bank:${settlement.id}`;
-    bank.position.set(settlement.position.x, height(settlement.position.x, settlement.position.z), settlement.position.z);
+    const position = node?.position ?? settlement.position;
+    bank.position.set(position.x, height(position.x, position.z), position.z);
     this.group.add(bank);
     const capacity = settlement.energy!.storageCapacity;
     const condition = settlement.energy!.storageState?.condition ?? 1;
@@ -510,14 +528,102 @@ export class EnergyRenderer {
     return plume;
   }
 
+  private drawGridNode(node: GridNode, state: SimulationState, height: (x: number, z: number) => number): void {
+    if (node.retired || node.progress <= 0) return;
+    const root = this.namedGroup(this.group, `Grid ${node.kind}:${node.id}`);
+    root.userData.gridNodeId = node.id;
+    root.userData.condition = node.condition;
+    root.position.set(node.position.x, height(node.position.x, node.position.z), node.position.z);
+    const large = node.kind === 'substation' || node.kind === 'switchyard';
+    const radius = node.radius;
+    this.box(root, 0, 0.04, 0, radius * 1.6, 0.08, radius * 1.6, this.brick, 'Grid equipment footing');
+    if (node.progress < 1) {
+      this.box(root, 0, 0.18, 0, radius, 0.12 + node.progress * 0.35, radius, this.wood, 'Grid equipment under construction');
+      for (const side of [-1, 1]) this.box(root, side * radius * 0.7, 0.32, 0, 0.04, 0.64, 0.04, this.wood, 'Survey stake');
+      return;
+    }
+    if (large && node.capacity < 100) {
+      this.box(root, 0, 0.45, 0, 0.38, 0.6, 0.3, this.metal, 'Early grid transformer');
+      for (const side of [-1, 1]) {
+        this.box(root, side * 0.28, 0.55, 0, 0.06, 1.1, 0.06, this.wood, 'Improvised switch frame');
+        this.cylinder(root, side * 0.15, 0.85, 0, 0.035, 0.05, 0.22, this.concrete, 'Early grid insulator');
+      }
+      this.box(root, 0, 1.1, 0, 0.65, 0.04, 0.04, this.copper, 'Early grid bus');
+    } else if (large) {
+      // Timber fencing, masonry footings and local colours continue the settlement's craft palette.
+      for (const side of [-1, 1]) {
+        for (const x of [-0.65, 0, 0.65]) this.box(root, x, 0.25, side * 0.65, 0.045, 0.5, 0.045, this.wood, 'Grid fence post');
+        this.box(root, 0, 0.3, side * 0.65, 1.35, 0.05, 0.035, this.wood, 'Grid precinct fence');
+        this.box(root, side * 0.65, 0.3, 0, 0.035, 0.05, 1.3, this.wood, 'Grid precinct fence');
+      }
+      this.box(root, -0.22, 0.35, 0, 0.45, 0.55, 0.5, this.metal, 'Grid transformer tank');
+      for (let i = 0; i < 5; i++) this.box(root, -0.48, 0.35, -0.2 + i * 0.1, 0.07, 0.4, 0.03, this.darkMetal, 'Transformer cooling fin');
+      for (let i = 0; i < 3; i++) {
+        this.cylinder(root, -0.36 + i * 0.14, 0.72, 0, 0.04, 0.055, 0.23, this.concrete, 'Grid porcelain insulator');
+        this.box(root, 0.28, 0.58, -0.25 + i * 0.25, 0.06, 0.95, 0.06, this.metal, 'Switchyard rack');
+        this.box(root, 0.05, 0.94, -0.25 + i * 0.25, 0.7, 0.035, 0.035, this.copper, 'Grid buswork');
+      }
+      const culture = state.cultures.find(c => c.id === node.cultureId);
+      const insignia = new THREE.MeshStandardMaterial({ color: culture?.style.accent ?? '#a96843', roughness: 0.85 });
+      this.equipmentMaterials.push(insignia);
+      this.box(root, 0, 0.38, 0.68, 0.3, 0.12, 0.025,
+        insignia, 'Local craft insignia');
+    } else if (node.kind === 'transformer') {
+      this.box(root, 0, 0.9, 0, 0.07, 1.8, 0.07, this.wood, 'Transformer pole');
+      this.cylinder(root, 0.14, 0.95, 0, 0.13, 0.13, 0.4, this.metal, 'Local transformer');
+      for (const x of [0.07, 0.2]) this.cylinder(root, x, 1.22, 0, 0.025, 0.035, 0.14, this.concrete, 'Transformer insulator');
+    } else if (node.kind !== 'storage') {
+      const terminal = this.terminals.get(node.id) ?? 0.95;
+      this.box(root, 0, terminal / 2, 0, 0.065, terminal, 0.065, this.wood, 'Electrical terminal support');
+      this.box(root, 0, terminal - 0.15, 0, 0.24, 0.16, 0.12, this.metal, node.kind === 'service' ? 'Service cutout' : 'Connection bus');
+      this.cylinder(root, 0, terminal, 0, 0.03, 0.045, 0.15, this.concrete, 'Terminal insulator');
+    }
+    if ((this.terminals.get(node.id) ?? 0) > 2) {
+      for (const side of [-1, 1]) this.box(root, side * 0.5, 1.4, 0, 0.07, 2.8, 0.07, this.metal, 'Transmission entry gantry');
+      this.box(root, 0, 2.8, 0, 1.1, 0.06, 0.06, this.metal, 'Transmission entry crossarm');
+      this.box(root, 0.25, 1.85, 0, 0.025, 1.9, 0.025, this.copper, 'Switchyard incoming conductor');
+    }
+    if (node.condition < 0.5) {
+      this.box(root, 0, 0.18, radius * 0.55, radius, 0.1, 0.1, this.coal, 'Damaged grid equipment');
+    }
+    const indicator = new THREE.MeshStandardMaterial({ color: '#594b32',
+      emissive: node.flow > 0 && node.condition > 0.25 ? '#ffbf59' : '#000000', emissiveIntensity: 0.7 });
+    this.equipmentMaterials.push(indicator);
+    this.box(root, radius * 0.4, 0.35, radius * 0.4, 0.05, 0.06, 0.035, indicator, 'Metered grid service indicator');
+    if (node.attachment && node.condition > 0.25) {
+      const cable = new THREE.Line(new THREE.BufferGeometry().setFromPoints(node.attachment.map(p =>
+        new THREE.Vector3(p.x, height(p.x, p.z) + 0.85, p.z))), this.wire);
+      cable.name = `${node.kind === 'plant-bus' ? 'Plant grid lead' : 'Building service lead'}:${node.id}`;
+      this.group.add(cable);
+    }
+  }
+
   private drawLine(line: PowerLine, height: (x: number, z: number) => number): void {
+    if (line.progress > 0 && line.progress < 1 && line.points.length >= 2) {
+      const work = line.progress * (line.points.length - 1), index = Math.floor(work), fraction = work - index;
+      const a = line.points[index]!, b = line.points[index + 1]!;
+      const x = a.x + (b.x - a.x) * fraction, z = a.z + (b.z - a.z) * fraction;
+      const site = this.namedGroup(this.group, `Grid wire construction:${line.id}`);
+      site.position.set(x, height(x, z), z);
+      this.box(site, 0, 0.06, 0, 0.3, 0.12, 0.12, this.wood, 'Staged grid timber');
+      this.cylinder(site, 0.15, 0.16, 0, 0.09, 0.09, 0.14, this.copper, 'Construction wire reel');
+    }
     const count = Math.floor(line.points.length * line.progress);
     const points = line.points.slice(0, count);
-    const regional = line.capacity > 80;
-    const poleHeight = regional ? 3.5 : 1.8;
-    for (const p of points) {
+    const regional = line.class ? line.class === 'transmission' : line.capacity > 80;
+    const poleHeight = regional ? 4.2 : line.class === 'service' ? 1.2 : 1.8;
+    const terminalHeight = (i: number): number => i === 0 ? this.terminals.get(line.from) ?? poleHeight
+      : i === line.points.length - 1 ? this.terminals.get(line.to) ?? poleHeight : poleHeight;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]!;
+      if (i === 0 && this.terminals.has(line.from) || i === line.points.length - 1 && this.terminals.has(line.to)) continue;
+      const supportKey = `${p.x.toFixed(4)}:${p.z.toFixed(4)}:${line.class}`;
+      if (this.supports.has(supportKey)) continue;
+      this.supports.add(supportKey);
       const root = new THREE.Group();
+      root.name = `${regional ? 'Transmission tower' : line.class === 'service' ? 'Service support' : 'Distribution pole'}:${line.id}`;
       root.position.set(p.x, height(p.x, p.z), p.z);
+      if (line.condition < 0.5) root.rotation.z = (0.5 - line.condition) * 0.35;
       this.group.add(root);
       this.box(root, 0, poleHeight / 2, 0, regional ? 0.14 : 0.07, poleHeight, regional ? 0.14 : 0.07,
         regional ? this.metal : this.wood);
@@ -540,21 +646,14 @@ export class EnergyRenderer {
           const z = a.z + (b.z - a.z) * t;
           const y = Math.max(
             height(x, z) + 0.7,
-            height(a.x, a.z) * (1 - t) + height(b.x, b.z) * t + poleHeight - Math.sin(t * Math.PI) * 0.25,
+            (height(a.x, a.z) + terminalHeight(i - 1)) * (1 - t) + (height(b.x, b.z) + terminalHeight(i)) * t - Math.sin(t * Math.PI) * 0.15,
           );
           vertices.push(new THREE.Vector3(x + offset, y, z));
         }
         if (line.condition > 0.25) this.group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(vertices), this.wire));
       }
     }
-    if (points.length && line.progress >= 1) {
-      const p = points[points.length - 1]!;
-      const root = new THREE.Group();
-      root.position.set(p.x, height(p.x, p.z), p.z);
-      this.group.add(root);
-      this.box(root, 0.35, 0.25, 0, 0.35, 0.5, 0.3, this.metal);
-      for (let i = 0; i < 3; i++) this.cylinder(root, 0.25 + i * 0.1, 0.58, 0, 0.025, 0.035, 0.15, this.concrete);
-    }
+
   }
 
   dispose(): void {

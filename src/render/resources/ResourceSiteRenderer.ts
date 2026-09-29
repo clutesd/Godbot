@@ -9,9 +9,8 @@ import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation
 import { MAX_ACTIVE_WORK_SITES, ResourceWorkScene, type ResourceWorkSite } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
 import { mineralAerialSignature, mineralVisualProfile, type MineralGeometryKind } from './MineralPresentation';
-import { movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
+import { strongestMovementPathNeighbour, movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
-const PATH_NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
 const PATH_COLOURS: Record<Exclude<MovementPathStage, 'none'>, THREE.Color> = {
   'desire-path': new THREE.Color('#8d775d'),
   footpath: new THREE.Color('#7b6249'),
@@ -1015,24 +1014,7 @@ export class ResourceSiteRenderer {
   }
 
   private strongestPathNeighbour(cellIndex: number): number | undefined {
-    const cell = this.world.cells[cellIndex];
-    if (!cell) return undefined;
-    let bestIndex: number | undefined;
-    let bestScore = 0;
-    for (const [dx, dz] of PATH_NEIGHBOURS) {
-      const x = cell.x + dx;
-      const z = cell.z + dz;
-      if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
-      const index = z * this.world.size + x;
-      const neighbour = this.world.cells[index];
-      if (!neighbour || neighbour.water || movementPathStage(neighbour) === 'none') continue;
-      const diagonalPenalty = dx !== 0 && dz !== 0 ? 0.94 : 1;
-      const score = movementPathStrength(neighbour) * diagonalPenalty;
-      if (score <= bestScore) continue;
-      bestScore = score;
-      bestIndex = index;
-    }
-    return bestIndex;
+    return strongestMovementPathNeighbour(this.world, cellIndex);
   }
 
   private pathHalfWidth(stage: Exclude<MovementPathStage, 'none'>, strength: number): number {

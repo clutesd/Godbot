@@ -3,6 +3,7 @@ import { hasKnowledgeCapability as knows } from '../knowledge/CapabilityContract
 import { materialEconomy, takeMaterial } from '../resources/Inventory';
 import { settlementRepresentedPopulation } from '../Population';
 import type { Settlement, SimulationState } from '../types';
+import { cellAt } from '../world';
 import {
   chargeStorage,
   dispatchPriority,
@@ -19,7 +20,8 @@ import {
 } from './AdvancedEnergy';
 import { combustionFromFuel, combustionFuelPotential, isCombustionKind, planCombustion } from './Combustion';
 import { GENERATORS, eligibleGenerator, environmentFactor, generatorDefinition } from './Generation';
-import { buildWork, constructGrid, deliver } from './Transmission';
+import { storageNodeId } from './GridTopology';
+import { buildWork, constructGrid, deliver, dispatchInputCapacity, powerPath } from './Transmission';
 import { prepareElectricDemand, type ElectricConsumer } from './Demand';
 import { POWER_PRIORITIES, energyAt, energyWorld, ledger, powerServiceCoverage, type EnergyPlant, type GeneratorKind } from './types';
 
@@ -154,6 +156,13 @@ export function advanceEnergy(state: SimulationState): void {
   }
   for (const s of living) constructPlants(state, s);
   constructGrid(state);
+  for (const node of world.nodes ?? []) {
+    node.flow = 0;
+    const cell = cellAt(state.world, node.position.x, node.position.z);
+    const weather = cell ? state.weather.cells[cell.z * state.world.size + cell.x] : undefined;
+    node.condition = Math.max(0, node.condition - 0.001
+      - Math.max(0, (weather?.wind ?? 0) - 0.8) * 0.035 - (weather?.floodDepth ?? 0) * 0.03);
+  }
   for (const l of world.lines) { l.flow = 0; l.condition = Math.max(0, l.condition - 0.001); }
 
   const sources: { s: Settlement; node: string; available: number; storage: boolean; kind?: GeneratorKind }[] = [];
@@ -187,7 +196,23 @@ export function advanceEnergy(state: SimulationState): void {
     for (const { s, p } of plants) {
       const g = generatorDefinition(p.kind), l = energyAt(s).ledgers.electric;
       const before = remainingDemand;
-      const request = generationDispatchRequest(p.kind, p, g.capacity, componentDemand, remainingDemand, storageHeadroom);
+      // An isolated station must not consume the island's dispatch request (or fuel), starving
+      // a connected backup. Reachability is evaluated on the same commissioned physical graph.
+      const reachableDemand = component.flatMap(member => consumers.get(member.id) ?? [])
+        .filter(consumer => powerPath(world.lines, p.id, consumer.node, world.nodes))
+        .reduce((sum, consumer) => sum + consumer.demand, 0);
+      const reachableStorage = component.filter(member => powerPath(world.lines, p.id, storageNodeId(member), world.nodes))
+        .reduce((sum, member) => sum + storageChargeInputCapacity(energyAt(member)), 0);
+      let request = generationDispatchRequest(p.kind, p, g.capacity, reachableDemand,
+        Math.min(remainingDemand, reachableDemand), Math.min(storageHeadroom, reachableStorage));
+      if (p.kind !== 'nuclear') {
+        const loads = component.flatMap(member => consumers.get(member.id) ?? [])
+          .sort((a, b) => POWER_PRIORITIES.indexOf(a.priority) - POWER_PRIORITIES.indexOf(b.priority)
+            || Number(b.settlement.id === s.id) - Number(a.settlement.id === s.id) || a.id.localeCompare(b.id));
+        const batteries = component.map(member => ({ node: storageNodeId(member), demand: storageChargeInputCapacity(energyAt(member)) }));
+        request = Math.min(request, dispatchInputCapacity(world.lines, world.nodes, p.id, Math.min(g.capacity, request),
+          [...loads, ...batteries]));
+      }
       const output = operate(state, s, p, request);
       l.generated += output;
       sources.push({ s, node: p.id, available: output, storage: false, kind: p.kind });
@@ -197,7 +222,7 @@ export function advanceEnergy(state: SimulationState): void {
   }
   for (const s of living) {
     const available = storageDischargeOutputCapacity(energyAt(s));
-    if (available > 0) sources.push({ s, node: s.id, available, storage: true });
+    if (available > 0) sources.push({ s, node: storageNodeId(s), available, storage: true });
   }
   // Serve critical loads before ordinary life, production and discretionary demand. Every priority
   // first consumes local generation/storage, then may import remaining power across commissioned lines.
@@ -213,7 +238,7 @@ export function advanceEnergy(state: SimulationState): void {
         || a.s.id.localeCompare(b.s.id) || a.node.localeCompare(b.node));
     for (const source of ordered) {
       if (need <= 1e-9 || source.available <= 1e-9) continue;
-      const flow = deliver(world.lines, source.node, consumer.node, source.available, need);
+      const flow = deliver(world.lines, source.node, consumer.node, source.available, need, world.nodes);
       if (flow.received <= 0) continue;
       source.available = Math.max(0, source.available - flow.sent);
       need = Math.max(0, need - flow.received);
@@ -253,7 +278,7 @@ export function advanceEnergy(state: SimulationState): void {
       const sinkEnergy = energyAt(sink);
       const capacity = storageChargeInputCapacity(sinkEnergy);
       if (capacity <= 1e-9) continue;
-      const charge = deliver(world.lines, source.node, sink.id, source.available, capacity);
+      const charge = deliver(world.lines, source.node, storageNodeId(sink), source.available, capacity, world.nodes);
       if (charge.received <= 0) continue;
       const transfer = chargeStorage(sinkEnergy, charge.received);
       source.available = Math.max(0, source.available - charge.sent);
@@ -272,8 +297,8 @@ export function advanceEnergy(state: SimulationState): void {
   for (const line of world.lines) {
     const available = Math.max(1e-9, line.capacity * Math.max(0.1, line.condition));
     const utilization = Math.min(1, line.flow / available);
-    const regional = line.capacity > 80;
-    const a = settlementsById.get(line.from), b = settlementsById.get(line.to);
+    const regional = line.class === 'transmission';
+    const a = settlementsById.get(world.nodes?.find(n => n.id === line.from)?.settlementId ?? line.from), b = settlementsById.get(world.nodes?.find(n => n.id === line.to)?.settlementId ?? line.to);
     const managed = regional && !!a && !!b && knows(a, 'grid-management') && knows(b, 'grid-management');
     const stressWear = Math.max(0, utilization - 0.8) * (managed ? 0.0015 : 0.005);
     line.condition = Math.max(0, line.condition - stressWear);

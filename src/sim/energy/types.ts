@@ -19,7 +19,18 @@ export interface EnergyPlant {
   conversionLoss?: number;
   status: 'construction' | 'running' | 'idle' | 'failed';
 }
-export interface PowerLine { id: string; from: string; to: string; points: Vec2[]; capacity: number; loss: number; progress: number; condition: number; flow: number; }
+export type GridNodeKind = 'plant-bus' | 'switchyard' | 'substation' | 'junction' | 'transformer' | 'service' | 'storage';
+export type GridEdgeClass = 'transmission' | 'distribution' | 'service' | 'connection';
+/** Stable simulation-owned equipment sites. Flow is reset with the existing monthly dispatch. */
+export interface GridNode {
+  id: string; settlementId: string; kind: GridNodeKind; position: Vec2;
+  plotId?: string; cultureId?: string; radius: number;
+  /** Surveyed final lead to the owning structure's exterior terminal. */
+  attachment?: Vec2[];
+  progress: number; condition: number; capacity: number; flow: number;
+  retired?: boolean;
+}
+export interface PowerLine { id: string; from: string; to: string; points: Vec2[]; capacity: number; loss: number; progress: number; condition: number; flow: number; class?: GridEdgeClass; retired?: boolean; }
 export interface EnergyLedger { demand: number; generated: number; supplied: number; imported: number; exported: number; losses: number; curtailed: number; charged: number; discharged: number; }
 export interface PowerServiceLedger { demand: Record<PowerPriority, number>; supplied: Record<PowerPriority, number>; }
 export interface EnergyStorageState {
@@ -43,7 +54,7 @@ export interface SettlementEnergy {
   reliability: number;
   lit: boolean;
 }
-export interface EnergyState { month: number; lines: PowerLine[]; milestones: string[]; }
+export interface EnergyState { month: number; lines: PowerLine[]; milestones: string[]; nodes?: GridNode[]; topologyVersion?: number; }
 
 declare module '../types' {
   interface Settlement { energy?: SettlementEnergy }

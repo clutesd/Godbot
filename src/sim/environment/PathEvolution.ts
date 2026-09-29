@@ -2,7 +2,7 @@ import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { consumeMaterial } from '../resources/MaterialUse';
 import { TransportationSystem } from '../transport/TransportationSystem';
 import type { LandModification } from './types';
-import type { Settlement, SimulationState, WorldCell } from '../types';
+import type { Settlement, SimulationState, WorldCell, WorldState } from '../types';
 
 export type MovementPathStage = 'none' | 'desire-path' | 'footpath' | 'packed-track' | 'cart-road' | 'engineered-road';
 
@@ -50,6 +50,23 @@ export function movementPathStrength(cell: WorldCell): number {
   const track = use?.track?.intensity ?? 0;
   const foot = use?.footpath?.intensity ?? 0;
   return Math.max(road * 1.45, cart * 1.28, track * 1.12, foot);
+}
+
+/** The same persistent worn-cell connections are used by presentation and utility surveys. */
+export function strongestMovementPathNeighbour(world: WorldState, cellIndex: number): number | undefined {
+  const cell = world.cells[cellIndex];
+  if (!cell) return undefined;
+  let bestIndex: number | undefined, bestScore = 0;
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const) {
+    const x = cell.x + dx, z = cell.z + dz;
+    if (x < 0 || z < 0 || x >= world.size || z >= world.size) continue;
+    const index = z * world.size + x, neighbour = world.cells[index];
+    if (!neighbour || neighbour.water || movementPathStage(neighbour) === 'none') continue;
+    const score = movementPathStrength(neighbour) * (dx !== 0 && dz !== 0 ? 0.94 : 1);
+    if (score <= bestScore) continue;
+    bestScore = score; bestIndex = index;
+  }
+  return bestIndex;
 }
 
 function ownerFor(state: SimulationState, mark: LandModification): Settlement | undefined {

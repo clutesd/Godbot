@@ -35,6 +35,15 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
       const cell = cellAt(state.world, worldX, worldZ);
       if (!cell || waterAt(state.world, { x: worldX, z: worldZ }, cell) || cell.slope > 0.42 || cell.biome === 'mountain') continue;
       if (allPlots.some(plot => Math.hypot(plot.worldX - worldX, plot.worldZ - worldZ) < plot.radius + radius + 0.25)) continue;
+      if (state.energy?.nodes?.some(node => !node.retired && Math.hypot(node.position.x - worldX, node.position.z - worldZ) < node.radius + radius + 0.25)) continue;
+      // Persistent electrical rights of way remain clear when the settlement grows around them.
+      if (state.energy?.lines.some(line => !line.retired && line.points.some((point, i) => {
+        const end = line.points[i + 1];
+        if (!end) return false;
+        const dx = end.x - point.x, dz = end.z - point.z;
+        const t = Math.max(0, Math.min(1, ((worldX - point.x) * dx + (worldZ - point.z) * dz) / Math.max(1e-9, dx * dx + dz * dz)));
+        return Math.hypot(worldX - point.x - t * dx, worldZ - point.z - t * dz) < radius + 0.2;
+      }))) continue;
       if (fields.some(field => {
         const dx = worldX - field.center.x, dz = worldZ - field.center.z;
         const localX = dx * Math.cos(field.rotationY) - dz * Math.sin(field.rotationY);

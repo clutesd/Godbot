@@ -1,8 +1,8 @@
-import { hasKnowledgeCapability as knows } from '../knowledge/CapabilityContract';
 import { infrastructureLabourBudget } from '../people/HumanCapital';
 import { materialEconomy, reconcileBulkStocks, takeMaterial } from '../resources/Inventory';
-import type { Settlement, SimulationState, Vec2 } from '../types';
-import { energyAt, energyWorld, type PowerLine } from './types';
+import type { Settlement, SimulationState } from '../types';
+import { energyAt, type PowerLine, type GridNode } from './types';
+import { constructPhysicalGrid } from './GridTopology';
 
 /** Each construction increment pays physical inputs and shared worker-months before progressing. */
 export function buildWork(state: SimulationState, s: Settlement, cost: Record<string, number>, requested: number): number {
@@ -19,49 +19,12 @@ export function buildWork(state: SimulationState, s: Settlement, cost: Record<st
   labour.remaining -= work;
   return work;
 }
-function line(state: SimulationState, s: Settlement, from: string, to: string, path: Vec2[], regional: boolean): void {
-  const world = energyWorld(state);
-  const id = `${from}>${to}`;
-  let edge = world.lines.find(l => l.id === id);
-  if (!edge) {
-    const points: Vec2[] = [];
-    for (let i = 1; i < path.length; i++) {
-      const a = path[i - 1]!, b = path[i]!;
-      const steps = Math.max(1, Math.ceil(Math.hypot(a.x - b.x, a.z - b.z) / 6));
-      for (let j = 0; j < steps; j++) points.push({ x: a.x + (b.x - a.x) * j / steps, z: a.z + (b.z - a.z) * j / steps });
-    }
-    if (path.length) points.push(path[path.length - 1]!);
-    const length = points.slice(1).reduce((n, p, i) => n + Math.hypot(p.x - points[i]!.x, p.z - points[i]!.z), 0);
-    edge = { id, from, to, points, capacity: regional ? 100 : 80, loss: Math.min(0.25, length * (regional ? 0.0006 : 0.002)), progress: 0, condition: 1, flow: 0 };
-    world.lines.push(edge);
-  }
-  if (edge.progress < 1) {
-    const work = Math.max(1, edge.points.length * 0.4);
-    edge.progress = Math.min(1, edge.progress + buildWork(state, s, { copper: 0.25, timber: 0.5 }, Math.min(1, (1 - edge.progress) * work)) / work);
-  } else if (edge.condition < 1) edge.condition = Math.min(1, edge.condition + buildWork(state, s, { copper: 0.1, timber: 0.2 }, 0.1) * 0.3);
-}
-export function constructGrid(state: SimulationState): void {
-  for (const s of state.settlements.filter(s => s.alive && knows(s, 'electrical-generation'))) {
-    for (const p of energyAt(s).plants.filter(p => p.progress >= 1)) {
-      const plot = s.structurePlots?.find(x => x.id === p.plotId);
-      if (plot && ['generator', 'coal', 'hydro', 'wind', 'solar', 'gas', 'nuclear'].includes(p.kind)) line(state, s, p.id, s.id, [{ x: plot.worldX, z: plot.worldZ }, s.position], false);
-    }
-    for (const p of s.structurePlots ?? []) if (p.development?.status === 'active' && !p.accessRestricted) line(state, s, s.id, p.id, [s.position, { x: p.worldX, z: p.worldZ }], false);
-  }
-  for (const route of state.tradeRoutes.filter(r => r.active)) {
-    const a = state.settlements.find(s => s.id === route.a && s.alive), b = state.settlements.find(s => s.id === route.b && s.alive);
-    if (!a || !b || !knows(a, 'electric-grid') || !knows(b, 'electric-grid')) continue;
-    const segments = Object.values(state.transportation.segments).filter(s => s.status === 'complete' && s.mode !== 'water');
-    // Only commissioned land corridors authorize a regional line; no wires across arbitrary ocean gaps.
-    const project = Object.values(state.transportation.projects).find(p => (p.a === a.id && p.b === b.id || p.a === b.id && p.b === a.id) && p.segmentIds.length && p.segmentIds.every(id => segments.some(s => s.id === id)));
-    if (!project) continue;
-    const path = project.segmentIds.flatMap(id => segments.find(s => s.id === id)!.points);
-    line(state, a, a.id, b.id, [a.position, ...path, b.position], true);
-  }
-}
-export function activeLine(l: PowerLine): boolean { return l.progress >= 1 && l.condition > 0.25; }
+export const constructGrid = constructPhysicalGrid;
+export function activeLine(l: PowerLine): boolean { return !l.retired && l.progress >= 1 && l.condition > 0.25; }
 /** Deterministic breadth-first residual path. Edges are physical, bidirectional and capacity limited. */
-export function powerPath(lines: PowerLine[], from: string, to: string): PowerLine[] | undefined {
+export function powerPath(lines: PowerLine[], from: string, to: string, nodes?: GridNode[]): PowerLine[] | undefined {
+  const usable = (id: string): boolean => !nodes || nodes.some(n => n.id === id && !n.retired && n.progress >= 1 && n.condition > 0.25 && n.flow < n.capacity * n.condition);
+  if (!usable(from) || !usable(to)) return undefined;
   const queue: { id: string; path: PowerLine[] }[] = [{ id: from, path: [] }];
   const seen = new Set([from]);
   for (let i = 0; i < queue.length; i++) {
@@ -70,18 +33,40 @@ export function powerPath(lines: PowerLine[], from: string, to: string): PowerLi
     for (const l of lines) {
       if (!activeLine(l) || l.flow >= l.capacity * l.condition) continue;
       const next = l.from === node.id ? l.to : l.to === node.id ? l.from : undefined;
-      if (next && !seen.has(next)) { seen.add(next); queue.push({ id: next, path: [...node.path, l] }); }
+      if (next && usable(next) && !seen.has(next)) { seen.add(next); queue.push({ id: next, path: [...node.path, l] }); }
     }
   }
   return undefined;
 }
-export function deliver(lines: PowerLine[], from: string, to: string, available: number, requested: number): { sent: number; received: number } {
-  const path = powerPath(lines, from, to);
+export function deliver(lines: PowerLine[], from: string, to: string, available: number, requested: number, nodes?: GridNode[]): { sent: number; received: number } {
+  const path = powerPath(lines, from, to, nodes);
   if (!path) return { sent: 0, received: 0 };
   const efficiency = path.reduce((n, l) => n * (1 - l.loss), 1);
-  let sent = Math.min(available, requested / efficiency), factor = 1;
-  for (const l of path) { sent = Math.min(sent, (l.capacity * l.condition - l.flow) / factor); factor *= 1 - l.loss; }
+  let sent = Math.max(0, Math.min(available, requested / efficiency)), factor = 1;
+  const visited: { node: GridNode; factor: number }[] = [];
+  let cursor = from;
+  const visit = (id: string, factor: number): void => {
+    const node = nodes?.find(n => n.id === id);
+    if (node) { sent = Math.min(sent, Math.max(0, node.capacity * node.condition - node.flow) / factor); visited.push({ node, factor }); }
+  };
+  visit(cursor, 1);
+  for (const l of path) { sent = Math.min(sent, (l.capacity * l.condition - l.flow) / factor); factor *= 1 - l.loss; cursor = l.from === cursor ? l.to : l.from; visit(cursor, factor); }
+  for (const entry of visited) entry.node.flow += Math.max(0, sent) * entry.factor;
   let received = Math.max(0, sent);
   for (const l of path) { l.flow += received; received *= 1 - l.loss; }
   return { sent: Math.max(0, sent), received };
+}
+
+/** Read-only dispatch sizing using the existing delivery solver and temporary flow counters.
+ * A restricted plant connection must leave residual demand for connected backup generation. */
+export function dispatchInputCapacity(lines: PowerLine[], nodes: GridNode[] | undefined, from: string,
+  available: number, sinks: readonly { node: string; demand: number }[]): number {
+  const scratchLines = lines.map(line => ({ ...line }));
+  const scratchNodes = nodes?.map(node => ({ ...node }));
+  let remaining = available;
+  for (const sink of sinks) {
+    if (remaining <= 1e-9) break;
+    remaining -= deliver(scratchLines, from, sink.node, remaining, sink.demand, scratchNodes).sent;
+  }
+  return available - remaining;
 }

@@ -76,10 +76,14 @@ function regionalNeighbours(state: SimulationState, settlementId: string): strin
   const settlementIds = new Set(state.settlements.filter(s => s.alive).map(s => s.id));
   const neighbours: string[] = [];
   for (const line of energyWorld(state).lines) {
-    if (line.progress < 1 || line.condition <= 0.25 || line.capacity <= 80) continue;
-    if (!settlementIds.has(line.from) || !settlementIds.has(line.to)) continue;
-    if (line.from === settlementId) neighbours.push(line.to);
-    else if (line.to === settlementId) neighbours.push(line.from);
+    if (line.retired || line.progress < 1 || line.condition <= 0.25 || (line.class ? line.class !== 'transmission' : line.capacity <= 80)) continue;
+    const nodes = state.energy?.nodes;
+    const a = nodes?.find(n => n.id === line.from), b = nodes?.find(n => n.id === line.to);
+    if (nodes && (!a || !b || a.retired || b.retired || a.progress < 1 || b.progress < 1 || a.condition <= 0.25 || b.condition <= 0.25)) continue;
+    const from = a?.settlementId ?? line.from, to = b?.settlementId ?? line.to;
+    if (!settlementIds.has(from) || !settlementIds.has(to)) continue;
+    if (from === settlementId) neighbours.push(to);
+    else if (to === settlementId) neighbours.push(from);
   }
   return neighbours.sort();
 }
