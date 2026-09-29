@@ -141,7 +141,9 @@ export class EnergyRenderer {
         const z = plant.kind === 'waterwheel' && hydraulic ? hydraulic.bankZ
           : plant.kind === 'hydro' && hydraulic ? hydraulic.riverZ
             : defaultZ;
-        const y = plant.kind === 'hydro' && hydraulic ? hydraulic.waterY - 0.06 : height(x, z);
+        // Hydraulic structures sit on rendered terrain. Their water-facing machinery is positioned
+        // relative to the authoritative river surface so steep banks do not leave wheels/dams floating.
+        const y = height(x, z);
         root.position.set(x, y, z);
         if (hydraulic) root.rotation.y = hydraulicRotationY(hydraulic);
         root.scale.setScalar(scale);
@@ -266,8 +268,13 @@ export class EnergyRenderer {
     mill.add(roof);
 
     const wheel = this.namedGroup(mill, 'Waterwheel assembly');
-    wheel.position.set(-0.5 * bankSide, 0.5, 0.12);
     const radius = 0.62;
+    const localWaterY = site
+      ? (site.waterY - root.position.y) / Math.max(0.001, root.scale.y)
+      : 0.18;
+    // Keep the lower paddles in the real river surface instead of pinning the wheel to bank grade.
+    const wheelCenterY = localWaterY + radius * 0.34;
+    wheel.position.set(-0.5 * bankSide, wheelCenterY, 0.12);
     for (let ringIndex = 0; ringIndex < 2; ringIndex++) {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.055, 6, 24), this.wood);
       ring.name = 'Waterwheel rim';
