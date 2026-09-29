@@ -5,7 +5,8 @@ import { settlementRepresentedPopulation } from '../Population';
 import type { Settlement, SimulationState } from '../types';
 import { GENERATORS, eligibleGenerator, environmentFactor, generatorDefinition } from './Generation';
 import { buildWork, constructGrid, deliver } from './Transmission';
-import { energyAt, energyWorld, ledger, type EnergyPlant } from './types';
+import { prepareElectricDemand, type ElectricConsumer } from './Demand';
+import { POWER_PRIORITIES, energyAt, energyWorld, ledger, powerServiceCoverage, type EnergyPlant } from './types';
 
 function milestone(state: SimulationState, s: Settlement, key: string, description: string, plant?: EnergyPlant): void {
   const world = energyWorld(state);
@@ -83,6 +84,7 @@ export function advanceEnergy(state: SimulationState): void {
   if (world.month === state.month) return;
   world.month = state.month;
   const living = state.settlements.filter(s => s.alive);
+  const consumers = new Map<string, ElectricConsumer[]>();
   for (const s of living) {
     const e = energyAt(s), population = settlementRepresentedPopulation(state, s.id);
     e.materialDemand = {};
@@ -91,7 +93,13 @@ export function advanceEnergy(state: SimulationState): void {
     thermal.demand = s.survival?.cold.fuelNeed ?? 0;
     thermal.generated = thermal.supplied = s.survival?.cold.fuelUsed ?? 0;
     e.ledgers.mechanical.demand = knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 : 0;
-    e.ledgers.electric.demand = knows(s, 'electrical-generation') ? population * 0.025 + s.infrastructure.factories * 35 + s.infrastructure.rail * 8 + s.infrastructure.archives * 3 : 0;
+    consumers.set(s.id, knows(s, 'electrical-generation') ? prepareElectricDemand(s, population) : prepareElectricDemand(s, 0));
+    if (!knows(s, 'electrical-generation')) {
+      const service = energyAt(s).service;
+      service.demand.essential = service.demand.productive = service.demand.discretionary = service.demand.critical = 0;
+      e.ledgers.electric.demand = 0;
+      consumers.set(s.id, []);
+    }
     constructPlants(state, s);
   }
   constructGrid(state);
@@ -109,22 +117,44 @@ export function advanceEnergy(state: SimulationState): void {
     }
     sources.push({ s, node: s.id, available: Math.min(e.storage, e.storageCapacity * 0.25), storage: true });
   }
-  // Local generators first, imports next, stored power last. Consumer edges are necessary for service.
-  for (const s of living) {
-    const e = energyAt(s), consumers = (s.structurePlots ?? []).filter(p => p.development?.status === 'active' && !p.accessRestricted);
-    for (const consumer of consumers) {
-      let need = e.ledgers.electric.demand / consumers.length;
-      const ordered = [...sources].sort((a, b) => Number(a.storage) - Number(b.storage) || Number(b.s.id === s.id) - Number(a.s.id === s.id));
-      for (const source of ordered) {
-        const flow = deliver(world.lines, source.node, consumer.id, source.available, need);
-        source.available -= flow.sent; need -= flow.received;
-        const donor = energyAt(source.s).ledgers.electric;
-        donor.losses += flow.sent - flow.received;
-        e.ledgers.electric.supplied += flow.received;
-        if (source.storage) { energyAt(source.s).storage -= flow.sent; donor.discharged += flow.sent; }
-        if (source.s.id !== s.id) { donor.exported += flow.received; e.ledgers.electric.imported += flow.received; if (flow.received > 0) milestone(state, s, 'first-regional-grid', 'A connected regional grid delivers power between settlements.'); }
+  // Serve critical loads before ordinary life, production and discretionary demand. Every priority
+  // first consumes local generation/storage, then may import remaining power across commissioned lines.
+  const allConsumers = [...consumers.values()].flat();
+  const serve = (consumer: ElectricConsumer, local: boolean): void => {
+    let need = Math.max(0, consumer.demand - consumer.supplied);
+    if (need <= 0) return;
+    const receiverEnergy = energyAt(consumer.settlement);
+    const ordered = sources
+      .filter(source => (source.s.id === consumer.settlement.id) === local)
+      .sort((a, b) => Number(a.storage) - Number(b.storage) || a.s.id.localeCompare(b.s.id) || a.node.localeCompare(b.node));
+    for (const source of ordered) {
+      if (need <= 1e-9 || source.available <= 1e-9) continue;
+      const flow = deliver(world.lines, source.node, consumer.node, source.available, need);
+      if (flow.received <= 0) continue;
+      source.available = Math.max(0, source.available - flow.sent);
+      need = Math.max(0, need - flow.received);
+      consumer.supplied += flow.received;
+      receiverEnergy.service.supplied[consumer.priority] += flow.received;
+      receiverEnergy.ledgers.electric.supplied += flow.received;
+      const donor = energyAt(source.s).ledgers.electric;
+      donor.losses += flow.sent - flow.received;
+      if (source.storage) {
+        energyAt(source.s).storage = Math.max(0, energyAt(source.s).storage - flow.sent);
+        donor.discharged += flow.sent;
+      }
+      if (source.s.id !== consumer.settlement.id) {
+        donor.exported += flow.received;
+        receiverEnergy.ledgers.electric.imported += flow.received;
+        milestone(state, consumer.settlement, 'first-regional-grid', 'A connected regional grid delivers power between settlements.');
       }
     }
+  };
+  for (const priority of POWER_PRIORITIES) {
+    const priorityConsumers = allConsumers
+      .filter(consumer => consumer.priority === priority)
+      .sort((a, b) => a.settlement.id.localeCompare(b.settlement.id) || a.id.localeCompare(b.id));
+    for (const consumer of priorityConsumers) serve(consumer, true);
+    for (const consumer of priorityConsumers) serve(consumer, false);
   }
   for (const source of sources.filter(s => !s.storage)) {
     const e = energyAt(source.s), l = e.ledgers.electric;
@@ -136,7 +166,9 @@ export function advanceEnergy(state: SimulationState): void {
   for (const s of living) {
     const e = energyAt(s), l = e.ledgers.electric;
     e.reliability = l.demand > 0 ? Math.min(1, l.supplied / l.demand) : 1;
-    e.lit = l.demand > 0 && e.reliability >= 0.75;
+    const essentialDemand = e.service.demand.essential;
+    const visibleSupply = e.service.supplied.essential + e.service.supplied.discretionary;
+    e.lit = l.demand > 0 && visibleSupply > 0 && (essentialDemand <= 0 || powerServiceCoverage(s, 'essential') >= 0.7);
     e.shortageMonths = e.reliability < 0.8 ? e.shortageMonths + 1 : Math.max(0, e.shortageMonths - 1);
     s.infrastructure.power = l.demand > 0 ? e.reliability * Math.min(1, l.supplied / 25) : 0;
     if (e.lit) milestone(state, s, 'first-illuminated-settlement', 'Electric light reaches occupied buildings.');

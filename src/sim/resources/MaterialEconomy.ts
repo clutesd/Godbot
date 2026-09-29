@@ -1,3 +1,4 @@
+import { poweredProductivity } from '../energy/types';
 import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
@@ -294,7 +295,8 @@ export function advanceMaterialProcessing(
   reconcileBulkStocks(settlement);
   inventory.lastProcessedMonth = state.month;
   const budget = resourceLabourBudget(state, settlement, residents);
-  const mechanization = 1 + settlement.infrastructure.workshops + settlement.infrastructure.factories * 2 + settlement.industry.intensity;
+  const mechanizedBoost = settlement.infrastructure.workshops + settlement.infrastructure.factories * 2 + settlement.industry.intensity;
+  const mechanization = 1 + mechanizedBoost * poweredProductivity(settlement);
   const capacity = ((budget.artisan ?? 0) + (budget.builder ?? 0)) * mechanization;
   let remainingCapacity = capacity;
   const ran: Partial<Record<string, number>> = {};
