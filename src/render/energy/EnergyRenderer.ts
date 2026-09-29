@@ -257,7 +257,6 @@ export class EnergyRenderer {
 
   private drawWatermill(root: THREE.Group, machine: EnergyMachineVisual, site?: HydraulicVisualSite): void {
     const mill = this.namedGroup(root, 'Riverside watermill');
-    const riverSide = site ? -1 : -1;
     this.box(mill, 0.48, 0.48, 0.15, 0.9, 0.82, 0.82, this.wood, 'Watermill house');
     const roof = new THREE.Mesh(new THREE.ConeGeometry(0.72, 0.48, 4), this.brick);
     roof.name = 'Watermill roof';
@@ -266,7 +265,7 @@ export class EnergyRenderer {
     mill.add(roof);
 
     const wheel = this.namedGroup(mill, 'Waterwheel assembly');
-    wheel.position.set(riverSide * 0.12, 0.5, 0.12);
+    wheel.position.set(-0.5, 0.5, 0.12);
     const radius = 0.62;
     for (let ringIndex = 0; ringIndex < 2; ringIndex++) {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.055, 6, 24), this.wood);
@@ -280,16 +279,17 @@ export class EnergyRenderer {
       wheel.add(paddle);
       this.box(paddle, 0, radius * 0.48, 0, 0.24, radius * 0.92, 0.24, this.wood, 'Waterwheel paddle');
     }
-    this.horizontalCylinder(wheel, 0, 0, 0, 0.07, 0.48, this.darkMetal, 'Waterwheel axle');
+    const axle = this.cylinder(wheel, 0, 0, 0, 0.07, 0.07, 0.48, this.darkMetal, 'Waterwheel axle');
+    axle.rotation.x = Math.PI / 2;
     machine.rotor = wheel;
 
     const race = this.namedGroup(mill, 'Watermill millrace');
-    this.box(race, -0.44, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank A');
-    this.box(race, -0.02, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank B');
-    this.box(race, -0.23, 0.03, -0.68, 0.34, 0.06, 1.35, this.darkMetal, 'Millrace channel bed');
+    this.box(race, -0.72, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank A');
+    this.box(race, -0.3, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank B');
+    this.box(race, -0.51, 0.03, -0.68, 0.34, 0.06, 1.35, this.darkMetal, 'Millrace channel bed');
     const sluice = this.namedGroup(mill, 'Watermill sluice gate');
-    this.box(sluice, -0.23, 0.34, -1.25, 0.44, 0.5, 0.07, this.wood, 'Watermill sluice board');
-    for (const x of [-0.43, -0.03]) this.box(sluice, x, 0.46, -1.25, 0.05, 0.82, 0.05, this.wood, 'Watermill sluice post');
+    this.box(sluice, -0.51, 0.34, -1.25, 0.44, 0.5, 0.07, this.wood, 'Watermill sluice board');
+    for (const x of [-0.71, -0.31]) this.box(sluice, x, 0.46, -1.25, 0.05, 0.82, 0.05, this.wood, 'Watermill sluice post');
 
     const gears = this.namedGroup(mill, 'Watermill gearing');
     const gear = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.055, 6, 16), this.darkMetal);
