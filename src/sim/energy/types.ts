@@ -27,6 +27,8 @@ export interface EnergyStorageState {
   cycles: number;
   /** Current-month charge + discharge energy handled by the battery. */
   throughput: number;
+  charged: number;
+  discharged: number;
 }
 export interface SettlementEnergy {
   plants: EnergyPlant[];
