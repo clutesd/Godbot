@@ -7,6 +7,7 @@ on:
       - 'src/main.ts'
       - 'src/historian/**'
       - 'src/render/CameraDirector.ts'
+      - 'tests/milestone-index.test.ts'
       - 'tests/watcher-*.test.ts'
       - 'tests/documentary-memory.test.ts'
       - 'tests/historian.test.ts'
@@ -27,5 +28,5 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npx eslint src/historian/*.ts src/main.ts tests/historian.test.ts tests/founding-*.test.ts
-      - run: npx vitest run tests/historian.test.ts tests/founding-chapter.test.ts tests/founding-continuity.test.ts tests/founding-year-one.test.ts tests/founding-cast.test.ts tests/founding-character-memory.test.ts tests/founding-character-arc.test.ts tests/watcher-continuity.test.ts tests/watcher-production.test.ts tests/watcher-narrative.test.ts tests/documentary-memory.test.ts
+      - run: npx vitest run tests/historian.test.ts tests/founding-chapter.test.ts tests/founding-continuity.test.ts tests/founding-year-one.test.ts tests/founding-cast.test.ts tests/founding-character-memory.test.ts tests/founding-character-arc.test.ts tests/milestone-index.test.ts tests/watcher-continuity.test.ts tests/watcher-production.test.ts tests/watcher-narrative.test.ts tests/documentary-memory.test.ts
       - run: npm run build

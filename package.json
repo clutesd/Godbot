@@ -16,7 +16,8 @@
     "sim": "tsx src/headless.ts",
     "batch": "tsx src/batch.ts",
     "pacing": "tsx src/pacing.ts",
-    "demography": "tsx scripts/demographic-seeds.ts"
+    "demography": "tsx scripts/demographic-seeds.ts",
+    "profile:camera": "node --import tsx scripts/profile-camera-runtime.ts"
   },
   "dependencies": {
     "three": "^0.185.1"

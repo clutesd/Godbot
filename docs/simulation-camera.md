@@ -64,3 +64,22 @@ manual control and the founding authority gate continue to own physical movement
 Regression coverage includes a ten-minute quiet viewing run, an inaccessible mandatory milestone,
 a three-minute run through real monthly simulation updates with the production Watcher layers, live
 evidence refresh, transit captions and truthful short-interval historical callbacks.
+
+## Camera runtime cost
+
+The camera and Historian keep incremental milestone indexes. Held frames and clock-only changes
+perform no archive traversal; appended events are inspected once. Replacing or trimming the archive
+rebuilds the index, including capped compaction that preserves the array's identity and length.
+Published event records are immutable. Tests exercise all of these invalidation boundaries with a
+50,000-record history and preserve the same first-milestone order as the uncached implementation.
+
+At acquisition, people, settlement, institution and route scenes refresh their own candidate family
+instead of generating every historical event, campaign, prediction and landscape proposal again.
+Current provenance validation and documentary memory decoration still apply.
+
+Run `npm run profile:camera` for a repeatable CPU audit with 240 people, 50,000 synthetic archived
+records, monthly appends and 1,800 measured frames after warm-up. It reports median, p95, p99,
+maximum and month-change timing in milliseconds. This isolates camera/Historian CPU work with flat
+sampling and frozen people; it does not measure simulation ticks, rendered obstacles, WebGL, GPU
+cost or frame time on a user's device. Timing is diagnostic, while traversal bounds and movement
+continuity are enforced by regression tests.

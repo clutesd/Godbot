@@ -27,3 +27,36 @@ export function firstMilestones(history: readonly HistoricalEvent[]): Historical
     return first;
   });
 }
+
+/** Published history events are immutable. Reuse the prefix and inspect only newly appended
+ * records; archive compaction, replacement and restart invalidate that prefix. */
+export class MilestoneIndex {
+  private history?: readonly HistoricalEvent[];
+  private length = 0;
+  private first?: HistoricalEvent;
+  private last?: HistoricalEvent;
+  private readonly categories = new Set<string>();
+  private events: HistoricalEvent[] = [];
+
+  read(history: readonly HistoricalEvent[]): HistoricalEvent[] {
+    if (history !== this.history || history.length < this.length
+      || this.length > 0 && (history[0] !== this.first || history[this.length - 1] !== this.last)) {
+      this.length = 0;
+      this.categories.clear();
+      this.events = [];
+    }
+    for (let index = this.length; index < history.length; index++) {
+      const event = history[index]!;
+      let first = false;
+      for (const category of milestoneCategories(event)) {
+        if (!this.categories.has(category)) { this.categories.add(category); first = true; }
+      }
+      if (first) this.events.push(event);
+    }
+    this.history = history;
+    this.length = history.length;
+    this.first = history[0];
+    this.last = history[history.length - 1];
+    return this.events;
+  }
+}
