@@ -182,7 +182,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     case 'food':
       if (c.farmers > 2 && c.fertile && !(c.culture.memory.foodScarcity
         && seedHash(`${s.id}:storage:${s.development?.evaluatedMonth}:${c.culture.memory.foodScarcity.eventId}`) / 0x100000000
-          < c.culture.memory.foodScarcity.strength * 0.7) && knows('crop-selection', 0.15)) {
+          < c.culture.memory.foodScarcity.strength * 0.7)) {
         form = 'field'; names = ['farmstead', 'agricultural estate', 'mechanized agricultural site'];
         if (knows('agrarian-surplus')) maxLevel = 2;
         if (maxLevel === 2 && knows('mechanical-power', 0.45) && c.artisans >= 5 && s.resources.wood > 12) maxLevel = 3;
@@ -283,7 +283,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   const level = Math.min(requestedLevel, maxLevel);
   if (level > 1) requirements.push('leverage', practical(s, 'stone-composites') >= 0.3 ? 'stone-composites' : 'pottery-firing');
   if (level === 3 && ['manufacturing', 'energy', 'water'].includes(need)) form = 'works';
-  const material = materialFor({ ...c, culture: siteCulture }, level);
+  let material = materialFor({ ...c, culture: siteCulture }, level);
   const cost = stock();
   const open = form === 'gathering' && level === 1 || form === 'marker';
   const units = level * (open ? 0.45 : 1);
@@ -292,6 +292,11 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   cost.goods = (level - 1) * 4;
   cost.wealth = (level - 1) * 3;
   const materialCost: Record<string, number> = material === 'metal' ? { 'iron-tools': units * 2 } : material === 'masonry' ? { 'dressed-stone': units * 2 } : material === 'timber' ? { 'timber-frame': units * 2 } : {};
+  if (form === 'field' && level === 1) {
+    material = 'earth';
+    for (const key of STOCK_KEYS) cost[key] = 0;
+    for (const key of Object.keys(materialCost)) delete materialCost[key];
+  }
   const services: ServiceSupply = { [need]: level === 1 ? 1 : level === 2 ? 2 : 3.5 };
   if (need === 'housing') services.housing = level === 1 ? 1 : 1.8;
   if (need === 'religion' && sponsor) { services.healthcare = level * 0.35; services.security = level * (d.religiousTendency > 0.7 ? 0.7 : 0.1); }
@@ -595,7 +600,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         if (plot) candidate.plotId = plot.id;
         const fuelReserve = response.need === 'energy' || response.level === 3 && ['food', 'manufacturing'].includes(response.need) ? 12 : 0;
         candidate.blockers.push(...resourceBlockers(settlement, response, fuelReserve));
-        if (c.builders === 0) candidate.blockers.push({ code: 'no-builders', available: 0, required: 1 });
+        if (c.builders === 0 && !(response.form === 'field' && c.farmers > 0)) candidate.blockers.push({ code: 'no-builders', available: 0, required: 1 });
         if (candidate.blockers.length > 0) {
           candidates.push(candidate);
           continue;
@@ -647,7 +652,9 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     const weather = state.weather.cells[settlement.cellIndex];
     const adaptationWork = (settlement.survival?.establishment?.constructionLabour ?? 0)
       * Math.max(0, 1 - (weather?.snowpack ?? 0) * 0.55 - (weather?.blizzard ?? 0) * 0.3 - (weather?.floodDepth ?? 0));
-    const availableWork = project.response.adaptation ? adaptationWork : workRate;
+    const fieldPreparation = project.response.form === 'field'
+      ? Math.min(c.farmers, project.response.labor) * Math.max(0, 1 - (weather?.snowpack ?? 0) * 0.55 - (weather?.floodDepth ?? 0)) : 0;
+    const availableWork = project.response.adaptation ? adaptationWork : workRate + fieldPreparation;
     project.blockedReasons = [
       ...(!project.response.adaptation && state.month === project.startedMonth ? ['site-preparation'] : []),
       ...(!plot ? ['missing-plot'] : []), ...(plot?.fire ? ['fire'] : []),

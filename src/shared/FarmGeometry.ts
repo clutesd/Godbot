@@ -54,6 +54,7 @@ function plotFarmGeometry(settlement: Settlement, plot: StructurePlot): FarmGeom
 }
 
 function fallbackFarmGeometry(settlement: Settlement): FarmGeometry | undefined {
+  if (settlement.fields !== undefined) return undefined;
   if (!settlement.alive || !(settlement.agriculture && settlement.agriculture.labour > 0)) return undefined;
   const initialAngle = resourceVisualUnit(`${settlement.id}:cultivated-field`) * Math.PI * 2;
   // Legacy agriculture has no reserved plot. Search deterministically around existing buildings.
@@ -141,5 +142,5 @@ export function farmAnchor(field: FarmGeometry, personId: string, step = 0): { a
 
 export function farmDestinationMatches(person: Person, field: FarmGeometry): boolean {
   return person.navigation?.destinationKind === 'field'
-    && (person.navigation.destinationId === field.id || person.navigation.destinationId === `${person.homeId}:field`);
+    && (person.navigation.destinationId === field.id || field.source === 'fallback' && person.navigation.destinationId === `${person.homeId}:field`);
 }

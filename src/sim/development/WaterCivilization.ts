@@ -119,12 +119,12 @@ export function advanceSettlementWater(
     : Math.max(0, settlement.monthlyBalance.food + baselineConsumption);
   const waterYieldFactor = Math.max(0.6, Math.min(1.24,
     0.78 + reliability * 0.15 + irrigation * 0.34 - droughtStress * 0.42 - floodContamination * 0.08));
-  const foodDelta = estimatedProduction * (waterYieldFactor - 1);
+  const foodDelta = settlement.fields === undefined ? estimatedProduction * (waterYieldFactor - 1) : 0;
   if (!adjustFoodProduction(settlement, foodDelta, state.month)) {
     settlement.monthlyBalance.food += foodDelta;
     settlement.resources.food = Math.max(0, Math.min(foodStorageLimit(settlement, population), settlement.resources.food + foodDelta));
   }
-  if (settlement.survival?.food?.month === state.month) settlement.survival.food.extraProduction *= waterYieldFactor;
+  if (settlement.fields === undefined && settlement.survival?.food?.month === state.month) settlement.survival.food.extraProduction *= waterYieldFactor;
   const monthsOfFood = settlement.resources.food / Math.max(1, population * 0.31);
   settlement.foodSecurity = clamp01(monthsOfFood / 5 * 0.7 + (settlement.monthlyBalance.food >= 0 ? 0.3 : 0));
 

@@ -1,6 +1,7 @@
+import { farmerField } from '../agriculture/AgricultureSystem';
 import { createSettlementLayoutPlan, type BuildingDistrict, type SettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
 import { structureDestination } from '../../shared/StructureDestinations';
-import { farmGeometry, farmAnchor } from '../../shared/FarmGeometry';
+import { farmAnchor } from '../../shared/FarmGeometry';
 import { isEstablishmentBuilder, isEstablishmentFireTender, physicalRestSite } from './EstablishmentWork';
 import type {
   Activity,
@@ -400,6 +401,16 @@ export class PeopleSystem {
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'work', activity: activityForRole(role, kind), reason: 'working the assigned night shift' };
     }
+    const agriculture = settlement.agriculture;
+    const farmShare = (agriculture?.labour ?? 0) / Math.max(0.01, (agriculture?.labour ?? 0) + (agriculture?.gatheringLabour ?? 0));
+    if (person.occupation === 'farmer' && settlement.fields !== undefined && shiftedHour >= 6 && shiftedHour < 16
+      && stableUnit(`${person.id}:offseason-forage`) >= farmShare && !resourceWork && !building) {
+      const angle = stableUnit(`${person.id}:foraging-direction`) * Math.PI * 2;
+      return { kind: 'field', phase: shiftedHour < 8 ? 'commute' : 'work', activity: shiftedHour < 8 ? 'travel' : 'gather',
+        destinationId: `${person.id}:offseason-forage`,
+        point: { x: settlement.position.x + Math.cos(angle) * 4, z: settlement.position.z + Math.sin(angle) * 4 },
+        reason: 'gathering food while the fields do not need this worker' };
+    }
     const memorial = memorialVisitPlan(person, settlement, state, shiftedHour);
     if (memorial) return memorial;
     if (shiftedHour < 8) {
@@ -577,7 +588,7 @@ export class PeopleSystem {
       navigation.crossingMode = 'walk';
       return;
     }
-    if (isResourceWorkDestinationId(navigation.destinationId)) {
+    if (isResourceWorkDestinationId(navigation.destinationId) || navigation.destinationId.endsWith(':offseason-forage')) {
       person.activity = 'gather';
       return;
     }
@@ -586,7 +597,7 @@ export class PeopleSystem {
 
   private destinationPoint(person: Person, settlement: Settlement, state: SimulationState, kind: DestinationKind): Vec2 {
     if (kind === 'field' && person.occupation === 'farmer') {
-      const field = farmGeometry(settlement);
+      const field = farmerField(settlement, person.id);
       if (field) return this.walkability.nearestWalkable(farmAnchor(field, person.id).anchor, `${person.id}:${field.id}`);
     }
     if (kind === 'home') {
@@ -637,7 +648,7 @@ export class PeopleSystem {
 
   private destinationId(person: Person, settlement: Settlement, kind: DestinationKind): string {
     if (kind === 'field' && person.occupation === 'farmer') {
-      const field = farmGeometry(settlement);
+      const field = farmerField(settlement, person.id);
       if (field) return field.id;
     }
     const site = structureDestination(settlement, kind);
