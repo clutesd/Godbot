@@ -71,6 +71,9 @@ export class Historian {
   private statementSequence = 1;
   private predictionSequence = 1;
   private sceneSequence = 0;
+  private acquiredCount = 0;
+  private lastNarratedCount = 0;
+  private readonly settlementReadouts = new Map<string, { month: number; population: number; food: number; buildings: number }>();
   private lastRepresentativeRefreshMonth = -Infinity;
   private lastSubjectId = '';
   private crossRunContext?: CrossRunContext;
@@ -111,7 +114,8 @@ export class Historian {
     // Historian weighs consequence and activity, then uses recent documentary memory to avoid
     // repeating subjects, scales and aerial grammar while preserving a thread when the next shot
     // can deepen it.
-    const ranked = candidates
+    const available = candidates.filter(candidate => !this.isSubjectDeferred(candidate.subjectId));
+    const ranked = (available.length ? available : candidates)
       .map(candidate => ({ candidate, score: this.editorialScore(candidate) + this.documentaryMemory.score(candidate, state) + (isEarlyDocumentary(state)
         ? earlyDocumentaryBias(candidate) + (candidate.kind === 'landscape-pause'
           && this.recentEditorialSelections.length >= 6
@@ -123,6 +127,27 @@ export class Historian {
     this.documentaryMemory.decorate(choice, state);
     this.ageDeferredSubjects();
     return choice;
+  }
+
+  /** Refresh queued live evidence without consuming attention or declaring a remote scene witnessed. */
+  refreshScene(scene: ObservationCandidate, state: SimulationState): ObservationCandidate | undefined {
+    const person = state.people.find(p => p.id === scene.subjectId);
+    if (person && !person.alive && ['worker-follow', 'traveler-follow', 'discovery-scene', 'street-observation'].includes(scene.kind)) return undefined;
+    if (scene.event || scene.id.startsWith('founding') || scene.id.startsWith('scenic:')) {
+      return this.validateStatement(scene.statement, state) ? scene : undefined;
+    }
+    if (scene.id.startsWith('human:')) {
+      return this.validateStatement(scene.statement, state)
+        && scene.statement.sourceEntityIds.every(id => state.people.find(p => p.id === id)?.alive !== false)
+        ? { ...scene, statement: { ...scene.statement, month: state.month } } : undefined;
+    }
+    const fresh = this.candidates(state).find(candidate => candidate.id === scene.id
+      || scene.id.startsWith('development:') && candidate.id.startsWith('development:')
+        && candidate.editorial?.subjectId === scene.editorial?.subjectId && candidate.subjectId === scene.subjectId);
+    if (fresh) return fresh;
+    // Renderer-owned/custom candidates can have their own provenance; vanished simulation subjects cannot.
+    if (/^(person|settlement|institution|route|polity|development):/.test(scene.id)) return undefined;
+    return this.validateStatement(scene.statement, state) ? scene : undefined;
   }
 
   /**
@@ -145,7 +170,16 @@ export class Historian {
   }
 
   /** Selection is a proposal. Only the physical camera can acknowledge an observation. */
-  acquireScene(choice: ObservationCandidate, state: SimulationState): void {
+  acquireScene(choice: ObservationCandidate, state: SimulationState, narrationVisible?: boolean): void {
+    this.acquiredCount += 1;
+    const narrated = narrationVisible ?? (choice.editorial?.narration === 'required'
+      || choice.editorial?.narration === 'selective' && (Boolean(choice.event) || choice.interest >= 0.66));
+    if (narrated) this.lastNarratedCount = this.acquiredCount;
+    if (choice.id.startsWith('settlement:') && narrated) {
+      const settlement = state.settlements.find(s => s.id === choice.subjectId);
+      if (settlement) this.settlementReadouts.set(settlement.id, { month: state.month,
+        population: settlementRepresentedPopulation(state, settlement.id), food: Math.round(settlement.foodSecurity * 100), buildings: settlement.buildings });
+    }
     this.acquisitionCallbacks.get(choice.id)?.();
     this.acquisitionCallbacks.delete(choice.id);
     this.shownSubjects.set(choice.subjectId, (this.shownSubjects.get(choice.subjectId) ?? 0) + 1);
@@ -153,7 +187,7 @@ export class Historian {
     if (choice.id.startsWith('century:')) this.shownCenturies.add(Number(choice.id.replace('century:', '')));
     this.lastSubjectId = choice.subjectId;
     this.rememberEditorialSelection(choice);
-    this.documentaryMemory.remember(choice, state.month);
+    this.documentaryMemory.remember(choice, state.month, narrated);
 
     if (this.validateStatement(choice.statement, state)) {
       if (!this.statements.some(statement => statement.id === choice.statement.id)) this.statements.push(choice.statement);
@@ -313,7 +347,8 @@ export class Historian {
       const people = state.people.filter((person) => person.alive && person.homeId === settlement.id);
       const localPopulation = settlementRepresentedPopulation(state, settlement.id);
       const shown = this.shownSubjects.get(settlement.id) ?? 0;
-      const base = 0.43 + Math.min(0.2, people.length / 600) + settlement.prosperity * 0.12 - shown * 0.045;
+      const needsReadout = this.needsSettlementReadout(settlement.id, state.month);
+      const base = 0.43 + Math.min(0.2, people.length / 600) + settlement.prosperity * 0.12 - Math.min(4, shown) * 0.045 + (needsReadout ? 0.55 : 0);
       // A settlement center is geographic context, not a human subject. Reserve human-scale
       // observation kinds for candidates that resolve to actual people.
       const kind: ObservationKind = settlement.industry.active ? 'city-growth-timelapse' : 'settlement-approach';
@@ -326,10 +361,21 @@ export class Historian {
         sourceEntityIds: [settlement.id],
         claims: { population: { month: state.month, value: localPopulation, scopeEntityId: settlement.id }, entityIds: [settlement.id] },
       });
+      statement.text += ` Food security is ${Math.round(settlement.foodSecurity * 100)}%; ${settlement.buildings} buildings are recorded here.`;
+      const previous = this.settlementReadouts.get(settlement.id);
+      if (previous && state.month > previous.month) {
+        const populationChange = localPopulation - previous.population;
+        const foodChange = Math.round(settlement.foodSecurity * 100) - previous.food;
+        const buildingChange = settlement.buildings - previous.buildings;
+        const deltas = [populationChange ? `population ${populationChange > 0 ? 'grew' : 'fell'} by ${Math.abs(populationChange).toLocaleString()}` : 'population is unchanged',
+          foodChange ? `food security ${foodChange > 0 ? 'rose' : 'fell'} by ${Math.abs(foodChange)} percentage points` : 'food security is unchanged',
+          buildingChange ? `the recorded building count ${buildingChange > 0 ? 'rose' : 'fell'} by ${Math.abs(buildingChange)}` : 'the recorded building count is unchanged'];
+        statement.text += ` Since the last narrated view in month ${previous.month}, ${deltas.join('; ')}.`;
+      }
       result.push(this.candidate(`settlement:${settlement.id}`, settlement.id, kind, settlement.position, settlement.name, statement, base, settlement.industry.active ? 0.7 : 0.35, settlement.industry.active ? 'industry' : 'settlement'));
       for (const institution of state.institutions.filter((candidate) => candidate.settlementId === settlement.id).sort((a, b) => b.prestige - a.prestige).slice(0, 1)) {
         const institutionStatement = this.statement({ month: state.month, text: `${institution.name} has ${institution.members} members and has endured for ${this.durationPhrase(state.month - institution.foundedMonth)}.`, epistemicStatus: 'derived-statistic', sourceEntityIds: [institution.id, settlement.id], claims: { entityIds: [institution.id, settlement.id] } });
-        result.push(this.candidate(`institution:${institution.id}`, institution.id, 'institution-exterior', settlement.position, institution.name, institutionStatement, 0.42 + institution.prestige * 0.22 - (this.shownSubjects.get(institution.id) ?? 0) * 0.05, 0.48, institution.kind === 'temple' ? 'ritual-culture' : 'settlement'));
+        result.push(this.candidate(`institution:${institution.id}`, institution.id, 'institution-exterior', settlement.position, institution.name, institutionStatement, 0.42 + institution.prestige * 0.22 - Math.min(4, this.shownSubjects.get(institution.id) ?? 0) * 0.05, 0.48, institution.kind === 'temple' ? 'ritual-culture' : 'settlement'));
       }
     }
     return result;
@@ -378,7 +424,7 @@ export class Historian {
       const position = a && b ? { x: (a.position.x + b.position.x) / 2, z: (a.position.z + b.position.z) / 2 } : { x: 0, z: 0 };
       const years = Math.floor(route.ageMonths / 12);
       const statement = this.statement({ month: state.month, text: `Trade between ${a?.name ?? route.a} and ${b?.name ?? route.b} has continued for ${years} years${years >= this.config.historicalPace.generationYears * 2 ? `—${Math.max(1, Math.floor(years / this.config.historicalPace.generationYears))} generations` : ''}.`, epistemicStatus: 'derived-statistic', sourceEntityIds: [route.id, route.a, route.b], claims: { entityIds: [route.id, route.a, route.b] } });
-      return this.candidate(`route:${route.id}`, route.id, 'regional-travel', position, `${route.mode === 'water' ? 'Water passage' : 'Trade road'} between ${a?.name ?? 'one settlement'} and ${b?.name ?? 'another'}`, statement, 0.43 + Math.min(0.18, route.ageMonths / 2400) + Math.min(0.12, route.knowledgeFlow * 12) - (this.shownSubjects.get(route.id) ?? 0) * 0.055, 0.38, 'ambient-wilderness');
+      return this.candidate(`route:${route.id}`, route.id, 'regional-travel', position, `${route.mode === 'water' ? 'Water passage' : 'Trade road'} between ${a?.name ?? 'one settlement'} and ${b?.name ?? 'another'}`, statement, 0.43 + Math.min(0.18, route.ageMonths / 2400) + Math.min(0.12, route.knowledgeFlow * 12) - Math.min(4, this.shownSubjects.get(route.id) ?? 0) * 0.055, 0.38, 'ambient-wilderness');
     });
   }
 
@@ -396,7 +442,7 @@ export class Historian {
           ? `${polity.dynastyName} has led ${polity.name} for ${this.durationPhrase(dynastyMonths)} through ${polity.successionCount} recorded successions.`
           : `${polity.name} has persisted for ${this.durationPhrase(state.month - polity.formedMonth)} and is in a ${polity.phase} phase.`;
       const statement = this.statement({ month: state.month, text: persistence, epistemicStatus: 'derived-statistic', sourceEntityIds: [polity.id, capital.id], claims: { entityIds: [polity.id, capital.id] } });
-      const score = 0.42 + Math.min(0.2, (state.month - polity.formedMonth) / 6000) + Math.min(0.12, peaceMonths / 3600) - (this.shownSubjects.get(polity.id) ?? 0) * 0.05;
+      const score = 0.42 + Math.min(0.2, (state.month - polity.formedMonth) / 6000) + Math.min(0.12, peaceMonths / 3600) - Math.min(4, this.shownSubjects.get(polity.id) ?? 0) * 0.05;
       return this.candidate(`polity:${polity.id}`, polity.id, 'historian-context', capital.position, polity.name, statement, score, activeWar ? 0.62 : 0.3, 'historian');
     }).filter((candidate): candidate is ObservationCandidate => Boolean(candidate));
   }
@@ -488,6 +534,10 @@ export class Historian {
     return this.candidate(`landscape:${cell.x}:${cell.z}:${this.sceneSequence}`, this.cellId(cell), this.sceneSequence % 9 === 0 ? 'night-transition' : 'landscape-pause', { x: cell.worldX, z: cell.worldZ }, title, statement, 0.42, 0.18, 'ambient-wilderness');
   }
 
+  private needsSettlementReadout(id: string, month: number): boolean {
+    return this.acquiredCount - this.lastNarratedCount >= 6 && (this.settlementReadouts.get(id)?.month ?? -1) < month;
+  }
+
   private ensureEditorial(state: SimulationState, candidate: ObservationCandidate): ObservationCandidate {
     if (candidate.editorial) return candidate;
     const person = state.people.find(subject => subject.id === candidate.subjectId);
@@ -514,7 +564,9 @@ export class Historian {
               ? 0.08
               : 0.28;
     const preferredScale = this.documentaryScale(candidate.kind);
-    const narration: DocumentaryEditorialIntent['narration'] = event && (event.significance >= 0.78 || event.type === 'first-fire')
+    const narration: DocumentaryEditorialIntent['narration'] = settlement && this.needsSettlementReadout(settlement.id, state.month)
+      ? 'required'
+      : event && (event.significance >= 0.78 || event.type === 'first-fire')
       ? 'required'
       : candidate.kind === 'landscape-pause' || candidate.kind === 'night-transition' || candidate.kind === 'world-establishing'
         ? 'silent'

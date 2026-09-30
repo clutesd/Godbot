@@ -40,7 +40,7 @@ describe('documentary observation memory', () => {
     state.month += 12;
     project.blockedReasons = ['insufficient-wood'];
     memory.observe(state);
-    expect(memory.candidates(state).find(c => c.subjectId === project.plotId)!.statement.text).toContain('insufficient-wood');
+    expect(memory.candidates(state).find(c => c.subjectId === project.plotId)!.statement.text).toContain('insufficient wood');
     delete s.development.project;
     state.month++;
     memory.observe(state);
@@ -57,7 +57,7 @@ describe('documentary observation memory', () => {
     state.month++;
     state.settlements[0]!.pollution = 0.2;
     memory.observe(state);
-    expect(memory.candidates(state)[0]!.statement.text).toContain('pollution band (fifths) changed from 4 to 1');
+    expect(memory.candidates(state)[0]!.statement.text).toContain('pollution has fallen into the 20–40% range');
   });
 
   it('notices relationships, migration and death from copied evidence', () => {
@@ -69,8 +69,8 @@ describe('documentary observation memory', () => {
     person.homeId = state.settlements[1]!.id;
     memory.observe(state);
     const changed = memory.candidates(state).find(c => c.subjectId === person.id)!;
-    expect(changed.statement.text).toContain('partner changed');
-    expect(changed.statement.text).toContain('home changed');
+    expect(changed.statement.text).toContain(`partnership with ${state.people[1]!.name}`);
+    expect(changed.statement.text).toContain(`has moved from ${state.settlements[0]!.name} to ${state.settlements[1]!.name}`);
     memory.remember(changed, state.month);
     state.month++;
     person.alive = false;
@@ -79,7 +79,7 @@ describe('documentary observation memory', () => {
     expect(death.interest).toBeGreaterThan(changed.interest);
     expect(death.kind).toBe('street-observation');
     expect(state.people.find(candidate => candidate.id === death.subjectId)?.alive).toBe(true);
-    expect(death.statement.text).toContain('alive changed from true to false');
+    expect(death.statement.text).toContain('has died');
   });
 
   it('does not consume a development through candidate enumeration and returns silently to unresolved lives', () => {
@@ -141,6 +141,17 @@ describe('documentary observation memory', () => {
     expect(Array.from({ length: 15 }, () => observeScene(a, state).id))
       .toEqual(Array.from({ length: 15 }, () => observeScene(b, state).id));
     expect(JSON.stringify(state)).toBe(before);
+  });
+
+  it('does not silence evidence that a sequence observed without showing its caption', () => {
+    const state = fixture(), historian = new Historian(simulation.config), memory = new DocumentaryMemory();
+    const source = event(state, 'observed-without-speech', 0.95);
+    state.history.push(source);
+    const candidate = historian.candidates(state).find(c => c.event?.id === source.id)!;
+    memory.remember(candidate, state.month, false);
+    expect(memory.decorate(structuredClone(candidate), state).editorial?.narration).toBe('required');
+    memory.remember(candidate, state.month, true);
+    expect(memory.decorate(structuredClone(candidate), state).editorial?.narration).toBe('silent');
   });
 
   it('does not change subsequent simulation evolution or random consumption', () => {

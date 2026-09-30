@@ -1322,6 +1322,9 @@ export class CameraDirector {
   /** No valid composition was found for the chosen destination; its flight gives up sooner. */
   private endpointUnreadable = false;
   private consecutiveAbandons = 0;
+  private presentationSeconds = 0;
+  /** Failed milestones remain pending, but cannot monopolize every subsequent edit. */
+  private readonly failedEvents = new Map<string, { attempts: number; retryAt: number; subjectId: string }>();
   private readonly recentAngles: Array<{ x: number; z: number; azimuth: number }> = [];
   private readonly recentAnchorIds: string[] = [];
   private readonly milestoneRetries = new Set<string>();
@@ -1348,6 +1351,7 @@ export class CameraDirector {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
+    this.presentationSeconds += Math.max(0, Number.isFinite(deltaSeconds) ? deltaSeconds : 0);
     this.observationState = state;
     this.historian.observe(state);
     if (state.arrival && isArrivalFilmPhase(state.arrival.phase)) {
@@ -1529,11 +1533,13 @@ export class CameraDirector {
     );
 
     const majorEvent = awaitingHistoryAuthority ? undefined : this.findMajorEvent(state);
-    const readableMinimum = this.currentScene?.id.startsWith('human:') ? 18
+    const readingSeconds = this.observation.narrationVisible && !isFoundingCameraScene(this.currentScene?.id)
+      ? Math.min(28, this.observation.detail.split(/\s+/).length / 3 + 2) : 0;
+    const readableMinimum = Math.max(readingSeconds, this.currentScene?.id.startsWith('human:') ? 18
       : this.currentScene?.kind === 'worker-follow' || this.currentScene?.kind === 'discovery-scene' ? 16
         : this.currentScene?.kind === 'street-observation' ? 14
           : this.currentScene?.kind === 'traveler-follow' ? 12
-            : 6;
+            : 6);
     const milestoneHold = this.currentScene?.event && this.mustWitnessEvents(state).some(event => event.id === this.currentScene?.event?.id);
     const mayInterrupt = (!milestoneHold || this.shotAge >= this.shotDuration) && this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
     if (!justCompletedFoundingRelease && !awaitingHistoryAuthority) {
@@ -1544,7 +1550,7 @@ export class CameraDirector {
           if (oldest && !this.mustWitnessEvents(state).some(event => event.id === oldest)) this.acknowledgedMajorEventIds.delete(oldest);
         }
         this.chooseShot(state, elevationAt, majorEvent?.id, elapsedSeconds);
-      } else if (this.shouldCompleteCurrentShot(state) || this.shotAge >= this.shotDuration) {
+      } else if ((this.shotAge >= readingSeconds && this.shouldCompleteCurrentShot(state)) || this.shotAge >= Math.max(this.shotDuration, readingSeconds)) {
         this.chooseShot(state, elevationAt, undefined, elapsedSeconds);
       }
     }
@@ -1957,6 +1963,9 @@ export class CameraDirector {
       }
       this.transitionScene(this.acquiredScene.id, 'released');
     }
+    for (const failure of this.failedEvents.values()) {
+      if (failure.retryAt > this.presentationSeconds) this.historian.deferSubject(failure.subjectId, 2);
+    }
     let scene: ObservationCandidate;
     if (focusEventId) {
       this.sequencePlanner.interrupt();
@@ -1970,6 +1979,17 @@ export class CameraDirector {
       if (planned && !planned.scene.event && this.historian.isSubjectDeferred(planned.scene.subjectId)) {
         this.sequencePlanner.interrupt();
         planned = undefined;
+      }
+      if (planned) {
+        const fresh = this.historian.refreshScene(planned.scene, state);
+        // A sequence is a proposal, not a frozen script. Changed/departed subjects yield to live history.
+        if (!fresh || this.isEventCoolingDown(fresh.event?.id)) {
+          this.sequencePlanner.interrupt();
+          planned = undefined;
+        } else {
+          planned = { ...planned, scene: fresh, narrate: fresh.editorial?.narration === 'required'
+            || planned.narrate && fresh.editorial?.narration !== 'silent' };
+        }
       }
       if (planned) {
         scene = planned.scene;
@@ -2276,6 +2296,17 @@ export class CameraDirector {
     if (endpoint.valid && distance <= 0.45 && this.lookTarget.distanceTo(this.shotBaseTarget) <= 0.9) {
       this.acquireCurrentScene();
       return;
+    }
+    if (!leavingFoundingOverlay && !isFoundingCameraScene(scene.id)) {
+      delete this.observation.statement;
+      delete this.observation.sceneId;
+      delete this.observation.eventType;
+      delete this.observation.eventMonth;
+      this.observation.label = 'Following history';
+      this.observation.detail = '';
+      this.observation.kind = 'regional-travel';
+      this.observation.narrationVisible = false;
+      this.observation.revision += 1;
     }
     this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
   }
@@ -2597,6 +2628,17 @@ export class CameraDirector {
       this.transitionScene(this.currentScene.id, 'released');
       // An unreachable destination yields to other subjects instead of being re-proposed at once.
       this.consecutiveAbandons += 1;
+      if (this.currentScene.event) {
+        const id = this.currentScene.event.id;
+        const attempts = (this.failedEvents.get(id)?.attempts ?? 0) + 1;
+        this.failedEvents.set(id, { attempts, subjectId: this.currentScene.subjectId, retryAt: this.presentationSeconds + Math.min(180, 30 * attempts) });
+        if (this.failedEvents.size > 512) this.failedEvents.delete(this.failedEvents.keys().next().value!);
+        // A focused selection bypasses ordinary ranking; invalidate its cached major-event result too.
+        this.latestMajorEvent = undefined;
+        this.lastScannedMonth = -1;
+      }
+      this.sequencePlanner.interrupt();
+      this.activeSequence = undefined;
       if (!isFoundingCameraScene(this.currentScene.id)
         && (this.currentScene !== this.acquiredScene || this.consecutiveAbandons >= 2)) {
         this.historian.deferSubject(this.currentScene.subjectId, 3);
@@ -2626,10 +2668,24 @@ export class CameraDirector {
     this.externalPoseRecoveryPending = false;
     this.interruptedFlightResumePending = false;
     this.consecutiveAbandons = 0;
+    if (this.observationState && !isFoundingCameraScene(this.currentScene.id) && !isScenicFlightScene(this.currentScene.id)) {
+      const social = this.currentScene.id.startsWith('human:') ? this.subjectPresentation?.(this.currentScene.subjectId) : undefined;
+      if (this.currentScene.id.startsWith('human:') && this.subjectPresentation
+        && (!social?.partnerId || !this.currentScene.statement.sourceEntityIds.includes(social.partnerId))) {
+        this.abandonCurrentFlight(); return;
+      }
+      const fresh = this.historian.refreshScene(this.currentScene, this.observationState);
+      if (!fresh) { this.abandonCurrentFlight(); return; }
+      // Refresh evidence at the physical lens arrival, not at the start of a potentially long flight.
+      this.currentScene = { ...this.currentScene, statement: fresh.statement, editorial: fresh.editorial };
+    }
     this.acquiredScene = this.currentScene;
     this.transitionScene(this.currentScene.id, 'acquired');
-    if (this.currentScene.event) this.acknowledgedMajorEventIds.add(this.currentScene.event.id);
-    if (this.observationState) this.historian.acquireScene(this.currentScene, this.observationState);
+    if (this.currentScene.event) {
+      this.acknowledgedMajorEventIds.add(this.currentScene.event.id);
+      this.failedEvents.delete(this.currentScene.event.id);
+    }
+    if (this.observationState) this.historian.acquireScene(this.currentScene, this.observationState, this.shouldNarrate(this.currentScene));
     this.commitObservation(this.currentScene);
     this.shotAge = 0;
     this.trackingInitialized = false;
@@ -2651,6 +2707,12 @@ export class CameraDirector {
     this.motionGainTarget = 1;
   }
 
+  private shouldNarrate(scene: ObservationCandidate): boolean {
+    const mode = scene.editorial?.narration ?? 'selective';
+    return mode !== 'silent' && (mode === 'required'
+      || (this.activeSequence?.narrate ?? (scene.event !== undefined || scene.interest >= 0.66)));
+  }
+
   private commitObservation(scene: ObservationCandidate): void {
     this.observation.sceneId = scene.id;
     this.observation.label = scene.title;
@@ -2666,9 +2728,7 @@ export class CameraDirector {
       delete this.observation.eventType;
       delete this.observation.eventMonth;
     }
-    const narrationMode = scene.editorial?.narration ?? 'selective';
-    this.observation.narrationVisible = this.activeSequence?.narrate
-      ?? (narrationMode === 'required' || narrationMode === 'selective' && (scene.event !== undefined || scene.interest >= 0.66));
+    this.observation.narrationVisible = this.shouldNarrate(scene);
     this.observation.revision += 1;
   }
 
@@ -3135,12 +3195,16 @@ export class CameraDirector {
     }
   }
 
+  private isEventCoolingDown(id: string | undefined): boolean {
+    return Boolean(id && (this.failedEvents.get(id)?.retryAt ?? 0) > this.presentationSeconds);
+  }
+
   private findMajorEvent(state: SimulationState): SimulationState['history'][number] | undefined {
     const pendingMilestone = this.mustWitnessEvents(state).find(event => event.month <= state.month
-      && !this.acknowledgedMajorEventIds.has(event.id));
+      && !this.acknowledgedMajorEventIds.has(event.id) && !this.isEventCoolingDown(event.id));
     if (pendingMilestone) return pendingMilestone;
     if (this.lastScannedHistoryLength === state.history.length && this.lastScannedMonth === state.month) {
-      return this.latestMajorEvent && !this.acknowledgedMajorEventIds.has(this.latestMajorEvent.id) ? this.latestMajorEvent : undefined;
+      return this.latestMajorEvent && !this.acknowledgedMajorEventIds.has(this.latestMajorEvent.id) && !this.isEventCoolingDown(this.latestMajorEvent.id) ? this.latestMajorEvent : undefined;
     }
 
     this.latestMajorEvent = undefined;
@@ -3154,7 +3218,7 @@ export class CameraDirector {
       if (!event) continue;
       const age = state.month - event.month;
       if (age > memoryMonths) break;
-      if (event.month > state.month || event.significance < 0.72 || !DOCUMENTARY_BREAK_TYPES.has(event.type) || this.acknowledgedMajorEventIds.has(event.id)) continue;
+      if (event.month > state.month || event.significance < 0.72 || !DOCUMENTARY_BREAK_TYPES.has(event.type) || this.acknowledgedMajorEventIds.has(event.id) || this.isEventCoolingDown(event.id)) continue;
       const recency = 1 - age / Math.max(1, memoryMonths);
       const score = event.significance * 1.6 + recency * 0.28;
       if (score > bestScore) {
