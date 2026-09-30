@@ -266,16 +266,6 @@ describe('facility throughput, conservation and physical limits', () => {
     expect(none.limiter).toBe('labour');
     expect(full.labour.used).toBeGreaterThan(one.labour.used);
     expect(one.labour.used).toBeLessThanOrEqual(1 + 1e-9);
-    // Worker-months are spent, not conjured: the same crew object cannot pay twice.
-    const w = processingWorld('labour-shared');
-    const f = placeFacility(w.state, w.s, 'wood', 1);
-    f.inputs.timber = 20;
-    const budget = { builder: 2 };
-    w.state.month += 1;
-    infrastructureLabourBudget(w.state, w.s).remaining = 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (require as unknown) ?? null;
-    void budget;
   });
 
   it('degrades with structural or machinery damage and halts when the works is wrecked', () => {
