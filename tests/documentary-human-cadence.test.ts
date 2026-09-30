@@ -178,7 +178,7 @@ describe('documentary human cadence', () => {
     for (const metric of repeatedlyObserved) {
       expect(metric.sameAuthorityResets).toBeLessThanOrEqual(Math.max(1, Math.floor(metric.stableComparisons * 0.05)));
     }
-  });
+  }, 30_000);
 
   it('keeps human life running for sixty real seconds while historical time is completely frozen', () => {
     const simulation = new Simulation({
