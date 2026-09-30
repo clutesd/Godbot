@@ -1,3 +1,4 @@
+import { developmentContext, responseForNeed } from '../src/sim/development/SettlementDevelopmentSystem';
 import { createField } from '../src/sim/agriculture/AgricultureSystem';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
@@ -121,9 +122,12 @@ describe('acquired human capability', () => {
       for (const settlement of sim.state.settlements) {
         const cell = sim.state.world.cells[settlement.cellIndex]!;
         const id = `${settlement.id}:skill-field`;
+        const response = responseForNeed(developmentContext(sim.state, settlement), 'food')!;
         settlement.structurePlots = [{ id, worldX: settlement.position.x, worldZ: settlement.position.z,
           width: 3, depth: 2, radius: 2, height: 0.1, condition: 1, foundedMonth: 0,
-          development: { form: 'field', status: 'active', need: 'food', level: 1, services: { food: 1 }, history: [], capabilities: [], reasons: [] } as NonNullable<typeof settlement.structurePlots>[number]['development'] }];
+          development: { ...response, form: 'field', status: 'active',
+            origin: { ...response, form: 'field', month: sim.state.month, action: 'founded' },
+            history: [], transitionCount: 0, lastUsedMonth: sim.state.month } }];
         const field = createField(id, cell, settlement.cellIndex, sim.state.month);
         field.stage = 'mature'; field.harvestRemaining = 10000; field.plantedMonth = sim.state.month;
         settlement.fields = [field];
