@@ -1,7 +1,7 @@
 import { SeededRandom } from '../../src/sim/prng';
 import { ResourceSystem } from '../../src/sim/resources/ResourceSystem';
 import { addMaterial, publishBulkStocks } from '../../src/sim/resources/Inventory';
-import { ExtractionAccessibility } from '../../src/sim/resources/ExtractionAccessibility';
+import type { ExtractionAccessibility } from '../../src/sim/resources/ExtractionAccessibility';
 import { advanceProcessingFacilities, ensureProcessingAuthority, establishFacility } from '../../src/sim/processing/FacilitySystem';
 import type { FacilityFamilyId, ProcessingFacility } from '../../src/sim/processing/types';
 import type { LabourBudget } from '../../src/sim/resources/Processing';
