@@ -533,7 +533,8 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
     if (pendingRemembrance(settlement)) dev.unmet.memory = Math.max(1.2, dev.unmet.memory ?? 0);
     for (const plot of settlement.structurePlots ?? []) {
       const building = plot.development;
-      if (!building || dev.project?.plotId === plot.id) continue;
+      // A processing facility's body is owned by the facility (tier, use, upkeep); development never repurposes or abandons it.
+      if (!building || building.facilityId || dev.project?.plotId === plot.id) continue;
       const demand = (pressures[building.need] ?? 0) - (informal[building.need] ?? 0);
       const surplus = (supplied[building.need] ?? 0) - demand;
       const patronGone = building.institutionId && !c.institutions.some(i => i.id === building.institutionId);
@@ -563,7 +564,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       const candidates: DevelopmentCandidateDecision[] = [];
       for (const need of needs) {
         const plots = (settlement.structurePlots ?? []).filter(p => !p.fire && !p.development?.memorial);
-        const ancestor = plots.find(p => p.development?.status === 'active' && p.development.need === need && p.development.level < 3);
+        const ancestor = plots.find(p => p.development?.status === 'active' && p.development.need === need && p.development.level < 3 && !p.development.facilityId);
         const desiredLevel = ancestor ? ancestor.development!.level + 1 : 1;
         const candidate: DevelopmentCandidateDecision = { need, desiredLevel, blockers: [] };
         let response = responseForNeed(c, need, desiredLevel);
@@ -578,7 +579,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         if (!plot) {
           response = responseForNeed(c, need)!;
           // Adapt a dormant building or a redundant communal hall before claiming new ground.
-          plot = response.memorial ? undefined : plots.find(p => p.development && (p.development.status !== 'active' ||
+          plot = response.memorial ? undefined : plots.find(p => p.development && !p.development.facilityId && (p.development.status !== 'active' ||
             ['gathering', 'hall'].includes(p.development.form) && (dev.pressures[p.development.need] ?? 0) < 0.5) && validPlot(state, p));
           if (plot) action = plot.development!.status === 'active' ? 'repurposed' : 'reused';
         }

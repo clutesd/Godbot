@@ -65,7 +65,9 @@ export class Historian {
   private readonly shownSubjects = new Map<string, number>();
   private readonly shownEventTypes = new Map<HistoricalEvent['type'], number>();
   private readonly shownCenturies = new Set<number>();
-  private readonly recentEditorialSelections: Array<{ subjectId: string; kind: ObservationKind; threadId: string; scale: DocumentaryShotScale }> = [];
+  private readonly recentEditorialSelections: Array<{ subjectId: string; kind: ObservationKind; threadId: string; scale: DocumentaryShotScale; x: number; z: number }> = [];
+  /** Subjects the camera could not frame readably; they sit out a few selections instead of being re-picked instantly. */
+  private readonly deferredSubjects = new Map<string, number>();
   private statementSequence = 1;
   private predictionSequence = 1;
   private sceneSequence = 0;
@@ -119,7 +121,27 @@ export class Historian {
     const choice = focused ?? ranked[0]?.candidate ?? this.ensureEditorial(state, this.fallback(state));
 
     this.documentaryMemory.decorate(choice, state);
+    this.ageDeferredSubjects();
     return choice;
+  }
+
+  /**
+   * The camera retired a composition of this subject as unreadable. Presentation-only: the subject
+   * simply yields for the next few selections so the edit moves on to a better shot.
+   */
+  deferSubject(subjectId: string, selections = 3): void {
+    this.deferredSubjects.set(subjectId, Math.max(1, Math.round(selections)));
+  }
+
+  isSubjectDeferred(subjectId: string): boolean {
+    return (this.deferredSubjects.get(subjectId) ?? 0) > 0;
+  }
+
+  private ageDeferredSubjects(): void {
+    for (const [subjectId, remaining] of this.deferredSubjects) {
+      if (remaining <= 1) this.deferredSubjects.delete(subjectId);
+      else this.deferredSubjects.set(subjectId, remaining - 1);
+    }
   }
 
   /** Selection is a proposal. Only the physical camera can acknowledge an observation. */
@@ -553,6 +575,23 @@ export class Historian {
       ? 0.13
       : 0;
     const sameSubjectPenalty = last?.subjectId === candidate.subjectId ? 0.34 : 0;
+    const scale = editorial?.preferredScale;
+    // Bridge scales one step at a time: a human moment earns a building reveal, a wide landscape
+    // earns a settlement approach, and a building earns a return to people, so the edit reads as
+    // landscape -> settlement -> building -> person instead of hopping between extremes.
+    const scaleBridge = scale && last
+      ? (last.scale === 'wide' && scale === 'medium') ? 0.12
+        : (last.scale === 'medium' && (scale === 'human' || scale === 'detail')) ? 0.07
+            : (last.scale === 'detail' && scale === 'wide') ? -0.06
+              : 0
+      : 0;
+    // Do not return to the same place in the same visual language within a few shots.
+    // (People-first: returning to a person is never penalised here, only repeated buildings/landscape.)
+    const locationRepeats = scale && (scale === 'medium' || scale === 'wide')
+      ? recent.slice(-4).filter(entry => entry.scale === scale
+        && Math.hypot(entry.x - candidate.position.x, entry.z - candidate.position.z) < 5).length
+      : 0;
+    const deferredPenalty = this.isSubjectDeferred(candidate.subjectId) ? 0.9 : 0;
 
     return candidate.score
       + candidate.interest * 0.12
@@ -565,7 +604,10 @@ export class Historian {
       - kindRepeats * 0.055
       - scaleRepeats * 0.045
       - wideStreak * 0.18
-      - sameSubjectPenalty;
+      - sameSubjectPenalty
+      + scaleBridge
+      - locationRepeats * 0.06
+      - deferredPenalty;
   }
 
   private rememberEditorialSelection(candidate: ObservationCandidate): void {
@@ -575,6 +617,8 @@ export class Historian {
       kind: candidate.kind,
       threadId: editorial?.threadId ?? candidate.subjectId,
       scale: editorial?.preferredScale ?? this.documentaryScale(candidate.kind),
+      x: candidate.position.x,
+      z: candidate.position.z,
     });
     if (this.recentEditorialSelections.length > 18) {
       this.recentEditorialSelections.splice(0, this.recentEditorialSelections.length - 18);

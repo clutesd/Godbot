@@ -94,7 +94,9 @@ function scaleContrast(previous: DocumentaryShotScale | undefined, next: Documen
   if (previous === next) return 0.06;
   const order: Record<DocumentaryShotScale, number> = { wide: 0, medium: 1, human: 2, detail: 3 };
   const delta = Math.abs(order[previous] - order[next]);
-  return delta >= 2 ? 1 : 0.66;
+  // Contrast reads best in steps (landscape -> settlement -> building -> person). A two-step jump is
+  // still valid editing; wide <-> detail is the one cut that loses spatial orientation.
+  return delta >= 3 ? 0.5 : delta === 2 ? 0.9 : 0.75;
 }
 
 function canonicalRoles(anchor: ObservationCandidate): readonly CinematicBeatRole[] {

@@ -8,8 +8,15 @@ import { createSettlementLayoutPlan, type BuildingDistrict } from './SettlementL
 import { FOUNDING_HEARTH_RESERVE_RADIUS, foundingHearthWorldPosition } from './FoundingCampLayout';
 import { PlacementContract } from './placement/PlacementContract';
 
+export interface PlotReservationOptions {
+  /** Shrinks the building relative to the district default while the reserved ground stays proportional to `precinct`. */
+  buildingScale?: number;
+  /** Ground reserved around the building for yards, utilities and loading, in building radii. */
+  precinct?: number;
+}
+
 /** A request reserves land only after passing the same contract used by the renderer. */
-export function reserveStructurePlot(state: SimulationState, settlement: Settlement, district: BuildingDistrict): StructurePlot | undefined {
+export function reserveStructurePlot(state: SimulationState, settlement: Settlement, district: BuildingDistrict, options: PlotReservationOptions = {}): StructurePlot | undefined {
     const plots = settlement.structurePlots ??= [];
     if (plots.length >= 96) return undefined;
     const allPlots = state.settlements.flatMap(entry => entry.structurePlots ?? []);
@@ -21,9 +28,9 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
     const random = new SeededRandom(`${state.seed}:${settlement.id}:structure:${index}`);
     const anchor = layout.anchors[district];
     const major = district === 'civic' || district === 'sacred' || district === 'industrial';
-    const width = random.range(0.7, 1.18) * (major ? 1.55 * 2.6 : district === 'residential' ? 1.9 : 1.6);
+    const width = random.range(0.7, 1.18) * (major ? 1.55 * 2.6 : district === 'residential' ? 1.9 : 1.6) * (options.buildingScale ?? 1);
     const depth = width * 0.82;
-    const radius = width * 0.66;
+    const radius = width * 0.66 * (options.precinct ?? 1);
     for (let attempt = 0; attempt < 128; attempt += 1) {
       const angle = index * 2.399 + attempt * 0.83 + random.range(-0.2, 0.2);
       const dispersal = (settlement.development?.informal.government ?? 0) > (settlement.development?.pressures.government ?? 0) ? 1.3 : 1;

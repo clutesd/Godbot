@@ -1,5 +1,6 @@
 import { balanceFounderTrades, combinedSurvivalHazard, conceptionChance, founderLife, linkFoundingFamilies, migrationHouseholds, syncDemographicHouseholds } from './people/Demography';
 import { advanceEnergy } from './energy/EnergySystem';
+import { ensureProcessingAuthority } from './processing/FacilitySystem';
 import { poweredProductivity } from './energy/types';
 import { tradeOpportunity } from './transport/FreightEconomy';
 import { firstMilestones } from '../historian/Milestones';
@@ -481,6 +482,7 @@ export class Simulation {
     this.tickProfiler.record('survival-planning', phaseStarted);
 
     phaseStarted = this.tickProfiler.start();
+    ensureProcessingAuthority(this.state);
     advanceEnergy(this.state);
     this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
     this.tickProfiler.record('resources', phaseStarted);

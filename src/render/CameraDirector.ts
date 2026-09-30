@@ -17,6 +17,18 @@ import { cellAt } from '../sim/world';
 import { FOUNDING_VESSEL_KEEP_OUT_RADIUS } from '../shared/FoundingCampLayout';
 import { isArrivalFilmPhase, podPosition } from '../sim/founding/FoundingArrival';
 import type { PhysicalActionPresentation } from './people/PhysicalActionPresentation';
+import {
+  CameraFrameWatchdog,
+  assessFrame,
+  chooseExteriorAnchor,
+  combineCameraProbes,
+  detourRouteAroundObstacles,
+  findEscapeWaypoint,
+  flightLineBlocked,
+  type CameraAnchor,
+  type CameraObstacleField,
+  type FrameAssessment,
+} from './CameraObstacleField';
 
 export interface CurrentObservation {
   label: string;
@@ -446,6 +458,14 @@ export function foundingCastShotProfileFor(sceneId: string | undefined): Foundin
 
 export function isFoundingReleaseScene(sceneId: string | undefined): boolean {
   return Boolean(sceneId?.startsWith('founding-release:'));
+}
+
+function documentaryShotScaleForKind(kind: ObservationKind): DocumentaryShotScale {
+  if (kind === 'worker-follow' || kind === 'discovery-scene') return 'detail';
+  if (kind === 'street-observation' || kind === 'traveler-follow') return 'human';
+  if (kind === 'settlement-approach' || kind === 'institution-exterior'
+    || kind === 'infrastructure-scene' || kind === 'atomic-threshold') return 'medium';
+  return 'wide';
 }
 
 function angularDistance(a: number, b: number): number {
@@ -1196,8 +1216,16 @@ interface CameraFlightState {
   readonly approachRadius: number;
   readonly maxSeconds: number;
   readonly maximumCruiseHeight: number;
+  /** Seconds without progress before the route is abandoned; short when no readable endpoint exists. */
+  readonly stallLimit: number;
   readonly routePoints: THREE.Vector3[];
   routeIndex: number;
+  /** Escape waypoints already spliced into this route (bounded, rate-limited). */
+  escapes: number;
+  lastEscapeSeconds: number;
+  /** The straight line to the destination crosses a building; keep following route waypoints. */
+  lineBlocked: boolean;
+  lineCheckSeconds: number;
   phase: 'depart' | 'cruise' | 'approach';
   cruiseHeight: number;
   elapsedSeconds: number;
@@ -1277,15 +1305,43 @@ export class CameraDirector {
   private interruptedFlightResumePending = false;
   private manualHumanReestablishPending = false;
 
+  /** Hard lens collision: renderer probes and the obstacle field combined. */
+  private readonly environmentProbe?: CameraEnvironmentProbe;
+  private readonly frameWatchdog = new CameraFrameWatchdog();
+  private frameAssessSeconds = 0;
+  private frameMoved = 0;
+  private frameCount = 0;
+  private frameCorrectedCount = 0;
+  private frameCorrectedThisFrame = false;
+  private reframeAzimuth = 0;
+  private reframeScale = 1;
+  private reframeLift = 0;
+  private motionGain = 1;
+  private motionGainTarget = 1;
+  private currentAnchor?: CameraAnchor;
+  /** No valid composition was found for the chosen destination; its flight gives up sooner. */
+  private endpointUnreadable = false;
+  private consecutiveAbandons = 0;
+  private readonly recentAngles: Array<{ x: number; z: number; azimuth: number }> = [];
+  private readonly recentAnchorIds: string[] = [];
+  private readonly milestoneRetries = new Set<string>();
+  /** Read-only presentation diagnostics; never fed back into simulation or Historian authority. */
+  readonly frameHealth = { quality: 1, dominance: 0, reframes: 0, retirements: 0, lastReason: '' };
+
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
     private readonly config: GodboxConfig,
     private readonly historian: Historian,
     private readonly subjectPresentation?: CameraSubjectPresentationResolver,
     private readonly humanSubjects?: () => readonly string[],
-    private readonly environmentProbe?: CameraEnvironmentProbe,
+    environmentProbe?: CameraEnvironmentProbe,
     private readonly scenicSubjects?: ScenicCameraSubjectResolver,
+    /** Renderer-owned buildings, overhangs, scaffolds, infrastructure and vessels. */
+    private readonly obstacles?: CameraObstacleField,
+    /** Soft geometry (foliage) that may dominate a frame but is never a hard collision. */
+    private readonly softProbe?: CameraEnvironmentProbe,
   ) {
+    this.environmentProbe = combineCameraProbes(environmentProbe, obstacles?.probe);
     this.camera.position.set(38, 48, 52);
     this.lookTarget.set(0, 0, 0);
     this.camera.lookAt(this.lookTarget);
@@ -1498,9 +1554,12 @@ export class CameraDirector {
       return;
     }
 
+    // Optional camera moves ease out when the composition is already strong, and back in when it is not.
+    this.motionGain += (this.motionGainTarget - this.motionGain) * (1 - Math.exp(-deltaSeconds * 0.6));
     this.animateShot(deltaSeconds, elapsedSeconds, state, elevationAt);
 
     const before = this.camera.position.clone();
+    this.frameCorrectedThisFrame = false;
     const beforeTarget = this.externalPoseRecoveryPending ? this.lookTarget.clone() : undefined;
     if (this.recoveryOffset) this.desiredPosition.copy(this.desiredTarget).add(this.recoveryOffset);
 
@@ -1563,6 +1622,141 @@ export class CameraDirector {
 
     this.enforceVisibility(before, deltaSeconds, state, elevationAt, clearance);
     this.camera.lookAt(this.lookTarget);
+    this.watchFrame(deltaSeconds, before, state, elevationAt);
+  }
+
+  /**
+   * Judges the held composition ~5 times a second. Good frames are left alone; a frame that stays
+   * obstructed, dominated by foreground geometry, or trapped in tiny corrections gets one nearby
+   * reframe and then is retired so the next shot is reached by an ordinary continuous flight.
+   */
+  private watchFrame(
+    deltaSeconds: number, before: THREE.Vector3, state: SimulationState,
+    elevationAt: (x: number, z: number) => number,
+  ): void {
+    const scene = this.currentScene;
+    if (!scene || this.acquiredScene?.id !== scene.id || isFoundingCameraScene(scene.id) || this.shotAge >= this.shotDuration) return;
+    this.frameAssessSeconds += deltaSeconds;
+    this.frameMoved += this.camera.position.distanceTo(before);
+    this.frameCount += 1;
+    if (this.frameCorrectedThisFrame) this.frameCorrectedCount += 1;
+    if (this.frameAssessSeconds < 0.2) return;
+
+    const interval = this.frameAssessSeconds;
+    const speed = this.frameMoved / interval;
+    const corrected = this.frameCorrectedCount / Math.max(1, this.frameCount) >= 0.5;
+    this.frameAssessSeconds = 0;
+    this.frameMoved = 0;
+    this.frameCount = 0;
+    this.frameCorrectedCount = 0;
+
+    const assessment = this.assessCurrentFrame(this.camera.position, this.lookTarget, scene, state, elevationAt);
+    this.frameHealth.quality = assessment.quality;
+    this.frameHealth.dominance = assessment.dominance;
+    const verdict = this.frameWatchdog.update(interval, {
+      quality: assessment.quality, obstructed: assessment.obstructed, dominated: assessment.dominated, speed, corrected,
+    });
+
+    const scale = documentaryShotScaleForKind(scene.kind);
+    const optionalMotion = (this.currentMotion === 'drift' || this.currentMotion === 'truck')
+      && (scale === 'medium' || scale === 'human');
+    this.motionGainTarget = optionalMotion && this.frameWatchdog.goodSeconds >= 1.2 ? 0.3 : 1;
+
+    if (verdict === 'reframe') {
+      if (this.attemptReframe(scene, state, elevationAt)) this.frameHealth.reframes += 1;
+      else this.retireShot(scene, 'no-readable-reframe');
+    } else if (verdict === 'retire') {
+      this.retireShot(scene, assessment.obstructed ? 'obstructed' : assessment.dominated ? 'dominated' : 'micro-corrections');
+    }
+  }
+
+  private assessCurrentFrame(
+    position: THREE.Vector3, target: THREE.Vector3, scene: ObservationCandidate,
+    state: SimulationState, elevationAt: (x: number, z: number) => number,
+    subjectsOverride?: readonly THREE.Vector3[],
+  ): FrameAssessment {
+    const subjects = subjectsOverride ?? this.subjectSightlineTargets(scene, elevationAt);
+    const clearance = cameraClearanceForScene(scene.kind, scene.id);
+    const validity = cameraShotValidity(state, position, target, elevationAt, {
+      lensClearance: clearance.lens, sightlineClearance: clearance.sightline,
+      environmentProbe: this.environmentProbe, subjects,
+    });
+    if (!this.obstacles) {
+      const obstructed = validity.subjectVisibility < 0.34 || validity.lensSafety === 0;
+      return { quality: validity.score, dominance: 1 - validity.subjectVisibility, nearestSurface: Infinity,
+        subjectBlocked: 1 - validity.subjectVisibility, covered: false, obstructed, dominated: false };
+    }
+    const assessed = assessFrame(this.obstacles, position, target, {
+      fovDegrees: this.camera.fov, aspect: this.camera.aspect > 0 ? this.camera.aspect : 16 / 9,
+      subjects: subjects.length ? subjects : [target], softProbe: this.softProbe,
+    });
+    if (validity.subjectVisibility >= 0.34 && validity.lensSafety === 1) return assessed;
+    return { ...assessed, quality: Math.min(assessed.quality, validity.score), obstructed: true };
+  }
+
+  /** One nearby, continuously reachable alternative: orbit, back off, or lift a little. */
+  private attemptReframe(scene: ObservationCandidate, state: SimulationState, elevationAt: (x: number, z: number) => number): boolean {
+    const followsSubject = ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)
+      && Boolean(this.subjectPresentation?.(scene.subjectId));
+    const target = (followsSubject ? this.desiredTarget : this.shotBaseTarget).clone();
+    const base = (followsSubject ? this.camera.position : this.shotBasePosition).clone();
+    const subjects = this.subjectSightlineTargets(scene, elevationAt);
+    const clearance = cameraClearanceForScene(scene.kind, scene.id);
+    const radius0 = Math.max(0.6, Math.hypot(base.x - target.x, base.z - target.z));
+    const angle0 = Math.atan2(base.z - target.z, base.x - target.x);
+
+    let best: { position: THREE.Vector3; offset: number; scale: number; lift: number; score: number } | undefined;
+    for (const scale of [1, 0.85, 1.25]) for (const lift of [0, 0.45, 1]) {
+      for (const offset of [0.45, -0.45, 0.9, -0.9, 1.4, -1.4, Math.PI]) {
+        const x = target.x + Math.cos(angle0 + offset) * radius0 * scale;
+        const z = target.z + Math.sin(angle0 + offset) * radius0 * scale;
+        const position = new THREE.Vector3(x, Math.max(base.y + lift, elevationAt(x, z) + clearance.lens), z);
+        const validity = cameraShotValidity(state, position, target, elevationAt, {
+          lensClearance: clearance.lens, sightlineClearance: clearance.sightline,
+          environmentProbe: this.environmentProbe, subjects,
+        });
+        if (!validity.valid) continue;
+        const assessed = this.assessCurrentFrame(position, target, scene, state, elevationAt, subjects);
+        if (assessed.quality < 0.72 || assessed.dominated || assessed.obstructed) continue;
+        if (!cameraFlightCorridorSafe(state, this.camera.position, position, elevationAt, clearance.lens,
+          this.environmentProbe, { allowUnsafeDeparture: true })) continue;
+        const score = (1 - assessed.quality) * 10 + this.camera.position.distanceTo(position) * 0.12
+          + Math.abs(offset) * 0.35 + lift * 0.4 + Math.abs(scale - 1) * 0.5;
+        if (!best || score < best.score - 1e-9) best = { position, offset, scale, lift, score };
+      }
+    }
+    if (!best) return false;
+
+    if (followsSubject) {
+      this.reframeAzimuth += best.offset;
+      this.reframeScale *= best.scale;
+      this.reframeLift += best.lift;
+    } else {
+      this.shotBasePosition.copy(best.position);
+      this.shotAzimuth = Math.atan2(best.position.z - target.z, best.position.x - target.x);
+    }
+    this.recoveryOffset = undefined;
+    this.visibility.reset();
+    this.routeCheckSeconds = 0;
+    return true;
+  }
+
+  /** Leave a composition that cannot be made readable. The next shot is reached by CameraFlight, never a cut. */
+  private retireShot(scene: ObservationCandidate, reason: string): void {
+    this.frameHealth.retirements += 1;
+    this.frameHealth.lastReason = reason;
+    this.historian.deferSubject(scene.subjectId, 4);
+    if (this.currentAnchor) this.recentAnchorIds.push(this.currentAnchor.boxId);
+    if (scene.event && !this.milestoneRetries.has(scene.event.id)) {
+      // A milestone gets exactly one more attempt (from a different angle) before it is given up.
+      this.milestoneRetries.add(scene.event.id);
+      this.acknowledgedMajorEventIds.delete(scene.event.id);
+    }
+    this.shotAge = this.shotDuration;
+    this.positionVelocity.multiplyScalar(0.6);
+    this.targetVelocity.multiplyScalar(0.8);
+    this.recoveryOffset = undefined;
+    this.frameWatchdog.reset();
   }
 
   private enforceVisibility(
@@ -1579,6 +1773,7 @@ export class CameraDirector {
     if (!corridor && beforeValid) {
       this.camera.position.copy(before);
       this.positionVelocity.multiplyScalar(0.28);
+      this.frameCorrectedThisFrame = true;
     }
     // The actual swept move remains checked every frame. The much longer destination survey
     // needs only four checks a second; repeating it at display frequency multiplies ray work.
@@ -1589,6 +1784,7 @@ export class CameraDirector {
       this.routeCheckSeconds = 0.25;
     }
     if (failed || (!route && beforeValid) || !this.safetyInitialized) {
+      this.frameCorrectedThisFrame = true;
       const safe = resolveCameraSafety(state, this.desiredPosition, this.desiredTarget, elevationAt, options);
       if (safe.valid) {
         if (!this.safetyInitialized) {
@@ -1685,6 +1881,7 @@ export class CameraDirector {
     this.safetyInitialized = true;
     this.visibility.reset();
     this.externalPoseRecoveryPending = true;
+    this.resetFrameWatch();
 
     if (!this.interruptedFlightResumePending) {
       // Ordinary history should not treat the observer's manual pose as a freshly authored shot.
@@ -1766,7 +1963,14 @@ export class CameraDirector {
       this.activeSequence = undefined;
       scene = this.historian.chooseScene(state, focusEventId);
     } else {
-      const planned = this.sequencePlanner.takePlannedShot();
+      let planned = this.sequencePlanner.takePlannedShot();
+      // A subject the camera just retired as unreadable yields to the next beat of the sequence.
+      while (planned && !planned.scene.event && this.historian.isSubjectDeferred(planned.scene.subjectId)
+        && this.sequencePlanner.hasPlannedShot()) planned = this.sequencePlanner.takePlannedShot();
+      if (planned && !planned.scene.event && this.historian.isSubjectDeferred(planned.scene.subjectId)) {
+        this.sequencePlanner.interrupt();
+        planned = undefined;
+      }
       if (planned) {
         scene = planned.scene;
         this.activeSequence = this.sequenceState(planned);
@@ -1821,7 +2025,8 @@ export class CameraDirector {
           const eligibleForSequence = anchor.kind !== 'landscape-pause' && anchor.kind !== 'night-transition' && !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:') && !anchor.id.startsWith('development:');
           if (eligibleForSequence) {
             const candidates = this.historian.candidates(state).filter(candidate =>
-              !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id));
+              !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id)
+              && !this.historian.isSubjectDeferred(candidate.subjectId));
             const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
             scene = first.scene;
             this.activeSequence = this.sequenceState(first);
@@ -1852,11 +2057,48 @@ export class CameraDirector {
 
     // A sparse camp's geometric center may be an empty pod footprint. Frame an actual
     // resident for context while retaining the Historian's camp subject and statement.
+    let residentFramed = false;
     if (isEarlyDocumentary(state) && scene.kind === 'settlement-approach') {
       const resident = state.people.find(person => person.alive && person.homeId === scene.subjectId);
       if (resident) {
         const visible = this.subjectPresentation?.(resident.id);
         scene = { ...scene, position: { x: visible?.x ?? resident.position.x, z: visible?.z ?? resident.position.z } };
+        residentFramed = true;
+      }
+    }
+
+    // Structures are photographed from a readable exterior anchor (entrance, facade, work yard,
+    // machinery, roofline) that faces the approaching lens, never blindly at a plot centre.
+    this.currentAnchor = undefined;
+    if (this.obstacles && !residentFramed && !isFoundingCameraScene(scene.id) && !isScenicFlightScene(scene.id)
+      && (scene.kind === 'settlement-approach' || scene.kind === 'institution-exterior' || scene.kind === 'infrastructure-scene')) {
+      this.currentAnchor = chooseExteriorAnchor(this.obstacles, {
+        focusX: scene.position.x, focusZ: scene.position.z,
+        viewerX: this.camera.position.x, viewerZ: this.camera.position.z,
+        searchRadius: scene.kind === 'infrastructure-scene' ? 9 : 10,
+        seed: scene.id, kind: scene.kind, avoid: new Set(this.recentAnchorIds),
+      });
+      if (this.currentAnchor) {
+        this.recentAnchorIds.push(this.currentAnchor.boxId);
+        if (this.recentAnchorIds.length > 6) this.recentAnchorIds.shift();
+      }
+    }
+    const anchor = this.currentAnchor;
+    let focusX = anchor?.x ?? scene.position.x;
+    let focusZ = anchor?.z ?? scene.position.z;
+    // A work yard is about the people working it: lean the frame toward the nearest builder.
+    if (anchor?.feature === 'work-yard') {
+      let nearest: { x: number; z: number; distance: number } | undefined;
+      for (const person of state.people) {
+        if (!person.alive || person.activity !== 'construct') continue;
+        const visible = this.subjectPresentation?.(person.id);
+        const x = visible?.x ?? person.position.x, z = visible?.z ?? person.position.z;
+        const distance = Math.hypot(x - anchor.x, z - anchor.z);
+        if (distance <= 6 && (!nearest || distance < nearest.distance - 1e-9)) nearest = { x, z, distance };
+      }
+      if (nearest) {
+        focusX = THREE.MathUtils.lerp(anchor.x, nearest.x, 0.6);
+        focusZ = THREE.MathUtils.lerp(anchor.z, nearest.z, 0.6);
       }
     }
     this.lastHumanShot = scene.id.startsWith('human:');
@@ -1868,6 +2110,10 @@ export class CameraDirector {
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
     this.visibility.reset();
+    this.reframeAzimuth = 0;
+    this.reframeScale = 1;
+    this.reframeLift = 0;
+    this.resetFrameWatch();
 
     const framing = FRAMING[scene.kind];
     const scenicProfile = scenicFlightProfileFor(scene.id);
@@ -1908,33 +2154,50 @@ export class CameraDirector {
       if (scene.id.startsWith('human:')) this.shotDuration = Math.max(this.shotDuration, 22);
     }
 
-    const ground = elevationAt(scene.position.x, scene.position.z);
-    this.shotBaseTarget.set(scene.position.x, ground + (scenicProfile?.targetHeight
-      ?? foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight)), scene.position.z);
+    const ground = elevationAt(focusX, focusZ);
+    this.shotBaseTarget.set(focusX, ground + (scenicProfile?.targetHeight
+      ?? foundingProfile?.targetHeight ?? castProfile?.targetHeight ?? (releaseScene ? 0.32 : framing.targetHeight)), focusZ);
+    if (anchor) this.shotBaseTarget.y = Math.max(anchor.y, ground + 0.4);
 
     // Preserve the physical side of the world the camera is already occupying. A tiny stable
     // variation avoids mechanical repetition without hashing each scene onto an unrelated compass
     // direction. Arrival's first Historian overview deliberately keeps the prologue master axis.
-    const radialX = this.camera.position.x - scene.position.x;
-    const radialZ = this.camera.position.z - scene.position.z;
+    const radialX = this.camera.position.x - focusX;
+    const radialZ = this.camera.position.z - focusZ;
     const inheritedAzimuth = this.externalPoseRecoveryPending ? this.stableAzimuth(scene.id)
       : Math.hypot(radialX, radialZ) > 0.75
       ? Math.atan2(radialZ, radialX)
       : this.acquiredScene ? this.shotAzimuth : this.stableAzimuth(scene.id);
     const continuityVariation = (this.stableUnit(`${scene.id}:continuity-angle`) - 0.5) * 0.22;
-    const baseAzimuth = (openingOverview
+    let baseAzimuth = (openingOverview
       ? this.stableAzimuth('arrival:master') + 0.02
-      : inheritedAzimuth + continuityVariation)
+      : anchor ? anchor.azimuth + continuityVariation * 0.5 : inheritedAzimuth + continuityVariation)
       + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
 
+    // Do not photograph the same place from the same side twice in a row.
+    const diversify = !anchor && !isFoundingCameraScene(scene.id) && !scenicProfile
+      && scene.kind !== 'regional-travel' && scene.kind !== 'battle-overview' && scene.kind !== 'aftermath-pullback';
+    if (diversify && this.recentAngles.some(entry => Math.hypot(entry.x - focusX, entry.z - focusZ) < 7
+      && angularDistance(entry.azimuth, baseAzimuth) < 0.55)) {
+      baseAzimuth += (this.stableUnit(`${scene.id}:angle-sign`) < 0.5 ? -1 : 1)
+        * (0.95 + 0.4 * this.stableUnit(`${scene.id}:angle-amount`));
+    }
+
     const earlyCamp = isEarlyDocumentary(state) && scene.kind === 'settlement-approach';
-    const radius = scenicProfile ? scenicProfile.routeLength * 0.5
+    const authoredRadius = scenicProfile ? scenicProfile.routeLength * 0.5
       : foundingProfile?.radius ?? castProfile?.radius
         ?? (releaseScene || openingOverview ? 2.55 : earlyCamp ? 4.2 : this.interpolate(framing.radius, 0.36 + scene.score * 0.4));
+    let radius = anchor ? Math.max(authoredRadius, anchor.minStandoff) : authoredRadius;
     const height = scenicProfile?.height ?? foundingProfile?.height ?? castProfile?.height
       ?? (releaseScene || openingOverview ? 0.92 : earlyCamp ? 1.5 : this.interpolate(framing.height, 0.42 + scene.interest * 0.32));
 
-    this.shotAzimuth = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
+    const clear = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
+    this.shotAzimuth = clear.azimuth;
+    radius *= clear.scale;
+    if (!isFoundingCameraScene(scene.id) && !scenicProfile) {
+      this.recentAngles.push({ x: focusX, z: focusZ, azimuth: this.shotAzimuth });
+      if (this.recentAngles.length > 10) this.recentAngles.shift();
+    }
     if (scenicProfile) {
       const radialX = Math.cos(this.shotAzimuth);
       const radialZ = Math.sin(this.shotAzimuth);
@@ -1955,9 +2218,9 @@ export class CameraDirector {
       }
     } else {
       this.shotBasePosition.set(
-        scene.position.x + Math.cos(this.shotAzimuth) * radius,
+        focusX + Math.cos(this.shotAzimuth) * radius,
         ground + height,
-        scene.position.z + Math.sin(this.shotAzimuth) * radius,
+        focusZ + Math.sin(this.shotAzimuth) * radius,
       );
     }
     this.desiredTarget.copy(this.shotBaseTarget);
@@ -1982,6 +2245,7 @@ export class CameraDirector {
       subjects: this.subjectSightlineTargets(scene, elevationAt),
     });
     if (endpoint.valid) this.desiredPosition.copy(endpoint.position);
+    this.endpointUnreadable = !endpoint.valid && !isFoundingCameraScene(scene.id) && !scenicProfile;
     this.shotBasePosition.copy(this.desiredPosition);
 
     this.transitionScene(scene.id, 'traveling');
@@ -2053,6 +2317,14 @@ export class CameraDirector {
       elevationAt,
       terrainPlan.clearance,
     );
+    // Terrain routing is blind to buildings; bend the route around real footprints and roof overhangs.
+    const routePoints = this.obstacles
+      ? detourRouteAroundObstacles(this.obstacles, terrainRoute, elevationAt, {
+        clearance: Math.max(0.6, Math.min(1.2, cameraClearanceForScene(this.currentScene?.kind, this.currentScene?.id).lens)),
+      })
+      : terrainRoute;
+    const lineBlocked = Boolean(this.obstacles
+      && flightLineBlocked(this.obstacles, this.camera.position, destinationPosition, 0.6));
     this.flight = {
       originPosition: this.camera.position.clone(),
       destinationPosition: destinationPosition.clone(),
@@ -2067,9 +2339,14 @@ export class CameraDirector {
       ),
       maxSeconds,
       maximumCruiseHeight: cruiseHeight + 8,
-      routePoints: terrainRoute,
-      routeIndex: Math.min(1, Math.max(0, terrainRoute.length - 1)),
-      phase: horizontalDistance > profile.minApproachRadius ? 'cruise' : 'approach',
+      stallLimit: this.endpointUnreadable ? 2.5 : 6,
+      routePoints,
+      routeIndex: Math.min(1, Math.max(0, routePoints.length - 1)),
+      escapes: 0,
+      lastEscapeSeconds: -Infinity,
+      lineBlocked,
+      lineCheckSeconds: 0.3,
+      phase: horizontalDistance > profile.minApproachRadius || (lineBlocked && routePoints.length > 2) ? 'cruise' : 'approach',
       cruiseHeight,
       elapsedSeconds: 0,
       bestDistance: Math.max(0.001, distance),
@@ -2126,7 +2403,18 @@ export class CameraDirector {
 
     const routePoint = flight.routePoints[Math.min(flight.routeIndex, finalRouteIndex)] ?? flight.destinationPosition;
     const remainingRoutePoints = finalRouteIndex - flight.routeIndex;
-    if (flight.phase !== 'approach' && (remainingRoutePoints <= 1 || horizontalDistance <= flight.approachRadius)) {
+    // Approach aims straight at the destination. Never allow that through a building: while the line
+    // is blocked, keep following the detoured route.
+    if (this.obstacles) {
+      flight.lineCheckSeconds -= deltaSeconds;
+      if (flight.lineCheckSeconds <= 0) {
+        flight.lineCheckSeconds = 0.3;
+        flight.lineBlocked = flightLineBlocked(this.obstacles, this.camera.position, flight.destinationPosition, 0.6);
+      }
+    }
+    if (flight.lineBlocked && remainingRoutePoints > 1) {
+      flight.phase = 'cruise';
+    } else if (flight.phase !== 'approach' && (remainingRoutePoints <= 1 || horizontalDistance <= flight.approachRadius)) {
       flight.phase = 'approach';
     }
 
@@ -2204,6 +2492,21 @@ export class CameraDirector {
           currentRoute.y = Math.max(currentRoute.y, elevationAt(currentRoute.x, currentRoute.z) + flightClearance + 0.35);
         }
       }
+      // Alternating lateral nudges on one waypoint cancel out, which leaves a lens rocking against a
+      // corner. After repeated blocks, hop to a clear, uncovered spot and route on from there.
+      if (flight.obstructionRetries >= 2 && flight.escapes < 3 && flight.elapsedSeconds - flight.lastEscapeSeconds > 1.5) {
+        const escape = findEscapeWaypoint(
+          this.obstacles, this.camera.position, flight.destinationPosition, elevationAt,
+          candidate => cameraFlightCorridorSafe(state, this.camera.position, candidate, elevationAt, flightClearance,
+            this.environmentProbe, { allowUnsafeDeparture: flight.allowUnsafeDeparture }),
+          flightClearance,
+        );
+        if (escape) {
+          flight.routePoints.splice(Math.min(flight.routeIndex, flight.routePoints.length), 0, escape);
+          flight.escapes += 1;
+          flight.lastEscapeSeconds = flight.elapsedSeconds;
+        }
+      }
       if (flight.obstructionRetries % 3 === 0) {
         flight.cruiseHeight = Math.min(flight.maximumCruiseHeight, flight.cruiseHeight + 0.9);
       }
@@ -2219,7 +2522,7 @@ export class CameraDirector {
     }
 
     const routeExhausted = flight.elapsedSeconds >= flight.maxSeconds
-      || flight.stalledSeconds >= 6
+      || flight.stalledSeconds >= flight.stallLimit
       || (flight.obstructionRetries >= 6 && flight.cruiseHeight >= flight.maximumCruiseHeight - 0.01);
     if (routeExhausted) {
       this.abandonCurrentFlight();
@@ -2290,7 +2593,15 @@ export class CameraDirector {
     // If the unreachable destination was the final release shot, the opening must still terminate.
     // Commit the semantic handoff immediately as well; otherwise the last internal "Arrival Day"
     // transit label can survive beneath a clock that has already started moving.
-    if (this.currentScene) this.transitionScene(this.currentScene.id, 'released');
+    if (this.currentScene) {
+      this.transitionScene(this.currentScene.id, 'released');
+      // An unreachable destination yields to other subjects instead of being re-proposed at once.
+      this.consecutiveAbandons += 1;
+      if (!isFoundingCameraScene(this.currentScene.id)
+        && (this.currentScene !== this.acquiredScene || this.consecutiveAbandons >= 2)) {
+        this.historian.deferSubject(this.currentScene.subjectId, 3);
+      }
+    }
     this.flight = undefined;
     this.flightAcceleration.set(0, 0, 0);
     this.gazeFlightAcceleration.set(0, 0, 0);
@@ -2307,12 +2618,14 @@ export class CameraDirector {
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
     this.visibility.reset();
+    this.resetFrameWatch();
   }
 
   private acquireCurrentScene(): void {
     if (!this.currentScene) return;
     this.externalPoseRecoveryPending = false;
     this.interruptedFlightResumePending = false;
+    this.consecutiveAbandons = 0;
     this.acquiredScene = this.currentScene;
     this.transitionScene(this.currentScene.id, 'acquired');
     if (this.currentScene.event) this.acknowledgedMajorEventIds.add(this.currentScene.event.id);
@@ -2325,7 +2638,17 @@ export class CameraDirector {
     this.recoveryBridgeSeconds = 0;
     this.recoveryBridgeFov = undefined;
     this.visibility.reset();
+    this.resetFrameWatch();
     this.safetyInitialized = true;
+  }
+
+  private resetFrameWatch(): void {
+    this.frameWatchdog.reset();
+    this.frameAssessSeconds = 0;
+    this.frameMoved = 0;
+    this.frameCount = 0;
+    this.frameCorrectedCount = 0;
+    this.motionGainTarget = 1;
   }
 
   private commitObservation(scene: ObservationCandidate): void {
@@ -2437,15 +2760,20 @@ export class CameraDirector {
     height: number,
     ground: number,
     elevationAt: (x: number, z: number) => number,
-  ): number {
-    if (!FOREST_AWARE_KINDS.has(kind)) return baseAzimuth;
+  ): { azimuth: number; scale: number } {
+    if (!FOREST_AWARE_KINDS.has(kind)) return { azimuth: baseAzimuth, scale: 1 };
 
     let bestAzimuth = baseAzimuth;
+    let bestScale = 1;
     let bestScore = Number.POSITIVE_INFINITY;
-    for (const offset of FOREST_AZIMUTH_OFFSETS) {
+    // Nearby angles first; if every angle at the authored distance is blocked (a lens pinned beside a
+    // wall), also try backing off or closing in before accepting a bad frame.
+    const searches = [1, 1.3, 0.8].flatMap(scale => FOREST_AZIMUTH_OFFSETS.map(offset => ({ offset, scale })));
+    for (const { offset, scale } of searches) {
+      if (scale !== 1 && bestScore < 12) break;
       const azimuth = baseAzimuth + offset;
-      const x = this.shotBaseTarget.x + Math.cos(azimuth) * radius;
-      const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius;
+      const x = this.shotBaseTarget.x + Math.cos(azimuth) * radius * scale;
+      const z = this.shotBaseTarget.z + Math.sin(azimuth) * radius * scale;
       const clearance = cameraClearanceFor(kind);
       this.forestCandidatePosition.set(x, Math.max(ground + height, elevationAt(x, z) + clearance.lens), z);
 
@@ -2463,14 +2791,21 @@ export class CameraDirector {
       const structureObstruction = structureSightlineObstruction(state, this.forestCandidatePosition, this.shotBaseTarget, elevationAt);
       const hardPenalty = validity.valid ? 0 : 12;
       const visibilityPenalty = (1 - validity.subjectVisibility) * 3.4;
-      const compositionPenalty = Math.abs(offset) * 0.035;
-      const score = hardPenalty + visibilityPenalty + fallbackForest * 2 + structureObstruction * 4 + compositionPenalty;
+      const compositionPenalty = Math.abs(offset) * 0.035 + Math.abs(scale - 1) * 0.4;
+      const frame = this.obstacles
+        ? assessFrame(this.obstacles, this.forestCandidatePosition, this.shotBaseTarget, {
+          fovDegrees: this.camera.fov, aspect: this.camera.aspect > 0 ? this.camera.aspect : 16 / 9, softProbe: this.softProbe,
+        })
+        : undefined;
+      const framePenalty = frame ? (1 - frame.quality) * 4 + (frame.dominated ? 6 : 0) : 0;
+      const score = hardPenalty + visibilityPenalty + fallbackForest * 2 + structureObstruction * 4 + compositionPenalty + framePenalty;
       if (score < bestScore) {
         bestScore = score;
         bestAzimuth = azimuth;
+        bestScale = scale;
       }
     }
-    return bestAzimuth;
+    return { azimuth: bestAzimuth, scale: bestScale };
   }
 
   private animateShot(deltaSeconds: number, elapsedSeconds: number, state: SimulationState, elevationAt: (x: number, z: number) => number): void {
@@ -2574,8 +2909,8 @@ export class CameraDirector {
         // actor + work object as one composition. Otherwise it remains a close person-follow shot.
         const framingVariation = 0.34 + this.stableUnit(`${scene.id}:follow-framing`) * 0.36;
         const castDistance = castProfile ? castProfile.radius + castProfile.distanceDelta * eased : undefined;
-        const followingDistance = (castDistance ?? (isFoundingReleaseScene(scene.id) ? 2.55 : this.interpolate(framing.radius, framingVariation))) + (composition?.distanceBoost ?? 0);
-        const cameraHeight = castProfile?.height ?? (isFoundingReleaseScene(scene.id) ? 0.92 : this.interpolate(framing.height, framingVariation));
+        const followingDistance = ((castDistance ?? (isFoundingReleaseScene(scene.id) ? 2.55 : this.interpolate(framing.radius, framingVariation))) + (composition?.distanceBoost ?? 0)) * this.reframeScale;
+        const cameraHeight = (castProfile?.height ?? (isFoundingReleaseScene(scene.id) ? 0.92 : this.interpolate(framing.height, framingVariation))) + this.reframeLift;
         const contactLock = composition?.contactLock ?? 0;
         const baseAngle = composition?.azimuth ?? this.shotAzimuth;
         const authoredOrbit = castProfile ? (eased - 0.5) * castProfile.orbitSpan : 0;
@@ -2600,7 +2935,7 @@ export class CameraDirector {
         const microOrbit = Math.sin(elapsedSeconds * 0.075 + this.shotAzimuth)
           * 0.012 * moveEnvelope * (1 - contactLock * 0.94);
         const authoredScale = motivatedMove ? 0.7 : 0;
-        const angle = baseAngle + authoredOrbit * authoredScale + microOrbit;
+        const angle = baseAngle + authoredOrbit * authoredScale + microOrbit + this.reframeAzimuth;
         const x = this.trackedFocus.x + Math.cos(angle) * followingDistance;
         const z = this.trackedFocus.z + Math.sin(angle) * followingDistance;
         const clearance = cameraClearanceForScene(scene.kind, scene.id);
@@ -2700,14 +3035,14 @@ export class CameraDirector {
         break;
       }
       case 'drift': {
-        const offset = (progress - 0.5) * 2.6;
+        const offset = (progress - 0.5) * 2.6 * this.motionGain;
         this.desiredPosition.addScaledVector(this.workingTangent, offset);
         this.desiredTarget.addScaledVector(this.workingTangent, offset * 0.18);
         break;
       }
       case 'truck': {
         const maximumOffset = Math.min(2.6, radius * 0.22);
-        const offset = (progress - 0.5) * 2 * maximumOffset;
+        const offset = (progress - 0.5) * 2 * maximumOffset * this.motionGain;
         this.desiredPosition.addScaledVector(this.workingTangent, offset);
         this.desiredTarget.addScaledVector(this.workingTangent, offset * 0.28);
         break;

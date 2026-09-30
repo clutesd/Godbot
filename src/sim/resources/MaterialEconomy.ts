@@ -3,7 +3,9 @@ import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
 import type { Person, Settlement, SimulationState } from '../types';
-import { addMaterial, publishBulkStocks, reconcileBulkStocks, takeMaterial } from './Inventory';
+import { addMaterial, publishBulkStocks, reconcileBulkStocks } from './Inventory';
+import { settlementLedger, type MaterialLedger } from './MaterialLedger';
+import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
 
 export const RAW_MATERIAL_KINDS = [
   'timber',
@@ -223,7 +225,7 @@ export function recordMaterialExtraction(
   return accepted;
 }
 
-function recipeEnabled(settlement: Settlement, recipeDefinition: MaterialRecipe): boolean {
+export function recipeEnabled(settlement: Settlement, recipeDefinition: MaterialRecipe): boolean {
   return recipeDefinition.knowledge.every((requirement) =>
     capabilityPractice(settlement, requirement.id, requirement.stage) >= requirement.minPractice);
 }
@@ -243,26 +245,31 @@ function maxBatchesFromInputs(settlement: Settlement, recipeDefinition: Material
   return Math.max(0, Math.min(possible, shareLimit));
 }
 
-function applyRecipe(
+/**
+ * Applies `batches` of a typed recipe to any ledger. Settlement telemetry (lifetime and monthly
+ * flow) records what the executor actually moved, wherever the material was sitting.
+ */
+export function applyRecipe(
   settlement: Settlement,
   inventory: MaterialInventoryState,
   recipeDefinition: MaterialRecipe,
   batches: number,
   month: number,
+  ledger: MaterialLedger = settlementLedger(settlement),
 ): void {
   if (batches <= EPSILON) return;
   const flow = flowForMonth(inventory, month);
   for (const [kind, perBatch] of Object.entries(recipeDefinition.inputs) as Array<[MaterialKind, number | undefined]>) {
     if (!perBatch || perBatch <= 0) continue;
     const requested = round(perBatch * batches);
-    const consumed = round(takeMaterial(settlement, kind, requested));
+    const consumed = round(ledger.take(kind, requested));
     if (consumed + 1e-6 < requested) throw new Error(`material processing conservation violation: ${recipeDefinition.id}:${kind}`);
     inventory.lifetimeConsumed[kind] = round((inventory.lifetimeConsumed[kind] ?? 0) + consumed);
     flow.consumed[kind] = round((flow.consumed[kind] ?? 0) + consumed);
   }
   for (const [kind, perBatch] of Object.entries(recipeDefinition.outputs) as Array<[ProcessedMaterialKind, number | undefined]>) {
     if (!perBatch || perBatch <= 0) continue;
-    const produced = round(addMaterial(settlement, kind, round(perBatch * batches)));
+    const produced = round(ledger.add(kind, round(perBatch * batches)));
     inventory.lifetimeProduced[kind] = round((inventory.lifetimeProduced[kind] ?? 0) + produced);
     flow.produced[kind] = round((flow.produced[kind] ?? 0) + produced);
   }
@@ -301,7 +308,10 @@ export function advanceMaterialProcessing(
   let remainingCapacity = capacity;
   const ran: Partial<Record<string, number>> = {};
 
+  // Facility-governed settlements transform these recipes only inside a physical processing facility.
+  const facilityOwned = facilityOwnedRecipeSet(state, settlement, 'material');
   for (const recipeDefinition of MATERIAL_RECIPES) {
+    if (facilityOwned?.has(recipeDefinition.id)) continue;
     if (remainingCapacity <= EPSILON || !recipeEnabled(settlement, recipeDefinition)) continue;
     const protectedLimit = Math.min(...Object.entries(recipeDefinition.inputs).map(([id, amount]) => Math.max(0,
       (settlement.localMaterials[id] ?? 0) - (settlement.survival?.establishment?.materialDemand[id] ?? 0)) / amount!));

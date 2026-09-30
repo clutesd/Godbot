@@ -7,6 +7,8 @@ import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
 import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom, takeMaterial } from './Inventory';
 import { processRecipes, useLabour, useLabourDetailed, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
+import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
+import { advanceProcessingFacilities } from '../processing/FacilitySystem';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
 import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
@@ -69,7 +71,8 @@ export class ResourceSystem {
       const fiberTime = useLabourDetailed(budget, ['farmer', 'keeper', 'carrier', 'artisan', 'builder', 'forager'], Math.min(0.5, fiberNeed / 0.7));
       const establishing = (s.survival?.establishment?.strength ?? 0) > 0.12;
       if (establishing) this.gather(state, s, nearby, budget, events);
-      events.push(...processRecipes(state, s, budget, this.random));
+      events.push(...processRecipes(state, s, budget, this.random, { skip: facilityOwnedRecipeSet(state, s, 'catalog') }));
+      events.push(...advanceProcessingFacilities(state, s, budget, this.random, this.access));
       if (!establishing) this.gather(state, s, nearby, budget, events);
       consumeMaterials(state, s, people, budget, events);
       for (const [occupation, time] of Object.entries(fiberTime.byOccupation) as Array<[keyof LabourBudget, number]>) budget[occupation] = (budget[occupation] ?? 0) + time;

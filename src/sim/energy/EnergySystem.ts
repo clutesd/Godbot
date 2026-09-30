@@ -23,6 +23,7 @@ import { GENERATORS, eligibleGenerator, environmentFactor, generatorDefinition }
 import { storageNodeId } from './GridTopology';
 import { buildWork, constructGrid, deliver, dispatchInputCapacity, powerPath } from './Transmission';
 import { prepareElectricDemand, type ElectricConsumer } from './Demand';
+import { applyMechanicalCoverage, facilityMechanicalDemand } from '../processing/FacilityPower';
 import { POWER_PRIORITIES, energyAt, energyWorld, ledger, powerServiceCoverage, type EnergyPlant, type GeneratorKind } from './types';
 
 function milestone(state: SimulationState, s: Settlement, key: string, description: string, plant?: EnergyPlant): void {
@@ -145,7 +146,8 @@ export function advanceEnergy(state: SimulationState): void {
     const thermal = e.ledgers.thermal;
     thermal.demand = s.survival?.cold.fuelNeed ?? 0;
     thermal.generated = thermal.supplied = s.survival?.cold.fuelUsed ?? 0;
-    e.ledgers.mechanical.demand = knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 : 0;
+    // Aggregate workshop demand plus the shaft load of every mechanically driven processing facility.
+    e.ledgers.mechanical.demand = (knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 : 0) + facilityMechanicalDemand(s);
     consumers.set(s.id, knows(s, 'electrical-generation') ? prepareElectricDemand(s, population) : prepareElectricDemand(s, 0));
     if (!knows(s, 'electrical-generation')) {
       const service = e.service;
@@ -177,6 +179,7 @@ export function advanceEnergy(state: SimulationState): void {
       l.generated += output;
       l.supplied += output;
     }
+    applyMechanicalCoverage(s, e.ledgers.mechanical.supplied, e.ledgers.mechanical.demand);
   }
 
   const dispatched = new Set<string>();
@@ -265,6 +268,14 @@ export function advanceEnergy(state: SimulationState): void {
       .sort((a, b) => a.settlement.id.localeCompare(b.settlement.id) || a.id.localeCompare(b.id));
     for (const consumer of priorityConsumers) serve(consumer, true);
     for (const consumer of priorityConsumers) serve(consumer, false);
+  }
+  // Delivered electricity is reported back to the processing facilities that drew it.
+  for (const consumer of allConsumers) {
+    if (!consumer.facilityId) continue;
+    const facility = consumer.settlement.processing?.facilities.find(f => f.id === consumer.facilityId);
+    if (!facility) continue;
+    facility.power.supplied = consumer.supplied;
+    facility.power.coverage = consumer.demand > 0 ? Math.min(1, consumer.supplied / consumer.demand) : 1;
   }
   // Surplus generation can charge any battery on the commissioned regional island; local storage
   // is preferred to avoid unnecessary line losses.

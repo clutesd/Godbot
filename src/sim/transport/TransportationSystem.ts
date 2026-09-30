@@ -117,7 +117,7 @@ export class TransportationSystem {
   advanceMonth(): void {
     const { state } = this;
     if (state.month % 12 === 0) {
-      for (const settlement of state.settlements.filter(s => s.alive)) this.planLocalAccess(settlement);
+      for (const settlement of state.settlements.filter(s => s.alive)) { this.planLocalAccess(settlement); this.planFacilityAccess(settlement); }
       for (const route of state.tradeRoutes.filter(r => r.active && r.transport)) {
         const a = state.settlements.find(s => s.id === route.a);
         const b = state.settlements.find(s => s.id === route.b);
@@ -493,6 +493,24 @@ export class TransportationSystem {
       const end = { x: settlement.position.x + anchor.localX, z: settlement.position.z + anchor.localZ };
       const edges = this.planner.plan(settlement.position, end, 'road', this.state.transportation);
       if (edges.length) this.register(`${settlement.id}:${district}:access`, settlement.id, settlement.id, 'road', edges, [], 'district-access');
+    }
+  }
+
+  /**
+   * A powered works moves tonnes, not baskets. Once a facility reaches tier two it gets a surveyed
+   * service road to the settlement centre, built by the ordinary transport construction (paid in
+   * worker-months and materials); its haul cost falls only when that road is actually complete.
+   */
+  private planFacilityAccess(settlement: Settlement): void {
+    for (const facility of [...(settlement.processing?.facilities ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (facility.tier < 2 || facility.progress < 1 || facility.roadProjectId) continue;
+      const plot = settlement.structurePlots?.find(p => p.id === facility.plotId);
+      if (!plot) continue;
+      const id = `${settlement.id}:industrial:${facility.id}:access`;
+      if (this.state.transportation.projects[id]) { facility.roadProjectId = id; continue; }
+      const edges = this.planner.plan(settlement.position, { x: plot.worldX, z: plot.worldZ }, 'road', this.state.transportation);
+      if (!edges.length) continue;
+      facility.roadProjectId = this.register(id, settlement.id, settlement.id, 'road', edges, [], 'district-access').id;
     }
   }
 

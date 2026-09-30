@@ -3,6 +3,7 @@ import { MATERIAL_RECIPES } from '../../sim/resources/MaterialEconomy';
 import { RECIPE_CATALOG } from '../../sim/resources/catalog';
 import { resourceProcessingForWorld } from '../../sim/resources/ResourceWorkAssignments';
 import { isMinedMaterial, mineralVisualProfile } from './MineralPresentation';
+import { facilityOwnedRecipes } from '../../sim/processing/FacilityCatalog';
 
 export const MAX_STORED_MATERIALS = 8;
 export const MAX_PROCESSING_STATIONS = 3;
@@ -23,6 +24,9 @@ export function resourceProcessingPresentation(world: WorldState, settlement: Se
   const active = new Set([...recorded.keys(), ...Object.entries(flow?.month === month ? flow.recipes : {})
     .filter(([, count]) => (count ?? 0) > 0).map(([id]) => id)]);
   const known = new Set([...settlement.knownRecipes, ...active]);
+  // A facility-governed settlement draws its wood and metal work at the facility itself, from the
+  // facility's own state; workshop stations here would be decoration unconnected to any works.
+  const owned = settlement.processing?.governed ? facilityOwnedRecipes() : undefined;
   for (const recipe of MATERIAL_RECIPES) {
     if (Object.keys(recipe.outputs).some(id => (settlement.materials?.lifetimeProduced[id as keyof NonNullable<Settlement['materials']>['lifetimeProduced']] ?? 0) > 0)) known.add(recipe.id);
   }
@@ -31,6 +35,7 @@ export function resourceProcessingPresentation(world: WorldState, settlement: Se
       const modern = RECIPE_CATALOG.find(r => r.id === id);
       const typed = MATERIAL_RECIPES.find(r => r.id === id);
       if (!modern && !typed) return [];
+      if (modern && owned?.catalog.has(id) || typed && owned?.material.has(id)) return [];
       const inputs = modern?.inputs ?? typed!.inputs;
       const hot = Boolean(modern?.energy) || /smelt|steel|fire|charcoal|bronze/.test(id);
       return [{ id, active: active.has(id), hot, inputs: Object.keys(inputs), textile: /textile/.test(id) }];

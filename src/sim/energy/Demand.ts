@@ -1,6 +1,7 @@
 import type { Settlement, StructurePlot } from '../types';
 import type { SettlementNeed } from '../development/types';
 import { energyAt, powerService, type PowerPriority } from './types';
+import '../processing/types';
 
 export interface ElectricConsumer {
   id: string;
@@ -9,6 +10,8 @@ export interface ElectricConsumer {
   priority: PowerPriority;
   demand: number;
   supplied: number;
+  /** Set when the load is a processing facility; dispatch reports delivered power back to it. */
+  facilityId?: string;
 }
 
 const NEED_PRIORITY: Record<SettlementNeed, PowerPriority> = {
@@ -60,6 +63,8 @@ function plotLoad(plot: StructurePlot): { priority: PowerPriority; demand: numbe
 export function electricConsumers(settlement: Settlement, population: number): ElectricConsumer[] {
   const consumers: ElectricConsumer[] = [];
   for (const plot of settlement.structurePlots ?? []) {
+    // A facility's structure draws exactly what its machinery draws, below; never a generic workshop load as well.
+    if (plot.development?.facilityId) continue;
     const load = plotLoad(plot);
     if (!load) continue;
     consumers.push({
@@ -69,6 +74,21 @@ export function electricConsumers(settlement: Settlement, population: number): E
       priority: load.priority,
       demand: load.demand,
       supplied: 0,
+    });
+  }
+
+  for (const facility of settlement.processing?.facilities ?? []) {
+    if (facility.progress < 1 || facility.power.carrier !== 'electric' || facility.power.demand <= 0) continue;
+    const plot = settlement.structurePlots?.find(p => p.id === facility.plotId);
+    if (!plot || plot.development?.status !== 'active' || plot.accessRestricted) continue;
+    consumers.push({
+      id: `${settlement.id}:facility:${facility.id}`,
+      settlement,
+      node: plot.id,
+      priority: 'productive',
+      demand: facility.power.demand,
+      supplied: 0,
+      facilityId: facility.id,
     });
   }
 

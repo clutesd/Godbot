@@ -49,13 +49,16 @@ export class ExtractionAccessibility {
     return end && Math.hypot(end.x - b.x, end.z - b.z) < 0.1 ? [{ ...a }, ...path] : [];
   }
   resolve(s: Settlement, d: ResourceDeposit): ExtractionAccess | undefined {
+    return this.resolveSite(s, d.id, { x: d.worldX, z: d.worldZ });
+  }
+  /** Any surveyed site (a deposit, a processing facility) reached from a settlement over the same real network. */
+  resolveSite(s: Settlement, siteId: string, target: Vec2): ExtractionAccess | undefined {
     const { world, transportation, month } = this.state;
     const revision = `${world.environmentRevision ?? 0}:${transportation.revision}:${Math.floor(month / 3)}`;
     if (revision !== this.revision) { this.cache.clear(); this.revision = revision; }
-    const key = `${s.id}:${s.position.x}:${s.position.z}:${d.id}:${d.worldX}:${d.worldZ}:${s.infrastructure.ports > 0.12}:${mastery(s, 'buoyancy-currents').practice > 0.25}`;
+    const key = `${s.id}:${s.position.x}:${s.position.z}:${siteId}:${target.x}:${target.z}:${s.infrastructure.ports > 0.12}:${mastery(s, 'buoyancy-currents').practice > 0.25}`;
     const cached = this.cache.get(key);
     if (cached !== undefined && (!cached || this.valid(cached))) return cached ?? undefined;
-    const target = { x: d.worldX, z: d.worldZ };
     const direct = this.walk(s.position, target);
     let best: ExtractionAccess | undefined = direct.length ? { path: direct, accessPaths: [direct], cost: transportFriction(world, direct),
       months: Math.max(1, Math.ceil((transportFriction(world, direct) - 1) * 1.5)) } : undefined;

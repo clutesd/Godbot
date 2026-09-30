@@ -1,5 +1,6 @@
 import type { FreightTrip } from '../sim/transport/types';
 import { EnergyRenderer } from './energy/EnergyRenderer';
+import { IndustryRenderer } from './industry/IndustryRenderer';
 import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
 import { socialGestureFrame } from './people/SocialGesturePresentation';
 import { HumanJointRig } from './people/HumanJointRig';
@@ -16,6 +17,7 @@ import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
 import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2 } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
+import { CameraObstacleField, type CameraObstacleBox } from './CameraObstacleField';
 import { setAutonomousCameraMode } from './CameraControlMode';
 import { ManualCameraController } from './ManualCameraController';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
@@ -230,9 +232,13 @@ export class GodboxRenderer {
   readonly observation: CurrentObservation;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly energyRenderer = new EnergyRenderer();
+  /** Read-only view of processing facilities: yards, machinery, smoke and lamps all come from facility state. */
+  private readonly industryRenderer = new IndustryRenderer();
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 900);
   private readonly cameraDirector: CameraDirector;
+  /** Read-only description of what is actually drawn that the documentary lens must respect. */
+  private readonly cameraObstacles = new CameraObstacleField();
   private readonly manualCamera: ManualCameraController;
   private readonly random: SeededRandom;
   private readonly sun = new THREE.DirectionalLight('#ffe2b5', 3.4);
@@ -449,9 +455,12 @@ export class GodboxRenderer {
       () => [...this.localPeers.keys()],
       undefined,
       (elapsedSeconds) => this.vegetation.wildlifeCameraSubjects(elapsedSeconds),
+      this.cameraObstacles,
+      // Foliage may dominate a frame but is never a hard collision (trees are presentation-soft).
+      (position, padding) => this.vegetation.cameraLensObstruction(position, padding),
     );
     this.foundingPods = new FoundingPodRenderer(state);
-    this.scene.add(this.foundingPods.root, this.energyRenderer.group);
+    this.scene.add(this.foundingPods.root, this.energyRenderer.group, this.industryRenderer.group);
     this.observation = this.cameraDirector.observation;
     this.manualCamera = new ManualCameraController(this.camera, this.renderer.domElement);
 
@@ -698,6 +707,7 @@ export class GodboxRenderer {
     // Water, sky and lightweight vegetation motion remain live throughout the prologue. These are
     // visible atmospheric cues, unlike settlement/human bookkeeping that cannot change yet.
     this.energyRenderer.update(this.state, elapsedSeconds, (x, z) => this.elevationAt(x, z));
+    this.industryRenderer.update(this.state, elapsedSeconds, (x, z) => this.elevationAt(x, z));
     this.waterSystem.update(elapsedSeconds);
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
     this.vegetation.updateLeaves(elapsedSeconds);
@@ -906,6 +916,99 @@ export class GodboxRenderer {
     this.humanNavigation.set(obstacles);
     this.warRenderer.setStructures(obstacles);
     this.humanObjectSignature = objectSignature;
+    this.rebuildCameraObstacles();
+  }
+
+  /**
+   * Presentation-only obstacle description for CameraDirector: real rendered building bodies with
+   * their roof overhangs, active scaffolds, landmarks, advanced infrastructure, landed vessels and
+   * work props. Rebuilt only when those visuals change; never read by simulation.
+   */
+  private rebuildCameraObstacles(): void {
+    const boxes: CameraObstacleBox[] = [];
+    for (const [settlementId, visual] of this.settlementVisuals) {
+      if (!visual.group.visible) continue;
+      const placements = new Map((this.settlementBuildingPlacements.get(settlementId) ?? []).map(placement => [placement.key, placement]));
+      visual.group.updateMatrixWorld(true);
+      for (const child of visual.group.children) {
+        const key = child.userData['placementKey'] as string | undefined;
+        const placement = key ? placements.get(key) : undefined;
+        if (!key || !placement) continue;
+        const bounds = new THREE.Box3().setFromObject(child);
+        if (bounds.isEmpty()) continue;
+        const construction = Boolean(child.userData['constructionSite']);
+        const scaleXZ = Math.abs(child.scale.x) || 1;
+        const bodyWidth = construction
+          ? Number(child.userData['constructionFootprintWidth'] ?? 0)
+          : Number(child.userData['bodyWidth'] ?? 0) * scaleXZ;
+        const bodyDepth = construction
+          ? Number(child.userData['constructionFootprintDepth'] ?? 0)
+          : Number(child.userData['bodyDepth'] ?? 0) * scaleXZ;
+        const halfWidth = (bodyWidth > 0.05 ? bodyWidth : placement.width * 0.8) / 2;
+        const halfDepth = (bodyDepth > 0.05 ? bodyDepth : placement.depth * 0.8) / 2;
+        const grammarWidth = Number(child.userData['footprintWidth'] ?? 0) * scaleXZ;
+        const grammarDepth = Number(child.userData['footprintDepth'] ?? 0) * scaleXZ;
+        const overhang = construction ? 0.1 : THREE.MathUtils.clamp(
+          Math.max((grammarWidth - halfWidth * 2) / 2, (grammarDepth - halfDepth * 2) / 2), 0.08, 0.6);
+        const height = Math.max(0.4, bounds.max.y - bounds.min.y);
+        const wallTop = Number(child.userData['wallTop'] ?? 0) * Math.abs(child.scale.y || 1);
+        boxes.push({
+          id: `${settlementId}:${key}`,
+          kind: construction ? 'scaffold' : 'building',
+          worldX: placement.worldX, worldZ: placement.worldZ,
+          halfWidth, halfDepth, rotationY: placement.rotationY,
+          baseY: bounds.min.y,
+          eaveY: bounds.min.y + THREE.MathUtils.clamp(wallTop > 0.2 ? wallTop : height * 0.7, 0.35, height),
+          topY: bounds.max.y,
+          overhang,
+          activity: construction ? 1 : undefined,
+          major: placement.major,
+          stack: placement.role === 'workshop' || placement.role === 'factory' || placement.role === 'foundry' || placement.role === 'energy',
+        });
+      }
+    }
+
+    for (const [settlementId, placement] of this.landmarkPlacements) {
+      const width = placement.width ?? 1.6, depth = placement.depth ?? 1.6;
+      const ground = this.elevationAt(placement.worldX, placement.worldZ);
+      boxes.push({
+        id: `${settlementId}:landmark`, kind: 'landmark',
+        worldX: placement.worldX, worldZ: placement.worldZ,
+        halfWidth: width / 2, halfDepth: depth / 2, rotationY: placement.rotationY,
+        baseY: ground, eaveY: ground + 1.8, topY: ground + 2.6, overhang: 0.12, major: true,
+      });
+    }
+    for (const [id, placement] of this.infrastructurePlacements) {
+      const ground = this.elevationAt(placement.worldX, placement.worldZ);
+      boxes.push({
+        id: `infrastructure:${id}`, kind: 'infrastructure',
+        worldX: placement.worldX, worldZ: placement.worldZ,
+        halfWidth: placement.radius, halfDepth: placement.radius, rotationY: 0,
+        baseY: ground, eaveY: ground + 3, topY: ground + 3.4, overhang: 0, activity: 0.5,
+      });
+    }
+    for (const [settlementId, footprints] of this.settlementSolidObstacles) {
+      footprints.forEach((footprint, index) => {
+        const ground = this.elevationAt(footprint.worldX, footprint.worldZ);
+        boxes.push({
+          id: `${settlementId}:prop:${index}`, kind: 'prop',
+          worldX: footprint.worldX, worldZ: footprint.worldZ,
+          halfWidth: footprint.width / 2, halfDepth: footprint.depth / 2, rotationY: footprint.rotationY ?? 0,
+          baseY: ground, eaveY: ground + 1.1, topY: ground + 1.2, overhang: 0,
+        });
+      });
+    }
+    for (const pod of this.state.arrival?.pods ?? []) {
+      if (!pod.landed) continue;
+      const ground = this.elevationAt(pod.position.x, pod.position.z);
+      boxes.push({
+        id: `vessel:${pod.id}`, kind: 'vessel',
+        worldX: pod.position.x, worldZ: pod.position.z,
+        halfWidth: FOUNDING_VESSEL_KEEP_OUT_RADIUS, halfDepth: FOUNDING_VESSEL_KEEP_OUT_RADIUS, rotationY: 0,
+        baseY: ground, eaveY: ground + 2.8, topY: ground + 3, overhang: 0,
+      });
+    }
+    this.cameraObstacles.set(boxes);
   }
 
   private registerSettlementObstacle(
@@ -1656,6 +1759,7 @@ export class GodboxRenderer {
       this.scene.add(visual.group);
     }
     this.refreshSmokeSources();
+    this.rebuildCameraObstacles();
     this.weatherRenderer.bindScene(this.scene);
   }
 
@@ -4525,6 +4629,7 @@ export class GodboxRenderer {
 
   dispose(): void {
     this.energyRenderer.dispose();
+    this.industryRenderer.dispose();
     this.manualCamera.dispose();
     this.foundingPods.dispose();
     this.postProcessing.dispose();

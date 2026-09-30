@@ -2,7 +2,7 @@ import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { materialEconomy } from '../resources/Inventory';
 import { chooseMaterialShipment } from '../resources/MaterialLogistics';
 import type { Settlement, TradeRoute } from '../types';
-import type { FreightVehicle, TraversalPath } from './types';
+import type { FreightVehicle, TransportMode, TraversalPath } from './types';
 
 /** Shared by contact decisions and dispatch. Geography-driven production supplies the surplus. */
 export function tradeOpportunity(a: Settlement, b: Settlement): number {
@@ -51,4 +51,26 @@ export function freightVehicle(source: Settlement, target: Settlement, route: Tr
   }
   if (demand > 1.2 && capabilityPractice(source, 'animal-husbandry', 'adopted') > 0.25 && source.foodSecurity > 0.9) return 'pack-animal';
   return (trade?.deliveries ?? 0) >= 2 ? 'merchant' : 'basket';
+}
+
+/**
+ * Vehicle a settlement really has for hauling between its store and a works it built, over the
+ * surveyed access it resolved (path, road, rail or barge). Same technology gates as trade freight.
+ */
+export function haulVehicle(s: Settlement, mode: TransportMode): FreightVehicle {
+  if (mode === 'rail') return 'train';
+  if (mode === 'water') return 'barge';
+  if (mode === 'road') {
+    if (capabilityPractice(s, 'internal-combustion', 'adopted') > 0.4 && capabilityPractice(s, 'precision-manufacturing', 'adopted') > 0.4
+      && (s.localMaterials.charcoal ?? 0) + (s.localMaterials.coal ?? 0) >= 0.1) return 'truck';
+    if (capabilityPractice(s, 'wheel-axle', 'adopted') > 0.22) return 'cart';
+  }
+  if (capabilityPractice(s, 'animal-husbandry', 'adopted') > 0.25 && s.foodSecurity > 0.9) return 'pack-animal';
+  return 'basket';
+}
+
+/** Loads one worker moves per month over a route: vehicle payload x trips, divided by route friction. */
+export const HAUL_TRIPS_PER_MONTH = 12;
+export function haulUnitsPerWorkerMonth(vehicle: FreightVehicle, routeCost: number): number {
+  return FREIGHT_CAPACITY[vehicle] * HAUL_TRIPS_PER_MONTH / Math.max(1, routeCost);
 }
