@@ -637,6 +637,31 @@ function waterKindAt(world: WorldState, index: number): number {
   return WATER_FLOOD;
 }
 
+/**
+ * A mapped waterfall is the only place where neighbouring river samples are allowed to become
+ * separate water surfaces. Ordinary downhill channel samples must stay connected; treating a
+ * steep but continuous reach as a discontinuity creates floating shelves from low camera angles.
+ */
+function touchesMappedWaterfall(world: WorldState, index: number): boolean {
+  const { terrain } = world;
+  if (index < 0 || index >= terrain.river.length || !terrain.river[index]) return false;
+  if ((terrain.fall[index] ?? 0) >= 0.22) return true;
+  const downstream = terrain.drainage?.downstream;
+  if (!downstream) return false;
+  const x = index % terrain.resolution;
+  const z = Math.floor(index / terrain.resolution);
+  for (let dz = -1; dz <= 1; dz += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = x + dx, nz = z + dz;
+      if (nx < 0 || nz < 0 || nx >= terrain.resolution || nz >= terrain.resolution) continue;
+      const neighbour = nz * terrain.resolution + nx;
+      if ((terrain.fall[neighbour] ?? 0) >= 0.22 && downstream[neighbour] === index) return true;
+    }
+  }
+  return false;
+}
+
 /** A fine sample is inland-wet only when the canonical hydrology owns water there. */
 function inlandWetSample(world: WorldState, index: number): boolean {
   return index >= 0
@@ -691,8 +716,8 @@ function dominantWetSampleAt(world: WorldState, worldX: number, worldZ: number):
 
 /**
  * One canonical water height for a world position. Every triangle that touches the same position
- * receives the same Y, which closes cracks. Real falls remain separate surfaces: samples more than
- * WATER_DISCONTINUITY_Y apart are never blended into a diagonal crystalline ramp.
+ * receives the same Y, which closes cracks. Large height differences are separated only when they
+ * touch an explicit mapped waterfall; ordinary descending reaches remain one connected surface.
  */
 function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, preferredIndex?: number): number {
   const { terrain, seaLevel } = world;
@@ -724,7 +749,9 @@ function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, pref
   let weighted = 0, weight = 0;
   for (const [index, influence] of weightedSamples) {
     const level = terrain.waterLevel[index]!;
-    if (Math.abs(elevationToY(level, seaLevel) - referenceY) > WATER_DISCONTINUITY_Y) continue;
+    const separatedByMappedFall = Math.abs(elevationToY(level, seaLevel) - referenceY) > WATER_DISCONTINUITY_Y
+      && (touchesMappedWaterfall(world, reference) || touchesMappedWaterfall(world, index));
+    if (separatedByMappedFall) continue;
     weighted += level * influence;
     weight += influence;
   }
