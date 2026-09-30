@@ -365,22 +365,27 @@ export class Historian {
       const statement = this.statement({
         month: state.month,
         text: state.month - settlement.foundedMonth >= this.config.historicalPace.generationYears * 24
-          ? `${settlement.name} has endured for ${this.durationPhrase(state.month - settlement.foundedMonth)} and currently represents ${localPopulation.toLocaleString()} people; its strongest production is ${settlement.specialization}.`
-          : `${settlement.name} currently represents ${localPopulation.toLocaleString()} people; its strongest production is ${settlement.specialization}.`,
+          ? `${settlement.name} has endured for ${this.durationPhrase(state.month - settlement.foundedMonth)}; ${localPopulation.toLocaleString()} people live here.`
+          : `${settlement.name} is home to ${localPopulation.toLocaleString()} people, specializing in ${settlement.specialization}.`,
         epistemicStatus: 'derived-statistic',
         sourceEntityIds: [settlement.id],
         claims: { population: { month: state.month, value: localPopulation, scopeEntityId: settlement.id }, entityIds: [settlement.id] },
       });
-      statement.text += ` Food security is ${Math.round(settlement.foodSecurity * 100)}%; ${settlement.buildings} buildings are recorded here.`;
+      const inventory = ` Food security is ${Math.round(settlement.foodSecurity * 100)}%; ${settlement.buildings} buildings are recorded here.`;
       const previous = this.settlementReadouts.get(settlement.id);
       if (previous && state.month > previous.month) {
         const populationChange = localPopulation - previous.population;
         const foodChange = Math.round(settlement.foodSecurity * 100) - previous.food;
         const buildingChange = settlement.buildings - previous.buildings;
-        const deltas = [populationChange ? `population ${populationChange > 0 ? 'grew' : 'fell'} by ${Math.abs(populationChange).toLocaleString()}` : 'population is unchanged',
-          foodChange ? `food security ${foodChange > 0 ? 'rose' : 'fell'} by ${Math.abs(foodChange)} percentage points` : 'food security is unchanged',
-          buildingChange ? `the recorded building count ${buildingChange > 0 ? 'rose' : 'fell'} by ${Math.abs(buildingChange)}` : 'the recorded building count is unchanged'];
-        statement.text += ` Since the last narrated view in month ${previous.month}, ${deltas.join('; ')}.`;
+        const deltas = [populationChange ? `population ${populationChange > 0 ? 'grew' : 'fell'} by ${Math.abs(populationChange).toLocaleString()}` : '',
+          foodChange ? `food security ${foodChange > 0 ? 'rose' : 'fell'} by ${Math.abs(foodChange)} percentage points` : '',
+          buildingChange ? `the recorded building count ${buildingChange > 0 ? 'rose' : 'fell'} by ${Math.abs(buildingChange)}` : ''].filter(Boolean);
+
+        statement.text += deltas.length
+          ? ` Since the last narrated view in month ${previous.month}, ${deltas.join('; ')}.`
+          : ' Population, food security and buildings are unchanged since our last narrated view.';
+      } else {
+        statement.text += inventory;
       }
       result.push(this.candidate(`settlement:${settlement.id}`, settlement.id, kind, settlement.position, settlement.name, statement, base, settlement.industry.active ? 0.7 : 0.35, settlement.industry.active ? 'industry' : 'settlement'));
       for (const institution of state.institutions.filter((candidate) => candidate.settlementId === settlement.id).sort((a, b) => b.prestige - a.prestige).slice(0, 1)) {

@@ -83,3 +83,10 @@ maximum and month-change timing in milliseconds. This isolates camera/Historian 
 sampling and frozen people; it does not measure simulation ticks, rendered obstacles, WebGL, GPU
 cost or frame time on a user's device. Timing is diagnostic, while traversal bounds and movement
 continuity are enforced by regression tests.
+
+
+### Watcher caption delivery and voice
+
+At physical camera arrival, the watcher composes its final caption from the refreshed statement, including scenes chosen directly by the sequence planner. Composition restores the statement's factual base first, so revisiting or refreshing it cannot duplicate commentary. A resolved prediction is marked as remarked only when its caption is actually narrated.
+
+Lead with the observed event or current subject. Add at most one historical connection: prefer a recorded cause, distinguish shared-place or shared-actor context from causation, and describe first occurrences as the earliest *surviving record*. Do not infer generations of technology, destruction, or continuity from an event type alone. Settlement follow-ups compare with the last narrated view and report changed measures; a quiet view states stability once rather than repeating three unchanged statistics. These changes run at scene selection and arrival, not on held camera frames.
