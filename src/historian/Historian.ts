@@ -1,4 +1,4 @@
-import { firstMilestones } from './Milestones';
+import { MilestoneIndex } from './Milestones';
 import { earlyDocumentaryBias, isEarlyDocumentary } from './EarlyDocumentary';
 import { DocumentaryMemory } from './DocumentaryMemory';
 import type { GodboxConfig } from '../config';
@@ -58,6 +58,7 @@ export class Historian {
   whenAcquired(sceneId: string, callback: () => void): void { this.acquisitionCallbacks.set(sceneId, callback); }
 
   private readonly documentaryMemory = new DocumentaryMemory();
+  private readonly milestoneIndex = new MilestoneIndex();
   readonly statements: HistorianStatement[] = [];
   readonly predictions: HistorianPrediction[] = [];
   readonly representativePersonIds = new Set<string>();
@@ -141,10 +142,19 @@ export class Historian {
         && scene.statement.sourceEntityIds.every(id => state.people.find(p => p.id === id)?.alive !== false)
         ? { ...scene, statement: { ...scene.statement, month: state.month } } : undefined;
     }
-    const fresh = this.candidates(state).find(candidate => candidate.id === scene.id
+    this.documentaryMemory.observe(state);
+    // Acquisition needs the chosen subject's current facts, not another complete editorial pass
+    // over archived events, campaigns, predictions and landscape candidates.
+    const direct = scene.id.startsWith('person:') ? this.personCandidates(state)
+      : /^(settlement|institution):/.test(scene.id) ? this.settlementCandidates(state)
+        : scene.id.startsWith('route:') ? this.routeCandidates(state) : undefined;
+    const fresh = (direct ?? this.candidates(state)).find(candidate => candidate.id === scene.id
       || scene.id.startsWith('development:') && candidate.id.startsWith('development:')
         && candidate.editorial?.subjectId === scene.editorial?.subjectId && candidate.subjectId === scene.subjectId);
-    if (fresh) return fresh;
+    if (fresh) return direct
+      ? this.validateStatement(fresh.statement, state)
+        ? this.documentaryMemory.decorate(this.ensureEditorial(state, fresh), state) : undefined
+      : fresh;
     // Renderer-owned/custom candidates can have their own provenance; vanished simulation subjects cannot.
     if (/^(person|settlement|institution|route|polity|development):/.test(scene.id)) return undefined;
     return this.validateStatement(scene.statement, state) ? scene : undefined;
@@ -201,7 +211,7 @@ export class Historian {
     const candidates: ObservationCandidate[] = [];
     // Arrival Day is owned by the authored founding chapter. Once normal history is running,
     // it must not re-enter the generic 24-month event window and compete with what is happening now.
-    const milestones = new Set(firstMilestones(state.history).map(event => event.id));
+    const milestones = new Set(this.milestoneIndex.read(state.history).map(event => event.id));
     const recentEvents = state.history.filter((event) => event.type !== 'ARRIVAL_DAY'
       && (milestones.has(event.id) || SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65)
       && event.month <= state.month && (milestones.has(event.id) || state.month - event.month <= 24));

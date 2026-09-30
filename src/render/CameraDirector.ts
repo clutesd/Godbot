@@ -1,5 +1,5 @@
 import { FIRST_FIRE_DURATION_SECONDS } from './founding/FoundingFirstFirePresentation';
-import { firstMilestones } from '../historian/Milestones';
+import { MilestoneIndex } from '../historian/Milestones';
 import { isEarlyDocumentary } from '../historian/EarlyDocumentary';
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
@@ -1247,18 +1247,9 @@ export class CameraDirector {
   private flight?: CameraFlightState;
   private acquiredScene?: ObservationCandidate;
   private observationState?: SimulationState;
-  private milestoneHistory?: SimulationState['history'];
-  private milestoneHistoryLength = -1;
-  private milestoneMonth = -1;
-  private milestoneEvents: SimulationState['history'] = [];
+  private readonly milestoneIndex = new MilestoneIndex();
   private mustWitnessEvents(state: SimulationState): SimulationState['history'] {
-    if (this.milestoneHistory !== state.history || this.milestoneHistoryLength !== state.history.length || this.milestoneMonth !== state.month) {
-      this.milestoneEvents = firstMilestones(state.history);
-      this.milestoneHistory = state.history;
-      this.milestoneHistoryLength = state.history.length;
-      this.milestoneMonth = state.month;
-    }
-    return this.milestoneEvents;
+    return this.milestoneIndex.read(state.history);
   }
   readonly sceneLifecycle = new Map<string, 'proposed' | 'reserved' | 'traveling' | 'acquired' | 'performed' | 'released'>();
   readonly sceneTransitions: Array<{ sceneId: string; phase: 'proposed' | 'reserved' | 'traveling' | 'acquired' | 'performed' | 'released' }> = [];

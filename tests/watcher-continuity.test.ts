@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { Historian } from '../src/historian/Historian';
@@ -84,6 +84,7 @@ describe('ongoing documentary observation', () => {
     const person = candidates.find(c => c.id.startsWith('person:'))!;
     const settlement = candidates.find(c => c.id.startsWith('settlement:'))!;
     const actor = sim.state.people.find(p => p.id === person.subjectId)!;
+    const fullEditorialPass = vi.spyOn(historian, 'candidates');
     sim.state.month++;
     actor.activity = 'rest';
     actor.ageMonths += 12;
@@ -93,5 +94,6 @@ describe('ongoing documentary observation', () => {
     expect(historian.validateStatement(historian.refreshScene(settlement, sim.state)!.statement, sim.state)).toBe(true);
     actor.alive = false;
     expect(historian.refreshScene(person, sim.state)).toBeUndefined();
+    expect(fullEditorialPass).not.toHaveBeenCalled();
   });
 });
