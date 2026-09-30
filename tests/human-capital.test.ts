@@ -1,3 +1,5 @@
+import { developmentContext, responseForNeed } from '../src/sim/development/SettlementDevelopmentSystem';
+import { createField } from '../src/sim/agriculture/AgricultureSystem';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import { AdvancedCivilizationSystem } from '../src/sim/advanced/AdvancedCivilizationSystem';
@@ -116,6 +118,21 @@ describe('acquired human capability', () => {
     const run = (skill: number) => {
       const sim = new Simulation({ seed: 'matched-production', startingPopulation: 80, settlementCount: [2, 2], world: { size: 24 } });
       for (const p of sim.state.people) { p.occupation = 'farmer'; p.health = 1; p.expertise = [{ domain: 'agriculture', competence: skill, lastPractisedMonth: 0 }]; }
+      // Agriculture now pays out only a real harvest: compare equally mature physical fields.
+      for (const settlement of sim.state.settlements) {
+        const cell = sim.state.world.cells[settlement.cellIndex]!;
+        const id = `${settlement.id}:skill-field`;
+        const response = responseForNeed(developmentContext(sim.state, settlement), 'food')!;
+        settlement.structurePlots = [{ id, worldX: settlement.position.x, worldZ: settlement.position.z,
+          width: 3, depth: 2, radius: 2, height: 0.1, condition: 1, foundedMonth: 0,
+          development: { ...response, form: 'field', status: 'active',
+            origin: { ...response, form: 'field', month: sim.state.month, action: 'founded' },
+            history: [], transitionCount: 0, lastUsedMonth: sim.state.month } }];
+        const field = createField(id, cell, settlement.cellIndex, sim.state.month);
+        field.stage = 'mature'; field.harvestRemaining = 10000; field.plantedMonth = sim.state.month;
+        settlement.fields = [field];
+        Object.assign(sim.state.weather.cells[settlement.cellIndex]!, { temperature: 0.6, snowpack: 0, floodDepth: 0, wind: 0, blizzard: 0 });
+      }
       (sim as unknown as { runEconomy(): void }).runEconomy();
       return sim.state.settlements.reduce((n, settlement) => n + settlement.monthlyBalance.food, 0);
     };

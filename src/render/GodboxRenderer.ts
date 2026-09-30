@@ -1086,7 +1086,8 @@ export class GodboxRenderer {
       let worker = binding && !interruption && resourceWorkerCanPresent(person, binding.site.assignment) ? binding : undefined;
       const project = settlement?.development?.project;
       const site = project ? this.settlementBuildingPlacements.get(person.homeId)?.find(p => p.key === project.plotId) : undefined;
-      let physical = this.physicalWork.plan(person, settlement, site, this.farmFields.fields.get(person.homeId), weather,
+      let physical = this.physicalWork.plan(person, settlement, site, (person.navigation?.destinationId ? this.farmFields.renderedFields.get(person.navigation.destinationId) : undefined)
+          ?? this.farmFields.fields.get(person.homeId), weather,
         (a, b) => this.resourceWork.safeSegment(a, b));
       const base = this.personDisplayTarget(person, group);
       const currentPresentation = this.peopleVisuals.get(person.id);

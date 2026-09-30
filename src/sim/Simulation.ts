@@ -1,3 +1,5 @@
+import { advanceAgriculture, ensureFields } from './agriculture/AgricultureSystem';
+import { advanceSettlementWater } from './development/WaterCivilization';
 import { balanceFounderTrades, combinedSurvivalHazard, conceptionChance, founderLife, linkFoundingFamilies, migrationHouseholds, syncDemographicHouseholds } from './people/Demography';
 import { advanceEnergy } from './energy/EnergySystem';
 import { ensureProcessingAuthority } from './processing/FacilitySystem';
@@ -25,7 +27,7 @@ import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
 import { ResourceSystem, createMaterialState, type ResourceEventDraft } from './resources/ResourceSystem';
 import { discoverProvince } from './resources/ResourceDiscoverySystem';
-import { environmentalSuitability, knownResourceAttraction, waterEconomy } from './resources/SettlementEnvironment';
+import { environmentalSuitability, knownResourceAttraction } from './resources/SettlementEnvironment';
 import { addMaterial, materialEconomy, reconcileBulkStocks, takeMaterial } from './resources/Inventory';
 import { campaignFront, campaignFocus, campaignSupply, createCampaign, TRUCE_MONTHS } from './war/Campaign';
 import type {
@@ -897,7 +899,6 @@ export class Simulation {
   }
 
   private runEconomy(): void {
-    const season = [0.7, 0.76, 0.86, 1, 1.16, 1.28, 1.22, 1.08, 0.98, 0.88, 0.76, 0.68][this.state.month % 12] ?? 1;
     for (const settlement of this.livingSettlements()) {
       const people = this.peopleAt(settlement.id);
       const cell = this.state.world.cells[settlement.cellIndex];
@@ -946,16 +947,20 @@ export class Simulation {
           clamp(((plot.floodDepth ?? 0) - 0.06) / 0.5)), 0) / Math.max(1, settlement.buildings);
       const exposedWork = (1 - (weather?.blizzard ?? 0) * 0.25) * (1 - floodedWorkLoss * 0.5)
         * (1 - (settlement.survival?.cold.exposure ?? 0) * 0.15);
-      const irrigation = 1 + waterEconomy(cell, settlement).irrigation * 0.12;
-      const farmYield = (0.86 + cell.fertility * 1.12) * season * climatePulse * irrigation * (1 - (weather?.cropDamage ?? 0));
-      const forageYield = (0.29 + cell.fertility * 0.4);
+      ensureFields(this.state, settlement);
+      this.applyKnowledgeEvents(advanceSettlementWater(this.state, settlement, people));
+      const cultivationHelpers = settlement.survival?.response?.kind === 'cultivate' ? settlement.survival.reassignedLabour : 0;
+      const fieldPreparation = settlement.development?.project?.response.form === 'field'
+        ? Math.min(farmers, settlement.development.project.response.labor) : 0;
+      const idleFarmLabour = advanceAgriculture(this.state, settlement,
+        Math.max(0, farmers + (cultivationHelpers ?? 0) - fieldPreparation) * safetyFactor * exposedWork);
+      // Gathering must support small pre-field communities and the seasonal gap between
+      // real harvests. The old rate relied on fictitious monthly farm output for subsistence.
+      const forageYield = 0.52 + cell.fertility * 0.7;
       const foodFactor = safetyFactor * productivity.food * exposedWork;
-      settlement.agriculture = { month: this.state.month, labour: farmers,
-        yieldPerWorker: farmYield * foodFactor, production: farmers * farmYield * foodFactor,
-        irrigation: waterEconomy(cell, settlement).irrigation };
-      const production = (farmers * farmYield + foragers * forageYield) * foodFactor;
-      const extraProduction = (settlement.survival?.reassignedLabour ?? 0) * 0.7
-        * (settlement.survival?.response?.kind === 'cultivate' ? farmYield : forageYield) * foodFactor;
+      const production = (settlement.agriculture?.production ?? 0) + (foragers * foodFactor + idleFarmLabour) * forageYield;
+      const extraProduction = settlement.survival?.response?.kind === 'cultivate' ? 0
+        : (settlement.survival?.reassignedLabour ?? 0) * 0.7 * forageYield * foodFactor;
       // The settlement must request actual raw-material extraction before it can consume finished stocks.
       // Legacy `resources.wood/minerals` still model broad stockpiles; the positive monthlyBalance values
       // are the physical-demand signal that activates world-resource extraction and typed material accounting.

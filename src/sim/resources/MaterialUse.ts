@@ -100,6 +100,7 @@ function formScale(response: DevelopmentResponse): number {
  * compatibility costs; this bill is the authoritative physical fabric of the structure.
  */
 export function structureMaterialRequirements(response: DevelopmentResponse): FlexibleMaterialRequirement[] {
+  if (response.form === 'field' && response.level === 1 && response.material === 'earth') return [];
   const scale = formScale(response);
   switch (response.material) {
     case 'earth':

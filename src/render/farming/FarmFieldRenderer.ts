@@ -68,7 +68,7 @@ const STEM_OFFSETS = [
 
 /**
  * Presentation-only agricultural surface. Every detail derives from the existing field geometry,
- * seasonal presentation state and authoritative agriculture output. Nothing here owns crop stock,
+ * persistent field state and authoritative agriculture output. Nothing here owns crop stock,
  * yield, labour, irrigation or progression.
  */
 export class FarmFieldRenderer {
@@ -133,7 +133,9 @@ export class FarmFieldRenderer {
         const sharedVisual = field.workable && field.source === 'plot' && productiveFieldCount > 1
           ? { ...baseVisual, output: baseVisual.output / productiveFieldCount }
           : baseVisual;
-        const visual = presentationForField(sharedVisual, field);
+        const cellIndex = settlement.fields?.find(f => f.id === field.id)?.cellIndex ?? settlement.cellIndex;
+        const visual = presentationForField(settlement.fields !== undefined
+          ? farmPresentationState(settlement, state.month, state.weather.cells[cellIndex], field.id) : sharedVisual, field);
         // Physical field plots persist even when damaged or temporarily unsafe. Only the synthetic
         // fallback bed is rejected when the selected ground is not currently standable.
         if (field.source === 'fallback' && !standable(field.center.x, field.center.z)
@@ -205,9 +207,10 @@ export class FarmFieldRenderer {
 
       if (visual.height > 0 && visual.density > 0) {
         const plantCount = Math.max(1, Math.min(PLANTS_PER_CLUMP, 1 + Math.floor(visual.density * PLANTS_PER_CLUMP)));
-        const headStage = visual.stage === 'mature' || visual.stage === 'harvest';
+        const headStage = (visual.stage === 'mature' || visual.stage === 'harvest') && visual.crop !== 'root' && visual.crop !== 'legume';
         const stubble = visual.stage === 'stubble';
         for (let row = 0; row < ROWS; row++) for (let column = 0; column < COLUMNS; column++) {
+          if (resourceVisualUnit(`${field.id}:${row}:${column}:emergence`) > visual.density && visual.stage !== 'stubble') continue;
           const base = farmPoint(field, (column / (COLUMNS - 1) - 0.5) * field.width * 0.8, (row - 1.5) * rowSpacing);
           const baseX = base.x;
           const baseZ = base.z;
@@ -219,16 +222,16 @@ export class FarmFieldRenderer {
             const z = baseZ + (localOffset.z - field.center.z);
             const stalkHeight = stubble ? Math.max(0.012, h) : h * (0.9 + plant * 0.05);
             const radius = 0.006 + visual.density * 0.004;
-            const lean = (resourceVisualUnit(`${field.id}:${row}:${column}:${plant}:lean`) - 0.5) * 0.2;
+            const lean = (resourceVisualUnit(`${field.id}:${row}:${column}:${plant}:lean`) - 0.5) * 0.2 + (visual.stormDamage ?? 0) * 0.9;
             const turn = resourceVisualUnit(`${field.id}:${row}:${column}:${plant}:turn`) * Math.PI;
-            this.emit(this.stems, counts.stems++, x, heightAt(x, z) + stalkHeight * 0.5 + 0.016, z,
+            this.emit(this.stems, counts.stems++, x, heightAt(x, z) + stalkHeight * Math.cos(lean) * 0.5 + 0.016, z,
               radius, stalkHeight, radius, palette.crop, lean, turn);
             if (!stubble && stalkHeight > 0.03) {
               const leafY = heightAt(x, z) + stalkHeight * 0.55 + 0.014;
               this.emit(this.leaves, counts.leaves++, x, leafY, z,
-                0.014, stalkHeight * 0.52, 1, palette.leaf, 0.72 + lean, turn + 0.7);
+                visual.crop === 'root' || visual.crop === 'legume' ? 0.028 : 0.014, stalkHeight * 0.52, 1, palette.leaf, 0.72 + lean, turn + 0.7);
               this.emit(this.leaves, counts.leaves++, x, leafY + stalkHeight * 0.08, z,
-                0.014, stalkHeight * 0.44, 1, palette.leaf, -0.7 + lean, turn - 0.7);
+                visual.crop === 'root' || visual.crop === 'legume' ? 0.028 : 0.014, stalkHeight * 0.44, 1, palette.leaf, -0.7 + lean, turn - 0.7);
             }
             if (headStage && stalkHeight > 0.055) {
               const headScale = 0.012 + visual.density * 0.008;

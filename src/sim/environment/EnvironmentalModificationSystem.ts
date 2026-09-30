@@ -85,7 +85,7 @@ export function advanceEnvironment(state: SimulationState): void {
     if (!home || home.water) continue;
     if (!s.alive) { modifyLand(home, 'ruin', Math.min(1, s.buildings / 12), state.month); continue; }
     const farming = settlementLabour(state, s).economy.farmer ?? 0;
-    if (farming > 0 || s.specialization === 'agriculture') {
+    if (s.fields === undefined && (farming > 0 || s.specialization === 'agriculture')) {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
         const x = home.x + dx, z = home.z + dz;
         const cell = x >= 0 && z >= 0 && x < state.world.size && z < state.world.size ? state.world.cells[z * state.world.size + x] : undefined;
