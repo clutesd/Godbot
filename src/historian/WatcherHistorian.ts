@@ -15,6 +15,7 @@ interface ObserverMemory {
   pendingPredictionRemarks: Map<string, string>;
 }
 
+const bases = new WeakMap<HistorianStatement, { text: string; sources: string[] }>();
 const memories = new WeakMap<Historian, ObserverMemory>();
 let installed = false;
 
@@ -31,8 +32,8 @@ function memoryFor(historian: Historian): ObserverMemory {
  * Installs a narrative layer over the grounded Historian.
  *
  * The base Historian remains authoritative for facts, provenance, scoring, uncertainty and
- * scene selection. This layer only deepens the chosen observation with a restrained cosmic
- * observer voice, historical callbacks, remembered subjects and calibrated surprise.
+ * scene selection. This layer adds one grounded historical connection after the current
+ * facts, then recomposes that connection from fresh evidence at physical camera arrival.
  */
 export function installWatcherHistorian(): void {
   if (installed) return;
@@ -41,6 +42,9 @@ export function installWatcherHistorian(): void {
   const acquireScene = Historian.prototype.acquireScene;
   Historian.prototype.acquireScene = function watcherAcquireScene(scene, state, narrationVisible): void {
     const memory = memoryFor(this);
+    // Refreshing a queued scene replaces its statement. Compose from those current facts
+    // at physical arrival, including scenes selected directly by the sequence planner.
+    if (narrationVisible ?? (scene.editorial?.narration !== 'silent')) prepareObservation(this, memory, scene, state);
     const predictionId = memory.pendingPredictionRemarks.get(scene.statement.id);
     if (predictionId && (narrationVisible ?? (scene.editorial?.narration !== 'silent'))) memory.remarkedPredictionIds.add(predictionId);
     memory.pendingPredictionRemarks.delete(scene.statement.id);
@@ -53,19 +57,27 @@ export function installWatcherHistorian(): void {
   Historian.prototype.chooseScene = function watcherChooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
     const scene = chooseScene.call(this, state, focusEventId);
     const memory = memoryFor(this);
-
-
-    const originalText = scene.statement.text;
-    const originalSources = [...scene.statement.sourceEventIds];
-    deepenObservation(this, memory, scene, state);
-
-    // The observer is never allowed to trade factual grounding for dramatic language.
-    if (!this.validateStatement(scene.statement, state)) {
-      scene.statement.text = originalText;
-      scene.statement.sourceEventIds = originalSources;
-    }
+    prepareObservation(this, memory, scene, state);
     return scene;
   };
+}
+
+function prepareObservation(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate, state: SimulationState): void {
+  const statement = scene.statement;
+  let base = bases.get(statement);
+  if (!base) {
+    base = { text: statement.text, sources: [...statement.sourceEventIds] };
+    bases.set(statement, base);
+  }
+  statement.text = base.text;
+  statement.sourceEventIds = [...base.sources];
+  memory.pendingPredictionRemarks.delete(statement.id);
+  deepenObservation(historian, memory, scene, state);
+  if (!historian.validateStatement(statement, state)) {
+    statement.text = base.text;
+    statement.sourceEventIds = [...base.sources];
+    memory.pendingPredictionRemarks.delete(statement.id);
+  }
 }
 
 function deepenObservation(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate, state: SimulationState): void {
@@ -75,18 +87,15 @@ function deepenObservation(historian: Historian, memory: ObserverMemory, scene: 
   const statement = scene.statement;
   const additions: string[] = [];
 
-  if (scene.event) {
-    additions.push(...eventPerspective(memory, scene.event, state, statement));
-  }
+  const predictionRemark = scene.event?.causes.length ? undefined : resolvedPredictionPerspective(historian, memory, scene);
+  if (predictionRemark) additions.push(predictionRemark);
+  else if (scene.event) additions.push(...eventPerspective(memory, scene.event, state, statement));
 
   const attentionRemark = attentionPerspective(memory, scene, state.month);
   if (attentionRemark) additions.push(attentionRemark);
 
-  const predictionRemark = resolvedPredictionPerspective(historian, memory, scene);
-  if (predictionRemark) additions.push(predictionRemark);
-
   if (additions.length === 0) return;
-  statement.text = `${additions.slice(0, 2).join(' ')} ${statement.text}`.trim();
+  statement.text = `${statement.text} ${additions[0]}`.trim();
 }
 
 function eventPerspective(memory: ObserverMemory, event: HistoricalEvent, state: SimulationState, statement: HistorianStatement): string[] {
@@ -96,65 +105,18 @@ function eventPerspective(memory: ObserverMemory, event: HistoricalEvent, state:
   const remarks: string[] = [];
   const priorOfType = state.history.filter((candidate) => candidate.type === event.type && (candidate.month < event.month || candidate.month === event.month && candidate.id < event.id));
   const firstOfKind = priorOfType.length === 0;
-  const thresholdRemark = thresholdPerspective(memory, event, state);
-  if (thresholdRemark) remarks.push(thresholdRemark);
-
-  if (firstOfKind && event.significance >= 0.58) {
-    remarks.push(`I have no earlier record of ${eventNoun(event.type, true)} in this world.`);
-  } else if (priorOfType.length >= 4 && event.significance >= 0.68 && memory.observationSequence % 3 === 0) {
-    remarks.push(`This is the ${ordinal(priorOfType.length + 1)} recorded ${eventNoun(event.type)}. Repetition does not make its consequences smaller.`);
-  }
-
+  // Explicit causal evidence earns priority. Sharing a place or actor is context,
+  // never proof of causation. Include only the source actually used in the caption.
   const callback = relatedEarlierEvent(event, state);
   if (callback) {
     statement.sourceEventIds = unique([...statement.sourceEventIds, callback.id]);
     remarks.push(callbackText(event, callback));
+  } else if (firstOfKind && event.significance >= 0.58) {
+    remarks.push(`This is the earliest surviving record of ${eventNoun(event.type, true)}.`);
+  } else if (priorOfType.length >= 4 && event.significance >= 0.68 && memory.observationSequence % 3 === 0) {
+    remarks.push(`This is the ${ordinal(priorOfType.length + 1)} ${eventNoun(event.type)} in the surviving record.`);
   }
   return remarks;
-}
-
-function thresholdPerspective(memory: ObserverMemory, event: HistoricalEvent, state: SimulationState): string | undefined {
-  switch (event.type) {
-    case 'atomic-threshold':
-      return 'For generations, power was limited by ordinary combustion. That boundary has now been crossed.';
-    case 'first-orbit':
-      return 'For the first time, this civilization has placed part of itself beyond the ground that made it.';
-    case 'offworld-settlement':
-      return 'The sky is no longer merely something these people look toward; it now contains a place they inhabit.';
-    case 'interplanetary-transition':
-      return 'What began as one inhabited world has become a civilization measured across worlds.';
-    case 'machine-intelligence-transition':
-      return 'A new kind of participant has entered history, and the consequences are not yet knowable.';
-    case 'nuclear-weapons-developed':
-      return 'Knowledge has become the ability to erase in moments what generations required to build.';
-    case 'nuclear-use':
-    case 'nuclear-exchange':
-      return state.history.some((candidate) => candidate.type === 'war-declared' && candidate.month < event.month)
-        ? 'I have recorded war before. The scale available here changes what war can mean.'
-        : 'The destructive scale of this moment has no ordinary precedent in the record.';
-    case 'civilization-collapse':
-      return 'The record now marks a collapse of the systems this civilization built.';
-    case 'civilization-recovery':
-      return 'Collapse did not end this story. Something survived long enough to begin again.';
-    case 'post-biological-transition':
-      return 'The civilization remains continuous with its past, even as the beings carrying that continuity change.';
-    case 'first-contact':
-      return 'Two histories that had developed apart now become part of one another.';
-    case 'settlement-founded':
-      return memory.observationSequence % 3 === 0 ? 'Another name enters the map. I will remember whether it endures.' : undefined;
-    case 'settlement-abandoned':
-      return 'A place can remain on the land after it has disappeared from ordinary life.';
-    case 'knowledge-rediscovered':
-      return 'What was lost has returned. The second discovery carries the memory of the first absence.';
-    case 'archive-destroyed':
-      return 'A civilization can lose part of itself without losing a single living body: it can lose what it remembers.';
-    case 'planetary-stability':
-      return 'Survival has lasted long enough to become a pattern rather than a moment.';
-    case 'observation-lost':
-      return 'For once, even the record cannot tell me what followed.';
-    default:
-      return undefined;
-  }
 }
 
 function relatedEarlierEvent(event: HistoricalEvent, state: SimulationState): HistoricalEvent | undefined {
@@ -207,7 +169,7 @@ function attentionPerspective(memory: ObserverMemory, scene: ObservationCandidat
   if (!attention || attention.appearances < 3 || memory.observationSequence % 5 !== 0) return undefined;
   const years = Math.floor((month - attention.firstMonth) / 12);
   if (years < 8) return undefined;
-  return `I have returned to ${scene.title} across ${years.toLocaleString()} years. Some threads keep drawing the record back.`;
+  return `I first observed ${scene.title} ${years.toLocaleString()} years ago.`;
 }
 
 function resolvedPredictionPerspective(historian: Historian, memory: ObserverMemory, scene: ObservationCandidate): string | undefined {
@@ -218,8 +180,8 @@ function resolvedPredictionPerspective(historian: Historian, memory: ObserverMem
   if (memory.pendingPredictionRemarks.size > 64) memory.pendingPredictionRemarks.delete(memory.pendingPredictionRemarks.keys().next().value!);
   const horizonYears = Math.max(1, Math.round((resolved.horizonMonth - resolved.madeMonth) / 12));
   return resolved.occurred
-    ? `An earlier warning proved justified within its ${horizonYears}-year horizon. Prediction is not prophecy; this one happened to be right.`
-    : `An earlier warning passed its ${horizonYears}-year horizon without the predicted war. The future resisted the pattern I thought I saw.`;
+    ? `An earlier warning proved justified within its ${horizonYears}-year horizon. The recorded outcome supports that warning.`
+    : `An earlier warning passed its ${horizonYears}-year horizon without the predicted war. That warning did not establish what would happen.`;
 }
 
 function eventNoun(type: HistoricalEventType, withArticle = false): string {
