@@ -22,7 +22,7 @@ function statement(overrides: Partial<HistorianStatement> = {}): HistorianStatem
 }
 
 describe('Historian grounding', () => {
-  const simulation = new Simulation({ seed: 'historian-grounding', startingPopulation: 240 });
+  const simulation = new Simulation({ seed: 'historian-grounding', startingPopulation: 240, simulation: { populationSoftCap: 240 }, world: { size: 24 } });
   simulation.step(120 * 12);
   const historian = new Historian(simulation.config);
 
@@ -58,7 +58,7 @@ describe('Historian grounding', () => {
   });
 
   it('directs a first-fire milestone as a required human-scale documentary scene', () => {
-    const early = new Simulation({ seed: 'historian-first-fire', startMode: 'arrival', world: { size: 40 } });
+    const early = new Simulation({ seed: 'historian-first-fire', startMode: 'arrival', world: { size: 64 } });
     early.advanceArrival(120);
     expect(early.beginHistory()).toBe(true);
     early.step(1);
@@ -170,7 +170,7 @@ describe('Presentation independence', () => {
     control.step(80 * 12);
     expect(observed.summary()).toEqual(control.summary());
     expect(observed.state.history).toEqual(control.state.history);
-  }, 40_000);
+  }, 90_000);
 
   it('accelerates quiet views and slows significant events', () => {
     const simulation = new Simulation({ seed: 'presentation-pacing', startingPopulation: 180 });

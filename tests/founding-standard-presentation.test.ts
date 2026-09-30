@@ -202,17 +202,9 @@ describe('founding standard presentation', () => {
     const prepare = seekPhase(presentation, simulation, settlement, 'prepare-base');
     const carry = seekPhase(presentation, simulation, settlement, 'carry-pole', prepare);
     const attach = seekPhase(presentation, simulation, settlement, 'attach-cloth', carry);
-    const raise = seekPhase(presentation, simulation, settlement, 'raise', attach);
-    const secure = seekPhase(presentation, simulation, settlement, 'secure', raise);
-    const unfurl = seekPhase(presentation, simulation, settlement, 'unfurl', secure);
-    const acknowledge = seekPhase(presentation, simulation, settlement, 'acknowledge', unfurl);
 
     expect(prepare).toBeLessThan(carry);
     expect(carry).toBeLessThan(attach);
-    expect(attach).toBeLessThan(raise);
-    expect(raise).toBeLessThan(secure);
-    expect(secure).toBeLessThan(unfurl);
-    expect(unfurl).toBeLessThan(acknowledge);
 
     let time = advanceReady(presentation, simulation, settlement, attach, 1.2);
     const attached = presentation.sample(settlement.id);
@@ -220,18 +212,26 @@ describe('founding standard presentation', () => {
     expect(attached.clothUnfurl).toBe(0);
     expect(attached.polePitch).toBeCloseTo(-Math.PI / 2, 4);
 
-    time = seekPhase(presentation, simulation, settlement, 'raise', time);
+    const raise = seekPhase(presentation, simulation, settlement, 'raise', time);
+    expect(attach).toBeLessThan(raise);
+    time = raise;
     time = advanceReady(presentation, simulation, settlement, time, 2.4);
     const raising = presentation.sample(settlement.id);
     expect(raising.polePitch).toBeGreaterThan(-Math.PI / 2);
     expect(raising.polePitch).toBeLessThan(0.01);
     expect(raising.clothUnfurl).toBe(0);
 
-    time = seekPhase(presentation, simulation, settlement, 'unfurl', time);
+    const secure = seekPhase(presentation, simulation, settlement, 'secure', time);
+    const unfurl = seekPhase(presentation, simulation, settlement, 'unfurl', secure);
+    expect(raise).toBeLessThan(secure);
+    expect(secure).toBeLessThan(unfurl);
+    time = unfurl;
     advanceReady(presentation, simulation, settlement, time, 1.7);
     const cloth = presentation.sample(settlement.id);
     expect(cloth.polePitch).toBeCloseTo(0, 4);
     expect(cloth.clothUnfurl).toBeGreaterThan(0.3);
+    const acknowledge = seekPhase(presentation, simulation, settlement, 'acknowledge', time + 1.7);
+    expect(unfurl).toBeLessThan(acknowledge);
   });
 
   it('puts real founders on the mast instead of playing the ceremony without people', () => {

@@ -27,6 +27,8 @@ on:
       - 'src/shared/FoundingCampLayout.ts'
       - 'src/sim/people/PeopleSystem.ts'
       - 'src/sim/pressures/**'
+      - 'tests/watcher-*.test.ts'
+      - 'tests/documentary-memory.test.ts'
       - 'tests/camera-*.test.ts'
       - 'tests/cinematic-*.test.ts'
       - 'tests/human-camera-presence.test.ts'
@@ -71,6 +73,8 @@ on:
       - 'src/shared/FoundingCampLayout.ts'
       - 'src/sim/people/PeopleSystem.ts'
       - 'src/sim/pressures/**'
+      - 'tests/watcher-*.test.ts'
+      - 'tests/documentary-memory.test.ts'
       - 'tests/camera-*.test.ts'
       - 'tests/cinematic-*.test.ts'
       - 'tests/human-camera-presence.test.ts'
@@ -133,6 +137,10 @@ jobs:
           src/render/people/PeopleVisualState.ts
           src/render/people/ReactionGlyphRenderer.ts
           src/sim/people/PeopleSystem.ts
+          tests/watcher-continuity.test.ts
+          tests/watcher-production.test.ts
+          tests/watcher-narrative.test.ts
+          tests/documentary-memory.test.ts
           tests/camera-*.test.ts
           tests/cinematic-*.test.ts
           tests/human-camera-presence.test.ts
@@ -153,6 +161,10 @@ jobs:
           tests/reaction-glyph-presentation.test.ts
       - run: >-
           npx vitest run
+          tests/watcher-continuity.test.ts
+          tests/watcher-production.test.ts
+          tests/watcher-narrative.test.ts
+          tests/documentary-memory.test.ts
           tests/camera-*.test.ts
           tests/cinematic-*.test.ts
           tests/human-camera-presence.test.ts

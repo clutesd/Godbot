@@ -51,7 +51,9 @@ function harness(people = [person()], overrides: Partial<LocalActivityContext> =
         revision: 1, blocked: false, ...overrides };
       const plan = local.resolve(p, context, dt);
       const v = visuals.resolve(p.id, { destination: plan?.destination ?? p.position,
-        restFacing: plan?.restFacing, localMove: !!plan }, dt, ground);
+        restFacing: plan?.restFacing, localMove: !!plan,
+        greetingPartnerId: plan?.encounter?.beat === 0 && ['hug', 'handshake'].includes(plan.encounter.greeting ?? '') ? plan.encounter.partnerId : undefined,
+        embracing: plan?.encounter?.beat === 0 && plan.encounter.greeting === 'hug' }, dt, ground);
       return { x: v.x, z: v.z, speed: v.speed, destination: { x: v.destinationX, z: v.destinationZ },
         action: plan?.action, phase: plan?.phase, facing: v.facing, partnerId: plan?.partnerId };
     });
@@ -771,7 +773,8 @@ describe('renderer-owned local activity', () => {
         if (state?.encounter) microgestures.add(state.animation);
       }
     }
-    expect(microgestures).toContain('social-wave');
+    // Close friends greet through the paired hug envelope, then resume conversation.
+    expect(microgestures).toContain('converse-quiet');
     expect(microgestures).toContain('social-laugh');
   });
 

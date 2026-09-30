@@ -279,7 +279,7 @@ describe('Trade, rendering and replay', () => {
   it('renders worked and abandoned deposits without mutating simulation state', () => {
     const { state, s } = fixture(); const d = site(state, s, 'stone');
     const renderer = new ResourceSiteRenderer(state.world, new TerrainSurface(state.world));
-    renderer.update(); const mesh = renderer.group.children[0] as THREE.InstancedMesh; expect(mesh.count).toBe(0);
+    renderer.update(); const mesh = renderer.group.getObjectByName('Aerial mineral site footprints') as THREE.InstancedMesh; expect(mesh.count).toBe(0);
     d.establishedMonth = 2; d.abandonedMonth = 4; const before = JSON.stringify(state.world);
     renderer.update(); expect(mesh.count).toBe(1); expect(JSON.stringify(state.world)).toBe(before);
     mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose(); mesh.dispose();
