@@ -72,6 +72,7 @@ export class Historian {
   private statementSequence = 1;
   private predictionSequence = 1;
   private sceneSequence = 0;
+  private transitionSequence = 0;
   private acquiredCount = 0;
   private lastNarratedCount = 0;
   private readonly settlementReadouts = new Map<string, { month: number; population: number; food: number; buildings: number }>();
@@ -128,6 +129,33 @@ export class Historian {
     this.documentaryMemory.decorate(choice, state);
     this.ageDeferredSubjects();
     return choice;
+  }
+
+  /** A flight is editorial intent, not remote observation. Only names and already acquired
+   * historical evidence may appear here; do not copy a destination's live factual caption. */
+  transitionStatement(scene: ObservationCandidate, state: SimulationState): HistorianStatement | undefined {
+    const person = state.people.find(p => p.id === scene.subjectId);
+    const place = state.settlements.find(p => p.id === (person?.homeId ?? scene.event?.locationId ?? scene.subjectId));
+    const institution = state.institutions.find(p => p.id === scene.subjectId);
+    const polity = state.polities.find(p => p.id === scene.subjectId);
+    const destination = place ?? person ?? institution ?? polity;
+    if (!destination) {
+      if (scene.event || !['landscape-pause', 'night-transition', 'world-establishing', 'regional-travel'].includes(scene.kind)) return undefined;
+      const statement = this.statement({ month: state.month, text: `${['The route turns towards', 'Crossing towards', 'A wider view takes us towards'][this.transitionSequence++ % 3]} ${scene.title}.`,
+        epistemicStatus: 'recorded-fact', sourceEntityIds: [...scene.statement.sourceEntityIds], claims: {} });
+      return this.validateStatement(statement, state) ? statement : undefined;
+    }
+    const known = this.knownEntityIds(state, state.month);
+    if (!known.has(destination.id)) return undefined;
+    const openings = ['Towards', 'The next view takes us to', 'Our route leads to', 'Turning towards'];
+    const opening = openings[this.transitionSequence++ % openings.length]!;
+    // An immutable historical callback has no stale current population/activity claim. The
+    // place memory contains only physical acquisitions; proposals never enter it.
+    const remembered = this.documentaryMemory.lastWitnessedAt(place?.id ?? destination.id, state.month);
+    const text = `${opening} ${destination.name}.${remembered ? ` Here, in month ${remembered.month}, the record noted: ${remembered.summary}` : ''}`;
+    const statement = this.statement({ month: state.month, text, epistemicStatus: 'recorded-fact',
+      sourceEntityIds: [destination.id], sourceEventIds: remembered ? [remembered.id] : [], claims: {} });
+    return this.validateStatement(statement, state) ? statement : undefined;
   }
 
   /** Refresh queued live evidence without consuming attention or declaring a remote scene witnessed. */

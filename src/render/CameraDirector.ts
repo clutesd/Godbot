@@ -184,7 +184,7 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
 const DOCUMENTARY_BREAK_TYPES = new Set([
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
   'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended',
-  'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'first-fire', 'harvest-crisis', 'recovery', 'cultural-shift',
+  'death', 'civilization-recovery', 'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'first-fire', 'harvest-crisis', 'recovery', 'cultural-shift',
   'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-weapons-developed', 'nuclear-restraint', 'nuclear-crisis',
   'nuclear-use', 'nuclear-exchange', 'pandemic', 'ecological-crisis', 'climate-crisis', 'resource-crisis', 'autonomous-weapons-crisis',
   'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'fermi-question',
@@ -1290,8 +1290,10 @@ export class CameraDirector {
   private readonly arrivalSafetyOffset = new THREE.Vector3();
   private shotsSinceScenic = 1;
   private scenicShotIndex = 0;
+  private sequenceRevealed = false;
+  private lastNarrationSeconds = 0;
   private readonly sequencePlanner = new CinematicSequencePlanner();
-  private activeSequence?: { id: string; ordinal: number; total: number; role: CinematicBeatRole; narrate: boolean; scale: DocumentaryShotScale; threadId: string };
+  private activeSequence?: { id: string; ordinal: number; total: number; role: CinematicBeatRole; narrate: boolean; scale: DocumentaryShotScale; threadId: string; anchorEventId?: string };
   private externalPoseRecoveryPending = false;
   private interruptedFlightResumePending = false;
   private manualHumanReestablishPending = false;
@@ -1345,6 +1347,16 @@ export class CameraDirector {
     this.presentationSeconds += Math.max(0, Number.isFinite(deltaSeconds) ? deltaSeconds : 0);
     this.observationState = state;
     this.historian.observe(state);
+    // Current-population claims expire when authoritative time advances. Other live
+    // captions are explicitly dated observations, and historical/transit records are immutable.
+    if (this.observation.statement?.claims.population && this.observation.sceneId && !this.observation.eventType
+      && this.observation.statement.claims.population.month < state.month && !isFoundingCameraScene(this.observation.sceneId)
+      && !isScenicFlightScene(this.observation.sceneId)) {
+      delete this.observation.statement;
+      this.observation.detail = '';
+      this.observation.narrationVisible = false;
+      this.observation.revision += 1;
+    }
     if (state.arrival && isArrivalFilmPhase(state.arrival.phase)) {
       const focus = arrivalSequenceFocus(state.arrival);
       const edit = !this.arrivalActive && !this.externalPoseRecoveryPending;
@@ -1532,7 +1544,8 @@ export class CameraDirector {
           : this.currentScene?.kind === 'traveler-follow' ? 12
             : 6);
     const milestoneHold = this.currentScene?.event && this.mustWitnessEvents(state).some(event => event.id === this.currentScene?.event?.id);
-    const mayInterrupt = (!milestoneHold || this.shotAge >= this.shotDuration) && this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
+    const threadHold = this.activeSequence?.anchorEventId && !this.sequenceRevealed && this.sequencePlanner.hasPlannedShot();
+    const mayInterrupt = (!threadHold || (majorEvent?.significance ?? 0) >= 0.95) && (!milestoneHold || this.shotAge >= this.shotDuration) && this.shotAge >= Math.max(readableMinimum, this.config.camera.transitionSeconds * 1.1);
     if (!justCompletedFoundingRelease && !awaitingHistoryAuthority) {
       if (!this.currentScene || (majorEvent && mayInterrupt)) {
 
@@ -1961,7 +1974,11 @@ export class CameraDirector {
     if (focusEventId) {
       this.sequencePlanner.interrupt();
       this.activeSequence = undefined;
-      scene = this.historian.chooseScene(state, focusEventId);
+      const anchor = this.historian.chooseScene(state, focusEventId);
+      const first = this.sequencePlanner.plan(state, anchor, this.historian.candidates(state)
+        .filter(candidate => !this.historian.isSubjectDeferred(candidate.subjectId)), this.acquiredScene);
+      scene = first.scene;
+      this.activeSequence = this.sequenceState(first);
     } else {
       let planned = this.sequencePlanner.takePlannedShot();
       // A subject the camera just retired as unreadable yields to the next beat of the sequence.
@@ -1978,8 +1995,7 @@ export class CameraDirector {
           this.sequencePlanner.interrupt();
           planned = undefined;
         } else {
-          planned = { ...planned, scene: fresh, narrate: fresh.editorial?.narration === 'required'
-            || planned.narrate && fresh.editorial?.narration !== 'silent' };
+          planned = { ...planned, scene: fresh, narrate: planned.narrate && fresh.editorial?.narration !== 'silent' };
         }
       }
       if (planned) {
@@ -2293,10 +2309,12 @@ export class CameraDirector {
       delete this.observation.sceneId;
       delete this.observation.eventType;
       delete this.observation.eventMonth;
-      this.observation.label = 'Following history';
-      this.observation.detail = '';
+      const transition = this.historian.transitionStatement(scene, state);
+      this.observation.label = transition ? 'On the way' : 'Following history';
+      this.observation.detail = transition?.text ?? '';
+      this.observation.statement = transition;
       this.observation.kind = 'regional-travel';
-      this.observation.narrationVisible = false;
+      this.observation.narrationVisible = Boolean(this.observation.statement);
       this.observation.revision += 1;
     }
     this.beginFlight(this.shotBasePosition, this.shotBaseTarget, elevationAt);
@@ -2674,10 +2692,15 @@ export class CameraDirector {
     this.transitionScene(this.currentScene.id, 'acquired');
     if (this.currentScene.event) {
       this.acknowledgedMajorEventIds.add(this.currentScene.event.id);
+      // The previous cached winner has been consumed. Reconsider the remaining backlog
+      // on the next editorial boundary even when no simulation month has advanced.
+      this.lastScannedHistoryLength = -1;
       this.failedEvents.delete(this.currentScene.event.id);
     }
     if (this.observationState) this.historian.acquireScene(this.currentScene, this.observationState, this.shouldNarrate(this.currentScene));
     this.commitObservation(this.currentScene);
+    if (this.observation.narrationVisible) this.lastNarrationSeconds = this.presentationSeconds;
+    if (this.activeSequence?.role === 'reveal') this.sequenceRevealed = true;
     this.shotAge = 0;
     this.trackingInitialized = false;
     this.routeCheckSeconds = 0;
@@ -2700,13 +2723,24 @@ export class CameraDirector {
 
   private shouldNarrate(scene: ObservationCandidate): boolean {
     const mode = scene.editorial?.narration ?? 'selective';
-    return mode !== 'silent' && (mode === 'required'
-      || (this.activeSequence?.narrate ?? (scene.event !== undefined || scene.interest >= 0.66)));
+    if (mode === 'silent') return false;
+    if (scene.event && scene.event.significance >= 0.72) return true;
+    // A planned sequence owns its sparse narration budget. Outside one, a selective
+    // grounded view earns a caption after a long interval without a narrated acquisition.
+    return this.activeSequence ? this.activeSequence.narrate
+      : mode === 'required' || scene.event !== undefined || scene.interest >= 0.66
+        || this.presentationSeconds - this.lastNarrationSeconds >= 45;
   }
 
   private commitObservation(scene: ObservationCandidate): void {
     this.observation.sceneId = scene.id;
     this.observation.label = scene.title;
+    if (!scene.event && !scene.statement.claims.population && !isFoundingCameraScene(scene.id)
+      && !isScenicFlightScene(scene.id) && !scene.statement.text.startsWith('Observed in month ')) {
+      // Date acquired snapshots so rapid simulation ticks do not turn readable evidence into
+      // an undated claim about the subject's present activity or condition.
+      scene.statement.text = `Observed in month ${scene.statement.month}: ${scene.statement.text}`;
+    }
     this.observation.detail = scene.statement.text;
     this.observation.kind = scene.kind;
     this.observation.interest = scene.interest;
@@ -2731,7 +2765,9 @@ export class CameraDirector {
     narrate: boolean;
     scale: DocumentaryShotScale;
     threadId: string;
+    anchorEventId?: string;
   } {
+    if (this.activeSequence?.id !== shot.sequenceId) this.sequenceRevealed = false;
     return {
       id: shot.sequenceId,
       ordinal: shot.ordinal,
@@ -2740,6 +2776,7 @@ export class CameraDirector {
       narrate: shot.narrate,
       scale: shot.scale,
       threadId: shot.threadId,
+      anchorEventId: shot.anchorEventId,
     };
   }
 

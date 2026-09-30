@@ -18,3 +18,40 @@ Memory is owned by each Historian and consumes no simulation randomness. Generic
 ## Validation
 
 `tests/documentary-memory.test.ts` covers change detection, project progress/rate/blockage/disappearance, environmental deltas, event significance and explicit causality, non-consuming enumeration, long-interval continuity, quiet mature years, repetition silence, deterministic selection, frozen evidence and identical subsequent simulation evolution. Existing historian, early-documentary and cinematic-sequence tests exercise compatibility with retained systems.
+
+## Event-led documentary continuity
+
+Travel captions express route intent using known names/geography and at most one copied,
+physically acquired record at the destination. They never copy the destination's current
+population/activity or announce an unacquired event. The bounded place callback is held by
+`DocumentaryMemory`, not a second narrative store. Transit has no acquired scene ID and does
+not consume event attention. Current-population captions expire when their observation month passes; other non-event
+captions carry an explicit observation date and historical event captions remain historical evidence.
+
+Watcher interpretation uses the event's authored outcome and an actual earlier record.
+Explicit event IDs in `causes` allow causal language. Shared knowledge, place or participants
+allow only a temporal comparison. Same-month callbacks require the predecessor to occur
+before the anchor in the authoritative history. World awakening is not a generic callback
+for every later development. War and the authored first-fire/opening voices retain their
+existing interpretation. Added evidence is excerpted to fit an 78-word reading budget;
+long pre-existing base captions are not rewritten. `validateStatement` is unchanged.
+
+An event anchor is the first physical destination in its package. The remaining roles follow
+the existing grammar, using relevant residents, institutions, the recorded place, or explicit
+predecessors/consequences; an unrelated event cannot qualify merely by proximity. Packages
+have at most two planned narrated beats and six shots. Event packages yield after a reveal,
+at exhaustion/invalidation, or to a new event of significance at least 0.95. Ordinary packages
+remain interruptible. The camera still owns arrival refresh, safety and cooldown decisions.
+Acquisition invalidates the cached major-event winner so a paused backlog can progress.
+
+`tests/documentary-experience.test.ts` exercises the installed production layers for ten
+minutes with deterministic frame time. It budgets empty fallback travel (<5%), unexplained
+silence (<75 seconds), subject/text repetition, acquisition and narration of a paused important
+event backlog, coherent human-scale reveals, future-evidence rejection, event-specific callbacks
+across fourteen categories, and repeatable live-history camera/caption traces. The live Watcher
+regression validates every displayed statement each frame and compares watched simulation
+outcomes with an unwatched control. The cinematic CI workflow runs these checks.
+
+Limits: unrecorded causality remains unknown; unreadable destinations can still be deferred
+by camera safety. Documentary memory remains session-local. CPU audits do not measure GPU
+cost or certify the aesthetic quality of a rendered multi-minute film.

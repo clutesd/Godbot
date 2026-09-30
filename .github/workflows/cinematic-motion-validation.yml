@@ -10,7 +10,7 @@ on:
       - 'src/ui/FooterControls.ts'
       - 'src/ui/RestartLifecycle.ts'
       - 'src/ui/OpeningReadinessGate.ts'
-      - 'src/historian/PresentationDirector.ts'
+      - 'src/historian/**'
       - 'src/render/Camera*.ts'
       - 'src/render/Cinematic*.ts'
       - 'src/render/ManualCameraController.ts'
@@ -31,6 +31,7 @@ on:
       - 'src/historian/Milestones.ts'
       - 'tests/watcher-*.test.ts'
       - 'tests/documentary-memory.test.ts'
+      - 'tests/documentary-experience.test.ts'
       - 'tests/camera-*.test.ts'
       - 'tests/cinematic-*.test.ts'
       - 'tests/human-camera-presence.test.ts'
@@ -58,7 +59,7 @@ on:
       - 'src/ui/FooterControls.ts'
       - 'src/ui/RestartLifecycle.ts'
       - 'src/ui/OpeningReadinessGate.ts'
-      - 'src/historian/PresentationDirector.ts'
+      - 'src/historian/**'
       - 'src/render/Camera*.ts'
       - 'src/render/Cinematic*.ts'
       - 'src/render/ManualCameraController.ts'
@@ -79,6 +80,7 @@ on:
       - 'src/historian/Milestones.ts'
       - 'tests/watcher-*.test.ts'
       - 'tests/documentary-memory.test.ts'
+      - 'tests/documentary-experience.test.ts'
       - 'tests/camera-*.test.ts'
       - 'tests/cinematic-*.test.ts'
       - 'tests/human-camera-presence.test.ts'
@@ -120,6 +122,9 @@ jobs:
           src/ui/RestartLifecycle.ts
           src/ui/OpeningReadinessGate.ts
           src/historian/PresentationDirector.ts
+          src/historian/Historian.ts
+          src/historian/WatcherHistorian.ts
+          src/historian/DocumentaryMemory.ts
           src/render/AdaptiveResolution.ts
           src/render/Camera*.ts
           src/render/Cinematic*.ts
@@ -146,6 +151,7 @@ jobs:
           tests/watcher-production.test.ts
           tests/watcher-narrative.test.ts
           tests/documentary-memory.test.ts
+          tests/documentary-experience.test.ts
           tests/camera-*.test.ts
           tests/cinematic-*.test.ts
           tests/human-camera-presence.test.ts
@@ -171,6 +177,7 @@ jobs:
           tests/watcher-production.test.ts
           tests/watcher-narrative.test.ts
           tests/documentary-memory.test.ts
+          tests/documentary-experience.test.ts
           tests/camera-*.test.ts
           tests/cinematic-*.test.ts
           tests/human-camera-presence.test.ts
