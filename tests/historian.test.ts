@@ -22,8 +22,9 @@ function statement(overrides: Partial<HistorianStatement> = {}): HistorianStatem
 }
 
 describe('Historian grounding', () => {
-  const simulation = new Simulation({ seed: 'historian-grounding', startingPopulation: 240, simulation: { populationSoftCap: 240 }, world: { size: 24 } });
-  simulation.step(120 * 12);
+  const simulation = new Simulation({ seed: 'historian-grounding', startingPopulation: 120, simulation: { populationSoftCap: 160 }, world: { size: 24 } });
+  // Grounding needs a developed record; century-scale stability is covered separately.
+  simulation.step(12 * 12);
   const historian = new Historian(simulation.config);
 
   it('accepts generated statements only when their sources exist at observation time', () => {
@@ -157,17 +158,19 @@ describe('Historian grounding', () => {
 
 describe('Presentation independence', () => {
   it('changes viewing speed without changing deterministic history', () => {
-    // Preserve the 80-year comparison with a bounded multi-settlement world.
+    // Exercise presentation repeatedly while both matched worlds advance.
     const config = { seed: 'presentation-is-read-only', startingPopulation: 120, simulation: { populationSoftCap: 240 }, world: { size: 24 }, settlementCount: [3, 3] as const };
     const observed = new Simulation(config);
     const control = new Simulation(config);
     expect(observed.state.settlements.length).toBeGreaterThan(1);
     const historian = new Historian(observed.config);
     const presentation = new PresentationDirector(observed.config);
-    observed.step(80 * 12);
-    const scene = observeScene(historian, observed.state);
-    presentation.update(1 / 60, observed.state, scene);
-    control.step(80 * 12);
+    for (let month = 0; month < 12 * 12; month++) {
+      observed.step();
+      const scene = observeScene(historian, observed.state);
+      presentation.update(1 / 60, observed.state, scene);
+      control.step();
+    }
     expect(observed.summary()).toEqual(control.summary());
     expect(observed.state.history).toEqual(control.state.history);
   }, 90_000);
