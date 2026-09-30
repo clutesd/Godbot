@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CameraDirector } from '../src/render/CameraDirector';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import { Historian } from '../src/historian/Historian';
 import { installWatcherHistorian } from '../src/historian/WatcherHistorian';
@@ -18,19 +18,38 @@ function event(month: number, id: string, causes: string[] = []): HistoricalEven
     outcome: 'A recorded change', tags: [], significance: 0.8, magnitude: 0.8, affectedPopulation: 12 };
 }
 
+function contextSelector(historian: Historian, sim: Simulation) {
+  const scene = historian.candidates(sim.state).find(c => c.id.startsWith('polity:'))!;
+  scene.editorial!.narration = 'selective';
+  vi.spyOn(historian, 'candidates').mockReturnValue([scene]);
+  return () => historian.chooseScene(sim.state);
+}
+
 describe('watcher narrative grounding', () => {
   it('does not consume a prediction callback while the lens is only considering a scene', () => {
     const sim = fixture(), historian = new Historian(sim.config);
     historian.predictions.push({ id: 'resolved-warning', madeMonth: 0, horizonMonth: 96, subjectIds: ['world'],
       sourceEntityIds: ['world'], predictedEventType: 'war-declared', resolved: true, occurred: false });
-    sim.state.history.push(event(100, 'context'));
-    const first = historian.chooseScene(sim.state, 'context');
-    const second = historian.chooseScene(sim.state, 'context');
+    const context = contextSelector(historian, sim);
+    const first = context();
+    const second = context();
     expect(first.statement.text).toContain('An earlier warning passed');
     expect(second.statement.text).toContain('An earlier warning passed');
     historian.acquireScene(second, sim.state);
     expect(historian.statements).toHaveLength(1);
     expect(historian.validateStatement(second.statement, sim.state)).toBe(true);
+  });
+
+  it('gives an important event its own interpretation before an unrelated resolved warning', () => {
+    const sim = fixture(), historian = new Historian(sim.config);
+    historian.predictions.push({ id: 'warning', madeMonth: 0, horizonMonth: 96, subjectIds: ['world'],
+      sourceEntityIds: ['world'], predictedEventType: 'war-declared', resolved: true, occurred: false });
+    sim.state.history.push(event(100, 'turning-point'));
+    const scene = historian.chooseScene(sim.state, 'turning-point');
+    historian.acquireScene(scene, sim.state, true);
+    expect(scene.statement.text).toContain('The recorded outcome: A recorded change');
+    expect(scene.statement.text).not.toContain('An earlier warning');
+    expect(historian.validateStatement(scene.statement, sim.state)).toBe(true);
   });
 
   it('uses months for a recent causal callback rather than inventing years of history', () => {
@@ -67,9 +86,9 @@ describe('watcher narrative grounding', () => {
       director.update(0.1, frame / 10, sim.state, () => 0);
       if (director.observation.narrationVisible && director.observation.eventType === 'atomic-threshold') caption = director.observation.detail;
     }
-    expect(caption).toContain('earliest surviving record');
+    expect(caption).toContain('The recorded outcome: A recorded change');
     expect(caption).not.toContain('For generations');
-    expect(caption.match(/earliest surviving record/g)).toHaveLength(1);
+    expect(caption).not.toContain('earliest surviving record');
   });
 
   it('keeps the causal link when a milestone has other tempting editorial remarks', () => {
@@ -100,9 +119,8 @@ describe('watcher narrative grounding', () => {
     const sim = fixture(), historian = new Historian(sim.config);
     historian.predictions.push({ id: 'warning', madeMonth: 0, horizonMonth: 96, subjectIds: ['world'],
       sourceEntityIds: ['world'], predictedEventType: 'war-declared', resolved: true, occurred: false });
-    sim.state.history.push(event(100, 'context'));
-    const context = () => historian.chooseScene(sim.state, 'context');
     const silent = historian.candidates(sim.state).find(c => c.id.startsWith('settlement:'))!;
+    const context = contextSelector(historian, sim);
     historian.acquireScene(historian.refreshScene(context(), sim.state)!, sim.state, false);
     for (let i = 0; i < 3; i++) historian.acquireScene(silent, sim.state, false);
     const voiced = historian.refreshScene(context(), sim.state)!;

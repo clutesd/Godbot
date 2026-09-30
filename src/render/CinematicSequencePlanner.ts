@@ -11,6 +11,7 @@ export interface CinematicPlannedShot {
   readonly narrate: boolean;
   readonly threadId: string;
   readonly sequenceId: string;
+  readonly anchorEventId?: string;
   readonly ordinal: number;
   readonly total: number;
 }
@@ -118,9 +119,23 @@ function threadIdFor(scene: ObservationCandidate): string {
   return scene.editorial?.threadId ?? `subject:${scene.subjectId}`;
 }
 
+/** Related by authoritative identity, residence or explicit event provenance. Proximity
+ * alone cannot make an unrelated historical event part of the same story. */
+function belongsToEvent(state: SimulationState, anchor: ObservationCandidate, scene: ObservationCandidate): boolean {
+  const event = anchor.event!;
+  if (scene.id === anchor.id || scene.event?.id === event.id) return true;
+  if (scene.event) return event.causes.includes(scene.event.id) || scene.event.causes.includes(event.id);
+  const person = state.people?.find(p => p.id === scene.subjectId);
+  const institution = state.institutions?.find(i => i.id === scene.subjectId);
+  return event.actors.includes(scene.subjectId) || scene.subjectId === event.locationId
+    || Boolean(event.locationId && (person?.homeId === event.locationId || institution?.settlementId === event.locationId))
+    || threadIdFor(scene) === threadIdFor(anchor);
+}
+
 function narrationFor(scene: ObservationCandidate, role: CinematicBeatRole, isAnchor: boolean): boolean {
   const mode = scene.editorial?.narration ?? 'selective';
   if (mode === 'silent') return false;
+  if (isAnchor && scene.event) return true;
   if (mode === 'required') return role === 'observe' || role === 'detail' || role === 'reveal' || isAnchor;
   if (role === 'establish' || role === 'approach' || role === 'release') return false;
   if (scene.interest >= 0.78) return true;
@@ -162,6 +177,7 @@ export class CinematicSequencePlanner {
   ): CinematicPlannedShot {
     this.queue = [];
     const sequenceId = `sequence:${state.month}:${this.sequenceCounter++}:${anchor.id}`;
+    const eventThread = Boolean(anchor.event);
     const early = isEarlyDocumentary(state) && !anchor.event;
     const intimate = early && (isHumanObservation(anchor) || anchor.kind === 'settlement-approach');
     const roles: readonly CinematicBeatRole[] = intimate
@@ -179,6 +195,8 @@ export class CinematicSequencePlanner {
       const previousScale = prior ? documentaryShotScaleFor(prior.kind) : recentScale;
       for (const scene of candidates) {
         if (usedIds.has(scene.id)) continue;
+        if (eventThread && !belongsToEvent(state, anchor, scene)) continue;
+        if (eventThread && scene.event && selected.filter(item => item.scene.event).length >= 2) continue;
         // An early sequence stays with the camp, and never pads scarce activity with aerials.
         if (intimate && (distance(anchor, scene) > 12
           || documentaryShotScaleFor(scene.kind) === 'wide'
@@ -231,7 +249,13 @@ export class CinematicSequencePlanner {
     };
 
     let prior = previous;
+    if (eventThread) {
+      selected.push({ scene: anchor, role: roles[0]!, score: 0 });
+      usedIds.add(anchor.id);
+      prior = anchor;
+    }
     for (const role of roles) {
+      if (eventThread && role === roles[0]) continue;
       let scene = intimate && selected.length === 0 ? anchor : chooseForRole(role, prior);
       if (!scene && !usedIds.has(anchor.id)) scene = anchor;
       if (!scene) continue;
@@ -256,16 +280,23 @@ export class CinematicSequencePlanner {
     }
 
     const total = compact.length;
-    const planned = compact.map((item, index): CinematicPlannedShot => ({
-      scene: item.scene,
-      role: item.role,
-      scale: item.scene.editorial?.preferredScale ?? documentaryShotScaleFor(item.scene.kind),
-      narrate: narrationFor(item.scene, item.role, item.scene.id === anchor.id),
-      threadId: threadIdFor(item.scene),
-      sequenceId,
-      ordinal: index,
-      total,
-    }));
+    let narratedBeats = 0;
+    const planned = compact.map((item, index): CinematicPlannedShot => {
+      const narrate = narrationFor(item.scene, item.role, item.scene.id === anchor.id)
+        && (!eventThread || narratedBeats < 2);
+      if (narrate) narratedBeats++;
+      return {
+        scene: item.scene,
+        role: item.role,
+        scale: item.scene.editorial?.preferredScale ?? documentaryShotScaleFor(item.scene.kind),
+        narrate,
+        threadId: eventThread ? anchorThread : threadIdFor(item.scene),
+        sequenceId,
+        anchorEventId: anchor.event?.id,
+        ordinal: index,
+        total,
+      };
+    });
 
     const first = planned.shift() ?? {
       scene: anchor,
@@ -274,6 +305,7 @@ export class CinematicSequencePlanner {
       narrate: narrationFor(anchor, roleFor(anchor.kind), true),
       threadId: anchorThread,
       sequenceId,
+      anchorEventId: anchor.event?.id,
       ordinal: 0,
       total: 1,
     };

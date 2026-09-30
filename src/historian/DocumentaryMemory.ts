@@ -39,13 +39,14 @@ export class DocumentaryMemory {
   private previous = new Map<string, Snapshot>();
   private readonly threads = new Map<string, Thread>();
   private readonly shownEvents = new Set<string>();
+  private readonly witnessedPlaces = new Map<string, { id: string; month: number; summary: string }>();
   private readonly spoken = new Set<string>();
   private readonly progressRates = new Map<string, number>();
   private month = -1;
 
   observe(state: SimulationState): void {
     if (state.month === this.month) return;
-    if (state.month < this.month) { this.previous.clear(); this.threads.clear(); this.shownEvents.clear(); this.spoken.clear(); this.progressRates.clear(); }
+    if (state.month < this.month) { this.previous.clear(); this.threads.clear(); this.shownEvents.clear(); this.witnessedPlaces.clear(); this.spoken.clear(); this.progressRates.clear(); }
     const snapshots: Snapshot[] = state.people.filter(p => p.alive || this.previous.has(p.id)).map(p => ({
       id: p.id, name: p.name, position: { ...p.position }, kind: p.alive ? 'worker-follow' : 'aftermath-pullback', activity: p.activity,
       values: { alive: p.alive, home: p.homeId, partner: p.partnerId ?? 'none', children: p.children.length, occupation: p.occupation, activity: p.activity },
@@ -154,8 +155,21 @@ export class DocumentaryMemory {
     return candidate;
   }
 
+  /** Bounded, copied evidence for travel callbacks. Proposals never populate this memory. */
+  lastWitnessedAt(placeId: string, month: number): { id: string; month: number; summary: string } | undefined {
+    const event = this.witnessedPlaces.get(placeId);
+    return event && event.month <= month ? { ...event } : undefined;
+  }
+
   remember(candidate: ObservationCandidate, month: number, narrated = candidate.editorial?.narration !== 'silent'): void {
-    if (candidate.event) this.shownEvents.add(candidate.event.id);
+    if (candidate.event) {
+      const event = candidate.event;
+      this.shownEvents.add(event.id);
+      if (event.locationId) {
+        this.witnessedPlaces.set(event.locationId, { id: event.id, month: event.month, summary: event.summary });
+        if (this.witnessedPlaces.size > 128) this.witnessedPlaces.delete(this.witnessedPlaces.keys().next().value!);
+      }
+    }
     if (narrated) this.spoken.add(candidate.statement.text);
     if (this.spoken.size > 2048) this.spoken.delete(this.spoken.values().next().value!);
     const t = this.threads.get(candidate.editorial?.subjectId ?? candidate.subjectId);

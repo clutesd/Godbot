@@ -61,8 +61,10 @@ describe('cinematic motion', () => {
       if (director.flightTelemetry().active && director.current()?.id === 'first') {
         sawTransit = true;
         expect(director.observation.sceneId).toBeUndefined();
-        expect(director.observation.statement).toBeUndefined();
-        expect(director.observation.narrationVisible).toBe(false);
+        expect(director.observation.statement).toBeDefined();
+        expect(historian.validateStatement(director.observation.statement!, sim.state)).toBe(true);
+        expect(director.observation.statement!.sourceEventIds).not.toContain(second.event?.id);
+        expect(director.observation.narrationVisible).toBe(true);
       }
       if (director.observation.sceneId === 'second') {
         acquired = true;
@@ -420,7 +422,8 @@ describe('cinematic motion', () => {
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
     expect(resumedDirection.angleTo(manualDirection)).toBeLessThan(THREE.MathUtils.degToRad(2));
     expect(director.observation.sceneId).toBeUndefined();
-    expect(director.observation.narrationVisible).toBe(false);
+    expect(director.observation.narrationVisible).toBe(true);
+    expect(historian.validateStatement(director.observation.statement!, sim.state)).toBe(true);
 
     // Recovery is continuous but decisive: it must climb out of the low manual envelope rather
     // than spending a documentary hold at eye level.
@@ -482,7 +485,8 @@ describe('cinematic motion', () => {
     expect(flight.active).toBe(true);
     expect(flight.destinationSceneId).toBe(context.id);
     expect(director.observation.sceneId).toBeUndefined();
-    expect(director.observation.narrationVisible).toBe(false);
+    expect(director.observation.narrationVisible).toBe(true);
+    expect(historian.validateStatement(director.observation.statement!, sim.state)).toBe(true);
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
 
     for (let frame = 1; frame <= 120; frame += 1) {

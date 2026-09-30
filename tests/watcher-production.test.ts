@@ -20,10 +20,10 @@ describe('production watcher across live months', () => {
       const t = frame / 10;
       if (frame % 40 === 0) { watched.step(); control.step(); }
       director.update(0.1, t, watched.state, () => 0);
+      if (director.observation.statement) expect(historian.validateStatement(director.observation.statement, watched.state)).toBe(true);
       if (director.observation.revision !== revision && director.observation.sceneId) {
         revision = director.observation.revision;
         windows[Math.floor(t / 60)]!.add(director.current()!.subjectId);
-        if (director.observation.statement) expect(historian.validateStatement(director.observation.statement, watched.state)).toBe(true);
         if (director.observation.narrationVisible) texts.add(director.observation.detail);
       }
     }
