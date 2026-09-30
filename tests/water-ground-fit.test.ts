@@ -46,11 +46,23 @@ describe('water fits the rendered earth', () => {
     water.geometry.dispose();
   });
 
-  it('keeps waterfall discontinuities covered without crystalline ramps or deleted triangles', () => {
+  it('keeps explicitly mapped waterfall discontinuities covered without crystalline ramps or deleted triangles', () => {
     const world = fixture();
     const field = world.terrain;
+    const split = Math.floor(field.resolution / 2);
+    field.lake.fill(0);
+    field.river.fill(1);
+    field.fall.fill(0);
     for (let i = 0; i < field.height.length; i++) {
-      if (i % field.resolution < Math.floor(field.resolution / 2)) field.waterLevel[i] = world.seaLevel + 0.3;
+      if (i % field.resolution < split) field.waterLevel[i] = world.seaLevel + 0.3;
+    }
+    if (field.drainage) {
+      for (let z = 0; z < field.resolution; z++) {
+        const upstream = z * field.resolution + split - 1;
+        const downstream = upstream + 1;
+        field.drainage.downstream[upstream] = downstream;
+        field.fall[upstream] = 1;
+      }
     }
     const water = buildInlandWater(world)!;
     const p = water.geometry.getAttribute('position');
@@ -65,6 +77,30 @@ describe('water fits the rendered earth', () => {
       expect(area).toBeGreaterThan(1e-10);
       expect(span).toBeLessThanOrEqual(Math.max(0.68, horizontal * 0.85) + 1e-5);
     }
+    water.geometry.dispose();
+  });
+
+  it('keeps a steep ordinary river reach connected instead of splitting it into floating shelves', () => {
+    const world = fixture();
+    const field = world.terrain;
+    const split = Math.floor(field.resolution / 2);
+    field.lake.fill(0);
+    field.river.fill(1);
+    field.fall.fill(0);
+    for (let i = 0; i < field.height.length; i++) {
+      field.waterLevel[i] = i % field.resolution < split ? world.seaLevel + 0.30 : world.seaLevel + 0.10;
+    }
+
+    const water = buildInlandWater(world)!;
+    const p = water.geometry.getAttribute('position');
+    const boundaryX = field.originX + (split - 0.5) * field.step;
+    const boundaryY: number[] = [];
+    for (let i = 0; i < p.count; i++) {
+      if (Math.abs(p.getX(i) - boundaryX) < 1e-5) boundaryY.push(p.getY(i));
+    }
+
+    expect(boundaryY.length).toBeGreaterThan(0);
+    expect(Math.max(...boundaryY) - Math.min(...boundaryY)).toBeLessThan(0.0002);
     water.geometry.dispose();
   });
 
