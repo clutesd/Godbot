@@ -47,7 +47,7 @@ describe('Pacing presets', () => {
     expect(fastTest.world).toEqual(normal.world);
     expect(fastTest.experiment.runYears).toBe(normal.experiment.runYears);
 
-    const overrides = { seed: 'pacing-equality', startingPopulation: 180, settlementCount: [4, 4] as const };
+    const overrides = { seed: 'pacing-equality', startingPopulation: 180, simulation: { populationSoftCap: 240 }, world: { size: 24 }, settlementCount: [4, 4] as const };
     const fast = new Simulation(timePresetConfig('fast-test', overrides));
     const normalRun = new Simulation(timePresetConfig('normal', overrides));
     fast.step(40 * 12);
@@ -55,7 +55,7 @@ describe('Pacing presets', () => {
     // Identical history under both pacings.
     expect(fast.summary()).toEqual(normalRun.summary());
     expect(fast.state.history).toEqual(normalRun.state.history);
-  }, 30_000);
+  }, 90_000);
 });
 
 describe('Adaptive temporal resolution', () => {

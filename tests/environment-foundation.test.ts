@@ -101,7 +101,7 @@ describe('Knowledge and economic access', () => {
     const { state, s, deposit } = fixture();
     expect(settlementResources(state, s).provinces).toHaveLength(0);
     const renderer = new ResourceSiteRenderer(state.world, new TerrainSurface(state.world)); renderer.update();
-    expect((renderer.group.children[0] as THREE.InstancedMesh).count).toBe(0);
+    expect((renderer.group.getObjectByName('Aerial mineral site footprints') as THREE.InstancedMesh).count).toBe(0);
     discoverProvince(s, deposit, 1);
     expect(settlementResources(state, s).provinces).toHaveLength(1);
   });
@@ -192,8 +192,8 @@ describe('Extraction and inherited landscapes', () => {
     expect(mark.abandonedMonth).toBe(12);
     const renderer = new ResourceSiteRenderer(state.world, new TerrainSurface(state.world));
     const before = structuredClone(state.world); renderer.update();
-    expect((renderer.group.children[0] as THREE.InstancedMesh).count).toBe(1);
-    expect((renderer.group.children[1] as THREE.InstancedMesh).count).toBeGreaterThan(0);
+    expect((renderer.group.getObjectByName('Aerial mineral site footprints') as THREE.InstancedMesh).count).toBe(1);
+    expect((renderer.group.getObjectByName('Persistent stone rubble') as THREE.InstancedMesh).count).toBeGreaterThan(0);
     expect(state.world).toEqual(before);
   });
   it('keeps active farmland cleared and reclaims it slowly after its settlement dies', () => {

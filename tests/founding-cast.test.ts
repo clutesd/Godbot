@@ -19,7 +19,7 @@ import { PresentationDirector } from '../src/historian/PresentationDirector';
 import { Simulation } from '../src/sim/Simulation';
 
 function completedArrival(seed: string): Simulation {
-  const simulation = new Simulation({ seed, startMode: 'arrival' });
+  const simulation = new Simulation({ seed, startMode: 'arrival', world: { size: 64 } });
   simulation.advanceArrival(80);
   expect(simulation.state.arrival?.phase).toBe('FOUNDING_ORIENTATION');
   expect(simulation.historyRunning).toBe(false);
@@ -222,7 +222,7 @@ describe('Founding documentary cast 2a', () => {
     const strongest = [...(person!.expertise ?? [])].sort((a, b) => b.competence - a.competence || a.domain.localeCompare(b.domain))[0];
     if (strongest) {
       expect(scene?.statement.text).toContain(strongest.domain.replaceAll('-', ' '));
-      expect(scene?.statement.text).toContain('strongest recorded skill');
+      expect(scene?.statement.text).toContain('strongest skill');
     } else {
       expect(scene?.statement.text).toContain((person!.role ?? person!.occupation).replaceAll('-', ' '));
       expect(scene?.statement.text).toContain('works as a');

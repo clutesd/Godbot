@@ -329,7 +329,7 @@ export class Simulation {
       for (const id of pod.knowledge) {
         if (!KNOWLEDGE_BY_ID.has(id)) throw new Error(`Unknown founding knowledge: ${id}`);
         const inherited = camp.knowledge.records[id];
-        camp.knowledge.records[id] = { id, theory: Math.max(0.58, inherited?.theory ?? 0), practice: Math.max(0.02, inherited?.practice ?? 0), discoveredMonth: 0, lastUsedMonth: 0,
+        camp.knowledge.records[id] = { id, theory: Math.max(0.58, inherited?.theory ?? 0), practice: 0.02, discoveredMonth: 0, lastUsedMonth: 0,
           originSettlementId: camp.id, lineageId: `${pod.id}:${id}`, parentLineages: [], source: 'inheritance', dormant: false };
       }
       initializeSettlementDevelopment(this.state, camp, []);

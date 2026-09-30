@@ -58,7 +58,12 @@ describe('cinematic motion', () => {
       const before = camera.position.clone();
       director.update(1 / 60, frame / 60, sim.state, () => 0);
       maximumStep = Math.max(maximumStep, camera.position.distanceTo(before));
-      if (director.current()?.id === 'first' && frame > 30 && director.observation.sceneId === 'first') sawTransit = true;
+      if (director.flightTelemetry().active && director.current()?.id === 'first') {
+        sawTransit = true;
+        expect(director.observation.sceneId).toBeUndefined();
+        expect(director.observation.statement).toBeUndefined();
+        expect(director.observation.narrationVisible).toBe(false);
+      }
       if (director.observation.sceneId === 'second') {
         acquired = true;
         expect(director.current()?.id).toBe('second');
@@ -403,8 +408,8 @@ describe('cinematic motion', () => {
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(1e-9);
 
     // On the very next autonomous frame, the same unseen authored destination is re-planned from
-    // the manual lens pose. The Historian is not asked for another scene, and narration remains on
-    // the last acquired scene until physical acquisition.
+    // the manual lens pose. The Historian is not asked for another scene; the released caption stays
+    // cleared until physical acquisition of the next scene.
     director.update(1 / 60, 9, sim.state, () => 0);
     const resumedDirection = new Vector3();
     camera.getWorldDirection(resumedDirection);
@@ -414,7 +419,8 @@ describe('cinematic motion', () => {
     expect(choose.mock.calls.length).toBe(choicesBeforeManual);
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
     expect(resumedDirection.angleTo(manualDirection)).toBeLessThan(THREE.MathUtils.degToRad(2));
-    expect(director.observation.sceneId).toBe('manual:first');
+    expect(director.observation.sceneId).toBeUndefined();
+    expect(director.observation.narrationVisible).toBe(false);
 
     // Recovery is continuous but decisive: it must climb out of the low manual envelope rather
     // than spending a documentary hold at eye level.
@@ -475,7 +481,8 @@ describe('cinematic motion', () => {
     const flight = director.flightTelemetry();
     expect(flight.active).toBe(true);
     expect(flight.destinationSceneId).toBe(context.id);
-    expect(director.observation.sceneId).toBe(human.id);
+    expect(director.observation.sceneId).toBeUndefined();
+    expect(director.observation.narrationVisible).toBe(false);
     expect(camera.position.distanceTo(manualPosition)).toBeLessThan(0.08);
 
     for (let frame = 1; frame <= 120; frame += 1) {

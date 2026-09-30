@@ -38,3 +38,29 @@ touches simulation state or randomness, and identical inputs replay identically.
 - **Sequencing.** Scale changes step (wide → settlement → building → person) instead of hopping to
   extremes, the Historian avoids returning to the same place at the same scale, and the same place is
   not filmed from the same side twice in a row.
+
+## Continued observation during live history
+
+The edit stays adaptive after the founding years. Settlement, institution, road and polity repetition
+penalties are bounded; lifetime viewing counts cannot permanently erase these subjects from attention.
+After six acquired shots without audible narration, an eligible settlement offers a current readout of
+population, food security and building count, with measured differences from its last narrated view.
+Unchanged evidence can remain silent. Speech memory and readout baselines advance only when the
+caption is actually shown, including sequence beats that otherwise suppress narration.
+
+Queued shots refresh their evidence before departure and again when the lens arrives. Missing people,
+completed projects and obsolete revisions yield to current history. Current population claims are
+recomputed rather than archived with a stale month. Social scenes also require their presented partner
+to remain present on acquisition. Ordinary transit clears the released caption; a destination is never
+narrated before physical acquisition. Live captions receive up to 28 seconds of reading time, while
+Arrival retains its authored timing.
+
+An unreachable major event or mandatory milestone remains pending. Failed flights interrupt their
+queued sequence and impose a presentation-time retry cooldown of 30 seconds per failed attempt,
+capped at three minutes. Other subjects remain eligible while it waits. A failed route neither
+acknowledges that event nor changes simulation authority. Existing continuous flight, swept safety,
+manual control and the founding authority gate continue to own physical movement.
+
+Regression coverage includes a ten-minute quiet viewing run, an inaccessible mandatory milestone,
+a three-minute run through real monthly simulation updates with the production Watcher layers, live
+evidence refresh, transit captions and truthful short-interval historical callbacks.

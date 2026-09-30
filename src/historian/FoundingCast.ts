@@ -81,7 +81,11 @@ function anchorForCommunity(
     .filter((person): person is Person => Boolean(person));
   if (founders.length === 0) return undefined;
 
-  const ranked = founders.map(person => {
+  const adults = founders.filter(person => {
+    const age = arrivalAgeYears(person, baseline);
+    return age >= 18 && age <= 50;
+  });
+  const ranked = (adults.length ? adults : founders).map(person => {
     const age = arrivalAgeYears(person, baseline);
     const ageDistinctiveness = clamp(Math.abs(age - 34) / 20);
     const stableTie = stableUnit(`${baseline.eventId}:${community.podId}:${person.id}`);
@@ -208,8 +212,8 @@ function introductionScene(
   const strongest = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence || a.domain.localeCompare(b.domain))[0];
   const subject = words.subject.toLowerCase();
   const text = strongest
-    ? `At ${member.arrivalAgeYears}, ${subject} stepped out of ${member.podName}. ${readable(strongest.domain).replace(/^./, letter => letter.toUpperCase())} is ${words.possessive} strongest skill — one piece of human knowledge now standing in an empty world.`
-    : `At ${member.arrivalAgeYears}, ${subject} stepped out of ${member.podName} as a ${roleLabel(person)}. This camp begins with ${baseline.communities.find(community => community.settlementId === member.settlementId)?.founderCount ?? 0} people and no history beyond the landing.`;
+    ? `At ${member.arrivalAgeYears}, ${subject} stepped out of ${member.podName} on Arrival Day. ${words.possessive.replace(/^./, letter => letter.toUpperCase())} strongest skill is ${readable(strongest.domain)} — one piece of human knowledge now standing in an empty world.`
+    : `At ${member.arrivalAgeYears}, ${subject} stepped out of ${member.podName} on Arrival Day as a ${roleLabel(person)}. This camp begins with ${baseline.communities.find(community => community.settlementId === member.settlementId)?.founderCount ?? 0} people and no history beyond the landing.`;
   const statement = {
     id: `founding-cast-introduction-${member.personId}`,
     month: state.month,

@@ -12,6 +12,7 @@ interface ObserverMemory {
   observationSequence: number;
   attention: Map<string, ObserverAttention>;
   remarkedPredictionIds: Set<string>;
+  pendingPredictionRemarks: Map<string, string>;
 }
 
 const memories = new WeakMap<Historian, ObserverMemory>();
@@ -20,7 +21,7 @@ let installed = false;
 function memoryFor(historian: Historian): ObserverMemory {
   let memory = memories.get(historian);
   if (!memory) {
-    memory = { observationSequence: 0, attention: new Map(), remarkedPredictionIds: new Set() };
+    memory = { observationSequence: 0, attention: new Map(), remarkedPredictionIds: new Set(), pendingPredictionRemarks: new Map() };
     memories.set(historian, memory);
   }
   return memory;
@@ -38,11 +39,14 @@ export function installWatcherHistorian(): void {
   installed = true;
 
   const acquireScene = Historian.prototype.acquireScene;
-  Historian.prototype.acquireScene = function watcherAcquireScene(scene, state): void {
+  Historian.prototype.acquireScene = function watcherAcquireScene(scene, state, narrationVisible): void {
     const memory = memoryFor(this);
+    const predictionId = memory.pendingPredictionRemarks.get(scene.statement.id);
+    if (predictionId && (narrationVisible ?? (scene.editorial?.narration !== 'silent'))) memory.remarkedPredictionIds.add(predictionId);
+    memory.pendingPredictionRemarks.delete(scene.statement.id);
     memory.observationSequence += 1;
     rememberAttention(memory, scene.subjectId, state.month);
-    acquireScene.call(this, scene, state);
+    acquireScene.call(this, scene, state, narrationVisible);
   };
 
   const chooseScene = Historian.prototype.chooseScene;
@@ -129,7 +133,7 @@ function thresholdPerspective(memory: ObserverMemory, event: HistoricalEvent, st
         ? 'I have recorded war before. The scale available here changes what war can mean.'
         : 'The destructive scale of this moment has no ordinary precedent in the record.';
     case 'civilization-collapse':
-      return 'I watched generations build the systems now coming apart.';
+      return 'The record now marks a collapse of the systems this civilization built.';
     case 'civilization-recovery':
       return 'Collapse did not end this story. Something survived long enough to begin again.';
     case 'post-biological-transition':
@@ -177,14 +181,16 @@ function relatedEarlierEvent(event: HistoricalEvent, state: SimulationState): Hi
 }
 
 function callbackText(event: HistoricalEvent, earlier: HistoricalEvent): string {
-  const years = Math.max(1, Math.floor((event.month - earlier.month) / 12));
+  const months = Math.max(0, event.month - earlier.month);
+  const interval = months < 12 ? `${months} ${months === 1 ? 'month' : 'months'}`
+    : `${Math.floor(months / 12).toLocaleString()} ${months < 24 ? 'year' : 'years'}`;
   if (event.causes.includes(earlier.id)) {
-    return `The roots of this moment reach back ${years.toLocaleString()} years, to ${eventNoun(earlier.type, true)}.`;
+    return `The roots of this moment reach back ${interval}, to ${eventNoun(earlier.type, true)}.`;
   }
   if (event.locationId && earlier.locationId === event.locationId) {
-    return `I remember this place ${years.toLocaleString()} years ago, when the record marked ${eventNoun(earlier.type, true)} here.`;
+    return `I remember this place ${interval} ago, when the record marked ${eventNoun(earlier.type, true)} here.`;
   }
-  return `These lives or institutions touched the record together ${years.toLocaleString()} years ago, during ${eventNoun(earlier.type, true)}.`;
+  return `These lives or institutions touched the record together ${interval} ago, during ${eventNoun(earlier.type, true)}.`;
 }
 
 function rememberAttention(memory: ObserverMemory, subjectId: string, month: number): void {
@@ -208,7 +214,8 @@ function resolvedPredictionPerspective(historian: Historian, memory: ObserverMem
   if (scene.kind !== 'historian-context' || memory.observationSequence % 4 !== 0) return undefined;
   const resolved = [...historian.predictions].reverse().find((prediction) => prediction.resolved && !memory.remarkedPredictionIds.has(prediction.id));
   if (!resolved) return undefined;
-  memory.remarkedPredictionIds.add(resolved.id);
+  memory.pendingPredictionRemarks.set(scene.statement.id, resolved.id);
+  if (memory.pendingPredictionRemarks.size > 64) memory.pendingPredictionRemarks.delete(memory.pendingPredictionRemarks.keys().next().value!);
   const horizonYears = Math.max(1, Math.round((resolved.horizonMonth - resolved.madeMonth) / 12));
   return resolved.occurred
     ? `An earlier warning proved justified within its ${horizonYears}-year horizon. Prediction is not prophecy; this one happened to be right.`

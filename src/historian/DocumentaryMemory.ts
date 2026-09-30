@@ -6,6 +6,29 @@ interface Snapshot {
   values: Record<string, string | number | boolean>; activity?: string;
   sourceIds?: string[];
 }
+function changeText(snapshot: Snapshot, before: Snapshot, keys: string[], state: SimulationState): string {
+  const personName = (id: string | number | boolean): string => state.people.find(p => p.id === id)?.name ?? String(id);
+  const placeName = (id: string | number | boolean): string => state.settlements.find(s => s.id === id)?.name ?? String(id);
+  return keys.map(key => {
+    const from = before.values[key], to = snapshot.values[key];
+    switch (key) {
+      case 'alive': return to === false ? 'has died; the people around them carry on' : 'is now present in the living record';
+      case 'partner': return to === 'none' ? 'no longer has a recorded partner' : `now has a recorded partnership with ${personName(to!)}`;
+      case 'home': return `has moved from ${placeName(from!)} to ${placeName(to!)}`;
+      case 'children': return `has ${to} recorded children, previously ${from}`;
+      case 'occupation': return `now works as ${to}, previously ${from}`;
+      case 'activity': return `is now ${String(to).replaceAll('-', ' ')}`;
+      case 'buildings': return `has ${to} recorded buildings, previously ${from}`;
+      case 'food security band (quarters)': return `food security has ${Number(to) > Number(from) ? 'improved' : 'deteriorated'} into the ${Math.min(100, Number(to) * 25)}–${Math.min(100, (Number(to) + 1) * 25)}% range`;
+      case 'pollution band (fifths)': return `pollution has ${Number(to) > Number(from) ? 'risen' : 'fallen'} into the ${Math.min(100, Number(to) * 20)}–${Math.min(100, (Number(to) + 1) * 20)}% range`;
+      case 'construction percent (rounded down)': return `construction advanced from ${from}% to ${to}% (rounded down)`;
+      case 'blocked': return to === 'none' ? 'the recorded construction blockers have cleared' : `construction is blocked by ${String(to).replaceAll('-', ' ')}`;
+      case 'stalled': return to ? 'no construction work has been recorded for at least twelve months' : 'construction is no longer recorded as stalled';
+      default: return `${key} is now ${to}, previously ${from}`;
+    }
+  }).join('; ');
+}
+
 interface Thread {
   snapshot: Snapshot; text: string; month: number; importance: number;
   revision: number; shownRevision: number; lastShown: number; resolved: boolean;
@@ -47,7 +70,7 @@ export class DocumentaryMemory {
       const pending = this.threads.get(snapshot.id);
       if (!important.length && pending && pending.shownRevision < pending.revision && pending.importance >= 0.7) continue;
       let text = before
-        ? `${snapshot.name}: since month ${this.month}, ${changes.map(k => `${k} changed from ${before.values[k]} to ${snapshot.values[k]}`).join('; ')}.`
+        ? `${snapshot.name}: since month ${this.month}, ${changeText(snapshot, before, changes, state)}.`
         : `${snapshot.name} is under construction; recorded progress is ${snapshot.values['construction percent (rounded down)']}% (rounded down).`;
       if (before && isProject) {
         const gain = Number(snapshot.values['construction percent (rounded down)']) - Number(before.values['construction percent (rounded down)']);
@@ -94,7 +117,7 @@ export class DocumentaryMemory {
         const kind: ObservationKind = builder ? 'worker-follow' : mourner ? 'street-observation' : s.kind;
         return { id: `development:${s.id}:${t.revision}`, subjectId: person?.id ?? s.id, kind, position: { ...(person?.position ?? s.position) }, title: s.name,
           score: fresh ? t.importance : 0.48, interest: fresh ? t.importance : 0.4, audioCategory: 'settlement',
-          statement: { id: `development:${s.id}:${t.revision}:${state.month}`, month: state.month, text: fresh ? t.text : `Returning to ${s.name}, last observed changing in month ${t.month}.`,
+          statement: { id: `development:${s.id}:${t.revision}:${state.month}`, month: state.month, text: fresh ? t.text : `Returning to ${s.name}: ${s.activity ? `currently ${s.activity.replaceAll('-', ' ')}` : 'the recorded condition remains unchanged'}; the last recorded change was in month ${t.month}.`,
             epistemicStatus: 'recorded-fact', sourceEntityIds: s.sourceIds ?? [s.id], sourceEventIds: [], sourceArchiveIds: [], claims: {} },
           breakdown: { novelty: fresh ? 1 : 0, magnitude: t.importance, populationAffected: 0, rarity: 0, technological: 0, political: 0, cultural: 0, consequence: t.importance, continuity: 1, repetitionPenalty: fresh ? 0 : 0.5 },
           editorial: { subjectId: s.id, importance: t.importance, threadId: `life:${s.id}`, why: t.text,
@@ -131,9 +154,9 @@ export class DocumentaryMemory {
     return candidate;
   }
 
-  remember(candidate: ObservationCandidate, month: number): void {
+  remember(candidate: ObservationCandidate, month: number, narrated = candidate.editorial?.narration !== 'silent'): void {
     if (candidate.event) this.shownEvents.add(candidate.event.id);
-    if (candidate.editorial?.narration !== 'silent') this.spoken.add(candidate.statement.text);
+    if (narrated) this.spoken.add(candidate.statement.text);
     if (this.spoken.size > 2048) this.spoken.delete(this.spoken.values().next().value!);
     const t = this.threads.get(candidate.editorial?.subjectId ?? candidate.subjectId);
     if (t && candidate.id.startsWith('development:')) { t.shownRevision = t.revision; t.lastShown = month; }

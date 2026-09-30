@@ -220,6 +220,8 @@ export const RECIPE_BY_ID = new Map(RECIPE_CATALOG.map((definition) => [definiti
 
 export interface MaterialDefinition { id: string; name: string; spoilage: number; fuelHeat?: number }
 export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
+  { id: 'uranium-ore', name: 'Uranium ore', spoilage: 0 },
+  { id: 'steel', name: 'Steel', spoilage: 0 },
   { id: 'nuclear-fuel', name: 'Fabricated nuclear fuel', spoilage: 0 },
   { id: 'spent-nuclear-fuel', name: 'Contained spent nuclear fuel', spoilage: 0 },
   { id: 'silicon', name: 'Purified silicon', spoilage: 0 },

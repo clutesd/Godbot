@@ -7,11 +7,6 @@ import { forestFamily } from './SoilSystem';
 import { advanceMovementPaths, installMovementRoadAuthority } from './PathEvolution';
 import { installFootTrafficTracking } from '../people/FootTraffic';
 
-// Full simulations load the environmental system through ResourceSystem. Installing here keeps
-// foot traffic as an environmental side effect of represented movement without changing routing
-// authority or requiring a second people loop. The installers are idempotent.
-installFootTrafficTracking();
-installMovementRoadAuthority();
 
 /** Bounded slots per cell preserve land history without accumulating per-harvest records. */
 export function modifyLand(cell: WorldCell, kind: ModificationKind, intensity: number, month: number, ownerId?: string): void {
@@ -75,6 +70,11 @@ export function wearExtractionPath(world: WorldState, path: Vec2[], amount: numb
 
 /** Annual succession, soil loss and land-use footprint. Wood regrowth remains in WeatherSystem. */
 export function advanceEnvironment(state: SimulationState): void {
+  // Install only after module evaluation: PeopleSystem imports agriculture, which imports this
+  // module. Top-level prototype writes can otherwise run before PeopleSystem/FootTraffic initialize.
+  // ResourceSystem advances before people each month, so the first real movement is still tracked.
+  installFootTrafficTracking();
+  installMovementRoadAuthority();
   if (state.month % 12 !== 0) return;
   // Movement is allowed to become infrastructure before abandonment/recovery is assessed, so an
   // actively used corridor renews its own maintenance clock rather than being faded in the same year.
