@@ -5,11 +5,13 @@ import { FREEZING } from '../../sim/weather/Precipitation';
 import type { WeatherCellState, WorldState } from '../../sim/types';
 import { softPointTexture } from '../atmosphere/sprites';
 import { elevationToY, type TerrainSurface } from './TerrainSurface';
-import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
+import { WaterReconstruction, WATER_CLEARANCE, type WaterVertex } from './WaterReconstruction';
 import type { EcologyField } from '../ecology/EcologyField';
 import { WaterEcology } from './WaterEcology';
-import { packInlandAttributes, packInlandShader, smoothInlandWaterNormals } from './WaterAttributes';
-import { renderedGroundSampler } from './WaterGround';
+import { packInlandAttributes, packInlandShader, smoothInlandWaterNormals, weldWaterVertices } from './WaterAttributes';
+import { renderedGroundSampler, renderedGroundColorSampler } from './WaterGround';
+import { animateWaterParticles, updateWaterParticles } from './WaterParticles';
+import { WATER_OPTICS_GLSL, WATER_SKY_REFLECTION_GLSL, INLAND_WATER_COLOR_GLSL, INLAND_WATER_NORMAL_GLSL } from './WaterOptics';
 
 export interface WaterReport {
   lakeSurfaces: number;
@@ -37,8 +39,8 @@ interface WaterWeatherSummary {
   storm: number;
 }
 
-interface RapidFoam { points: THREE.Points; base: Float32Array; sites: number }
-interface PlungeFoam { points: THREE.Points; base: Float32Array; sites: number }
+interface RapidFoam { points: THREE.Points; sites: number }
+interface PlungeFoam { points: THREE.Points; sites: number }
 
 type WaterKindName = 'lake' | 'river' | 'flood';
 
@@ -49,16 +51,15 @@ const WATER_RIVER = 1;
 const WATER_FLOOD = 2;
 const WATER_TRANSITION_SECONDS = 2.4;
 const RECESSION_WET_SECONDS = 10;
-/**
- * Inland water is contoured from the canonical hydrology samples instead of drawing one visible
- * square per sample. Four render subdivisions are presentation-only: simulation authority remains
- * the original waterLevel mask.
- */
-const WATER_CONTOUR_SUBDIVISIONS = 4;
 const WATER_COVERAGE_THRESHOLD = 0.5;
-/** Tiny physical clearance only at the terrain intersection; polygon offset handles the depth fight. */
-const SHORELINE_RENDER_DEPTH = 0.00025;
-const WATER_DISCONTINUITY_Y = 0.32;
+const SHORELINE_RENDER_DEPTH = WATER_CLEARANCE;
+const WATER_CASCADE_SLOPE = 0.3;
+const reconstruction = new WeakMap<WorldState, WaterReconstruction>();
+function reconstructed(world: WorldState): WaterReconstruction {
+  let field = reconstruction.get(world);
+  if (!field) { field = new WaterReconstruction(world); reconstruction.set(world, field); }
+  return field;
+}
 
 /**
  * Everything wet. Hydrology remains authoritative; this layer only turns that truth into a
@@ -68,17 +69,13 @@ export class WaterSystem {
   readonly group = new THREE.Group();
   readonly report: WaterReport;
   private readonly ocean: THREE.Mesh;
-  private readonly oceanY: number;
+  private readonly oceanY = 0;
   private foam: THREE.Points | undefined;
-  private foamBase: Float32Array;
   private mist: THREE.Points | undefined;
-  private waterfallSheets: THREE.Mesh | undefined;
   private plungePools: THREE.Points | undefined;
-  private plungeBase: Float32Array;
   private inland: THREE.Mesh | undefined;
   private rapids: THREE.Points | undefined;
-  private rapidBase: Float32Array = new Float32Array(0);
-  private recessionWetness: THREE.Points | undefined;
+  private recessionWetness: THREE.Mesh | undefined;
   private recessionStarted = -100;
   private transitionStarted = -100;
   private lastElapsed = 0;
@@ -87,22 +84,21 @@ export class WaterSystem {
   private revision = -1;
   private readonly ecology?: WaterEcology;
 
-  constructor(private readonly world: WorldState, surface: TerrainSurface, private readonly seed: string, ecology?: EcologyField, waterComplexity: 0 | 1 | 2 = 2) {
+  constructor(private readonly world: WorldState, private readonly surface: TerrainSurface, private readonly seed: string, ecology?: EcologyField, waterComplexity: 0 | 1 | 2 = 2) {
     const span = Math.max(world.size * world.cellSize * 6, 720);
     this.group.name = 'water';
     this.group.userData['materialRevision'] = 0;
 
     const oceanMaterial = createOceanMaterial();
-    this.ocean = new THREE.Mesh(new THREE.PlaneGeometry(span, span, 96, 96), oceanMaterial);
-    this.ocean.rotation.x = -Math.PI / 2;
-    this.oceanY = surface.seaLevelY - 0.02;
-    this.ocean.position.y = this.oceanY;
+    reconstruction.set(world, new WaterReconstruction(world));
+    this.ocean = new THREE.Mesh(buildOceanGeometry(reconstructed(world), span), oceanMaterial);
+    this.ocean.name = 'ocean-water';
     this.ocean.receiveShadow = true;
     this.group.add(this.ocean);
 
     this.wetMask = currentInlandWetMask(world);
     this.freezeSnapshot = computeFreezeSnapshot(world);
-    this.inland = buildInlandWater(world, this.wetMask, this.freezeSnapshot);
+    this.inland = buildInlandWater(world, this.wetMask, this.freezeSnapshot, renderedGroundColorSampler(world, surface, seed));
     if (this.inland) this.group.add(this.inland);
     if (ecology) {
       this.ecology = new WaterEcology(world, ecology, waterComplexity);
@@ -112,25 +108,21 @@ export class WaterSystem {
 
     const rapidFoam = buildRapidFoam(world, new SeededRandom(`${seed}:rapids`));
     this.rapids = rapidFoam?.points;
-    this.rapidBase = rapidFoam?.base ?? new Float32Array(0);
     if (this.rapids) this.group.add(this.rapids);
 
     const falls = collectFalls(world);
     const waterfallRandom = new SeededRandom(`${seed}:waterfalls`);
-    const foam = buildFoam(falls, world, waterfallRandom);
+    const foam = buildFoam(falls, waterfallRandom);
     this.foam = foam?.points;
-    this.foamBase = foam?.base ?? new Float32Array(0);
     if (foam) this.group.add(foam.points);
 
-    this.mist = buildMist(falls, world, waterfallRandom);
+    this.mist = buildMist(falls, waterfallRandom);
     if (this.mist) this.group.add(this.mist);
 
-    this.waterfallSheets = buildWaterfallSheets(falls, world);
-    if (this.waterfallSheets) this.group.add(this.waterfallSheets);
+    this.revision = world.environmentRevision ?? 0;
 
-    const plunge = buildPlungePools(falls, world, new SeededRandom(`${seed}:plunge-pools`));
+    const plunge = buildPlungePools(falls, new SeededRandom(`${seed}:plunge-pools`));
     this.plungePools = plunge?.points;
-    this.plungeBase = plunge?.base ?? new Float32Array(0);
     if (this.plungePools) this.group.add(this.plungePools);
 
     this.report = {
@@ -148,16 +140,15 @@ export class WaterSystem {
     const weather = waterWeatherSummary(this.world);
     const transition = clamp01((elapsedSeconds - this.transitionStarted) / WATER_TRANSITION_SECONDS);
 
-    // Preserve the old bounded whole-plane motion for deterministic camera/terrain separation;
-    // all stronger weather motion happens inside the subdivided ocean shader.
-    this.ocean.position.y = this.oceanY + Math.sin(elapsedSeconds * 0.42) * 0.0016;
+    // The coast shares exact geometry edges; wave motion changes normals, never the seam height.
+    this.ocean.position.y = this.oceanY;
     setWaterPresentation(this.ocean, elapsedSeconds, weather, 1);
     setWaterPresentation(this.inland, elapsedSeconds, weather, transition);
-    setWaterPresentation(this.waterfallSheets, elapsedSeconds, weather, 1);
+    // Cascades share the inland material and its transition state.
 
-    this.updateRapidFoam(elapsedSeconds);
-    this.updatePlungePools(elapsedSeconds);
-    this.updateWaterfallFoam(elapsedSeconds);
+    updateWaterParticles(this.rapids, elapsedSeconds);
+    updateWaterParticles(this.plungePools, elapsedSeconds);
+    updateWaterParticles(this.foam, elapsedSeconds);
     this.updateRecessionWetness(elapsedSeconds);
 
     if (this.mist) {
@@ -195,7 +186,9 @@ export class WaterSystem {
       this.group.remove(this.inland);
       disposeObject(this.inland);
     }
-    this.inland = buildInlandWater(this.world, previousWet, previousFreeze);
+    this.inland = buildInlandWater(this.world, previousWet, previousFreeze, renderedGroundColorSampler(this.world, this.surface, this.seed));
+    this.ocean.geometry.dispose();
+    this.ocean.geometry = buildOceanGeometry(reconstructed(this.world), Math.max(this.world.size * this.world.cellSize * 6, 720));
     this.ecology?.refreshTerrain();
     this.ecology?.bind(this.inland, false);
     if (this.inland) this.group.add(this.inland);
@@ -209,24 +202,20 @@ export class WaterSystem {
     }
     const rapidFoam = buildRapidFoam(this.world, new SeededRandom(`${this.seed}:rapids`));
     this.rapids = rapidFoam?.points;
-    this.rapidBase = rapidFoam?.base ?? new Float32Array(0);
     if (this.rapids) this.group.add(this.rapids);
     this.report.rapidSites = rapidFoam?.sites ?? 0;
     // Falls belong to current hydrology too: retired channels must not keep pouring onto dry land.
-    for (const object of [this.foam, this.mist, this.waterfallSheets, this.plungePools]) {
+    for (const object of [this.foam, this.mist, this.plungePools]) {
       if (object) { this.group.remove(object); disposeObject(object); }
     }
     const falls = collectFalls(this.world);
     const random = new SeededRandom(`${this.seed}:waterfalls`);
-    const foam = buildFoam(falls, this.world, random);
+    const foam = buildFoam(falls, random);
     this.foam = foam?.points;
-    this.foamBase = foam?.base ?? new Float32Array(0);
-    this.mist = buildMist(falls, this.world, random);
-    this.waterfallSheets = buildWaterfallSheets(falls, this.world);
-    const plunge = buildPlungePools(falls, this.world, new SeededRandom(`${this.seed}:plunge-pools`));
+    this.mist = buildMist(falls, random);
+    const plunge = buildPlungePools(falls, new SeededRandom(`${this.seed}:plunge-pools`));
     this.plungePools = plunge?.points;
-    this.plungeBase = plunge?.base ?? new Float32Array(0);
-    for (const object of [this.foam, this.mist, this.waterfallSheets, this.plungePools]) {
+    for (const object of [this.foam, this.mist, this.plungePools]) {
       if (object) this.group.add(object);
     }
     this.report.waterfalls = falls.length;
@@ -244,64 +233,9 @@ export class WaterSystem {
   /** Geometry/materials are disposed by the renderer's scene traversal. */
   dispose(): void { this.ecology?.dispose(); }
 
-  private updateRapidFoam(elapsedSeconds: number): void {
-    if (!this.rapids) return;
-    const positions = this.rapids.geometry.getAttribute('position') as THREE.BufferAttribute;
-    const stride = 8;
-    for (let index = 0; index < positions.count; index += 1) {
-      const base = index * stride;
-      const x = this.rapidBase[base] ?? 0;
-      const y = this.rapidBase[base + 1] ?? 0;
-      const z = this.rapidBase[base + 2] ?? 0;
-      const dirX = this.rapidBase[base + 3] ?? 0;
-      const dirZ = this.rapidBase[base + 4] ?? 0;
-      const phase = this.rapidBase[base + 5] ?? 0;
-      const travel = this.rapidBase[base + 6] ?? 0;
-      const speed = this.rapidBase[base + 7] ?? 1;
-      const progress = ((elapsedSeconds * speed + phase) % 1) - 0.5;
-      positions.setXYZ(index, x + dirX * progress * travel, y + Math.sin((progress + phase) * Math.PI * 2) * 0.004, z + dirZ * progress * travel);
-    }
-    positions.needsUpdate = true;
-  }
-
-  private updatePlungePools(elapsedSeconds: number): void {
-    if (!this.plungePools) return;
-    const positions = this.plungePools.geometry.getAttribute('position') as THREE.BufferAttribute;
-    const stride = 8;
-    for (let index = 0; index < positions.count; index += 1) {
-      const base = index * stride;
-      const cx = this.plungeBase[base] ?? 0;
-      const y = this.plungeBase[base + 1] ?? 0;
-      const cz = this.plungeBase[base + 2] ?? 0;
-      const dirX = this.plungeBase[base + 3] ?? 0;
-      const dirZ = this.plungeBase[base + 4] ?? 0;
-      const phase = this.plungeBase[base + 5] ?? 0;
-      const radius = this.plungeBase[base + 6] ?? 0.2;
-      const speed = this.plungeBase[base + 7] ?? 0.5;
-      const progress = (elapsedSeconds * speed + phase) % 1;
-      const angle = phase * Math.PI * 2 + progress * 0.7;
-      const radialX = Math.cos(angle) * 0.68 + dirX * 0.42;
-      const radialZ = Math.sin(angle) * 0.68 + dirZ * 0.42;
-      positions.setXYZ(index, cx + radialX * radius * progress, y + Math.sin(progress * Math.PI) * 0.012, cz + radialZ * radius * progress);
-    }
-    positions.needsUpdate = true;
-  }
-
-  private updateWaterfallFoam(elapsedSeconds: number): void {
-    if (!this.foam) return;
-    const positions = this.foam.geometry.getAttribute('position') as THREE.BufferAttribute;
-    for (let index = 0; index < positions.count; index += 1) {
-      const baseY = this.foamBase[index * 2] ?? 0;
-      const drop = this.foamBase[index * 2 + 1] ?? 1;
-      const phase = (elapsedSeconds * 0.55 + index * 0.137) % 1;
-      positions.setY(index, baseY - phase * drop);
-    }
-    positions.needsUpdate = true;
-  }
-
   private updateRecessionWetness(elapsedSeconds: number): void {
     if (!this.recessionWetness) return;
-    const material = this.recessionWetness.material as THREE.PointsMaterial;
+    const material = this.recessionWetness.material as THREE.MeshStandardMaterial;
     const age = elapsedSeconds - this.recessionStarted;
     const remaining = clamp01(1 - age / RECESSION_WET_SECONDS);
     material.opacity = 0.22 * remaining * remaining;
@@ -319,6 +253,7 @@ function countChannel(values: Uint8Array): number {
 }
 
 function disposeObject(object: THREE.Object3D): void {
+  for (const child of object.children) disposeObject(child);
   if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.LineSegments) {
     object.geometry.dispose();
     const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -440,9 +375,10 @@ function createOceanMaterial(): THREE.MeshPhysicalMaterial {
   const material = new THREE.MeshPhysicalMaterial({
     color: '#2b6d78',
     roughness: 0.2,
-    metalness: 0.01,
+    metalness: 0,
+    ior: 1.333,
     depthWrite: true,
-    clearcoat: 0.78,
+    clearcoat: 0.08,
     clearcoatRoughness: 0.18,
   });
   const state = createMaterialState();
@@ -457,29 +393,32 @@ function createOceanMaterial(): THREE.MeshPhysicalMaterial {
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterWind;\nuniform float waterWindX;\nuniform float waterWindZ;\nuniform float waterStorm;\nvarying vec2 vWaterLocal;`);
     // Keep the ocean geometry physically smooth. Wave shape belongs in the fragment normal; vertex
     // displacement on the very large plane exposes its triangles as long diagonal facets at low angles.
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterLocal = position.xy;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterWind;\nuniform float waterWindX;\nuniform float waterWindZ;\nuniform float waterRain;\nuniform float waterStorm;\nvarying vec2 vWaterLocal;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nvec2 oceanWindDirection = normalize(vec2(waterWindX, waterWindZ) + vec2(0.0001));\nfloat oceanAlong = dot(vWaterLocal, oceanWindDirection);\nfloat oceanAcross = dot(vWaterLocal, vec2(-oceanWindDirection.y, oceanWindDirection.x));\nfloat oceanCrossA = sin(oceanAlong * (0.12 + waterWind * 0.05) - waterTime * (0.48 + waterWind * 0.5));\nfloat oceanCrossB = sin(oceanAcross * 0.16 + oceanAlong * 0.035 + waterTime * 0.31);\nfloat oceanRipple = (oceanCrossA + oceanCrossB) * 0.5;\n// Incommensurate world-space bands keep large water coherent without revealing the plane mesh.\nfloat oceanWanderA = sin(vWaterLocal.x * 0.071 + vWaterLocal.y * 0.043 - waterTime * 0.19);\nfloat oceanWanderB = sin(vWaterLocal.x * -0.037 + vWaterLocal.y * 0.089 + waterTime * 0.16 + oceanWanderA * 0.72);\nfloat oceanWanderC = sin((vWaterLocal.x + vWaterLocal.y) * 0.021 - waterTime * 0.075 + oceanWanderB * 0.55);\nfloat oceanBreath = oceanWanderA * 0.38 + oceanWanderB * 0.37 + oceanWanderC * 0.25;\nfloat oceanSilk = pow(max(0.0, 0.5 + 0.5 * (oceanRipple * 0.58 + oceanBreath * 0.42)), 7.0);\nfloat rainDimple = sin(vWaterLocal.x * 8.1 + waterTime * 8.4) * sin(vWaterLocal.y * 7.3 - waterTime * 7.7);\nfloat oceanGlint = smoothstep(0.66, 0.99, oceanRipple * 0.68 + oceanBreath * 0.32) * (0.08 + waterWind * 0.05);\nvec3 oceanDeep = vec3(0.055, 0.20, 0.27);\nvec3 oceanJewel = vec3(0.16, 0.48, 0.53);\ndiffuseColor.rgb = mix(diffuseColor.rgb, oceanDeep, 0.055 + max(0.0, -oceanBreath) * 0.035);\ndiffuseColor.rgb = mix(diffuseColor.rgb, oceanJewel, max(0.0, oceanBreath) * 0.055);\ndiffuseColor.rgb *= 1.0 + oceanRipple * (0.018 + waterWind * 0.010);\ndiffuseColor.rgb += vec3(0.16, 0.25, 0.26) * oceanGlint;\ndiffuseColor.rgb += vec3(0.10, 0.22, 0.24) * oceanSilk * (0.018 + waterWind * 0.012);\ndiffuseColor.rgb += vec3(0.11, 0.14, 0.15) * max(0.0, rainDimple) * waterRain * 0.045;\ndiffuseColor.rgb *= 1.0 - waterStorm * 0.07;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterLocal = (modelMatrix * vec4(transformed, 1.0)).xz;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+      uniform float waterTime;
+      uniform float waterWind;
+      uniform float waterWindX;
+      uniform float waterWindZ;
+      uniform float waterRain;
+      uniform float waterStorm;
+      varying vec2 vWaterLocal;
+      ${WATER_OPTICS_GLSL}`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float waterOpen = 1.0;
+      vec2 oceanWindDirection = vec2(waterWindX, waterWindZ);
+      vec3 oceanCurrent = waterAdvectedField(vWaterLocal,oceanWindDirection*0.18,waterTime,0.32);
+      diffuseColor.rgb *= 0.88+oceanCurrent.x*0.16;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
-vec2 oceanNormalWind = normalize(vec2(waterWindX, waterWindZ) + vec2(0.0001));
-vec2 oceanNormalAcross = vec2(-oceanNormalWind.y, oceanNormalWind.x);
-float oceanNormalAlong = dot(vWaterLocal, oceanNormalWind);
-float oceanNormalCross = dot(vWaterLocal, oceanNormalAcross);
-float oceanNormalEnergy = 0.62 + waterWind * 0.9 + waterStorm * 1.35;
-float oceanNormalA = oceanNormalAlong * 0.032 - waterTime * (0.28 + waterWind * 0.28);
-float oceanNormalB = oceanNormalAlong * 0.055 + oceanNormalCross * 0.018 - waterTime * (0.21 + waterWind * 0.18);
-float oceanNormalC = oceanNormalCross * 0.082 + waterTime * 0.17;
-float oceanSlopeAlong = (cos(oceanNormalA) * 0.020 * 0.032 + cos(oceanNormalB) * 0.011 * 0.055) * oceanNormalEnergy;
-float oceanSlopeAcross = (cos(oceanNormalB) * 0.011 * 0.018 + cos(oceanNormalC) * 0.004 * 0.082) * oceanNormalEnergy;
-vec2 oceanGradient = oceanNormalWind * oceanSlopeAlong + oceanNormalAcross * oceanSlopeAcross;
-vec3 oceanWorldNormal = normalize(vec3(-oceanGradient.x * 8.0, 1.0, -oceanGradient.y * 8.0));
-vec3 oceanWaveNormal = normalize((viewMatrix * vec4(oceanWorldNormal, 0.0)).xyz);
-// Preserve any ecology/rain micro-detail already applied earlier in the material chain.
-normal = normalize(mix(normal, oceanWaveNormal, 0.68));
-nonPerturbedNormal = normal;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor + waterStorm * 0.08 + waterRain * 0.04, 0.08, 0.9);`);
+      vec2 oceanGradient = waterWindSlope(vWaterLocal,oceanWindDirection,waterTime,waterWind,waterStorm);
+      normal = normalize(normal+(viewMatrix*vec4(-oceanGradient.x,0,-oceanGradient.y,0)).xyz);
+      nonPerturbedNormal = normal;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = clamp(roughnessFactor+waterWind*0.055+waterStorm*0.10+waterRain*0.045
+        +waterDetailRoughness(vWaterLocal,3.4)*0.26,0.16,0.72);`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+${WATER_SKY_REFLECTION_GLSL}`);
   };
-  material.customProgramCacheKey = () => 'godbox-ocean-water-v6-layered-smooth-surface';
+  material.customProgramCacheKey = () => 'godbox-ocean-water-v8-distance-roughness';
   return material;
 }
 
@@ -489,16 +428,17 @@ nonPerturbedNormal = normal;`);
  */
 function createInlandMaterial(): THREE.MeshPhysicalMaterial {
   const material = new THREE.MeshPhysicalMaterial({
-    // The geometry retains its diagnostic colour attribute, but the visible surface colour is
-    // world-space/depth driven so per-cell hydrology can never appear as a checkerboard.
+    // Reuse the colour buffer as the submerged terrain palette. The shader applies depth
+    // absorption explicitly instead of multiplying terrain colour across deep water.
     vertexColors: false,
     roughness: 0.22,
-    metalness: 0.01,
+    metalness: 0,
+    ior: 1.333,
     depthWrite: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
-    clearcoat: 0.62,
+    clearcoat: 0.08,
     clearcoatRoughness: 0.2,
   });
   const state = createMaterialState();
@@ -506,29 +446,43 @@ function createInlandMaterial(): THREE.MeshPhysicalMaterial {
   material.onBeforeCompile = shader => {
     shader.uniforms['waterTime'] = state.time;
     shader.uniforms['waterTransition'] = state.transition;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterTransition;\nattribute float waterDepth;\nattribute float waterFlow;\nattribute vec2 waterFlowDirection;\nattribute float waterKind;\nattribute float waterHierarchy;\nattribute float waterRapid;\nattribute vec2 waterWindDirection;\nattribute float waterWind;\nattribute float waterRain;\nattribute float waterStorm;\nattribute float waterFreezePrevious;\nattribute float waterFreeze;\nattribute float waterSnow;\nattribute float waterEmergence;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterDepth = waterDepth;\nvWaterFlow = waterFlow;\nvWaterFlowDirection = waterFlowDirection;\nvWaterKind = waterKind;\nvWaterHierarchy = waterHierarchy;\nvWaterRapid = waterRapid;\nvWaterRain = waterRain;\nvWaterWind = waterWind;\nvWaterStorm = waterStorm;\nvWaterSnow = waterSnow;\nvWaterIce = mix(waterFreezePrevious, waterFreeze, waterTransition);\n// Keep shared vertices fixed; moving normals carry the waves without opening cracks.\nvWaterPosition = transformed;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat waterRiver = 1.0 - step(0.49, abs(vWaterKind - 1.0));\nfloat waterLake = 1.0 - step(0.49, abs(vWaterKind));\nfloat waterFlood = max(0.0, 1.0 - waterRiver - waterLake);\nfloat waterShallow = 1.0 - smoothstep(0.025, 0.20, vWaterDepth);\nfloat waterDeep = smoothstep(0.16, 0.82, vWaterDepth);\nfloat waterBank = 1.0 - smoothstep(0.008, 0.060, vWaterDepth);\nvec3 waterShallowTint = vec3(0.39, 0.64, 0.61);\nvec3 waterDeepTint = vec3(0.075, 0.25, 0.31);\nvec3 waterLakeTint = vec3(0.16, 0.39, 0.43);\nvec3 waterRiverTint = mix(vec3(0.17, 0.42, 0.43), vec3(0.08, 0.31, 0.36), vWaterHierarchy);\nvec3 waterFloodTint = vec3(0.30, 0.34, 0.24);\nvec3 lakeBankTint = vec3(0.25, 0.43, 0.38);\nvec3 riverBankTint = vec3(0.29, 0.32, 0.22);\nvec3 floodBankTint = vec3(0.34, 0.29, 0.18);\nvec3 bankTint = lakeBankTint * waterLake + riverBankTint * waterRiver + floodBankTint * waterFlood;\n// Semantic colour begins from interpolated depth/type instead of per-cell vertex colour.\nvec3 waterBodyTint = waterLakeTint * waterLake + waterRiverTint * waterRiver + waterFloodTint * waterFlood;\ndiffuseColor.rgb = waterBodyTint;\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterShallowTint, waterShallow * (0.28 + waterLake * 0.06));\ndiffuseColor.rgb = mix(diffuseColor.rgb, waterDeepTint, waterDeep * (0.46 + waterRiver * 0.08));\ndiffuseColor.rgb = mix(diffuseColor.rgb, bankTint, waterBank * (0.19 + waterFlood * 0.17));\nvec2 waterDirection = length(vWaterFlowDirection) > 0.01 ? normalize(vWaterFlowDirection) : vec2(0.7071, 0.7071);\nvec2 waterAcross = vec2(-waterDirection.y, waterDirection.x);\nfloat waterCurrentCoordinate = dot(vWaterPosition.xz, waterDirection);\nfloat waterAcrossCoordinate = dot(vWaterPosition.xz, waterAcross);\nfloat lakeRipple = (sin(vWaterPosition.x * 0.86 + waterTime * (0.34 + vWaterWind * 0.36)) + sin(vWaterPosition.z * 0.74 - waterTime * 0.31)) * 0.5;\nfloat riverCurrent = sin(waterCurrentCoordinate * (1.5 + vWaterHierarchy * 0.65) - waterTime * (1.45 + vWaterFlow * 2.2) + sin(waterAcrossCoordinate * 1.35) * 0.38);\nfloat currentLane = pow(max(0.0, 0.5 + 0.5 * riverCurrent), 7.0) * waterRiver;\nfloat rapidCrest = pow(max(0.0, sin(waterCurrentCoordinate * 5.2 - waterTime * (3.5 + vWaterFlow * 3.0) + waterAcrossCoordinate * 0.9)), 9.0) * vWaterRapid * waterRiver;\nfloat rainScatter = max(0.0, sin(vWaterPosition.x * 8.2 + waterTime * 8.6) * sin(vWaterPosition.z * 7.5 - waterTime * 7.9)) * vWaterRain;\nfloat waterRipple = lakeRipple * waterLake + riverCurrent * 0.55 * waterRiver + lakeRipple * 0.18 * waterFlood;\nwaterRipple *= 1.0 - vWaterIce * 0.94;\n// Slow world-space silk sits beneath the fast ripples, so the surface appears to breathe.\nfloat wanderA = sin(vWaterPosition.x * 0.31 + vWaterPosition.z * 0.19 - waterTime * 0.19);\nfloat wanderB = sin(vWaterPosition.x * -0.17 + vWaterPosition.z * 0.39 + waterTime * 0.15 + wanderA * 0.52);\nfloat wanderC = sin((vWaterPosition.x + vWaterPosition.z) * 0.085 - waterTime * 0.09 + wanderB * 0.40);\nfloat waterWander = wanderA * 0.36 + wanderB * 0.39 + wanderC * 0.25;\nfloat waterSilk = pow(max(0.0, 0.5 + 0.5 * (waterRipple * 0.48 + waterWander * 0.52)), 5.0);\nfloat waterGlint = smoothstep(0.67, 0.98, waterRipple * 0.70 + waterWander * 0.30) * smoothstep(0.025, 0.12, vWaterDepth);\nfloat shorelinePearl = waterBank * (0.5 + 0.5 * sin(vWaterPosition.x * 1.31 + vWaterPosition.z * 1.07 - waterTime * 0.34 + waterWander));\nvec3 jewelTint = mix(vec3(0.10, 0.42, 0.43), vec3(0.17, 0.51, 0.55), 0.5 + 0.5 * waterWander);\ndiffuseColor.rgb = mix(diffuseColor.rgb, jewelTint, waterSilk * (0.028 + waterLake * 0.014) * (1.0 - vWaterIce));\ndiffuseColor.rgb *= 1.0 + waterRipple * (0.006 + waterRiver * 0.006);\ndiffuseColor.rgb += vec3(0.12, 0.20, 0.20) * waterGlint * 0.16;\ndiffuseColor.rgb += vec3(0.16, 0.29, 0.25) * shorelinePearl * 0.028 * (1.0 - vWaterIce);\ndiffuseColor.rgb += vec3(0.10, 0.18, 0.17) * currentLane * (0.04 + vWaterFlow * 0.05) * (1.0 - vWaterIce);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.88, 0.86), rapidCrest * 0.52 * (1.0 - vWaterIce));\ndiffuseColor.rgb += vec3(0.10, 0.13, 0.13) * rainScatter * 0.055 * (1.0 - vWaterIce);\ndiffuseColor.rgb *= 1.0 - vWaterStorm * 0.045;\nvec3 iceTint = mix(vec3(0.43, 0.59, 0.62), vec3(0.62, 0.72, 0.73), waterLake);\ndiffuseColor.rgb = mix(diffuseColor.rgb, iceTint, vWaterIce * 0.74);\nfloat snowOnIce = smoothstep(0.72, 0.96, vWaterIce) * smoothstep(0.008, 0.07, vWaterSnow);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.88, 0.87), snowOnIce * 0.48);`);
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nuniform float waterTransition;\nattribute vec3 waterBedColour;\nvarying vec3 vWaterBedColour;\nattribute float waterDepth;\nattribute float waterFlow;\nattribute vec2 waterFlowDirection;\nattribute float waterKind;\nattribute float waterHierarchy;\nattribute float waterRapid;\nattribute vec2 waterWindDirection;\nattribute float waterWind;\nattribute float waterRain;\nattribute float waterStorm;\nattribute float waterFreezePrevious;\nattribute float waterFreeze;\nattribute float waterSnow;\nattribute float waterEmergence;\nvarying float vWaterDepth;\nvarying float vWaterFlow;\nvarying vec2 vWaterFlowDirection;\nvarying vec2 vWaterWindDirection;\nvarying float vWaterKind;\nvarying float vWaterHierarchy;\nvarying float vWaterRapid;\nvarying float vWaterRain;\nvarying float vWaterWind;\nvarying float vWaterStorm;\nvarying float vWaterIce;\nvarying float vWaterSnow;\nvarying vec3 vWaterPosition;`);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvWaterBedColour = waterBedColour;\nvWaterDepth = waterDepth;\nvWaterFlow = waterFlow;\nvWaterFlowDirection = waterFlowDirection;\nvWaterWindDirection = waterWindDirection;\nvWaterKind = waterKind;\nvWaterHierarchy = waterHierarchy;\nvWaterRapid = waterRapid;\nvWaterRain = waterRain;\nvWaterWind = waterWind;\nvWaterStorm = waterStorm;\nvWaterSnow = waterSnow;\nvWaterIce = mix(waterFreezePrevious, waterFreeze, waterTransition);\n// Keep shared vertices fixed; moving normals carry the waves without opening cracks.\nvWaterPosition = transformed;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+      uniform float waterTime;
+      varying vec3 vWaterBedColour;
+      varying float vWaterDepth;
+      varying float vWaterFlow;
+      varying vec2 vWaterFlowDirection;
+      varying vec2 vWaterWindDirection;
+      varying float vWaterKind;
+      varying float vWaterHierarchy;
+      varying float vWaterRapid;
+      varying float vWaterRain;
+      varying float vWaterWind;
+      varying float vWaterStorm;
+      varying float vWaterIce;
+      varying float vWaterSnow;
+      varying vec3 vWaterPosition;
+      ${WATER_OPTICS_GLSL}`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+${INLAND_WATER_COLOR_GLSL}`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
-      // Continuous world-space ripples make even the lowest detail water catch the light.
-      float rippleShore = smoothstep(0.0, 0.08, vWaterDepth) * (1.0 - vWaterIce);
-      vec2 rippleSlope = vec2(
-        cos(vWaterPosition.x * 0.88 + vWaterPosition.z * 0.31 - waterTime * 0.72),
-        sin(vWaterPosition.z * 0.97 - vWaterPosition.x * 0.24 + waterTime * 0.54)) * 0.026 * rippleShore;
-      vec3 broadWaterNormal = normalize((viewMatrix * vec4(normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y)), 0.0)).xyz);
-      // Blend into the smooth geometric/ecology normal instead of replacing real river slope.
-      normal = normalize(mix(normal, broadWaterNormal, 0.40));
-      nonPerturbedNormal = normal;
-    `);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = clamp(mix(roughnessFactor, 0.68, vWaterIce * 0.78) + vWaterStorm * 0.035, 0.08, 0.92);`);
+${INLAND_WATER_NORMAL_GLSL}`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = clamp(roughnessFactor+vWaterWind*0.025+vWaterStorm*0.07+vWaterRain*0.035
+        +waterFoam*0.32+waterFlood*0.10+(waterCurrent.x-0.5)*0.035
+        +waterDetailRoughness(vWaterPosition.xz,1.9)*0.24,0.16,0.8);
+      roughnessFactor = mix(roughnessFactor,0.38+snowOnIce*0.42,vWaterIce);`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+${WATER_SKY_REFLECTION_GLSL}`);
   };
   const compile = material.onBeforeCompile;
   material.onBeforeCompile = (shader, renderer) => {
     compile.call(material, shader, renderer);
     shader.vertexShader = packInlandShader(shader.vertexShader);
   };
-  material.customProgramCacheKey = () => 'godbox-inland-water-v8-layered-continuous-surface';
+  material.customProgramCacheKey = () => 'godbox-inland-water-v11-distance-roughness';
   return material;
 }
 
@@ -541,49 +495,48 @@ interface FallSite {
   drop: number;
   intensity: number;
   direction: readonly [number, number];
+  endX: number;
+  endZ: number;
+  halfWidth: number;
 }
 
 function collectFalls(world: WorldState): FallSite[] {
   const { terrain, seaLevel } = world;
-  const { resolution, step, originX, originZ, fall, height } = terrain;
+  const { resolution, step, originX, originZ, fall } = terrain;
   const sites: FallSite[] = [];
-  for (let z = 1; z < resolution - 1; z += 1) {
-    for (let x = 1; x < resolution - 1; x += 1) {
-      const index = z * resolution + x;
-      const intensity = read(fall, index);
-      if (intensity < 0.22 || terrain.waterLevel[index]! < 0 || !terrain.river[index]) continue;
-      let lowest = read(height, index);
-      let lowestIndex = index;
-      for (const offset of [-1, 1, -resolution, resolution]) {
-        const candidate = index + offset;
-        if (read(height, candidate) < lowest) {
-          lowest = read(height, candidate);
-          lowestIndex = candidate;
-        }
-      }
-      const groundDrop = elevationToY(read(height, index), seaLevel) - elevationToY(lowest, seaLevel);
-      if (groundDrop < 0.7) continue;
-      const level = terrain.waterLevel[index] ?? -1;
-      const topY = level >= 0 ? elevationToY(level, seaLevel) : elevationToY(read(height, index), seaLevel);
-      const bottomY = elevationToY(lowest, seaLevel) + 0.03;
-      let direction = flowDirectionAt(world, index);
-      if (Math.hypot(direction[0], direction[1]) < 0.5) {
-        const dx = lowestIndex % resolution - x;
-        const dz = Math.floor(lowestIndex / resolution) - z;
-        const length = Math.hypot(dx, dz);
-        direction = length > 0 ? [dx / length, dz / length] : [0, 1];
-      }
-      sites.push({ index, worldX: originX + x * step, worldZ: originZ + z * step, topY, bottomY, drop: Math.max(0.7, topY - bottomY), intensity, direction });
+  const groundAt = renderedGroundSampler(world);
+  for (let index = 0; index < fall.length; index++) {
+    const intensity = read(fall, index);
+    if (intensity < 0.22 || terrain.waterLevel[index]! < 0 || !terrain.river[index]) continue;
+    // Only the mapped drainage edge can own a fall. A nearby low hillside is not an outlet.
+    const next = terrain.drainage?.downstream[index] ?? -1;
+    if (next < 0 || next >= fall.length || next === index || terrain.waterLevel[next]! < 0) continue;
+    const direction = flowDirectionAt(world,index);
+    const topY = elevationToY(terrain.waterLevel[index]!,seaLevel);
+    const bottomY = elevationToY(terrain.waterLevel[next]!,seaLevel);
+    const drop = topY-bottomY;
+    if (drop < 0.12) continue;
+    const x = originX+(index%resolution)*step;
+    const z = originZ+Math.floor(index/resolution)*step;
+    const endX = originX+(next%resolution)*step;
+    const endZ = originZ+Math.floor(next/resolution)*step;
+    // The canonical nearest-sample discontinuity lies midway along the routed edge.
+    const worldX = x;
+    const worldZ = z;
+    let halfWidth = step*(0.12+clamp01(terrain.flow[index]!)*0.16);
+    // Keep both lip and impact inside wet terrain; spectacle never expands the channel.
+    for (let attempt=0; attempt<8; attempt++) {
+      const supported = [-1,1].every(side => [[worldX,worldZ,topY],[endX,endZ,bottomY]].every(([cx,cz,y]) => {
+        const px = cx! - direction[1]*halfWidth*side;
+        const pz = cz! + direction[0]*halfWidth*side;
+        return inlandWetCoverageAt(world,px,pz)>=WATER_COVERAGE_THRESHOLD && groundAt(px,pz)<y!;
+      }));
+      if (supported) break;
+      halfWidth *= 0.7;
     }
+    sites.push({index,worldX,worldZ,topY,bottomY,drop,intensity,direction,endX,endZ,halfWidth});
   }
-  sites.sort((a, b) => b.intensity * b.drop - a.intensity * a.drop);
-  const kept: FallSite[] = [];
-  for (const site of sites) {
-    if (kept.some((other) => Math.hypot(other.worldX - site.worldX, other.worldZ - site.worldZ) < world.cellSize * 2.5)) continue;
-    kept.push(site);
-    if (kept.length >= 8) break;
-  }
-  return kept;
+  return sites;
 }
 
 function maxDrainageAccumulation(world: WorldState): number {
@@ -637,184 +590,30 @@ function waterKindAt(world: WorldState, index: number): number {
   return WATER_FLOOD;
 }
 
-/**
- * A mapped waterfall is the only place where neighbouring river samples are allowed to become
- * separate water surfaces. Ordinary downhill channel samples must stay connected; treating a
- * steep but continuous reach as a discontinuity creates floating shelves from low camera angles.
- */
-function touchesMappedWaterfall(world: WorldState, index: number): boolean {
-  const { terrain } = world;
-  if (index < 0 || index >= terrain.river.length || !terrain.river[index]) return false;
-  if ((terrain.fall[index] ?? 0) >= 0.22) return true;
-  const downstream = terrain.drainage?.downstream;
-  if (!downstream) return false;
-  const x = index % terrain.resolution;
-  const z = Math.floor(index / terrain.resolution);
-  for (let dz = -1; dz <= 1; dz += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      if (dx === 0 && dz === 0) continue;
-      const nx = x + dx, nz = z + dz;
-      if (nx < 0 || nz < 0 || nx >= terrain.resolution || nz >= terrain.resolution) continue;
-      const neighbour = nz * terrain.resolution + nx;
-      if ((terrain.fall[neighbour] ?? 0) >= 0.22 && downstream[neighbour] === index) return true;
-    }
-  }
-  return false;
+function inlandWetCoverageAt(world: WorldState, x: number, z: number): number {
+  return reconstructed(world).sample(x, z).depth > WATER_CLEARANCE ? 1 : 0;
 }
-
-/** A fine sample is inland-wet only when the canonical hydrology owns water there. */
-function inlandWetSample(world: WorldState, index: number): boolean {
-  return index >= 0
-    && index < world.terrain.waterLevel.length
-    && world.terrain.waterLevel[index]! >= 0
-    && world.terrain.height[index]! >= world.seaLevel;
+function waterSurfaceYAt(world: WorldState, x: number, z: number): number {
+  return reconstructed(world).sample(x, z).y;
 }
+type InlandVertex = WaterVertex;
 
-/**
- * Bilinear coverage over the binary hydrology mask. The 0.5 contour is the same nearest-sample
- * authority boundary used by simulation queries on straight banks, while corners and bends become
- * continuous instead of visible square tiles.
- */
-function inlandWetCoverageAt(world: WorldState, worldX: number, worldZ: number): number {
-  const { terrain } = world;
-  const fx = (worldX - terrain.originX) / terrain.step;
-  const fz = (worldZ - terrain.originZ) / terrain.step;
-  const x0 = Math.floor(fx), z0 = Math.floor(fz);
-  const tx = fx - x0, tz = fz - z0;
-  const wet = (x: number, z: number): number => {
-    if (x < 0 || z < 0 || x >= terrain.resolution || z >= terrain.resolution) return 0;
-    return inlandWetSample(world, z * terrain.resolution + x) ? 1 : 0;
+/** The ocean owns only ocean faces. Mixed coast faces belong to the inland skin and meet this
+ * mesh at identical sea-level edges. There is no second plane beneath the mouth to depth-fight. */
+function buildOceanGeometry(field: WaterReconstruction, span: number): THREE.BufferGeometry {
+  const positions: number[] = [];
+  field.forEachFace((face, ocean) => { if (ocean) for (const p of face) positions.push(p.x, p.y, p.z); });
+  const t = field.world.terrain;
+  const x0 = t.originX, z0 = t.originZ, x1 = x0 + (t.resolution - 1) * t.step, z1 = z0 + (t.resolution - 1) * t.step;
+  const r = span / 2;
+  const rect = (ax: number, az: number, bx: number, bz: number): void => {
+    for (const [x, z] of [[ax, az], [ax, bz], [bx, az], [bx, az], [ax, bz], [bx, bz]]) positions.push(x!, WATER_CLEARANCE, z!);
   };
-  const a = wet(x0, z0), b = wet(x0 + 1, z0);
-  const c = wet(x0, z0 + 1), d = wet(x0 + 1, z0 + 1);
-  const top = a + (b - a) * tx;
-  const bottom = c + (d - c) * tx;
-  return top + (bottom - top) * tz;
-}
-
-/** Nearest canonical wet sample for categorical flow/type/weather attributes. */
-function dominantWetSampleAt(world: WorldState, worldX: number, worldZ: number): number {
-  const { terrain } = world;
-  const fx = (worldX - terrain.originX) / terrain.step;
-  const fz = (worldZ - terrain.originZ) / terrain.step;
-  const cx = Math.round(fx), cz = Math.round(fz);
-  let best = -1;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (let radius = 0; radius <= 2 && best < 0; radius += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) for (let dx = -radius; dx <= radius; dx += 1) {
-      if (radius > 0 && Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
-      const x = cx + dx, z = cz + dz;
-      if (x < 0 || z < 0 || x >= terrain.resolution || z >= terrain.resolution) continue;
-      const index = z * terrain.resolution + x;
-      if (!inlandWetSample(world, index)) continue;
-      const distance = (x - fx) ** 2 + (z - fz) ** 2;
-      if (distance < bestDistance) { best = index; bestDistance = distance; }
-    }
-  }
-  return best;
-}
-
-/**
- * One canonical water height for a world position. Every triangle that touches the same position
- * receives the same Y, which closes cracks. Large height differences are separated only when they
- * touch an explicit mapped waterfall; ordinary descending reaches remain one connected surface.
- */
-function waterSurfaceYAt(world: WorldState, worldX: number, worldZ: number, preferredIndex?: number): number {
-  const { terrain, seaLevel } = world;
-  const fx = (worldX - terrain.originX) / terrain.step;
-  const fz = (worldZ - terrain.originZ) / terrain.step;
-  const x0 = Math.floor(fx), z0 = Math.floor(fz);
-  const tx = fx - x0, tz = fz - z0;
-  const weightedSamples: Array<readonly [number, number]> = [];
-  for (const [x, z, influence] of [
-    [x0, z0, (1 - tx) * (1 - tz)],
-    [x0 + 1, z0, tx * (1 - tz)],
-    [x0, z0 + 1, (1 - tx) * tz],
-    [x0 + 1, z0 + 1, tx * tz],
-  ] as const) {
-    if (x < 0 || z < 0 || x >= terrain.resolution || z >= terrain.resolution || influence <= 0) continue;
-    const index = z * terrain.resolution + x;
-    if (inlandWetSample(world, index)) weightedSamples.push([index, influence]);
-  }
-
-  let reference = preferredIndex ?? -1;
-  if (!inlandWetSample(world, reference)) {
-    reference = weightedSamples.reduce((best, sample) => sample[1] > best[1] ? sample : best, [-1, -1] as readonly [number, number])[0];
-  }
-  if (!inlandWetSample(world, reference)) reference = dominantWetSampleAt(world, worldX, worldZ);
-  if (!inlandWetSample(world, reference)) return Number.NEGATIVE_INFINITY;
-
-  const referenceLevel = terrain.waterLevel[reference]!;
-  const referenceY = elevationToY(referenceLevel, seaLevel);
-  let weighted = 0, weight = 0;
-  for (const [index, influence] of weightedSamples) {
-    const level = terrain.waterLevel[index]!;
-    const separatedByMappedFall = Math.abs(elevationToY(level, seaLevel) - referenceY) > WATER_DISCONTINUITY_Y
-      && (touchesMappedWaterfall(world, reference) || touchesMappedWaterfall(world, index));
-    if (separatedByMappedFall) continue;
-    weighted += level * influence;
-    weight += influence;
-  }
-  return elevationToY(weight > 1e-9 ? weighted / weight : referenceLevel, seaLevel);
-}
-
-interface InlandVertex {
-  x: number;
-  z: number;
-  coverage: number;
-  y: number;
-  depth: number;
-}
-
-function clipWaterPolygon(
-  polygon: readonly InlandVertex[],
-  scalar: (vertex: InlandVertex) => number,
-  threshold: number,
-  sample: (x: number, z: number) => InlandVertex,
-): InlandVertex[] {
-  if (!polygon.length) return [];
-  const output: InlandVertex[] = [];
-  for (let i = 0; i < polygon.length; i += 1) {
-    const a = polygon[i]!;
-    const b = polygon[(i + 1) % polygon.length]!;
-    const av = scalar(a) - threshold;
-    const bv = scalar(b) - threshold;
-    const aInside = av >= 0;
-    const bInside = bv >= 0;
-    if (aInside) output.push(a);
-    if (aInside === bInside) continue;
-    const denominator = av - bv;
-    const t = Math.abs(denominator) < 1e-9 ? 0.5 : av / denominator;
-    output.push(sample(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t));
-  }
-  return output;
-}
-
-/** Keep a waterfall discontinuity horizontal on one side instead of deleting triangle coverage. */
-function stabilizeWaterTriangle(triangle: readonly InlandVertex[], groundAt: (x: number, z: number) => number): InlandVertex[] {
-  const points = triangle.map(point => ({ ...point }));
-  let low = 0, high = 0;
-  for (let i = 1; i < 3; i += 1) {
-    if (points[i]!.y < points[low]!.y) low = i;
-    if (points[i]!.y > points[high]!.y) high = i;
-  }
-  const span = points[high]!.y - points[low]!.y;
-  const horizontal = Math.max(
-    Math.hypot(points[0]!.x - points[1]!.x, points[0]!.z - points[1]!.z),
-    Math.hypot(points[1]!.x - points[2]!.x, points[1]!.z - points[2]!.z),
-    Math.hypot(points[2]!.x - points[0]!.x, points[2]!.z - points[0]!.z),
-  );
-  if (span <= Math.max(0.68, horizontal * 0.85)) return points;
-  const middle = [0, 1, 2].find(index => index !== low && index !== high)!;
-  const highGap = points[high]!.y - points[middle]!.y;
-  const lowGap = points[middle]!.y - points[low]!.y;
-  const outlier = highGap >= lowGap ? high : low;
-  const anchor = outlier === high
-    ? (points[low]!.y > points[middle]!.y ? low : middle)
-    : (points[high]!.y < points[middle]!.y ? high : middle);
-  points[outlier]!.y = points[anchor]!.y;
-  points[outlier]!.depth = Math.max(SHORELINE_RENDER_DEPTH, points[outlier]!.y - groundAt(points[outlier]!.x, points[outlier]!.z));
-  return points;
+  rect(-r, -r, r, z0); rect(-r, z1, r, r); rect(-r, z0, x0, z1); rect(x1, z0, r, z1);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  g.computeVertexNormals(); g.computeBoundingSphere();
+  return g;
 }
 
 /**
@@ -825,9 +624,8 @@ function stabilizeWaterTriangle(triangle: readonly InlandVertex[], groundAt: (x:
  * lines and real holes. This contour pass keeps the exact simulation samples as authority but
  * presents their union as one continuous surface with shared positions and no deleted faces.
  */
-export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, previousFreeze?: Float32Array): THREE.Mesh | undefined {
+export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, previousFreeze?: Float32Array, groundColorAt?: (x: number, z: number, target: THREE.Color) => THREE.Color): THREE.Mesh | undefined {
   const { terrain } = world;
-  const { resolution, step, originX, originZ, height } = terrain;
   const positions: number[] = [];
   const colors: number[] = [];
   const depths: number[] = [];
@@ -851,287 +649,255 @@ export function buildInlandWater(world: WorldState, previousWet?: Uint8Array, pr
   const colour = new THREE.Color();
   const maximumAccumulation = maxDrainageAccumulation(world);
   const currentFreeze = computeFreezeSnapshot(world);
-  const groundAt = renderedGroundSampler(world);
-  const subdivisions = WATER_CONTOUR_SUBDIVISIONS;
-  const fineStep = step / subdivisions;
-  const half = subdivisions / 2;
-  const fineSegments = resolution * subdivisions;
-  const startX = originX - step * 0.5;
-  const startZ = originZ - step * 0.5;
-  const candidateCells = new Set<number>();
+  const field = new WaterReconstruction(world);
+  reconstruction.set(world, field);
+  const ordinary: number[] = [], cascades: number[] = [];
 
-  // Only contour the neighbourhood of real wet samples: quality scales with water, not map area.
-  for (let index = 0; index < height.length; index += 1) {
-    if (!inlandWetSample(world, index)) continue;
-    const sampleX = index % resolution;
-    const sampleZ = Math.floor(index / resolution);
-    const centreX = half + sampleX * subdivisions;
-    const centreZ = half + sampleZ * subdivisions;
-    for (let dz = -half; dz < half; dz += 1) for (let dx = -half; dx < half; dx += 1) {
-      const x = centreX + dx, z = centreZ + dz;
-      if (x < 0 || z < 0 || x >= fineSegments || z >= fineSegments) continue;
-      candidateCells.add(z * fineSegments + x);
-    }
-  }
-
-  const sampleVertex = (x: number, z: number): InlandVertex => {
-    const coverage = inlandWetCoverageAt(world, x, z);
-    const source = dominantWetSampleAt(world, x, z);
-    const y = waterSurfaceYAt(world, x, z, source);
-    return { x, z, coverage, y, depth: Number.isFinite(y) ? y - groundAt(x, z) : Number.NEGATIVE_INFINITY };
+  /**
+   * Everything a vertex inherits from its hydrology sample rather than its own position. Tens of
+   * thousands of vertices share a few thousand samples, so each sample is resolved once.
+   */
+  const sampleCount = terrain.height.length;
+  const resolved = new Uint8Array(sampleCount);
+  const perSample = {
+    flow: new Float32Array(sampleCount), directionX: new Float32Array(sampleCount), directionZ: new Float32Array(sampleCount),
+    kind: new Float32Array(sampleCount), hierarchy: new Float32Array(sampleCount), rapid: new Float32Array(sampleCount),
+    windX: new Float32Array(sampleCount), windZ: new Float32Array(sampleCount), wind: new Float32Array(sampleCount),
+    rain: new Float32Array(sampleCount), storm: new Float32Array(sampleCount), freeze: new Float32Array(sampleCount),
+    freezePrevious: new Float32Array(sampleCount), snow: new Float32Array(sampleCount), emergence: new Float32Array(sampleCount),
   };
-
-  const emit = (point: InlandVertex): void => {
-    const source = dominantWetSampleAt(world, point.x, point.z);
-    if (source < 0) return;
-    const currentFlow = terrain.flow[source] ?? 0;
+  const resolveSample = (source: number): void => {
+    if (resolved[source]) return;
+    resolved[source] = 1;
     const direction = flowDirectionAt(world, source);
     const kind = waterKindAt(world, source);
-    const hierarchy = waterHierarchyAt(world, source, maximumAccumulation);
-    const rapid = rapidIntensityAt(world, source);
-    const localWeather = weatherAt(world, point.x, point.z);
+    const x = terrain.originX + source % terrain.resolution * terrain.step;
+    const z = terrain.originZ + Math.floor(source / terrain.resolution) * terrain.step;
+    const localWeather = weatherAt(world, x, z);
     const windX = localWeather?.windX ?? world.weather?.windX ?? 1;
     const windZ = localWeather?.windZ ?? world.weather?.windZ ?? 0;
     const windLength = Math.hypot(windX, windZ);
-    const wind = clamp01(localWeather?.wind ?? world.weather?.wind ?? 0);
-    const rain = localWeather && (localWeather.precipitation === 'rain' || localWeather.precipitation === 'mixed')
-      ? clamp01(localWeather.intensity) : 0;
-    const storm = stormIntensity(localWeather);
     const frozen = currentFreeze[source] ?? 0;
-    const priorFrozen = previousFreeze?.[source] ?? frozen;
-    const snow = localWeather?.snowpack ?? 0;
-    const emergence = previousWet && !previousWet[source] && kind === WATER_FLOOD ? 1 : 0;
+    perSample.flow[source] = terrain.flow[source] ?? 0;
+    perSample.directionX[source] = direction[0];
+    perSample.directionZ[source] = direction[1];
+    perSample.kind[source] = kind;
+    perSample.hierarchy[source] = waterHierarchyAt(world, source, maximumAccumulation);
+    perSample.rapid[source] = rapidIntensityAt(world, source);
+    perSample.windX[source] = windLength > 0.001 ? windX / windLength : 1;
+    perSample.windZ[source] = windLength > 0.001 ? windZ / windLength : 0;
+    perSample.wind[source] = clamp01(localWeather?.wind ?? world.weather?.wind ?? 0);
+    perSample.rain[source] = localWeather && (localWeather.precipitation === 'rain' || localWeather.precipitation === 'mixed')
+      ? clamp01(localWeather.intensity) : 0;
+    perSample.storm[source] = stormIntensity(localWeather);
+    perSample.freeze[source] = frozen;
+    perSample.freezePrevious[source] = previousFreeze?.[source] ?? frozen;
+    perSample.snow[source] = localWeather?.snowpack ?? 0;
+    perSample.emergence[source] = previousWet && !previousWet[source] && kind === WATER_FLOOD ? 1 : 0;
+  };
+
+  const emit = (point: InlandVertex): void => {
+    const source = point.source;
+    if (source < 0) return;
+    resolveSample(source);
+    const currentFlow = perSample.flow[source]!;
+    const kind = perSample.kind[source]!;
+    const hierarchy = perSample.hierarchy[source]!;
     const depth = Math.max(SHORELINE_RENDER_DEPTH, point.depth);
     const bankToShallow = clamp01(depth / 0.16);
     const shallowToDeep = clamp01(depth * 0.72 + currentFlow * 0.18 + hierarchy * 0.12);
     colour.copy(bank).lerp(shallow, bankToShallow).lerp(deep, shallowToDeep);
     if (kind === WATER_FLOOD) colour.lerp(flood, 0.42);
 
+    groundColorAt?.(point.x, point.z, colour);
     positions.push(point.x, point.y, point.z);
     colors.push(colour.r, colour.g, colour.b);
     depths.push(depth);
     flows.push(currentFlow);
-    directions.push(direction[0], direction[1]);
+    directions.push(perSample.directionX[source]!, perSample.directionZ[source]!);
     kinds.push(kind);
     hierarchies.push(hierarchy);
-    rapids.push(rapid);
-    windDirections.push(windLength > 0.001 ? windX / windLength : 1, windLength > 0.001 ? windZ / windLength : 0);
-    winds.push(wind);
-    rains.push(rain);
-    storms.push(storm);
-    freezePrevious.push(priorFrozen);
-    freezes.push(frozen);
-    snows.push(snow);
-    emergences.push(emergence);
+    rapids.push(perSample.rapid[source]!);
+    windDirections.push(perSample.windX[source]!, perSample.windZ[source]!);
+    winds.push(perSample.wind[source]!);
+    rains.push(perSample.rain[source]!);
+    storms.push(perSample.storm[source]!);
+    freezePrevious.push(perSample.freezePrevious[source]!);
+    freezes.push(perSample.freeze[source]!);
+    snows.push(perSample.snow[source]!);
+    emergences.push(perSample.emergence[source]!);
   };
 
-  const emitTriangle = (triangle: readonly InlandVertex[]): void => {
-    if (triangle.length !== 3) return;
-    const stable = stabilizeWaterTriangle(triangle, groundAt);
-    const area = Math.abs(
-      (stable[1]!.x - stable[0]!.x) * (stable[2]!.z - stable[0]!.z)
-      - (stable[1]!.z - stable[0]!.z) * (stable[2]!.x - stable[0]!.x),
-    );
-    if (area <= 1e-10) return;
-    stable.forEach(emit);
-  };
-
-  const orderedCells = [...candidateCells].sort((a, b) => a - b);
-  for (const cell of orderedCells) {
-    const fineX = cell % fineSegments;
-    const fineZ = Math.floor(cell / fineSegments);
-    const x0 = startX + fineX * fineStep;
-    const z0 = startZ + fineZ * fineStep;
-    const a = sampleVertex(x0, z0);
-    const b = sampleVertex(x0 + fineStep, z0);
-    const c = sampleVertex(x0, z0 + fineStep);
-    const d = sampleVertex(x0 + fineStep, z0 + fineStep);
-    // Follow the rendered terrain triangle orientation, not the presentation sub-grid.
-    // Every clipped water triangle therefore stays inside one planar ground triangle, making
-    // shoreline/terrain intersection exact even around sharp islands and ridges.
-    const groundX = Math.max(0, Math.min(resolution - 2, Math.floor((x0 - originX) / step + 1e-9)));
-    const groundZ = Math.max(0, Math.min(resolution - 2, Math.floor((z0 - originZ) / step + 1e-9)));
-    const rawTriangles = ((groundX + groundZ) & 1) === 0
-      ? [[a, c, b], [b, c, d]]
-      : [[a, c, d], [a, d, b]];
-
-    for (const raw of rawTriangles) {
-      let polygon = clipWaterPolygon(raw, vertex => vertex.coverage, WATER_COVERAGE_THRESHOLD, sampleVertex);
-      if (polygon.length < 3) continue;
-      polygon = clipWaterPolygon(polygon, vertex => vertex.depth, SHORELINE_RENDER_DEPTH, (x, z) => {
-        const vertex = sampleVertex(x, z);
-        // Pin the actual terrain intersection exactly, rather than leaving a floating interpolated lip.
-        if (Number.isFinite(vertex.y) && vertex.depth < SHORELINE_RENDER_DEPTH * 1.5) {
-          vertex.y = groundAt(x, z) + SHORELINE_RENDER_DEPTH;
-          vertex.depth = SHORELINE_RENDER_DEPTH;
-        }
-        return vertex;
-      });
-      for (let i = 1; i < polygon.length - 1; i += 1) emitTriangle([polygon[0]!, polygon[i]!, polygon[i + 1]!]);
-    }
-  }
+  field.forEachFace((face, ocean, cascade) => {
+    if (ocean) return;
+    const destination = cascade ? cascades : ordinary;
+    for (const point of face) { destination.push(positions.length / 3); emit(point); }
+  });
 
   if (!positions.length) return undefined;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setAttribute('waterDepth', new THREE.Float32BufferAttribute(depths, 1));
-  geometry.setAttribute('waterFlow', new THREE.Float32BufferAttribute(flows, 1));
-  geometry.setAttribute('waterFlowDirection', new THREE.Float32BufferAttribute(directions, 2));
-  geometry.setAttribute('waterKind', new THREE.Float32BufferAttribute(kinds, 1));
-  geometry.setAttribute('waterHierarchy', new THREE.Float32BufferAttribute(hierarchies, 1));
-  geometry.setAttribute('waterRapid', new THREE.Float32BufferAttribute(rapids, 1));
-  geometry.setAttribute('waterWindDirection', new THREE.Float32BufferAttribute(windDirections, 2));
-  geometry.setAttribute('waterWind', new THREE.Float32BufferAttribute(winds, 1));
-  geometry.setAttribute('waterRain', new THREE.Float32BufferAttribute(rains, 1));
-  geometry.setAttribute('waterStorm', new THREE.Float32BufferAttribute(storms, 1));
-  geometry.setAttribute('waterFreezePrevious', new THREE.Float32BufferAttribute(freezePrevious, 1));
-  geometry.setAttribute('waterFreeze', new THREE.Float32BufferAttribute(freezes, 1));
-  geometry.setAttribute('waterSnow', new THREE.Float32BufferAttribute(snows, 1));
-  geometry.setAttribute('waterEmergence', new THREE.Float32BufferAttribute(emergences, 1));
-  geometry.userData['waterContourSubdivisions'] = WATER_CONTOUR_SUBDIVISIONS;
-  smoothInlandWaterNormals(geometry);
-  packInlandAttributes(geometry);
-  geometry.computeBoundingSphere();
-  const mesh = new THREE.Mesh(geometry, createInlandMaterial());
-  mesh.name = 'inland-water';
-  mesh.receiveShadow = true;
+  const vertexCount = positions.length / 3;
+  const welded = weldWaterVertices(positions, vertexCount);
+  // Steep water is white water wherever it occurs: cascades into the sea, lake overflow and steep
+  // reaches alike. Take the steepest face touching each physical point so the foam has no facets.
+  const steepestSlope = new Float32Array(vertexCount);
+  const steepestFall = new Float32Array(vertexCount * 2);
+  /** Rise over run of a face, with the horizontal direction the water runs down it. */
+  const faceFall = (first: number): { slope: number; dx: number; dz: number } => {
+    const [ax, ay, az, bx, by, bz, cx, cy, cz] = [0, 1, 2].flatMap(k => [positions[(first + k) * 3]!, positions[(first + k) * 3 + 1]!, positions[(first + k) * 3 + 2]!]) as number[];
+    let nx = (by! - ay!) * (cz! - az!) - (bz! - az!) * (cy! - ay!);
+    let ny = (bz! - az!) * (cx! - ax!) - (bx! - ax!) * (cz! - az!);
+    let nz = (bx! - ax!) * (cy! - ay!) - (by! - ay!) * (cx! - ax!);
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    const run = Math.hypot(nx, nz);
+    return ny > 1e-12 && run > 1e-12 ? { slope: run / ny, dx: nx / run, dz: nz / run } : { slope: 0, dx: 0, dz: 0 };
+  };
+  for (let first = 0; first + 2 < vertexCount; first += 3) {
+    const fall = faceFall(first);
+    if (fall.slope < WATER_CASCADE_SLOPE) continue;
+    for (let k = 0; k < 3; k += 1) {
+      const id = welded[first + k]!;
+      if (fall.slope <= steepestSlope[id]!) continue;
+      steepestSlope[id] = fall.slope;
+      steepestFall[id * 2] = fall.dx;
+      steepestFall[id * 2 + 1] = fall.dz;
+    }
+  }
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const id = welded[vertex]!;
+    const slope = steepestSlope[id]!;
+    if (slope <= 0) continue;
+    rapids[vertex] = Math.max(rapids[vertex]!, clamp01((slope - WATER_CASCADE_SLOPE) / 0.9));
+    // Standing water that spills gets a current of its own, running down the surface it spills over.
+    if (Math.hypot(directions[vertex * 2]!, directions[vertex * 2 + 1]!) < 0.01) {
+      directions[vertex * 2] = steepestFall[id * 2]!;
+      directions[vertex * 2 + 1] = steepestFall[id * 2 + 1]!;
+    }
+  }
+  const channels: Array<readonly [string, number[], number]> = [
+    ['position', positions, 3], ['color', colors, 3], ['waterDepth', depths, 1], ['waterFlow', flows, 1],
+    ['waterFlowDirection', directions, 2], ['waterKind', kinds, 1], ['waterHierarchy', hierarchies, 1],
+    ['waterRapid', rapids, 1], ['waterWindDirection', windDirections, 2], ['waterWind', winds, 1],
+    ['waterRain', rains, 1], ['waterStorm', storms, 1], ['waterFreezePrevious', freezePrevious, 1],
+    ['waterFreeze', freezes, 1], ['waterSnow', snows, 1], ['waterEmergence', emergences, 1],
+  ];
+  const assemble = (vertices: readonly number[] | undefined): THREE.BufferGeometry => {
+    const geometry = new THREE.BufferGeometry();
+    for (const [name, values, stride] of channels) {
+      const data = vertices ? vertices.flatMap(vertex => values.slice(vertex * stride, vertex * stride + stride)) : values;
+      geometry.setAttribute(name, new THREE.Float32BufferAttribute(data, stride));
+    }
+    geometry.setAttribute('waterBedColour', geometry.getAttribute('color'));
+    geometry.userData['waterReconstruction'] = 'signed-depth-on-shared-terrain-triangles';
+    return geometry;
+  };
+
+  const all = assemble(undefined);
+  smoothInlandWaterNormals(all, welded);
+  const normal = all.getAttribute('normal');
+  const part = (vertices: number[]): THREE.BufferGeometry => {
+    const g = assemble(vertices);
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(vertices.flatMap(i => [normal.getX(i), normal.getY(i), normal.getZ(i)]), 3));
+    packInlandAttributes(g); g.computeBoundingSphere();
+    return g;
+  };
+  const material = createInlandMaterial();
+  const mesh = new THREE.Mesh(part(ordinary), material);
+  mesh.name = 'inland-water'; mesh.receiveShadow = true;
+  if (cascades.length) {
+    const falls = new THREE.Mesh(part(cascades), material);
+    falls.name = 'waterfall-sheets'; falls.receiveShadow = true;
+    mesh.add(falls);
+  }
+  all.dispose();
   return mesh;
 }
 
 /** Sparse moving foam only where discharge, slope or mapped falls make turbulence believable. */
 function buildRapidFoam(world: WorldState, random: SeededRandom): RapidFoam | undefined {
   const { terrain, seaLevel } = world;
+  const groundAt = renderedGroundSampler(world);
   const sites: Array<{ index: number; intensity: number; direction: readonly [number, number] }> = [];
   for (let index = 0; index < terrain.height.length; index += 1) {
     if (!terrain.river[index] || terrain.waterLevel[index]! < 0 || terrain.height[index]! < seaLevel) continue;
-    const intensity = rapidIntensityAt(world, index);
+    const x = terrain.originX + index % terrain.resolution * terrain.step;
+    const z = terrain.originZ + Math.floor(index / terrain.resolution) * terrain.step;
+    const weather = weatherAt(world, x, z);
+    const ice = weather ? waterFreezeFactor(weather.temperature, 'river', terrain.flow[index], weather.snowpack) : 0;
+    const intensity = rapidIntensityAt(world, index) * (1 - ice);
     const direction = flowDirectionAt(world, index);
     if (intensity < 0.34 || Math.hypot(direction[0], direction[1]) < 0.5) continue;
     sites.push({ index, intensity, direction });
   }
+  // The surface shader carries all rapids; reserve sprites for a bounded set of energetic reaches.
+  sites.sort((a, b) => b.intensity - a.intensity || a.index - b.index);
+  sites.length = Math.min(sites.length, 1024);
   if (!sites.length) return undefined;
   const count = sites.reduce((sum, site) => sum + 2 + Math.round(site.intensity * 4), 0);
   const positions = new Float32Array(count * 3);
   const base = new Float32Array(count * 8);
+  const rises = new Float32Array(count);
   let cursor = 0;
   for (const site of sites) {
     const x = terrain.originX + site.index % terrain.resolution * terrain.step;
     const z = terrain.originZ + Math.floor(site.index / terrain.resolution) * terrain.step;
-    const y = waterSurfaceYAt(world, x, z, site.index) + 0.008;
     const perSite = 2 + Math.round(site.intensity * 4);
     const acrossX = -site.direction[1];
     const acrossZ = site.direction[0];
     for (let i = 0; i < perSite; i += 1) {
-      const across = random.range(-0.16, 0.16) * terrain.step;
-      const along = random.range(-0.12, 0.12) * terrain.step;
-      const px = x + acrossX * across + site.direction[0] * along;
-      const pz = z + acrossZ * across + site.direction[1] * along;
-      positions[cursor * 3] = px;
-      positions[cursor * 3 + 1] = y;
-      positions[cursor * 3 + 2] = pz;
+      let across = random.range(-0.16, 0.16) * terrain.step;
+      let along = random.range(-0.12, 0.12) * terrain.step;
+      let travel = terrain.step * random.range(0.18, 0.36);
+      let px = x, pz = z, y0 = 0, y1 = 0, supported = false;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        px = x + acrossX * across + site.direction[0] * along;
+        pz = z + acrossZ * across + site.direction[1] * along;
+        y0 = waterSurfaceYAt(world, px - site.direction[0] * travel * 0.5, pz - site.direction[1] * travel * 0.5);
+        y1 = waterSurfaceYAt(world, px + site.direction[0] * travel * 0.5, pz + site.direction[1] * travel * 0.5);
+        supported = [0, 0.25, 0.5, 0.75, 1].every(t => {
+          const qx = px + site.direction[0] * travel * (t - 0.5);
+          const qz = pz + site.direction[1] * travel * (t - 0.5);
+          const level = waterSurfaceYAt(world, qx, qz);
+          return inlandWetCoverageAt(world, qx, qz) > 0.55 && level - groundAt(qx, qz) > 0.025
+            && Math.abs(level - (y0 + (y1 - y0) * t)) < 0.02;
+        });
+        if (supported) break;
+        across *= 0.5; along *= 0.5; travel *= 0.5;
+      }
+      if (!supported) continue;
+      const y = (y0 + y1) * 0.5 + 0.008;
+      positions.set([px, y, pz], cursor * 3);
+      rises[cursor] = y1 - y0;
       const offset = cursor * 8;
       base[offset] = px; base[offset + 1] = y; base[offset + 2] = pz;
       base[offset + 3] = site.direction[0]; base[offset + 4] = site.direction[1];
       base[offset + 5] = random.float();
-      base[offset + 6] = terrain.step * random.range(0.18, 0.36);
+      base[offset + 6] = travel;
       base[offset + 7] = random.range(0.7, 1.35) * (0.75 + site.intensity * 0.8);
       cursor += 1;
     }
   }
+  if (!cursor) return undefined;
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#e4f1ed', size: 0.09, map: softPointTexture(), transparent: true, opacity: 0.58, depthWrite: false, sizeAttenuation: true }));
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions.slice(0, cursor * 3), 3));
+  geometry.setAttribute('waterParticleRise', new THREE.BufferAttribute(rises.slice(0, cursor), 1));
+  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#e4f1ed', size: 0.07, map: softPointTexture(), transparent: true, opacity: 0.58, depthWrite: false, sizeAttenuation: true }));
   points.name = 'river-rapid-foam';
-  points.frustumCulled = false;
-  return { points, base, sites: sites.length };
+  animateWaterParticles(points, base.slice(0, cursor * 8), 'rapid');
+  return { points, sites: sites.length };
 }
 
-/** Thin curved sheets turn a mapped fall into a readable body of falling water, not just particles. */
-function buildWaterfallSheets(falls: FallSite[], world: WorldState): THREE.Mesh | undefined {
-  if (!falls.length) return undefined;
-  const positions: number[] = [];
-  const progress: number[] = [];
-  const indices: number[] = [];
-  const uvs: number[] = [];
-  const segments = 16;
-  for (const fall of falls) {
-    const acrossX = -fall.direction[1];
-    const acrossZ = fall.direction[0];
-    const start = positions.length / 3;
-    for (let segment = 0; segment <= segments; segment += 1) {
-      const t = segment / segments;
-      const curve = t * t;
-      const drift = world.terrain.step * (0.16 + fall.intensity * 0.28) * curve;
-      const cx = fall.worldX + fall.direction[0] * drift;
-      const cz = fall.worldZ + fall.direction[1] * drift;
-      const y = fall.topY + (fall.bottomY - fall.topY) * t;
-      const width = world.terrain.step * (0.16 + fall.intensity * 0.22) * (1 - t * 0.32);
-      for (const side of [-1, 1]) {
-        positions.push(cx + acrossX * width * side, y, cz + acrossZ * width * side);
-        progress.push(t);
-        uvs.push((side + 1) * 0.5, t);
-      }
-    }
-    for (let segment = 0; segment < segments; segment += 1) {
-      const a = start + segment * 2;
-      const b = a + 1;
-      const c = a + 2;
-      const d = a + 3;
-      indices.push(a, c, b, b, c, d);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geometry.setAttribute('fallProgress', new THREE.Float32BufferAttribute(progress, 1));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
-  const material = createWaterfallMaterial();
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = 'waterfall-sheets';
-  mesh.frustumCulled = false;
-  return mesh;
-}
-
-function createWaterfallMaterial(): THREE.MeshPhysicalMaterial {
-  const material = new THREE.MeshPhysicalMaterial({
-    color: '#b9d9d8',
-    roughness: 0.18,
-    metalness: 0,
-    clearcoat: 0.7,
-    clearcoatRoughness: 0.16,
-    transparent: true,
-    opacity: 0.72,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  const state = createMaterialState();
-  material.userData[WATER_STATE_KEY] = state;
-  material.onBeforeCompile = shader => {
-    shader.uniforms['waterTime'] = state.time;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nattribute float fallProgress;\nvarying float vFallProgress;\nvarying vec2 vFallUV;`);
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\nvFallProgress = fallProgress;\nvFallUV = uv;\ntransformed.y += sin(fallProgress * 19.0 - waterTime * 6.0) * 0.008 * (0.2 + fallProgress);`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float waterTime;\nvarying float vFallProgress;\nvarying vec2 vFallUV;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat fallStreak = pow(max(0.0, sin(vFallProgress * 42.0 - waterTime * 9.0)), 6.0);\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.95, 0.94), fallStreak * 0.32);\nfloat fallThread = pow(0.5 + 0.5 * sin(vFallUV.x * 73.0 + sin(vFallUV.x * 21.0) * 2.0 - waterTime * 1.3 + vFallProgress * 5.0), 5.0);\nfloat fallLace = smoothstep(0.0, 0.12, vFallUV.x) * smoothstep(0.0, 0.12, 1.0 - vFallUV.x);\nfloat fallImpact = smoothstep(0.72, 1.0, vFallProgress);\ndiffuseColor.rgb += vec3(0.12, 0.20, 0.21) * (fallThread * 0.45 + fallImpact * 0.24);\ndiffuseColor.a *= fallLace * (0.52 + fallThread * 0.26 + fallStreak * 0.16 + fallImpact * 0.15);`);
-  };
-  material.customProgramCacheKey = () => 'godbox-waterfall-sheet-v2-lace';
-  return material;
-}
-
-function buildPlungePools(falls: FallSite[], world: WorldState, random: SeededRandom): PlungeFoam | undefined {
+function buildPlungePools(falls: FallSite[], random: SeededRandom): PlungeFoam | undefined {
   if (!falls.length) return undefined;
   const perFall = 34;
   const positions = new Float32Array(falls.length * perFall * 3);
   const base = new Float32Array(falls.length * perFall * 8);
   let cursor = 0;
   for (const fall of falls) {
-    const centerX = fall.worldX + fall.direction[0] * world.terrain.step * 0.24;
-    const centerZ = fall.worldZ + fall.direction[1] * world.terrain.step * 0.24;
+    const centerX = fall.endX;
+    const centerZ = fall.endZ;
     for (let index = 0; index < perFall; index += 1) {
       const phase = random.float();
-      const radius = world.terrain.step * random.range(0.18, 0.68) * (0.7 + fall.intensity * 0.5);
+      const radius = fall.halfWidth * random.range(0.25, 0.9);
       positions[cursor * 3] = centerX;
       positions[cursor * 3 + 1] = fall.bottomY + 0.018;
       positions[cursor * 3 + 2] = centerZ;
@@ -1143,75 +909,106 @@ function buildPlungePools(falls: FallSite[], world: WorldState, random: SeededRa
     }
   }
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#edf5f0', size: 0.16, map: softPointTexture(), transparent: true, opacity: 0.64, depthWrite: false, sizeAttenuation: true }));
   points.name = 'waterfall-plunge-foam';
-  points.frustumCulled = false;
-  return { points, base, sites: falls.length };
+  animateWaterParticles(points, base, 'plunge');
+  return { points, sites: falls.length };
 }
 
-function buildRecessionWetness(world: WorldState, previousWet: Uint8Array, nextWet: Uint8Array): THREE.Points | undefined {
+function buildRecessionWetness(world: WorldState, previousWet: Uint8Array, nextWet: Uint8Array): THREE.Mesh | undefined {
   const { terrain } = world;
-  const positions: number[] = [];
-  for (let index = 0; index < previousWet.length; index += 1) {
+  const ground = renderedGroundSampler(world);
+  const positions: number[] = [], uvs: number[] = [];
+  // A ground-conforming veil instead of camera-facing dark sprites standing above the shore.
+  const divisions = 4;
+  for (let index=0; index<previousWet.length; index++) {
     if (!previousWet[index] || nextWet[index]) continue;
-    const x = terrain.originX + index % terrain.resolution * terrain.step;
-    const z = terrain.originZ + Math.floor(index / terrain.resolution) * terrain.step;
-    positions.push(x, surfaceHeightAt(world, x, z) + 0.012, z);
+    const cx=terrain.originX+index%terrain.resolution*terrain.step;
+    const cz=terrain.originZ+Math.floor(index/terrain.resolution)*terrain.step;
+    for (let iz=0; iz<divisions; iz++) for (let ix=0; ix<divisions; ix++) {
+      const x=cx+(ix/divisions-0.5)*terrain.step;
+      const z=cz+(iz/divisions-0.5)*terrain.step;
+      const delta=terrain.step/divisions;
+      const gx=Math.floor((x-terrain.originX)/terrain.step+1e-9);
+      const gz=Math.floor((z-terrain.originZ)/terrain.step+1e-9);
+      const corners=[[x,z],[x+delta,z],[x,z+delta],[x+delta,z+delta]];
+      const order=((gx+gz)&1)===0 ? [0,2,1,1,2,3] : [0,2,3,0,3,1];
+      for (const corner of order) {
+        const [px,pz]=corners[corner]!;
+        positions.push(px!,ground(px!,pz!)+0.0003,pz!);
+        uvs.push((px!-cx)/terrain.step+0.5,(pz!-cz)/terrain.step+0.5);
+      }
+    }
   }
   if (!positions.length) return undefined;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#3f4633', size: Math.max(0.22, terrain.step * 1.45), map: softPointTexture(), transparent: true, opacity: 0.22, depthWrite: false, sizeAttenuation: true }));
-  points.name = 'receded-water-wetness';
-  points.frustumCulled = false;
-  return points;
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+  geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+  geometry.computeVertexNormals();
+  const material=new THREE.MeshStandardMaterial({color:'#353b29',roughness:0.42,transparent:true,
+    opacity:0.22,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1});
+  material.onBeforeCompile=shader => {
+    shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec2 vWetUV;')
+      .replace('#include <begin_vertex>','#include <begin_vertex>\nvWetUV=uv;');
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nvarying vec2 vWetUV;')
+      .replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.a *= 1.0-smoothstep(0.2,0.5,length(vWetUV-0.5));');
+  };
+  material.customProgramCacheKey=()=> 'godbox-receded-ground-v1';
+  const mesh=new THREE.Mesh(geometry,material);
+  mesh.name='receded-water-wetness';
+  return mesh;
 }
 
-function buildFoam(falls: FallSite[], world: WorldState, random: SeededRandom): { points: THREE.Points; base: Float32Array } | undefined {
+function buildFoam(falls: FallSite[], random: SeededRandom): { points: THREE.Points } | undefined {
   if (falls.length === 0) return undefined;
-  const perFall = 54;
-  const count = falls.length * perFall;
-  const positions = new Float32Array(count * 3);
-  const base = new Float32Array(count * 2);
+  const counts = falls.map(fall => Math.round(12+42*fall.intensity*clamp01(fall.drop/2)));
+  const count = counts.reduce((a,b)=>a+b,0);
+  const positions = new Float32Array(count*3);
+  const base = new Float32Array(count*8);
   let cursor = 0;
-  for (const fall of falls) {
-    for (let index = 0; index < perFall; index += 1) {
-      const spread = world.terrain.step * 0.72;
-      positions[cursor * 3] = fall.worldX + random.range(-spread, spread);
-      positions[cursor * 3 + 1] = fall.topY - random.range(0, fall.drop);
-      positions[cursor * 3 + 2] = fall.worldZ + random.range(-spread, spread);
-      base[cursor * 2] = fall.topY + random.range(0, 0.16);
-      base[cursor * 2 + 1] = fall.drop + 0.24;
-      cursor += 1;
+  for (const [fi,fall] of falls.entries()) {
+    for (let index=0; index<counts[fi]!; index++) {
+      const across = random.range(-0.9,0.9)*fall.halfWidth;
+      const px = fall.worldX-fall.direction[1]*across;
+      const pz = fall.worldZ+fall.direction[0]*across;
+      positions.set([px,fall.topY,pz],cursor*3);
+      base.set([px,fall.topY,pz,fall.endX-fall.worldX,fall.endZ-fall.worldZ,
+        random.float(),fall.drop,Math.sqrt(1.8/Math.max(0.12,fall.drop))],cursor*8);
+      cursor++;
     }
   }
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#e9f4f6', size: 0.24, map: softPointTexture(), transparent: true, opacity: 0.68, depthWrite: false, sizeAttenuation: true }));
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#e9f4f6', size: 0.075, map: softPointTexture(), transparent: true, opacity: 0.68, depthWrite: false, sizeAttenuation: true }));
   points.name = 'waterfall-foam';
-  points.frustumCulled = false;
-  return { points, base };
+  animateWaterParticles(points, base, 'fall');
+  return { points };
 }
 
 /** Soft spray sells scale while the sheet and plunge pool carry the actual waterfall shape. */
-function buildMist(falls: FallSite[], world: WorldState, random: SeededRandom): THREE.Points | undefined {
+function buildMist(falls: FallSite[], random: SeededRandom): THREE.Points | undefined {
   if (falls.length === 0) return undefined;
-  const perFall = 42;
-  const positions = new Float32Array(falls.length * perFall * 3);
+  const counts = falls.map(fall => Math.round(6 + 36 * fall.intensity * clamp01(fall.drop / 2)));
+  const count = counts.reduce((sum, value) => sum + value, 0);
+  const positions = new Float32Array(count * 3);
+  const scales = new Float32Array(count);
   let cursor = 0;
-  for (const fall of falls) {
-    for (let index = 0; index < perFall; index += 1) {
-      const spread = world.terrain.step * 2.5;
-      positions[cursor * 3] = fall.worldX + fall.direction[0] * world.terrain.step * 0.2 + random.range(-spread, spread);
-      positions[cursor * 3 + 1] = fall.bottomY + random.range(-0.05, 1.25);
-      positions[cursor * 3 + 2] = fall.worldZ + fall.direction[1] * world.terrain.step * 0.2 + random.range(-spread, spread);
+  for (const [fi, fall] of falls.entries()) {
+    const scale = Math.min(1.5, Math.max(0.12, Math.sqrt(fall.drop) * (0.25 + fall.intensity * 0.55)));
+    for (let index = 0; index < counts[fi]!; index += 1) {
+      const spread = Math.min(0.8, fall.halfWidth * (0.6 + fall.intensity * 0.7));
+      positions[cursor * 3] = fall.endX + random.range(-spread, spread);
+      positions[cursor * 3 + 1] = fall.bottomY + random.range(0.02, Math.max(0.02, Math.min(0.65, fall.drop * 0.35)));
+      positions[cursor * 3 + 2] = fall.endZ + random.range(-spread, spread);
+      scales[cursor] = scale;
       cursor += 1;
     }
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const mist = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#dbe8ea', size: 2.1, map: softPointTexture(), transparent: true, opacity: 0.22, depthWrite: false, sizeAttenuation: true }));
+  geometry.setAttribute('sprayScale', new THREE.BufferAttribute(scales, 1));
+  const mist = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#dbe8ea', size: 0.32, map: softPointTexture(), transparent: true, opacity: 0.22, depthWrite: false, sizeAttenuation: true }));
   const material = mist.material as THREE.PointsMaterial;
   const sprayTime = { value: 0 };
   material.userData['sprayTime'] = sprayTime;
@@ -1219,18 +1016,20 @@ function buildMist(falls: FallSite[], world: WorldState, random: SeededRandom): 
     shader.uniforms['sprayTime'] = sprayTime;
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
       uniform float sprayTime;
+      attribute float sprayScale;
       varying float vSprayLife;`);
     shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       float phase = fract(sin(dot(position.xz, vec2(12.9898, 78.233))) * 43758.5453);
       float age = fract(sprayTime * (0.16 + phase * 0.12) + phase);
       vSprayLife = sin(age * 3.14159265);
-      transformed.y += age * 0.8;
-      transformed.x += sin(age * 4.0 + phase * 6.28) * age * 0.3;
-      transformed.z += cos(age * 3.0 + phase * 6.28) * age * 0.3;`);
+      transformed.y += age * 0.8 * sprayScale;
+      transformed.x += sin(age * 4.0 + phase * 6.28) * age * 0.3 * sprayScale;
+      transformed.z += cos(age * 3.0 + phase * 6.28) * age * 0.3 * sprayScale;`);
+    shader.vertexShader = shader.vertexShader.replace('gl_PointSize = size;', 'gl_PointSize = size * sprayScale;');
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vSprayLife;');
     shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vSprayLife * vSprayLife;');
   };
-  material.customProgramCacheKey = () => 'godbox-waterfall-living-spray-v1';
+  material.customProgramCacheKey = () => 'godbox-waterfall-living-spray-v2-scaled';
   mist.name = 'waterfall-mist';
   mist.frustumCulled = false;
   return mist;

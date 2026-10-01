@@ -185,13 +185,15 @@ describe('Persistent world environment acceptance', () => {
     const water = buildInlandWater(world)!;
     expect(water).toBeDefined();
     const positions = water.geometry.getAttribute('position');
-    for (let i = 0; i < positions.count; i++) expect(Math.abs(positions.getX(i))).toBeLessThanOrEqual(world.terrain.step / 2 + 0.001);
+    // The shoreline may run onto submerged ground past the raster edge, but never further than one
+    // sample from a wet sample, so a channel can still never balloon into a lake.
+    for (let i = 0; i < positions.count; i++) expect(Math.abs(positions.getX(i))).toBeLessThanOrEqual(world.terrain.step + 0.001);
     expect((water.material as THREE.MeshStandardMaterial).depthWrite).toBe(true);
     expect((water.material as THREE.MeshStandardMaterial).transparent).toBe(false);
     const renderer = new WaterSystem(world, new TerrainSurface(world), 'ocean-bounds');
     const ocean = renderer.group.children[0]!;
     for (let frame = 0; frame < 60 * 600; frame++) renderer.update(frame / 60);
-    expect(Math.abs(ocean.position.y + 0.02)).toBeLessThanOrEqual(0.0016);
+    expect(ocean.position.y).toBe(0); // Shared coastline edges cannot bob independently.
     const y = ocean.position.y;
     renderer.update((60 * 600 - 1) / 60);
     expect(ocean.position.y).toBe(y);

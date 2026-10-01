@@ -4,6 +4,8 @@ import { Simulation } from '../src/sim/Simulation';
 import { buildInlandWater, waterFreezeFactor, WaterSystem } from '../src/render/terrain/WaterSystem';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
 import { nearestIndex } from '../src/sim/terrain/TerrainField';
+import { elevationToY } from '../src/sim/terrain/SurfaceGeometry';
+import { renderedGroundSampler } from '../src/render/terrain/WaterGround';
 import { EcologyField } from '../src/render/ecology/EcologyField';
 
 function waterWorld() {
@@ -153,21 +155,107 @@ describe('Water rendering foundation', () => {
       expect(packed.getY(i)).toBe(flows.getX(i));
       expect(packed.getZ(i)).toBe(kinds.getX(i));
     }
-    expect(shader.fragmentShader).toContain('waterCurrentCoordinate');
+    expect(shader.fragmentShader).toContain('waterVelocity = waterDirection*waterSpeed');
+    expect(shader.vertexShader).toContain('vWaterWindDirection = waterWindDirection');
+    expect(material.ior).toBeCloseTo(1.333);
+    expect(material.metalness).toBe(0);
     expect(shader.vertexShader).not.toContain('transformed.y +=');
     expect(shader.vertexShader).not.toContain('transformed.y -=');
     expect(shader.vertexShader).toContain('waterFreezePrevious');
     expect(shader.vertexShader).toContain('waterEmergence');
     expect(shader.fragmentShader).toContain('waterRiverTint');
     expect(shader.fragmentShader).toContain('currentLane');
-    expect(shader.fragmentShader).toContain('waterWander');
-    expect(shader.fragmentShader).toContain('shorelinePearl');
+    expect(shader.fragmentShader).toContain('waterAdvectedField');
+    expect(shader.fragmentShader).toContain('waterAbsorption');
     expect(shader.fragmentShader).toContain('rapidCrest');
     expect(shader.fragmentShader).toContain('snowOnIce');
     expect(shader.fragmentShader).toContain('roughnessFactor');
+    // Sub-pixel waves must become roughness as detail fades, or distant water turns mirror-flat
+    // and the sun or moon burns a single blown highlight across it.
+    expect(shader.fragmentShader).toContain('waterDetailRoughness');
 
     water.geometry.dispose();
     material.dispose();
+  });
+
+  it('anchors mapped falls to routed wet endpoints even when an unrelated neighbour is lower', () => {
+    const world = waterWorld();
+    const field = world.terrain;
+    const fallIndex = field.fall.findIndex(value => value > 0.5);
+    const next = field.drainage!.downstream[fallIndex]!;
+    field.height[fallIndex - 1] = world.seaLevel - 0.2;
+    const snapshot = field.waterLevel.slice();
+    const renderer = new WaterSystem(world,new TerrainSurface(world),'routed-falls');
+    const sheet = renderer.group.getObjectByName('waterfall-sheets') as THREE.Mesh;
+    const p = sheet.geometry.getAttribute('position');
+    const ground = renderedGroundSampler(world);
+    const upstreamY = elevationToY(field.waterLevel[fallIndex]!, world.seaLevel);
+    const downstreamY = elevationToY(field.waterLevel[next]!, world.seaLevel);
+    const upstreamX = field.originX + fallIndex % field.resolution * field.step;
+    const upstreamZ = field.originZ + Math.floor(fallIndex / field.resolution) * field.step;
+    const downstreamZ = field.originZ + Math.floor(next / field.resolution) * field.step;
+    let upper = false, lower = false;
+    for (let i = 0; i < p.count; i++) {
+      expect(Number.isFinite(p.getY(i))).toBe(true);
+      expect(p.getY(i) - ground(p.getX(i), p.getZ(i))).toBeGreaterThan(0);
+      if (Math.abs(p.getX(i) - upstreamX) < 1e-5 && Math.abs(p.getZ(i) - upstreamZ) < 1e-5) {
+        expect(p.getY(i) - upstreamY).toBeCloseTo(0.00025, 5); upper = true;
+      }
+      if (Math.abs(p.getX(i) - upstreamX) < 1e-5 && Math.abs(p.getZ(i) - downstreamZ) < 1e-5) {
+        expect(p.getY(i) - downstreamY).toBeCloseTo(0.00025, 5); lower = true;
+      }
+    }
+    expect(upper && lower).toBe(true);
+    expect(field.waterLevel).toEqual(snapshot);
+    // A dry receiver cannot retain a decorative fall, even with the map marker intact.
+    field.waterLevel[next] = -1;
+    world.environmentRevision = (world.environmentRevision ?? 0)+1;
+    renderer.syncHydrology();
+    expect(renderer.report.waterfalls).toBe(0);
+    disposeRenderer(renderer);
+  });
+
+  it('keeps downstream particle trajectories deterministic and immutable through long-time replay', () => {
+    const world = waterWorld();
+    const a = new WaterSystem(world,new TerrainSurface(world),'particle-replay');
+    const b = new WaterSystem(world,new TerrainSurface(world),'particle-replay');
+    for (const name of ['river-rapid-foam','waterfall-plunge-foam','waterfall-foam']) {
+      const pa = a.group.getObjectByName(name) as THREE.Points;
+      const pb = b.group.getObjectByName(name) as THREE.Points;
+      const data = pa.geometry.getAttribute('waterParticleMotion') as THREE.InterleavedBufferAttribute;
+      expect(data.data.array).toEqual((pb.geometry.getAttribute('waterParticleMotion') as THREE.InterleavedBufferAttribute).data.array);
+      const origins = pa.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const original = origins.array.slice();
+      for (const time of [0,12.5,1000000,12.5]) a.update(time);
+      expect(origins.array).toEqual(original);
+      expect(origins.version).toBe(0);
+      expect((pa.material as THREE.Material).userData['waterParticleTime'].value).toBe(12.5);
+      expect(pa.geometry.boundingSphere!.radius).toBeGreaterThan(0);
+      if (name==='river-rapid-foam') {
+        const dir = pa.geometry.getAttribute('waterParticleDirection');
+        for (let i=0;i<dir.count;i++) {
+          expect(dir.getX(i)).toBe(0);
+          expect(dir.getY(i)).toBe(1);
+        }
+      }
+    }
+    disposeRenderer(a); disposeRenderer(b);
+  });
+
+  it('scales spray down for small mapped drops instead of giving every fall a large mist cloud', () => {
+    const world = waterWorld();
+    const large = new WaterSystem(world, new TerrainSurface(world), 'fall-scale');
+    const largeMist = large.group.getObjectByName('waterfall-mist') as THREE.Points;
+    const index = world.terrain.fall.findIndex(value => value > 0.5);
+    const next = world.terrain.drainage!.downstream[index]!;
+    world.terrain.fall[index] = 0.3;
+    world.terrain.waterLevel[next] = world.terrain.waterLevel[index]! - 0.012;
+    const small = new WaterSystem(world, new TerrainSurface(world), 'fall-scale');
+    const smallMist = small.group.getObjectByName('waterfall-mist') as THREE.Points;
+    expect(small.report.waterfalls).toBe(1);
+    expect(smallMist.geometry.getAttribute('position').count).toBeLessThan(largeMist.geometry.getAttribute('position').count);
+    expect(smallMist.geometry.getAttribute('sprayScale').getX(0)).toBeLessThan(largeMist.geometry.getAttribute('sprayScale').getX(0) * 0.5);
+    disposeRenderer(large); disposeRenderer(small);
   });
 
   it('freezes calm standing water first and leaves warm or fast water substantially more open', () => {
@@ -205,7 +293,7 @@ describe('Water rendering foundation', () => {
       }
     }
     expect(shared).toBeGreaterThan(0);
-    expect(water.geometry.userData['waterContourSubdivisions']).toBe(4);
+    expect(water.geometry.userData['waterReconstruction']).toBe('signed-depth-on-shared-terrain-triangles');
     const normals = water.geometry.getAttribute('normal');
     const normalByPosition = new Map<string, [number, number, number]>();
     for (let index = 0; index < normals.count; index += 1) {
@@ -227,6 +315,7 @@ describe('Water rendering foundation', () => {
     const world = waterWorld();
     const renderer = new WaterSystem(world, new TerrainSurface(world), 'water-rendering-foundation');
     const ocean = renderer.group.children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
+    expect(ocean.name).toBe('ocean-water');
     expect(ocean.geometry.getAttribute('position').count).toBeGreaterThan(4);
     const rapidFoam = renderer.group.getObjectByName('river-rapid-foam') as THREE.Points | undefined;
     const waterfall = renderer.group.getObjectByName('waterfall-sheets') as THREE.Mesh | undefined;
@@ -236,7 +325,7 @@ describe('Water rendering foundation', () => {
     expect(waterfall).toBeDefined();
     expect(plunge).toBeDefined();
     expect(mist).toBeDefined();
-    expect(waterfall!.geometry.getAttribute('fallProgress').count).toBe(waterfall!.geometry.getAttribute('position').count);
+    expect(waterfall!.geometry.getAttribute('waterDepth').count).toBe(waterfall!.geometry.getAttribute('position').count);
 
     if (world.weather) {
       world.weather.wind = 0.9;
@@ -254,10 +343,9 @@ describe('Water rendering foundation', () => {
     renderer.update(12.5);
     expect(shader.uniforms['waterTime']!.value).toBe(12.5);
     expect(shader.uniforms['waterWind']!.value).toBe(0.9);
-    expect(shader.fragmentShader).toContain('oceanWanderA');
-    expect(shader.fragmentShader).toContain('oceanSilk');
-    expect(shader.fragmentShader).toContain('oceanWorldNormal');
-    expect(shader.fragmentShader).toContain('mix(normal, oceanWaveNormal, 0.68)');
+    expect(shader.fragmentShader).toContain('waterWindSlope');
+    expect(shader.fragmentShader).toContain('waterDetailFade');
+    expect(shader.vertexShader).toContain('(modelMatrix * vec4(transformed, 1.0)).xz');
     // Ocean motion is normal-driven: the giant plane must stay smooth instead of exposing its triangles.
     expect(shader.vertexShader).not.toContain('transformed.z +=');
     const y = ocean.position.y;
@@ -266,8 +354,12 @@ describe('Water rendering foundation', () => {
     const firstRapid = rapidPositions.getZ(0);
     const firstPlunge = plungePositions.getX(0);
     renderer.update(13.5);
-    expect(rapidPositions.getZ(0)).not.toBe(firstRapid);
-    expect(plungePositions.getX(0)).not.toBe(firstPlunge);
+    expect(rapidPositions.getZ(0)).toBe(firstRapid);
+    expect(plungePositions.getX(0)).toBe(firstPlunge);
+    expect((rapidFoam!.material as THREE.Material).userData['waterParticleTime'].value).toBe(13.5);
+    expect((plunge!.material as THREE.Material).userData['waterParticleTime'].value).toBe(13.5);
+    expect((rapidPositions as THREE.BufferAttribute).version).toBe(0);
+    expect(rapidFoam!.frustumCulled).toBe(true);
     expect(Math.abs(mist!.position.x)).toBeGreaterThan(0);
     renderer.update(12.5);
     expect(ocean.position.y).toBe(y);
@@ -296,7 +388,7 @@ describe('Water rendering foundation', () => {
     ecology.dispose();
   });
 
-  it('eases newly flooded ground upward and leaves temporary wetness after recession without widening water', () => {
+  it('tracks newly flooded ground and leaves temporary wetness after recession without widening water', () => {
     const world = waterWorld();
     const renderer = new WaterSystem(world, new TerrainSurface(world), 'flood-transition');
     renderer.update(20);
@@ -321,7 +413,7 @@ describe('Water rendering foundation', () => {
     expect(Number(shader.uniforms['waterTransition']!.value)).toBeGreaterThan(0);
     expect(Number(shader.uniforms['waterTransition']!.value)).toBeLessThan(1);
 
-    // Geometry is still clipped to the authoritative sample footprint; the transition only changes height.
+    // Geometry stays fixed at the canonical level; freeze transitions only change the material.
     const positions = flooded.geometry.getAttribute('position');
     const sx = field.originX + sample % field.resolution * field.step;
     const sz = field.originZ + Math.floor(sample / field.resolution) * field.step;
@@ -334,8 +426,14 @@ describe('Water rendering foundation', () => {
     field.waterLevel[sample] = -1;
     world.environmentRevision++;
     renderer.syncHydrology();
-    const wetness = renderer.group.getObjectByName('receded-water-wetness') as THREE.Points | undefined;
+    const wetness = renderer.group.getObjectByName('receded-water-wetness') as THREE.Mesh | undefined;
     expect(wetness).toBeDefined();
+    expect(wetness).toBeInstanceOf(THREE.Mesh);
+    const ground = renderedGroundSampler(world);
+    const wetPositions = wetness!.geometry.getAttribute('position');
+    for (let i = 0; i < wetPositions.count; i++) {
+      expect(wetPositions.getY(i) - ground(wetPositions.getX(i), wetPositions.getZ(i))).toBeCloseTo(0.0003, 5);
+    }
     renderer.update(31);
     expect(renderer.group.getObjectByName('receded-water-wetness')).toBeUndefined();
 

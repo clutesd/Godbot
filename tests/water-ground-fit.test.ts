@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 import { buildInlandWater } from '../src/render/terrain/WaterSystem';
 import { renderedGroundSampler } from '../src/render/terrain/WaterGround';
+import { renderedGroundColorSampler } from '../src/render/terrain/WaterGround';
+import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
+import * as THREE from 'three';
+import { terrainDiagonalAD } from '../src/sim/terrain/TerrainTopology';
 import { elevationToY } from '../src/sim/terrain/SurfaceGeometry';
 
 function fixture() {
@@ -15,6 +19,41 @@ function fixture() {
 }
 
 describe('water fits the rendered earth', () => {
+  it('clips reconstructed water against real terrain without lowering or burying vertices', () => {
+    // This generated terrain has four cliff vertices that the old per-face stabilization buried.
+    const world = new Simulation({ seed: 'water-performance-check', startingPopulation: 20,
+      world: { size: 32 }, settlementCount: [2, 2] }).state.world;
+    const levels = world.terrain.waterLevel.slice();
+    const water = buildInlandWater(world)!;
+    const p = water.geometry.getAttribute('position');
+    const ground = renderedGroundSampler(world);
+    for (let i = 0; i < p.count; i++) {
+      expect(p.getY(i) - ground(p.getX(i), p.getZ(i))).toBeGreaterThan(0.0001);
+    }
+    expect(world.terrain.waterLevel).toEqual(levels);
+    water.geometry.dispose();
+    (water.material as THREE.Material).dispose();
+  });
+  it('uses the rendered terrain palette and triangle interpolation beneath shallow water', () => {
+    const world = fixture();
+    const surface = new TerrainSurface(world);
+    const mesh = surface.buildMesh('ground-colour');
+    const colors = mesh.geometry.getAttribute('color');
+    const sample = renderedGroundColorSampler(world, surface, 'ground-colour');
+    const result = new THREE.Color();
+    const field = world.terrain;
+    for (const [x, z] of [[2, 2], [3, 2]]) {
+      const a = z! * field.resolution + x!;
+      // Centre of each diagonal: even cells interpolate B/C, odd cells interpolate A/D.
+      const [i, j] = !terrainDiagonalAD(field, x!, z!) ? [a + 1, a + field.resolution] : [a, a + field.resolution + 1];
+      sample(field.originX + (x! + 0.5) * field.step, field.originZ + (z! + 0.5) * field.step, result);
+      expect(result.r).toBeCloseTo((colors.getX(i) + colors.getX(j)) / 2, 6);
+      expect(result.g).toBeCloseTo((colors.getY(i) + colors.getY(j)) / 2, 6);
+      expect(result.b).toBeCloseTo((colors.getZ(i) + colors.getZ(j)) / 2, 6);
+    }
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+  });
   it('keeps lake faces level and clips their entire area above alternating ground triangles', () => {
     const world = fixture();
     const field = world.terrain;
@@ -95,8 +134,22 @@ describe('water fits the rendered earth', () => {
     const p = water.geometry.getAttribute('position');
     const boundaryX = field.originX + (split - 0.5) * field.step;
     const boundaryY: number[] = [];
+    const shared = new Map<string, number>();
+    const ground = renderedGroundSampler(world);
     for (let i = 0; i < p.count; i++) {
-      if (Math.abs(p.getX(i) - boundaryX) < 1e-5) boundaryY.push(p.getY(i));
+      // Sample intersections of the actual triangles with the section, not a particular
+      // subdivision's vertices.
+      if (i % 3 === 0) for (let edge = 0; edge < 3; edge++) {
+        const a = i + edge, b = i + (edge + 1) % 3;
+        if ((p.getX(a) - boundaryX) * (p.getX(b) - boundaryX) < 0) {
+          const f = (boundaryX - p.getX(a)) / (p.getX(b) - p.getX(a));
+          boundaryY.push(p.getY(a) + (p.getY(b) - p.getY(a)) * f);
+        }
+      }
+      const key = `${p.getX(i)}:${p.getZ(i)}`;
+      if (shared.has(key)) expect(p.getY(i)).toBeCloseTo(shared.get(key)!, 5);
+      shared.set(key, p.getY(i));
+      expect(p.getY(i) - ground(p.getX(i), p.getZ(i))).toBeGreaterThan(0.0001);
     }
 
     expect(boundaryY.length).toBeGreaterThan(0);
@@ -104,7 +157,7 @@ describe('water fits the rendered earth', () => {
     water.geometry.dispose();
   });
 
-  it('rounds an isolated wet sample instead of exposing a square hydrology tile', () => {
+  it('clips an isolated sample to a bounded footprint without square tile corners', () => {
     const world = fixture();
     const field = world.terrain;
     field.waterLevel.fill(-1);
@@ -123,13 +176,47 @@ describe('water fits the rendered earth', () => {
     for (let i = 0; i < p.count; i++) {
       const dx = Math.abs(p.getX(i) - cx) / field.step;
       const dz = Math.abs(p.getZ(i) - cz) / field.step;
-      expect(dx).toBeLessThanOrEqual(0.501);
-      expect(dz).toBeLessThanOrEqual(0.501);
-      if (dx > 0.49 && dz > 0.49) squareCorners += 1;
+      // Past its own sample the shoreline belongs to the terrain, but never beyond one sample.
+      expect(dx).toBeLessThanOrEqual(1.001);
+      expect(dz).toBeLessThanOrEqual(1.001);
+      if (dx > 0.99 && dz > 0.99) squareCorners += 1;
       unique.add(`${p.getX(i).toFixed(4)}:${p.getZ(i).toFixed(4)}`);
     }
-    expect(unique.size).toBeGreaterThan(8);
+    expect(unique.size).toBeGreaterThanOrEqual(5);
     expect(squareCorners).toBe(0);
+    water.geometry.dispose();
+  });
+
+  it('only reaches past the wet footprint over ground that is already under the water surface', () => {
+    const world = fixture();
+    const field = world.terrain;
+    field.waterLevel.fill(-1);
+    field.lake.fill(0);
+    const half = Math.floor(field.resolution / 2);
+    // A lake filling one half of the map, against a bank that climbs steeply out of it.
+    for (let z = 0; z < field.resolution; z += 1) for (let x = 0; x < field.resolution; x += 1) {
+      const index = z * field.resolution + x;
+      if (x < half) {
+        field.height[index] = world.seaLevel + 0.02;
+        field.waterLevel[index] = world.seaLevel + 0.10;
+        field.lake[index] = 1;
+      } else {
+        field.height[index] = world.seaLevel + 0.02 + (x - half + 1) * 0.05;
+      }
+    }
+    const water = buildInlandWater(world)!;
+    const p = water.geometry.getAttribute('position');
+    const ground = renderedGroundSampler(world);
+    const lastWetX = field.originX + (half - 1) * field.step;
+    let shore = 0;
+    for (let i = 0; i < p.count; i += 1) {
+      // Never dry land, and never further than one sample past the last wet sample.
+      expect(p.getY(i)).toBeGreaterThan(ground(p.getX(i), p.getZ(i)));
+      expect(p.getX(i)).toBeLessThanOrEqual(lastWetX + field.step * 1.001);
+      if (p.getX(i) > lastWetX && p.getY(i) - ground(p.getX(i), p.getZ(i)) < 0.001) shore += 1;
+    }
+    // The wet-to-dry interval ends on terrain with zero depth, without a hanging lip.
+    expect(shore).toBeGreaterThan(0);
     water.geometry.dispose();
   });
 });

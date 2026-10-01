@@ -1,5 +1,5 @@
 import { fbmSeeded, octaveSeeds, smoothstep } from './noise';
-import { nearestIndex, sampleField } from './TerrainField';
+import { nearestIndex, sampleField, type TerrainField } from './TerrainField';
 import type { WorldState } from '../types';
 
 export type WaterDepthState = 'dry' | 'wet' | 'flooded' | 'deeply-flooded' | 'submerged';
@@ -27,10 +27,31 @@ export function elevationToY(elevation: number, seaLevel: number): number {
   return (elevation - seaLevel) * 17.5 + alpine ** 1.45 * 8.5;
 }
 
+/**
+ * Bilinear share of the permanent river/lake channel at a position. Channel beds are carved only a
+ * few millimetres below their stage, so the decorative grain below must never reach them.
+ */
+function channelWeightAt(terrain: TerrainField, worldX: number, worldZ: number): number {
+  const { resolution, step, originX, originZ, river, lake } = terrain;
+  const fx = Math.min(resolution - 1, Math.max(0, (worldX - originX) / step));
+  const fz = Math.min(resolution - 1, Math.max(0, (worldZ - originZ) / step));
+  const x0 = Math.min(resolution - 1, Math.floor(fx)), z0 = Math.min(resolution - 1, Math.floor(fz));
+  const x1 = Math.min(resolution - 1, x0 + 1), z1 = Math.min(resolution - 1, z0 + 1);
+  const tx = fx - x0, tz = fz - z0;
+  const channel = (x: number, z: number): number => river[z * resolution + x] || lake[z * resolution + x] ? 1 : 0;
+  const top = channel(x0, z0) + (channel(x1, z0) - channel(x0, z0)) * tx;
+  const bottom = channel(x0, z1) + (channel(x1, z1) - channel(x0, z1)) * tx;
+  return top + (bottom - top) * tz;
+}
+
 export function surfaceHeightAt(world: WorldState, x: number, z: number): number {
   const elevation = sampleField(world.terrain, world.terrain.height, x, z);
-  const grain = elevation < world.seaLevel ? 0 : (fbmSeeded(grainSeeds, x * 0.42, z * 0.42) - 0.5)
+  let grain = elevation < world.seaLevel ? 0 : (fbmSeeded(grainSeeds, x * 0.42, z * 0.42) - 0.5)
     * 0.34 * (0.35 + smoothstep(world.seaLevel + 0.16, world.mountainLevel, elevation) * 0.9);
+  // Surface grain belongs to banks and meadows. Left on a channel bed it pokes through the water
+  // as dry speckles inside rivers and lakes, so the bed stays smooth exactly where water lives.
+  if (grain !== 0) grain *= (1 - channelWeightAt(world.terrain, x, z))
+    * smoothstep(world.seaLevel, world.seaLevel + 0.02, elevation);
   return elevationToY(elevation, world.seaLevel) + grain;
 }
 

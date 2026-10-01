@@ -86,6 +86,8 @@ export class WaterEcology {
       `);
       // Night becomes deep rather than black, preserving physical reflections and luminous life.
       shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', `
+        ${ocean ? `diffuseColor.rgb = waterAbsorption(vec3(0.17,0.19,0.12),diffuseColor.rgb,
+          bioDepth,0.0,normalize(vViewPosition));` : ''}
         // Apply living colour after the base water shader has finished its depth/current/ice pass.
         diffuseColor.rgb = mix(diffuseColor.rgb, dayJewel,
           daylightWater * surfaceLife * livingVeil * 0.055);
@@ -97,15 +99,15 @@ export class WaterEcology {
       shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         vec2 waterP = vEcologyWaterWorld.xz;
         float waveT = ecologyTime;
-        vec2 slope = waterCurrentSlope(waterP, bioFlow, waveT, bioStorm);
         vec3 rainRings = vec3(0.0);
         #if ECOLOGY_WATER_COMPLEXITY > 0
-          if (bioRain > 0.01) rainRings = waterRainRings(waterP * 1.4, waveT);
+          if (bioRain > 0.01) rainRings = waterRainRings(waterP * 4.0, waveT)*waterDetailFade(waterP*4.0);
         #endif
-        slope += rainRings.xy * bioRain * 0.32;
-        slope += vec2(sin(waterP.y * 7.3 + waveT * 1.8), cos(waterP.x * 8.1 - waveT * 1.6)) * (0.015 + bioRain * 0.025);
-        vec3 rippleNormal = normalize((viewMatrix * vec4(normalize(vec3(-slope.x, 1.0, -slope.y)), 0.0)).xyz);
-        normal = normalize(mix(normal, rippleNormal, 0.88 * (1.0 - bioIce)));
+        // Base material owns flow/wind. Ecology adds only filtered raindrop disturbances.
+        float rainFade = waterDetailFade(waterP*4.0);
+        vec2 slope = rainRings.xy * bioRain * 0.075 * rainFade;
+        normal = normalize(normal+(viewMatrix*vec4(-slope.x,0,-slope.y,0)).xyz
+          *(1.0-bioIce)*smoothstep(0.001,0.055,bioDepth));
         nonPerturbedNormal = normal;
       `);
       shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
@@ -123,22 +125,19 @@ export class WaterEcology {
           totalEmissiveRadiance += currentAura * breathingCurrent * life * (0.10 + bioStorm * 0.08);
         }
         #endif
-        // A subdued blue sky reflection remains between the emissive organisms; physical light
-        // specular/clearcoat above it still responds to the animated normals and real scene lights.
+        // Restrained shallow scattering; reflected sky belongs to the physical material light pass.
         float shallowLight = smoothstep(0.025, 0.12, bioDepth) * (1.0 - smoothstep(0.25, 2.4, bioDepth));
         #if ECOLOGY_WATER_COMPLEXITY > 0
-          float caustic = waterCaustics(vEcologyWaterWorld.xz - bioFlow * ecologyTime * 0.4, ecologyTime);
+          float caustic = waterCaustics(vEcologyWaterWorld.xz - bioFlow * ecologyTime * 0.4, ecologyTime)*waterDetailFade(waterP*3.0);
           totalEmissiveRadiance += vec3(0.12, 0.43, 0.34) * caustic * shallowLight
-            * daylightWater * (1.0 - bioIce) * (1.0 - bioStorm * 0.75) * 0.28;
+            * daylightWater * (1.0 - bioIce) * (1.0 - bioStorm * 0.75) * 0.045;
           totalEmissiveRadiance += vec3(0.08, 0.32, 0.48) * rainRings.z * bioRain
             * (1.0 - bioIce) * (0.08 + ecologyNight * surfaceLife * 0.6);
         #endif
-        float skyFresnel = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
-        totalEmissiveRadiance += mix(vec3(0.13, 0.22, 0.28), vec3(0.008, 0.022, 0.065), ecologyNight)
-          * skyFresnel * (1.0 - bioIce);
+
       `);
     };
-    material.customProgramCacheKey = () => `${originalKey}-ecology-v3-current-caustics-${this.complexity}`;
+    material.customProgramCacheKey = () => `${originalKey}-ecology-v4-filtered-rain-${this.complexity}`;
     material.needsUpdate = true;
   }
   dispose(): void {

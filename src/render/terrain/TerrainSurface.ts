@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { terrainDiagonalAD } from '../../sim/terrain/TerrainTopology';
 import { elevationToY, surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 export { elevationToY } from '../../sim/terrain/SurfaceGeometry';
 import { stableHash } from '../../sim/prng';
@@ -75,6 +76,15 @@ export class TerrainSurface {
   /** Ground height in world units at any position, smoothly interpolated. */
   heightAt(worldX: number, worldZ: number): number {
     return surfaceHeightAt(this.world, worldX, worldZ);
+  }
+
+  /** Exact palette at a rendered terrain vertex, shared with shallow-water absorption. */
+  colorAtVertex(seed: string, index: number, target: THREE.Color): THREE.Color {
+    const field = this.world.terrain;
+    const x = field.originX + index % field.resolution * field.step;
+    const z = field.originZ + Math.floor(index / field.resolution) * field.step;
+    this.paintSurface(seed, x, z, index, field.height[index]!);
+    return target.copy(this.scratch);
   }
 
   elevationAt(worldX: number, worldZ: number): number {
@@ -177,7 +187,7 @@ export class TerrainSurface {
         const c = a + resolution;
         const d = c + 1;
         // Flip the shared edge per quad so the triangulation stops reading as diagonal stripes.
-        if (((x + z) & 1) === 0) {
+        if (!terrainDiagonalAD(terrain, x, z)) {
           indices[cursor] = a; indices[cursor + 1] = c; indices[cursor + 2] = b;
           indices[cursor + 3] = b; indices[cursor + 4] = c; indices[cursor + 5] = d;
         } else {

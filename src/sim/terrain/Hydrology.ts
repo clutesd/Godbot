@@ -37,6 +37,8 @@ export class DynamicHydrology {
   private readonly samplesPerCell: Uint16Array;
   private readonly flooded: Uint8Array;
   private readonly cellGroundY: Float32Array;
+  private readonly ocean: Uint8Array;
+  private readonly lakeBasins: number[][] = [];
 
   lastBudget: HydrologyWaterBudget = {
     runoffInput: 0,
@@ -51,6 +53,8 @@ export class DynamicHydrology {
   constructor(private readonly world: WorldState) {
     const terrain = world.terrain;
     this.baseLevel = terrain.waterLevel.slice();
+    this.ocean = Uint8Array.from(terrain.waterLevel, (level, i) =>
+      Number(level >= 0 && level <= world.seaLevel + 1e-7 && terrain.height[i]! < world.seaLevel && !terrain.lake[i]));
     this.baseFlow = terrain.flow.slice();
     this.baseWater = world.cells.map((cell) => cell.water);
     this.cellGroundY = Float32Array.from(world.cells, cell => surfaceHeightAt(world, cell.worldX, cell.worldZ));
@@ -71,7 +75,7 @@ export class DynamicHydrology {
       return cellIndex;
     });
     for (let index = 0; index < terrain.height.length; index += 1) {
-      if (terrain.height[index]! < world.seaLevel || this.baseLevel[index]! < 0) continue;
+      if (this.ocean[index] || this.baseLevel[index]! < 0) continue;
       const depth = Math.max(0, this.baseLevel[index]! - terrain.height[index]!);
       const reference = terrain.lake[index]
         ? 0.2 + Math.min(0.28, depth / STORAGE_TO_STAGE * 0.25)
@@ -82,6 +86,23 @@ export class DynamicHydrology {
       this.storage[index] = reference;
       const retained = this.retentionAt(index);
       this.referenceDischarge[index] = Math.max(0.0025, reference * (1 - retained));
+    }
+    const visited = new Uint8Array(terrain.height.length), n = terrain.resolution;
+    for (let i = 0; i < visited.length; i++) {
+      if (visited[i] || !terrain.lake[i]) continue;
+      const basin = [i]; visited[i] = 1;
+      for (let head = 0; head < basin.length; head++) {
+        const j = basin[head]!, x = j % n, z = Math.floor(j / n);
+        for (const [dx, dz] of NEIGHBOURS) {
+          const nx = x + dx, nz = z + dz, k = nz * n + nx;
+          if (nx < 0 || nz < 0 || nx >= n || nz >= n || visited[k] || !terrain.lake[k]) continue;
+          // Priority-flood epsilon gives a basin a tiny routing gradient; a genuine outlet
+          // stage change separates basins and must not be averaged into a different lake.
+          if (Math.abs(this.baseLevel[k]! - this.baseLevel[j]!) > 0.0001) continue;
+          visited[k] = 1; basin.push(k);
+        }
+      }
+      this.lakeBasins.push(basin);
     }
   }
 
@@ -102,7 +123,7 @@ export class DynamicHydrology {
       runoffInput += localRunoff;
       const available = this.storage[index]! + this.incoming[index]! + localRunoff;
 
-      if (height[index]! < seaLevel) {
+      if (this.ocean[index]) {
         outletLoss += available;
         this.storage[index] = 0;
         this.discharge[index] = available;
@@ -124,10 +145,11 @@ export class DynamicHydrology {
       else outletLoss += outflow;
     }
 
-    this.spillFloodwater(height, seaLevel);
+    this.spillFloodwater(height);
+    this.equilibrateStages();
     waterLevel.fill(-1);
     for (let index = 0; index < height.length; index += 1) {
-      if (height[index]! < seaLevel) {
+      if (this.ocean[index]) {
         waterLevel[index] = seaLevel;
         flow[index] = this.baseFlow[index]!;
         this.flooded[index] = 0;
@@ -200,6 +222,72 @@ export class DynamicHydrology {
     return this.flooded[index] ? FLOODPLAIN_RETENTION : 0;
   }
 
+  /** Pool connected storage whenever its hydraulic stages invert. This is a volume-conserving
+   * active-set solve of the existing storage/stage relation, not a clamp on waterLevel. Lake
+   * samples start in one pool; river backwater joins it only when the lower reach overtops the
+   * upstream stage and bed. Every merge reduces the number of pools, so the solve terminates. */
+  private equilibrateStages(): void {
+    const t = this.world.terrain, count = t.height.length;
+    const parent = new Int32Array(count).fill(-1);
+    const members: number[][] = Array.from({ length: count }, () => []);
+    const volume = new Float64Array(count), threshold = new Float64Array(count);
+    const sumThreshold = new Float64Array(count), maxThreshold = new Float64Array(count);
+    const head = new Float64Array(count);
+    for (let i = 0; i < count; i++) {
+      if (this.ocean[i] || (this.baseLevel[i]! < 0 && !this.flooded[i])) continue;
+      parent[i] = i; members[i]!.push(i); volume[i] = this.storage[i]!;
+      threshold[i] = (this.baseLevel[i]! >= 0 ? this.baseLevel[i]! : t.height[i]!) - this.referenceStorage[i]! * STORAGE_TO_STAGE;
+      sumThreshold[i] = maxThreshold[i] = threshold[i]!;
+      head[i] = threshold[i]! + volume[i]! * STORAGE_TO_STAGE;
+    }
+    const root = (i: number): number => {
+      if (parent[i]! < 0) return -1;
+      while (parent[i] !== i) { parent[i] = parent[parent[i]!]!; i = parent[i]!; }
+      return i;
+    };
+    const merge = (first: number, second: number): void => {
+      let a = root(first), b = root(second);
+      if (a < 0 || b < 0 || a === b) return;
+      if (members[a]!.length < members[b]!.length) [a, b] = [b, a];
+      parent[b] = a;
+      for (const i of members[b]!) members[a]!.push(i);
+      members[b] = [];
+      volume[a] = volume[a]! + volume[b]!;
+      sumThreshold[a] = sumThreshold[a]! + sumThreshold[b]!;
+      maxThreshold[a] = Math.max(maxThreshold[a]!, maxThreshold[b]!);
+      head[a] = (volume[a]! * STORAGE_TO_STAGE + sumThreshold[a]!) / members[a]!.length;
+      if (head[a]! < maxThreshold[a]!) {
+        let active = members[a]!;
+        for (;;) {
+          const next = active.filter(i => threshold[i]! <= head[a]!);
+          if (!next.length || next.length === active.length) break;
+          active = next;
+          head[a] = (volume[a]! * STORAGE_TO_STAGE + active.reduce((sum, i) => sum + threshold[i]!, 0)) / active.length;
+        }
+      }
+    };
+    for (const basin of this.lakeBasins) for (let k = 1; k < basin.length; k++) merge(basin[0]!, basin[k]!);
+    if (t.drainage) {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const i of t.drainage.order) {
+          const j = t.drainage.downstream[i]!;
+          if (j < 0) continue;
+          const a = root(i), b = root(j);
+          if (a < 0 || b < 0 || a === b) continue;
+          if (head[b]! > Math.max(head[a]!, t.height[i]! + 0.00035) + 1e-9) {
+            merge(a, b); changed = true;
+          }
+        }
+      }
+    }
+    for (let i = 0; i < count; i++) {
+      const r = root(i);
+      if (r >= 0) this.storage[i] = Math.max(0, (head[r]! - threshold[i]!) / STORAGE_TO_STAGE);
+    }
+  }
+
   private bankfullExcess(index: number): number {
     const terrain = this.world.terrain;
     if (terrain.lake[index]) return LAKE_BANKFULL_EXCESS;
@@ -208,7 +296,7 @@ export class DynamicHydrology {
   }
 
   private softStorageCapacity(index: number): number {
-    if (this.world.terrain.height[index]! < this.world.seaLevel) return 0;
+    if (this.ocean[index]) return 0;
     const reference = this.referenceStorage[index]!;
     if (reference > 0) return reference + this.bankfullExcess(index);
     return this.flooded[index] ? FLOODPLAIN_BANKFULL : 0;
@@ -218,7 +306,7 @@ export class DynamicHydrology {
    * Moves only water that actually exists into adjacent low ground. Every transferred unit is
    * removed from the source sample, so widening a floodplain cannot manufacture water volume.
    */
-  private spillFloodwater(height: Float32Array, seaLevel: number): void {
+  private spillFloodwater(height: Float32Array): void {
     const resolution = this.world.terrain.resolution;
     for (let pass = 0; pass < MAX_FLOOD_PASSES; pass += 1) {
       let moved = false;
@@ -239,7 +327,7 @@ export class DynamicHydrology {
           const nextZ = sourceZ + offsetZ;
           if (nextX < 0 || nextZ < 0 || nextX >= resolution || nextZ >= resolution) continue;
           const next = nextZ * resolution + nextX;
-          if (height[next]! < seaLevel || height[next]! >= sourceSurface - 0.0005) continue;
+          if (this.ocean[next] || height[next]! >= sourceSurface - 0.0005) continue;
           candidates.push(next);
         }
         candidates.sort((a, b) => height[a]! - height[b]! || a - b);
@@ -437,10 +525,29 @@ export interface HydrologyOptions {
   readonly riverThreshold: number;
 }
 
+/** Below sea level does not imply ocean: an enclosed depression belongs to its lake. */
+function oceanConnected(raw: RawHeightfield, seaLevel: number): Uint8Array {
+  const { resolution: n, height } = raw;
+  const ocean = new Uint8Array(height.length), queue: number[] = [];
+  const visit = (i: number): void => {
+    if (!ocean[i] && height[i]! < seaLevel) { ocean[i] = 1; queue.push(i); }
+  };
+  for (let i = 0; i < n; i++) { visit(i); visit((n - 1) * n + i); visit(i * n); visit(i * n + n - 1); }
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head]!, x = i % n, z = Math.floor(i / n);
+    for (const [dx, dz] of NEIGHBOURS) {
+      const nx = x + dx, nz = z + dz;
+      if (nx >= 0 && nz >= 0 && nx < n && nz < n) visit(nz * n + nx);
+    }
+  }
+  return ocean;
+}
+
 export function computeHydrology(raw: RawHeightfield, options: HydrologyOptions): Hydrology {
   const { seaLevel, verticalScale, riverThreshold } = options;
   const { height, resolution } = raw;
   const filled = fillDepressions(raw, seaLevel);
+  const ocean = oceanConnected(raw, seaLevel);
   const { accumulation, downstream, order } = routeFlow(raw, filled);
 
   let maxAccumulation = 1;
@@ -457,7 +564,7 @@ export function computeHydrology(raw: RawHeightfield, options: HydrologyOptions)
     const ground = read(height, index);
     const surface = read(filled, index);
     flow[index] = clamp01(Math.log(1 + read(accumulation, index)) / logMax);
-    if (ground < seaLevel) {
+    if (ocean[index]) {
       waterLevel[index] = seaLevel;
       continue;
     }
@@ -497,6 +604,25 @@ export function enforceChannelDescent(raw: RawHeightfield, hydrology: Hydrology)
     const next = hydrology.downstream[index] ?? -1;
     if (next < 0 || !hydrology.river[next]) continue;
     height[next] = Math.min(read(height, next), read(height, index) - 1e-4);
+  }
+}
+
+/** Resolve the channel cross-section after final routing. Previously the final hydrology pass
+ * reset a river's stage to its freshly carved bed, leaving effectively zero water depth. The
+ * renderer then tried to supply a channel with lifts, bridges and skirts. Incision belongs here:
+ * the stage and drainage stay fixed, and simulation and rendering see the same shallow bed.
+ * Depth is 0.002–0.006 elevation units, controlled by discharge, not by neighbouring terrain. */
+export function inciseChannelBeds(raw: RawHeightfield, hydrology: Hydrology, seaLevel: number): void {
+  for (let i = 0; i < raw.height.length; i++) {
+    if (!hydrology.river[i] || hydrology.waterLevel[i]! <= seaLevel) continue;
+    const depth = 0.002 + 0.004 * hydrology.flow[i]! ** 2;
+    raw.height[i] = Math.min(raw.height[i]!, hydrology.waterLevel[i]! - depth);
+  }
+  const ocean = oceanConnected(raw, seaLevel);
+  for (let i = 0; i < ocean.length; i++) {
+    if (!ocean[i]) continue;
+    hydrology.waterLevel[i] = seaLevel;
+    hydrology.lake[i] = 0;
   }
 }
 

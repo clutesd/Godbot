@@ -4,7 +4,7 @@ import { initializeEnvironment } from './environment/SoilSystem';
 import { generateResourceDeposits } from './resources/WorldResourceSystem';
 import { createCellResourceState } from './resources/WorldResources';
 import { computeRockiness, synthesizeHeightfield } from './terrain/Heightfield';
-import { carveChannels, computeHydrology, enforceChannelDescent, type Hydrology } from './terrain/Hydrology';
+import { carveChannels, computeHydrology, enforceChannelDescent, inciseChannelBeds, type Hydrology } from './terrain/Hydrology';
 import { detectLandmarks } from './terrain/Landmarks';
 import type { TerrainField } from './terrain/TerrainField';
 import { fbm } from './terrain/noise';
@@ -126,6 +126,7 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
   carveChannels(raw, computeHydrology(raw, hydrologyOptions), seaLevel);
   enforceChannelDescent(raw, computeHydrology(raw, hydrologyOptions));
   const hydrology = computeHydrology(raw, hydrologyOptions);
+  inciseChannelBeds(raw, hydrology, seaLevel);
   const rock = computeRockiness(config.seed, raw, mountainLevel, TERRAIN_VERTICAL_SCALE);
 
   const terrain: TerrainField = {
