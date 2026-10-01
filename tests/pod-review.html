@@ -1,4 +1,29 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Founding pod review</title>
-<style>body{margin:0;background:#1c272d;color:#e1d9c7;font:14px system-ui}header{position:absolute;padding:24px;z-index:1}h1{font-size:18px;letter-spacing:.15em}button{background:#30424a;color:inherit;border:1px solid #738184;padding:8px 14px;margin-right:8px;cursor:pointer}p{opacity:.7}</style>
-</head><body><header><h1>FOUNDING VESSELS</h1><p>Drag to orbit · Scroll to inspect</p><div id="profiles"></div></header>
-<script type="module" src="/src/dev/podReview.ts"></script></body></html>
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Founding vessels · Material & hatch review</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#26353d;color:#e1d9c7;font:13px system-ui}
+    canvas{display:block}header{position:absolute;top:28px;left:32px;pointer-events:none}
+    .eyebrow{font-size:10px;letter-spacing:.24em;color:#b59a70}h1{font-size:25px;font-weight:500;letter-spacing:.08em;margin:8px 0}
+    p{opacity:.65;margin:6px 0 20px}nav,aside{pointer-events:auto}button{background:#17232bd9;color:inherit;border:1px solid #73818466;border-radius:4px;padding:8px 13px;cursor:pointer}
+    button:hover,button[aria-pressed=true]{border-color:#d0b88a;background:#41514b}button:focus-visible,input:focus-visible{outline:2px solid #e9ce97;outline-offset:3px}
+    nav{display:flex;gap:6px;flex-wrap:wrap}aside{position:absolute;left:32px;bottom:32px;width:310px;padding:20px;background:#111c24e8;border:1px solid #73818444;border-radius:8px;backdrop-filter:blur(12px)}
+    label{display:flex;justify-content:space-between;margin-bottom:10px}input{width:100%;accent-color:#bba174;margin:0 0 18px}.row{display:flex;gap:6px;margin-top:8px}footer{position:absolute;right:28px;bottom:24px;color:#a4b1b1;font-size:11px}
+    @media(max-width:650px){header{top:18px;left:18px}h1{font-size:20px}aside{left:18px;bottom:18px;width:280px}footer{display:none}}
+  </style>
+</head>
+<body>
+  <header><div class="eyebrow">GODBOX / ARRIVAL ARTIFACTS</div><h1>FOUNDING VESSELS</h1><p>Drag to orbit · Scroll to inspect</p><nav id="profiles" aria-label="Founding vessel"></nav></header>
+  <aside aria-label="Review controls">
+    <label for="hatch">Hatch deployment <span id="hatch-value">100%</span></label>
+    <input id="hatch" type="range" min="0" max="100" value="100">
+    <div class="row"><button id="hero">Three-quarter</button><button id="front">Doorway</button><button id="rear">Rear</button></div>
+    <div class="row"><button id="orbit" aria-pressed="false">Turntable</button><button id="night" aria-pressed="false">Night lighting</button></div>
+  </aside>
+  <footer id="stats"></footer>
+  <script type="module" src="/src/dev/podReview.ts"></script>
+</body>
+</html>

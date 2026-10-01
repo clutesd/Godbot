@@ -509,6 +509,7 @@ export class GodboxRenderer {
     const peopleGeometry = createCosmicBodyGeometry();
     const peopleMaterial = this.cosmicMaterial = createCosmicBodyMaterial();
     this.cosmicReflections = createCosmicReflectionEnvironment(this.renderer);
+    this.foundingPods.setReflectionEnvironment(this.cosmicReflections.texture);
     peopleMaterial.envMap = this.cosmicReflections.texture;
     this.resourceWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
     this.physicalWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
