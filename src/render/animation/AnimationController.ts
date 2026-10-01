@@ -43,6 +43,11 @@ export interface AnimationPose {
   pelvisRotation: number; // Rotation Y in radians
   spineRotation: number; // Curve along spine
   spineRoll?: number;
+  /**
+   * Yaw of the shoulder girdle relative to the pelvis. Walking humans rotate their shoulders
+   * against their hips; without it a procedural walk reads as a rigid block sliding forward.
+   */
+  spineTwist?: number;
   headRotation: number; // Head look direction
   headPitch?: number; // Small nods/downward task attention, independent of torso pitch.
   leftShoulderRotation: number; // Upper arm rotation
@@ -108,6 +113,8 @@ export interface CharacterAnimationState {
   ageMonths: number;
   carrying: boolean;
   expressiveness: number;
+  /** Per-person stride length multiplier from the deterministic posture signature. */
+  strideScale: number;
 }
 
 /**
@@ -1106,6 +1113,7 @@ export class AnimationController {
       playbackSpeed: 0.9 + random.float() * 0.2,
       phaseOffset: random.float(),
       humanSeconds: 0, stridePhase: random.float() * Math.PI * 2, gaitSpeed: 0, ageMonths: 360, carrying: false, expressiveness: 0.5,
+      strideScale: 1,
     };
 
     this.characterStates.set(personId, state);
@@ -1118,7 +1126,7 @@ export class AnimationController {
    * whenever the character is actually seen to move.
    */
   updateCharacterAnimation(personId: string, deltaTime: number, newActivity: Activity, override?: AnimationState,
-    visualSpeed?: number, ageMonths = 360, carrying = false, expressiveness = 0.5): void {
+    visualSpeed?: number, ageMonths = 360, carrying = false, expressiveness = 0.5, strideScale = 1): void {
     const charState = this.characterStates.get(personId);
     if (!charState) return;
 
@@ -1133,6 +1141,7 @@ export class AnimationController {
     charState.visualSpeed = visualSpeed;
     charState.ageMonths = ageMonths;
     charState.expressiveness = Math.max(0, Math.min(1, expressiveness));
+    charState.strideScale = Math.max(0.6, Math.min(1.4, strideScale));
     charState.carrying = carrying || newAnimState === 'carry';
     charState.humanSeconds += Math.max(0, deltaTime);
     if (visualSpeed !== undefined) {
@@ -1140,7 +1149,10 @@ export class AnimationController {
       charState.gaitSpeed += (targetSpeed - charState.gaitSpeed) * (1 - Math.exp(-Math.max(0, deltaTime) * 14));
       if (charState.gaitSpeed < 0.0001) charState.gaitSpeed = 0;
       const ageStride = ageMonths < 168 ? 0.75 : ageMonths > 816 ? 0.85 : 1;
-      charState.stridePhase += Math.max(0, visualSpeed) * Math.max(0, deltaTime) / (0.18 * ageStride * charState.playbackSpeed) * Math.PI * 2;
+      // A longer stride covers the same ground in fewer, slower steps. Scaling the step length here
+      // rather than the playback rate is what keeps feet planted at every individual cadence.
+      const stepLength = 0.18 * ageStride * charState.playbackSpeed * charState.strideScale;
+      charState.stridePhase += Math.max(0, visualSpeed) * Math.max(0, deltaTime) / stepLength * Math.PI * 2;
     }
 
     // Update animation time
@@ -1210,23 +1222,34 @@ export class AnimationController {
     if (speed > 0 && state.currentState !== 'dance') {
       const running = state.currentState === 'run';
       const amplitude = Math.min(1, speed / 0.24) * (elderly ? 0.27 : running ? 0.55 : 0.36);
-      const stride = Math.sin(state.stridePhase) * amplitude;
-      // Flex the recovering leg while its opposite supports the body. Half the knee flexion
-      // is added at the hip so the ankle still traces an opposing stride, rather than scissors.
-      const recovery = Math.cos(state.stridePhase);
-      out.leftKneeRotation = Math.max(0, recovery) ** 2 * amplitude * 1.7;
-      out.rightKneeRotation = Math.max(0, -recovery) ** 2 * amplitude * 1.7;
+      const phase = state.stridePhase;
+      const stride = Math.sin(phase) * amplitude;
+      const recovery = Math.cos(phase);
+      // Each leg has a swing phase, where the knee folds to clear the ground, and a stance phase,
+      // where it absorbs the body's weight with a shallower bend. Modelling both is what makes a
+      // walk look weighted instead of like two pendulums crossing.
+      const swing = (lift: number) => Math.max(0, lift) ** 2 * amplitude * (running ? 2.1 : 1.7);
+      const absorb = (lift: number) => Math.max(0, -lift) * amplitude * (running ? 0.42 : 0.22);
+      out.leftKneeRotation = swing(recovery) + absorb(recovery);
+      out.rightKneeRotation = swing(-recovery) + absorb(-recovery);
       out.leftHipRotation = stride + out.leftKneeRotation * 0.5;
       out.rightHipRotation = -stride + out.rightKneeRotation * 0.5;
-      out.leftShoulderRotation = state.carrying ? 0.42 : -stride * 0.8;
-      out.rightShoulderRotation = state.carrying ? 0.42 : stride * 0.8;
-      out.leftElbowRotation = state.carrying ? 1.05 : (running ? 0.65 : 0.16) + Math.max(0, stride) * 0.3;
-      out.rightElbowRotation = state.carrying ? 1.05 : (running ? 0.65 : 0.18) + Math.max(0, -stride) * 0.3;
-      out.spineRotation = state.carrying ? 0.12 : elderly ? 0.06 : 0.025;
-      out.pelvisRotation = Math.sin(state.stridePhase) * amplitude * 0.06;
-      // Lower the pelvis by the supporting leg's shortening. This keeps its sole at ground
-      // height and avoids the old positive bob lifting both feet clear of the terrain.
-      out.positionOffset.y = 0.45 * (Math.cos(stride) - 1);
+      // Arms oppose the legs. A real arm is never straight, and the two sides are never identical.
+      const swingArm = running ? 1.05 : 0.82;
+      out.leftShoulderRotation = state.carrying ? 0.42 : -stride * swingArm;
+      out.rightShoulderRotation = state.carrying ? 0.42 : stride * swingArm;
+      const elbowBase = running ? 0.72 : 0.2;
+      out.leftElbowRotation = state.carrying ? 1.05 : elbowBase + Math.max(0, stride) * (running ? 0.62 : 0.34);
+      out.rightElbowRotation = state.carrying ? 1.05 : elbowBase + 0.03 + Math.max(0, -stride) * (running ? 0.62 : 0.34);
+      out.spineRotation = (state.carrying ? 0.12 : elderly ? 0.06 : 0.025) + (running ? 0.07 : 0);
+      out.pelvisRotation = Math.sin(phase) * amplitude * 0.085;
+      // The shoulder girdle turns against the hips, and the trunk rolls toward the supporting leg
+      // once per step — the two cues that read as transferred body weight.
+      out.spineTwist = -out.pelvisRotation * (state.carrying ? 0.5 : 1.35);
+      out.spineRoll = Math.cos(phase) * amplitude * (running ? 0.05 : 0.035);
+      // Plant the feet: drop the pelvis until whichever foot reaches lowest touches the ground.
+      // Solving both legs analytically, knees included, is what removes the float-and-skate.
+      out.positionOffset.y = pelvisPlantOffset(out);
     } else {
       // After the frozen stride settles, stationary activities own the legs again.
       if (state.currentState !== 'rest' && state.currentState !== 'dance') {
@@ -1317,8 +1340,8 @@ export class AnimationController {
       if (crouching) {
         out.leftHipRotation = out.leftKneeRotation * 0.5;
         out.rightHipRotation = out.rightKneeRotation * 0.5;
-        const support = Math.max(Math.cos(out.leftHipRotation), Math.cos(out.rightHipRotation));
-        out.positionOffset.y = 0.45 * (support - 1) + (state.currentState === 'play' ? Math.max(0, out.positionOffset.y) : 0);
+        out.positionOffset.y = pelvisPlantOffset(out)
+          + (state.currentState === 'play' ? Math.max(0, out.positionOffset.y) : 0);
       } else {
         out.leftKneeRotation = out.rightKneeRotation = 0;
         out.positionOffset.y = 0;
@@ -1409,12 +1432,35 @@ export class AnimationController {
   }
 }
 
+/** Thigh and shin are equal halves of the leg; 0.45 is the whole leg in body units. */
+const LEG_SEGMENT = 0.225;
+
+/**
+ * How far the pelvis must drop for the lower of the two feet to rest exactly on the ground.
+ *
+ * A bent leg is shorter than a straight one, so any pose that flexes a hip or knee without
+ * lowering the pelvis leaves the character hovering, and any pose that lowers it too far buries a
+ * foot. Both feet are solved from the same two-segment chain the rig actually composes — the thigh
+ * swings by the hip angle and the shin trails it by the knee angle — and the deepest one wins,
+ * because that is the leg carrying the body.
+ */
+function pelvisPlantOffset(pose: AnimationPose): number {
+  const reach = (hip: number, knee: number) =>
+    LEG_SEGMENT * Math.cos(hip) + LEG_SEGMENT * Math.cos(hip - knee);
+  const deepest = Math.max(
+    reach(pose.leftHipRotation, pose.leftKneeRotation),
+    reach(pose.rightHipRotation, pose.rightKneeRotation),
+  );
+  return deepest - LEG_SEGMENT * 2;
+}
+
 function emptyPose(): AnimationPose {
   return {
     name: 'blend',
     duration: 0,
     pelvisRotation: 0,
     spineRotation: 0,
+    spineTwist: 0,
     headRotation: 0,
     leftShoulderRotation: 0,
     leftElbowRotation: 0,
@@ -1439,6 +1485,7 @@ function lerpPose(from: AnimationPose, to: AnimationPose, t: number, out: Animat
   out.pelvisRotation = mix(from.pelvisRotation, to.pelvisRotation);
   out.spineRotation = mix(from.spineRotation, to.spineRotation);
   out.spineRoll = mix(from.spineRoll ?? 0, to.spineRoll ?? 0);
+  out.spineTwist = mix(from.spineTwist ?? 0, to.spineTwist ?? 0);
   out.headRotation = mix(from.headRotation, to.headRotation);
   out.headPitch = mix(from.headPitch ?? 0, to.headPitch ?? 0);
   out.leftShoulderRotation = mix(from.leftShoulderRotation, to.leftShoulderRotation);

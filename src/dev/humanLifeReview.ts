@@ -12,6 +12,7 @@ import { AssetBuilder } from '../render/assets/AssetBuilder';
 import { MaterialPalette } from '../render/materials/MaterialPalette';
 import { TerrainSurface } from '../render/terrain/TerrainSurface';
 import { LocalActivityPresentation, clearActivityStructure, type ActivityStructure } from '../render/people/LocalActivityPresentation';
+import { WorldAttentionPresentation, worldAttentionCues } from '../render/people/WorldAttentionPresentation';
 import { PeopleVisualStateStore } from '../render/people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../render/people/PeoplePresentation';
 import { AnimationController } from '../render/animation/AnimationController';
@@ -62,6 +63,7 @@ floor.rotation.x = -Math.PI / 2; floor.position.y = groundY - 0.01; floor.receiv
 const assets = new AssetBuilder('human-life-review'), culture = state.cultures[0]!.style;
 const palette = new MaterialPalette({ culture, era: 'village' });
 const locals = new LocalActivityPresentation(), visuals = new PeopleVisualStateStore(), animation = new AnimationController('human-life-review');
+const worldAttention = new WorldAttentionPresentation();
 const physical = new PhysicalWorkScene(), fields = new FarmFieldRenderer(); scene.add(fields.group);
 const resources = new ResourceWorkScene(world, 'human-life-review');
 const resourceSites = new ResourceSiteRenderer(world, surface, resources); scene.add(resourceSites.group);
@@ -146,7 +148,7 @@ const cameraSubject = (id: string): CameraSubjectPresentation | undefined => {
     ...(local ? { action: { personId: id, actionKind: local.action, authoritativeActivity: peers.get(id)!.activity,
       sourceAuthority: 'review fixture', targetId: local.partnerId ?? id, targetKind: 'local', interactionAnchor: local.focus,
       locomotionTarget: local.destination, phase: local.phase, phaseProgress: 0, activeTool: 'none', contactStrength: 0 } } : {}),
-    ...(encounter && locals.get(encounter.partnerId)?.partnerId === id ? { partnerId: encounter.partnerId,
+    ...(encounter?.ready && locals.get(encounter.partnerId)?.partnerId === id ? { partnerId: encounter.partnerId,
       socialMeaning: encounter.relationshipKind ? 0.9 : 0.3, socialTone: encounter.tone } : {}) };
 };
 const director = new CameraDirector(camera, simulation.config, new Historian(simulation.config), cameraSubject, () => people.map(p => p.id));
@@ -176,6 +178,18 @@ let calendarSeconds = 0, calendarMonth = 0;
 let elapsed = 0, previous = performance.now(), paused = false, frames = 0, emergency = false, holdStarted = performance.now(), contactLatch = false;
 const authority = () => JSON.stringify({ people, settlement, relationships: state.socialRelationships, ledger: resourceWorkAssignmentsForWorld(world) });
 let heldAuthority = authority();
+const refreshAttention = () => worldAttention.refresh(worldAttentionCues([settlement], people,
+  new Map([[settlement.id, [...structures, placement]]])));
+refreshAttention();
+// Explicit developer fixture control; the production presentation never starts fires.
+element('fire').onclick = () => {
+  const plot = settlement.structurePlots!.find(p => p.id === 'Workshop')!;
+  if (plot.fire) delete plot.fire;
+  else plot.fire = { cause: 'developer', startedMonth: state.month, age: 0, stage: 'growing', intensity: 0.6,
+    fuel: 1, initialFuel: 1, smoulderMonths: 0 };
+  element('fire').textContent = plot.fire ? 'Remove review fire cue' : 'Add review fire cue';
+  refreshAttention(); heldAuthority = authority(); holdStarted = performance.now();
+};
 element('hold').onclick = () => { element<HTMLSelectElement>('rate').value = '0'; holdStarted = performance.now(); heldAuthority = authority(); paused = false; element('pause').textContent = 'Pause presentation'; };
 element('pause').onclick = () => { paused = !paused; element('pause').textContent = paused ? 'Resume presentation' : 'Pause presentation'; };
 element('emergency').onclick = () => {
@@ -213,6 +227,7 @@ function frame(now: number): void {
     heldAuthority = authority();
   }
   locals.beginFrame(); visuals.beginFrame(); physical.beginFrame(people, [settlement]); resourceRigs.beginFrame(); physicalRigs.beginFrame();
+  worldAttention.beginFrame(dt);
   for (const p of people) { const v = visuals.get(p.id) ?? p.position; const at = positions.get(p.id);
     if (at) { at.x = v.x; at.z = v.z; } else positions.set(p.id, { x: v.x, z: v.z }); }
   let moving = 0, working = 0;
@@ -223,14 +238,17 @@ function frame(now: number): void {
     const grouped = placeInGroup(person, group, person.position);
     let base = grouped;
     for (const structure of structures) base = { ...clearActivityStructure(base, structure, index), restFacing: grouped.restFacing };
-    const local = locals.resolve(person, { base, group, visual: visuals.get(person.id), people: peers, visualFor: id => positions.get(id),
+    const local = locals.resolve(person, { base, group, visual: visuals.get(person.id), people: peers,
+      visualFor: id => visuals.snapshot(id) ?? positions.get(id), nearbyIds: () => visuals.nearbyIds(positions.get(person.id) ?? base),
       relationshipFor: (a, b) => state.socialRelationships?.find(r => r.a === a && r.b === b || r.a === b && r.b === a),
       structures, revision: 1, safeSegment: (a, b) => resources.safeSegment(a, b), blocked: !!resource || !!worker || !!workInterruption(person) }, dt);
     const destination = resource ? resourceWorkAlternateAnchor(resource.site.profile, resource.variation, elapsed) ? resource.station.alternate : resource.station.anchor
       : worker?.action.locomotionTarget ?? local?.destination ?? base;
     const restFacing = resource ? facingTarget(destination, resource.station.target)
       : worker ? facingTarget(destination, worker.action.interactionAnchor) : local?.restFacing ?? base.restFacing;
-    const visual = visuals.resolve(person.id, { destination, restFacing, localMove: !!local && local.action !== 'arrive', smoothTravel: !resource && !worker, arrivalEase: !!resource || !!worker }, dt, ground);
+    const visual = visuals.resolve(person.id, { destination, restFacing, localMove: !!local && local.action !== 'arrive', smoothTravel: !resource && !worker, arrivalEase: !!resource || !!worker,
+      greetingPartnerId: local?.encounter?.beat === 0 && ['hug', 'handshake'].includes(local.encounter.greeting ?? '') ? local.encounter.partnerId : undefined,
+      embracing: local?.encounter?.beat === 0 && local.encounter.greeting === 'hug' }, dt, ground);
     if (worker) physical.advance(person, worker, visual, dt);
     const standing = !!worker && worker.ready && !visual.traveling && visual.speed < 0.05;
     const resourceStanding = !!resource && !visual.traveling && visual.speed < 0.05;
@@ -238,19 +256,23 @@ function frame(now: number): void {
     const travel = travelAnimationFor(visual.speed, person);
     animation.getOrCreateCharacterState(person.id, person.occupation);
     animation.updateCharacterAnimation(person.id, dt, person.activity, visual.speed >= 0.05 ? loaded || carried ? 'carry' : travel
-      : worker || emergency ? 'idle' : local ? local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
+      : worker || emergency ? 'idle' : local ? local.encounter && !local.encounter.ready ? 'idle'
+        : local.phase === 'action' || local.phase === 'pause' ? local.animation : 'idle' : travel,
     visual.speed, person.ageMonths, loaded || carried);
     let pose = animation.getCurrentPose(person.id)!;
     if (resource) resourceRigs.sample(resource, elapsed, dt, resourceStanding && Math.cos(visual.facing - restFacing!) > 0.94);
     if (resourceStanding) pose = animation.resourcePose(pose, resourceRigs.motion, resource!.blend);
     if (standing) pose = animation.resourcePose(pose, worker!.motion, worker!.blend);
     const articulated = standing || resourceStanding || loaded;
+    const attention = worldAttention.resolve(person, visual, dt, structures,
+      !articulated && !local?.encounter && !local?.attentionId && !local?.rest && !local?.socialFocusId);
+    const localHead = (local?.attentionHeadYaw ?? 0) * (local?.attentionBlend ?? 0);
     const scale = 0.28 * (person.ageMonths < 168 ? 0.7 : person.ageMonths > 816 ? 0.88 : 1);
     const y = visual.footY + (worker?.elevation ?? 0), lift = Math.max(-0.4, Math.min(0.1, pose.positionOffset.y)) * scale;
     colour.set(['#b75436', '#335c78', '#c89d45'][index % 3]!);
-    transform(bodies, index, visual.x, y + 0.44 * scale + lift, visual.z, scale, pose.spineRotation, visual.facing + pose.pelvisRotation); bodies.setColorAt(index, colour);
+    transform(bodies, index, visual.x, y + 0.44 * scale + lift, visual.z, scale, pose.spineRotation, visual.facing + pose.pelvisRotation + attention.torsoYaw); bodies.setColorAt(index, colour);
     torso.copy(matrix.matrix);
-    transform(heads, index, visual.x, y + 0.84 * scale + lift, visual.z, scale, 0, visual.facing + pose.headRotation); heads.setColorAt(index, skin);
+    transform(heads, index, visual.x, y + 0.84 * scale + lift, visual.z, scale, 0, visual.facing + pose.headRotation + attention.headYaw + localHead); heads.setColorAt(index, skin);
     transform(cargo, index, visual.x + Math.sin(visual.facing) * scale * 0.2, y + 0.48 * scale + lift,
       visual.z + Math.cos(visual.facing) * scale * 0.2, carried && !articulated ? scale : 0, 0, visual.facing); cargo.setColorAt(index, loadColour);
     matrix.position.set(visual.x, y + 0.45 * scale + lift, visual.z);
@@ -276,6 +298,7 @@ function frame(now: number): void {
     if (visual.speed >= 0.05) moving++; if (standing || resourceStanding || local?.phase === 'action') working++;
   }
   locals.prune(); visuals.prune(id => animation.release(id)); physical.endFrame(); resourceRigs.endFrame(); physicalRigs.endFrame();
+  worldAttention.prune();
   const contact = physical.installationContact(placement.key); assembly.update(0.3, dt, contact === undefined ? undefined : contact && !contactLatch); contactLatch = contact ?? false;
   updateConstructionScaffold(scaffold, assembly.plan, assembly.plan.progress ?? 0.3, dt);
   updateConstructionWorksite(dressing, 0.3, false, physical.materialInTransit(placement.key));

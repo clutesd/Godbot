@@ -487,7 +487,7 @@ export class TransportationSystem {
   private planLocalAccess(settlement: Settlement): void {
     if (settlement.buildings < 3 || this.localPlans.has(settlement.id)) return;
     this.localPlans.add(settlement.id);
-    const layout = createSettlementLayoutPlan({ settlement, settlements: this.state.settlements, routes: [], eraRank: 1, seed: this.state.seed });
+    const layout = createSettlementLayoutPlan({ settlement, settlements: this.state.settlements, routes: [], eraRank: 1, seed: this.state.seed, identity: settlement.architecture });
     for (const district of ['market', 'residential', 'craft'] as const) {
       const anchor = layout.anchors[district];
       const end = { x: settlement.position.x + anchor.localX, z: settlement.position.z + anchor.localZ };

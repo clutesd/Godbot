@@ -19,6 +19,8 @@ import { eraRank } from './BuildingGrammar';
 import type { MaterialPalette, SurfaceKey } from '../materials/MaterialPalette';
 import type { MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
+import { wallLayerForMaterial } from './StructureHeritage';
+import type { StructureMaterial } from '../../sim/development/types';
 
 /** Construction lifecycle. Parts are emitted only once their stage has been reached. */
 export const BUILD_STAGE = {
@@ -387,6 +389,11 @@ export function composeBuilding(
   palette: MaterialPalette,
   seed: string,
   stage: BuildStage,
+  /** The building's original-fabric material, only set when real multi-generation history shows
+   * a genuine material shift and the origin differs from the current material. The core (and any
+   * ground-level fixtures) then render in the earlier material while the newer massing annex and
+   * everything above the core keep the grammar's current one. */
+  coreMaterial?: StructureMaterial,
 ): ComposedBuilding {
   const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift);
   const memorial = grammar.development?.memorial;
@@ -527,10 +534,11 @@ export function composeBuilding(
   const roofSurface = roofSurfaceFor(grammar);
   const postSurface: SurfaceKey =
     grammar.postStyle === 'stone' ? 'stone' : grammar.postStyle === 'steel' || grammar.postStyle === 'composite' ? 'metal' : 'timber';
+  const baseSurface = grammar.baseMaterial ? wallSurfaceFor(wallLayerForMaterial(grammar.baseMaterial)) : undefined;
 
   emitGroundworks(canvas, grammar, halfWidth, halfDepth);
   emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
-  emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface);
+  emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface, baseSurface, coreMaterial);
   emitVernacularFabric(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
   const roofTop = emitRoof(canvas, grammar, halfWidth, halfDepth, wallTop, roofSurface, wallSurface, postSurface, random);
   const crownTop = emitCrown(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, roofSurface, wallSurface, postSurface);
@@ -741,8 +749,9 @@ function emitFrame(
     posts?.addBox(-halfWidth, y, 0, thickness, thickness * 0.85, grammar.depth);
   }
 
-  if (grammar.postStyle === 'steel' || grammar.postStyle === 'composite') {
-    // Industrial and later frames brace their bays; the diagonal reads as a truss.
+  if (grammar.postStyle === 'steel' || grammar.postStyle === 'composite' || grammar.reinforced) {
+    // Industrial and later frames brace their bays; the diagonal reads as a truss. Iron-reinforced
+    // timber gets the same bracing without a material swap.
     for (let index = 0; index < grammar.bays; index += 1) {
       const x0 = bayPositions[index]!;
       const x1 = bayPositions[index + 1]!;
@@ -835,20 +844,33 @@ function emitBody(
   wallTop: number,
   wallSurface: SurfaceKey,
   postSurface: SurfaceKey,
+  baseSurface?: SurfaceKey,
+  coreMaterial?: StructureMaterial,
 ): void {
-  const wall = canvas.at(wallSurface, BUILD_STAGE.WALLS);
+  // The core is the building's original fabric (StructureComponents.ts assigns it `origin`
+  // provenance; a massing annex is always the later addition — see generationForAnnex's own
+  // comment). When history shows a real material shift, the core renders in that earlier
+  // material and the annex keeps the grammar's current one, so an old core reads as genuinely
+  // older than the new wing bolted onto it.
+  const coreSurface = coreMaterial ? wallSurfaceFor(wallLayerForMaterial(coreMaterial)) : wallSurface;
+  const wall = canvas.at(coreSurface, BUILD_STAGE.WALLS);
+  const annexWall = coreSurface === wallSurface ? wall : canvas.at(wallSurface, BUILD_STAGE.WALLS);
   const inset = grammar.postThickness * 0.45;
   const bodyHeight = wallTop - plinthTop;
-  if (wall) emitWallUnits(wall, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, bodyHeight);
+  // A masonry ground floor under a lighter upper storey: only the bottom storey's courses render
+  // in the distinct base material, the rest stay in the main wall surface.
+  const baseWall = baseSurface && baseSurface !== coreSurface ? canvas.at(baseSurface, BUILD_STAGE.WALLS) : undefined;
+  const baseBandHeight = baseWall ? Math.min(bodyHeight * 0.55, grammar.wallHeight) : 0;
+  if (wall) emitWallUnits(wall, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, bodyHeight, baseWall, baseBandHeight);
 
   if (grammar.massing === 'wing') {
-    wall?.addBox(halfWidth * 0.72, plinthTop + bodyHeight * 0.36, -halfDepth * 0.95, grammar.width * 0.44, bodyHeight * 0.72, grammar.depth * 0.6);
+    annexWall?.addBox(halfWidth * 0.72, plinthTop + bodyHeight * 0.36, -halfDepth * 0.95, grammar.width * 0.44, bodyHeight * 0.72, grammar.depth * 0.6);
   } else if (grammar.massing === 'twin') {
-    wall?.addBox(-halfWidth * 0.86, plinthTop + bodyHeight * 0.42, halfDepth * 0.5, grammar.width * 0.34, bodyHeight * 0.84, grammar.depth * 0.38);
-    wall?.addBox(halfWidth * 0.86, plinthTop + bodyHeight * 0.42, halfDepth * 0.5, grammar.width * 0.34, bodyHeight * 0.84, grammar.depth * 0.38);
+    annexWall?.addBox(-halfWidth * 0.86, plinthTop + bodyHeight * 0.42, halfDepth * 0.5, grammar.width * 0.34, bodyHeight * 0.84, grammar.depth * 0.38);
+    annexWall?.addBox(halfWidth * 0.86, plinthTop + bodyHeight * 0.42, halfDepth * 0.5, grammar.width * 0.34, bodyHeight * 0.84, grammar.depth * 0.38);
   } else if (grammar.massing === 'court') {
     for (const side of [-1, 1]) {
-      wall?.addBox(side * halfWidth * 1.02, plinthTop + bodyHeight * 0.3, halfDepth * 1.1, grammar.width * 0.26, bodyHeight * 0.6, grammar.depth * 0.75);
+      annexWall?.addBox(side * halfWidth * 1.02, plinthTop + bodyHeight * 0.3, halfDepth * 1.1, grammar.width * 0.26, bodyHeight * 0.6, grammar.depth * 0.75);
     }
   }
 
@@ -871,7 +893,8 @@ function emitBody(
 }
 
 /** Closed individual units give incomplete walls real edges; door/window voids survive assembly. */
-function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: number, halfD: number, base: number, height: number): void {
+function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: number, halfD: number, base: number, height: number,
+  baseWall?: GeometryBuilder, baseBandHeight = 0): void {
   const material = grammar.development?.material;
   const timber = material === 'timber' || !material && (grammar.wallLayer === 'thatch' || grammar.wallLayer === 'daub');
   const metal = material === 'metal';
@@ -911,7 +934,8 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
         if (u1 - u0 < 0.001 || y1 - y0 < 0.001 || openings.some(o => Math.abs(u - o.u) < o.w / 2 && Math.abs(y - o.y) < o.h / 2)) continue;
         const p = framePoint(face, u, base + y, -thickness / 2);
         const gap = earth ? 0 : 0.0015;
-        wall.addBox(p.x, p.y, p.z, faceIndex < 2 ? u1 - u0 - gap : thickness, y1 - y0 - gap,
+        const target = baseWall && y1 <= baseBandHeight + 1e-6 ? baseWall : wall;
+        target.addBox(p.x, p.y, p.z, faceIndex < 2 ? u1 - u0 - gap : thickness, y1 - y0 - gap,
           faceIndex < 2 ? thickness : u1 - u0 - gap);
       }
     }

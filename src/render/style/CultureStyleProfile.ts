@@ -9,6 +9,7 @@
  */
 
 import type { CultureStyle } from '../../sim/types';
+import type { SettlementArchitecturalIdentity } from '../../sim/development/SettlementIdentity';
 import type { Era } from '../materials/MaterialPalette';
 
 export type RoofLanguage = 'layered-asian' | 'gable-geometric' | 'dome-organic' | 'pyramid-stepped';
@@ -364,4 +365,36 @@ export class CultureStyleProfileFactory {
   ): CultureStyleProfile {
     return new CultureStyleProfile(cultureId, style, roofLanguage, trimDensity, materialBias);
   }
+}
+
+/**
+ * A settlement-specific variant of a culture's style. The family-defining fields (roofLanguage,
+ * motifFamily, patternStyle, symbolPlacement) are inherited unchanged, so related-culture
+ * settlements still read as related; only the continuous intensity knobs drift per settlement,
+ * from that settlement's own environment, economy and accumulated history.
+ */
+export class SettlementStyleProfile extends CultureStyleProfile {
+  private readonly identity: SettlementArchitecturalIdentity;
+
+  constructor(base: CultureStyleProfile, identity: SettlementArchitecturalIdentity) {
+    super(base.cultureId, {
+      primary: '#000000', secondary: '#000000', accent: '#000000',
+      symbol: base.motifFamily, pattern: base.patternStyle, nameSyllables: [],
+    }, base.roofLanguage, base.trimDensity, base.materialBias);
+    this.identity = identity;
+  }
+
+  override getEaveOverhang(era: Era): number {
+    return super.getEaveOverhang(era) * (1 + this.identity.eaveDepthDelta * 0.25);
+  }
+
+  override getTrimDensity(era: Era): number {
+    return super.getTrimDensity(era) * Math.max(0.1, 1 + this.identity.trimDensityDelta * 0.3);
+  }
+}
+
+/** Creates a per-settlement style profile when an identity is available, else the plain culture profile. */
+export function createSettlementProfile(cultureId: string, style: CultureStyle, identity?: SettlementArchitecturalIdentity): CultureStyleProfile {
+  const base = CultureStyleProfileFactory.createFromCulture(cultureId, style);
+  return identity ? new SettlementStyleProfile(base, identity) : base;
 }

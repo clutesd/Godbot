@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { roleVisualFamilyFor, type RoleVisualFamily } from './RoleVisualProfile';
+import {
+  createHumanArmGeometry, createHumanForearmGeometry, createHumanHeadGeometry, createHumanLegGeometry,
+  createHumanShinGeometry, createHumanThighGeometry, createHumanTorsoGeometry, createHumanUpperArmGeometry,
+  createHumanWorkLimbGeometry,
+} from './HumanAnatomy';
+import {
+  HUMAN_SURFACE_MODE, createHumanSurfaceMaterial, updateHumanSurfaceMaterial, type HumanSurfaceMode,
+} from './HumanSurfaceMaterial';
 
 /** Presentation dimensions only. Navigation, reach targets and simulation appearance are unchanged. */
 export const COSMIC_HEIGHT_MULTIPLIER = 1.14;
@@ -43,148 +51,44 @@ export function cosmicAppearanceFor(id: string) {
   return { height: 0.975 + a * 0.05, build: 0.96 + b * 0.08, seed: a, nebula: 0.65 + b * 0.35, brightness: 0.86 + a * 0.14 };
 }
 
-// Elliptical anatomical sections: height, half-width, half-depth, sagittal offset.
-// Smooth interpolation gives a sculpted surface without a subdivided/imported character rig.
-type Section = readonly [number, number, number, number];
-const torso: readonly Section[] = [
-  [-0.055, 0.012, 0.02, 0], [-0.035, 0.054, 0.042, -0.004],
-  [0.005, 0.076, 0.052, -0.006], [0.07, 0.055, 0.037, -0.002],
-  [0.13, 0.067, 0.044, 0], [0.205, 0.094, 0.059, 0.003],
-  [0.25, 0.108, 0.049, 0], [0.272, 0.098, 0.04, -0.003],
-  [0.293, 0.054, 0.031, -0.003], [0.32, 0.026, 0.024, -0.004],
-  [0.35, 0.018, 0.021, -0.007], [0.369, 0.014, 0.019, -0.009],
-];
+/**
+ * Body geometry now lives in HumanAnatomy, which owns the same skeleton contract these functions
+ * always published: the torso origin, the 0.425 head anchor, 0.19/0.18 arm segments and 0.225/0.225
+ * leg segments, with the sole exactly 0.45 below the hip. Callers are unchanged; the anatomy is not.
+ */
+export function createCosmicBodyGeometry(): THREE.BufferGeometry { return createHumanTorsoGeometry(); }
 
-function sectionAt(sections: readonly Section[], y: number): Section {
-  let i = 0;
-  while (i < sections.length - 2 && y > sections[i + 1]![0]) i++;
-  const a = sections[i]!, b = sections[i + 1]!;
-  const t = THREE.MathUtils.clamp((y - a[0]) / (b[0] - a[0]), 0, 1);
-  // Monotone Hermite tangents smooth the silhouette without overshooting narrow sections.
-  const channels = [1, 2, 3].map(channel => {
-    const slope = (j: number) => (sections[j + 1]![channel]! - sections[j]![channel]!) / (sections[j + 1]![0] - sections[j]![0]);
-    const tangent = (j: number) => {
-      if (j === 0) return slope(0);
-      if (j === sections.length - 1) return slope(j - 1);
-      const left = slope(j - 1), right = slope(j);
-      return left * right <= 0 ? 0 : 2 * left * right / (left + right);
-    };
-    const span = b[0] - a[0];
-    return (2 * t ** 3 - 3 * t * t + 1) * a[channel]!
-      + (t ** 3 - 2 * t * t + t) * tangent(i) * span
-      + (-2 * t ** 3 + 3 * t * t) * b[channel]!
-      + (t ** 3 - t * t) * tangent(i + 1) * span;
-  });
-  return [y, channels[0]!, channels[1]!, channels[2]!];
-}
+export function createCosmicHeadGeometry(): THREE.BufferGeometry { return createHumanHeadGeometry(); }
 
-function sculpt(sections: readonly Section[], radial: number, surface = 0, samples = 2): THREE.BufferGeometry {
-  const vertices: number[] = [], indices: number[] = [], uvs: number[] = [];
-  // Adaptive profile samples preserve curves without wasting vertices on invisible detail.
-  const rings = (sections.length - 1) * samples + 1;
-  for (let ring = 0; ring < rings; ring++) {
-    const i = Math.min(sections.length - 2, Math.floor(ring / samples));
-    const y = THREE.MathUtils.lerp(sections[i]![0], sections[i + 1]![0], (ring - i * samples) / samples);
-    const [, rx, rz, z] = sectionAt(sections, y);
-    for (let j = 0; j < radial; j++) {
-      const angle = j / radial * Math.PI * 2;
-      vertices.push(Math.sin(angle) * rx, y, Math.cos(angle) * rz + z);
-      uvs.push(j / radial, ring / (rings - 1));
-      if (ring < rings - 1) {
-        const a = ring * radial + j, b = ring * radial + (j + 1) % radial;
-        indices.push(a, b, a + radial, b, b + radial, a + radial);
-      }
-    }
-  }
-  // Closed poles also keep shadow silhouettes watertight.
-  for (const end of [0, rings - 1]) {
-    const pole = vertices.length / 3;
-    const s = end === 0 ? sections[0]! : sections[sections.length - 1]!;
-    vertices.push(0, s[0], s[3]); uvs.push(0.5, end === 0 ? 0 : 1);
-    for (let j = 0; j < radial; j++) {
-      const a = end * radial + j, b = end * radial + (j + 1) % radial;
-      indices.push(pole, end === 0 ? b : a, end === 0 ? a : b);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geometry.setAttribute('cosmicSurface', new THREE.Float32BufferAttribute(new Array(vertices.length / 3).fill(surface), 1));
-  geometry.setIndex(indices); geometry.computeVertexNormals();
-  return geometry;
-}
-
-export function createCosmicBodyGeometry(): THREE.BufferGeometry { return sculpt(torso, 16); }
-
-export function createCosmicHeadGeometry(): THREE.BufferGeometry {
-  return sculpt([
-    [-0.105, 0.007, 0.013, 0.005], [-0.086, 0.026, 0.035, 0.003],
-    [-0.055, 0.045, 0.05, 0], [-0.012, 0.06, 0.060, -0.004],
-    [0.035, 0.061, 0.065, -0.009], [0.075, 0.045, 0.05, -0.01],
-    [0.095, 0.021, 0.025, -0.01], [0.10, 0, 0, -0.01],
-  ], 24, 1, 3).scale(0.80, 0.75, 0.80);
-}
-
-/** Single-mesh resting limbs retain the existing shoulder/hip pivots and instancing. */
+/** Hands are part of the forearm mesh, so a person gains hands without gaining a draw call. */
 export function createCosmicArmGeometry(segment?: 'upper' | 'lower'): THREE.BufferGeometry {
-  if (segment) return segment === 'upper' ? sculpt([
-    [-0.196, 0.019, 0.020, 0], [-0.15, 0.025, 0.027, 0],
-    [-0.075, 0.029, 0.03, 0], [0, 0.025, 0.026, 0], [0.012, 0, 0, 0],
-  ], 10) : sculpt([
-    [-0.18, 0.009, 0.012, 0.006], [-0.163, 0.016, 0.013, 0.006],
-    [-0.14, 0.013, 0.013, 0], [-0.08, 0.022, 0.021, 0],
-    [-0.025, 0.024, 0.023, 0], [0, 0.020, 0.021, 0], [0.009, 0, 0, 0],
-  ], 10);
-  return sculpt([
-    [-0.395, 0.008, 0.01, 0.018], [-0.38, 0.016, 0.013, 0.019],
-    [-0.35, 0.014, 0.012, 0.014], [-0.325, 0.012, 0.013, 0.01],
-    [-0.275, 0.022, 0.021, 0.005], [-0.225, 0.024, 0.023, 0],
-    [-0.195, 0.019, 0.02, -0.004], [-0.145, 0.025, 0.027, -0.005],
-    [-0.075, 0.029, 0.03, 0], [-0.015, 0.030, 0.032, 0],
-    [0.003, 0.022, 0.023, 0], [0.014, 0, 0, 0],
-  ], 10).scale(1, 0.95, 1);
+  if (segment === 'upper') return createHumanUpperArmGeometry();
+  if (segment === 'lower') return createHumanForearmGeometry();
+  return createHumanArmGeometry();
 }
 
+/** Feet are part of the shin mesh, for the same reason. */
 export function createCosmicLegGeometry(segment?: 'upper' | 'lower'): THREE.BufferGeometry {
-  if (segment) return segment === 'upper' ? sculpt([
-    [-0.225, 0.023, 0.025, 0], [-0.18, 0.027, 0.03, 0],
-    [-0.12, 0.034, 0.037, 0], [-0.045, 0.037, 0.04, 0],
-    [0.012, 0.029, 0.031, 0], [0.03, 0, 0, 0],
-  ], 10) : sculpt([
-    [-0.225, 0.019, 0.046, 0.021], [-0.213, 0.025, 0.054, 0.023],
-    [-0.19, 0.019, 0.033, 0.008], [-0.155, 0.017, 0.021, 0],
-    [-0.1, 0.024, 0.028, -0.005], [-0.045, 0.029, 0.031, 0],
-    [0, 0.024, 0.026, 0], [0.009, 0, 0, 0],
-  ], 10);
-  return sculpt([
-    [-0.42, 0.019, 0.046, 0.021], [-0.408, 0.025, 0.054, 0.023],
-    [-0.385, 0.019, 0.033, 0.008], [-0.35, 0.016, 0.02, 0],
-    [-0.295, 0.024, 0.028, -0.009], [-0.25, 0.029, 0.031, -0.01],
-    [-0.205, 0.023, 0.025, 0], [-0.18, 0.024, 0.026, 0.004],
-    [-0.12, 0.034, 0.037, 0], [-0.045, 0.037, 0.04, -0.004],
-    [0.012, 0.029, 0.031, -0.003], [0.035, 0, 0, 0],
-  ], 10).scale(1, 0.45 / 0.42, 1);
+  if (segment === 'upper') return createHumanThighGeometry();
+  if (segment === 'lower') return createHumanShinGeometry();
+  return createHumanLegGeometry();
 }
 
 /** Rounded, organic segments for the existing physical-work solver; endpoints are unchanged. */
 export function createCosmicWorkLimbGeometry(): THREE.BufferGeometry {
-  return sculpt([
-    [-0.62, 0, 0, 0], [-0.56, 0.018, 0.018, 0], [-0.48, 0.025, 0.026, 0],
-    [-0.2, 0.033, 0.034, 0], [0.25, 0.025, 0.025, 0],
-    [0.5, 0.024, 0.024, 0], [0.58, 0.012, 0.012, 0], [0.62, 0, 0, 0],
-  ], 10);
+  return createHumanWorkLimbGeometry();
 }
 
-/** One small, shared reflection field for obsidian, including articulated work limbs.
+/** One small, shared reflection field, including articulated work limbs.
  * Generated once, never per person/frame. It is deliberately neutral, with broad sky-like cards.
  * Caller owns the target; no scene lighting or postprocessing settings are changed. */
 export function createCosmicReflectionEnvironment(renderer: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
   const studio = new THREE.Scene();
-  studio.background = new THREE.Color().setRGB(0.012, 0.017, 0.028);
+  studio.background = new THREE.Color().setRGB(0.07, 0.08, 0.1);
   const cards = [
-    { position: [-3, 2, 2], size: [1.5, 6], color: [2.0, 2.2, 2.6] },
-    { position: [3, 1, -2], size: [2, 5], color: [0.7, 0.9, 1.5] },
-    { position: [0, 5, 0], size: [5, 4], color: [1.0, 1.0, 1.1] },
+    { position: [-3, 2, 2], size: [1.5, 6], color: [1.4, 1.5, 1.7] },
+    { position: [3, 1, -2], size: [2, 5], color: [0.6, 0.72, 1.0] },
+    { position: [0, 5, 0], size: [5, 4], color: [1.0, 1.0, 1.05] },
   ];
   for (const card of cards) {
     const material = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(card.color[0]!, card.color[1]!, card.color[2]!) });
@@ -201,204 +105,25 @@ export function createCosmicReflectionEnvironment(renderer: THREE.WebGLRenderer)
   return target;
 }
 
-/** One reusable opaque shader: no per-person textures, lights, transparency, time noise or materials.
- * Sparse object-space stars fade below pixel resolution; the thin rim never fills the silhouette.
- * instanceColor owns role tint only. It must not multiply the obsidian surface itself. */
-export function createCosmicBodyMaterial(individuality = true): THREE.MeshStandardMaterial {
-  // A physically grounded obsidian shell with a deliberately impossible interior. The entire
-  // population still shares one material; individuality is carried by the existing instanced seed.
-  // Detail self-simplifies with pixel footprint so close shots feel intricate while distant people
-  // remain clean, luminous silhouettes instead of noisy sparkles.
-  const material = new THREE.MeshStandardMaterial({
-    color: '#080a12',
-    roughness: 0.26,
-    metalness: 0.12,
-    envMapIntensity: 0.72,
-  });
-  material.name = 'godbox-cosmic-obsidian';
-
-  const daylight = { value: 1 };
-  material.userData['daylight'] = daylight;
-  const interior = { value: 1 };
-  material.userData['interior'] = interior;
-
-  material.onBeforeCompile = shader => {
-    shader.uniforms['cosmicDaylight'] = daylight;
-    shader.uniforms['cosmicInterior'] = interior;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
-      varying vec3 cosmicPoint;
-      varying vec3 cosmicSeed;
-      varying float cosmicSurfaceId;
-      varying vec3 cosmicView;
-      attribute float cosmicSurface;
-      ${individuality ? 'attribute vec3 cosmicVariation;' : ''}`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        cosmicPoint = position;
-        cosmicSurfaceId = cosmicSurface;
-        cosmicSeed = ${individuality ? 'cosmicVariation' : 'vec3(0.43, 0.8, 0.94)'};`)
-      .replace('#include <project_vertex>', `#include <project_vertex>
-        mat4 cosmicBasis = modelViewMatrix;
-        #ifdef USE_INSTANCING
-          cosmicBasis *= instanceMatrix;
-        #endif
-        cosmicView = normalize(vec3(dot(normalize(cosmicBasis[0].xyz), -mvPosition.xyz),
-          dot(normalize(cosmicBasis[1].xyz), -mvPosition.xyz), dot(normalize(cosmicBasis[2].xyz), -mvPosition.xyz)));
-      `);
-
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec3 cosmicPoint;
-      varying vec3 cosmicSeed;
-      varying float cosmicSurfaceId;
-      varying vec3 cosmicView;
-      uniform float cosmicDaylight;
-      uniform float cosmicInterior;
-
-      float cosmicHash(vec3 p) {
-        return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
-      }
-
-      float cosmicStarCore(vec3 p, float threshold, float size) {
-        vec3 cell = floor(p);
-        vec3 local = fract(p) - 0.5;
-        float h = cosmicHash(cell);
-        float footprint = max(length(fwidth(p)), 0.001);
-        float core = step(threshold, h)
-          * (1.0 - smoothstep(size, size + 0.045 + footprint * 0.32, length(local)));
-        return core * (1.0 - smoothstep(0.62, 2.0, footprint));
-      }
-
-      float cosmicStarHalo(vec3 p, float threshold) {
-        vec3 cell = floor(p);
-        vec3 local = fract(p) - 0.5;
-        float h = cosmicHash(cell);
-        float footprint = max(length(fwidth(p)), 0.001);
-        float halo = step(threshold, h)
-          * (1.0 - smoothstep(0.06, 0.34 + footprint * 0.22, length(local)));
-        return halo * (1.0 - smoothstep(0.48, 1.55, footprint));
-      }`)
-      .replace('#include <color_fragment>', `
-        // Nearly-black diffuse response preserves a readable solid form in daylight. The colour
-        // story is emitted from within rather than painted across the surface.
-        diffuseColor.rgb = vec3(0.0022, 0.0028, 0.0048);
-      `)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        // Subtle material variation catches grazing light on curved forms. It is intentionally
-        // low-frequency so the body reads as polished obsidian rather than plastic glitter.
-        float cosmicPolishBand = 0.5 + 0.5 * sin(
-          cosmicPoint.y * 8.0 + cosmicPoint.x * 11.0 + cosmicSeed.x * 19.0
-        );
-        roughnessFactor *= mix(1.04, 0.78, pow(cosmicPolishBand, 3.2));
-      `)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        vec3 accent = vec3(0.46, 0.62, 0.96);
-        #ifdef USE_INSTANCING_COLOR
-          accent = vColor.rgb;
-        #endif
-
-        float night = 1.0 - cosmicDaylight;
-        float viewDistance = length(vViewPosition);
-        float distanceRead = smoothstep(8.0, 42.0, viewDistance);
-
-        // Two broad fields create layered depth instead of a single procedural stripe. Their
-        // overlap is rare enough to feel like nebula structure rather than camouflage.
-        float ribbonA = 0.5 + 0.5 * sin(
-          cosmicPoint.y * 12.0
-          + cosmicPoint.x * 17.0
-          + sin(cosmicPoint.z * 20.0 + cosmicSeed.x * 17.0) * 1.2
-          + cosmicSeed.x * 31.0
-        );
-        float ribbonB = 0.5 + 0.5 * sin(
-          cosmicPoint.z * 16.0
-          - cosmicPoint.y * 9.0
-          + sin(cosmicPoint.x * 23.0 + cosmicSeed.x * 11.0) * 0.92
-          + cosmicSeed.x * 47.0
-        );
-        float ribbonC = 0.5 + 0.5 * sin(
-          (cosmicPoint.x + cosmicPoint.z) * 9.0
-          - cosmicPoint.y * 5.0
-          + cosmicSeed.x * 63.0
-        );
-
-        float nebulaMask = pow(
-          clamp(ribbonA * 0.62 + ribbonB * 0.38 + ribbonC * 0.18 - 0.30, 0.0, 1.0),
-          2.35
-        );
-        float nebulaCore = pow(clamp(ribbonA * ribbonB - 0.36, 0.0, 1.0), 1.7);
-
-        vec3 deepBlue = vec3(0.010, 0.030, 0.105);
-        vec3 violet = vec3(0.105, 0.022, 0.175);
-        vec3 cyan = vec3(0.010, 0.125, 0.19);
-        vec3 nebulaColour = mix(deepBlue, violet, smoothstep(0.16, 0.84, ribbonA));
-        nebulaColour = mix(nebulaColour, cyan, smoothstep(0.56, 0.98, ribbonB) * 0.40);
-        nebulaColour = mix(nebulaColour, accent * 0.30, 0.10);
-
-        float nebulaEnergy = cosmicSeed.y * mix(0.10, 0.17, night) * cosmicInterior;
-        totalEmissiveRadiance += nebulaColour * nebulaMask * nebulaEnergy;
-        totalEmissiveRadiance += mix(violet, accent * 0.24, 0.28) * nebulaCore
-          * cosmicSeed.y * mix(0.035, 0.065, night) * cosmicInterior;
-        totalEmissiveRadiance += vec3(0.0006, 0.0009, 0.002);
-
-        // Fine stars give close-up richness. Hero stars get a soft HDR halo and survive bloom as
-        // isolated points of light. Both fade with pixel footprint before they can shimmer.
-        vec3 fineField = (cosmicPoint - cosmicView * 0.012) * 45.0 + cosmicSeed.x * 173.0;
-        vec3 heroField = (cosmicPoint - cosmicView * 0.027) * 22.0 + cosmicSeed.x * 311.0;
-        float fineStars = cosmicStarCore(fineField, 0.992, 0.055);
-        float heroStars = cosmicStarCore(heroField, 0.995, 0.075);
-        float heroHalo = cosmicStarHalo(heroField, 0.995);
-
-        float starWarmth = cosmicHash(floor(heroField) + vec3(19.0, 7.0, 3.0));
-        vec3 coolStar = vec3(0.60, 0.83, 1.58);
-        vec3 warmStar = vec3(1.90, 1.34, 0.72);
-        vec3 heroColour = mix(coolStar, warmStar, smoothstep(0.60, 0.94, starWarmth));
-        float starEnergy = cosmicSeed.z * mix(0.50, 0.72, night) * cosmicInterior;
-        totalEmissiveRadiance += coolStar * fineStars * 0.70 * starEnergy;
-        totalEmissiveRadiance += heroColour * heroHalo * 0.22 * starEnergy;
-        totalEmissiveRadiance += heroColour * heroStars * 1.86 * starEnergy;
-
-        // Dual-lobe Fresnel: a razor-thin bright edge on top of a broader, much dimmer aura. The
-        // broad lobe receives a slight distance lift so tiny people remain unmistakably supernatural.
-        float facing = abs(dot(normalize(normal), normalize(vViewPosition)));
-        float broadRim = pow(1.0 - facing, 3.2);
-        float fineRim = pow(1.0 - facing, 7.0);
-        vec3 rimColour = mix(vec3(0.34, 0.49, 0.98), accent, 0.12);
-        totalEmissiveRadiance += rimColour * broadRim
-          * (mix(0.012, 0.020, night) + distanceRead * mix(0.008, 0.018, night));
-        totalEmissiveRadiance += rimColour * fineRim * mix(0.12, 0.24, night);
-
-        // A restrained aurora catches shoulders, skulls and limbs in close shots. It never becomes
-        // a full-body glow; the black negative space is what gives the material its visual authority.
-        float aurora = pow(clamp(ribbonA - 0.67, 0.0, 1.0), 3.1)
-          * (0.40 + 0.60 * ribbonB);
-        totalEmissiveRadiance += mix(vec3(0.022, 0.055, 0.17), accent * 0.23, 0.24)
-          * aurora * mix(0.08, 0.14, night) * cosmicInterior;
-
-        // The face is part of the head surface, so every head/spine transform is inherited.
-        // A precise warm-white seam with a tiny central inflection, never a visor or decal.
-        if (cosmicSurfaceId > 0.5) {
-          float faceT = smoothstep(-0.078, 0.064, cosmicPoint.y);
-          float diamond = max(0.0, 1.0 - abs(cosmicPoint.y - 0.006) / 0.013);
-          float slitWidth = mix(0.00025, 0.00135, faceT) + diamond * 0.0011;
-          float slitDistance = abs(cosmicPoint.x) - slitWidth;
-          float aa = max(fwidth(cosmicPoint.x) * 0.7, 0.00015);
-          float faceMask = smoothstep(0.002, 0.015, cosmicPoint.z)
-            * smoothstep(-0.079, -0.07, cosmicPoint.y);
-          float seam = 1.0 - smoothstep(-aa, aa, slitDistance);
-          float halo = exp(-max(slitDistance, 0.0) * 600.0) * 0.10;
-          totalEmissiveRadiance += mix(vec3(1.0, 0.88, 0.68), accent, 0.16)
-            * (seam * mix(3.6, 3.0, night) + halo) * faceMask;
-        }
-      `);
-  };
-
-  material.customProgramCacheKey = () => `cosmic-obsidian-v4-${individuality}`;
-  return material;
+/**
+ * The population's surface. Skin, cloth, leather, hair, metal and wood all resolve from one
+ * texture-free program; per-instance attributes carry each individual's palette and clothing.
+ * `individuality` keeps the close-range weave/pore detail; crowd and company meshes can drop it.
+ */
+export function createCosmicBodyMaterial(individuality = true,
+  mode: HumanSurfaceMode = HUMAN_SURFACE_MODE.torso): THREE.MeshStandardMaterial {
+  return createHumanSurfaceMaterial(mode, individuality);
 }
 
 export function updateCosmicBodyMaterial(material: THREE.MeshStandardMaterial, daylight: number): void {
-  (material.userData['daylight'] as { value: number }).value = THREE.MathUtils.clamp(daylight, 0, 1);
-  material.envMapIntensity = THREE.MathUtils.lerp(0.22, 0.9, THREE.MathUtils.clamp(daylight, 0, 1));
+  updateHumanSurfaceMaterial(material, daylight);
 }
 
+/**
+ * Legacy per-instance seed channel. The surface shader no longer reads it — individuality now
+ * arrives through the richer humanTone/humanTrim/humanFit/humanShape channels — but callers that
+ * only need a stable scratch channel keep working, and the attribute costs nothing when unused.
+ */
 export function bindCosmicVariation(mesh: THREE.InstancedMesh): THREE.InstancedBufferAttribute {
   const attribute = new THREE.InstancedBufferAttribute(new Float32Array(mesh.instanceMatrix.count * 3), 3).setUsage(THREE.DynamicDrawUsage);
   mesh.geometry.setAttribute('cosmicVariation', attribute);
@@ -407,7 +132,10 @@ export function bindCosmicVariation(mesh: THREE.InstancedMesh): THREE.InstancedB
 
 /** Core front/back panels and silhouette trims share ONE instanced draw call for every family.
  * Geometry part IDs allow per-instance accessory proportions; glyphs are analytic and antialiased.
- * No billboard, pick target, depth override or permanent floating label is added. */
+ * No billboard, pick target, depth override or permanent floating label is added.
+ *
+ * Ambient settlement people no longer wear these: readable clothing, palette and headwear carry
+ * role at documentary range. War companies still use them, where abstraction is the point. */
 export class CosmicRoleAccents {
   readonly mesh: THREE.InstancedMesh;
   readonly material: THREE.MeshBasicMaterial;
@@ -424,6 +152,7 @@ export class CosmicRoleAccents {
     // intersect the ribcage between vertices and make the circular ring look broken in profile.
     const inlay = createCosmicBodyGeometry();
     inlay.deleteAttribute('cosmicSurface');
+    inlay.deleteAttribute('humanSurface');
     const position = inlay.getAttribute('position'), normal = inlay.getAttribute('normal');
     const uv = inlay.getAttribute('uv');
     for (let i = 0; i < position.count; i++) {

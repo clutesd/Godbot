@@ -6,6 +6,20 @@ const flat: PersonVisualGround = { heightAt: () => 0, isStandable: () => true };
 const dt = 1 / 60;
 
 describe('real-time physical human contract', () => {
+  it('caps spatial awareness candidates deterministically and excludes distant residents', () => {
+    const ids = Array.from({ length: 100 }, (_, i) => `resident-${i}`);
+    const run = (order: string[]) => {
+      const store = new PeopleVisualStateStore();
+      for (const id of order) store.resolve(id, { destination: { x: 0.3, z: 0.3 } }, 0, flat);
+      store.resolve('distant', { destination: { x: 20, z: 20 } }, 0, flat);
+      store.beginFrame();
+      return store.nearbyIds({ x: 0, z: 0 });
+    };
+    const selected = run(ids);
+    expect(selected).toHaveLength(24);
+    expect(selected).not.toContain('distant');
+    expect(run([...ids].reverse())).toEqual(selected);
+  });
   it('has identical measured speed with frozen, slow, documentary and accelerated monthly destinations', () => {
     const journeys = [0, 0.1, 2, 100].map(rate => {
       const store = new PeopleVisualStateStore();

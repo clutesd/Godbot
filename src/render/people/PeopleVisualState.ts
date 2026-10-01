@@ -124,6 +124,22 @@ export class PeopleVisualStateStore {
       this.snapshots.set(state.id, snapshot);
       bucket.push(snapshot); this.buckets.set(key, bucket);
     }
+    for (const bucket of this.buckets.values()) bucket.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /** Awareness shares the physical-neighbour index; no per-person population scan. */
+  nearbyIds(at: Readonly<Vec2>, radius = 2, limit = 24): string[] {
+    const ids: string[] = [];
+    for (let x = Math.floor(at.x - radius); x <= Math.floor(at.x + radius); x++) {
+      for (let z = Math.floor(at.z - radius); z <= Math.floor(at.z + radius); z++) {
+        for (const peer of this.buckets.get(`${x}:${z}`) ?? []) {
+          if (Math.hypot(peer.x - at.x, peer.z - at.z) > radius) continue;
+          ids.push(peer.id);
+          if (ids.length >= limit) return ids;
+        }
+      }
+    }
+    return ids;
   }
 
   /** Drops visual state for anyone not resolved during the current frame (dead or off-budget). */

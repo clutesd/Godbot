@@ -734,6 +734,9 @@ export class Simulation {
       conflictPressure: 0,
       crisisMonths: 0,
       depopulationMonths: 0,
+      disastersSurvived: 0,
+      droughtsSurvived: 0,
+      migrationInfluence: 0,
       politicalPower: this.initialPower(culture.dimensions),
       polityId,
       institutionIds: [],
@@ -1006,6 +1009,7 @@ export class Simulation {
         const culture = this.dominantCulture(settlement);
         if (culture) culture.memory.collectiveSuccess += 0.35;
         settlement.crisisMonths = 0;
+        settlement.disastersSurvived = Math.min(999, settlement.disastersSurvived + 1);
       } else settlement.crisisMonths = Math.max(0, settlement.crisisMonths - 1);
       if (settlement.foodSecurity < 0.13 && this.state.month % 12 === 0) {
         this.addEvent({
@@ -1181,6 +1185,7 @@ export class Simulation {
         residents.push(member); this.peopleBySettlement.set(target.id, residents);
       }
       this.state.stats.migrations += family.length;
+      target.migrationInfluence = Math.min(999, target.migrationInfluence + family.length);
       this.addEvent({ type: 'major-migration', location: target.position, locationId: target.id, actors: family.map(p => p.id),
         causes: ['settlement-abandonment'], context: { source: source?.id ?? '', destination: target.id, expertise: (person.expertise ?? []).map(e => e.domain).join(',') },
         outcome: 'A displaced household found refuge.', affectedPopulation: this.state.advanced.scale === 'modern-statistical' ? 0 : family.length,
@@ -1249,6 +1254,7 @@ export class Simulation {
       }
       this.applyKnowledgeEvents(this.knowledgeSystem.diffuseMigration(this.state, source, target, moved.length));
       this.state.stats.migrations += moved.length;
+      target.migrationInfluence = Math.min(999, target.migrationInfluence + moved.length);
       const experts = moved.filter(p => p.expertise?.some(e => e.competence >= 0.7));
       if (moved.length >= 3 || experts.length > 0) {
         const causes = [

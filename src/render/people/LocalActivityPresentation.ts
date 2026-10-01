@@ -41,6 +41,7 @@ const RECENT_SOCIAL_PLAY_SECONDS = 12;
 const RECENT_SOCIAL_PASSING_SECONDS = 5;
 const MUTUAL_YIELD_RADIUS = 0.95;
 const MUTUAL_YIELD_SECONDS = 0.58;
+export const SOCIAL_PAIR_COOLDOWN_SECONDS = 28;
 export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
   sleepingArea?: IndoorSleepingArea;
@@ -53,7 +54,9 @@ export interface LocalActivityContext {
   people: ReadonlyMap<string, Person>;
   /** Authoritative social graph lookup. Presentation reads it but never mutates it. */
   relationshipFor?(a: string, b: string): SocialRelationship | undefined;
-  visualFor?(id: string): Readonly<Vec2> | undefined;
+  visualFor?(id: string): (Readonly<Vec2> & Partial<Pick<PersonVisualState, 'facing' | 'speed' | 'traveling'>>) | undefined;
+  /** Bounded spatial candidates from the previous visual frame (all visible peers in fixtures). */
+  nearbyIds?(): readonly string[];
   structures: readonly ActivityStructure[];
   safeSegment(a: Vec2, b: Vec2): boolean;
   /** Terrain/structure authority revision, independent of the local presentation clock. */
@@ -176,6 +179,11 @@ export interface SocialEncounterPresentation {
   beat: number;
   pairedOffset?: Vec2;
   greeting?: SocialGreeting;
+  /** Shared reservation scope: at most one exclusive encounter per conversational pod. */
+  scope?: string;
+  ready?: boolean;
+  waitingSeconds?: number;
+  elapsedSeconds?: number;
 };
 export interface LocalActivityState {
   authority: string;
@@ -215,6 +223,7 @@ export interface LocalActivityState {
   attentionHeadYaw?: number;
   attentionTorsoYaw?: number;
   attentionCooldown?: number;
+  attentionCheckSeconds?: number;
   hold: number;
   partnerId?: string;
   /** Multi-beat presentation-only social encounter derived from real relationship authority. */
@@ -249,6 +258,8 @@ export class LocalActivityPresentation {
   private presentationSeconds = 0;
   private clockFrame = -1;
   private readonly previousStates = new Map<string, LocalActivityState>();
+  private readonly reservations = new Map<string, string>();
+  private readonly encounterMemory = new Map<string, { seen: number; peers: Map<string, number> }>();
   get size(): number { return this.states.size; }
   get(id: string): Readonly<LocalActivityState> | undefined { return this.states.get(id); }
   snapshot(id: string): Readonly<LocalActivityState> | undefined { return this.previousStates.get(id); }
@@ -258,15 +269,51 @@ export class LocalActivityPresentation {
       destination: { ...state.destination },
       rest: state.rest ? { ...state.rest, destination: { ...state.rest.destination } } : undefined,
       encounter: state.encounter ? { ...state.encounter } : undefined });
+    // Resolve invitations from one immutable frame, never from person iteration order. Existing
+    // mutual scenes retain their floor; competing invitations get one deterministic winner.
+    this.reservations.clear();
+    const scopes = new Set<string>();
+    const invitations = [...this.previousStates].filter(([, s]) => s.encounter);
+    invitations.sort(([a, sa], [b, sb]) => {
+      const mutual = (id: string, s: LocalActivityState) => Number(this.previousStates.get(s.partnerId!)?.partnerId === id);
+      return mutual(b, sb) - mutual(a, sa)
+        || (sb.encounter!.strength + sb.encounter!.trust) - (sa.encounter!.strength + sa.encounter!.trust)
+        || a.localeCompare(b);
+    });
+    for (const [id, state] of invitations) {
+      const peer = state.encounter!.partnerId, scope = state.encounter!.scope;
+      if (this.reservations.has(id) || this.reservations.has(peer) || scope && scopes.has(scope)) continue;
+      this.reservations.set(id, peer); this.reservations.set(peer, id);
+      if (scope) scopes.add(scope);
+    }
   }
-  prune(): void { for (const [id, state] of this.states) if (state.seen !== this.frame) this.states.delete(id); }
-  clear(): void { this.states.clear(); this.presentationSeconds = 0; this.clockFrame = -1; }
+  prune(): void {
+    for (const [id, state] of this.states) if (state.seen !== this.frame) this.states.delete(id);
+    for (const [id, memory] of this.encounterMemory) if (memory.seen !== this.frame) this.encounterMemory.delete(id);
+  }
+  clear(): void {
+    this.states.clear(); this.previousStates.clear(); this.reservations.clear(); this.encounterMemory.clear();
+    this.presentationSeconds = 0; this.clockFrame = -1;
+  }
+
+  private cooling(a: string, b: string): boolean {
+    return (this.encounterMemory.get(a)?.peers.get(b) ?? 0) > this.presentationSeconds;
+  }
+
+  private rememberEncounter(a: string, b: string): void {
+    const memory = this.encounterMemory.get(a)!;
+    memory.peers.delete(b);
+    memory.peers.set(b, this.presentationSeconds + SOCIAL_PAIR_COOLDOWN_SECONDS + unit(`${a < b ? a : b}:${a < b ? b : a}:reunion`) * 12);
+    if (memory.peers.size > 4) memory.peers.delete(memory.peers.keys().next().value!);
+  }
 
   resolve(person: Person, context: LocalActivityContext, delta: number): LocalActivityState | undefined {
     if (this.clockFrame !== this.frame) {
       this.presentationSeconds += Math.max(0, delta);
       this.clockFrame = this.frame;
     }
+    const memory = this.encounterMemory.get(person.id) ?? { seen: this.frame, peers: new Map<string, number>() };
+    memory.seen = this.frame; this.encounterMemory.set(person.id, memory);
     const nav = person.navigation;
     if (!nav) {
       this.states.delete(person.id);
@@ -279,7 +326,15 @@ export class LocalActivityPresentation {
     const ordinaryCommute = !nav.traveling && nav.schedulePhase === 'commute' && person.activity === 'travel';
     if (ordinaryCommute) {
       const suspended = this.states.get(person.id);
-      if (suspended) suspended.seen = this.frame;
+      if (suspended) {
+        suspended.seen = this.frame;
+        if (suspended.encounter) {
+          this.rememberEncounter(person.id, suspended.encounter.partnerId);
+          suspended.lastPartnerId = suspended.encounter.partnerId;
+          suspended.encounter = undefined; suspended.partnerId = undefined;
+          suspended.animation = 'idle'; suspended.action = 'quiet-departure'; suspended.seconds = 0;
+        }
+      }
       return undefined;
     }
 
@@ -358,13 +413,16 @@ export class LocalActivityPresentation {
       for (const id of context.group?.members ?? []) {
         const invitation = this.previousStates.get(id);
         const peer = context.people.get(id);
-        if (!peer || invitation?.encounter?.partnerId !== person.id || !canInteract(person, peer)) continue;
+        if (!peer || invitation?.encounter?.partnerId !== person.id || this.reservations.get(person.id) !== id
+          || this.cooling(person.id, id) || !canInteract(person, peer)) continue;
         clearRestChoreography(state);
         clearPodParticipation(state);
         clearPlayPresentation(state);
         clearAmbientAttention(state);
         state.encounter = buildSocialEncounter(person, peer, context.relationshipFor?.(person.id, peer.id));
         state.encounter.beat = invitation.encounter.beat;
+        state.encounter.scope = invitation.encounter.scope;
+        this.rememberEncounter(person.id, peer.id);
         state.partnerId = peer.id; state.seconds = 0;
         applySocialBeat(person, peer, context, state);
         // The invited listener holds their place while the initiator approaches only when that
@@ -392,18 +450,33 @@ export class LocalActivityPresentation {
     state.phase = !arrived ? 'approach' : !oriented ? 'orient' : state.action === 'pause' ? 'pause' : 'action';
     // Time spent walking/turning cannot consume the interaction it is approaching.
     const partnerState = state.partnerId ? this.previousStates.get(state.partnerId) : undefined;
+    if (state.encounter) state.encounter.elapsedSeconds = (state.encounter.elapsedSeconds ?? 0) + Math.max(0, delta);
     if (state.encounter && partnerState && !partnerState.encounter && partnerState.lastPartnerId === person.id) {
       rememberSocial(state, state.partnerId, this.presentationSeconds, 'encounter');
       state.socialCooldown = 2; state.lastPartnerId = state.partnerId; state.encounter = undefined; state.partnerId = undefined;
       state.animation = 'idle'; state.action = 'quiet-departure'; state.seconds = 0; state.hold = 1.8;
     }
-    if (state.encounter && ((partnerState?.partnerId && partnerState.partnerId !== person.id)
-      || (state.sceneSeconds ?? 0) > 12 && (state.phase === 'approach' || !partnerState?.encounter))) {
+    if (state.encounter && ((this.previousStates.get(person.id)?.encounter && this.reservations.get(person.id) !== state.partnerId)
+      || (this.reservations.has(state.partnerId!) && this.reservations.get(state.partnerId!) !== person.id)
+      || (partnerState?.partnerId && partnerState.partnerId !== person.id)
+      || (state.encounter.waitingSeconds ?? 0) > 12 || (state.encounter.elapsedSeconds ?? 0) > 45)) {
       state.socialCooldown = 2; state.lastPartnerId = state.partnerId; state.encounter = undefined; state.partnerId = undefined;
       state.animation = 'idle'; state.action = 'observe'; state.seconds = state.hold;
     }
     const reciprocal = partnerState?.partnerId === person.id;
-    const partnerReady = reciprocal && (partnerState.phase === 'action' || partnerState.phase === 'pause');
+    const partnerAt = state.partnerId ? context.visualFor?.(state.partnerId) : undefined;
+    const greeting = state.encounter?.beat === 0 ? state.encounter.greeting : undefined;
+    const spacing = greeting ? SOCIAL_GREETING_DISTANCE[greeting] + 0.045 : 0.9;
+    const partnerReady = reciprocal && (partnerState.phase === 'action' || partnerState.phase === 'pause')
+      && !!visual && !!partnerAt
+      && Math.hypot(visual.x - partnerAt.x, visual.z - partnerAt.z) <= spacing
+      && Math.cos(facingTarget(visual, partnerAt) - visual.facing) > 0.94
+      && (partnerAt.facing === undefined || Math.cos(facingTarget(partnerAt, visual) - partnerAt.facing) > 0.94)
+      && !partnerAt.traveling && (partnerAt.speed ?? 0) < 0.05;
+    if (state.encounter) {
+      state.encounter.ready = Boolean(oriented && partnerReady);
+      state.encounter.waitingSeconds = state.encounter.ready ? 0 : (state.encounter.waitingSeconds ?? 0) + Math.max(0, delta);
+    }
     if (oriented && (!state.encounter || partnerReady)) state.seconds += Math.max(0, delta);
     if (state.encounter && reciprocal && partnerState.encounter
       && state.encounter.beat < partnerState.encounter.beat) {
@@ -428,7 +501,7 @@ export class LocalActivityPresentation {
     }
     // The stable pair leader advances the shared beat; listener readiness is required.
     const leads = !state.encounter || !reciprocal || person.id < state.partnerId!;
-    if (oriented && leads && state.seconds >= state.hold && !state.attentionId) {
+    if (oriented && leads && (!state.encounter || partnerReady) && state.seconds >= state.hold && !state.attentionId) {
       if (state.rest) {
         if (state.restStage === 'settling') {
           state.restStage = 'settled';
@@ -473,6 +546,7 @@ export class LocalActivityPresentation {
         }
         state.socialCooldown = 2;
         state.lastPartnerId = state.encounter.partnerId;
+        this.rememberEncounter(person.id, state.encounter.partnerId);
         rememberSocial(state, state.encounter.partnerId, this.presentationSeconds, 'encounter');
         state.encounter = undefined;
         state.partnerId = undefined;
@@ -596,10 +670,14 @@ export class LocalActivityPresentation {
     if (!state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
       const selected = selectSocialPartner(person, context, state, id => {
         const peer = this.previousStates.get(id);
-        return !peer?.socialCooldown && !peer?.rest && !peer?.yieldToId && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
+        return !this.cooling(person.id, id) && !this.cooling(id, person.id)
+          && !this.reservations.has(person.id) && !this.reservations.has(id)
+          && !peer?.socialCooldown && !peer?.rest && !peer?.yieldToId && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
       });
       if (selected) {
         state.encounter = buildSocialEncounter(person, selected.peer, selected.relationship);
+        state.encounter.scope = conversationPodFor(context.group, person.id)?.id ?? context.group?.key;
+        this.rememberEncounter(person.id, selected.peer.id);
         state.partnerId = selected.peer.id;
         applySocialBeat(person, selected.peer, context, state);
         return;
@@ -1116,8 +1194,9 @@ function updateMutualYield(person: Person, context: LocalActivityContext, state:
   const ownRemaining = Math.hypot(state.destination.x - visual.x, state.destination.z - visual.z);
   if (ownRemaining < 0.14) return;
 
-  for (const [id, peer] of context.people) {
-    if (id === person.id) continue;
+  for (const id of context.nearbyIds?.() ?? context.people.keys()) {
+    const peer = context.people.get(id);
+    if (!peer || id === person.id) continue;
     const peerState = previousStates.get(id);
     const peerAt = context.visualFor?.(id) ?? peer.position;
     if (!canPerceive(person, peer) || peerState?.yieldToId === person.id
@@ -1323,6 +1402,8 @@ function socialActionFor(encounter: SocialEncounterPresentation, baseAction: str
 function applySocialBeat(person: Person, peer: Person, context: LocalActivityContext, state: LocalActivityState): void {
   const encounter = state.encounter;
   if (!encounter) return;
+  encounter.ready = false;
+  encounter.waitingSeconds = 0;
   clearPodParticipation(state);
   clearPlayPresentation(state);
   const script = SOCIAL_SCRIPTS[encounter.tone];
@@ -1391,9 +1472,11 @@ function updateAmbientAttention(person: Person, context: LocalActivityContext, s
     const peer = context.people.get(state.attentionId);
     const at = peer ? context.visualFor?.(peer.id) ?? peer.position : undefined;
     const peerState = peer ? previousStates.get(peer.id) : undefined;
-    const valid = !unsuitable && peer && at && canInteract(person, peer)
-      && peerState?.phase !== 'approach' && peerState?.action !== 'arrive'
-      && Math.hypot(at.x - visual!.x, at.z - visual!.z) <= SOCIAL_AWARENESS_RADIUS * 1.15;
+    const caregiver = peer && (person.children.includes(peer.id) || peer.parents.includes(person.id));
+    const recent = peer && state.recentSocialId === peer.id && (state.recentSocialUntil ?? 0) > now;
+    const valid = !unsuitable && peer && at && canPerceive(person, peer)
+      && (peerState?.phase !== 'approach' || caregiver || recent) && peerState?.action !== 'arrive'
+      && Math.hypot(at.x - visual!.x, at.z - visual!.z) <= (caregiver ? 1.7 : recent ? 1.5 : SOCIAL_AWARENESS_RADIUS) * 1.15;
 
     if (!valid && state.attentionPhase !== 'release') {
       state.attentionPhase = 'release';
@@ -1440,6 +1523,9 @@ function updateAmbientAttention(person: Person, context: LocalActivityContext, s
   }
 
   if (unsuitable || (state.attentionCooldown ?? 0) > 0) return;
+  state.attentionCheckSeconds = (state.attentionCheckSeconds ?? unit(`${person.id}:perception-phase`) * 0.4) - dt;
+  if (state.attentionCheckSeconds > 0) return;
+  state.attentionCheckSeconds = 0.35 + unit(`${person.id}:perception-cadence`) * 0.35;
   const selected = selectAmbientAttentionPeer(person, context, state, visual!, previousStates, now);
   if (!selected) return;
   const at = context.visualFor?.(selected.peer.id) ?? selected.peer.position;
@@ -1473,8 +1559,9 @@ function selectAmbientAttentionPeer(person: Person, context: LocalActivityContex
   let selected: AmbientAttentionSelection | undefined;
   const kind = person.navigation?.destinationKind;
   const continuityActive = Boolean(state.recentSocialId && (state.recentSocialUntil ?? 0) > now);
-  for (const [id, peer] of context.people) {
-    if (id === person.id) continue;
+  for (const id of context.nearbyIds?.() ?? context.people.keys()) {
+    const peer = context.people.get(id);
+    if (!peer || id === person.id) continue;
     const peerState = previousStates.get(id);
     if (!canPerceive(person, peer) || peerState?.action === 'arrive') continue;
     const recent = continuityActive && state.recentSocialId === peer.id;
@@ -1637,6 +1724,7 @@ function canPerceive(person: Person, peer: Person): boolean {
 
 function canInteract(person: Person, peer: Person): boolean {
   return canPerceive(person, peer) && !peer.navigation?.traveling
+    && !EXCLUSIVE_ACTIVITIES.has(peer.activity)
     && peer.navigation?.destinationId === person.navigation?.destinationId
     && peer.navigation?.destinationKind === person.navigation?.destinationKind;
 }

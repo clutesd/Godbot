@@ -12,7 +12,8 @@
 import type { Era } from '../materials/MaterialPalette';
 import type { CultureStyleProfile, MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
-import type { DevelopmentResponse } from '../../sim/development/types';
+import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
+import type { SettlementArchitecturalIdentity } from '../../sim/development/SettlementIdentity';
 import { applyDevelopmentComposition } from './StructureComposition';
 
 export type BuildingRole =
@@ -112,6 +113,12 @@ export interface BuildingGrammar {
   postStyle: PostStyle;
   postThickness: number;
   wallLayer: WallLayer;
+  /** A distinct material for the lowest wall band only (e.g. a masonry ground floor under a
+   * timber upper storey). Undefined means the wall is one material throughout, as before. */
+  baseMaterial?: StructureMaterial;
+  /** Iron-reinforced timber/earth construction: gets the same diagonal bay bracing as steel posts
+   * without changing the wall material itself. */
+  reinforced?: boolean;
   roofFamily: RoofFamily;
   roofTiers: number;
   roofPitch: number;
@@ -211,14 +218,20 @@ export function clampRoleToEra(role: BuildingRole, era: Era): BuildingRole {
   }
 }
 
-function roofFamilyFor(profile: CultureStyleProfile, era: Era, role: BuildingRole): RoofFamily {
+function roofFamilyFor(profile: CultureStyleProfile, era: Era, role: BuildingRole, development?: DevelopmentResponse): RoofFamily {
   if (era === 'primitive') {
     if (role === 'lean-to') return 'lean-slope';
     if (role === 'store-pit') return 'thatch-hip';
     return 'hide-cone';
   }
-  if (role === 'factory' || role === 'foundry') return 'saw-tooth';
-  if (role === 'energy' || role === 'research') return 'canopy-shell';
+  // Heavy industry at full scale converges on a functional, culture-independent form (a real
+  // convergence); early/mid-tier industrial buildings keep growing out of the settlement's own
+  // roof language so industrialization reads as a descendant of local tradition, not a kit swap.
+  // Buildings with no development response (legacy ambient fabric, landmarks) keep the old,
+  // always-functional behaviour.
+  const majorIndustrial = !development || development.level === 3;
+  if ((role === 'factory' || role === 'foundry') && majorIndustrial) return 'saw-tooth';
+  if ((role === 'energy' || role === 'research') && majorIndustrial) return 'canopy-shell';
   if (era === 'early') {
     // Early structures already inherit a culture's roof silhouette; the material system still
     // renders these families in thatch, so this changes shape rather than granting later materials.
@@ -589,12 +602,24 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
   }
 }
 
+export interface BuildingGrammarContext {
+  /** -1 (cold/wet) .. 1 (hot/dry), from the settlement's own cell temperature/moisture. */
+  climateSignal?: number;
+  /** Local flood depth at the plot, extending the slope-responsive plinth with a second hazard. */
+  floodDepth?: number;
+  /** True only for a settlement's purpose-built landmark; never set for an ordinary building. */
+  isLandmark?: boolean;
+}
+
 export function resolveBuildingGrammar(
   profile: CultureStyleProfile,
   era: Era,
   requestedRole: BuildingRole,
   seed: string,
   development?: DevelopmentResponse,
+  identity?: SettlementArchitecturalIdentity,
+  localSlopeDegrees?: number,
+  context?: BuildingGrammarContext,
 ): BuildingGrammar {
   const role = development ? requestedRole : clampRoleToEra(requestedRole, era);
   const random = new SeededRandom(seed);
@@ -602,12 +627,12 @@ export function resolveBuildingGrammar(
   const rank = eraRank(era);
   const inheritance = profile.getEraInheritance(era);
   const trim = profile.getTrimDensity(era);
-  const roofFamily = roofFamilyFor(profile, era, role);
+  const roofFamily = roofFamilyFor(profile, era, role, development);
   const ceremonial = role === 'shrine' || role === 'hall' || role === 'gate-tower' || role === 'ritual-marker';
   const industrialRole = role === 'factory' || role === 'foundry' || role === 'warehouse';
   const scale = inheritance.scaleFactor;
 
-  const ornament = Math.min(1, shape.ornament * (0.55 + trim * 0.75) + (ceremonial ? 0.18 : 0));
+  const ornament = Math.min(1, shape.ornament * (0.55 + trim * 0.75) + (ceremonial ? 0.18 : 0) + (identity?.ornamentBias ?? 0) * 0.15);
   const layeredFamily = roofFamily === 'tile-layered' || roofFamily === 'stepped-terrace';
   const roofTiers = era === 'primitive'
     ? 1
@@ -621,12 +646,17 @@ export function resolveBuildingGrammar(
   const grammar: BuildingGrammar = {
     role,
     era,
-    width: shape.width * scale * random.range(0.93, 1.08),
-    depth: shape.depth * scale * random.range(0.93, 1.08),
+    // A settlement-consistent footprint skew (identity.footprintBias) layers on top of the
+    // existing per-building jitter, so one settlement's buildings share a "local dialect" of
+    // narrow/deep vs. broad/shallow proportions while individual buildings still vary.
+    width: shape.width * scale * random.range(0.93, 1.08) * (1 - (identity?.footprintBias ?? 0) * 0.12),
+    depth: shape.depth * scale * random.range(0.93, 1.08) * (1 + (identity?.footprintBias ?? 0) * 0.12),
     wallHeight: shape.wallHeight * (0.85 + rank * 0.06) * random.range(0.94, 1.07),
     storeys: shape.storeys,
     bays: Math.max(1, shape.bays + (rank >= 3 && !ceremonial ? 1 : 0)),
-    plinthHeight: era === 'primitive' ? 0 : (0.05 + rank * 0.016) * (ceremonial ? 2.1 : 1),
+    plinthHeight: (era === 'primitive' ? 0 : (0.05 + rank * 0.016) * (ceremonial ? 2.1 : 1))
+      * (1 + (ceremonial ? (identity?.monumentalScaleBias ?? 0) * 0.3 : 0))
+      * (1 + Math.min(1, (localSlopeDegrees ?? 0) / 20) * (identity?.plinthSlopeResponsiveness ?? 0.5)),
     plinthInset: ceremonial ? -0.12 : -0.05,
     postStyle: postStyleFor(era, role),
     postThickness: era === 'primitive' ? 0.035 : 0.045 + rank * 0.006 + (ceremonial ? 0.02 : 0),
@@ -662,13 +692,18 @@ export function resolveBuildingGrammar(
     lanterns: era === 'primitive' ? 0 : Math.round(ornament * 3 + (rank >= 2 ? 1 : 0)),
     gateway: ceremonial && rank >= 1,
     forecourt: ceremonial && rank >= 2,
+    // A settlement with a strong courtyard tendency (identity.massingCourtyardTendency) sometimes
+    // encloses buildings that would otherwise have none, via the same already-seeded `random`
+    // instance used for every other per-building draw in this function.
     enclosure: role === 'compound'
       ? 'yard'
       : ceremonial && rank >= 2
         ? 'court'
         : era === 'primitive' && role === 'shelter'
           ? 'stakes'
-          : 'none',
+          : identity && identity.massingCourtyardTendency > 0.6 && random.chance((identity.massingCourtyardTendency - 0.6) * 1.5)
+            ? (rank >= 2 ? 'court' : 'yard')
+            : 'none',
     chimneys: role === 'foundry' ? 3 : role === 'factory' ? 2 : role === 'workshop' && rank >= 3 ? 1 : 0,
     vents: role === 'energy' || role === 'research' ? 3 : industrialRole ? 2 : 0,
     frontage: frontageFor(role, rank),
@@ -693,6 +728,16 @@ export function resolveBuildingGrammar(
     grammar.development = { memorial: development.memorial, form: development.form, need: development.need, level: development.level, material: development.material };
     grammar.postStyle = development.material === 'metal' ? 'steel' : development.material === 'masonry' ? 'stone' : 'timber';
     grammar.wallLayer = development.material === 'metal' ? 'panel' : development.material === 'masonry' ? 'stone' : development.material === 'ceramic' ? 'brick' : 'daub';
+    // A masonry ground floor under a lighter upper structure: pushed by a settlement's own
+    // material disagreement with its culture's default lean, or by a ceremonial/government
+    // building's wealth once construction has matured enough to support it.
+    if (development.material !== 'masonry' && development.material !== 'metal' && rank >= 2
+      && (identity?.materialBiasOverride === 'masonry' || (development.need === 'government' || ceremonial) && development.level >= 2)) {
+      grammar.baseMaterial = 'masonry';
+    }
+    // Iron-reinforced timber: the same diagonal bracing a steel post gets, without a full
+    // material swap, once a settlement has the construction capability to support level 2+.
+    grammar.reinforced = development.material === 'timber' && development.level >= 2 && rank >= 2;
     grammar.openings = development.material === 'metal' ? 'glazed' : development.level > 1 ? 'lattice' : 'shutter';
     grammar.roofTiers = development.form === 'sanctuary' ? development.level : 1;
     grammar.storeys = development.form === 'tower' ? development.level + 1 : development.level === 3 ? 2 : 1;
@@ -716,6 +761,31 @@ export function resolveBuildingGrammar(
     grammar.emissive = development.need === 'energy' && development.level === 3 ? 0.85 : 0.25;
     applyDevelopmentIdentity(grammar, development);
     applyDevelopmentComposition(grammar, development);
+  }
+  // Climate/terrain response: a real settlement-cell signal, not a biome skin. Cold/wet pulls the
+  // roof steeper and the massing tighter; hot/dry flattens the roof and opens it toward courtyards.
+  const climate = context?.climateSignal ?? 0;
+  if (climate !== 0) {
+    grammar.roofPitch *= 1 - climate * 0.22;
+    if (climate < 0) {
+      grammar.windowRows = Math.max(1, grammar.windowRows - (climate < -0.5 ? 1 : 0));
+      grammar.veranda = grammar.veranda === 'wrap' ? 'front' : grammar.veranda;
+    } else if (climate > 0.4 && grammar.enclosure === 'none' && !industrialRole) {
+      grammar.enclosure = 'yard';
+      grammar.veranda = grammar.veranda === 'none' ? 'front' : 'wrap';
+    }
+  }
+  // A second hazard sharing the same slope-responsive plinth mechanism from settlement identity.
+  if (context?.floodDepth) {
+    grammar.plinthHeight *= 1 + Math.min(1.5, context.floodDepth * 3) * (identity?.plinthSlopeResponsiveness ?? 0.5);
+  }
+  // A settlement's purpose-built landmark never shares an ordinary building's silhouette: it
+  // always gets a dramatic crown and reads more ornamented/monumental than its role's default.
+  if (context?.isLandmark) {
+    if (grammar.crown === 'none') grammar.crown = 'lantern-cupola';
+    grammar.ornament = Math.max(grammar.ornament, 0.85);
+    grammar.plinthHeight *= 1.35;
+    grammar.forecourt = true;
   }
   return grammar;
 }

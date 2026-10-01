@@ -19,6 +19,7 @@ import { reserveStructurePlot } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
 import { advanceSettlementWater } from './WaterCivilization';
+import { evaluateSettlementIdentity } from './SettlementIdentity';
 import { shelterCapacity, usableStructure } from './Shelter';
 import {
   SETTLEMENT_NEEDS,
@@ -115,17 +116,21 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
   const waterState = s.development?.water;
   const scale = Math.min(4, Math.sqrt(c.population / 65));
   const backing = (kind: InstitutionKind) => { const i = institution(c, kind); return i ? i.support * 1.5 + Math.min(1, i.members / 24) : 0; };
+  // Settlement identity amplifies, never replaces, the existing weighted pressures: a settlement
+  // whose history has oriented it toward trade or defense reaches the matching building sooner.
+  const tradeAmplify = s.architecture?.orientationBias === 'trade' ? 1.25 : 1;
+  const securityAmplify = s.architecture?.orientationBias === 'defense' ? 1.3 : 1;
   const pressures: ServiceSupply = {
     housing: c.population / 17,
     food: c.farmers > 0 ? scale * (0.7 + (1 - s.foodSecurity) * 1.3 + (c.fertile ? 0.25 : 0) + (s.specialization === 'agriculture' ? 0.6 : 0)) : scale * 0.3,
-    trade: c.routes > 0 ? scale * (0.5 + d.tradeOrientation + c.routes * 0.35) + backing('merchant-association') : 0,
+    trade: c.routes > 0 ? (scale * (0.5 + d.tradeOrientation + c.routes * 0.35) + backing('merchant-association')) * tradeAmplify : 0,
     government: scale * (0.15 + d.hierarchy * 0.35) + backing('council') + c.capitalReach * 0.6,
-    security: scale * (s.conflictPressure * 3 + d.militarism * 0.4 + clamp(c.culture.memory.frontierViolence) * 0.5) + backing('military-order'),
+    security: (scale * (s.conflictPressure * 3 + d.militarism * 0.4 + clamp(c.culture.memory.frontierViolence) * 0.5) + backing('military-order')) * securityAmplify,
     religion: scale * Math.max(0, d.religiousTendency - 0.4) * 1.8 + backing('temple'),
     knowledge: scale * Math.max(0, d.curiosity - 0.5) + backing('knowledge-keepers') + s.knowledge.literacy * scale * 0.6,
     healthcare: scale * ((1 - c.health) * 2 + s.pollution * 0.5 + d.cooperation * 0.2 + (waterState ? (1 - waterState.quality) * 0.8 : 0)),
     manufacturing: scale * (Math.min(1, c.artisans / 8) * 0.6 + s.industry.intensity * 2) + backing('craft-circle'),
-    transport: c.routes ? scale * (0.3 + c.routes * 0.35 + clamp(c.movement / 5) * 0.3) : 0,
+    transport: c.routes ? scale * (0.3 + c.routes * 0.35 + clamp(c.movement / 5) * 0.3) * tradeAmplify : 0,
     energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power),
     water: scale * (s.urbanization * 1.3 + s.pollution + (c.water ? 0.1 : 0.55) + s.climateStress * 0.5
       + (waterState ? waterState.droughtStress * 1.8 + (1 - waterState.quality) * 0.8 + waterState.floodContamination * 0.7 : 0)),
@@ -516,6 +521,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
   if (state.month - dev.evaluatedMonth >= planningInterval) {
     refreshMemorials(state, settlement);
     const c = developmentContext(state, settlement, residents);
+    settlement.architecture = evaluateSettlementIdentity(state, settlement, c);
     const { pressures, informal } = evaluatePressures(c);
     dev.pressures = pressures; dev.informal = informal; dev.providers = {}; dev.evaluatedMonth = state.month;
     const supplied = serviceSupply(settlement);

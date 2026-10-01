@@ -143,7 +143,7 @@ export function deriveStructureHeritage(response: DevelopmentResponse): Structur
   };
 }
 
-function wallLayerForMaterial(material: StructureMaterial): WallLayer {
+export function wallLayerForMaterial(material: StructureMaterial): WallLayer {
   switch (material) {
     case 'earth': return 'daub';
     case 'timber': return 'daub';

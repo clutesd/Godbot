@@ -52,6 +52,7 @@ function layoutFor(self: RendererInternals, settlement: Settlement, era: Era): S
     transportation: self.state.transportation,
     eraRank: eraRank(era),
     seed: self.state.seed,
+    identity: settlement.architecture,
   });
 }
 
@@ -142,8 +143,11 @@ function addTerrainFollowingStreet(
   }
 }
 
-function streetMaterial(era: Era, palette: MaterialPalette): THREE.Material {
+/** Service lanes (the industrial connector) stay rougher even once civic/market paving refines,
+ * so an industrial district reads distinctly from the ceremonial core at the same era. */
+function streetMaterial(era: Era, palette: MaterialPalette, kind: StreetSegment['kind'] = 'secondary'): THREE.Material {
   const rank = eraRank(era);
+  if (kind === 'service') return new THREE.MeshStandardMaterial({ color: rank >= 4 ? '#4b453e' : '#5c5248', roughness: 1 });
   return rank >= 3
     ? palette.getSurfaceMaterial('ground')
     : new THREE.MeshStandardMaterial({ color: '#765f46', roughness: 1 });
@@ -177,7 +181,6 @@ function enhancedAddGroundCraft(
   }
 
   const layout = layoutFor(self, settlement, era);
-  const material = streetMaterial(era, palette);
   const ordered = [...layout.streets].sort((a, b) => streetPriority(a) - streetPriority(b));
   const limit = rank >= 4 ? 8 : rank >= 2 ? 7 : 5;
 
@@ -200,7 +203,7 @@ function enhancedAddGroundCraft(
       settlement,
       route,
       settlementStreetWidth(rank, street.kind),
-      material,
+      streetMaterial(era, palette, street.kind),
       `settlement-${street.kind}-street`,
       street.kind,
     );

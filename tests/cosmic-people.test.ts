@@ -37,7 +37,8 @@ describe('cosmic people presentation', () => {
     const actual = new THREE.Matrix4(); batch.mesh.getMatrixAt(0, actual);
     actual.elements.forEach((value, i) => expect(value).toBeCloseTo(matrix.elements[i]!, 6));
     expect(batch.mesh.geometry.getAttribute('cosmicStyle').count).toBe(384);
-    expect(batch.mesh.geometry.index!.count / 3).toBeLessThan(1100);
+    // The accent batch reuses the torso triangles for its inlay, so it tracks the richer torso.
+    expect(batch.mesh.geometry.index!.count / 3).toBeLessThan(1500);
     expect(batch.material.transparent).toBe(false);
     expect(batch.material.depthTest).toBe(true);
     expect(batch.material.vertexColors).toBe(false);
@@ -76,8 +77,11 @@ describe('cosmic people presentation', () => {
     expect(body.boundingBox!.max.y).toBeGreaterThan(0.425 + head.boundingBox!.min.y);
     expect(head.boundingBox!.max.y - head.boundingBox!.min.y).toBeGreaterThan(head.boundingBox!.max.x * 2);
     expect(new Set(Array.from(head.getAttribute('cosmicSurface').array))).toEqual(new Set([1]));
+    // The budget buys real anatomy: hands merged into the forearms, feet merged into the shins, and
+    // a head with jaw, brow, nose and ears. It stays within a few percent of the limbs-only figure
+    // it replaced, because the detail is spent on silhouette rather than on subdivision.
     const triangles = (body.index!.count + head.index!.count + 2 * arm.index!.count + 2 * leg.index!.count) / 3;
-    expect(triangles).toBeLessThan(4000);
+    expect(triangles).toBeLessThan(4200);
     for (const geometry of [body, head, arm, leg, work]) geometry.dispose();
   });
 
@@ -86,12 +90,14 @@ describe('cosmic people presentation', () => {
     const mesh = new THREE.InstancedMesh(createCosmicBodyGeometry(), material, 384);
     const variation = bindCosmicVariation(mesh);
     expect(variation.count).toBe(384);
-    expect(mesh.geometry.index!.count / 3).toBeLessThan(800);
+    expect(mesh.geometry.index!.count / 3).toBeLessThan(1200);
     expect(material.map).toBeNull();
     expect(material.emissiveMap).toBeNull();
     expect(material.transparent).toBe(false);
-    expect(material.roughness).toBeCloseTo(0.26);
-    expect(material.metalness).toBeCloseTo(0.12);
+    // Per-zone roughness and metalness are resolved in the shader, so the material only carries a
+    // neutral fallback. Skin, cloth, leather, hair and metal must never need separate materials.
+    expect(material.roughness).toBeCloseTo(0.7);
+    expect(material.metalness).toBeCloseTo(0.04);
     updateCosmicBodyMaterial(material, -1); expect(material.userData['daylight'].value).toBe(0);
     updateCosmicBodyMaterial(material, 5); expect(material.userData['daylight'].value).toBe(1);
     mesh.dispose(); mesh.geometry.dispose(); material.dispose();

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { StructureMaterial } from '../../sim/development/types';
 import type { AssemblyPiece, Vec3 } from '../assets/GeometryBuilder';
+import type { StructureComponentManifest } from '../assets/StructureComponents';
 import { constructionStagePresentation } from './ConstructionVisualGrammar';
 
 const STAGE_START = [0, 0.2, 0.45, 0.78, 0.92, 1] as const;
@@ -32,6 +33,33 @@ function unit(seed: string): number {
   let h = 2166136261;
   for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
   return (h >>> 0) / 4294967296;
+}
+
+interface Box { min: Vec3; max: Vec3 }
+
+/** The building's original-fabric components (StructureComponents.ts always gives the core —
+ * foundation/frame/core/roof — `origin` provenance; a massing annex is always the later addition,
+ * per generationForAnnex's own contract). When real multi-generation history exists, this core
+ * already stands, so an expansion/upgrade should animate only the new annex being built onto it,
+ * not rebuild the whole target from scratch. A fresh single-generation building has no `origin`
+ * phase (its core is simply `current`), so this is a no-op for ordinary new construction. */
+function preexistingCoreBounds(source: THREE.Object3D, fit: number): Box[] {
+  const manifest = source.userData['structureComponents'] as StructureComponentManifest | undefined;
+  if (!manifest) return [];
+  return manifest.components
+    .filter(component => component.provenance.phase === 'origin')
+    .map(component => {
+      const { center, size } = component.bounds;
+      return {
+        min: { x: (center.x - size.x / 2) * fit, y: (center.y - size.y / 2) * fit, z: (center.z - size.z / 2) * fit },
+        max: { x: (center.x + size.x / 2) * fit, y: (center.y + size.y / 2) * fit, z: (center.z + size.z / 2) * fit },
+      };
+    });
+}
+
+function centerWithin(piece: ConstructionPiece, box: Box): boolean {
+  const cx = (piece.min.x + piece.max.x) / 2, cy = (piece.min.y + piece.max.y) / 2, cz = (piece.min.z + piece.max.z) / 2;
+  return cx >= box.min.x && cx <= box.max.x && cy >= box.min.y && cy <= box.max.y && cz >= box.min.z && cz <= box.max.z;
 }
 
 /** One sequence of real target-building parts, shared by fabric, access and worker contact. */
@@ -67,6 +95,19 @@ export function constructionAssemblyPlan(source: THREE.Object3D, fit: number, se
       p.startProgress = start + span * i / stagePieces.length;
       p.endProgress = start + span * (i + 1) / stagePieces.length;
     });
+  }
+  // A building expanded or repurposed onto an existing core should not look identical to one
+  // built at its final size from scratch: the pre-existing core reveals immediately, and only the
+  // new annex's pieces animate through the ordinary stage progression.
+  const coreBounds = preexistingCoreBounds(source, fit);
+  if (coreBounds.length > 0) {
+    for (const piece of pieces) if (coreBounds.some(box => centerWithin(piece, box))) {
+      piece.startProgress = 0;
+      piece.endProgress = 0;
+    }
+    // The draw-range binary search in ConstructionAssembly.update assumes pieces are sorted
+    // ascending by endProgress; re-sort after the override to preserve that invariant.
+    pieces.sort((a, b) => a.endProgress - b.endProgress);
   }
   return { pieces, width, depth, height: Number(source.userData['buildingHeight'] ?? 1) * fit, material };
 }

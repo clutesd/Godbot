@@ -6,6 +6,7 @@ import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
 import type { RouteTransport, TransportationState, TraversalPath } from './transport/types';
 import type { Remembrance, SettlementDevelopment, StructureDevelopment } from './development/types';
+import type { SettlementArchitecturalIdentity } from './development/SettlementIdentity';
 import type { ForestCommunity, Geology, LandModification, ModificationKind, Soil } from './environment/types';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
@@ -606,6 +607,12 @@ export interface Settlement {
   foundingPodId?: string;
   id: string;
   development?: SettlementDevelopment;
+  /** Deterministic architectural identity derived from environment, economy and accumulated history. */
+  architecture?: SettlementArchitecturalIdentity;
+  /** Bounded cumulative counters feeding architectural identity; not full event logs. */
+  disastersSurvived: number;
+  droughtsSurvived: number;
+  migrationInfluence: number;
   structurePlots?: StructurePlot[];
   structurePlotTarget?: number;
   weatherRecoverySince?: number;

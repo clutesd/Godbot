@@ -47,7 +47,7 @@ function harness(people = [person()], overrides: Partial<LocalActivityContext> =
     return people.map(p => {
       const context: LocalActivityContext = { base: { ...p.position, restFacing: 0 }, visual: visuals.get(p.id),
         group: groups.get(groupKeyFor(p) ?? ''), people: peers, structures: [], safeSegment: () => true,
-        visualFor: id => previousPositions.get(id),
+        visualFor: id => visuals.snapshot(id) ?? previousPositions.get(id),
         revision: 1, blocked: false, ...overrides };
       const plan = local.resolve(p, context, dt);
       const v = visuals.resolve(p.id, { destination: plan?.destination ?? p.position,
@@ -517,12 +517,15 @@ describe('renderer-owned local activity', () => {
     childState.action = 'play-tag-run'; childState.phase = 'approach'; childState.playGame = 'tag';
     childState.destination = { x: 0.82, z: 0.85 }; childState.hold = 5; childState.socialCooldown = 99;
 
-    let monitored = false;
+    let monitored = false, heldFrames = 0;
     for (let frame = 0; frame < 90; frame++) {
       h.tick(1 / 60);
-      if (h.local.get(caregiver.id)?.attentionId === child.id) { monitored = true; break; }
+      const attention = h.local.get(caregiver.id);
+      if (attention?.attentionId === child.id) monitored = true;
+      if (attention?.attentionId === child.id && attention.attentionPhase === 'hold') heldFrames++;
     }
     expect(monitored).toBe(true);
+    expect(heldFrames).toBeGreaterThan(15);
   });
 
   it('does not let child play override rest, study, travel or emergency authority', () => {
@@ -1065,6 +1068,101 @@ describe('displacement-driven human animation', () => {
 
 
 describe('natural social continuity', () => {
+  it('abandons an unreachable listener within a bounded wait instead of gesturing forever', () => {
+    const a = person('a'), b = person('b'); b.position.x = 0.65;
+    for (const p of [a, b]) { p.activity = 'socialize'; p.navigation!.destinationKind = 'plaza'; }
+    let gone = false;
+    const h = harness([a, b], { visualFor: id => gone && id === b.id ? { x: 20, z: 0 } : id === a.id ? a.position : b.position });
+    let started = false;
+    for (let frame = 0; frame < 30 * 30 && !started; frame++) { h.tick(); started = !!h.local.get(a.id)?.encounter; }
+    expect(started).toBe(true); gone = true;
+    for (let frame = 0; frame < 14 * 30; frame++) {
+      h.tick(); expect(h.local.get(a.id)?.encounter?.ready).not.toBe(true);
+    }
+    expect(h.local.get(a.id)?.encounter).toBeUndefined();
+  });
+
+  it('remembers a completed pair for at least 28 seconds and resumes local purpose between encounters', () => {
+    const a = person('a'), b = person('b');
+    b.position.x = 0.65;
+    for (const p of [a, b]) { p.activity = 'socialize'; p.navigation!.destinationKind = 'plaza'; }
+    const h = harness([a, b]);
+    let previous = false, ended = -Infinity, starts = 0, resumed = false;
+    for (let frame = 0; frame < 120 * 30; frame++) {
+      h.tick();
+      const local = h.local.get(a.id)!;
+      const active = !!local.encounter;
+      if (active && !previous) { expect(frame / 30 - ended).toBeGreaterThanOrEqual(28); starts++; }
+      if (!active && previous) ended = frame / 30;
+      if (!active && ended > 0 && !['observe', 'quiet-departure'].includes(local.action)) resumed = true;
+      previous = active;
+    }
+    expect(starts).toBeGreaterThanOrEqual(2);
+    expect(resumed).toBe(true);
+  });
+
+  it('arbitrates competing invitations deterministically with one mutual pair per pod', () => {
+    const people = ['a', 'b', 'c', 'd'].map((id, index) => {
+      const p = person(id); p.activity = 'socialize'; p.navigation!.destinationKind = 'plaza';
+      p.position = { x: index * 0.42, z: index % 2 * 0.35 }; return p;
+    });
+    const ties = ['a', 'b', 'c'].map(id => relationship(id, 'd', 'friend'));
+    const run = (order: Person[]) => {
+      const h = harness(order, { relationshipFor: relationshipLookup(ties) });
+      const trace: string[] = [];
+      let mutual = 0;
+      for (let frame = 0; frame < 60 * 30; frame++) {
+        h.tick();
+        const scopes = new Set<string>();
+        const pairs: string[] = [];
+        for (const p of people) {
+          const e = h.local.get(p.id)?.encounter;
+          if (!e || p.id > e.partnerId || h.local.get(e.partnerId)?.partnerId !== p.id) continue;
+          expect(scopes.has(e.scope!)).toBe(false); scopes.add(e.scope!);
+          pairs.push(`${p.id}:${e.partnerId}:${e.beat}`); mutual++;
+        }
+        trace.push(pairs.sort().join('|'));
+      }
+      expect(mutual).toBeGreaterThan(30);
+      return trace;
+    };
+    expect(run(people)).toEqual(run([...people].reverse()));
+  });
+
+  it('stops social readiness on partner interruption and keeps the reunion cooldown after authority resumes', () => {
+    const a = person('a'), b = person('b'); b.position.x = 0.65;
+    for (const p of [a, b]) { p.activity = 'socialize'; p.navigation!.destinationKind = 'plaza'; }
+    const h = harness([a, b]);
+    let ready = false;
+    for (let frame = 0; frame < 30 * 30 && !ready; frame++) { h.tick(); ready = !!h.local.get(a.id)?.encounter?.ready; }
+    expect(ready).toBe(true);
+    b.activity = 'flee'; b.navigation!.schedulePhase = 'emergency'; h.tick();
+    expect(h.local.get(a.id)?.encounter).toBeUndefined();
+    expect(h.local.get(b.id)).toBeUndefined();
+    b.activity = 'socialize'; b.navigation!.schedulePhase = 'social';
+    for (let frame = 0; frame < 10 * 30; frame++) {
+      h.tick(); expect(h.local.get(a.id)?.encounter).toBeUndefined();
+    }
+  });
+
+  it('only reports ready interactions when both residents have settled within conversation distance', () => {
+    const a = person('a'), b = person('b'); b.position.x = 1.4;
+    for (const p of [a, b]) { p.activity = 'socialize'; p.navigation!.destinationKind = 'plaza'; }
+    const h = harness([a, b]); let readyFrames = 0, approachFrames = 0;
+    for (let frame = 0; frame < 30 * 30; frame++) {
+      h.tick(); const state = h.local.get(a.id)!;
+      if (state.encounter && !state.encounter.ready) approachFrames++;
+      if (!state.encounter?.ready) continue;
+      const self = h.visuals.snapshot(a.id)!, peer = h.visuals.snapshot(b.id)!;
+      expect(self.speed).toBeLessThan(0.05);
+      expect(Math.hypot(self.x - peer.x, self.z - peer.z)).toBeLessThanOrEqual(0.9);
+      expect(Math.cos(Math.atan2(peer.x - self.x, peer.z - self.z) - self.facing)).toBeGreaterThan(0.9);
+      expect(Math.cos(Math.atan2(self.x - peer.x, self.z - peer.z) - peer.facing)).toBeGreaterThan(0.85);
+      readyFrames++;
+    }
+    expect(approachFrames).toBeGreaterThan(0); expect(readyFrames).toBeGreaterThan(30);
+  });
+
   it('uses variable shared turn lengths without skipping or reversing turns', () => {
     let previous = conversationTurn('gathering', 0);
     const boundaries: number[] = [];

@@ -23,7 +23,7 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
     const fields = state.settlements.flatMap(entry => farmGeometries(entry));
     const contract = new PlacementContract(state.world);
     const foundingHearth = foundingHearthWorldPosition(settlement, state.arrival?.pods ?? []);
-    const layout = createSettlementLayoutPlan({ settlement, settlements: state.settlements, routes: state.tradeRoutes, eraRank: 1, seed: state.seed });
+    const layout = createSettlementLayoutPlan({ settlement, settlements: state.settlements, routes: state.tradeRoutes, eraRank: 1, seed: state.seed, identity: settlement.architecture });
     const index = plots.length;
     const random = new SeededRandom(`${state.seed}:${settlement.id}:structure:${index}`);
     const anchor = layout.anchors[district];

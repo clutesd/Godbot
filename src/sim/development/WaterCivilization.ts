@@ -151,6 +151,7 @@ export function advanceSettlementWater(
   if ((previous?.droughtMonths ?? 0) >= 6 && droughtMonths <= 2 && reliability > 0.55
     && (water.lastRecoveryMonth === undefined || state.month - water.lastRecoveryMonth >= 60)) {
     water.lastRecoveryMonth = state.month;
+    settlement.droughtsSurvived = Math.min(999, settlement.droughtsSurvived + 1);
     events.push({
       type: 'recovery', location: settlement.position, locationId: settlement.id, actors: [settlement.id],
       causes: ['restored-water-supply', storageResilience > 0.3 ? 'water-infrastructure' : 'hydrologic-recovery'],

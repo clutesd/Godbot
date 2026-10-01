@@ -661,7 +661,7 @@ export class PeopleSystem {
       .filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id))
       .map((route) => `${route.id}:${route.transport?.path?.mode ?? 'unconnected'}:${Math.floor(route.volume * 5)}`)
       .join('|');
-    const signature = `${settlement.buildings}:${Math.floor(settlement.urbanization * 8)}:${settlementEraRank(settlement, state)}:${routeSignature}`;
+    const signature = `${settlement.buildings}:${Math.floor(settlement.urbanization * 8)}:${settlementEraRank(settlement, state)}:${routeSignature}:${settlement.architecture?.dialectKey ?? ''}`;
     const cached = this.layoutCache.get(settlement.id);
     if (cached?.signature === signature) return cached.layout;
     const layout = createSettlementLayoutPlan({
@@ -671,6 +671,7 @@ export class PeopleSystem {
       transportation: state.transportation,
       eraRank: settlementEraRank(settlement, state),
       seed: this.seed,
+      identity: settlement.architecture,
     });
     this.layoutCache.set(settlement.id, { signature, layout });
     return layout;

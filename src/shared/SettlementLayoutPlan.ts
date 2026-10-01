@@ -2,6 +2,7 @@ import { SeededRandom } from '../sim/prng';
 import type { Settlement, TradeRoute, Vec2 } from '../sim/types';
 import type { TransportationState, TransportStop } from '../sim/transport/types';
 import type { DevelopmentResponse } from '../sim/development/types';
+import type { SettlementArchitecturalIdentity } from '../sim/development/SettlementIdentity';
 
 /**
  * Semantic city plan shared by simulation and presentation. It contains no render state: the
@@ -63,25 +64,34 @@ export interface SettlementLayoutInput {
   transportation?: TransportationState;
   eraRank: number;
   seed: string;
+  /** Settlement-specific drift; biases morphology scale, never topology. */
+  identity?: SettlementArchitecturalIdentity;
 }
 
 const DISTRICTS: readonly BuildingDistrict[] = ['civic', 'sacred', 'market', 'residential', 'craft', 'industrial'];
 
 export function createSettlementLayoutPlan(input: SettlementLayoutInput): SettlementLayoutPlan {
-  const { settlement, settlements, routes, eraRank, seed } = input;
+  const { settlement, settlements, routes, eraRank, seed, identity } = input;
   const random = new SeededRandom(`${seed}:layout:${settlement.id}`);
   const activeRoutes = routes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id));
-  const baseRadius = 2.8 + Math.sqrt(Math.max(1, settlement.buildings)) * 0.56 + settlement.urbanization * 3.4 + eraRank * 0.42;
+  // Bounded scaling only, no topology branching: a defensive/frontier history pulls a settlement
+  // compact, while a settlement with no strong orientation that farms the land spreads looser.
+  const compactBias = identity?.orientationBias === 'defense' ? -0.15
+    : identity?.orientationBias === 'none' && settlement.specialization === 'agriculture' ? 0.12 : 0;
+  const baseRadius = (2.8 + Math.sqrt(Math.max(1, settlement.buildings)) * 0.56 + settlement.urbanization * 3.4 + eraRank * 0.42) * (1 + compactBias);
   const tradeAngle = averageRouteAngle(settlement, settlements, activeRoutes) ?? random.range(0, Math.PI * 2);
   const craftAngle = angleForSpecialization(settlement.specialization, tradeAngle);
   const industrialAngle = industrialFacingAngle(settlement, activeRoutes, settlements, tradeAngle + Math.PI * 0.72);
+  // A water/trade-oriented settlement's residential and craft rings pull toward the same
+  // water-facing angle the trade angle already captures, rather than spreading evenly.
+  const waterPull = identity?.orientationBias === 'water' ? 1 + (identity.footprintBias ?? 0) * 0.2 : 1;
 
   const anchorSpecs: Record<BuildingDistrict, { angle: number; distance: number; radius: number }> = {
     civic: { angle: 0, distance: 0, radius: Math.max(1.4, baseRadius * 0.24) },
     market: { angle: tradeAngle, distance: baseRadius * 0.38, radius: Math.max(1.2, baseRadius * 0.25) },
     sacred: { angle: tradeAngle - Math.PI * 0.58, distance: baseRadius * 0.32, radius: Math.max(1.1, baseRadius * 0.2) },
-    residential: { angle: tradeAngle + Math.PI * 0.72, distance: baseRadius * 0.46, radius: Math.max(1.8, baseRadius * 0.38) },
-    craft: { angle: craftAngle, distance: baseRadius * 0.58, radius: Math.max(1.4, baseRadius * 0.3) },
+    residential: { angle: tradeAngle + Math.PI * 0.72, distance: baseRadius * 0.46 * waterPull, radius: Math.max(1.8, baseRadius * 0.38) },
+    craft: { angle: craftAngle, distance: baseRadius * 0.58 * waterPull, radius: Math.max(1.4, baseRadius * 0.3) },
     industrial: { angle: industrialAngle, distance: baseRadius * (eraRank >= 4 ? 0.78 : 0.68), radius: Math.max(1.5, baseRadius * 0.32) },
   };
 

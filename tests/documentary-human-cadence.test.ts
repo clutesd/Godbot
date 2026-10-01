@@ -4,6 +4,7 @@ import { Simulation } from '../src/sim/Simulation';
 import type { Person, Vec2 } from '../src/sim/types';
 import { LocalActivityPresentation } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
+import { WorldAttentionPresentation, worldAttentionCues } from '../src/render/people/WorldAttentionPresentation';
 import { HumanLifeClock } from '../src/render/people/HumanLifeClock';
 import { buildSocialGroups, groupKeyFor, placeInGroup } from '../src/render/people/PeoplePresentation';
 
@@ -55,6 +56,7 @@ describe('documentary human cadence', () => {
 
     const local = new LocalActivityPresentation();
     const visuals = new PeopleVisualStateStore();
+    const attention = new WorldAttentionPresentation();
     const lifeClock = new HumanLifeClock();
     const metrics = new Map<string, ResidentCadence>(selectedIds.map(id => [id, {
       actions: new Set<string>(),
@@ -75,6 +77,7 @@ describe('documentary human cadence', () => {
       while (monthAccumulator + 1e-9 >= 1) {
         observed.step();
         control.step();
+        attention.refresh(worldAttentionCues(observed.state.settlements, observed.state.people, new Map()));
         monthlySteps++;
         monthAccumulator -= 1;
       }
@@ -93,6 +96,7 @@ describe('documentary human cadence', () => {
       const life = lifeClock.advance(FRAME_SECONDS);
       local.beginFrame();
       visuals.beginFrame();
+      attention.beginFrame(life.deltaSeconds);
 
       for (const person of visible) {
         const group = groups.get(groupKeyFor(person) ?? '');
@@ -103,7 +107,8 @@ describe('documentary human cadence', () => {
           visual: visuals.get(person.id),
           group,
           people: peers,
-          visualFor: id => previousPositions.get(id),
+          visualFor: id => visuals.snapshot(id) ?? previousPositions.get(id),
+          nearbyIds: () => visuals.nearbyIds(previousPositions.get(person.id) ?? base),
           structures: [],
           safeSegment: () => true,
           revision: 'documentary-cadence-flat-fixture',
@@ -128,6 +133,7 @@ describe('documentary human cadence', () => {
             waypointIndex: person.navigation.waypointIndex,
           } : {}),
         }, life.deltaSeconds, ground);
+        attention.resolve(person, visual, life.deltaSeconds, [], !plan?.encounter && !plan?.rest);
 
         expect(visual.speed).toBeLessThanOrEqual(visual.maxPhysicalSpeed + 1e-8);
         if (plan?.phase === 'action' && purposeful(plan.action) && visual.speed < WALKING) stationaryActionFrames++;
@@ -139,6 +145,7 @@ describe('documentary human cadence', () => {
 
       local.prune();
       visuals.prune();
+      attention.prune();
     }
 
     expect(stationaryActionFrames).toBeGreaterThan(60);

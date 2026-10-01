@@ -8,15 +8,17 @@
 import * as THREE from 'three';
 import type { CultureStyle } from '../../sim/types';
 import { MaterialPalette, type Era } from '../materials/MaterialPalette';
-import { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
+import { CultureStyleProfileFactory, SettlementStyleProfile } from '../style/CultureStyleProfile';
 import type { CultureStyleProfile } from '../style/CultureStyleProfile';
 import { ProceduralGeometry } from './ProceduralGeometry';
-import { resolveBuildingGrammar, type BuildingGrammar, type BuildingRole } from './BuildingGrammar';
+import { resolveBuildingGrammar, type BuildingGrammar, type BuildingGrammarContext, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
-import type { DevelopmentResponse } from '../../sim/development/types';
+import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
+import type { SettlementArchitecturalIdentity } from '../../sim/development/SettlementIdentity';
 import { buildStructureComponentManifest } from './StructureComponents';
 import { structureVisualHistorySignature } from './StructureVisualSignature';
+import { deriveArchitecturalGenerations, generationForCurrentFabric, generationForOriginFabric } from './StructureGenerations';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -28,6 +30,12 @@ export interface AssetConfig {
   variant?: string;
   scale?: number;
   customData?: Record<string, unknown>;
+  /** Settlement-specific architectural drift layered on the culture's baseline style. */
+  settlementIdentity?: SettlementArchitecturalIdentity;
+  /** Average terrain slope under the plot's footprint, for a slope-responsive foundation. */
+  localSlopeDegrees?: number;
+  /** Climate/flood/landmark context that further shapes grammar beyond culture and identity. */
+  grammarContext?: BuildingGrammarContext;
 }
 
 export interface CachedAsset {
@@ -364,6 +372,21 @@ export class AssetBuilder {
   }
 
   /**
+   * The building's origin-fabric material, so its core can render older than a later massing
+   * annex instead of an identical copy of the current wall. Only set when there is genuine
+   * multi-generation history (several upgrades/repurposes) AND the origin material actually
+   * differs from the current one — a building whose material never changed is left untouched.
+   */
+  private coreMaterialFor(grammar: BuildingGrammar, development?: DevelopmentResponse): StructureMaterial | undefined {
+    if (grammar.massing === 'single' || !development) return undefined;
+    const generationModel = deriveArchitecturalGenerations(development);
+    if (generationModel.generations.length <= 1) return undefined;
+    const origin = generationForOriginFabric(generationModel).material;
+    const current = generationForCurrentFabric(generationModel).material;
+    return origin !== current ? origin : undefined;
+  }
+
+  /**
    * Generate a building asset with LODs.
    *
    * Completed structures return a THREE.LOD root, so the existing renderer automatically swaps
@@ -376,12 +399,17 @@ export class AssetBuilder {
     material: THREE.Material;
   } {
     const palette = this.getOrCreatePalette(config);
-    const profile = this.getOrCreateCultureProfile(config);
+    const cultureProfile = this.getOrCreateCultureProfile(config);
+    // The shared, cached culture profile stays culture-only; settlement drift wraps it per call
+    // rather than multiplying the cached base profiles, so related-culture settlements still
+    // share one cheap base object and only differ by this lightweight wrapper.
+    const profile = config.settlementIdentity ? new SettlementStyleProfile(cultureProfile, config.settlementIdentity) : cultureProfile;
     const [roleName, stageName] = (config.variant ?? 'house').split('#');
     const role = (roleName || 'house') as BuildingRole;
     const stage = stageName === undefined ? BUILD_STAGE.DETAIL : (Number(stageName) as BuildStage);
-    const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development);
-    const composed = composeBuilding(grammar, palette, config.seed, stage);
+    const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development, config.settlementIdentity, config.localSlopeDegrees, config.grammarContext);
+    const coreMaterial = this.coreMaterialFor(grammar, config.development);
+    const composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
     const lods = stage === BUILD_STAGE.DETAIL && !config.development?.memorial
       ? this.generateBuildingLODs(grammar, composed.height, palette)
@@ -732,7 +760,15 @@ export class AssetBuilder {
   private getCacheKey(type: AssetType, config: AssetConfig): string {
     const d = config.development;
     const history = type === 'building' ? structureVisualHistorySignature(d) : 'na';
-    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}`;
+    // Bucketed (not raw) so nearly-identical slopes/climate keep reusing one cached shape; the
+    // seed alone can otherwise be shared by several plots of the same role/variation within one
+    // settlement, and these are the per-plot/per-call dimensions that still vary beneath it.
+    const slopeBucket = type === 'building' && config.localSlopeDegrees !== undefined ? `:s${Math.round(config.localSlopeDegrees / 5)}` : '';
+    const ctx = config.grammarContext;
+    const contextBucket = type === 'building' && ctx
+      ? `:c${ctx.climateSignal !== undefined ? Math.round(ctx.climateSignal * 5) : ''}.${ctx.floodDepth !== undefined ? Math.round(ctx.floodDepth * 5) : ''}.${ctx.isLandmark ? 1 : 0}`
+      : '';
+    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}`;
   }
 
   /**
