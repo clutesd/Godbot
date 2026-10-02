@@ -1391,12 +1391,10 @@ export class GodboxRenderer {
       if (!contactGait) this.groundedLocomotion.forget(person.id);
       if (contactGait && pose && (contactGait.motion > 0.01 || contactGait.active >= 0)) {
         const motion = contactGait.motion;
-        // One gait clock owns the visible walk. Pelvis, shoulder girdle and arms all key from the
-        // same planted-foot phase instead of allowing the older clip phase to drift underneath the
-        // contact solver. The small phase offset makes the shoulders follow the hips rather than
-        // mirror them like a mechanical linkage.
-        const hipDrive = -Math.cos(contactGait.phase - 0.10) * motion;
-        const shoulderDrive = -Math.cos(contactGait.phase - 0.02) * motion;
+        // Pelvis and arms follow actual foot separation; the shoulder girdle follows with inertia.
+        // This stays coordinated through shortened steps, double support, turns and braking.
+        const hipDrive = contactGait.hipDrive * motion;
+        const shoulderDrive = contactGait.shoulderDrive * motion;
         const turnDrive = contactGait.turn * motion;
         pose.pelvisRotation = hipDrive * 0.052 + turnDrive * 0.018;
         pose.spineTwist = -hipDrive * 0.086 - turnDrive * 0.012;
@@ -1405,8 +1403,8 @@ export class GodboxRenderer {
         if (!loaded && contactGait.motion > 0.01) {
           pose.leftShoulderRotation = -shoulderDrive * 0.22 - turnDrive * 0.018;
           pose.rightShoulderRotation = shoulderDrive * 0.21 - turnDrive * 0.018;
-          pose.leftElbowRotation = 0.19 + Math.max(0, -Math.cos(contactGait.phase - 0.26)) * 0.12;
-          pose.rightElbowRotation = 0.22 + Math.max(0, Math.cos(contactGait.phase - 0.26)) * 0.105;
+          pose.leftElbowRotation = 0.19 + Math.max(0, -shoulderDrive) * 0.12;
+          pose.rightElbowRotation = 0.22 + Math.max(0, shoulderDrive) * 0.105;
         }
       }
       const supportShift = contactGait ? contactGait.weight * heightScale * SUPPORT_SHIFT : 0;
@@ -1587,7 +1585,7 @@ export class GodboxRenderer {
           this.humanJoints.reach(this.jointParent, (side ? 1 : -1) * posture.stanceWidth * buildScale,
             0, this.footTarget, legSegment, legSegment, side ? 1 : -1, true);
           this.humanAppearance.setFootOrientation(index, side,
-            this.humanJoints.footOrientation(contact.yaw, contact.pitch));
+            this.humanJoints.footOrientation(contact.yaw, contact.terrainPitch + contact.pitch, contact.roll));
         }
         this.peopleLegs.setMatrixAt(index * 2 + side, this.humanJoints.upper);
         this.peopleShins.setMatrixAt(index * 2 + side, this.humanJoints.lower);
@@ -1603,7 +1601,8 @@ export class GodboxRenderer {
           const z = contact?.z ?? display.z - Math.sin(facing) * (side ? 1 : -1) * posture.stanceWidth * heightScale;
           const y = movementGround.heightAt(x, z);
           this.setInstanceTransform(this.focalContactShadow, this.focalContactShadow.count++, x, y + 0.003, z,
-            heightScale * 0.10, 1, heightScale * 0.18, 0, contact?.yaw ?? facing, 0);
+            heightScale * 0.10, 1, heightScale * 0.18,
+            contact?.terrainPitch ?? 0, contact?.yaw ?? facing, contact?.roll ?? 0);
         }
         this.focalContactShadow.instanceMatrix.needsUpdate = true;
       }

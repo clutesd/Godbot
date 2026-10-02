@@ -1,4 +1,5 @@
 import type { PersonVisualState, PersonVisualGround } from './PeopleVisualState';
+import { sampleSoleSlope } from './FootContactPose';
 
 export const SUPPORT_SHIFT = 0.024;
 
@@ -7,6 +8,9 @@ interface Contact {
   fromX: number; fromY: number; fromZ: number; fromYaw: number;
   toX: number; toY: number; toZ: number; toYaw: number;
   progress: number; planted: boolean; duration: number; contactAge: number; releasePitch: number;
+  terrainPitch: number; roll: number;
+  fromTerrainPitch: number; fromRoll: number; toTerrainPitch: number; toRoll: number;
+  clearance: number;
 }
 
 export interface GroundedStride {
@@ -27,6 +31,9 @@ export interface GroundedStride {
   turn: number;
   /** 0..1 response used to make starts decisive and stops settle rather than shuffle. */
   locomotionBlend: number;
+  /** Body-space foot separation and its delayed shoulder response, independent of clip phase. */
+  hipDrive: number;
+  shoulderDrive: number;
 }
 
 const angle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -52,10 +59,7 @@ function stableParity(value: string): number {
  * clearance while the knee folds, then extends toward heel strike with only a small late hover.
  */
 function swingClearance(t: number): number {
-  if (t < 0.18) return mix(0, 0.34, smooth(t / 0.18));
-  if (t < 0.52) return mix(0.34, 1, smoother((t - 0.18) / 0.34));
-  if (t < 0.80) return mix(1, 0.24, smooth((t - 0.52) / 0.28));
-  return mix(0.24, 0, smoother((t - 0.80) / 0.20));
+  return 16 * t * t * (1 - t) * (1 - t) * (1.15 - 0.3 * t);
 }
 
 /**
@@ -63,14 +67,14 @@ function swingClearance(t: number): number {
  * contact. This removes the equal-speed pendulum look of a single smoothstep trajectory.
  */
 function swingTravel(t: number): number {
-  if (t < 0.18) return 0.10 * smoother(t / 0.18);
-  if (t < 0.72) return 0.10 + 0.75 * smoother((t - 0.18) / 0.54);
-  return 0.85 + 0.15 * smoother((t - 0.72) / 0.28);
+  // One continuous velocity envelope. Joining eased sub-clips made the sole stop twice in air.
+  return smoother(t + 0.12 * Math.sin(Math.PI * t) ** 2);
 }
 
 /** World-space contacts are held until toe-off. Rendering only: never writes navigation or people. */
 export class GroundedLocomotion {
   private readonly states = new Map<string, GroundedStride>();
+  private readonly slope = { terrainPitch: 0, roll: 0 };
 
   clear(): void { this.states.clear(); }
   forget(id: string): void { this.states.delete(id); }
@@ -84,11 +88,15 @@ export class GroundedLocomotion {
         const x = v.x + Math.cos(v.facing) * side * stance * scale;
         const z = v.z - Math.sin(v.facing) * side * stance * scale;
         const y = ground.heightAt(x, z);
+        sampleSoleSlope(this.slope, x, z, v.facing, scale, ground);
         return {
           x, y, z, yaw: v.facing, pitch: 0,
           fromX: x, fromY: y, fromZ: z, fromYaw: v.facing,
           toX: x, toY: y, toZ: z, toYaw: v.facing,
           progress: 1, planted: true, duration: 0.3, contactAge: 1, releasePitch: 0,
+          terrainPitch: this.slope.terrainPitch, roll: this.slope.roll,
+          fromTerrainPitch: this.slope.terrainPitch, fromRoll: this.slope.roll,
+          toTerrainPitch: this.slope.terrainPitch, toRoll: this.slope.roll, clearance: 0,
         };
       };
       s = {
@@ -107,6 +115,8 @@ export class GroundedLocomotion {
         secondary: 0,
         turn: 0,
         locomotionBlend: 0,
+        hipDrive: 0,
+        shoulderDrive: 0,
       };
       this.states.set(v.id, s);
     }
@@ -167,8 +177,12 @@ export class GroundedLocomotion {
       if (shouldStep && (moving || restError > scale * 0.052 || yawError > 0.24 || stopping)) {
         // The committed swing owns its timing. Speed changes after toe-off must not stretch or
         // compress the leg in mid-air.
-        const nominal = 0.30 + (1 - s.motion) * 0.055;
-        const duration = Math.max(0.23, Math.min(0.40, nominal / Math.max(0.88, stride)));
+        const legRatio = scale * legLength / 0.32;
+        const nominal = (0.30 + (1 - s.motion) * 0.055) * legRatio;
+        // Short legs take quicker steps at the same world speed. A fixed adult swing time can
+        // leave a child's support foot farther behind than either rigid leg can reach.
+        const reachDuration = 0.19 * scale * legLength / Math.max(0.04, v.speed);
+        const duration = Math.max(0.10, Math.min(0.40, reachDuration, nominal / Math.max(0.88, stride)));
         const brakingDistance = Math.hypot(v.destinationX - v.x, v.destinationZ - v.z);
         const advance = moving ? Math.min(v.speed * duration, brakingDistance) : 0;
         const firstStepScale = starting ? 0.72 : 1;
@@ -181,10 +195,23 @@ export class GroundedLocomotion {
         const x = v.x + Math.cos(stepFacing) * lateral + Math.sin(stepFacing) * lead;
         const z = v.z - Math.sin(stepFacing) * lateral + Math.cos(stepFacing) * lead;
         if (ground.isStandable(x, z) && (!ground.safeSegment || ground.safeSegment(v, { x, z }))) {
+          const landingY = ground.heightAt(x, z);
+          sampleSoleSlope(this.slope, x, z, stepFacing, scale, ground);
+          let clearance = scale * legLength * (0.035 + 0.009 * s.motion);
+          // Plan clearance over the actual path, including shallow ridges between the endpoints.
+          // This is bounded work at toe-off, rather than terrain queries for every visible frame.
+          for (let sample = 1; sample < 8; sample++) {
+            const t = sample / 8, u = swingTravel(t);
+            const terrain = ground.heightAt(mix(f.x, x, u), mix(f.z, z, u));
+            clearance = Math.max(clearance,
+              (terrain - mix(f.y, landingY, u) + scale * 0.004) / swingClearance(t));
+          }
           Object.assign(f, {
             fromX: f.x, fromY: f.y, fromZ: f.z, fromYaw: f.yaw,
-            toX: x, toY: ground.heightAt(x, z), toZ: z, toYaw: stepFacing,
+            toX: x, toY: landingY, toZ: z, toYaw: stepFacing,
             progress: 0, planted: false, duration, releasePitch: f.pitch,
+            fromTerrainPitch: f.terrainPitch, fromRoll: f.roll,
+            toTerrainPitch: this.slope.terrainPitch, toRoll: this.slope.roll, clearance,
           });
           s.active = s.next;
         }
@@ -199,9 +226,11 @@ export class GroundedLocomotion {
       f.x = mix(f.fromX, f.toX, u);
       f.z = mix(f.fromZ, f.toZ, u);
       const baseline = mix(f.fromY, f.toY, u);
-      const clearance = scale * legLength * (0.035 + 0.009 * s.motion) * swingClearance(t);
+      const clearance = f.clearance * swingClearance(t);
       f.y = baseline + clearance;
       f.yaw = f.fromYaw + angle(f.toYaw - f.fromYaw) * smoother(t);
+      f.terrainPitch = mix(f.fromTerrainPitch, f.toTerrainPitch, smoother(t));
+      f.roll = mix(f.fromRoll, f.toRoll, smoother(t));
 
       // Leave from the planted toe, dorsiflex during extension, and present the heel before landing.
       if (t < 0.18) f.pitch = mix(f.releasePitch, 0.08, smooth(t / 0.18));
@@ -212,11 +241,17 @@ export class GroundedLocomotion {
       if (t >= 1) {
         f.x = f.toX; f.y = f.toY; f.z = f.toZ; f.yaw = f.toYaw;
         f.planted = true; f.contactAge = 0; f.pitch = -0.145;
-        s.supportTime = moving ? 0.065 : 0.10;
+        s.supportTime = moving ? Math.min(0.065, f.duration * 0.21) : 0.10;
         s.next = 1 - s.active;
         s.active = -1;
       }
     }
+
+    const separation = ((s.feet[0].x - s.feet[1].x) * Math.sin(v.facing)
+      + (s.feet[0].z - s.feet[1].z) * Math.cos(v.facing)) / (scale * legLength * 0.28);
+    s.hipDrive += (Math.max(-1, Math.min(1, separation)) * s.locomotionBlend - s.hipDrive)
+      * (1 - Math.exp(-dt * 14));
+    s.shoulderDrive += (s.hipDrive - s.shoulderDrive) * (1 - Math.exp(-dt * 12));
 
     // Centre of mass commits to the support leg early, then begins transferring only as the swing
     // foot is ready to accept weight. This is the visual difference between stepping and gliding.

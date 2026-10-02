@@ -107,7 +107,9 @@ describe('cosmic people presentation', () => {
     // The fallback stays in the polished-mineral band: a broad lobe turns obsidian into plastic.
     expect(material.roughness).toBeLessThan(0.3);
     expect(material.clearcoatRoughness).toBeLessThan(0.15);
-    expect(material.envMapIntensity).toBeGreaterThanOrEqual(1);
+    // The near-black material pass deliberately reduced the initial probe gain to 0.84.
+    expect(material.envMapIntensity).toBeGreaterThanOrEqual(0.8);
+    expect(material.envMapIntensity).toBeLessThanOrEqual(1.1);
     updateCosmicBodyMaterial(material, -1); expect(material.userData['daylight'].value).toBe(0);
     // Reflection is how this species is read, so the probe never goes dark enough to flatten a
     // body into a silhouette, even at midnight.

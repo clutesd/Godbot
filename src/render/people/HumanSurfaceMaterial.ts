@@ -132,6 +132,30 @@ const VERTEX_COMMON = /* glsl */`
 `;
 
 const HEAD_DEFORM = /* glsl */`
+  // One deformation for visible positions, shadow positions and the lighting frame. Torso
+  // highlights must follow the fitted ribs, waist and moving cloth, not the undeformed lathe.
+  vec3 humanTorsoPoint(vec3 p) {
+    float along = clamp((p.y + 0.058) / 0.427, 0.0, 1.0);
+    float shoulders = smoothstep(0.52, 0.86, along);
+    float hips = 1.0 - smoothstep(0.0, 0.30, along);
+    float middle = max(0.0, 1.0 - shoulders - hips);
+    float lateral = humanShape.x * shoulders + humanShape.y * hips + humanShape.z * middle;
+    if (humanMode > 2.5 && humanSurface.w < 1.5) {
+      float hemY = p.y;
+      if (hemY < 0.012) p.y = 0.012 + (hemY - 0.012) * humanGarment.x;
+      float below = clamp((0.012 - hemY) / 0.112, 0.0, 1.0);
+      p.xz *= mix(1.0, humanGarment.y, below);
+    }
+    float ribs = smoothstep(0.09, 0.16, p.y) * (1.0 - smoothstep(0.23, 0.29, p.y));
+    lateral *= mix(1.0, humanShape.w, ribs);
+    if (humanMode > 2.5 && humanSurface.x > 0.5 && humanSurface.x < 1.5)
+      p.z += humanFit.y * pow(clamp((0.05 - p.y) / 0.3, 0.0, 1.0), 2.0);
+    p.x *= lateral;
+    p.z *= mix(1.0, lateral, 0.62);
+    float twist = humanFit.x * smoothstep(0.08, 0.25, p.y);
+    p.xz = mat2(cos(twist), -sin(twist), sin(twist), cos(twist)) * p.xz;
+    return p;
+  }
   vec3 humanFootVector(vec3 p) {
     // Quaternion supplied by locomotion: exact cancellation of the shin orientation.
     vec4 q = humanGarment;
@@ -187,27 +211,7 @@ const VERTEX_BODY = /* glsl */`
   }
 
   if (humanMode < 0.5 || (humanMode > 2.5 && humanMode < 3.5)) {
-    // Torso and torso adornment share one taper, so a broad-shouldered person's collar is broad too.
-    float along = clamp((transformed.y + 0.058) / 0.427, 0.0, 1.0);
-    float shoulders = smoothstep(0.52, 0.86, along);
-    float hips = 1.0 - smoothstep(0.0, 0.30, along);
-    float middle = max(0.0, 1.0 - shoulders - hips);
-    float lateral = humanShape.x * shoulders + humanShape.y * hips + humanShape.z * middle;
-    if (humanMode > 2.5 && humanPartId < 1.5) {
-      // One drape part becomes a hip wrap, a short panel or a floor-length ceremonial fall.
-      float hemY = transformed.y;
-      if (hemY < 0.012) transformed.y = 0.012 + (hemY - 0.012) * humanGarment.x;
-      float below = clamp((0.012 - hemY) / 0.112, 0.0, 1.0);
-      transformed.xz *= mix(1.0, humanGarment.y, below);
-    }
-    float ribs = smoothstep(0.09, 0.16, transformed.y) * (1.0 - smoothstep(0.23, 0.29, transformed.y));
-    lateral *= mix(1.0, humanShape.w, ribs);
-    if (humanMode > 2.5 && humanSurface.x > 0.5 && humanSurface.x < 1.5)
-      transformed.z += humanFit.y * pow(clamp((0.05 - transformed.y) / 0.3, 0.0, 1.0), 2.0);
-    transformed.x *= lateral;
-    transformed.z *= mix(1.0, lateral, 0.62);
-    float twist = humanFit.x * smoothstep(0.08, 0.25, transformed.y);
-    transformed.xz = mat2(cos(twist), -sin(twist), sin(twist), cos(twist)) * transformed.xz;
+    transformed = humanTorsoPoint(transformed);
   } else if (humanMode < 1.5) {
     transformed.y *= humanShape.x;
     transformed.xz *= humanShape.w;
@@ -315,8 +319,11 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
       .replace('#include <common>', `#include <common>\n${VERTEX_COMMON}\n${HEAD_DEFORM}`)
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
         if (humanMode < 0.5 || (humanMode > 2.5 && humanMode < 3.5)) {
-          float twist = humanFit.x * smoothstep(0.08, 0.25, position.y);
-          objectNormal.xz = mat2(cos(twist), -sin(twist), sin(twist), cos(twist)) * objectNormal.xz;
+          vec3 tangent = normalize(cross(abs(objectNormal.y) < 0.9 ? vec3(0,1,0) : vec3(1,0,0), objectNormal));
+          vec3 bitangent = cross(objectNormal, tangent);
+          vec3 p = humanTorsoPoint(position);
+          objectNormal = normalize(cross(humanTorsoPoint(position + tangent * 0.0001) - p,
+            humanTorsoPoint(position + bitangent * 0.0001) - p));
         }
         if (humanMode > 1.5 && humanMode < 2.5) {
           vec3 tangent = normalize(cross(abs(objectNormal.y) < 0.9 ? vec3(0,1,0) : vec3(1,0,0), objectNormal));
@@ -325,8 +332,11 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
           objectNormal = normalize(cross(humanHeadPoint(position + tangent * 0.0001) - p,
             humanHeadPoint(position + bitangent * 0.0001) - p));
         }
-        if (humanMode > 0.5 && humanMode < 1.5 && humanParts.y > 1.5 && humanSurface.y > 0.985) {
-          objectNormal = humanFootVector(objectNormal);
+        if (humanMode > 0.5 && humanMode < 1.5) {
+          // Inverse-transpose of the authored length/thickness scaling, before ankle rotation.
+          objectNormal = normalize(objectNormal / vec3(humanShape.w, humanShape.x, humanShape.w));
+          if (humanParts.y > 1.5 && humanSurface.y > 0.985)
+            objectNormal = humanFootVector(objectNormal);
         }
       `)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERTEX_BODY}`);
@@ -647,7 +657,7 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
       `);
   };
 
-  material.customProgramCacheKey = () => `godbox-obsidian-presence-v3-${detail}`;
+  material.customProgramCacheKey = () => `godbox-obsidian-presence-v4-${detail}`;
   return material;
 }
 
@@ -660,7 +670,7 @@ function createHumanDepthMaterial(mode: number): THREE.MeshDepthMaterial {
       .replace('#include <common>', `#include <common>\n${VERTEX_COMMON}\n${HEAD_DEFORM}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERTEX_BODY}`);
   };
-  material.customProgramCacheKey = () => 'godbox-presence-depth-v3';
+  material.customProgramCacheKey = () => 'godbox-presence-depth-v4';
   return material;
 }
 

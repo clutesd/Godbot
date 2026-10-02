@@ -15,7 +15,36 @@ Implementation preserves the living-obsidian surface family, canonical skeleton,
 - Headwear now uses the saved head matrix. Previously its position scratch vector had already been overwritten by the hip transform.
 - Shadow depth uses the same head deformation, selected adornment and ankle transforms as the visible pass.
 
-## Verification boundary
+## Terrain and motion refinement (2026-10-02)
+
+- Replaced the three separately eased swing intervals with one continuous velocity envelope.
+  Soles no longer pause twice between toe-off and landing. Clearance is continuous as well.
+- Sampled landing pitch and lateral roll align soles to hills. Their terrain frame stays fixed
+  during support; heel/toe roll preserves its world-space pivot even on compound slopes. The
+  observed person's two contact shadows use the same slope frame.
+- Seven terrain samples at toe-off plan clearance over shallow ridges between contacts. This
+  adds bounded CPU work per step, with no terrain sampling in the swing update itself.
+- Swing duration responds to physical leg length and speed. Short-legged figures take quicker
+  steps, fixing the existing child-scale support-foot reach failure. Each committed swing keeps
+  its duration through acceleration and braking.
+- Pelvis, arms and elbows follow actual foot separation; a filtered shoulder response supplies
+  follow-through. This remains coordinated through double support, abbreviated steps and stops.
+- Torso and garment lighting normals now follow the same fitted ribs, waist, twist and cloth
+  deformation as their visible/shadow geometry. Limb normals account for length/thickness
+  scaling before ankle rotation. The near-black palette, geometry and instanced draw counts
+  are unchanged. This adds vertex shader work; live GPU cost has not been measured.
+
+Build and lint pass. The four focused geometry, joint, authored-presence and locomotion files pass
+all 37 tests, including compound-slope pivots, continuous swing velocity, uneven-ground contact at
+30/60/120 fps and shoulder settling. The material test now reflects the existing 0.84 initial
+reflection gain from the prior near-black pass, without increasing the material's brightness.
+
+Live review remains pending: this session's browser inventory returned no browsers, and opening
+the in-app browser returned `Browser is not available: iab`. No new screenshot, GPU compilation,
+frame-rate or subjective animation-quality claim is made. Next review should include a stationary
+camera watching adult/child starts, several strides, slope travel, turns and stops in the main app.
+
+## Earlier verification boundary
 
 The supplied screenshot was reviewed. Live visual acceptance is **pending**: browser inventory returned no surfaces and the Windows native capture pipe was unavailable, including after reset. Build and mathematical/contract tests cannot establish visual motion quality, GPU shader compilation or live frame cost.
 

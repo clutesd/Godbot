@@ -37,10 +37,10 @@ export class HumanJointRig {
   }
 
   /** Cancel the complete shin frame, including lateral knee tilt during turns. */
-  footOrientation(yaw: number, pitch: number): THREE.Quaternion {
+  footOrientation(yaw: number, pitch: number, roll = 0): THREE.Quaternion {
     this.local.extractRotation(this.lower);
     this.rotation.setFromRotationMatrix(this.local).invert();
-    this.footRotation.setFromEuler(this.footEuler.set(pitch, yaw, 0, 'YXZ'));
+    this.footRotation.setFromEuler(this.footEuler.set(pitch, yaw, roll, 'YXZ'));
     return this.footRotation.premultiply(this.rotation);
   }
 

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { GroundedLocomotion } from '../src/render/people/GroundedLocomotion';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
-import { soleTarget } from '../src/render/people/FootContactPose';
+import { sampleSoleSlope, soleTarget } from '../src/render/people/FootContactPose';
 import { HumanJointRig } from '../src/render/people/HumanJointRig';
 
 const ground = { heightAt: () => 0, isStandable: () => true };
@@ -15,6 +15,92 @@ function walking(id = 'p') {
 }
 
 describe('walking quality contracts', () => {
+  it.each([0, 0.8, 2.4, -1.2])('aligns the sole to a compound slope at heading %s', yaw => {
+    const slope = { terrainPitch: 0, roll: 0 };
+    const hillside = { ...ground, heightAt: (x: number, z: number) => 0.18 * x - 0.22 * z };
+    sampleSoleSlope(slope, 2, -1, yaw, 0.32, hillside);
+    const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(slope.terrainPitch, yaw, slope.roll, 'YXZ'));
+    const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(rotation);
+    expect(normal.distanceTo(new THREE.Vector3(-0.18, 1, 0.22).normalize())).toBeLessThan(1e-10);
+    for (const pitch of [-0.145, 0.27]) {
+      const contact = { x: 2, y: hillside.heightAt(2, -1), z: -1, yaw, pitch, ...slope };
+      const origin = soleTarget(new THREE.Vector3(), contact, 0.32, 0.9);
+      const pivot = new THREE.Vector3(0, 0, (pitch > 0 ? 0.092 : -0.026) * 0.32 * 0.9);
+      const expected = pivot.clone().applyQuaternion(rotation).add(new THREE.Vector3(contact.x, contact.y, contact.z));
+      const rolled = new THREE.Quaternion().setFromEuler(new THREE.Euler(slope.terrainPitch + pitch, yaw, slope.roll, 'YXZ'));
+      expect(pivot.applyQuaternion(rolled).add(origin).distanceTo(expected)).toBeLessThan(1e-10);
+    }
+  });
+
+  it('carries the sole through mid-swing without the old sub-clip pauses', () => {
+    const { nav, gait, id } = walking('continuous-swing');
+    const step = 1 / 480;
+    let previous: { x: number; z: number; active: number } | undefined;
+    let samples = 0;
+    for (let frame = 0; frame < 1200; frame++) {
+      nav.beginFrame();
+      const visual = nav.resolve(id, { destination: { x: 0, z: 10 }, localSpeed: 0.18 }, step, ground);
+      const state = gait.update(visual, step, 0.32, 1, 0.05, 1, ground);
+      if (state.active < 0) { previous = undefined; continue; }
+      const foot = state.feet[state.active]!;
+      if (previous?.active === state.active && ((foot.progress > 0.17 && foot.progress < 0.19)
+        || (foot.progress > 0.71 && foot.progress < 0.73))) {
+        const speed = Math.hypot(foot.x - previous.x, foot.z - previous.z) / step;
+        const average = Math.hypot(foot.toX - foot.fromX, foot.toZ - foot.fromZ) / foot.duration;
+        expect(speed).toBeGreaterThan(average * 0.35);
+        samples++;
+      }
+      previous = { x: foot.x, z: foot.z, active: state.active };
+    }
+    expect(samples).toBeGreaterThan(20);
+  });
+
+  it.each([30, 60, 120])('clears uneven terrain and preserves planted orientation at %s fps', fps => {
+    const hillside = { ...ground, heightAt: (x: number, z: number) => 0.08 * x + 0.06 * z + 0.002 * Math.sin(z * 90) };
+    const nav = new PeopleVisualStateStore(), gait = new GroundedLocomotion();
+    gait.update(nav.resolve('hill', { destination: { x: 0, z: 0 } }, 0, hillside), 0, 0.32, 1, 0.05, 1, hillside);
+    let previous: { planted: boolean; yaw: number; terrainPitch: number; roll: number }[] = [];
+    let contacts = 0;
+    for (let frame = 0; frame < fps * 5; frame++) {
+      nav.beginFrame();
+      const visual = nav.resolve('hill', { destination: { x: 0, z: 3 }, localSpeed: 0.18 }, 1 / fps, hillside);
+      const state = gait.update(visual, 1 / fps, 0.32, 1, 0.05, 1, hillside);
+      state.feet.forEach((foot, side) => {
+        expect(foot.y).toBeGreaterThanOrEqual(hillside.heightAt(foot.x, foot.z) - 0.0003);
+        if (previous[side]?.planted && foot.planted) {
+          expect(foot.yaw).toBe(previous[side]!.yaw);
+          expect(foot.terrainPitch).toBe(previous[side]!.terrainPitch);
+          expect(foot.roll).toBe(previous[side]!.roll);
+          contacts++;
+        }
+      });
+      previous = state.feet.map(foot => ({ ...foot }));
+    }
+    expect(contacts).toBeGreaterThan(fps);
+  });
+
+  it('lets shoulders follow actual foot separation and settle after braking', () => {
+    const { nav, gait, id } = walking('follow-through');
+    let priorDrive = 0, maxDelay = 0;
+    let visual = nav.get(id)!;
+    for (let frame = 0; frame < 300; frame++) {
+      nav.beginFrame();
+      visual = nav.resolve(id, { destination: { x: 0, z: 3 }, localSpeed: 0.18 }, dt, ground);
+      const state = gait.update(visual, dt, 0.32, 1, 0.05, 1, ground);
+      expect(Math.abs(state.shoulderDrive - priorDrive)).toBeLessThan(0.15);
+      maxDelay = Math.max(maxDelay, Math.abs(state.hipDrive - state.shoulderDrive));
+      priorDrive = state.shoulderDrive;
+    }
+    expect(maxDelay).toBeGreaterThan(0.1);
+    const destination = { x: visual.x, z: visual.z };
+    for (let frame = 0; frame < 240; frame++) {
+      nav.beginFrame();
+      visual = nav.resolve(id, { destination }, dt, ground);
+      const state = gait.update(visual, dt, 0.32, 1, 0.05, 1, ground);
+      if (frame === 239) expect(Math.abs(state.shoulderDrive)).toBeLessThan(0.001);
+    }
+  });
+
   it('lands ahead of the moving pelvis, maintains stance overlap, and rolls over the planted toe', () => {
     const { nav, gait, id } = walking();
     const previous = [true, true];
@@ -59,9 +145,9 @@ describe('walking quality contracts', () => {
       new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.8, 0.018, 'YXZ')), new THREE.Vector3(0.32, 0.32, 0.32));
     rig.reach(parent, 0.05, 0, new THREE.Vector3(2.035, 0, -0.97), 0.225, 0.225, 1, true);
     const lowerBefore = rig.lower.clone(), tipBefore = rig.tip.clone();
-    const localFoot = rig.footOrientation(0.4, -0.145).clone();
+    const localFoot = rig.footOrientation(0.4, -0.145, 0.18).clone();
     const shin = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(rig.lower));
-    const desired = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.145, 0.4, 0, 'YXZ'));
+    const desired = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.145, 0.4, 0.18, 'YXZ'));
     expect(shin.multiply(localFoot).angleTo(desired)).toBeLessThan(1e-7);
     expect(rig.lower.equals(lowerBefore)).toBe(true);
     expect(rig.tip.equals(tipBefore)).toBe(true);
