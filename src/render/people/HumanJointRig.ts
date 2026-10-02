@@ -55,10 +55,18 @@ export class HumanJointRig {
     this.direction.copy(this.target).normalize();
     if (this.direction.lengthSq() < 0.1) this.direction.copy(this.down);
     this.target.copy(this.direction).multiplyScalar(distance).add(this.elbow);
-    if (leg) this.pole.set(0, 0, 1);
-    else this.pole.set(side, -0.3, 0);
+    if (leg) {
+      // A fixed straight-ahead pole makes knees corkscrew whenever a foot lands laterally or the
+      // body is turning. Keep the knee fundamentally forward, but bias its bend plane continuously
+      // toward the actual foot target and slightly outward by side. Because this is derived from
+      // the target direction rather than a discrete turn state, the knee plane cannot snap between
+      // unrelated solutions from one frame to the next.
+      const lateral = side * 0.07 + Math.max(-0.16, Math.min(0.16, this.direction.x * 0.24));
+      const forward = 1 + Math.max(-0.08, Math.min(0.08, this.direction.z * 0.08));
+      this.pole.set(lateral, 0, forward);
+    } else this.pole.set(side, -0.3, 0);
     this.pole.addScaledVector(this.direction, -this.direction.dot(this.pole)).normalize();
-    if (this.pole.lengthSq() < 0.1) this.pole.set(0, 0, 1);
+    if (this.pole.lengthSq() < 0.1) this.pole.set(leg ? side * 0.06 : side, leg ? 0 : -0.3, leg ? 1 : 0).normalize();
     const along = (length * length + distance * distance - lowerLength * lowerLength) / (2 * distance);
     this.elbow.addScaledVector(this.direction, along).addScaledVector(this.pole, Math.sqrt(Math.max(0, length * length - along * along)));
     this.direction.copy(this.elbow).sub(this.pole.set(x, y, 0)).normalize();
