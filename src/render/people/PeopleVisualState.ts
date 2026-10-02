@@ -7,7 +7,8 @@ export const HUMAN_MAX_RUN_SPEED = 0.95;
 export const HUMAN_ACCELERATION = 0.8;
 export const HUMAN_BRAKING = 1.2;
 export const HUMAN_RADIUS = 0.075;
-const TURN_RATE = 3.2;
+const TURN_RATE = 2.6;
+const STANDING_TURN_RATE = 1.35;
 const RETARGET_EPSILON = 0.02;
 export const WALK_SPEED_THRESHOLD = 0.05;
 export const RUN_SPEED_THRESHOLD = 0.65;
@@ -323,7 +324,11 @@ export class PeopleVisualStateStore {
     if (next && !state.blocked) {
       const dx = next.x - state.x, dz = next.z - state.z, distance = Math.hypot(dx, dz);
       state.desiredFacing = Math.atan2(dx, dz);
-      state.facing = turnToward(state.facing, state.desiredFacing, TURN_RATE * dt);
+      // Locomotion can only look grounded if the torso is not allowed to spin faster than the
+      // feet can reorganize beneath it. Use the previous frame's physical speed to let a moving
+      // body steer confidently while low-speed turns remain deliberate enough for real turn steps.
+      const turnRate = state.speed > 0.06 ? TURN_RATE : STANDING_TURN_RATE;
+      state.facing = turnToward(state.facing, state.desiredFacing, turnRate * dt);
       const grade = distance > 0.001 ? (ground.heightAt(next.x, next.z) - state.footY) / distance : 0;
       const slopeSpeed = state.maxPhysicalSpeed / (1 + Math.max(0, grade) * 0.7 + Math.max(0, -grade) * 0.3);
       const braking = Math.sqrt(2 * HUMAN_BRAKING * distance);
@@ -342,7 +347,7 @@ export class PeopleVisualStateStore {
       if (Math.hypot(next.x - state.x, next.z - state.z) < 0.00001) state.waypoint++;
     } else if (restFacing !== undefined) {
       state.desiredFacing = restFacing;
-      state.facing = turnToward(state.facing, restFacing, TURN_RATE * dt);
+      state.facing = turnToward(state.facing, restFacing, STANDING_TURN_RATE * dt);
     }
     state.velocityX = dt > 0 ? (state.x - previousX) / dt : 0;
     state.velocityZ = dt > 0 ? (state.z - previousZ) / dt : 0;
