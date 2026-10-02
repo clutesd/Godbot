@@ -158,7 +158,7 @@ const ERA_RANK: Readonly<Record<Era, number>> = {
  * depth by a few percent, because the whole point is that an inhabitant of any civilisation is
  * unmistakably the same creature as an inhabitant of every other.
  */
-const OBSIDIAN_GLASS = '#1f2126';
+const OBSIDIAN_GLASS = '#111318';
 
 /** The alloy the species casts, by what its technology can actually work. */
 const ALLOY_ERAS: readonly (readonly string[])[] = [
@@ -302,9 +302,9 @@ function paletteFor(person: Person, context: HumanLookContext, maturity: number,
   const obsidian = shift(OBSIDIAN_GLASS,
     (channel(cultureId, 'tint') - 0.5) * 0.9 + (channel(person.id, 'glass') - 0.5) * 0.03,
     0.6 + channel(cultureId, 'tintsat') * 0.9 + (channel(person.id, 'glasssat') - 0.5) * 0.25,
-    (channel(cultureId, 'tintdepth') - 0.5) * 0.020
-    + (channel(person.id, 'glasslight') - 0.5) * 0.016 - seniority * 0.006,
-    0.11, 0.05, 0.135);
+    (channel(cultureId, 'tintdepth') - 0.5) * 0.014
+    + (channel(person.id, 'glasslight') - 0.5) * 0.010 - seniority * 0.004,
+    0.10, 0.032, 0.095);
 
   // Finish. Technology polishes glass; labour scuffs it; age dulls it. This is the single channel
   // that most separates a primitive settlement from an advanced one at a glance.

@@ -110,8 +110,8 @@ describe('living obsidian species', () => {
         const body = hslOf(palette.obsidian);
         // Dark enough to be obsidian, open enough to hold a reflection. Never a featureless void,
         // and nowhere near the lightness or the orange hue band of human skin.
-        expect(body.l).toBeGreaterThan(0.04);
-        expect(body.l).toBeLessThan(0.18);
+        expect(body.l).toBeGreaterThan(0.025);
+        expect(body.l).toBeLessThan(0.11);
         expect(body.s).toBeLessThan(0.3);
         // Drape is cloth this species would weave: dark, desaturated, never a dyed villager tunic.
         expect(hslOf(palette.drape).l).toBeLessThan(0.26);
@@ -125,7 +125,7 @@ describe('living obsidian species', () => {
     }
     // Cultures occupy neighbouring tints rather than separate palettes.
     const lightness = tones.map(tone => hslOf(tone).l);
-    expect(Math.max(...lightness) - Math.min(...lightness)).toBeLessThan(0.1);
+    expect(Math.max(...lightness) - Math.min(...lightness)).toBeLessThan(0.06);
   });
 
   it('separates the four figures of the lineup by proportion alone', () => {

@@ -143,9 +143,9 @@ export function createObsidianReflectionEnvironment(renderer: THREE.WebGLRendere
   // Deliberately dark for a daylight probe. A bright even dome lights every square millimetre of
   // a polished body equally, which is precisely how obsidian turns into grey plastic. The energy
   // belongs in the key card, where it becomes a highlight that travels and describes a form.
-  const zenith = new THREE.Color().setRGB(0.26, 0.33, 0.50);
-  const horizon = new THREE.Color().setRGB(0.70, 0.58, 0.44);
-  const ground = new THREE.Color().setRGB(0.085, 0.075, 0.062);
+  const zenith = new THREE.Color().setRGB(0.16, 0.20, 0.29);
+  const horizon = new THREE.Color().setRGB(0.44, 0.36, 0.26);
+  const ground = new THREE.Color().setRGB(0.040, 0.036, 0.032);
   const scratch = new THREE.Color();
   for (let i = 0; i < position.count; i++) {
     const height = position.getY(i) / radius;
@@ -161,8 +161,8 @@ export function createObsidianReflectionEnvironment(renderer: THREE.WebGLRendere
 
   const cards = [
     { position: [-3.4, 4.6, 3.2], size: [2.2, 2.2], color: [7.6, 6.9, 5.7] },
-    { position: [4.2, 1.5, -2.2], size: [3, 5], color: [0.34, 0.46, 0.76] },
-    { position: [0.4, 2.0, -4.8], size: [6, 2.4], color: [1.30, 0.94, 0.60] },
+    { position: [4.2, 1.5, -2.2], size: [3, 5], color: [0.22, 0.30, 0.55] },
+    { position: [0.4, 2.0, -4.8], size: [6, 2.4], color: [0.92, 0.68, 0.46] },
   ];
   for (const card of cards) {
     const material = new THREE.MeshBasicMaterial({
