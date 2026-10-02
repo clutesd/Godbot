@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createCosmicBodyMaterial, createCosmicWorkLimbGeometry, updateCosmicBodyMaterial } from './CosmicPeople';
+import { bindCosmicBodySurface, createCosmicBodyMaterial, createCosmicWorkLimbGeometry, updateCosmicBodyMaterial } from './CosmicPeople';
 import type { RestPosture, RestSpotPresentation } from './RestPresentation';
 import {
   REST_RISE_SECONDS,
@@ -93,6 +93,9 @@ export class RestPoseRenderer {
     this.limbs.castShadow = true;
     this.limbs.frustumCulled = false;
     this.limbs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // The obsidian material resolves every surface from per-instance channels; without them a
+    // resting body would render as pure black instead of as glass.
+    bindCosmicBodySurface(this.limbs);
     this.group.add(this.limbs);
   }
 

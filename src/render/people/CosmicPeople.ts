@@ -7,8 +7,19 @@ import {
   createHumanWorkLimbGeometry,
 } from './HumanAnatomy';
 import {
-  HUMAN_SURFACE_MODE, createHumanSurfaceMaterial, updateHumanSurfaceMaterial, type HumanSurfaceMode,
+  HUMAN_SURFACE_MODE, bindHumanSurface, createHumanSurfaceMaterial, updateHumanSurfaceMaterial,
+  type HumanSurfaceMode,
 } from './HumanSurfaceMaterial';
+
+/**
+ * Gives any mesh drawn with the obsidian body material its per-instance material channels. Without
+ * it the attributes default to zero and the surface resolves to pure black, so every renderer that
+ * draws bodies with this material — articulated work limbs, resting figures, war companies — must
+ * call it once at construction. The seeded defaults are already a valid neutral inhabitant.
+ */
+export function bindCosmicBodySurface(mesh: THREE.InstancedMesh): void {
+  bindHumanSurface(mesh);
+}
 
 /** Presentation dimensions only. Navigation, reach targets and simulation appearance are unchanged. */
 export const COSMIC_HEIGHT_MULTIPLIER = 1.14;
@@ -24,19 +35,24 @@ export interface CosmicRoleStyle {
 }
 
 /** Independent channels leave room for future cultural/status/equipment layers without changing role. */
+/**
+ * Role light. Every entry sits inside the species' warm luminous band, so a role shifts the hue of
+ * an inhabitant's inlay without ever making them look like a different creature. Culture still
+ * dominates that colour; this is the smaller of the two contributions to it.
+ */
 export const COSMIC_ROLES: Readonly<Record<RoleVisualFamily, CosmicRoleStyle>> = {
-  earth: { color: '#a4cf71', symbol: 'seed', shoulders: 0.85, mantle: 0, halo: 0 },
-  water: { color: '#63cce2', symbol: 'crescent', shoulders: 0.85, mantle: 0, halo: 0 },
-  labor: { color: '#e9b65b', symbol: 'diamond', shoulders: 1.45, mantle: 0, halo: 0 },
-  trade: { color: '#ef9062', symbol: 'double-bar', shoulders: 1, mantle: 0.45, halo: 0 },
-  guard: { color: '#ef6353', symbol: 'chevron', shoulders: 1.7, mantle: 0, halo: 0 },
-  ritual: { color: '#d68ac9', symbol: 'hourglass', shoulders: 0.75, mantle: 1, halo: 0 },
-  civic: { color: '#e3d487', symbol: 'triangle', shoulders: 1.3, mantle: 0, halo: 0.8 },
-  knowledge: { color: '#ae96ed', symbol: 'bar', shoulders: 0.7, mantle: 1, halo: 0 },
-  industry: { color: '#759ee7', symbol: 'square', shoulders: 1.25, mantle: 0, halo: 0 },
-  healing: { color: '#a2e7d0', symbol: 'cross', shoulders: 1, mantle: 0.55, halo: 0 },
-  elder: { color: '#ede6cd', symbol: 'crown', shoulders: 0.95, mantle: 0.6, halo: 1 },
-  ordinary: { color: '#b2bdcc', symbol: 'circle', shoulders: 0.65, mantle: 0, halo: 0 },
+  earth: { color: '#d8bd63', symbol: 'seed', shoulders: 0.85, mantle: 0, halo: 0 },
+  water: { color: '#8ac8d6', symbol: 'crescent', shoulders: 0.85, mantle: 0, halo: 0 },
+  labor: { color: '#edaa50', symbol: 'diamond', shoulders: 1.45, mantle: 0, halo: 0 },
+  trade: { color: '#f09a58', symbol: 'double-bar', shoulders: 1, mantle: 0.45, halo: 0 },
+  guard: { color: '#ef7048', symbol: 'chevron', shoulders: 1.7, mantle: 0, halo: 0 },
+  ritual: { color: '#d892c6', symbol: 'hourglass', shoulders: 0.75, mantle: 1, halo: 0 },
+  civic: { color: '#f0d484', symbol: 'triangle', shoulders: 1.3, mantle: 0, halo: 0.8 },
+  knowledge: { color: '#b49ae8', symbol: 'bar', shoulders: 0.7, mantle: 1, halo: 0 },
+  industry: { color: '#8fabe2', symbol: 'square', shoulders: 1.25, mantle: 0, halo: 0 },
+  healing: { color: '#9ce0c4', symbol: 'cross', shoulders: 1, mantle: 0.55, halo: 0 },
+  elder: { color: '#f2e4c4', symbol: 'crown', shoulders: 0.95, mantle: 0.6, halo: 1 },
+  ordinary: { color: '#ffb45c', symbol: 'circle', shoulders: 0.65, mantle: 0, halo: 0 },
 };
 export const COSMIC_FAMILIES = Object.keys(COSMIC_ROLES) as RoleVisualFamily[];
 const symbols = ['circle', 'diamond', 'bar', 'triangle', 'crescent', 'cross', 'chevron', 'double-bar', 'square', 'hourglass', 'crown', 'seed'];
@@ -106,12 +122,77 @@ export function createCosmicReflectionEnvironment(renderer: THREE.WebGLRenderer)
 }
 
 /**
- * The population's surface. Skin, cloth, leather, hair, metal and wood all resolve from one
- * texture-free program; per-instance attributes carry each individual's palette and clothing.
- * `individuality` keeps the close-range weave/pore detail; crowd and company meshes can drop it.
+ * The reflection field the obsidian bodies are read through, and the single most important input
+ * to how expensive the species looks.
+ *
+ * Polished volcanic glass has almost no diffuse response: nearly everything the eye uses to follow
+ * a shoulder, a ribcage or a calf arrives as a reflection, so a flat grey probe produces a flat
+ * black body no matter how good the shading is. This field has structure instead — a bright
+ * zenith, a warm horizon band with a hard line at it, a dim warm ground bounce, and three cards
+ * acting as key, cool fill and warm rim — so anatomy stays readable with every inlay switched off,
+ * and the highlight travelling across a body as it turns is a real moving horizon.
+ *
+ * One 256px PMREM for the entire population. Generated once, never per person or per frame.
+ */
+export function createObsidianReflectionEnvironment(renderer: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
+  const studio = new THREE.Scene();
+  const radius = 12;
+  const dome = new THREE.SphereGeometry(radius, 24, 16);
+  const position = dome.getAttribute('position');
+  const colours = new Float32Array(position.count * 3);
+  // Deliberately dark for a daylight probe. A bright even dome lights every square millimetre of
+  // a polished body equally, which is precisely how obsidian turns into grey plastic. The energy
+  // belongs in the key card, where it becomes a highlight that travels and describes a form.
+  const zenith = new THREE.Color().setRGB(0.26, 0.33, 0.50);
+  const horizon = new THREE.Color().setRGB(0.70, 0.58, 0.44);
+  const ground = new THREE.Color().setRGB(0.085, 0.075, 0.062);
+  const scratch = new THREE.Color();
+  for (let i = 0; i < position.count; i++) {
+    const height = position.getY(i) / radius;
+    // The horizon is a hard transition rather than a gradient: that edge is what a curved polished
+    // surface turns into the long travelling highlight which describes its form.
+    if (height >= 0) scratch.copy(horizon).lerp(zenith, Math.pow(Math.min(1, height * 1.35), 0.5));
+    else scratch.copy(horizon).lerp(ground, Math.pow(Math.min(1, -height * 6), 0.6));
+    colours[i * 3] = scratch.r; colours[i * 3 + 1] = scratch.g; colours[i * 3 + 2] = scratch.b;
+  }
+  dome.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+  studio.add(new THREE.Mesh(dome,
+    new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+
+  const cards = [
+    { position: [-3.4, 4.6, 3.2], size: [2.2, 2.2], color: [7.6, 6.9, 5.7] },
+    { position: [4.2, 1.5, -2.2], size: [3, 5], color: [0.34, 0.46, 0.76] },
+    { position: [0.4, 2.0, -4.8], size: [6, 2.4], color: [1.30, 0.94, 0.60] },
+  ];
+  for (const card of cards) {
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setRGB(card.color[0]!, card.color[1]!, card.color[2]!),
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(card.size[0], card.size[1]), material);
+    mesh.position.set(card.position[0]!, card.position[1]!, card.position[2]!);
+    mesh.lookAt(0, 0, 0);
+    studio.add(mesh);
+  }
+
+  const generator = new THREE.PMREMGenerator(renderer);
+  const target = generator.fromScene(studio, 0.035, 0.1, 30, { size: 256 });
+  generator.dispose();
+  studio.traverse(object => {
+    if (object instanceof THREE.Mesh) {
+      object.geometry.dispose(); (object.material as THREE.Material).dispose();
+    }
+  });
+  return target;
+}
+
+/**
+ * The population's surface. Obsidian, drape, carved stone, crest, alloy and wood all resolve from
+ * one texture-free program; per-instance attributes carry each individual's material identity.
+ * `individuality` keeps the close-range grain and fracture detail; crowd and company meshes can
+ * drop it and still share the compiled program.
  */
 export function createCosmicBodyMaterial(individuality = true,
-  mode: HumanSurfaceMode = HUMAN_SURFACE_MODE.torso): THREE.MeshStandardMaterial {
+  mode: HumanSurfaceMode = HUMAN_SURFACE_MODE.torso): THREE.MeshPhysicalMaterial {
   return createHumanSurfaceMaterial(mode, individuality);
 }
 

@@ -7,6 +7,9 @@ import * as THREE from 'three';
 export class HumanJointRig {
   readonly upper = new THREE.Matrix4();
   readonly lower = new THREE.Matrix4();
+  lowerPitch = 0;
+  private readonly footRotation = new THREE.Quaternion();
+  private readonly footEuler = new THREE.Euler();
   readonly tip = new THREE.Vector3();
   private readonly local = new THREE.Matrix4();
   private readonly inverse = new THREE.Matrix4();
@@ -33,10 +36,18 @@ export class HumanJointRig {
     this.tip.set(0, -lowerLength, 0).applyMatrix4(this.lower);
   }
 
+  /** Cancel the complete shin frame, including lateral knee tilt during turns. */
+  footOrientation(yaw: number, pitch: number): THREE.Quaternion {
+    this.local.extractRotation(this.lower);
+    this.rotation.setFromRotationMatrix(this.local).invert();
+    this.footRotation.setFromEuler(this.footEuler.set(pitch, yaw, 0, 'YXZ'));
+    return this.footRotation.premultiply(this.rotation);
+  }
+
   /** Analytic two-link reach in torso space, with a stable outward elbow pole. Unreachable
    * targets are clamped, never achieved by stretching anatomy or moving the person. */
   reach(parent: THREE.Matrix4, x: number, y: number, worldTarget: THREE.Vector3,
-    length: number, lowerLength: number, side: number): void {
+    length: number, lowerLength: number, side: number, leg = false): void {
     this.inverse.copy(parent).invert();
     this.target.copy(worldTarget).applyMatrix4(this.inverse).sub(this.elbow.set(x, y, 0));
     const distance = Math.max(Math.abs(length - lowerLength) + 0.0001,
@@ -44,7 +55,9 @@ export class HumanJointRig {
     this.direction.copy(this.target).normalize();
     if (this.direction.lengthSq() < 0.1) this.direction.copy(this.down);
     this.target.copy(this.direction).multiplyScalar(distance).add(this.elbow);
-    this.pole.set(side, -0.3, 0).addScaledVector(this.direction, -this.direction.dot(this.pole)).normalize();
+    if (leg) this.pole.set(0, 0, 1);
+    else this.pole.set(side, -0.3, 0);
+    this.pole.addScaledVector(this.direction, -this.direction.dot(this.pole)).normalize();
     if (this.pole.lengthSq() < 0.1) this.pole.set(0, 0, 1);
     const along = (length * length + distance * distance - lowerLength * lowerLength) / (2 * distance);
     this.elbow.addScaledVector(this.direction, along).addScaledVector(this.pole, Math.sqrt(Math.max(0, length * length - along * along)));
@@ -53,6 +66,7 @@ export class HumanJointRig {
     this.local.compose(this.pole, this.rotation, this.one);
     this.upper.multiplyMatrices(parent, this.local);
     this.direction.copy(this.target).sub(this.elbow).normalize();
+    this.lowerPitch = Math.atan2(-this.direction.z, -this.direction.y);
     this.rotation.setFromUnitVectors(this.down, this.direction);
     this.local.compose(this.elbow, this.rotation, this.one);
     this.lower.multiplyMatrices(parent, this.local);

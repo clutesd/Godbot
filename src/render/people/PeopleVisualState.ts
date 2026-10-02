@@ -7,7 +7,7 @@ export const HUMAN_MAX_RUN_SPEED = 0.95;
 export const HUMAN_ACCELERATION = 0.8;
 export const HUMAN_BRAKING = 1.2;
 export const HUMAN_RADIUS = 0.075;
-const TURN_RATE = 5.2;
+const TURN_RATE = 3.2;
 const RETARGET_EPSILON = 0.02;
 export const WALK_SPEED_THRESHOLD = 0.05;
 export const RUN_SPEED_THRESHOLD = 0.65;
@@ -330,7 +330,9 @@ export class PeopleVisualStateStore {
       const alignment = Math.cos(state.desiredFacing - state.facing);
       const desiredSpeed = alignment > 0.8 ? Math.min(slopeSpeed, braking) : 0;
       const oldSpeed = Math.hypot(state.velocityX, state.velocityZ);
-      const speed = Math.max(0, Math.min(desiredSpeed, oldSpeed + HUMAN_ACCELERATION * dt));
+      const speed = oldSpeed < desiredSpeed
+        ? Math.min(desiredSpeed, oldSpeed + HUMAN_ACCELERATION * dt)
+        : Math.max(desiredSpeed, oldSpeed - HUMAN_BRAKING * dt);
       const step = Math.min(distance, speed * dt, state.maxPhysicalSpeed * dt);
       const proposed = { x: state.x + dx / (distance || 1) * step, z: state.z + dz / (distance || 1) * step };
       const accepted = this.avoidPeers(state, proposed, dt, ground);

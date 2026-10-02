@@ -42,7 +42,8 @@ describe('ordinary articulated human contract', () => {
       rig.compose(parent, 0.049, 0, pose.rightHipRotation, pose.rightKneeRotation, 0.225, 0.225, false);
       expect(left.z * rig.tip.z).toBeLessThanOrEqual(1e-8);
       expect(Math.min(left.y, rig.tip.y)).toBeCloseTo(0, 7);
-      expect(pose.leftKneeRotation * pose.rightKneeRotation).toBe(0);
+      // The loaded knee absorbs weight while the recovery knee folds farther.
+      expect(Math.min(pose.leftKneeRotation, pose.rightKneeRotation)).toBeLessThan(0.09);
     }
   });
 

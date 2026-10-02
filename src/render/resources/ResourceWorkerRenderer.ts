@@ -9,7 +9,7 @@ import type { ResourceWorkerVisual } from './ResourceWorkScene';
 import { MAX_ACTIVE_WORK_SITES } from './ResourceWorkScene';
 import { createResourceWorkMotion, sampleResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { resourceToolHeadGeometry } from './ResourceWorkGeometry';
-import { createCosmicBodyMaterial, createCosmicWorkLimbGeometry, updateCosmicBodyMaterial } from '../people/CosmicPeople';
+import { bindCosmicBodySurface, createCosmicBodyMaterial, createCosmicWorkLimbGeometry, updateCosmicBodyMaterial } from '../people/CosmicPeople';
 
 const CAPACITY = MAX_ACTIVE_WORK_SITES * 4;
 
@@ -51,6 +51,9 @@ export class ResourceWorkerRenderer {
     this.limbs = this.pool('Resource worker joints', createCosmicWorkLimbGeometry(), '#ffffff', CAPACITY * 10);
     (this.limbs.material as THREE.Material).dispose();
     this.limbs.material = createCosmicBodyMaterial(false);
+    // Working limbs are the same volcanic glass as the rest of the body and need the same
+    // per-instance material channels, or they resolve to black beside the figure they belong to.
+    bindCosmicBodySurface(this.limbs);
     this.handles = this.pool('Resource worker tool shafts', new THREE.CylinderGeometry(0.018, 0.023, 1, 6), '#765235', CAPACITY);
     this.heads = this.pool('Resource worker axe and pick heads', resourceToolHeadGeometry(), '#ffffff', CAPACITY);
     this.chips = this.pool('Resource and construction contact fragments', new THREE.TetrahedronGeometry(1), '#ffffff', CAPACITY * 3);

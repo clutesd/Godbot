@@ -9,7 +9,7 @@ import { combatPose, engagementGap, figurePosition } from './CombatChoreography'
 import { createCombatExchanges, exchangeFigurePose, formationCount, MAX_FORMATION_FIGURES, type CombatExchangePlan, type WeaponPose } from './CombatExchanges';
 import { BattleSpectacle, type StructuralBattleEvidence } from './BattleSpectacle';
 import { militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
-import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, bindCosmicBodySurface, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
 
 interface Standard {
   pole: THREE.Mesh;
@@ -427,6 +427,9 @@ export class WarRenderer {
     const arms = new THREE.InstancedMesh(this.legGeometry, cosmic, COMPANY_CAPACITY * 2);
     const accents = new CosmicRoleAccents(COMPANY_CAPACITY);
     this.color.set(cosmicRoleFor('soldier').color);
+    // Soldiers are the same obsidian species as the settlement they came from, so their meshes
+    // need the same per-instance material channels; the seeded defaults are a valid inhabitant.
+    for (const mesh of [body, head, legs, arms]) bindCosmicBodySurface(mesh);
     for (const mesh of [body, head, legs, arms]) for (let i = 0; i < mesh.instanceMatrix.count; i++) mesh.setColorAt(i, this.color);
     const shield = new THREE.InstancedMesh(this.shieldGeometry, trim, COMPANY_CAPACITY);
     const helmet = new THREE.InstancedMesh(this.helmetGeometry, metal, COMPANY_CAPACITY);

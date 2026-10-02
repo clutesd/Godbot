@@ -3,6 +3,8 @@ import { EnergyRenderer } from './energy/EnergyRenderer';
 import { IndustryRenderer } from './industry/IndustryRenderer';
 import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
 import { socialGestureFrame } from './people/SocialGesturePresentation';
+import { soleTarget } from './people/FootContactPose';
+import { GroundedLocomotion, SUPPORT_SHIFT } from './people/GroundedLocomotion';
 import { HumanJointRig } from './people/HumanJointRig';
 import { createPottery, planPottery, potteryStyle, potteryTier, type PotteryAnchor } from './assets/Pottery';
 import { createResourceCargo } from './resources/ResourceCargo';
@@ -43,12 +45,12 @@ import { indoorSleepingSpots, sleepAreaFloor, type IndoorSleepingArea } from './
 import { usableStructure } from '../sim/development/Shelter';
 import { sleepSchedule } from '../sim/people/SleepSchedule';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
-import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicReflectionEnvironment, createObsidianReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { HUMAN_SURFACE_MODE, createHumanSurfaceMaterial } from './people/HumanSurfaceMaterial';
 import { HumanFigureAppearance } from './people/HumanFigureAppearance';
-import { humanLookFor as resolveHumanLook, type HumanLook } from './people/HumanAppearanceProfile';
-import { createGarmentAtlasGeometry, createHeadAtlasGeometry } from './people/HumanWardrobeAtlas';
-import { decorate, ZONE_CLOTH } from './people/HumanSculpt';
+import { humanLookFor as resolveHumanLook, type HeadPiece, type HumanLook } from './people/HumanAppearanceProfile';
+import { createGarmentAtlasGeometry, createHeadAtlasGeometry, createHumanMantleGeometry } from './people/HumanWardrobeAtlas';
+import { createFocalContactShadow } from './people/FocalContactShadow';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
@@ -261,6 +263,10 @@ export class GodboxRenderer {
   private readonly peopleLegs: THREE.InstancedMesh;
   private readonly peopleForearms: THREE.InstancedMesh;
   private readonly peopleShins: THREE.InstancedMesh;
+  private readonly focalContactShadow = createFocalContactShadow();
+  private readonly groundedLocomotion = new GroundedLocomotion();
+  private readonly footTarget = new THREE.Vector3();
+  private readonly headAttachmentMatrix = new THREE.Matrix4();
   private readonly humanJoints = new HumanJointRig();
   private readonly socialHandTarget = new THREE.Vector3();
   private readonly jointParent = new THREE.Matrix4();
@@ -275,6 +281,7 @@ export class GodboxRenderer {
   private readonly peopleRoleAccents: THREE.InstancedMesh;
   private readonly cosmicAccents: CosmicRoleAccents;
   private readonly cosmicReflections: THREE.WebGLRenderTarget;
+  private readonly obsidianReflections: THREE.WebGLRenderTarget;
   private readonly humanMaterials: THREE.MeshStandardMaterial[];
   private readonly humanAppearance: HumanFigureAppearance;
   /** Resolved looks are cached: a person's palette and wardrobe only change with age, role or era. */
@@ -423,6 +430,7 @@ export class GodboxRenderer {
   private readonly smoke: THREE.InstancedMesh;
   private readonly activeSmokeSources: SmokeSource[] = [];
   private visiblePeople: Person[] = [];
+  private visiblePeopleSubject: string | undefined;
   private visiblePeopleMonth = -1;
   private visiblePeoplePopulation = -1;
   private readonly lastPersonGroundPosition = new Map<string, Vec2>();
@@ -537,11 +545,14 @@ export class GodboxRenderer {
     this.humanMaterials = [torsoMaterial, headMaterial, limbMaterial, garmentMaterial, headgearMaterial];
     this.cosmicReflections = createCosmicReflectionEnvironment(this.renderer);
     this.foundingPods.setReflectionEnvironment(this.cosmicReflections.texture);
-    for (const material of this.humanMaterials) material.envMap = this.cosmicReflections.texture;
-    this.resourceWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
-    this.physicalWorkers.setReflectionEnvironment(this.cosmicReflections.texture);
+    // Obsidian bodies are read almost entirely through reflection, so they get their own probe:
+    // one with a real horizon, which is what lets anatomy stay legible with no inlay lit at all.
+    this.obsidianReflections = createObsidianReflectionEnvironment(this.renderer);
+    for (const material of this.humanMaterials) material.envMap = this.obsidianReflections.texture;
+    this.resourceWorkers.setReflectionEnvironment(this.obsidianReflections.texture);
+    this.physicalWorkers.setReflectionEnvironment(this.obsidianReflections.texture);
     this.restPoses = new RestPoseRenderer(visiblePersonBudget);
-    this.restPoses.setReflectionEnvironment(this.cosmicReflections.texture);
+    this.restPoses.setReflectionEnvironment(this.obsidianReflections.texture);
     this.people = new THREE.InstancedMesh(peopleGeometry, torsoMaterial, visiblePersonBudget);
     this.people.castShadow = true;
     this.people.frustumCulled = false;
@@ -557,7 +568,7 @@ export class GodboxRenderer {
     this.peopleHeadwear = new THREE.InstancedMesh(createHeadAtlasGeometry(), headgearMaterial, visiblePersonBudget);
     this.peopleGarments = new THREE.InstancedMesh(createGarmentAtlasGeometry(), garmentMaterial, visiblePersonBudget);
     this.peopleCargo = new CarriedMaterialRenderer(visiblePersonBudget);
-    this.peopleMantles = new THREE.InstancedMesh(decorate(new THREE.ConeGeometry(0.15, 0.37, 9, 1, true).translate(0, -0.185, 0), { zone: ZONE_CLOTH, occlusion: 0.92 }), garmentMaterial, NOTABLE_VISUAL_BUDGET);
+    this.peopleMantles = new THREE.InstancedMesh(createHumanMantleGeometry(), garmentMaterial, NOTABLE_VISUAL_BUDGET);
     this.humanAppearance = new HumanFigureAppearance({
       torso: this.people, head: this.peopleHeads,
       upperArms: this.peopleArms, forearms: this.peopleForearms,
@@ -586,7 +597,7 @@ export class GodboxRenderer {
     this.peopleLegs.frustumCulled = false;
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
-    this.scene.add(this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins, this.peopleTools, this.peopleHeadwear, this.peopleGarments, this.peopleCargo.group, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
+    this.scene.add(this.focalContactShadow, this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins, this.peopleTools, this.peopleHeadwear, this.peopleGarments, this.peopleCargo.group, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
     this.scene.add(this.sleepGlyphs.group);
     this.syncSettlements(true);
     this.syncRoutes(true);
@@ -805,6 +816,7 @@ export class GodboxRenderer {
   }
 
   private setHumanPresentationVisible(visible: boolean): void {
+    this.focalContactShadow.visible = visible;
     for (const mesh of [
       this.people,
       this.peopleRoleAccents,
@@ -1064,6 +1076,7 @@ export class GodboxRenderer {
   }
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
+    this.focalContactShadow.count = 0;
     this.sleepingPeople.beginFrame(this.state.people);
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
@@ -1227,11 +1240,11 @@ export class GodboxRenderer {
         smoothTravel: !worker && !physical,
         emergency: person.activity === 'flee' || person.navigation?.schedulePhase === 'emergency',
         localSpeed: ((person.activity === 'flee' ? 0.85
-          : firstFire ? 0.5
-            : foundingStandard ? 0.48
+          : firstFire ? 0.22
+            : foundingStandard ? 0.20
             : ['play-tag-run', 'play-tag-chase', 'play-follow', 'play-lead'].includes(local?.action ?? '') ? 0.53
               : local?.action.startsWith('play-') ? (person.ageMonths < 36 ? 0.24 : 0.44)
-                : local ? 0.27 : 0.38)
+                : local ? 0.16 : 0.20)
           + stableUnit(`${person.id}:pace`) * 0.02) * (person.ageMonths > 816 ? 0.8 : person.ageMonths < 168 ? 0.94 : 1),
         arrivalEase: Boolean(worker || physical || foundingStandard),
         ...(!sleepSpot && !worker && !physical && !firstFire && !foundingStandard && (!local || local.action === 'arrive') && person.navigation ? { waypoints: person.navigation.waypoints, waypointIndex: person.navigation.waypointIndex } : {}),
@@ -1240,8 +1253,9 @@ export class GodboxRenderer {
             : firstFire?.restFacing ?? foundingStandard?.restFacing ?? sleepSpot?.facing ?? local?.restFacing ?? base.restFacing,
       }, deltaSeconds, movementGround);
       const display = visual;
+      const focalPerson = this.cameraDirector.current()?.subjectId === person.id;
       const tier = visualTierFor(person);
-      const detailed = tier !== 'population' || Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
+      const detailed = focalPerson || tier !== 'population' || Math.hypot(this.camera.position.x - display.x, this.camera.position.z - display.z) < 58;
       this.animationController.getOrCreateCharacterState(person.id, person.occupation);
       if (physical) this.physicalWork.advance(person, physical, visual, deltaSeconds);
       const physicalStanding = physical && physical.ready && !visual.traveling && visual.speed < WALK_SPEED_THRESHOLD;
@@ -1364,13 +1378,35 @@ export class GodboxRenderer {
       // Shorter legs lower the hip without stretching anything: the pelvis, torso and head all
       // descend together, which is exactly how a child's proportions differ from a scaled adult.
       const legShortfall = 0.45 * (1 - proportions.legLength);
-      this.humanAppearance.apply(index, look, person.appearance?.textilePattern ?? culture?.style.pattern);
+      this.humanAppearance.apply(index, look, culture?.style.pattern ?? person.appearance?.textilePattern, focalPerson);
       // The rendered terrain under the *visual* position is the only anchor: the soles sit on
       // footY and the body is built upward from there, so bob and crouch can never bury anyone.
       const footY = visual.footY + (physical?.elevation ?? 0);
       // Physical rest owns its pelvis height while it blends in/out; generic animation offsets
       // remain responsible for ordinary crouch/work. Soles stay anchored at footY.
-      const poseLift = restArticulated
+      const contactGait = detailed && !articulated && !firstFireStanding && !standardStanding
+        && visual.speed < 0.6 && !sleepSpot && !['dance', 'play'].includes(local?.animation ?? '')
+        ? this.groundedLocomotion.update(visual, deltaSeconds, heightScale, proportions.legLength,
+          posture.stanceWidth * buildScale, posture.strideStyle, movementGround, posture.weightShift) : undefined;
+      if (!contactGait) this.groundedLocomotion.forget(person.id);
+      if (contactGait && pose && (contactGait.motion > 0.01 || contactGait.active >= 0)) {
+        const motion = contactGait.motion;
+        const swing = -Math.cos(contactGait.phase - 0.12) * motion;
+        pose.pelvisRotation = swing * 0.045;
+        pose.spineTwist = -swing * 0.075;
+        pose.spineRoll = -contactGait.weight * 0.016;
+        pose.spineRotation += contactGait.lean;
+        if (!loaded && contactGait.motion > 0.01) {
+          pose.leftShoulderRotation = -swing * 0.25;
+          pose.rightShoulderRotation = swing * 0.23;
+          pose.leftElbowRotation = 0.18 + Math.max(0, -Math.cos(contactGait.phase - 0.30)) * 0.13;
+          pose.rightElbowRotation = 0.21 + Math.max(0, Math.cos(contactGait.phase - 0.30)) * 0.11;
+        }
+      }
+      const supportShift = contactGait ? contactGait.weight * heightScale * SUPPORT_SHIFT : 0;
+      const renderX = display.x + Math.cos(visual.facing) * supportShift;
+      const renderZ = display.z - Math.sin(visual.facing) * supportShift;
+      const poseLift = contactGait ? contactGait.bodyY * heightScale : restArticulated
         ? restPose.bodyLift * heightScale
         : Math.max(-0.4, Math.min(0.1, pose?.positionOffset.y ?? 0)) * heightScale;
       const facing = visual.facing;
@@ -1397,11 +1433,17 @@ export class GodboxRenderer {
       const carriage = sleepingPose || restArticulated ? 0 : proportions.slouch;
       const bodyPitch = (sleepingPose ? 0 : bodyTilt.pitch + carriage) + (socialGesture?.kind === 'bow' ? socialGesture.weight * (person.ageMonths > 816 ? 0.15 : 0.24) : 0) + (restArticulated ? restPose.bodyPitch : 0);
       const bodyFacing = facing + (sleepingPose ? 0 : (pose?.pelvisRotation ?? 0) + attentionBodyYaw) + (restArticulated ? restPose.bodyYaw : 0);
-      const bodyRoll = (sleepingPose ? 0 : bodyTilt.roll + (pose?.spineRoll ?? 0)) + (restArticulated ? restPose.bodyRoll : 0);
-      this.setInstanceTransform(this.people, index, display.x, footY + (0.44 - legShortfall + (working && worker ? worker.blend * 0.03 : 0)) * heightScale + poseLift, display.z, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
-      // Work limbs, rest poses and carried props all key off the garment colour, so an articulated
-      // worker never reverts to a different palette than the body it belongs to.
-      this.personColor.set(look.palette.garmentSecondary);
+      // Standing at rest is contrapposto, not attention: one leg carries the body, the pelvis
+      // rolls toward it, and the spine answers that roll in the opposite direction.
+      const restingStance = !articulated && !sleepingPose
+        && (pose?.leftHipRotation ?? 0) === 0 && (pose?.rightHipRotation ?? 0) === 0;
+      const bodyRoll = (sleepingPose ? 0 : bodyTilt.roll + (pose?.spineRoll ?? 0))
+        + (restArticulated ? restPose.bodyRoll : 0)
+        - (restingStance ? posture.pelvisTilt * 0.6 : 0);
+      this.setInstanceTransform(this.people, index, renderX, footY + (0.44 - legShortfall + (working && worker ? worker.blend * 0.03 : 0)) * heightScale + poseLift, renderZ, heightScale * buildScale, heightScale, heightScale * buildScale, bodyPitch, bodyFacing, bodyRoll);
+      // Work limbs, rest poses and carried props all key off the person's luminous accent, so an
+      // articulated worker never reverts to a different identity than the body it belongs to.
+      this.personColor.set(look.palette.luminous);
       this.personTorsoMatrix.copy(this.personMatrix);
       this.resourceWorkers.setBodyTransform(this.personMatrix);
       this.physicalWorkers.setBodyTransform(this.personMatrix);
@@ -1409,6 +1451,7 @@ export class GodboxRenderer {
       // The shoulder girdle turns against the hips about the spine. Applying it to the arms' parent
       // keeps the torso mesh and the pelvis authoritative while the arms swing from a turning chest.
       const spineTwist = sleepingPose || restArticulated ? 0 : pose?.spineTwist ?? 0;
+      this.humanAppearance.setTorsoMotion(index, spineTwist);
       if (spineTwist !== 0) this.jointParent.multiply(this.partRotation.makeRotationY(spineTwist));
       if (!detailed || articulated) this.jointParent.scale(this.partScale.setScalar(0.001));
       const upperArmLength = 0.19 * proportions.armLength;
@@ -1419,9 +1462,12 @@ export class GodboxRenderer {
         // two shoulders never sit at exactly the same height.
         const shoulderY = 0.27 + (side ? posture.shoulderDrop : -posture.shoulderDrop);
         const splay = (side ? 1 : -1) * (0.028 + posture.armRest * 0.55);
+        // The two arms never hang identically: one leads, and its elbow carries a little more bend.
+        const lead = restingStance ? (side ? 1 : -1) * posture.armLead : 0;
         this.humanJoints.compose(this.jointParent, (side ? 1 : -1) * shoulderX, shoulderY,
-          side ? pose?.rightShoulderRotation ?? 0 : pose?.leftShoulderRotation ?? 0,
-          side ? pose?.rightElbowRotation ?? 0.12 : pose?.leftElbowRotation ?? 0.12,
+          (side ? pose?.rightShoulderRotation ?? 0 : pose?.leftShoulderRotation ?? 0) + lead,
+          (side ? pose?.rightElbowRotation ?? 0.12 : pose?.leftElbowRotation ?? 0.12)
+          + Math.abs(lead) * (lead > 0 ? 0.5 : 0.18),
           upperArmLength, forearmLength, true, splay);
         if (standardStanding && foundingStandard?.interactionTarget) {
           const contact = foundingStandard.interactionTarget;
@@ -1494,7 +1540,7 @@ export class GodboxRenderer {
         && !local?.attentionId && !visual.passingPeer && !worldAttention.targetId
         ? Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(focalDelta), Math.cos(focalDelta)))) : 0;
       visual.focalHeadYaw = turnToward(visual.focalHeadYaw ?? 0, focalYaw, Math.min(0.1, Math.max(0, deltaSeconds)) * 1.8);
-      const headFacing = restPose.spot?.posture === 'sleep' ? bodyFacing : bodyFacing + visual.focalHeadYaw + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0) + spineTwist * 0.3 - (sleepingPose ? 0 : (pose?.pelvisRotation ?? 0) * 0.55);
+      const headFacing = restPose.spot?.posture === 'sleep' ? bodyFacing : bodyFacing + (contactGait?.headLead ?? 0) + visual.focalHeadYaw + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0) + spineTwist * 0.3 - (sleepingPose ? 0 : (pose?.pelvisRotation ?? 0) * 0.55);
       // Head stabilisation: the skull resists the torso's walking pitch instead of nodding with it,
       // then carries a small permanent tilt of its own.
       // Head stabilisation: the skull resists the torso's walking pitch and most of the shoulder
@@ -1503,6 +1549,7 @@ export class GodboxRenderer {
       const headRoll = sleepingPose ? 0 : posture.headTilt;
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
         heightScale, heightScale, heightScale, headPitch, headFacing, headRoll);
+      this.headAttachmentMatrix.copy(this.personMatrix);
       this.peopleHeads.setColorAt(index, this.personColor);
       if (!visual.traveling && restPose.spot?.posture === 'sleep') this.sleepGlyphs.draw(person.id,
         this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale, restPose.blend);
@@ -1513,11 +1560,12 @@ export class GodboxRenderer {
       // The hip sits exactly one leg-length above the sole, so a short-legged child still plants
       // its feet on the terrain instead of floating or sinking.
       const legSegment = 0.225 * proportions.legLength;
-      this.partPosition.set(display.x, footY + legSegment * 2 * heightScale + poseLift, display.z);
-      this.partQuaternion.setFromEuler(this.partEuler.set(0, facing + (pose?.pelvisRotation ?? 0), 0));
+      this.partPosition.set(renderX, footY + legSegment * 2 * heightScale + poseLift, renderZ);
+      this.partQuaternion.setFromEuler(this.partEuler.set(0, facing + (pose?.pelvisRotation ?? 0),
+        contactGait ? contactGait.weight * 0.018 : restingStance ? posture.pelvisTilt : 0, 'YXZ'));
       this.jointParent.compose(this.partPosition, this.partQuaternion, this.partScale.setScalar(legScale));
       // Standing weight rests on one leg. The loaded knee stays straight; the free one relaxes.
-      const standing = !articulated && (pose?.leftHipRotation ?? 0) === 0 && (pose?.rightHipRotation ?? 0) === 0;
+      const standing = restingStance;
       for (let side = 0; side < 2; side++) {
         // The unweighted leg is the one that relaxes: its knee softens and its foot trails.
         const free = standing ? (side ? Math.max(0, -posture.weightShift) : Math.max(0, posture.weightShift)) : 0;
@@ -1525,10 +1573,31 @@ export class GodboxRenderer {
           (side ? pose?.rightHipRotation ?? 0 : pose?.leftHipRotation ?? 0) - free * 0.14,
           (side ? pose?.rightKneeRotation ?? 0 : pose?.leftKneeRotation ?? 0) + free * 0.3,
           legSegment, legSegment, false);
+        if (contactGait) {
+          const contact = contactGait.feet[side]!;
+          soleTarget(this.footTarget, contact, heightScale, proportions.limbThickness * 0.98);
+          this.humanJoints.reach(this.jointParent, (side ? 1 : -1) * posture.stanceWidth * buildScale,
+            0, this.footTarget, legSegment, legSegment, side ? 1 : -1, true);
+          this.humanAppearance.setFootOrientation(index, side,
+            this.humanJoints.footOrientation(contact.yaw, contact.pitch));
+        }
         this.peopleLegs.setMatrixAt(index * 2 + side, this.humanJoints.upper);
         this.peopleShins.setMatrixAt(index * 2 + side, this.humanJoints.lower);
         this.peopleLegs.setColorAt(index * 2 + side, this.personColor);
         this.peopleShins.setColorAt(index * 2 + side, this.personColor);
+      }
+      if (focalPerson && !sleepingPose) {
+        const contacts = contactGait?.feet;
+        for (let side = 0; side < 2; side++) {
+          const contact = contacts?.[side];
+          if (contact && !contact.planted) continue;
+          const x = contact?.x ?? display.x + Math.cos(facing) * (side ? 1 : -1) * posture.stanceWidth * heightScale;
+          const z = contact?.z ?? display.z - Math.sin(facing) * (side ? 1 : -1) * posture.stanceWidth * heightScale;
+          const y = movementGround.heightAt(x, z);
+          this.setInstanceTransform(this.focalContactShadow, this.focalContactShadow.count++, x, y + 0.003, z,
+            heightScale * 0.10, 1, heightScale * 0.18, 0, contact?.yaw ?? facing, 0);
+        }
+        this.focalContactShadow.instanceMatrix.needsUpdate = true;
       }
       if (restArticulated) this.restPoses.draw(restPose, display.x, footY, display.z, heightScale, buildScale,
         bodyFacing, bodyPitch, this.personColor);
@@ -1544,16 +1613,15 @@ export class GodboxRenderer {
 
       // Hair and headwear ride the head's exact transform, so a hat never slides off a turned head.
       const headAtlasScale = sleepSpot || !detailed ? 0.001 : heightScale;
-      const wearsHead = headAtlasScale > 0.001 && this.humanAppearance.applyHeadgear(index, look);
-      this.setInstanceTransform(this.peopleHeadwear, index,
-        this.partPosition.x, this.partPosition.y, this.partPosition.z,
-        wearsHead ? headAtlasScale : 0.001, wearsHead ? headAtlasScale : 0.001, wearsHead ? headAtlasScale : 0.001,
-        headPitch, headFacing, headRoll);
+      const wearsHead = headAtlasScale > 0.001 && this.humanAppearance.applyHeadgear(index, look, focalPerson);
+      if (wearsHead) this.peopleHeadwear.setMatrixAt(index, this.headAttachmentMatrix);
+      else this.setInstanceTransform(this.peopleHeadwear, index, 0, 0, 0, 0.001, 0.001, 0.001, 0, 0, 0);
 
       // Torso clothing follows the torso transform exactly, so hems, belts and aprons stay attached
       // through crouch, work lean and conversation twist.
       if (detailed && !sleepSpot && garments < this.peopleGarments.instanceMatrix.count
-        && this.humanAppearance.applyGarment(garments, look, person.appearance?.textilePattern ?? culture?.style.pattern)) {
+        && this.humanAppearance.applyGarment(garments, look, culture?.style.pattern ?? person.appearance?.textilePattern)) {
+        this.humanAppearance.setDrapeMotion(garments, contactGait?.secondary ?? 0, spineTwist);
         this.peopleGarments.setMatrixAt(garments, this.personTorsoMatrix);
         garments += 1;
       }
@@ -1618,6 +1686,7 @@ export class GodboxRenderer {
     this.peopleVisuals.prune((personId) => {
       this.animationController.release(personId);
       this.humanLooks.delete(personId);
+      this.groundedLocomotion.forget(personId);
       this.lastPersonGroundPosition.delete(personId);
       this.localPeerPositions.delete(personId);
     });
@@ -1697,7 +1766,10 @@ export class GodboxRenderer {
   }
 
   private refreshVisiblePeople(): void {
-    if (this.visiblePeopleMonth === this.state.month && this.visiblePeoplePopulation === this.state.people.length) return;
+    const subjectId = this.cameraDirector.current()?.subjectId;
+    if (this.visiblePeopleMonth === this.state.month && this.visiblePeoplePopulation === this.state.people.length
+      && this.visiblePeopleSubject === subjectId) return;
+    this.visiblePeopleSubject = subjectId;
     this.visiblePeopleMonth = this.state.month;
     this.visiblePeoplePopulation = this.state.people.length;
     // Reconcile construction roles against the full authoritative workforce before any rendering
@@ -1717,7 +1789,8 @@ export class GodboxRenderer {
     this.visiblePeople = alive
       // Notable/historical lives remain first. Then preserve live construction and one-time
       // founding-standard participants so a crowded settlement cannot hide the people doing the act.
-      .sort((a, b) => Number(protectedFirstFire.has(b.id)) - Number(protectedFirstFire.has(a.id))
+      .sort((a, b) => Number(b.id === subjectId) - Number(a.id === subjectId)
+        || Number(protectedFirstFire.has(b.id)) - Number(protectedFirstFire.has(a.id))
         || tierRank(b) - tierRank(a)
         || Number(protectedFoundingStandard.has(b.id)) - Number(protectedFoundingStandard.has(a.id))
         || Number(protectedConstruction.has(b.id)) - Number(protectedConstruction.has(a.id))
@@ -1836,8 +1909,8 @@ export class GodboxRenderer {
       prosperity: settlement?.prosperity,
       cold,
     });
-    // A notable or historical life must never read as bare-headed at documentary distance.
-    if (tier !== 'population' && look.wardrobe.head === 'none') look.wardrobe.head = notableHeadwear(person);
+    // A notable or historical life must never read as unadorned at documentary distance.
+    if (tier !== 'population' && look.wardrobe.head === 'none') look.wardrobe.head = notableHeadPiece(person);
     this.humanLooks.set(person.id, { key, look });
     return look;
   }
@@ -4802,6 +4875,7 @@ export class GodboxRenderer {
     this.warRenderer.dispose();
     this.weatherRenderer.dispose();
     this.peopleVisuals.clear();
+    this.groundedLocomotion.clear();
     this.localActivities.clear();
     this.worldAttention.clear();
     this.reactionGlyphs.dispose();
@@ -4818,6 +4892,7 @@ export class GodboxRenderer {
       if (object instanceof THREE.InstancedMesh) object.dispose();
       if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.Line) {
         geometries.add(object.geometry);
+        if (object instanceof THREE.Mesh && object.customDepthMaterial) materials.add(object.customDepthMaterial);
         const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of objectMaterials) materials.add(material);
       }
@@ -4828,6 +4903,7 @@ export class GodboxRenderer {
     this.placementContract.dispose();
     this.placementFootprints.dispose();
     this.cosmicReflections.dispose();
+    this.obsidianReflections.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -4877,9 +4953,13 @@ function coldPressure(weather: WeatherCellState | undefined): number {
   return Math.max(0, Math.min(1, (14 - weather.temperature) / 26 + weather.snowpack * 0.2));
 }
 
-function notableHeadwear(person: Person): NonNullable<Person['appearance']>['headwear'] {
+/**
+ * The smallest head structure that still reads at documentary range. A notable life never appears
+ * with nothing worked onto the skull, but it does not graduate to a crown it has not earned.
+ */
+function notableHeadPiece(person: Person): HeadPiece {
   const headwear = person.appearance?.headwear ?? 'none';
-  return headwear === 'none' ? 'wrap' : headwear;
+  return headwear === 'helmet' ? 'high-crown' : headwear === 'wrap' ? 'veil-fall' : 'head-ring';
 }
 
 function stableUnit(value: string): number {

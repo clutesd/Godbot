@@ -8,7 +8,7 @@ import * as THREE from 'three';
  * with monotone Hermite interpolation so the surface curves without overshooting narrow sections.
  *
  * Every sculpted part carries the four channels the human surface shader needs:
- *   humanSurface.x  material zone (skin, cloth, leather, hair, metal, wood, accent)
+ *   humanSurface.x  material zone (obsidian, drape, stone, crest, alloy, wood, glyph)
  *   humanSurface.y  clothing axis, 0 at the proximal attachment and 1 at the distal tip
  *   humanSurface.z  baked crevice occlusion, 1 = fully open surface
  *   humanSurface.w  wardrobe part id, used by the part-selecting atlas meshes
@@ -20,21 +20,32 @@ import * as THREE from 'three';
 /** [height, half-width, half-depth, sagittal offset]. Must be ordered by ascending height. */
 export type Section = readonly [number, number, number, number];
 
-export const ZONE_SKIN = 0;
-export const ZONE_CLOTH = 1;
-export const ZONE_LEATHER = 2;
-export const ZONE_HAIR = 3;
-export const ZONE_METAL = 4;
+/**
+ * Material zones of the species. The body is living volcanic glass, not skin, and what it wears is
+ * carved, cast or woven rather than tailored. The numeric values are stable so a zone can be
+ * retuned in the shader without re-authoring geometry.
+ */
+/** The body itself: deep charcoal volcanic glass, polished, dielectric, environment-driven. */
+export const ZONE_OBSIDIAN = 0;
+/** Dense woven ceremonial cloth. Dark, matte, used for drapes and panels only. */
+export const ZONE_DRAPE = 1;
+/** Carved stone and raw mineral adornment. The primitive end of the ornament vocabulary. */
+export const ZONE_STONE = 2;
+/** The sculpted obsidian crest that occupies the place hair would on a human skull. */
+export const ZONE_CREST = 3;
+/** Cast and polished alloy: the gold/bronze/pale-metal adornment the species works. */
+export const ZONE_ALLOY = 4;
+/** Hafts and carried timber. */
 export const ZONE_WOOD = 5;
-/** Culture trim: reads as the garment colour lifted toward its own highlight. */
-export const ZONE_ACCENT = 6;
+/** A luminous inlay channel. The only zone that emits; always a minority of a body's area. */
+export const ZONE_GLYPH = 6;
 
 export interface SculptOptions {
   radial: number;
   /** Extra interpolated rings between authored sections. */
   samples?: number;
   zone?: number;
-  /** Legacy head flag consumed by the face shader. */
+  /** Legacy head flag. The face is now selected by the material's mode uniform instead. */
   surface?: number;
   /** Maps section height to the 0..1 clothing axis. Constant 1 means "never clothed". */
   cover?: (height: number) => number;
@@ -67,7 +78,7 @@ function sectionAt(sections: readonly Section[], y: number): Section {
 }
 
 export function sculpt(sections: readonly Section[], options: SculptOptions): THREE.BufferGeometry {
-  const { radial, samples = 1, zone = ZONE_SKIN, surface = 0, part = 0 } = options;
+  const { radial, samples = 1, zone = ZONE_OBSIDIAN, surface = 0, part = 0 } = options;
   const cover = options.cover ?? (() => 1);
   const occlusion = options.occlusion ?? (() => 1);
   const vertices: number[] = [], indices: number[] = [], uvs: number[] = [], channels: number[] = [];
@@ -121,7 +132,7 @@ export function sculptForward(sections: readonly Section[], options: SculptOptio
 export function decorate(geometry: THREE.BufferGeometry, options: {
   zone?: number; cover?: number; occlusion?: number; part?: number; surface?: number;
 } = {}): THREE.BufferGeometry {
-  const { zone = ZONE_CLOTH, cover = 1, occlusion = 1, part = 0, surface = 0 } = options;
+  const { zone = ZONE_DRAPE, cover = 1, occlusion = 1, part = 0, surface = 0 } = options;
   const count = geometry.getAttribute('position').count;
   const channels = new Float32Array(count * 4);
   for (let i = 0; i < count; i++) {

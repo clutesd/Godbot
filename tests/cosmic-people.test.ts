@@ -38,7 +38,7 @@ describe('cosmic people presentation', () => {
     actual.elements.forEach((value, i) => expect(value).toBeCloseTo(matrix.elements[i]!, 6));
     expect(batch.mesh.geometry.getAttribute('cosmicStyle').count).toBe(384);
     // The accent batch reuses the torso triangles for its inlay, so it tracks the richer torso.
-    expect(batch.mesh.geometry.index!.count / 3).toBeLessThan(1500);
+    expect(batch.mesh.geometry.index!.count / 3).toBeLessThan(1600);
     expect(batch.material.transparent).toBe(false);
     expect(batch.material.depthTest).toBe(true);
     expect(batch.material.vertexColors).toBe(false);
@@ -77,11 +77,14 @@ describe('cosmic people presentation', () => {
     expect(body.boundingBox!.max.y).toBeGreaterThan(0.425 + head.boundingBox!.min.y);
     expect(head.boundingBox!.max.y - head.boundingBox!.min.y).toBeGreaterThan(head.boundingBox!.max.x * 2);
     expect(new Set(Array.from(head.getAttribute('cosmicSurface').array))).toEqual(new Set([1]));
-    // The budget buys real anatomy: hands merged into the forearms, feet merged into the shins, and
-    // a head with jaw, brow, nose and ears. It stays within a few percent of the limbs-only figure
-    // it replaced, because the detail is spent on silhouette rather than on subdivision.
+    // The budget buys joint continuity, which is what stops a rigid-segment body reading as
+    // parts: a rounded cap on every segment that meets another, centred on the rig pivot at the
+    // mating radius, plus a neck column that hides the head seam inside the torso, an arched foot
+    // and a skull with brow, cheek and jaw planes. That is the whole of the increase over the
+    // limbs-only figure, and the complete person is still six instanced draws with no per-person
+    // geometry anywhere.
     const triangles = (body.index!.count + head.index!.count + 2 * arm.index!.count + 2 * leg.index!.count) / 3;
-    expect(triangles).toBeLessThan(4200);
+    expect(triangles).toBeLessThan(4900);
     for (const geometry of [body, head, arm, leg, work]) geometry.dispose();
   });
 
@@ -90,15 +93,25 @@ describe('cosmic people presentation', () => {
     const mesh = new THREE.InstancedMesh(createCosmicBodyGeometry(), material, 384);
     const variation = bindCosmicVariation(mesh);
     expect(variation.count).toBe(384);
-    expect(mesh.geometry.index!.count / 3).toBeLessThan(1200);
+    expect(mesh.geometry.index!.count / 3).toBeLessThan(1400);
     expect(material.map).toBeNull();
     expect(material.emissiveMap).toBeNull();
     expect(material.transparent).toBe(false);
-    // Per-zone roughness and metalness are resolved in the shader, so the material only carries a
-    // neutral fallback. Skin, cloth, leather, hair and metal must never need separate materials.
-    expect(material.roughness).toBeCloseTo(0.7);
-    expect(material.metalness).toBeCloseTo(0.04);
+    // Obsidian is a dielectric with a polished coat, never a black metal and never chrome. The
+    // clearcoat lobe must exist at compile time or the per-fragment override has nothing to drive.
+    expect(material).toBeInstanceOf(THREE.MeshPhysicalMaterial);
+    expect(material.clearcoat).toBeGreaterThan(0);
+    expect(material.metalness).toBe(0);
+    // Per-zone roughness, metalness and coat are resolved in the shader, so the material only
+    // carries a neutral fallback. Obsidian, drape, stone, crest and alloy share one material.
+    // The fallback stays in the polished-mineral band: a broad lobe turns obsidian into plastic.
+    expect(material.roughness).toBeLessThan(0.3);
+    expect(material.clearcoatRoughness).toBeLessThan(0.15);
+    expect(material.envMapIntensity).toBeGreaterThanOrEqual(1);
     updateCosmicBodyMaterial(material, -1); expect(material.userData['daylight'].value).toBe(0);
+    // Reflection is how this species is read, so the probe never goes dark enough to flatten a
+    // body into a silhouette, even at midnight.
+    expect(material.envMapIntensity).toBeGreaterThan(0.4);
     updateCosmicBodyMaterial(material, 5); expect(material.userData['daylight'].value).toBe(1);
     mesh.dispose(); mesh.geometry.dispose(); material.dispose();
   });
