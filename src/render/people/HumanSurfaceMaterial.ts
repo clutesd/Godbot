@@ -59,7 +59,7 @@ export interface HumanSurfaceAttributes {
 }
 
 /** Volcanic glass, not absolute black. Dark enough to read as obsidian, open enough to hold light. */
-const DEFAULT_OBSIDIAN = new THREE.Color('#1e1f25');
+const DEFAULT_OBSIDIAN = new THREE.Color('#111318');
 const DEFAULT_ALLOY = new THREE.Color('#c8973f');
 const DEFAULT_DRAPE = new THREE.Color('#17161a');
 
@@ -297,7 +297,7 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
     metalness: 0,
     clearcoat: 0.85,
     clearcoatRoughness: 0.09,
-    envMapIntensity: 1.0,
+    envMapIntensity: 0.84,
   });
   material.name = `godbox-obsidian-surface-${mode}`;
 
@@ -355,10 +355,10 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
         // a near-zero coat roughness turns every light source into a hard streak, which is exactly
         // what reads as chrome. A broad coat spreads the same energy into a reflection that
         // describes curvature instead of smearing across it.
-        float humanRough = mix(0.32, 0.135, humanFinish);
+        float humanRough = mix(0.34, 0.145, humanFinish);
         float humanMetal = 0.0;
-        float humanCoat = mix(0.46, 0.82, humanFinish);
-        float humanCoatRough = mix(0.26, 0.095, humanFinish);
+        float humanCoat = mix(0.50, 0.86, humanFinish);
+        float humanCoatRough = mix(0.24, 0.090, humanFinish);
         float humanIsGlass = 1.0;
 
         if (humanZone < 0.5) {
@@ -406,17 +406,17 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
             + 0.6 * sin(humanPoint.y * 15.7 - humanPoint.x * 11.3 + humanSeed * 53.0);
           humanRough += humanCloud * 0.030;
           humanCoatRough += humanCloud * 0.022;
-          humanBase *= 1.0 + humanCloud * 0.055;
+          humanBase *= 1.0 + humanCloud * 0.032;
         }
         ${detail ? `
         if (humanIsGlass > 0.5) {
           // Grain plus slow flow banding. Without both, a dark body is either a mirror or a void.
           float humanG = humanGrain(humanPoint * (0.9 + humanSeed * 0.25));
           humanRough += humanG * mix(0.050, 0.018, humanFinish) * humanDetail;
-          humanBase *= 1.0 + humanG * 0.045 * humanDetail;
+          humanBase *= 1.0 + humanG * 0.026 * humanDetail;
           float humanBanding = sin(humanPoint.y * 44.0 + humanPoint.x * 23.0 + humanSeed * 6.3);
           humanRough += humanBanding * mix(0.030, 0.010, humanFinish);
-          humanBase *= 1.0 + humanBanding * 0.026;
+          humanBase *= 1.0 + humanBanding * 0.016;
         }` : ''}
 
         // ------------------------------------------------------------------------------------
