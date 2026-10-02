@@ -59,7 +59,7 @@ export interface HumanSurfaceAttributes {
 }
 
 /** Volcanic glass, not absolute black. Dark enough to read as obsidian, open enough to hold light. */
-const DEFAULT_OBSIDIAN = new THREE.Color('#111318');
+const DEFAULT_OBSIDIAN = new THREE.Color('#07090c');
 const DEFAULT_ALLOY = new THREE.Color('#c8973f');
 const DEFAULT_DRAPE = new THREE.Color('#17161a');
 
@@ -348,7 +348,9 @@ export function createHumanSurfaceMaterial(mode: HumanSurfaceMode = HUMAN_SURFAC
           humanLight = vColor.rgb;
         #endif
 
-        vec3 humanObsidian = humanToneV.rgb;
+        // Keep the dielectric body genuinely near-black. Reflections and clearcoat carry form;
+        // the base albedo must not drift back toward graphite-grey under bright daylight.
+        vec3 humanObsidian = humanToneV.rgb * 0.78;
         vec3 humanBase = humanObsidian;
         // Obsidian, not black chrome. The body lobe stays tight enough to give a mineral its
         // small bright highlight, while the coat above it is deliberately *broader* than a mirror:
