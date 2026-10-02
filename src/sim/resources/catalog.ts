@@ -209,6 +209,23 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     craftOccupations: ['builder'], baseEfficiency: 0.8, failureRisk: 0.05, labour: 0.8, researchWork: 1.5, unlocks: ['carpentry'],
   },
   {
+    id: 'machine-parts', name: 'Machine parts', description: 'Gears, bearings, shafts and castings cut and fitted to a repeatable size.',
+    requiredKnowledge: [{ id: 'precision-tools', minPractice: 0.3 }, { id: 'rotary-machinery', minPractice: 0.25 }],
+    inputs: { iron: 2, timber: 0.5 }, outputs: { 'machine-parts': 1.5 },
+    energy: { fuel: 'charcoal', quantity: 1, minimumHeat: 0.6 }, labour: 1.1, researchWork: 2.5,
+    byproducts: { slag: 0.15 }, unlocks: ['machine-shop'],
+    craftOccupations: ['artisan', 'builder'], requiredInfrastructure: { workshops: 0.1 },
+    baseEfficiency: 0.58, failureRisk: 0.18,
+  },
+  {
+    id: 'engine-assembly', name: 'Engine assembly', description: 'Fitted parts, a pressure vessel and copper fittings become a working prime mover.',
+    requiredKnowledge: [{ id: 'mechanical-power', minPractice: 0.4 }, { id: 'precision-manufacturing', minPractice: 0.35 }],
+    inputs: { 'machine-parts': 3, steel: 2, copper: 0.5 }, outputs: { engine: 1 },
+    labour: 2.6, researchWork: 5, unlocks: ['engine-works'],
+    craftOccupations: ['artisan', 'builder'], requiredInfrastructure: { factories: 0.1, workshops: 0.3 },
+    baseEfficiency: 0.6, failureRisk: 0.12,
+  },
+  {
     id: 'masonry', name: 'Dressed masonry', description: 'Shaped and fitted stone for lasting structures.',
     requiredKnowledge: [{ id: 'leverage', minPractice: 0.25 }, { id: 'stone-composites', minPractice: 0.3 }],
     inputs: { stone: 3 }, outputs: { 'dressed-stone': 2 }, craftOccupations: ['builder'],
@@ -233,8 +250,11 @@ export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
   { id: 'charcoal', name: 'Charcoal', spoilage: 0, fuelHeat: 0.8 },
   { id: 'herbal-remedy', name: 'Herbal remedies', spoilage: 0.01 },
   { id: 'bronze', name: 'Bronze', spoilage: 0 }, { id: 'iron-tools', name: 'Forged iron', spoilage: 0 },
+  // Refined metals of the typed economy; recipes in this catalog consume them directly.
+  { id: 'iron', name: 'Iron', spoilage: 0 }, { id: 'copper', name: 'Copper', spoilage: 0 },
   { id: 'pottery', name: 'Fired pottery', spoilage: 0.004 },
   { id: 'timber-frame', name: 'Timber frames', spoilage: 0 }, { id: 'dressed-stone', name: 'Dressed stone', spoilage: 0 },
   { id: 'ash', name: 'Wood ash', spoilage: 0.05 }, { id: 'slag', name: 'Slag', spoilage: 0.02 },
+  { id: 'machine-parts', name: 'Machine parts', spoilage: 0 }, { id: 'engine', name: 'Engines', spoilage: 0 },
 ];
 export const MATERIAL_BY_ID = new Map(MATERIAL_CATALOG.map(m => [m.id, m]));

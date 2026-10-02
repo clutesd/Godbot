@@ -212,7 +212,9 @@ function operatingRequirements(settlement: Settlement, residents: readonly Perso
 
   const intensity = Math.max(0, settlement.industry.intensity);
   add('industry', 'industrial-fuel', intensity * 0.14, ['coal', 'charcoal', 'timber'], 'process-energy');
-  add('industry', 'industrial-metal', intensity * 0.085, ['steel', 'iron', 'bronze'], 'machine-wear');
+  // Worn machinery is replaced with machine parts where a machine shop makes them, and with raw metal where none does.
+  add('industry', 'industrial-metal', intensity * 0.085, ['machine-parts', 'steel', 'iron', 'bronze'], 'machine-wear');
+  add('industry', 'prime-mover-upkeep', infra.power * 0.035, ['engine', 'machine-parts', 'steel'], 'prime-mover-overhaul');
 
   const healthKnowledge = Math.max(
     capabilityPractice(settlement, 'anatomical-observation', 'adopted'),

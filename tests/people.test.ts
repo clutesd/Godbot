@@ -7,6 +7,7 @@ import { WalkabilityLayer } from '../src/sim/people/WalkabilityLayer';
 import { createSettlementLayoutPlan, type BuildingDistrict } from '../src/shared/SettlementLayoutPlan';
 import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
 import { isResourceWorkDestinationId, resourceWorkDestinationId } from '../src/sim/people/ResourceWorkRouting';
+import { facilityIdFromDestinationId, facilityWorkDutyFromDestinationId, isFacilityWorkDestinationId } from '../src/sim/people/FacilityWorkRouting';
 
 describe('Purposeful represented people', () => {
   it('grounds every person in a household, supported role, appearance, and walkable home', () => {
@@ -110,6 +111,7 @@ describe('Purposeful represented people', () => {
     };
     let checked = 0;
     let resourceChecked = 0;
+    let facilityChecked = 0;
     const assignments = resourceWorkAssignments(simulation.state);
     for (const person of simulation.state.people) {
       if (isResourceWorkDestinationId(person.navigation?.destinationId)) {
@@ -119,6 +121,22 @@ describe('Purposeful represented people', () => {
         const endpoint = person.navigation!.waypoints.at(-1)!;
         expect(Math.hypot(endpoint.x - assignment!.worldPosition.x, endpoint.z - assignment!.worldPosition.z)).toBeLessThanOrEqual(simulation.state.world.cellSize * 6.1);
         resourceChecked++;
+        continue;
+      }
+      // A staffed works is an authoritative physical site like an extraction site, not a point in
+      // the industrial district: it is checked against the facility the authority put the person at.
+      if (isFacilityWorkDestinationId(person.navigation?.destinationId)) {
+        const home = simulation.state.settlements.find((candidate) => candidate.id === person.homeId)!;
+        const facility = home.processing?.facilities.find(f => f.id === facilityIdFromDestinationId(person.navigation!.destinationId));
+        expect(facility, person.navigation!.destinationId).toBeDefined();
+        const duty = facilityWorkDutyFromDestinationId(person.navigation!.destinationId);
+        expect(duty).toBeDefined();
+        if (duty !== 'haul') expect(facility!.labour.byOccupation[person.occupation] ?? 0).toBeGreaterThan(0);
+        const plot = (home.structurePlots ?? []).find(candidate => candidate.id === facility!.plotId)!;
+        const endpoint = person.navigation!.waypoints.at(-1) ?? person.position;
+        expect(Math.hypot(endpoint.x - facility!.position.x, endpoint.z - facility!.position.z), person.navigation!.destinationId)
+          .toBeLessThanOrEqual(plot.radius + 1.5);
+        facilityChecked += 1;
         continue;
       }
       const district = districts[person.navigation?.destinationKind ?? ''];
@@ -134,6 +152,10 @@ describe('Purposeful represented people', () => {
     }
     expect(checked).toBeGreaterThan(20);
     expect(resourceChecked).toBeGreaterThan(0);
+    // Works crews are only cast where a facility actually spent worker-months, so this scenario
+    // may legitimately have none; every one that exists must have been checked above.
+    expect(facilityChecked).toBe(simulation.state.people
+      .filter(candidate => isFacilityWorkDestinationId(candidate.navigation?.destinationId)).length);
   });
 
   it('sends builders to workshops when no construction project is active', () => {

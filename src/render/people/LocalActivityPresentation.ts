@@ -46,8 +46,28 @@ export interface ActivityStructure extends RestSupportFootprint {
   role?: string;
   sleepingArea?: IndoorSleepingArea;
 }
+/**
+ * A physical post this person was assigned by an authority outside local choreography: a machine
+ * in a processing facility, or one side of a market stall. It replaces the generic frontage focus
+ * with the actual thing being worked, and names the beats in that work's own vocabulary.
+ */
+export interface LocalWorkstation {
+  /** Stable socket identity; a change re-anchors the routine. */
+  key: string;
+  /** What the person works at and faces. */
+  focus: Vec2;
+  routine: 'facility-station' | 'market-vendor' | 'market-customer';
+  /** Documentary label for the working beats of the routine. */
+  action: string;
+  animation: AnimationState;
+  /** An attended post is held: no walking off into an exclusive conversation or a social pod. */
+  attended?: boolean;
+}
+
 export interface LocalActivityContext {
   base: GroupPlacement;
+  /** Assigned machine or stall side, when some other authority placed this person at one. */
+  workstation?: LocalWorkstation;
   visual?: PersonVisualState;
   group?: SocialGroup;
   /** Visible peers only; callers cache the index once per frame. */
@@ -87,6 +107,27 @@ const CHILD_PLAY_ROUTINE: readonly Intent[] = [
   ['task', 2, 'play-gesture', 1.15],
   ['reposition', 3, 'play-return', 1.0],
 ];
+/** Beats at an assigned machine. Point 0 is the station itself; the rest are its surroundings. */
+const FACILITY_STATION_ROUTINE: readonly Intent[] = [
+  ['task', 0, 'station-task', 5.2], ['inspect', 1, 'check-the-work', 2.4], ['return', 0, 'station-task', 4.4],
+  ['reposition', 2, 'change-work-side', 1.7], ['inspect', 3, 'check-the-stock', 2.6], ['pause', 0, 'pause', 2.2],
+];
+/** A vendor holds the counter: arrange, attend, acknowledge a customer, check the ledger. */
+const MARKET_VENDOR_ROUTINE: readonly Intent[] = [
+  ['task', 0, 'attend-stall', 4.4], ['inspect', 0, 'arrange-goods', 2.8], ['interact', 0, 'look-to-customer', 2.6],
+  ['return', 0, 'attend-stall', 4.0], ['inspect', 1, 'check-the-ledger', 2.4], ['reposition', 2, 'step-along-the-table', 1.8],
+];
+/** A shopper works the frontage rather than the counter. */
+const MARKET_CUSTOMER_ROUTINE: readonly Intent[] = [
+  ['task', 0, 'browse-stall', 3.4], ['inspect', 0, 'inspect-goods', 2.6], ['interact', 0, 'look-to-vendor', 2.4],
+  ['reposition', 1, 'move-along-frontage', 1.7], ['pause', 2, 'pause', 2.0],
+];
+const WORKSTATION_ROUTINES: Record<LocalWorkstation['routine'], readonly Intent[]> = {
+  'facility-station': FACILITY_STATION_ROUTINE,
+  'market-vendor': MARKET_VENDOR_ROUTINE,
+  'market-customer': MARKET_CUSTOMER_ROUTINE,
+};
+
 const ROUTINES: Partial<Record<DestinationKind, readonly Intent[]>> = {
   workshop: WORK_ROUTINE,
   market: [['task', 0, 'attend-stall', 3.6], ['interact', 4, 'look-to-customer', 3.4], ['reposition', 5, 'step-aside', 1.7],
@@ -225,6 +266,8 @@ export interface LocalActivityState {
   attentionCooldown?: number;
   attentionCheckSeconds?: number;
   hold: number;
+  /** Holding an assigned counter or machine: this person neither offers nor accepts a scene. */
+  attended?: boolean;
   partnerId?: string;
   /** Multi-beat presentation-only social encounter derived from real relationship authority. */
   encounter?: SocialEncounterPresentation;
@@ -348,7 +391,7 @@ export class LocalActivityPresentation {
     // Keep the routine alive across ordinary monthly position/target/phase churn. Commute,
     // emergency and other exclusive authority changes already yield above; the identity below
     // changes only when the person's actual local-life context changes.
-    const authority = localActivityAuthority(person);
+    const authority = localActivityAuthority(person, context.workstation?.key);
     let state = this.states.get(person.id);
     const baseDrift = state ? Math.hypot(state.base.x - context.base.x, state.base.z - context.base.z) : Infinity;
     if (!state || state.authority !== authority || state.revision !== context.revision
@@ -368,7 +411,7 @@ export class LocalActivityPresentation {
       // destination's ongoing routine instead of replaying step zero every historical sample.
       if (previous) {
         state.sample = previous.sample + 1;
-        state.step = sampledEntryStep(person, state.sample) - 1;
+        state.step = sampledEntryStep(person, state.sample, context.workstation) - 1;
         state.hold = 0;
         state.lastPartnerId = previous.lastPartnerId ?? previous.partnerId;
         state.recentSocialId = previous.recentSocialId ?? previous.partnerId;
@@ -390,6 +433,7 @@ export class LocalActivityPresentation {
       this.reanchor(person, context, state, hysteresisBase(state.base, context.base));
     }
     state.seen = this.frame;
+    if (context.workstation?.attended) state.attended = true; else delete state.attended;
     state.sceneSeconds = (state.sceneSeconds ?? 0) + Math.max(0, delta);
     state.socialCooldown = Math.max(0, (state.socialCooldown ?? 0) - delta);
     state.attentionCooldown = Math.max(0, (state.attentionCooldown ?? 0) - delta);
@@ -408,8 +452,9 @@ export class LocalActivityPresentation {
         state.phase = 'approach';
       }
     }
-    // Invitations are renderer-owned and reciprocal. A resident cannot belong to two scenes.
-    if (!state.encounter && !state.socialCooldown && !state.yieldToId && !state.rest) {
+    // Invitations are renderer-owned and reciprocal. A resident cannot belong to two scenes, and
+    // someone holding a counter or a machine is not available for one at all.
+    if (!state.encounter && !state.attended && !state.socialCooldown && !state.yieldToId && !state.rest) {
       for (const id of context.group?.members ?? []) {
         const invitation = this.previousStates.get(id);
         const peer = context.people.get(id);
@@ -551,7 +596,7 @@ export class LocalActivityPresentation {
         state.encounter = undefined;
         state.partnerId = undefined;
       }
-      state.step = (state.step + 1) % routineFor(person).length;
+      state.step = (state.step + 1) % routineFor(person, context.workstation).length;
       if (state.step === 0) state.cycle++;
       state.seconds = 0;
       this.choose(person, context, state);
@@ -571,11 +616,13 @@ export class LocalActivityPresentation {
       if (d < distance) { structure = candidate; distance = d; }
     }
     const angle = context.base.restFacing ?? unit(`${person.id}:activity-axis`) * Math.PI * 2;
-    const focus = structure ? { x: structure.worldX, z: structure.worldZ }
-      : { x: base.x + Math.sin(angle) * 0.4, z: base.z + Math.cos(angle) * 0.4 };
+    const focus = context.workstation ? { ...context.workstation.focus }
+      : structure ? { x: structure.worldX, z: structure.worldZ }
+        : { x: base.x + Math.sin(angle) * 0.4, z: base.z + Math.cos(angle) * 0.4 };
     const facing = facingTarget(base, focus);
     const kind = person.navigation!.destinationKind;
-    const radius = activityRadius(kind);
+    // An assigned machine or counter is a place to stay, so its frontage points stay close in.
+    const radius = context.workstation ? (context.workstation.attended ? 0.34 : 0.46) : activityRadius(kind);
     const forward = { x: Math.sin(facing), z: Math.cos(facing) };
     const side = { x: Math.cos(facing), z: -Math.sin(facing) };
     // Group placement is an arrival/safety anchor, not a permanent standing slot. These are
@@ -633,7 +680,7 @@ export class LocalActivityPresentation {
 
   private choose(person: Person, context: LocalActivityContext, state: LocalActivityState): void {
     const kind = person.navigation!.destinationKind;
-    const routine = routineFor(person);
+    const routine = routineFor(person, context.workstation);
     const childPlay = isChildPlayRoutine(routine);
     const [step, pointIndex, action, seconds] = routine[state.step]!;
     const variation = unit(`${person.id}:${state.cycle}:${state.step}:hold`);
@@ -667,12 +714,17 @@ export class LocalActivityPresentation {
 
     if (childPlay && applyChildPlay(person, context, state, point, this.presentationSeconds)) return;
 
-    if (!state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
+    const station = context.workstation;
+    // The working beats of an assigned post are named after the machine or counter being worked.
+    if (station && ['task', 'return'].includes(step)) { state.animation = station.animation; state.action = station.action; }
+    // Someone holding a counter or a machine may glance up, but never leaves the post for a scene.
+    if (!station?.attended && !state.socialCooldown && (step === 'interact' || (kind === 'plaza' || kind === 'market') && step === 'task')) {
       const selected = selectSocialPartner(person, context, state, id => {
         const peer = this.previousStates.get(id);
         return !this.cooling(person.id, id) && !this.cooling(id, person.id)
           && !this.reservations.has(person.id) && !this.reservations.has(id)
-          && !peer?.socialCooldown && !peer?.rest && !peer?.yieldToId && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
+          && !peer?.socialCooldown && !peer?.rest && !peer?.yieldToId && !peer?.attended
+          && person.id < id && (!peer?.partnerId || peer.partnerId === person.id);
       });
       if (selected) {
         state.encounter = buildSocialEncounter(person, selected.peer, selected.relationship);
@@ -684,8 +736,22 @@ export class LocalActivityPresentation {
       }
     }
 
+    // Turning to the person across the counter is the whole of an attended post's social beat:
+    // the vendor stays with their goods and acknowledges whoever is in front of them.
+    if (station && step === 'interact') {
+      const other = nearestAttendedPeer(person, context, state);
+      if (other) { state.focus.x = other.x; state.focus.z = other.z; }
+      const post = state.points[0] ?? state.base;
+      const from = context.visual ?? state.destination;
+      if (localSegmentSafe(from, post, context)) state.destination = post;
+      state.animation = other ? 'converse' : 'idle';
+      state.action = other ? action : 'watch-the-frontage';
+      state.restFacing = facingTarget(state.destination, state.focus);
+      return;
+    }
+
     // A visible pod remains one conversation even when this person is not in the exclusive pair.
-    if ((kind === 'plaza' || kind === 'market') && ['task', 'interact', 'pause'].includes(step)
+    if (!station?.attended && (kind === 'plaza' || kind === 'market') && ['task', 'interact', 'pause'].includes(step)
       && applyPodParticipation(person, context, state, point, this.previousStates, this.presentationSeconds)) return;
 
     if (childPlay) {
@@ -1677,7 +1743,8 @@ function activityRadius(kind: DestinationKind): number {
   return 0.5;
 }
 
-function routineFor(person: Person): readonly Intent[] {
+function routineFor(person: Person, workstation?: LocalWorkstation): readonly Intent[] {
+  if (workstation) return WORKSTATION_ROUTINES[workstation.routine];
   const child = isChildPresentationPerson(person);
   const freeToPlay = child && person.activity === 'socialize'
     && person.navigation?.schedulePhase !== 'emergency'
@@ -1690,8 +1757,8 @@ function isChildPlayRoutine(routine: readonly Intent[]): boolean {
   return routine === CHILD_PLAY_ROUTINE || routine === YOUNG_CHILD_PLAY_ROUTINE;
 }
 
-function sampledEntryStep(person: Person, sample: number): number {
-  const routine = routineFor(person);
+function sampledEntryStep(person: Person, sample: number, workstation?: LocalWorkstation): number {
+  const routine = routineFor(person, workstation);
   const purposeful = routine
     .map((intent, index) => ({ intent, index }))
     .filter(({ intent }) => intent[0] !== 'pause');
@@ -1708,12 +1775,30 @@ function hysteresisBase(current: Vec2, observed: Vec2): Vec2 {
   return { x: current.x + dx / distance * follow, z: current.z + dz / distance * follow };
 }
 
-function localActivityAuthority(person: Person): string {
+/** The closest visible person on the other side of an assigned post, for a glance or a word. */
+function nearestAttendedPeer(person: Person, context: LocalActivityContext, state: LocalActivityState): Vec2 | undefined {
+  const candidates = context.nearbyIds?.() ?? context.group?.members ?? [];
+  let best: Vec2 | undefined;
+  let bestDistance = 2.2;
+  for (const id of candidates) {
+    if (id === person.id) continue;
+    const peer = context.people.get(id);
+    if (!peer || !canPerceive(person, peer)) continue;
+    const at = context.visualFor?.(id) ?? peer.position;
+    const distance = Math.hypot(at.x - state.base.x, at.z - state.base.z);
+    if (distance < 0.25 || distance >= bestDistance) continue;
+    best = { x: at.x, z: at.z };
+    bestDistance = distance;
+  }
+  return best;
+}
+
+function localActivityAuthority(person: Person, workstationKey?: string): string {
   const nav = person.navigation!;
   // Intentionally omit position, target, waypoint index, schedule phase and carried appearance.
   // Those can change on monthly presentation refreshes without changing what the person is
   // semantically doing here. True interruptions are handled before this key is evaluated.
-  return `${person.homeId}|${person.householdId}|${person.occupation}|${person.role}|${person.activity}|${nav.destinationKind}|${nav.destinationId}`;
+  return `${person.homeId}|${person.householdId}|${person.occupation}|${person.role}|${person.activity}|${nav.destinationKind}|${nav.destinationId}|${workstationKey ?? ''}`;
 }
 
 function canPerceive(person: Person, peer: Person): boolean {

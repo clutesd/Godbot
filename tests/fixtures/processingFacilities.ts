@@ -13,6 +13,8 @@ import { learn, societyFixture } from './settlementDevelopment';
 export const WOOD_KNOWLEDGE = ['stone-composites', 'fire-control'] as const;
 export const METAL_KNOWLEDGE = ['material-testing', 'combustion-dynamics', 'metal-smelting', 'iron-working', 'high-temperature-ceramics'] as const;
 export const INDUSTRIAL_KNOWLEDGE = ['rotary-machinery', 'mechanical-power', 'precision-manufacturing', 'industrial-chemistry'] as const;
+/** Knowledge the machinery ladder needs on top of the shared industrial capabilities. */
+export const MACHINE_KNOWLEDGE = ['precision-tools', 'standardized-parts'] as const;
 
 /** One isolated, fully staffed settlement with an empty store, ready to be enrolled in facility authority. */
 export function processingWorld(seed = 'processing-facilities') {
@@ -47,7 +49,7 @@ export function step(state: SimulationState, system: ResourceSystem, months = 1)
 /** Places a finished facility and gives it the tools of its tier's trade; nothing is stocked. */
 export function placeFacility(state: SimulationState, s: Settlement, family: FacilityFamilyId, tier: number): ProcessingFacility {
   ensureProcessingAuthority(state);
-  learn(s, ...WOOD_KNOWLEDGE, ...METAL_KNOWLEDGE, ...INDUSTRIAL_KNOWLEDGE);
+  learn(s, ...WOOD_KNOWLEDGE, ...METAL_KNOWLEDGE, ...INDUSTRIAL_KNOWLEDGE, ...MACHINE_KNOWLEDGE);
   const facility = establishFacility(state, s, family, tier, { origin: 'placed' });
   if (!facility) throw new Error('facility site unavailable');
   return facility;

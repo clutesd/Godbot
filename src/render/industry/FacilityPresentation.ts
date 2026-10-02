@@ -46,6 +46,11 @@ export interface FacilityVisual {
   outputs: FacilityPile[];
   /** Cargo moved in or out last month. */
   hauling: { inbound: boolean; outbound: boolean; vehicle: ProcessingFacility['access']['vehicle'] };
+  /**
+   * Worker-months the authority spent here, reduced to a legible head count. The crew itself is
+   * represented people bound to stations (FacilityCrewScene); geometry draws no figures, so this
+   * is deliberately not part of the geometry signature.
+   */
   crew: number;
   /** Months since the last tier change; presentation marks fresh work for two years. */
   monthsSinceUpgrade: number | undefined;
@@ -64,7 +69,7 @@ export const pileKindOf = (material: string): PileKind =>
         : material === 'coal' ? 'coal'
           : /-ore$/.test(material) ? 'ore'
             : material === 'slag' || material === 'ash' ? 'slag'
-              : /^(copper|tin|iron|steel|bronze|iron-tools)$/.test(material) ? 'ingot' : 'generic';
+              : /^(copper|tin|iron|steel|bronze|iron-tools|machine-parts|engine)$/.test(material) ? 'ingot' : 'generic';
 
 function piles(stock: Record<string, number>, yard: number): FacilityPile[] {
   return Object.entries(stock)
@@ -113,6 +118,6 @@ export function facilityVisualSignature(v: FacilityVisual): string {
   const q = (n: number, steps = 10): number => Math.round(n * steps);
   return [v.id, v.tier, v.stage, v.status, q(v.build), q(v.activity, 5), q(v.heat, 4), q(v.smoke, 4), q(v.steam, 4), v.carrier, v.energised ? 1 : 0,
     q(v.damage, 6), q(v.scorch, 4), v.inputs.map(p => `${p.kind}${q(p.fill, 6)}`).join(','), v.outputs.map(p => `${p.kind}${q(p.fill, 6)}`).join(','),
-    v.hauling.inbound ? 1 : 0, v.hauling.outbound ? 1 : 0, v.hauling.vehicle, v.crew, v.monthsSinceUpgrade !== undefined && v.monthsSinceUpgrade < 24 ? 1 : 0,
+    v.hauling.inbound ? 1 : 0, v.hauling.outbound ? 1 : 0, v.hauling.vehicle, v.monthsSinceUpgrade !== undefined && v.monthsSinceUpgrade < 24 ? 1 : 0,
     q(v.position.x, 100), q(v.position.z, 100), q(v.width, 20)].join('|');
 }

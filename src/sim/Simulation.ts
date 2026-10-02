@@ -3,6 +3,7 @@ import { advanceSettlementWater } from './development/WaterCivilization';
 import { balanceFounderTrades, combinedSurvivalHazard, conceptionChance, founderLife, linkFoundingFamilies, migrationHouseholds, syncDemographicHouseholds } from './people/Demography';
 import { advanceEnergy } from './energy/EnergySystem';
 import { ensureProcessingAuthority } from './processing/FacilitySystem';
+import { industryDiagnosticLines } from './processing/FacilityDiagnostics';
 import { poweredProductivity } from './energy/types';
 import { tradeOpportunity } from './transport/FreightEconomy';
 import { firstMilestones } from '../historian/Milestones';
@@ -167,6 +168,8 @@ export interface SimulationSummary {
   fermiHypotheses: string[];
   riskPressures: Record<string, { annualProbability: number; hazard: number; vulnerability: number; mitigation: number }>;
   industrialCenters: number;
+  /** One observational line per settlement and processing family: tier, limiter and blocker. */
+  industryDiagnostics: string[];
   firstIndustrializationYear: number | null;
   industrialRoutes: Record<string, number>;
   independentDiscoveryCenters: number;
@@ -2290,6 +2293,7 @@ export class Simulation {
       },
       riskPressures: Object.fromEntries(Object.entries(this.state.advanced.risks).map(([kind, risk]) => [kind, { annualProbability: Number(risk.annualProbability.toFixed(6)), hazard: Number(risk.hazard.toFixed(4)), vulnerability: Number(risk.vulnerability.toFixed(4)), mitigation: Number(risk.mitigation.toFixed(4)) }])),
       industrialCenters: this.livingSettlements().filter((settlement) => settlement.industry.active).length,
+      industryDiagnostics: [...industryDiagnosticLines(this.state)],
       firstIndustrializationYear: firstIndustrialization ? Number((firstIndustrialization.month / 12).toFixed(1)) : null,
       industrialRoutes, independentDiscoveryCenters, milestones, eventCounts, largestSettlements, cultureProfiles, regionalSpecialization,
     };

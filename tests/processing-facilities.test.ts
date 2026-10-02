@@ -77,8 +77,9 @@ describe('facility authority: production requires a physical place', () => {
       expect((ref.source === 'catalog' ? owned.catalog : owned.material).has(ref.id)).toBe(true);
       expect(processSpec(ref)).toBeDefined();
     }
-    // Exactly the existing lumber, charcoal, copper, bronze, iron and steel recipes: nothing is redefined here.
-    expect([...owned.catalog].sort()).toEqual(['bronze-ingot', 'charcoal', 'iron-tools', 'timber-framing']);
+    // Exactly the existing lumber, charcoal, copper, bronze, iron, steel, machine-part and engine
+    // recipes: every one is defined by the recipe catalogs, never redefined here.
+    expect([...owned.catalog].sort()).toEqual(['bronze-ingot', 'charcoal', 'engine-assembly', 'iron-tools', 'machine-parts', 'timber-framing']);
     expect([...owned.material].sort()).toEqual(['make-steel', 'saw-lumber', 'smelt-copper', 'smelt-iron']);
     for (const id of owned.catalog) expect(RECIPE_BY_ID.has(id)).toBe(true);
     for (const id of owned.material) expect(MATERIAL_RECIPES.some(recipe => recipe.id === id)).toBe(true);
@@ -409,8 +410,8 @@ describe('reusable family framework', () => {
 
   it('reserves every later family id without any implementation', () => {
     const ids = facilityFamilies().map(f => f.id).sort();
-    expect(ids).toEqual(['metallurgy', 'wood']);
-    for (const reserved of ['ceramics', 'textiles', 'machinery', 'chemicals', 'electrical-equipment', 'strategic'] as const) {
+    expect(ids).toEqual(['machinery', 'metallurgy', 'wood']);
+    for (const reserved of ['ceramics', 'textiles', 'chemicals', 'electrical-equipment', 'strategic'] as const) {
       expect(facilityTierSpec(reserved, 1)).toBeUndefined();
     }
   });

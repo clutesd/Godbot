@@ -23,7 +23,6 @@ interface Entry {
   motions: Motion[];
   plumes: Plume[];
   glows: { material: THREE.MeshStandardMaterial; level: number; flicker: boolean }[];
-  crew: { object: THREE.Object3D; base: THREE.Vector3; phase: number }[];
   lamp?: { material: THREE.MeshStandardMaterial; status: FacilityStatus };
 }
 
@@ -150,11 +149,6 @@ export class IndustryRenderer {
         const flicker = glow.flicker ? 0.85 + Math.sin(elapsed * 9 + glow.level * 7) * 0.15 : 1;
         glow.material.emissiveIntensity = glow.level * 2.2 * flicker;
       }
-      for (const person of entry.crew) {
-        const bob = Math.sin(elapsed * (1.4 + activity) + person.phase);
-        person.object.position.set(person.base.x, person.base.y + Math.abs(bob) * 0.025, person.base.z + bob * 0.05);
-        person.object.rotation.x = bob * 0.12;
-      }
       if (entry.lamp) {
         const spec = LAMP[entry.lamp.status];
         const pulse = entry.lamp.status === 'unpowered' ? 0.5 + 0.5 * Math.sin(elapsed * 4) : 1;
@@ -173,7 +167,7 @@ export class IndustryRenderer {
     root.position.set(v.position.x, height(v.position.x, v.position.z), v.position.z);
     root.rotation.y = v.yaw;
     this.group.add(root);
-    const entry: Entry = { signature, root, visual: v, motions: [], plumes: [], glows: [], crew: [] };
+    const entry: Entry = { signature, root, visual: v, motions: [], plumes: [], glows: [] };
     const hw = v.width / 2, hd = v.depth / 2;
 
     this.pads(root, v, hw, hd);
@@ -192,7 +186,6 @@ export class IndustryRenderer {
       if (v.damage > 0.25 && v.stage !== 'ruined') this.damage(entry, hw, hd);
       if (v.monthsSinceUpgrade !== undefined && v.monthsSinceUpgrade < 24 && v.stage === 'operating') this.freshWork(entry, hw, hd);
       this.lantern(entry, hw, hd);
-      if (v.stage === 'operating') this.workers(entry, hw, hd);
     }
     return entry;
   }
@@ -447,18 +440,6 @@ export class IndustryRenderer {
     entry.lamp = { material, status: v.status };
   }
 
-  private workers(entry: Entry, hw: number, hd: number): void {
-    const v = entry.visual;
-    const stations: Array<[number, number]> = [[-hw - 0.6, 0.5], [0.4, hd + 1.1], [hw + 0.6, 0.4], [-0.5, hd + 1.2], [0.9, hd + 0.8], [-hw - 0.5, -0.5]];
-    for (let i = 0; i < v.crew; i++) {
-      const [x, z] = stations[i]!;
-      const person = this.named(entry.root, 'Facility crew member', x, 0, z);
-      this.add(person, this.cylinder, this.material(['#8a5a44', '#5b6b7a', '#7a7a4a'][i % 3]!, 0.9), [0, 0.2, 0], [0.06, 0.34, 0.06], 'Crew body');
-      this.add(person, this.sphere, this.material('#c79a76', 0.8), [0, 0.42, 0], [0.055, 0.055, 0.055], 'Crew head');
-      entry.crew.push({ object: person, base: new THREE.Vector3(x, 0, z), phase: hash(`${v.id}${i}`) * 6.28 });
-    }
-  }
-
   // --- states ------------------------------------------------------------------------------
 
   private scaffold(entry: Entry, hw: number, hd: number, height: number, name: string): void {
@@ -481,12 +462,9 @@ export class IndustryRenderer {
     this.pile(entry.root, { material: 'timber', kind: v.family === 'metallurgy' ? 'ore' : 'log', fill: 0.4 }, -hw - 0.95, 0, 0.9, 0.8, 3);
     this.pile(entry.root, { material: 'stone', kind: 'generic', fill: 0.3 }, hw + 0.95, 0.2, 0.9, 0.8, 4);
     if (v.status === 'under-construction') {
-      for (let i = 0; i < 2; i++) {
-        const person = this.named(entry.root, 'Builder', hw + 0.3 + i * 0.3, 0, hd + 0.5);
-        this.add(person, this.cylinder, this.material('#8a5a44'), [0, 0.2, 0], [0.06, 0.34, 0.06], 'Builder body');
-        this.add(person, this.sphere, this.material('#c79a76'), [0, 0.42, 0], [0.055, 0.055, 0.055], 'Builder head');
-        entry.crew.push({ object: person, base: new THREE.Vector3(hw + 0.3 + i * 0.3, 0, hd + 0.5), phase: i * 2.1 });
-      }
+      // Tools and materials left at the site; the people who work it are real represented residents.
+      this.slab(entry.root, hw + 0.45, 0.07, hd + 0.5, 0.5, 0.14, 0.34, '#6b5a42', 'Site tool chest', 0.9);
+      this.add(entry.root, this.cylinder, this.material('#8a7a5e', 1), [hw + 0.95, 0.12, hd + 0.5], [0.16, 0.24, 0.16], 'Mortar tub');
     }
   }
 

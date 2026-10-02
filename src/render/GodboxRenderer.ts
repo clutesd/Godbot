@@ -33,7 +33,7 @@ import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundi
 import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, turnToward, type PersonVisualGround } from './people/PeopleVisualState';
-import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure } from './people/LocalActivityPresentation';
+import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure, type LocalWorkstation } from './people/LocalActivityPresentation';
 import { WorldAttentionPresentation, worldAttentionCues } from './people/WorldAttentionPresentation';
 import { ReactionGlyphRenderer } from './people/ReactionGlyphRenderer';
 import { HumanLifeClock } from './people/HumanLifeClock';
@@ -75,6 +75,11 @@ import { WarRenderer } from './war/WarRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
 import { ResourceSiteRenderer } from './resources/ResourceSiteRenderer';
 import { ResourceWorkScene, resourceWorkerCanPresent } from './resources/ResourceWorkScene';
+import { FacilityCrewScene } from './industry/FacilityCrewScene';
+import { isFacilityWorkDestinationId } from '../sim/people/FacilityWorkRouting';
+import {
+  assignMarketStalls, marketStallSignature, type MarketStall, type MarketStallAssignment,
+} from './people/MarketStallPresentation';
 import { ResourceWorkerRenderer } from './resources/ResourceWorkerRenderer';
 import { resourceWorkAlternateAnchor } from './animation/ResourceWorkMotion';
 import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
@@ -363,6 +368,15 @@ export class GodboxRenderer {
   private readonly vegetation: VegetationRenderer;
   private readonly resourceSites: ResourceSiteRenderer;
   private readonly resourceWork: ResourceWorkScene;
+  /** Real crews bound to the machines their works is drawing. */
+  private readonly facilityCrew: FacilityCrewScene;
+  private facilityCrewMonth = -1;
+  private facilityCrewRevision = -1;
+  /** Market tables exactly as placed, so vendors stand behind their own counter. */
+  private readonly settlementMarketStalls = new Map<string, MarketStall[]>();
+  private marketStalls = new Map<string, MarketStallAssignment>();
+  private marketStallPlan = '';
+  private marketStallMonth = -1;
   private readonly resourceWorkers = new ResourceWorkerRenderer();
   private readonly physicalWorkers = new ResourceWorkerRenderer();
   private readonly restPoses: RestPoseRenderer;
@@ -522,6 +536,9 @@ export class GodboxRenderer {
       undefined,
       (id) => state.settlements.find(s => s.id === id));
     this.resourceSites = new ResourceSiteRenderer(state.world, this.terrainSurface, this.resourceWork, state);
+    this.facilityCrew = new FacilityCrewScene(
+      (point) => this.personCollisionFree(point.x, point.z),
+      (a, b) => this.resourceWork.safeSegment(a, b));
     this.scene.add(this.resourceWorkers.group, this.physicalWorkers.group, this.farmFields.group);
     this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
@@ -1086,6 +1103,8 @@ export class GodboxRenderer {
       this.resourceWorkersRevision = this.resourceWork.revision;
       this.resourceWork.bindWorkers(this.visiblePeople);
     }
+    this.refreshFacilityCrews();
+    this.refreshMarketStalls();
     this.resourceWorkers.beginFrame();
     this.physicalWorkers.beginFrame();
     this.restPoses.beginFrame();
@@ -1149,6 +1168,18 @@ export class GodboxRenderer {
       let physical = this.physicalWork.plan(person, settlement, site, (person.navigation?.destinationId ? this.farmFields.renderedFields.get(person.navigation.destinationId) : undefined)
           ?? this.farmFields.fields.get(person.homeId), weather,
         (a, b) => this.resourceWork.safeSegment(a, b));
+      const crew = isFacilityWorkDestinationId(person.navigation?.destinationId) ? this.facilityCrew.get(person.id) : undefined;
+      const stall = person.navigation?.destinationKind === 'market' ? this.marketStalls.get(person.id) : undefined;
+      const workstation: LocalWorkstation | undefined = crew ? {
+        key: crew.station.key, focus: crew.station.machine, routine: 'facility-station',
+        action: crew.station.action, animation: crew.station.animation, attended: true,
+      } : stall ? {
+        key: stall.key, focus: stall.table,
+        routine: stall.role === 'vendor' ? 'market-vendor' : 'market-customer',
+        action: stall.role === 'vendor' ? 'attend-stall' : 'browse-stall',
+        animation: stall.role === 'vendor' ? 'work' : 'gather',
+        attended: stall.role === 'vendor',
+      } : undefined;
       const base = this.personDisplayTarget(person, group);
       const currentPresentation = this.peopleVisuals.get(person.id);
       const hearthPosition = settlement ? foundingHearthWorldPosition(settlement, this.state.arrival?.pods ?? []) : undefined;
@@ -1217,7 +1248,7 @@ export class GodboxRenderer {
       }
       const foundingCommunityRoutine = isFoundingCommunityDestinationId(person.navigation?.destinationId);
       const local = this.localActivities.resolve(person, {
-        base, visual: this.peopleVisuals.get(person.id), group, people: this.localPeers,
+        base, workstation, visual: this.peopleVisuals.get(person.id), group, people: this.localPeers,
         relationshipFor: (a, b) => this.socialRelationshipByPair.get(socialPairKey(a, b)),
         structures,
         safeSegment: (a, b) => this.resourceWork.safeSegment(a, b),
@@ -1847,7 +1878,11 @@ export class GodboxRenderer {
     let restFacing: number | undefined;
     const settlement = this.state.settlements.find((candidate) => candidate.id === person.homeId);
     const placements = settlement ? this.settlementBuildingPlacements.get(settlement.id) ?? [] : [];
-    if (settlement && person.navigation?.destinationKind === 'construction-site' && !person.navigation.traveling
+    const post = this.assignedPostFor(person);
+    if (post) {
+      position = { x: post.x, z: post.z };
+      restFacing = post.facing;
+    } else if (settlement && person.navigation?.destinationKind === 'construction-site' && !person.navigation.traveling
       && constructionPresentationProgress(settlement) > 0) {
       const site = placements[this.shownBuildingCount(settlement)];
       if (site) {
@@ -1879,6 +1914,48 @@ export class GodboxRenderer {
       remembered.z = position.z;
     } else this.lastPersonGroundPosition.set(person.id, { x: position.x, z: position.z });
     return { x: position.x, z: position.z, ...(restFacing === undefined ? {} : { restFacing }) };
+  }
+
+  /**
+   * A machine in a works, or one side of a market table. Both are assigned from authoritative
+   * state elsewhere (facility labour, trade roles), so they outrank gathering geometry: a works
+   * crew stands at its machines and a vendor stands behind their own counter.
+   */
+  private assignedPostFor(person: Person): { x: number; z: number; facing: number } | undefined {
+    const destination = person.navigation;
+    if (!destination || destination.traveling) return undefined;
+    const crew = isFacilityWorkDestinationId(destination.destinationId) ? this.facilityCrew.get(person.id) : undefined;
+    if (crew) return { x: crew.station.anchor.x, z: crew.station.anchor.z, facing: crew.station.facing };
+    const stall = destination.destinationKind === 'market' ? this.marketStalls.get(person.id) : undefined;
+    if (stall) return { x: stall.socket.x, z: stall.socket.z, facing: stall.facing };
+    return undefined;
+  }
+
+  /** Station plans follow the authoritative month; the cast follows the plan. */
+  private refreshFacilityCrews(): void {
+    const month = this.facilityCrewMonth !== this.state.month;
+    if (month) {
+      this.facilityCrewMonth = this.state.month;
+      this.facilityCrew.update(this.state);
+    }
+    if (month || this.facilityCrewRevision !== this.facilityCrew.revision) {
+      this.facilityCrewRevision = this.facilityCrew.revision;
+      this.facilityCrew.bindWorkers(this.visiblePeople);
+    }
+  }
+
+  private refreshMarketStalls(): void {
+    const stalls = [...this.settlementMarketStalls.values()].flat();
+    const plan = marketStallSignature(stalls);
+    if (plan === this.marketStallPlan && this.marketStallMonth === this.state.month) return;
+    this.marketStallPlan = plan;
+    this.marketStallMonth = this.state.month;
+    if (stalls.length === 0) { this.marketStalls = new Map(); return; }
+    const attending = this.visiblePeople.filter((person) => person.alive && !person.navigation?.traveling
+      && person.navigation?.destinationKind === 'market');
+    this.marketStalls = assignMarketStalls(attending, stalls, {
+      standable: (point) => this.personCollisionFree(point.x, point.z),
+    });
   }
 
   private nearestRenderableGround(origin: Vec2, identity: string): Vec2 {
@@ -1946,6 +2023,7 @@ export class GodboxRenderer {
         const visual = this.settlementVisuals.get(settlement.id);
         if (visual) visual.group.visible = false;
         this.settlementSolidObstacles.delete(settlement.id);
+        this.settlementMarketStalls.delete(settlement.id);
         continue;
       }
       const existing = this.settlementVisuals.get(settlement.id);
@@ -1982,6 +2060,7 @@ export class GodboxRenderer {
   private createSettlementVisual(settlement: Settlement): SettlementVisual {
     const group = new THREE.Group();
     this.settlementSolidObstacles.set(settlement.id, []);
+    this.settlementMarketStalls.set(settlement.id, []);
     const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
     group.position.set(settlement.position.x, settlementY, settlement.position.z);
     const culture = this.dominantCulture(settlement);
@@ -3992,6 +4071,11 @@ export class GodboxRenderer {
       stall.rotation.y = -angle + Math.PI / 2;
       group.add(stall);
       this.registerSettlementObstacle(settlement.id, position.worldX, position.worldZ, 0.85, 0.48, stall.rotation.y);
+      // Published so market attendance can be presented as vendors and customers at real tables.
+      this.settlementMarketStalls.get(settlement.id)?.push({
+        id: `${settlement.id}:market-stall:${index}`,
+        worldX: position.worldX, worldZ: position.worldZ, rotationY: stall.rotation.y, width: 0.85, depth: 0.48,
+      });
     }
   }
 

@@ -35,7 +35,7 @@ const WOOD: FacilityFamilySpec = {
       power: { mode: 'either', demand: 6, fallback: 0.25, minimumCoverage: 0.35 }, yieldBonus: 0.05,
       recipes: WOOD_RECIPES,
       build: { lines: [{ options: ['timber', 'lumber'], amount: 8 }, { options: ['iron', 'iron-tools', 'bronze', 'steel'], amount: 2 }], work: 8 },
-      maintenance: { lines: [{ options: ['timber', 'lumber'], amount: 0.2 }, { options: ['iron', 'iron-tools', 'bronze'], amount: 0.06 }], work: 0.25 },
+      maintenance: { lines: [{ options: ['timber', 'lumber'], amount: 0.2 }, { options: ['machine-parts', 'iron', 'iron-tools', 'bronze'], amount: 0.06 }], work: 0.25 },
       service: 1.1,
     },
     {
@@ -45,7 +45,7 @@ const WOOD: FacilityFamilySpec = {
       power: { mode: 'electric', demand: 12, fallback: 0.05, minimumCoverage: 0.5 }, yieldBonus: 0.1,
       recipes: WOOD_RECIPES,
       build: { lines: [{ options: ['steel', 'iron'], amount: 5 }, { options: ['brick', 'stone'], amount: 8 }, { options: ['copper'], amount: 2 }, { options: ['timber', 'lumber'], amount: 8 }], work: 16 },
-      maintenance: { lines: [{ options: ['steel', 'iron'], amount: 0.12 }, { options: ['copper'], amount: 0.03 }], work: 0.35 },
+      maintenance: { lines: [{ options: ['machine-parts', 'steel', 'iron'], amount: 0.12 }, { options: ['copper'], amount: 0.03 }], work: 0.35 },
       service: 2,
     },
   ],
@@ -84,7 +84,7 @@ const METALLURGY: FacilityFamilySpec = {
       heat: { minimum: 0.7, warmup: 1.5 }, yieldBonus: 0.06,
       recipes: SMELT,
       build: { lines: [{ options: ['brick', 'stone'], amount: 10 }, { options: ['iron', 'iron-tools', 'bronze'], amount: 3 }, { options: ['timber', 'lumber'], amount: 6 }], work: 10 },
-      maintenance: { lines: [{ options: ['brick', 'stone'], amount: 0.15 }, { options: ['iron', 'iron-tools', 'bronze'], amount: 0.08 }], work: 0.3 },
+      maintenance: { lines: [{ options: ['brick', 'stone'], amount: 0.15 }, { options: ['machine-parts', 'iron', 'iron-tools', 'bronze'], amount: 0.08 }], work: 0.3 },
       service: 1.4,
     },
     {
@@ -95,8 +95,59 @@ const METALLURGY: FacilityFamilySpec = {
       heat: { minimum: 0.75, warmup: 4 }, yieldBonus: 0.1,
       recipes: [...SMELT, material('make-steel')],
       build: { lines: [{ options: ['steel', 'iron'], amount: 10 }, { options: ['brick', 'stone'], amount: 10 }, { options: ['copper'], amount: 4 }, { options: ['timber', 'lumber'], amount: 4 }], work: 24 },
-      maintenance: { lines: [{ options: ['steel', 'iron'], amount: 0.25 }, { options: ['brick', 'stone'], amount: 0.2 }, { options: ['copper'], amount: 0.05 }], work: 0.5 },
+      maintenance: { lines: [{ options: ['machine-parts', 'steel', 'iron'], amount: 0.25 }, { options: ['brick', 'stone'], amount: 0.2 }, { options: ['copper'], amount: 0.05 }], work: 0.5 },
       service: 2.6,
+    },
+  ],
+};
+
+/**
+ * Machinery reference industry.
+ *   millwright and machine workshop -> machine shop -> precision engine works
+ * The family turns the metals metallurgy makes into the parts the rest of industry wears out, so
+ * it is the first family whose inputs are another family's outputs. `machine-parts` is made at
+ * every tier (capacity, power and yield are what a tier buys); engines are only assembled in a
+ * tier-3 works with electricity, a hot forge and precision practice.
+ */
+const MACHINE_RECIPES: readonly RecipeRef[] = [catalog('machine-parts')];
+const MACHINERY: FacilityFamilySpec = {
+  id: 'machinery',
+  name: 'Machinery',
+  description: 'Metal becomes gears, shafts, castings and finally engines at a machine shop.',
+  triggerMaterials: ['iron', 'bronze', 'copper'],
+  tiers: [
+    {
+      tier: 1, kind: 'mechanical-workshop', name: 'millwright and machine workshop', form: 'workshop', material: 'timber',
+      capacity: 3, workers: 3, occupations: ['artisan', 'builder'], yard: 20,
+      knowledge: [{ id: 'precision-tools', minPractice: 0.3 }, { id: 'rotary-machinery', minPractice: 0.25 }],
+      power: { mode: 'either', demand: 2, fallback: 0.55, minimumCoverage: 0 },
+      heat: { minimum: 0.6, warmup: 0.5 }, yieldBonus: 0,
+      recipes: MACHINE_RECIPES,
+      build: { lines: [{ options: ['timber', 'lumber'], amount: 5 }, { options: ['iron', 'iron-tools', 'bronze'], amount: 2 }], work: 3 },
+      maintenance: { lines: [{ options: ['timber', 'lumber'], amount: 0.12 }, { options: ['iron', 'iron-tools', 'bronze'], amount: 0.05 }], work: 0.2 },
+      service: 0.7,
+    },
+    {
+      tier: 2, kind: 'machine-shop', name: 'machine shop', form: 'works', material: 'masonry',
+      capacity: 10, workers: 6, occupations: ['artisan', 'builder', 'carrier'], yard: 60,
+      knowledge: [{ id: 'standardized-parts', minPractice: 0.35 }, { id: 'rotary-machinery', minPractice: 0.4 }, { id: 'mechanical-power', minPractice: 0.3 }],
+      power: { mode: 'either', demand: 8, fallback: 0.2, minimumCoverage: 0.3 },
+      heat: { minimum: 0.6, warmup: 1.2 }, yieldBonus: 0.06,
+      recipes: MACHINE_RECIPES,
+      build: { lines: [{ options: ['brick', 'stone'], amount: 8 }, { options: ['iron', 'steel', 'iron-tools'], amount: 4 }, { options: ['timber', 'lumber'], amount: 5 }], work: 10 },
+      maintenance: { lines: [{ options: ['machine-parts', 'iron', 'steel'], amount: 0.07 }, { options: ['brick', 'stone'], amount: 0.1 }], work: 0.3 },
+      service: 1.5,
+    },
+    {
+      tier: 3, kind: 'engine-works', name: 'precision engine works', form: 'works', material: 'metal',
+      capacity: 26, workers: 12, occupations: ['artisan', 'builder', 'carrier'], yard: 160,
+      knowledge: [{ id: 'precision-manufacturing', minPractice: 0.45 }, { id: 'mechanical-power', minPractice: 0.4 }, { id: 'standardized-parts', minPractice: 0.5 }],
+      power: { mode: 'electric', demand: 22, fallback: 0.05, minimumCoverage: 0.5 },
+      heat: { minimum: 0.7, warmup: 3 }, yieldBonus: 0.1,
+      recipes: [...MACHINE_RECIPES, catalog('engine-assembly')],
+      build: { lines: [{ options: ['steel', 'iron'], amount: 8 }, { options: ['brick', 'stone'], amount: 10 }, { options: ['copper'], amount: 3 }, { options: ['timber', 'lumber'], amount: 4 }], work: 20 },
+      maintenance: { lines: [{ options: ['machine-parts', 'steel', 'iron'], amount: 0.2 }, { options: ['copper'], amount: 0.04 }], work: 0.45 },
+      service: 2.4,
     },
   ],
 };
@@ -108,14 +159,13 @@ const reserved = (id: FacilityFamilyId, name: string, description: string): Faci
 const RESERVED: readonly FacilityFamilySpec[] = [
   reserved('ceramics', 'Ceramics', 'Kilns, brickworks and glass: pottery-vessels and fire-brick recipes are candidates.'),
   reserved('textiles', 'Textiles', 'Retting, spinning and weaving of plant fibre.'),
-  reserved('machinery', 'Machinery', 'Machine shops turning steel into engines and tools.'),
   reserved('chemicals', 'Chemicals', 'Reaction vessels and refineries.'),
   reserved('electrical-equipment', 'Electrical equipment', 'Wire, motors, cells and semiconductors.'),
   reserved('strategic', 'Strategic processing', 'Fuel fabrication and other safeguarded processing.'),
 ];
 
 const registry = new Map<FacilityFamilyId, FacilityFamilySpec>();
-for (const family of [WOOD, METALLURGY, ...RESERVED]) registry.set(family.id, family);
+for (const family of [WOOD, METALLURGY, MACHINERY, ...RESERVED]) registry.set(family.id, family);
 
 /** Replaces a family definition (used by later passes and tests) and returns a restorer. */
 export function registerFacilityFamily(spec: FacilityFamilySpec): () => void {

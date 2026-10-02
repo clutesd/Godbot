@@ -31,6 +31,8 @@ export const PROCESSED_MATERIAL_KINDS = [
   'steel',
   'medicine',
   'textile',
+  'machine-parts',
+  'engine',
 ] as const;
 
 export type RawMaterialKind = typeof RAW_MATERIAL_KINDS[number];

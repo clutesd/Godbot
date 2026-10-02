@@ -17,6 +17,12 @@ import type {
   WorldState,
 } from '../types';
 import type { ResourceWorkAssignment } from '../resources/ResourceWorkAssignments';
+import {
+  facilityWorkAssignmentForPerson,
+  facilityWorkDestinationId,
+  isFacilityWorkDestinationId,
+  type FacilityWorkAssignment,
+} from './FacilityWorkRouting';
 import { WalkabilityLayer, type CrossingMode } from './WalkabilityLayer';
 import {
   isResourceWorkDestinationId,
@@ -194,15 +200,17 @@ export class PeopleSystem {
     }
 
     const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
-    const resourceSchedule = resourceWork || isEstablishmentBuilder(state, person) ? this.scheduleFor(person, settlement, state) : undefined;
-    const expectedResourceDestinationId = resourceSchedule && isResourceWorkDestinationId(resourceSchedule.destinationId)
+    const facilityWork = facilityWorkAssignmentForPerson(state, person, this.seed);
+    const resourceSchedule = resourceWork || facilityWork || isEstablishmentBuilder(state, person)
+      ? this.scheduleFor(person, settlement, state) : undefined;
+    const expectedResourceDestinationId = resourceSchedule && isPhysicalSiteDestinationId(resourceSchedule.destinationId)
       ? resourceSchedule.destinationId
       : undefined;
     const navigation = person.navigation;
-    if (navigation && isResourceWorkDestinationId(navigation.destinationId)
+    if (navigation && isPhysicalSiteDestinationId(navigation.destinationId)
       && navigation.destinationId !== expectedResourceDestinationId) {
-      // Extraction sites are monthly facts. Never finish a commute toward a site that is no longer
-      // worked, no longer belongs to this representative, or has moved under a new authority.
+      // Extraction sites and staffed works are monthly facts. Never finish a commute toward a site
+      // that is no longer worked, no longer belongs to this representative, or changed authority.
       navigation.traveling = false;
       navigation.destinationId = `${person.id}:resource-work-replan`;
     } else if (navigation && expectedResourceDestinationId
@@ -230,7 +238,7 @@ export class PeopleSystem {
     }
 
     const destinationId = schedule.destinationId ?? this.destinationId(person, settlement, schedule.kind);
-    if (navigation && navigation.destinationId === destinationId && isResourceWorkDestinationId(destinationId)) {
+    if (navigation && navigation.destinationId === destinationId && isPhysicalSiteDestinationId(destinationId)) {
       // Changing from the commute phase to the work phase at the same physical site must not rebuild
       // the access route and send an arrived worker back toward town.
       navigation.schedulePhase = schedule.phase;
@@ -387,6 +395,7 @@ export class PeopleSystem {
   private scheduleFor(person: Person, settlement: Settlement, state: SimulationState): ScheduledDestination {
     const role = person.role ?? 'gatherer';
     const resourceWork = resourceWorkAssignmentForPerson(state, person, this.seed);
+    const facilityWork = facilityWorkAssignmentForPerson(state, person, this.seed);
     const shiftedHour = (state.month * 3
       + Math.floor(stableUnit(`${person.id}:schedule`) * (settlement.foundingPodId ? 24 : 3))) % 24;
     const building = isEstablishmentBuilder(state, person);
@@ -398,6 +407,7 @@ export class PeopleSystem {
         : 'recovering energy at home' };
     }
     if (sleep.nightShift && (shiftedHour >= 21 || shiftedHour < 8)) {
+      if (facilityWork) return this.facilityWorkSchedule(facilityWork, 'work', true);
       const kind = this.workDestination(role, settlement);
       return { kind, phase: 'work', activity: activityForRole(role, kind), reason: 'working the assigned night shift' };
     }
@@ -415,6 +425,7 @@ export class PeopleSystem {
     if (memorial) return memorial;
     if (shiftedHour < 8) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'commute');
+      if (facilityWork) return this.facilityWorkSchedule(facilityWork, 'commute');
       if (building) return { kind: 'construction-site', phase: 'commute', activity: 'travel', reason: 'carrying supplies to the active shelter project' };
       const founding = foundingCommunityDestination(person, settlement, state, shiftedHour);
       if (founding) return founding;
@@ -423,6 +434,7 @@ export class PeopleSystem {
     }
     if (shiftedHour < 16) {
       if (resourceWork) return this.resourceWorkSchedule(resourceWork, 'work');
+      if (facilityWork) return this.facilityWorkSchedule(facilityWork, 'work');
       if (building) return { kind: 'construction-site', phase: 'work', activity: 'construct', reason: 'helping build physical protection for the settlement' };
       if (fireTender) {
         const hearth = foundingHearthWorldPosition(settlement, state.arrival?.pods ?? []);
@@ -463,6 +475,27 @@ export class PeopleSystem {
       destinationId: resourceWorkDestinationId(assignment),
       point: { x: assignment.worldPosition.x, z: assignment.worldPosition.z },
       preferredWaypoints: resourceWorkPreferredWaypoints(assignment),
+    };
+  }
+
+  /**
+   * A represented member of a works' authoritative crew commutes to that works, not to the
+   * settlement's generic manufacturing district. The duty comes from the facility's own labour
+   * accounting; presentation turns it into a station without changing anything here.
+   */
+  private facilityWorkSchedule(assignment: FacilityWorkAssignment, phase: 'commute' | 'work', nightShift = false): ScheduledDestination {
+    const works = assignment.kind.replaceAll('-', ' ');
+    const activity: Activity = phase === 'commute' ? 'travel' : assignment.duty === 'haul' ? 'transport' : 'craft';
+    const duty = assignment.duty === 'haul' ? `moving cargo through the ${works} yards`
+      : assignment.duty === 'maintenance' ? `keeping the ${works} machinery in repair`
+        : `working a station in the ${works}`;
+    return {
+      kind: 'industrial-site',
+      phase,
+      activity,
+      destinationId: facilityWorkDestinationId(assignment),
+      point: { x: assignment.position.x, z: assignment.position.z },
+      reason: phase === 'work' ? `${duty}${nightShift ? ' on the night shift' : ''}` : `taking the shift route to the ${works}`,
     };
   }
 
@@ -592,6 +625,10 @@ export class PeopleSystem {
       person.activity = 'gather';
       return;
     }
+    if (isFacilityWorkDestinationId(navigation.destinationId)) {
+      person.activity = navigation.destinationId.includes(':haul:') ? 'transport' : 'craft';
+      return;
+    }
     person.activity = activityAtDestination(person.role ?? 'gatherer', navigation.destinationKind);
   }
 
@@ -676,6 +713,11 @@ export class PeopleSystem {
     this.layoutCache.set(settlement.id, { signature, layout });
     return layout;
   }
+}
+
+/** Destinations that are a specific physical site this month rather than a semantic district. */
+function isPhysicalSiteDestinationId(destinationId: string | undefined): boolean {
+  return isResourceWorkDestinationId(destinationId) || isFacilityWorkDestinationId(destinationId);
 }
 
 export function settlementEraRank(settlement: Settlement, state: SimulationState): number {

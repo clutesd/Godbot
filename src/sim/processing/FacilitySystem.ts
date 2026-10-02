@@ -26,7 +26,12 @@ const round = (value: number): number => Math.round(Math.max(0, value) * 1_000_0
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 export function tierKnowledgeMet(s: Settlement, spec: FacilityTierSpec): boolean {
-  return spec.knowledge.every(need => capabilityPractice(s, need.id, 'adopted') >= need.minPractice);
+  return missingTierKnowledge(s, spec).length === 0;
+}
+
+/** Capabilities this tier needs that the settlement does not practise far enough, in tier order. */
+export function missingTierKnowledge(s: Settlement, spec: FacilityTierSpec): readonly string[] {
+  return spec.knowledge.filter(need => capabilityPractice(s, need.id, 'adopted') < need.minPractice).map(need => need.id);
 }
 
 /**
@@ -103,10 +108,16 @@ export function advanceProcessingFacilities(
 // Founding and upgrades
 // ---------------------------------------------------------------------------------------------
 
-function foundingBlocker(c: StepContext, family: FacilityFamilySpec): string | undefined {
-  const { state, s } = c;
-  const first = family.tiers[0]!;
-  if (!tierKnowledgeMet(s, first)) return 'knowledge';
+/**
+ * The one strongest reason this family has no works yet, or undefined when founding is possible.
+ * The planner below and the diagnostics in FacilityDiagnostics read the same function, so an
+ * explanation can never disagree with the decision it explains.
+ */
+export function facilityFoundingBlocker(state: SimulationState, s: Settlement, family: FacilityFamilySpec): string | undefined {
+  const first = family.tiers[0];
+  if (!first) return 'no-family-implementation';
+  const missing = missingTierKnowledge(s, first);
+  if (missing.length > 0) return `knowledge:${missing[0]}`;
   if (!first.recipes.some(ref => { const spec = processSpec(ref); return !!spec && processEnabled(state, s, spec); })) return 'no-enabled-recipe';
   if (!family.triggerMaterials.some(id => (s.localMaterials[id] ?? 0) >= 3)) return 'no-raw-material';
   if (infrastructureLabourBudget(state, s).remaining < 0.25) return 'no-construction-labour';
@@ -114,13 +125,14 @@ function foundingBlocker(c: StepContext, family: FacilityFamilySpec): string | u
   return undefined;
 }
 
-function upgradeBlocker(c: StepContext, f: ProcessingFacility): string | undefined {
-  const { state, s } = c;
+/** The one strongest reason this works is not being converted to its next tier. */
+export function facilityUpgradeBlocker(state: SimulationState, s: Settlement, f: ProcessingFacility): string | undefined {
   const next = facilityTierSpec(f.family, f.tier + 1);
   if (!next) return 'max-tier';
   if (f.status === 'damaged' || f.status === 'ruined' || f.condition < 0.6) return 'damaged';
   if (f.saturationMonths < 3) return 'not-saturated';
-  if (!tierKnowledgeMet(s, next)) return 'knowledge';
+  const missing = missingTierKnowledge(s, next);
+  if (missing.length > 0) return `knowledge:${missing[0]}`;
   if (!powerSourceAvailable(s, next.power)) return 'no-power-source';
   if (infrastructureLabourBudget(state, s).remaining < 0.25) return 'no-construction-labour';
   if (billCoverage(s, next.build) < 0.2) return 'materials';
@@ -136,7 +148,7 @@ function planFacilities(c: StepContext): void {
   for (const family of facilityFamilies()) {
     const existing = proc.facilities.filter(f => f.family === family.id).sort((a, b) => a.id.localeCompare(b.id));
     if (existing.length === 0) {
-      const blocker = foundingBlocker(c, family);
+      const blocker = facilityFoundingBlocker(state, s, family);
       if (blocker) { proc.foundingBlockers[family.id] = blocker; continue; }
       const result = foundFacility(state, s, family);
       if (!result.facility) { proc.foundingBlockers[family.id] = result.blocker ?? 'no-site'; continue; }
@@ -156,7 +168,7 @@ function planFacilities(c: StepContext): void {
       }
       continue;
     }
-    if (upgradeBlocker(c, primary)) continue;
+    if (facilityUpgradeBlocker(state, s, primary)) continue;
     beginUpgrade(state, primary, primary.tier + 1);
     events.push(facilityEvent(s, primary, `${s.name} begins converting its ${primary.kind.replace(/-/g, ' ')} to a ${facilityTierSpec(primary.family, primary.tier + 1)!.name}.`, 'facility-upgrade-started', 0.45));
     return;

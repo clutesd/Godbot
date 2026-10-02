@@ -19,6 +19,7 @@ function human(result: ExperimentRun): string {
     `Space and machine: first orbit ${result.firstOrbitYear ?? 'not reached'}; ${result.selfSustainingBodies} self-sustaining bodies; machine capability ${result.machineCapability}`,
     `Fermi hypotheses: ${result.fermiHypotheses.join(', ') || 'not yet formulated'}`,
     `Independent discovery centers: ${result.independentDiscoveryCenters}`,
+    `Industry:\n  ${result.industryDiagnostics.join('\n  ') || 'no processing facilities'}`,
     `Milestones: ${milestoneText}`,
     `Regional profiles:\n  ${regions || 'none'}`,
     `Runtime: ${result.run.elapsedMs} ms (${result.run.monthsPerSecond} months/s)`,
