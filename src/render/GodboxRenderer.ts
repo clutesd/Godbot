@@ -1391,16 +1391,22 @@ export class GodboxRenderer {
       if (!contactGait) this.groundedLocomotion.forget(person.id);
       if (contactGait && pose && (contactGait.motion > 0.01 || contactGait.active >= 0)) {
         const motion = contactGait.motion;
-        const swing = -Math.cos(contactGait.phase - 0.12) * motion;
-        pose.pelvisRotation = swing * 0.045;
-        pose.spineTwist = -swing * 0.075;
-        pose.spineRoll = -contactGait.weight * 0.016;
-        pose.spineRotation += contactGait.lean;
+        // One gait clock owns the visible walk. Pelvis, shoulder girdle and arms all key from the
+        // same planted-foot phase instead of allowing the older clip phase to drift underneath the
+        // contact solver. The small phase offset makes the shoulders follow the hips rather than
+        // mirror them like a mechanical linkage.
+        const hipDrive = -Math.cos(contactGait.phase - 0.10) * motion;
+        const shoulderDrive = -Math.cos(contactGait.phase - 0.02) * motion;
+        const turnDrive = contactGait.turn * motion;
+        pose.pelvisRotation = hipDrive * 0.052 + turnDrive * 0.018;
+        pose.spineTwist = -hipDrive * 0.086 - turnDrive * 0.012;
+        pose.spineRoll = -contactGait.weight * 0.019 - turnDrive * 0.008;
+        pose.spineRotation += contactGait.lean + Math.abs(contactGait.weight) * motion * 0.004;
         if (!loaded && contactGait.motion > 0.01) {
-          pose.leftShoulderRotation = -swing * 0.25;
-          pose.rightShoulderRotation = swing * 0.23;
-          pose.leftElbowRotation = 0.18 + Math.max(0, -Math.cos(contactGait.phase - 0.30)) * 0.13;
-          pose.rightElbowRotation = 0.21 + Math.max(0, Math.cos(contactGait.phase - 0.30)) * 0.11;
+          pose.leftShoulderRotation = -shoulderDrive * 0.22 - turnDrive * 0.018;
+          pose.rightShoulderRotation = shoulderDrive * 0.21 - turnDrive * 0.018;
+          pose.leftElbowRotation = 0.19 + Math.max(0, -Math.cos(contactGait.phase - 0.26)) * 0.12;
+          pose.rightElbowRotation = 0.22 + Math.max(0, Math.cos(contactGait.phase - 0.26)) * 0.105;
         }
       }
       const supportShift = contactGait ? contactGait.weight * heightScale * SUPPORT_SHIFT : 0;
@@ -1562,7 +1568,9 @@ export class GodboxRenderer {
       const legSegment = 0.225 * proportions.legLength;
       this.partPosition.set(renderX, footY + legSegment * 2 * heightScale + poseLift, renderZ);
       this.partQuaternion.setFromEuler(this.partEuler.set(0, facing + (pose?.pelvisRotation ?? 0),
-        contactGait ? contactGait.weight * 0.018 : restingStance ? posture.pelvisTilt : 0, 'YXZ'));
+        contactGait
+          ? contactGait.weight * 0.023 + contactGait.turn * contactGait.motion * 0.006
+          : restingStance ? posture.pelvisTilt : 0, 'YXZ'));
       this.jointParent.compose(this.partPosition, this.partQuaternion, this.partScale.setScalar(legScale));
       // Standing weight rests on one leg. The loaded knee stays straight; the free one relaxes.
       const standing = restingStance;
