@@ -860,8 +860,6 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   const baySpacing = familyDefinition.baySpacing
     // The frame material's span capacity moves the rhythm: steel opens it, rubble closes it.
     * (0.72 + architecturalMaterial(frame).structure.span * 0.6);
-  let bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
-
   // ----- roof -----
   const roofArchetype = cultureRoof(stage.roof, context.culture.roofLanguage, context.culture.trimDensity);
   const span = depth;
@@ -935,7 +933,7 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
       openings = { ...openings, density: 0, perBay: 0, arched: false };
       break;
   }
-  bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
+  const bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
 
   // A settlement's specialization earns its working fittings; it never removes the archetype's.
   const equipment = specEquipment(stage.equipment, context.specialization, period, level);
