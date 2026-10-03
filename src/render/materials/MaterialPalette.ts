@@ -8,6 +8,8 @@
 import * as THREE from 'three';
 import type { CultureStyle } from '../../sim/types';
 import { applySurfaceDetail } from './SurfaceDetail';
+import type { ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
+import { ArchitecturalMaterialSet } from '../architecture/ArchitecturalMaterialSet';
 
 export type Era = 'primitive' | 'early' | 'village' | 'preIndustrial' | 'industrial' | 'advanced';
 
@@ -77,6 +79,12 @@ export class MaterialPalette {
   private readonly materials: Map<string, THREE.MeshStandardMaterial>;
   private readonly config: PaletteConfig;
   private readonly emissiveBase = new Map<string, number>();
+  /**
+   * Construction materials from the architectural library, created on first use. Lives on the
+   * palette so it inherits the palette's own per-culture-and-era caching: every building sharing
+   * a palette shares these materials too.
+   */
+  private architecturalSet?: ArchitecturalMaterialSet;
   private nightFactor = 0;
 
   constructor(config: PaletteConfig) {
@@ -263,6 +271,31 @@ export class MaterialPalette {
       if (!material) continue;
       material.emissiveIntensity = key === 'forge' ? base * (0.55 + this.nightFactor * 0.75) : base * this.nightFactor;
     }
+    this.architecturalSet?.setNightFactor(this.nightFactor);
+  }
+
+  /**
+   * The shared Three material for one architectural construction material.
+   *
+   * This is the material path the architecture system uses. It coexists with the surface-key
+   * path above: legacy callers (memorials, scaffolds, plaza paving, the other renderers) keep
+   * using `getSurfaceMaterial`, while spec-driven buildings ask for real materials by name.
+   */
+  getArchitecturalMaterial(id: ArchitecturalMaterialId): THREE.MeshStandardMaterial {
+    if (!this.architecturalSet) {
+      this.architecturalSet = new ArchitecturalMaterialSet({
+        tint: this.baseColors.get('primary') ?? new THREE.Color(0xffffff),
+        // Process refinement tracks the era, so one palette's buildings share one program set.
+        refinement: this.eraRank() / 5,
+      });
+      this.architecturalSet.setNightFactor(this.nightFactor);
+    }
+    return this.architecturalSet.get(id);
+  }
+
+  /** Diagnostic: how many architectural materials and GPU programs this palette has realised. */
+  architecturalStats(): { materials: number; programs: number } {
+    return this.architecturalSet?.stats ?? { materials: 0, programs: 0 };
   }
 
   /**
@@ -428,5 +461,7 @@ export class MaterialPalette {
     this.materials.forEach(material => material.dispose());
     this.materials.clear();
     this.baseColors.clear();
+    this.architecturalSet?.dispose();
+    this.architecturalSet = undefined;
   }
 }

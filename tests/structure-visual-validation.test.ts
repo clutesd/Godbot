@@ -4,7 +4,7 @@ import type { CultureStyle } from '../src/sim/types';
 import type { DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../src/sim/development/types';
 import { AssetBuilder } from '../src/render/assets/AssetBuilder';
 import { BUILD_STAGE } from '../src/render/assets/BuildingComposer';
-import { constructionBuildStage, constructionPresentationBucket, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from '../src/render/construction/ConstructionVisualGrammar';
+import { CONSTRUCTION_STAGE_SEQUENCE, constructionBuildStage, constructionPresentationBucket, constructionScaffoldSurface, constructionStagePresentation, constructionTargetIdentity } from '../src/render/construction/ConstructionVisualGrammar';
 import { developmentBuildingRole } from '../src/render/assets/BuildingGrammar';
 import { heritageFingerprint } from '../src/render/assets/StructureHeritage';
 import { structureVisualHistorySignature } from '../src/render/assets/StructureVisualSignature';
@@ -197,44 +197,70 @@ describe('structure renderer and performance validation', () => {
   });
 
   it('aligns paid progress, cache rebuilds and canonical building stages', () => {
-    expect([
-      constructionBuildStage(0.05),
-      constructionBuildStage(0.2),
-      constructionBuildStage(0.45),
-      constructionBuildStage(0.78),
-      constructionBuildStage(0.91),
-      constructionBuildStage(0.92),
-      constructionBuildStage(1),
-    ]).toEqual([
+    // Construction walks the eight physical stages in order: ground is set out, footings go in,
+    // the frame rises, the envelope closes, the roof goes on, services are run, joinery and
+    // equipment are fitted, and ornament comes last.
+    expect(CONSTRUCTION_STAGE_SEQUENCE).toEqual([
+      BUILD_STAGE.SITE,
       BUILD_STAGE.FOUNDATION,
       BUILD_STAGE.FRAME,
       BUILD_STAGE.WALLS,
       BUILD_STAGE.ROOF,
-      BUILD_STAGE.ROOF,
-      BUILD_STAGE.DETAIL,
-      BUILD_STAGE.DETAIL,
+      BUILD_STAGE.UTILITIES,
+      BUILD_STAGE.FITOUT,
+      BUILD_STAGE.FINISH,
     ]);
+
+    expect([
+      constructionBuildStage(0.02),
+      constructionBuildStage(0.1),
+      constructionBuildStage(0.2),
+      constructionBuildStage(0.45),
+      constructionBuildStage(0.78),
+      constructionBuildStage(0.88),
+      constructionBuildStage(0.94),
+      constructionBuildStage(1),
+    ]).toEqual([
+      BUILD_STAGE.SITE,
+      BUILD_STAGE.FOUNDATION,
+      BUILD_STAGE.FRAME,
+      BUILD_STAGE.WALLS,
+      BUILD_STAGE.ROOF,
+      BUILD_STAGE.UTILITIES,
+      BUILD_STAGE.FITOUT,
+      BUILD_STAGE.FINISH,
+    ]);
+
+    // Stages never regress as paid work accumulates, and every stage is actually reachable.
+    const walked: number[] = [];
+    for (let paid = 0; paid <= 1.0001; paid += 0.005) walked.push(constructionBuildStage(Math.min(1, paid)));
+    for (let index = 1; index < walked.length; index += 1) {
+      expect(walked[index]!).toBeGreaterThanOrEqual(walked[index - 1]!);
+    }
+    expect(new Set(walked).size).toBe(CONSTRUCTION_STAGE_SEQUENCE.length);
 
     const frameStart = constructionStagePresentation(0.2);
     const frameMid = constructionStagePresentation(0.325);
-    const detailStart = constructionStagePresentation(0.92);
-    const detailMid = constructionStagePresentation(0.96);
-    const detailAlmostDone = constructionStagePresentation(0.999);
+    const fitoutStart = constructionStagePresentation(0.91);
+    const finishMid = constructionStagePresentation(0.985);
+    const almostDone = constructionStagePresentation(0.9999);
+    expect(frameStart.stage).toBe(BUILD_STAGE.FRAME);
     expect(frameStart.previousStage).toBe(BUILD_STAGE.FOUNDATION);
     expect(frameStart.phase).toBeCloseTo(0);
     expect(frameMid.phase).toBeCloseTo(0.5);
-    expect(detailStart.previousStage).toBe(BUILD_STAGE.ROOF);
-    expect(detailStart.phase).toBeCloseTo(0);
-    expect(detailMid.stage).toBe(BUILD_STAGE.DETAIL);
-    expect(detailMid.phase).toBeCloseTo(0.5);
-    expect(detailMid.finishing).toBe(true);
-    expect(detailAlmostDone.phase).toBeGreaterThan(0.98);
+    expect(fitoutStart.stage).toBe(BUILD_STAGE.FITOUT);
+    expect(fitoutStart.previousStage).toBe(BUILD_STAGE.UTILITIES);
+    expect(fitoutStart.phase).toBeCloseTo(0);
+    expect(finishMid.stage).toBe(BUILD_STAGE.FINISH);
+    expect(finishMid.finishing).toBe(true);
+    expect(almostDone.phase).toBeGreaterThan(0.98);
+    expect(constructionStagePresentation(0).previousStage).toBeUndefined();
 
-    // Tiny progress changes within one reveal slice stay cheap; visible slices and DETAIL do rebuild.
-    expect(constructionPresentationBucket(0.12)).toBe(constructionPresentationBucket(0.14));
+    // Tiny progress changes within one reveal slice stay cheap; crossing a slice or a stage
+    // boundary does rebuild.
+    expect(constructionPresentationBucket(0.12)).toBe(constructionPresentationBucket(0.125));
     expect(constructionPresentationBucket(0.14)).not.toBe(constructionPresentationBucket(0.19));
-    expect(constructionPresentationBucket(0.919)).not.toBe(constructionPresentationBucket(0.92));
-    expect(constructionPresentationBucket(0.92)).not.toBe(constructionPresentationBucket(0.94));
+    expect(constructionPresentationBucket(0.919)).not.toBe(constructionPresentationBucket(0.93));
   });
 
   it('uses the active project as the future identity during upgrades and repurposes', () => {
@@ -264,7 +290,7 @@ describe('structure renderer and performance validation', () => {
 
   it('preserves target architectural identity throughout canonical construction stages', () => {
     const builder = new AssetBuilder('construction-continuity-validation');
-    const stages = [BUILD_STAGE.FOUNDATION, BUILD_STAGE.FRAME, BUILD_STAGE.WALLS, BUILD_STAGE.ROOF, BUILD_STAGE.DETAIL] as const;
+    const stages = [BUILD_STAGE.SITE, BUILD_STAGE.FOUNDATION, BUILD_STAGE.FRAME, BUILD_STAGE.WALLS, BUILD_STAGE.ROOF, BUILD_STAGE.UTILITIES, BUILD_STAGE.FITOUT, BUILD_STAGE.FINISH] as const;
     const factory = stages.map(stage => builder.getAsset('building', {
       seed: 'continuity:factory',
       culture: CULTURE,
@@ -287,9 +313,12 @@ describe('structure renderer and performance validation', () => {
     // The staged procedural path must not collapse unlike future buildings into one generic shell.
     expect(boundsSignature(factory[1]!)).not.toBe(boundsSignature(shrine[1]!));
     expect(boundsSignature(factory[3]!)).not.toBe(boundsSignature(shrine[3]!));
-    expect(factory.slice(0, 4).every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
-    expect(factory[4]).toBeInstanceOf(THREE.LOD);
-    expect(shrine.slice(0, 4).every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
+    // Only a finished building gets LOD tiers; every stage before that stays a single staged
+    // mesh so a distant site can never read as complete.
+    expect(factory.slice(0, BUILD_STAGE.FINISH).every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
+    expect(factory[BUILD_STAGE.FINISH]).toBeInstanceOf(THREE.LOD);
+    expect(shrine.slice(0, BUILD_STAGE.FINISH).every(mesh => !(mesh instanceof THREE.LOD))).toBe(true);
+    expect(shrine[BUILD_STAGE.FINISH]).toBeInstanceOf(THREE.LOD);
     builder.dispose();
   });
 

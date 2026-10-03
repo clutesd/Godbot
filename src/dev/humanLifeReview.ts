@@ -9,6 +9,7 @@ import { Simulation } from '../sim/Simulation';
 import type { Activity, DestinationKind, Occupation, Person, PersonRole, Vec2 } from '../sim/types';
 import type { DevelopmentResponse } from '../sim/development/types';
 import { AssetBuilder } from '../render/assets/AssetBuilder';
+import { BUILD_STAGE } from '../render/assets/BuildingComposer';
 import { MaterialPalette } from '../render/materials/MaterialPalette';
 import { TerrainSurface } from '../render/terrain/TerrainSurface';
 import { LocalActivityPresentation, clearActivityStructure, type ActivityStructure } from '../render/people/LocalActivityPresentation';
@@ -88,7 +89,7 @@ for (const [i, station] of stations.entries()) {
   path.rotation.x = -Math.PI / 2; path.position.set(station.x, groundY - 0.003, station.z + 0.2); path.receiveShadow = true; scene.add(path);
   if (!station.building) continue;
   const era = station.building === 'factory' || station.building === 'research' ? 'industrial' : 'village';
-  const asset = assets.getAsset('building', { seed: `life:${station.name}`, culture, era, variant: `${station.building}#3` }).mesh;
+  const asset = assets.getAsset('building', { seed: `life:${station.name}`, culture, era, variant: `${station.building}#${BUILD_STAGE.ROOF}` }).mesh;
   const scale = 0.9 / Number(asset.userData['footprintWidth'] ?? 1); asset.scale.setScalar(scale);
   asset.position.set(station.x, groundY, station.z); scene.add(asset);
   structures.push({ key: station.name, worldX: station.x, worldZ: station.z, width: 0.9,
@@ -109,7 +110,7 @@ const response: DevelopmentResponse = { need: 'housing', form: 'dwelling', name:
 settlement.development = { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: 6, nextAttemptMonth: 12, revision: 1,
   project: { plotId: 'review-construction', response, action: 'founded', startedMonth: 0, progress: 0.3,
     spent: { food: 0, wood: 1.2, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] } };
-const buildAsset = assets.getAsset('building', { seed: 'life:construction', culture, era: 'village', development: response, variant: 'house#3' }).mesh;
+const buildAsset = assets.getAsset('building', { seed: 'life:construction', culture, era: 'village', development: response, variant: `house#${BUILD_STAGE.ROOF}` }).mesh;
 const buildScale = 1.2 / Number(buildAsset.userData['footprintWidth']);
 const assembly = new ConstructionAssembly(buildAsset, buildScale, 'review-construction', 'timber'); assembly.update(0.3);
 const constructionRoot = new THREE.Group(); constructionRoot.position.set(buildStation.x, groundY, buildStation.z); scene.add(constructionRoot);

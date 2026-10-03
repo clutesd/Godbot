@@ -13,6 +13,8 @@ import type { Era } from '../materials/MaterialPalette';
 import type { CultureStyleProfile, MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
+import type { BuildingSpec } from '../architecture/BuildingSpec';
+import type { Biome } from '../../sim/types';
 import type { SettlementArchitecturalIdentity } from '../../sim/development/SettlementIdentity';
 import { applyDevelopmentComposition } from './StructureComposition';
 
@@ -158,6 +160,29 @@ export interface BuildingGrammar {
   emissive: number;
   /** 0..1 heat/energy glow for forges, foundries, reactors. */
   forgeGlow: number;
+
+  // ---------------------------------------------------------------------------------------
+  // Architectural specification.
+  //
+  // Present whenever the structure was resolved through the architecture system. The fields
+  // below are decisions the old grammar had no vocabulary for, and the composer reads them only
+  // when they exist — a grammar resolved the legacy way behaves exactly as it always did.
+  // ---------------------------------------------------------------------------------------
+
+  /** The full resolved specification this grammar was derived from. */
+  spec?: BuildingSpec;
+  /** Wall thickness in canonical building units, from structural family and wall material. */
+  wallThickness?: number;
+  /** 0..1 how much of the load-bearing frame shows on the elevation. */
+  frameExposure?: number;
+  /** 0..1 density of posts, piers and braces within a bay. */
+  supportDensity?: number;
+  /** Opening width in canonical units, from the family's structural dare. */
+  openingWidth?: number;
+  /** Opening height in canonical units. */
+  openingHeight?: number;
+  /** The wall finishes at a parapet rather than an eave. */
+  parapet?: boolean;
 }
 
 const ERA_RANK: Record<Era, number> = {
@@ -605,6 +630,15 @@ export function applyDevelopmentIdentity(grammar: BuildingGrammar, development: 
 export interface BuildingGrammarContext {
   /** -1 (cold/wet) .. 1 (hot/dry), from the settlement's own cell temperature/moisture. */
   climateSignal?: number;
+  /**
+   * The settlement cell's own temperature and moisture, 0..1.
+   *
+   * The architecture system prefers these to `climateSignal` because a single signal cannot
+   * separate wet from snowy, and those want opposite roofs.
+   */
+  temperature?: number;
+  moisture?: number;
+  biome?: Biome;
   /** Local flood depth at the plot, extending the slope-responsive plinth with a second hazard. */
   floodDepth?: number;
   /** True only for a settlement's purpose-built landmark; never set for an ordinary building. */

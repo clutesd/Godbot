@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
 import type { MaterialPalette } from '../materials/MaterialPalette';
 import { constructionStagePresentation } from './ConstructionVisualGrammar';
+import { BUILD_STAGE, type BuildStage } from '../assets/BuildingComposer';
 
 export interface ConstructionWorksiteSpec {
   width: number;
@@ -48,20 +49,30 @@ export function constructionWorksiteAnchors(
   const laneUnit = Math.max(-1, Math.min(1, lane));
   const stage = progress === undefined ? undefined : constructionStagePresentation(progress);
   // Canonical-stage migration moves crews within the same safe face instead of teleporting them
-  // across the structure. Foundation work sits farther out/low, frame and wall work shifts along
-  // the bay, roof work stands farther back, and finishing clears outward with the scaffold.
-  const stageLaneShift = stage === undefined ? 0
-    : stage.finishing ? -0.11
-      : stage.stage === 0 ? -0.08
-        : stage.stage === 1 ? 0.07
-          : stage.stage === 2 ? -0.025
-            : stage.stage === 3 ? 0.11 : 0.035;
-  const edgeExtra = stage === undefined ? 0
-    : stage.finishing ? 0.14
-      : stage.stage === 0 ? 0.08
-        : stage.stage === 1 ? 0.025
-          : stage.stage === 2 ? 0
-            : stage.stage === 3 ? 0.1 : 0.04;
+  // across the structure. Setting-out and footing work sits farther out and low, frame and wall
+  // work shifts along the bay, roof and services work stands farther back, and fitting-out and
+  // finishing clear progressively outward as the scaffold comes down.
+  //
+  // `edgeExtra` is deliberately non-decreasing from the roof onward: once work is overhead the
+  // crew keeps stepping back, which is what makes the lifecycle readable from outside the plot.
+  const migration: Record<BuildStage, { lane: number; edge: number }> = {
+    [BUILD_STAGE.SITE]: { lane: -0.1, edge: 0.1 },
+    [BUILD_STAGE.FOUNDATION]: { lane: -0.08, edge: 0.08 },
+    [BUILD_STAGE.FRAME]: { lane: 0.07, edge: 0.025 },
+    [BUILD_STAGE.WALLS]: { lane: -0.025, edge: 0 },
+    [BUILD_STAGE.ROOF]: { lane: 0.11, edge: 0.1 },
+    [BUILD_STAGE.UTILITIES]: { lane: 0.09, edge: 0.115 },
+    [BUILD_STAGE.FITOUT]: { lane: 0.05, edge: 0.125 },
+    [BUILD_STAGE.FINISH]: { lane: 0.035, edge: 0.13 },
+  };
+  const stageMigration = stage === undefined
+    ? { lane: 0, edge: 0 }
+    : stage.finishing
+      // Scaffold stripping clears the widest, whatever stage it overlaps.
+      ? { lane: -0.11, edge: 0.14 }
+      : migration[stage.stage];
+  const stageLaneShift = stageMigration.lane;
+  const edgeExtra = stageMigration.edge;
   const migrationScale = Math.min(0.24, Math.min(width, depth) * 0.12);
   const baseLaneZ = laneUnit * Math.min(0.3, depth * 0.18);
   const baseLaneX = laneUnit * Math.min(0.3, width * 0.18);

@@ -14,11 +14,15 @@ import { ProceduralGeometry } from './ProceduralGeometry';
 import { resolveBuildingGrammar, type BuildingGrammar, type BuildingGrammarContext, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
-import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
+import type { DevelopmentProject, DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
 import type { SettlementArchitecturalIdentity } from '../../sim/development/SettlementIdentity';
 import { buildStructureComponentManifest } from './StructureComponents';
 import { structureVisualHistorySignature } from './StructureVisualSignature';
 import { deriveArchitecturalGenerations, generationForCurrentFabric, generationForOriginFabric } from './StructureGenerations';
+import { deriveStructureHeritage } from './StructureHeritage';
+import { resolveBuildingSpec, type BuildingSpec } from '../architecture/BuildingSpec';
+import { applySpecToGrammar } from '../architecture/SpecGrammarBridge';
+import { materialBillSignature } from '../architecture/MaterialSourcing';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -36,6 +40,16 @@ export interface AssetConfig {
   localSlopeDegrees?: number;
   /** Climate/flood/landmark context that further shapes grammar beyond culture and identity. */
   grammarContext?: BuildingGrammarContext;
+  /**
+   * The live construction project, when there is one. Carries the exact bill of materials the
+   * settlement consumed, which is the strongest evidence the architecture system has for what a
+   * building is actually made of.
+   */
+  project?: DevelopmentProject;
+  /** 0..1 settlement prosperity. Gates expensive construction materials. */
+  prosperity?: number;
+  /** Economic specialization, which earns a structure its working fittings. */
+  specialization?: 'agriculture' | 'forestry' | 'mining' | 'craft' | 'exchange';
 }
 
 export interface CachedAsset {
@@ -377,6 +391,53 @@ export class AssetBuilder {
    * multi-generation history (several upgrades/repurposes) AND the origin material actually
    * differs from the current one — a building whose material never changed is left untouched.
    */
+  /**
+   * Resolve the architectural specification for one building.
+   *
+   * Reads only authoritative state: era, the local development response and its practised
+   * capabilities, the project's material consumption, the settlement's own cell climate, its
+   * prosperity and specialization, and the structure's recorded history.
+   *
+   * Settlement material *stock* is deliberately not consulted. It changes every month, and
+   * keying buildings on it would thrash the asset cache for no visual gain — the project's bill
+   * of materials is both stabler and stronger evidence.
+   */
+  private specFor(
+    config: AssetConfig,
+    role: BuildingRole,
+    stage: BuildStage,
+    profile: CultureStyleProfile,
+  ): BuildingSpec | undefined {
+    const context = config.grammarContext;
+    return resolveBuildingSpec({
+      role,
+      era: config.era,
+      seed: config.seed,
+      culture: {
+        materialBias: profile.materialBias,
+        roofLanguage: profile.roofLanguage,
+        trimDensity: profile.getTrimDensity(config.era),
+        ornamentBias: config.settlementIdentity?.ornamentBias,
+      },
+      development: config.development,
+      project: config.project,
+      heritage: config.development ? deriveStructureHeritage(config.development) : undefined,
+      climate: context
+        ? {
+          temperature: context.temperature,
+          moisture: context.moisture,
+          biome: context.biome,
+          signal: context.climateSignal,
+          floodDepth: context.floodDepth,
+        }
+        : undefined,
+      prosperity: config.prosperity,
+      specialization: config.specialization,
+      localSlopeDegrees: config.localSlopeDegrees,
+      stage,
+    });
+  }
+
   private coreMaterialFor(grammar: BuildingGrammar, development?: DevelopmentResponse): StructureMaterial | undefined {
     if (grammar.massing === 'single' || !development) return undefined;
     const generationModel = deriveArchitecturalGenerations(development);
@@ -408,6 +469,12 @@ export class AssetBuilder {
     const role = (roleName || 'house') as BuildingRole;
     const stage = stageName === undefined ? BUILD_STAGE.DETAIL : (Number(stageName) as BuildStage);
     const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development, config.settlementIdentity, config.localSlopeDegrees, config.grammarContext);
+    // The architectural specification refines the grammar with decisions the grammar could not
+    // make on its own: a structural family, a real construction material per role, and the
+    // geometric consequences of both. Memorials are excluded — they are a ceremonial composition
+    // with their own geometry, not an inhabited building.
+    const spec = config.development?.memorial ? undefined : this.specFor(config, role, stage, profile);
+    if (spec) applySpecToGrammar(grammar, spec);
     const coreMaterial = this.coreMaterialFor(grammar, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
@@ -768,7 +835,15 @@ export class AssetBuilder {
     const contextBucket = type === 'building' && ctx
       ? `:c${ctx.climateSignal !== undefined ? Math.round(ctx.climateSignal * 5) : ''}.${ctx.floodDepth !== undefined ? Math.round(ctx.floodDepth * 5) : ''}.${ctx.isLandmark ? 1 : 0}`
       : '';
-    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}`;
+    // The architectural spec's own inputs. Climate and prosperity are bucketed so neighbouring
+    // plots keep sharing one cached mesh, and the material bill contributes a compact signature
+    // rather than its raw quantities.
+    const specBucket = type === 'building'
+      ? `:a${ctx?.temperature !== undefined ? Math.round(ctx.temperature * 8) : ''}.${ctx?.moisture !== undefined ? Math.round(ctx.moisture * 8) : ''}.${ctx?.biome ?? ''}`
+        + `.${config.prosperity !== undefined ? Math.round(config.prosperity * 4) : ''}.${config.specialization ?? ''}`
+        + `.${materialBillSignature(config.project)}`
+      : '';
+    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}${specBucket}`;
   }
 
   /**

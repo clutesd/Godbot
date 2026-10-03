@@ -31,7 +31,9 @@ export function constructionChoreography(
   const presentation = constructionStagePresentation(progress);
   const stage = presentation.stage;
   const stageName = BUILD_STAGE_ORDER[stage] ?? 'complete';
-  const phase = stage === BUILD_STAGE.FOUNDATION ? 'foundation'
+  // Site preparation reads as groundwork, and the three post-roof stages all read as fitting
+  // out, so the worker vocabulary stays the five motions it has verbs for.
+  const phase = stage === BUILD_STAGE.SITE || stage === BUILD_STAGE.FOUNDATION ? 'foundation'
     : stage === BUILD_STAGE.FRAME ? 'frame'
       : stage === BUILD_STAGE.WALLS ? 'walls'
         : stage === BUILD_STAGE.ROOF ? 'roof'

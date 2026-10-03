@@ -46,7 +46,7 @@ export function surfaceHasProceduralDetail(surface: SurfaceKey): boolean {
   return DETAILED_SURFACES.includes(surface);
 }
 
-const COMMON_GLSL = /* glsl */ `
+export const SURFACE_COMMON_GLSL = /* glsl */ `
 varying vec3 vGbLocal;
 varying vec3 vGbNormalLocal;
 varying vec3 vGbDetail;
@@ -91,7 +91,7 @@ vec3 gbPerturbNormal(vec3 nrm, float height) {
 `;
 
 /** Face-local frame. `gbTan` follows the element grain axis where the surface uses one. */
-function frameGlsl(useGrainAxis: boolean): string {
+export function surfaceFrameGlsl(useGrainAxis: boolean): string {
   const grain = useGrainAxis
     ? 'vec3 gbGrain = vGbDetail.z < 0.25 ? vec3(1.0, 0.0, 0.0) : (vGbDetail.z < 0.75 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));'
     : 'vec3 gbGrain = vec3(1.0, 0.0, 0.0);';
@@ -114,7 +114,7 @@ function frameGlsl(useGrainAxis: boolean): string {
 `;
 }
 
-interface SurfaceProgram {
+export interface ProceduralSurfaceProgram {
   /** Uses the per-vertex grain axis rather than a fixed horizontal course direction. */
   grain: boolean;
   /** Extra baked weathering on top of the per-vertex value. */
@@ -128,7 +128,7 @@ interface SurfaceProgram {
  * One canonical building unit is roughly six metres, so a brick course is ~0.012 and a
  * stone course ~0.055. The constants below are chosen from that scale rather than tuned by eye.
  */
-function surfaceProgram(surface: SurfaceKey, rank: number): SurfaceProgram | undefined {
+function surfaceProgram(surface: SurfaceKey, rank: number): ProceduralSurfaceProgram | undefined {
   const refined = Math.min(1, rank / 5);
   switch (surface) {
     case 'brick':
@@ -336,7 +336,7 @@ function surfaceProgram(surface: SurfaceKey, rank: number): SurfaceProgram | und
   }
 }
 
-function vertexInjection(source: string): string {
+export function injectSurfaceVertexStage(source: string): string {
   return source
     .replace(
       '#include <common>',
@@ -355,14 +355,14 @@ vGbDetail = aSurfaceDetail.xyz;`,
     );
 }
 
-function fragmentInjection(program: SurfaceProgram, source: string): string {
+export function injectSurfaceFragmentStage(program: ProceduralSurfaceProgram, source: string): string {
   const detail = /* glsl */ `
 float gbTone = 1.0;
 float gbRough = 1.0;
 float gbHeight = 0.0;
 float gbSoot = 0.0;
 {
-${frameGlsl(program.grain)}
+${surfaceFrameGlsl(program.grain)}
   float gbWear = clamp(vGbDetail.x + ${program.wear.toFixed(3)}, 0.0, 1.0);
 ${program.body}
   gbTone *= 1.0 + vGbDetail.y * 0.09 - gbWear * 0.26;
@@ -375,7 +375,7 @@ diffuseColor.rgb *= clamp(gbTone, 0.5, 1.35);
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), gbSoot);
 `;
   return source
-    .replace('#include <common>', `#include <common>\n${COMMON_GLSL}`)
+    .replace('#include <common>', `#include <common>\n${SURFACE_COMMON_GLSL}`)
     .replace('#include <map_fragment>', `#include <map_fragment>\n${detail}`)
     .replace(
       '#include <roughnessmap_fragment>',
@@ -398,19 +398,37 @@ export function applySurfaceDetail(
 ): boolean {
   const program = surfaceProgram(surface, eraRank);
   if (!program) return false;
+  installProceduralSurface(material, program, `godbox-surface:${surface}:${eraRank}`);
+  material.userData['proceduralSurface'] = surface;
+  return true;
+}
+
+/**
+ * Install a procedural pattern onto a material.
+ *
+ * Shared by the legacy surface-key palette and the architectural material library, so there is
+ * exactly one place that knows how a pattern is bound to a Three material.
+ *
+ * `cacheKey` is the program's identity on the GPU. Two materials passing the same key share one
+ * compiled shader, which is what lets dozens of architectural materials cost only a handful of
+ * programs: the key names the *pattern*, never the material.
+ */
+export function installProceduralSurface(
+  material: THREE.MeshStandardMaterial,
+  program: ProceduralSurfaceProgram,
+  cacheKey: string,
+): void {
   material.onBeforeCompile = (shader) => {
-    shader.vertexShader = vertexInjection(shader.vertexShader);
-    shader.fragmentShader = fragmentInjection(program, shader.fragmentShader);
+    shader.vertexShader = injectSurfaceVertexStage(shader.vertexShader);
+    shader.fragmentShader = injectSurfaceFragmentStage(program, shader.fragmentShader);
   };
-  // Two surfaces can share identical onBeforeCompile source text, so the default cache key would
-  // let them reuse one program. Key on the surface instead.
-  material.customProgramCacheKey = () => `godbox-surface:${surface}:${eraRank}`;
+  // Two patterns can share identical onBeforeCompile source text, so the default cache key would
+  // let them reuse one program. Key on the caller's identity instead.
+  material.customProgramCacheKey = () => cacheKey;
   // Geometry without the optional detail attribute (plaza paving, portals, scaffolds) renders
   // as unweathered, straight-grained material rather than failing to bind.
   const defaults = material as unknown as { defaultAttributeValues?: Record<string, number[]> };
   defaults.defaultAttributeValues = { ...(defaults.defaultAttributeValues ?? {}), aSurfaceDetail: [0, 0, 0, 0] };
-  material.userData['proceduralSurface'] = surface;
-  return true;
 }
 
 /** Test/QA hook: the exact shader pair the renderer would compile for a surface. */
@@ -418,7 +436,7 @@ export function compileSurfaceDetailPreview(surface: SurfaceKey, eraRank = 3): {
   const program = surfaceProgram(surface, eraRank);
   if (!program) return undefined;
   return {
-    vertexShader: vertexInjection(THREE.ShaderLib.standard.vertexShader),
-    fragmentShader: fragmentInjection(program, THREE.ShaderLib.standard.fragmentShader),
+    vertexShader: injectSurfaceVertexStage(THREE.ShaderLib.standard.vertexShader),
+    fragmentShader: injectSurfaceFragmentStage(program, THREE.ShaderLib.standard.fragmentShader),
   };
 }

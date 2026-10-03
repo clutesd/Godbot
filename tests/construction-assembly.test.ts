@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { AssetBuilder } from '../src/render/assets/AssetBuilder';
+import { BUILD_STAGE } from '../src/render/assets/BuildingComposer';
 import { ConstructionAssembly, constructionActiveWorkZone, constructionAssemblyPlan } from '../src/render/construction/ConstructionAssembly';
 import { createConstructionScaffold, updateConstructionScaffold } from '../src/render/construction/ConstructionScaffold';
 import { createConstructionWorksite, updateConstructionWorksite } from '../src/render/construction/ConstructionWorksite';
@@ -18,7 +19,7 @@ function response(material: StructureMaterial): DevelopmentResponse {
 }
 function asset(material: StructureMaterial) {
   const builder = new AssetBuilder('assembly-test');
-  const source = builder.getAsset('building', { seed: 'assembly-house', culture: style, era: 'village', variant: 'house#4', development: response(material) }).mesh;
+  const source = builder.getAsset('building', { seed: 'assembly-house', culture: style, era: 'village', variant: `house#${BUILD_STAGE.FINISH}`, development: response(material) }).mesh;
   return { builder, source };
 }
 const materials = ['timber', 'masonry', 'ceramic', 'earth', 'metal'] as const;

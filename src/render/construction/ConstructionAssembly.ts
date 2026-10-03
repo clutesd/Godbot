@@ -1,10 +1,28 @@
 import * as THREE from 'three';
 import type { StructureMaterial } from '../../sim/development/types';
 import type { AssemblyPiece, Vec3 } from '../assets/GeometryBuilder';
+import { BUILD_STAGE } from '../assets/BuildingComposer';
 import type { StructureComponentManifest } from '../assets/StructureComponents';
-import { constructionStagePresentation } from './ConstructionVisualGrammar';
+import { CONSTRUCTION_STAGE_THRESHOLDS, constructionStagePresentation } from './ConstructionVisualGrammar';
 
-const STAGE_START = [0, 0.2, 0.45, 0.78, 0.92, 1] as const;
+/**
+ * Where each construction stage begins in paid progress, plus a terminating 1.
+ *
+ * Mirrors CONSTRUCTION_STAGE_THRESHOLDS exactly; derived from it rather than restated so the
+ * piece-by-piece reveal can never drift out of step with the stage the rest of the renderer
+ * believes the site is in.
+ */
+const STAGE_START = [
+  0,
+  CONSTRUCTION_STAGE_THRESHOLDS.foundation,
+  CONSTRUCTION_STAGE_THRESHOLDS.frame,
+  CONSTRUCTION_STAGE_THRESHOLDS.walls,
+  CONSTRUCTION_STAGE_THRESHOLDS.roof,
+  CONSTRUCTION_STAGE_THRESHOLDS.utilities,
+  CONSTRUCTION_STAGE_THRESHOLDS.fitout,
+  CONSTRUCTION_STAGE_THRESHOLDS.detail,
+  1,
+] as const;
 
 export interface ConstructionPiece extends AssemblyPiece {
   meshIndex: number;
@@ -83,12 +101,18 @@ export function constructionAssemblyPlan(source: THREE.Object3D, fit: number, se
   const firstFace = Math.floor(unit(seed) * 4);
   const faceOrder = (p: ConstructionPiece) => (p.face - firstFace + 4) % 4;
   const course = (p: ConstructionPiece) => Math.round(p.min.y / Math.max(0.025, fit * 0.12));
+  // Within a stage: masonry rises course by course, a timber frame is raised face by face, and
+  // finishing work comes down from the top (ridge ornament before yard dressing).
   pieces.sort((a, b) => a.stage - b.stage
-    || (a.stage === 4 ? course(b) - course(a) : a.stage === 2 && material === 'timber' ? faceOrder(a) - faceOrder(b) : course(a) - course(b))
+    || (a.stage >= BUILD_STAGE.FINISH
+      ? course(b) - course(a)
+      : a.stage === BUILD_STAGE.FRAME && material === 'timber'
+        ? faceOrder(a) - faceOrder(b)
+        : course(a) - course(b))
     || faceOrder(a) - faceOrder(b)
     || (a.face % 2 ? a.min.x - b.min.x : a.min.z - b.min.z)
     || a.min.y - b.min.y || a.meshIndex - b.meshIndex || a.start - b.start);
-  for (let stage = 0; stage < 5; stage++) {
+  for (let stage = 0; stage < STAGE_START.length - 1; stage++) {
     const stagePieces = pieces.filter(p => p.stage === stage);
     stagePieces.forEach((p, i) => {
       const start = STAGE_START[stage]!, span = STAGE_START[stage + 1]! - start;
@@ -129,7 +153,7 @@ export function constructionActiveWorkZone(plan: ConstructionAssemblyPlan, progr
     if (face === 2) contact.x = p.min.x;
     if (face === 3) contact.z = p.min.z;
     // Tall posts are fastened at their lower connection first.
-    if (p.stage === 1) contact.y = p.min.y + Math.min(0.2, p.max.y - p.min.y);
+    if (p.stage === BUILD_STAGE.FOUNDATION) contact.y = p.min.y + Math.min(0.2, p.max.y - p.min.y);
   }
   const stand = { x: contact.x, z: contact.z };
   const clearance = 0.14;
@@ -138,7 +162,7 @@ export function constructionActiveWorkZone(plan: ConstructionAssemblyPlan, progr
   if (face === 2) stand.x = Math.min(-plan.width / 2, contact.x) - clearance;
   if (face === 3) stand.z = Math.min(-plan.depth / 2, contact.z) - clearance;
   const stage = constructionStagePresentation(progress).stage;
-  const platform = stage >= 1 ? Math.floor(Math.max(0, contact.y - 0.16) / 0.2) * 0.2 : 0;
+  const platform = stage >= BUILD_STAGE.FOUNDATION ? Math.floor(Math.max(0, contact.y - 0.16) / 0.2) * 0.2 : 0;
   return { piece: index, face, contact, stand, platform };
 }
 

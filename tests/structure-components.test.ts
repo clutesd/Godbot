@@ -184,7 +184,7 @@ describe('structural component contract', () => {
       seed: 'component-asset',
       culture: context.culture.style,
       era: 'industrial',
-      variant: 'energy#4',
+      variant: `energy#${BUILD_STAGE.FINISH}`,
       development,
     });
     const manifest = asset.mesh.userData['structureComponents'] as StructureComponentManifest;

@@ -4,6 +4,7 @@ import { Simulation } from '../sim/Simulation';
 import type { Person } from '../sim/types';
 import type { DevelopmentResponse, StructureMaterial } from '../sim/development/types';
 import { AssetBuilder } from '../render/assets/AssetBuilder';
+import { BUILD_STAGE } from '../render/assets/BuildingComposer';
 import { ConstructionAssembly } from '../render/construction/ConstructionAssembly';
 import { createConstructionScaffold, updateConstructionScaffold } from '../render/construction/ConstructionScaffold';
 import { createConstructionWorksite, updateConstructionWorksite } from '../render/construction/ConstructionWorksite';
@@ -66,7 +67,7 @@ function rebuild(): void {
   const era: Era = material === 'metal' ? 'industrial' : material === 'ceramic' ? 'preIndustrial' : material === 'masonry' ? 'village' : 'early';
   const role = material === 'metal' ? 'factory' : material === 'masonry' ? 'hall' : 'house';
   const response: DevelopmentResponse = { need: material === 'metal' ? 'manufacturing' : 'housing', form: material === 'metal' ? 'workshop' : 'dwelling', name: role, level: material === 'metal' ? 3 : 2, material, cultureId: templatePerson.cultureId, style: culture, services: { housing: 2 }, reasons: [], capabilities: [], cost: { food: 0, wood: 4, minerals: 0, goods: 0, wealth: 0 }, labor: 4 };
-  const source = assetBuilder.getAsset('building', { seed: `review:${role}`, culture, era, development: response, variant: `${role}#4` }).mesh;
+  const source = assetBuilder.getAsset('building', { seed: `review:${role}`, culture, era, development: response, variant: `${role}#${BUILD_STAGE.FINISH}` }).mesh;
   const fit = 2.4 / Number(source.userData['footprintWidth']);
   assembly = new ConstructionAssembly(source, fit, 'review-plot', material);
   assembly.update(Number(progress.value)); root.add(assembly.group);

@@ -21,23 +21,47 @@ import type { MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
 import { wallLayerForMaterial } from './StructureHeritage';
 import type { StructureMaterial } from '../../sim/development/types';
+import type { ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
+import { specSurfaceMaterials } from '../architecture/SpecGrammarBridge';
 
-/** Construction lifecycle. Parts are emitted only once their stage has been reached. */
+/**
+ * Construction lifecycle. Parts are emitted only once their stage has been reached.
+ *
+ * The sequence is the physical order of building work, which is what makes a site legible from
+ * across a valley: ground is cleared and set out, footings go in, the frame or the first courses
+ * rise, the envelope closes, the roof goes on, flues and services are run, joinery and equipment
+ * are fitted, and only then does anything decorative appear.
+ *
+ * `DETAIL` is retained as an alias for the finished state so the many existing call sites that
+ * mean "only on a completed building" keep meaning exactly that.
+ */
 export const BUILD_STAGE = {
-  FOUNDATION: 0,
-  FRAME: 1,
-  WALLS: 2,
-  ROOF: 3,
-  DETAIL: 4,
+  /** Site preparation: setting-out stakes, cleared ground, spoil and material stacks. */
+  SITE: 0,
+  FOUNDATION: 1,
+  FRAME: 2,
+  WALLS: 3,
+  ROOF: 4,
+  /** Flues, stacks, vents, water and power — run once the shell can carry them. */
+  UTILITIES: 5,
+  /** Joinery, doors, glazing and working equipment, fitted into a weathertight shell. */
+  FITOUT: 6,
+  /** Ornament, banners, lanterns, yard dressing: the last eight per cent of the work. */
+  FINISH: 7,
+  /** Legacy alias for a fully built structure. */
+  DETAIL: 7,
 } as const;
 
 export type BuildStage = (typeof BUILD_STAGE)[keyof typeof BUILD_STAGE];
 
 export const BUILD_STAGE_ORDER: readonly string[] = [
+  'site',
   'foundation',
   'frame',
   'partial-walls',
   'roof',
+  'utilities',
+  'fit-out',
   'complete',
 ];
 
@@ -53,6 +77,12 @@ class BuildingCanvas {
     private readonly stage: number,
     private readonly wear = 0,
     private readonly tone = 0,
+    /**
+     * The real construction material behind each semantic surface, when the structure was
+     * resolved through the architecture system. Absent for legacy fabric, which keeps using the
+     * palette's surface-key materials exactly as before.
+     */
+    private readonly materials?: ReadonlyMap<SurfaceKey, ArchitecturalMaterialId>,
   ) {}
 
   /** Returns a builder only if the requested part belongs to a stage already built. */
@@ -81,17 +111,22 @@ class BuildingCanvas {
 
   build(palette: MaterialPalette): THREE.Group {
     const group = new THREE.Group();
-    const batches = new Map<SurfaceKey, THREE.BufferGeometry[]>();
+    // Batches are keyed by the *resolved material*, not by the semantic surface. Two surfaces
+    // that turn out to be the same construction material therefore merge into one draw call,
+    // so a spec-driven building generally costs fewer batches than the legacy path, not more.
+    const batches = new Map<string, { surface: SurfaceKey; geometries: THREE.BufferGeometry[] }>();
     for (const { surface, stage, builder } of this.surfaces.values()) {
       if (builder.isEmpty) continue;
       const geometry = builder.build();
       for (const piece of geometry.userData['assemblyPieces'] as AssemblyPiece[]) piece.stage = stage;
       if (!geometry.hasAttribute('aSurfaceDetail')) geometry.setAttribute('aSurfaceDetail',
         new THREE.Int8BufferAttribute(new Int8Array(geometry.getAttribute('position').count * 4), 4, true));
-      const batch = batches.get(surface) ?? [];
-      batch.push(geometry); batches.set(surface, batch);
+      const architectural = this.materials?.get(surface);
+      const key = architectural ? `arch:${architectural}` : `surface:${surface}`;
+      const batch = batches.get(key) ?? { surface, geometries: [] };
+      batch.geometries.push(geometry); batches.set(key, batch);
     }
-    for (const [surface, batch] of batches) {
+    for (const [key, { surface, geometries: batch }] of batches) {
       const pieces: AssemblyPiece[] = [];
       let offset = 0;
       for (const geometry of batch) {
@@ -104,11 +139,16 @@ class BuildingCanvas {
       geometry.userData['assemblyPieces'] = pieces;
       for (const source of batch) source.dispose();
       geometry.userData['shared'] = true;
-      const material = palette.getSurfaceMaterial(surface);
+      const architectural = this.materials?.get(surface);
+      const material = architectural
+        ? palette.getArchitecturalMaterial(architectural)
+        : palette.getSurfaceMaterial(surface);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = surface !== 'shadow';
       mesh.receiveShadow = true;
-      mesh.name = surface;
+      // Name by what it is made of when that is known, so scene inspection reads architecturally.
+      mesh.name = architectural ?? surface;
+      mesh.userData['batchKey'] = key;
       group.add(mesh);
     }
     return group;
@@ -246,6 +286,18 @@ function roofSurfaceFor(grammar: BuildingGrammar): SurfaceKey {
   if (grammar.era === 'early') return 'roof-thatch';
   if (grammar.roofFamily === 'saw-tooth' || grammar.roofFamily === 'canopy-shell') return 'roof-metal';
   return 'roof-tile';
+}
+
+/**
+ * Door width.
+ *
+ * A structural family's opening dare is the strongest functional cue a building has: a cart
+ * entrance in a steel shed and a doorway in a rubble wall are not the same hole. Shared with the
+ * `doorWidth` hint other systems use to walk people to an entrance, so the two never disagree.
+ */
+function doorWidthFor(grammar: BuildingGrammar): number {
+  if (grammar.openingWidth === undefined) return Math.min(grammar.width * 0.3, 0.34);
+  return Math.min(grammar.width * 0.46, Math.max(0.16, grammar.openingWidth * 2.1));
 }
 
 function wallSurfaceFor(layer: WallLayer): SurfaceKey {
@@ -395,7 +447,19 @@ export function composeBuilding(
    * everything above the core keep the grammar's current one. */
   coreMaterial?: StructureMaterial,
 ): ComposedBuilding {
-  const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift);
+  // Surfaces are pure functions of the grammar, so they are resolved before the canvas exists:
+  // the canvas needs to know which construction material sits behind each of them in order to
+  // batch by material rather than by surface.
+  const wallSurface = wallSurfaceFor(grammar.wallLayer);
+  const roofSurface = roofSurfaceFor(grammar);
+  const postSurface: SurfaceKey =
+    grammar.postStyle === 'stone' ? 'stone' : grammar.postStyle === 'steel' || grammar.postStyle === 'composite' ? 'metal' : 'timber';
+  const baseSurface = grammar.baseMaterial ? wallSurfaceFor(wallLayerForMaterial(grammar.baseMaterial)) : undefined;
+  const surfaceMaterials = grammar.spec
+    ? specSurfaceMaterials(grammar.spec, { wallSurface, roofSurface, postSurface, baseSurface })
+    : undefined;
+
+  const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift, surfaceMaterials);
   const memorial = grammar.development?.memorial;
   if (memorial) {
     // The landscape renderer owns distributed burial markers. This asset is the ceremonial focal
@@ -530,11 +594,6 @@ export function composeBuilding(
   const halfDepth = grammar.depth / 2;
   const plinthTop = grammar.plinthHeight;
   const wallTop = plinthTop + grammar.wallHeight * grammar.storeys;
-  const wallSurface = wallSurfaceFor(grammar.wallLayer);
-  const roofSurface = roofSurfaceFor(grammar);
-  const postSurface: SurfaceKey =
-    grammar.postStyle === 'stone' ? 'stone' : grammar.postStyle === 'steel' || grammar.postStyle === 'composite' ? 'metal' : 'timber';
-  const baseSurface = grammar.baseMaterial ? wallSurfaceFor(wallLayerForMaterial(grammar.baseMaterial)) : undefined;
 
   emitGroundworks(canvas, grammar, halfWidth, halfDepth);
   emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
@@ -552,7 +611,7 @@ export function composeBuilding(
   group.userData['bodyWidth'] = grammar.width;
   group.userData['bodyDepth'] = grammar.depth;
   group.userData['floorHeight'] = plinthTop;
-  group.userData['doorWidth'] = Math.min(grammar.width * 0.3, 0.34);
+  group.userData['doorWidth'] = doorWidthFor(grammar);
   group.userData['wallTop'] = wallTop;
   group.userData['vernacularFabric'] = (rank <= 1 || grammar.development?.level === 1)
     && ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);
@@ -650,7 +709,7 @@ function emitFrame(
   postSurface: SurfaceKey,
 ): void {
   const posts = canvas.at(postSurface, BUILD_STAGE.FRAME);
-  const stakes = canvas.at('timber', BUILD_STAGE.FOUNDATION);
+  const stakes = canvas.at('timber', BUILD_STAGE.SITE);
   const thickness = grammar.postThickness;
 
   // Setting-out stakes read as a marked-out plot before framing starts.
@@ -731,12 +790,27 @@ function emitFrame(
       posts?.addBox(x, plinthTop + (wallTop - plinthTop) / 2, z, thickness * (corner ? 1.3 : 1), wallTop - plinthTop, thickness * (corner ? 1.3 : 1));
     }
   }
-  const sidePosts = Math.max(1, Math.round(grammar.bays * (grammar.depth / grammar.width)));
+  // Support density is a family property: a timber frame is a thicket of members, a steel portal
+  // frame is four stanchions and a clear span.
+  const densityScale = grammar.supportDensity !== undefined ? 0.55 + grammar.supportDensity * 1.0 : 1;
+  const sidePosts = Math.max(1, Math.round(grammar.bays * (grammar.depth / grammar.width) * densityScale));
   for (const x of [halfWidth, -halfWidth]) {
     for (let index = 1; index < sidePosts; index += 1) {
       const z = -halfDepth + (grammar.depth * index) / sidePosts;
       posts?.addBox(x, plinthTop + (wallTop - plinthTop) / 2, z, thickness, wallTop - plinthTop, thickness);
     }
+  }
+
+  // A roof that outspans its own structure needs a middle support, and that arcade of internal
+  // posts is exactly what makes a medieval threshing barn read as a threshing barn.
+  if (grammar.spec?.roof.intermediateSupport) {
+    const interior = Math.max(2, Math.round(grammar.bays * 0.6));
+    for (let index = 1; index < interior; index += 1) {
+      const x = -halfWidth + (grammar.width * index) / interior;
+      posts?.addBox(x, plinthTop + (wallTop - plinthTop) / 2, 0, thickness * 1.15, wallTop - plinthTop, thickness * 1.15);
+    }
+    // The tie beam the posts carry, running the length of the building on the centre line.
+    posts?.addBox(0, wallTop - thickness * 0.6, 0, grammar.width * 0.94, thickness * 0.95, thickness * 1.1);
   }
 
   // Sill, mid-rail and head beams give the timber-framing rhythm its horizontals.
@@ -749,7 +823,9 @@ function emitFrame(
     posts?.addBox(-halfWidth, y, 0, thickness, thickness * 0.85, grammar.depth);
   }
 
-  if (grammar.postStyle === 'steel' || grammar.postStyle === 'composite' || grammar.reinforced) {
+  // An exposed frame braces its bays visibly; a frame buried in masonry does not.
+  const exposedFrame = (grammar.frameExposure ?? 0) > 0.6;
+  if (grammar.postStyle === 'steel' || grammar.postStyle === 'composite' || grammar.reinforced || exposedFrame) {
     // Industrial and later frames brace their bays; the diagonal reads as a truss. Iron-reinforced
     // timber gets the same bracing without a material swap.
     for (let index = 0; index < grammar.bays; index += 1) {
@@ -900,13 +976,25 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
   const metal = material === 'metal';
   const earth = material === 'earth';
   const rows = metal ? 3 : timber ? 2 : earth ? 5 : 8;
-  const thickness = Math.max(0.035, grammar.postThickness * (earth ? 2.4 : 1.1));
-  const doorWidth = Math.min(grammar.width * 0.3, 0.34);
-  const doorHeight = Math.min(height * 0.78, 0.6);
+  // Wall thickness is a property of the structural family and its wall material, not of the post
+  // section. This is what makes an adobe wall visibly massive and a curtain wall visibly thin.
+  const thickness = grammar.wallThickness !== undefined
+    ? Math.max(0.012, grammar.wallThickness)
+    : Math.max(0.035, grammar.postThickness * (earth ? 2.4 : 1.1));
+  const doorWidth = doorWidthFor(grammar);
+  const doorHeight = grammar.openingHeight !== undefined
+    ? Math.min(height * 0.82, Math.max(0.16, grammar.openingHeight * 2.4))
+    : Math.min(height * 0.78, 0.6);
   const perRow = Math.max(1, grammar.bays - 1);
   const windowRows = grammar.windowRows;
-  const ww = Math.min(grammar.width / (perRow + 1) * 0.5, 0.2) * (grammar.openings === 'slit' ? 0.4 : 1);
-  const wh = grammar.openings === 'slit' ? Math.min(height * 0.4, 0.26) : Math.min(height * 0.3, 0.22);
+  // Opening size follows what the wall can span over. A masonry wall keeps its holes small
+  // because every one of them needs something above it; a steel frame does not care.
+  const ww = grammar.openingWidth !== undefined
+    ? Math.max(0.02, Math.min(grammar.openingWidth, (grammar.width / (perRow + 1)) * 0.8))
+    : Math.min(grammar.width / (perRow + 1) * 0.5, 0.2) * (grammar.openings === 'slit' ? 0.4 : 1);
+  const wh = grammar.openingHeight !== undefined
+    ? Math.max(0.03, Math.min(grammar.openingHeight, height * 0.62))
+    : grammar.openings === 'slit' ? Math.min(height * 0.4, 0.26) : Math.min(height * 0.3, 0.22);
   for (const [faceIndex, face] of wallFrames(halfW, halfD).entries()) {
     const openings: { u: number; y: number; w: number; h: number }[] = [];
     if (faceIndex === 0) openings.push({ u: 0, y: doorHeight / 2, w: doorWidth, h: doorHeight });
@@ -953,7 +1041,7 @@ function emitOpenings(
 ): void {
   const shadow = canvas.at('shadow', BUILD_STAGE.WALLS);
   const trim = canvas.at(postSurface, BUILD_STAGE.WALLS);
-  const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+  const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
   const bodyHeight = wallTop - plinthTop;
   const frames = wallFrames(halfWidth, halfDepth);
   const proud = grammar.postThickness * 0.5;
@@ -978,7 +1066,7 @@ function emitOpenings(
   if (grammar.openings === 'flap') return;
 
   // A hung timber door with a stone threshold; entrances stop reading as black holes.
-  const door = canvas.at('timber', BUILD_STAGE.DETAIL);
+  const door = canvas.at('timber', BUILD_STAGE.FITOUT);
   door?.addBox(0, plinthTop + doorHeight / 2, halfDepth + proud * 0.55, doorWidth * 0.92, doorHeight * 0.96, proud * 0.5);
   canvas.at('stone', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.025, halfDepth + proud * 2.4, doorWidth * 1.4, 0.05, 0.14);
   if (grammar.ornament > 0.4) {
@@ -1080,7 +1168,7 @@ function emitRoof(
     // so the workshop still belongs to the same architectural family.
     const teeth = Math.max(2, Math.round(grammar.bays * 0.6));
     const pitchHeight = grammar.depth * grammar.roofPitch;
-    const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+    const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
     for (let index = 0; index < teeth; index += 1) {
       const z0 = halfDepth - (grammar.depth * index) / teeth;
       const z1 = halfDepth - (grammar.depth * (index + 1)) / teeth;
@@ -1213,10 +1301,10 @@ function emitStacks(
   topY: number,
   postSurface: SurfaceKey,
 ): void {
-  const brick = canvas.at(grammar.wallLayer === 'panel' ? 'panel' : 'brick', BUILD_STAGE.ROOF);
-  const metal = canvas.at('metal', BUILD_STAGE.ROOF);
-  const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
-  const trim = canvas.at(postSurface, BUILD_STAGE.ROOF);
+  const brick = canvas.at(grammar.wallLayer === 'panel' ? 'panel' : 'brick', BUILD_STAGE.UTILITIES);
+  const metal = canvas.at('metal', BUILD_STAGE.UTILITIES);
+  const motif = canvas.at('motif', BUILD_STAGE.FINISH);
+  const trim = canvas.at(postSurface, BUILD_STAGE.UTILITIES);
   // Flues are the sootiest fabric on any building.
   if (grammar.chimneys > 0) canvas.stain(brick, 0.4);
   if (grammar.vents > 0) canvas.stain(metal, 0.2);
@@ -1478,7 +1566,7 @@ function emitCrown(
   const metal = canvas.at('metal', BUILD_STAGE.ROOF);
   const stone = canvas.at('stone', BUILD_STAGE.ROOF);
   const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
-  const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+  const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
   const shadow = canvas.at('shadow', BUILD_STAGE.ROOF);
   const frontFrame = wallFrames(halfWidth, halfDepth)[0]!;
 
@@ -1750,7 +1838,7 @@ function emitYardProps(
   const timber = canvas.at('timber', BUILD_STAGE.DETAIL);
   const stone = canvas.at('stone', BUILD_STAGE.DETAIL);
   const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
-  const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+  const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
   const shadow = canvas.at('shadow', BUILD_STAGE.DETAIL);
   const service = -halfWidth * 1.3;
   const jitter = (amount: number): number => random.range(-amount, amount);
@@ -1940,7 +2028,7 @@ function emitDetails(
   const deck = canvas.at('timber', BUILD_STAGE.DETAIL);
   const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
   const cloth = canvas.at('cloth', BUILD_STAGE.DETAIL);
-  const glow = canvas.at('glow', BUILD_STAGE.DETAIL);
+  const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
   const stone = canvas.at('stone', BUILD_STAGE.DETAIL);
   const forge = canvas.at('forge', BUILD_STAGE.DETAIL);
   const thickness = grammar.postThickness;

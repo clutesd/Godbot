@@ -9,12 +9,19 @@ import { developmentBuildingRole, developmentPresentationEra, type BuildingRole 
  * The same thresholds drive geometry, worksite dressing and the heavy-render signature.
  */
 export const CONSTRUCTION_STAGE_THRESHOLDS = {
+  /** Footings begin once the ground is cleared and set out. */
+  foundation: 0.06,
   frame: 0.2,
   walls: 0.45,
-  roof: 0.78,
-  // Reserve the final 8% of paid work for doors, trim, glow, ornament, frontage and yard detail.
-  // Cleanup/scaffold stripping begins shortly after, at 95%, while this stage continues revealing.
-  detail: 0.92,
+  roof: 0.7,
+  /** Flues, stacks and services, run once the shell is weathertight. */
+  utilities: 0.86,
+  /** Joinery, glazing and working equipment, fitted into a closed shell. */
+  fitout: 0.91,
+  // Reserve the final 5% of paid work for ornament, frontage and yard detail, with scaffold
+  // stripping beginning at the same point. `detail` is retained as the name of that boundary
+  // because the renderer's completed-building stage is still called DETAIL.
+  detail: 0.95,
   finishing: 0.95,
 } as const;
 
@@ -46,43 +53,41 @@ export function constructionBuildStage(progress: number): BuildStage {
  * Continuous presentation state inside the canonical stages. Simulation progress remains the only
  * authority; this merely converts it into a staged reveal amount for rendering.
  */
+/**
+ * The construction lifecycle as an ordered table of (stage, the paid progress it begins at).
+ *
+ * One table drives stage selection, the reveal phase inside a stage, and the previous stage, so
+ * the eight stages cannot drift out of step with each other the way parallel branches would.
+ */
+const STAGE_TABLE: readonly { stage: BuildStage; start: number }[] = [
+  { stage: BUILD_STAGE.SITE, start: 0 },
+  { stage: BUILD_STAGE.FOUNDATION, start: CONSTRUCTION_STAGE_THRESHOLDS.foundation },
+  { stage: BUILD_STAGE.FRAME, start: CONSTRUCTION_STAGE_THRESHOLDS.frame },
+  { stage: BUILD_STAGE.WALLS, start: CONSTRUCTION_STAGE_THRESHOLDS.walls },
+  { stage: BUILD_STAGE.ROOF, start: CONSTRUCTION_STAGE_THRESHOLDS.roof },
+  { stage: BUILD_STAGE.UTILITIES, start: CONSTRUCTION_STAGE_THRESHOLDS.utilities },
+  { stage: BUILD_STAGE.FITOUT, start: CONSTRUCTION_STAGE_THRESHOLDS.fitout },
+  { stage: BUILD_STAGE.FINISH, start: CONSTRUCTION_STAGE_THRESHOLDS.detail },
+];
+
+/** Every construction stage in physical build order. */
+export const CONSTRUCTION_STAGE_SEQUENCE: readonly BuildStage[] = STAGE_TABLE.map(entry => entry.stage);
+
 export function constructionStagePresentation(progress: number): ConstructionStagePresentation {
   const paid = Math.max(0, Math.min(1, progress));
-  let stage: BuildStage;
-  let previousStage: BuildStage | undefined;
-  let start = 0;
-  let end: number = CONSTRUCTION_STAGE_THRESHOLDS.frame;
 
-  if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.detail) {
-    stage = BUILD_STAGE.DETAIL;
-    previousStage = BUILD_STAGE.ROOF;
-    start = CONSTRUCTION_STAGE_THRESHOLDS.detail;
-    end = 1;
-  } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.roof) {
-    stage = BUILD_STAGE.ROOF;
-    previousStage = BUILD_STAGE.WALLS;
-    start = CONSTRUCTION_STAGE_THRESHOLDS.roof;
-    end = CONSTRUCTION_STAGE_THRESHOLDS.detail;
-  } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.walls) {
-    stage = BUILD_STAGE.WALLS;
-    previousStage = BUILD_STAGE.FRAME;
-    start = CONSTRUCTION_STAGE_THRESHOLDS.walls;
-    end = CONSTRUCTION_STAGE_THRESHOLDS.roof;
-  } else if (paid >= CONSTRUCTION_STAGE_THRESHOLDS.frame) {
-    stage = BUILD_STAGE.FRAME;
-    previousStage = BUILD_STAGE.FOUNDATION;
-    start = CONSTRUCTION_STAGE_THRESHOLDS.frame;
-    end = CONSTRUCTION_STAGE_THRESHOLDS.walls;
-  } else {
-    stage = BUILD_STAGE.FOUNDATION;
+  let index = 0;
+  for (let candidate = STAGE_TABLE.length - 1; candidate >= 0; candidate -= 1) {
+    if (paid >= STAGE_TABLE[candidate]!.start) { index = candidate; break; }
   }
+  const entry = STAGE_TABLE[index]!;
+  const start = entry.start;
+  const end = index + 1 < STAGE_TABLE.length ? STAGE_TABLE[index + 1]!.start : 1;
 
-  const phase = stage === BUILD_STAGE.FOUNDATION
-    ? paid / Math.max(1e-6, CONSTRUCTION_STAGE_THRESHOLDS.frame)
-    : (paid - start) / Math.max(1e-6, end - start);
+  const phase = (paid - start) / Math.max(1e-6, end - start);
   return {
-    stage,
-    previousStage,
+    stage: entry.stage,
+    previousStage: index > 0 ? STAGE_TABLE[index - 1]!.stage : undefined,
     phase: Math.max(0, Math.min(1, phase)),
     finishing: paid >= CONSTRUCTION_STAGE_THRESHOLDS.finishing && paid < 1,
   };

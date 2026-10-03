@@ -53,8 +53,8 @@ import { createGarmentAtlasGeometry, createHeadAtlasGeometry, createHumanMantleG
 import { createFocalContactShadow } from './people/FocalContactShadow';
 import { AssetBuilder } from './assets/AssetBuilder';
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
-import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingRole } from './assets/BuildingGrammar';
-import type { DevelopmentResponse } from '../sim/development/types';
+import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingGrammarContext, type BuildingRole } from './assets/BuildingGrammar';
+import type { DevelopmentProject, DevelopmentResponse } from '../sim/development/types';
 import { districtForResponse } from '../shared/SettlementLayoutPlan';
 import { MaterialPalette, type Era } from './materials/MaterialPalette';
 import { PlacementContract } from './placement/PlacementContract';
@@ -2497,7 +2497,9 @@ export class GodboxRenderer {
       era,
       variant: `${placement.role}#${BUILD_STAGE.DETAIL}`,
       settlementIdentity: settlement.architecture,
-      grammarContext: { isLandmark: true, climateSignal: this.climateSignalFor(settlement) },
+      grammarContext: { ...this.climateContextFor(settlement), isLandmark: true },
+      prosperity: settlement.prosperity,
+      specialization: settlement.specialization,
     });
     const landmark = asset.mesh.clone(true);
     const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
@@ -2569,7 +2571,10 @@ export class GodboxRenderer {
       development: placement.development,
       settlementIdentity: settlement.architecture,
       localSlopeDegrees: placement.localSlopeDegrees,
-      grammarContext: { climateSignal: this.climateSignalFor(settlement), floodDepth: placement.floodDepth },
+      grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
+      prosperity: settlement.prosperity,
+      specialization: settlement.specialization,
+      project: this.projectForPlot(settlement, placement.key),
     });
     const building = asset.mesh.clone(true);
 
@@ -2868,7 +2873,10 @@ export class GodboxRenderer {
       development: targetPlacement.development,
       settlementIdentity: settlement?.architecture,
       localSlopeDegrees: targetPlacement.localSlopeDegrees,
-      grammarContext: settlement ? { climateSignal: this.climateSignalFor(settlement), floodDepth: targetPlacement.floodDepth } : undefined,
+      grammarContext: settlement ? { ...this.climateContextFor(settlement), floodDepth: targetPlacement.floodDepth } : undefined,
+      prosperity: settlement?.prosperity,
+      specialization: settlement?.specialization,
+      project: this.projectForPlot(settlement, targetPlacement.key),
     };
     const stagedAsset = this.assetBuilder.getAsset('building', {
       ...baseConfig,
@@ -3294,6 +3302,36 @@ export class GodboxRenderer {
     const cell = this.state.world.cells[settlement.cellIndex];
     if (!cell) return 0;
     return Math.max(-1, Math.min(1, (cell.temperature - 0.5) * 2 - (cell.moisture - 0.5) * 0.8));
+  }
+
+  /**
+   * The settlement cell's own climate, for the architecture system.
+   *
+   * `climateSignal` collapses temperature and moisture into one number, which cannot tell a wet
+   * climate from a snowy one — and those want opposite roofs. The raw fields are passed through
+   * alongside it so the architecture system can zone properly, while every existing consumer of
+   * the signal keeps working.
+   */
+  private climateContextFor(settlement: Settlement): BuildingGrammarContext {
+    const cell = this.state.world.cells[settlement.cellIndex];
+    return {
+      climateSignal: this.climateSignalFor(settlement),
+      temperature: cell?.temperature,
+      moisture: cell?.moisture,
+      biome: cell?.biome,
+    };
+  }
+
+  /**
+   * The live project, but only for the plot it is actually building.
+   *
+   * A settlement's current bill of materials describes the building going up now; handing it to
+   * every finished structure on the map would make them all claim fabric they were not built of.
+   */
+  private projectForPlot(settlement: Settlement | undefined, placementKey: string | undefined): DevelopmentProject | undefined {
+    const project = settlement?.development?.project;
+    if (!project || !placementKey || project.plotId !== placementKey) return undefined;
+    return project;
   }
 
   /** Derive the founding heraldry from geography, institutions, culture and lineage. */

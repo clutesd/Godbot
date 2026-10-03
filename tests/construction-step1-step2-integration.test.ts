@@ -7,6 +7,7 @@ import { BUILD_STAGE } from '../src/render/assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra } from '../src/render/assets/BuildingGrammar';
 import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import {
+  CONSTRUCTION_STAGE_THRESHOLDS,
   constructionPresentationProgress,
   constructionStagePresentation,
 } from '../src/render/construction/ConstructionVisualGrammar';
@@ -173,12 +174,20 @@ describe('Step 1 + Step 2 construction presentation contract', () => {
     expect(assembler).toBeDefined();
     const assemblerAssignment = scene.constructionCrewAssignment(settlement.id, assembler.id)!;
 
+    // One checkpoint per construction stage, with the expected reveal phase derived from the
+    // canonical thresholds rather than restated, so retuning the lifecycle cannot silently
+    // invalidate this contract.
+    const T = CONSTRUCTION_STAGE_THRESHOLDS;
+    const within = (progress: number, start: number, end: number): number => (progress - start) / (end - start);
     const checkpoints = [
-      { progress: 0.10, stage: BUILD_STAGE.FOUNDATION, phase: 0.50, finishing: false },
-      { progress: 0.30, stage: BUILD_STAGE.FRAME, phase: 0.40, finishing: false },
-      { progress: 0.60, stage: BUILD_STAGE.WALLS, phase: (0.60 - 0.45) / (0.78 - 0.45), finishing: false },
-      { progress: 0.85, stage: BUILD_STAGE.ROOF, phase: 0.50, finishing: false },
-      { progress: 0.96, stage: BUILD_STAGE.DETAIL, phase: 0.50, finishing: true },
+      { progress: 0.03, stage: BUILD_STAGE.SITE, phase: within(0.03, 0, T.foundation), finishing: false },
+      { progress: 0.10, stage: BUILD_STAGE.FOUNDATION, phase: within(0.10, T.foundation, T.frame), finishing: false },
+      { progress: 0.30, stage: BUILD_STAGE.FRAME, phase: within(0.30, T.frame, T.walls), finishing: false },
+      { progress: 0.60, stage: BUILD_STAGE.WALLS, phase: within(0.60, T.walls, T.roof), finishing: false },
+      { progress: 0.80, stage: BUILD_STAGE.ROOF, phase: within(0.80, T.roof, T.utilities), finishing: false },
+      { progress: 0.88, stage: BUILD_STAGE.UTILITIES, phase: within(0.88, T.utilities, T.fitout), finishing: false },
+      { progress: 0.93, stage: BUILD_STAGE.FITOUT, phase: within(0.93, T.fitout, T.detail), finishing: false },
+      { progress: 0.96, stage: BUILD_STAGE.FINISH, phase: within(0.96, T.detail, 1), finishing: true },
     ] as const;
 
     const deliveryTargets: string[] = [];

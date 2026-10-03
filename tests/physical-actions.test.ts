@@ -453,7 +453,7 @@ describe('construction workflow', () => {
 
   it('derives material-specific choreography from the same construction stages as the building', () => {
     const timberFrame = constructionChoreography('timber', 0.3);
-    const timberRoof = constructionChoreography('timber', 0.85);
+    const timberRoof = constructionChoreography('timber', 0.78);
     const stoneWalls = constructionChoreography('masonry', 0.6);
     const metalFrame = constructionChoreography('metal', 0.3);
     const earthFoundation = constructionChoreography('earth', 0.1);

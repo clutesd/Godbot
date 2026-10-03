@@ -133,9 +133,13 @@ BuildingPlacement  (persistent plot: position, footprint, role, founding era)
         v
 BuildingGrammar    (massing, roof family, motif, ornament, openings, ...)
         |
+        | resolveBuildingSpec(authoritative state) -> applySpecToGrammar
+        v
+BuildingSpec       (period, structural family, material per role, metrics, age)
+        |
         | composeBuilding(grammar, palette, seed, stage)
         v
-merged per-surface geometry -> shared, cached, instanced clones
+geometry batched per construction material -> shared, cached, instanced clones
 ```
 
 **Determinism.** A structure's appearance is a pure function of `(seed, culture style, era, role, variation, construction stage)`. No wall-clock time, no world position, no `Math.random()`. The renderer's PRNG stream is forked per plot and is separate from the simulation stream, so a visual choice cannot consume a simulation random draw.
@@ -145,6 +149,41 @@ merged per-surface geometry -> shared, cached, instanced clones
 **Identity over time.** A plot's role and position are assigned once and never change. Era is the only thing that advances, and it advances per plot rather than per settlement, so a town modernizes unevenly and keeps its history visible. A structure's rendered era is clamped so it can never regress below the era it was founded in.
 
 **Presentation, not state.** Construction stages are presentation-time state owned by `VisualStateResolver` and `TransitionTimeline`. Skipping, accelerating, or never showing a construction sequence changes when a viewer sees a building rise; it cannot change whether the simulation considers it built.
+
+## Architectural system
+
+`src/render/architecture/` answers one question — *given everything the simulation knows, what is this building made of and how does it stand up?* — and answers it once, in `BuildingSpec`. Downstream consumers read the spec; none of them re-decide.
+
+```text
+MaterialLibrary        36 construction materials with real metadata
+StructuralFamily       14 ways of standing up, each with geometric consequences
+BuildingArchetype      18 functional classes, each a lineage of historical stages
+ArchitecturalPeriod    8 periods, derived from era + development + capability
+MaterialSourcing       graded evidence from what the settlement actually consumed
+        |
+        v
+BuildingSpec           one contract: family, material per role, metrics, age, equipment
+        |
+        +-- SpecGrammarBridge ----> the existing BuildingGrammar and composer
+        +-- SurfaceProgramLibrary -> 26 procedural patterns, no textures
+        +-- ArchitecturalMaterialSet -> shared Three materials per culture-era scope
+```
+
+**Materials are substances, not colours.** A material declares the first period it can be made in, the capabilities its process needs, what it can hold up (`load`), how far it can span, how many storeys it carries, its durability, fire resistance, weathering mode, labour and cost, per-climate suitability, cultural affinity, and the simulation material kinds that evidence it. The resolver only ever compares these; nothing is special-cased by name.
+
+**Materials are earned, not drawn.** `MaterialSourcing` grades the evidence for what a building is made of: the project's own consumption record (`materialSpent`) is strongest, the response's processed-material bill (`materialCost`) next, settlement stock weak, and the coarse `StructureMaterial` class the always-present floor. A settlement that fired and laid brick gets brick walls; one that only felled timber cannot. Settlement *stock* is deliberately excluded from the render path — it changes monthly and would thrash the asset cache for no visual gain.
+
+**Structural families change geometry, not texture.** A family carries wall thickness, bay spacing, opening width and height, frame exposure, support density, clear roof span, roof pitch bias, storey limit, plinth share, foundation style, silhouette and wall assembly. A timber barn, a stone barn and a steel barn therefore differ in how thick their walls are, how far apart their bays sit, how wide a door they dare and whether they need a middle support — not in which texture is bound.
+
+**The same function evolves.** An archetype is a sparse lineage keyed by period: a barn is a byre shelter, then a framed livestock barn, a high-roofed threshing barn, a bank barn, a monitor-roof barn, a pole barn, a mechanised shed. A period with no entry of its own inherits the most recent earlier stage, which is how vernacular building actually persists and means adding a period costs nothing for archetypes that did not change in it.
+
+**Nothing absurd ships.** `validateBuildingSpec` rejects a material before its period or without its process, a material in a role it cannot serve, more storeys than the walls or family can carry, a span with no support raised for it, and structural fabric that the local climate would destroy. Production specs are required to validate clean; `debug: true` relaxes it for previews. The spec test asserts this across the full archetype x era x climate x culture matrix.
+
+**Determinism.** A spec is a pure function of its context, and `buildingSpecSignature` is a compact signature of every decision in it that reaches geometry. The asset cache keys on the spec's *inputs*, with climate, prosperity and the material bill bucketed so neighbouring plots keep sharing one cached mesh.
+
+**Performance.** Geometry is batched by resolved construction material rather than by semantic surface, so two surfaces of the same material merge into one draw call and a fully detailed building stays in single digits. Materials are shared per culture-and-era palette and created lazily. Procedural patterns are fragment-stage programs keyed by *pattern* and bucketed by refinement, so 36 materials compile to a couple of dozen GPU programs and cost no texture memory at all.
+
+**Construction is physical.** Eight stages — site, foundation, frame, walls, roof, utilities, fit-out, finish — run in build order. A timber frame rises before its walls close, masonry courses upward, flues and services follow the roof, and machinery is fitted only into a weathertight shell. `CONSTRUCTION_STAGE_THRESHOLDS` is the single source for stage boundaries; the piece-by-piece reveal and the worksite crew migration both derive from it rather than restating it.
 
 ## City legibility layer
 
