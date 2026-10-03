@@ -447,6 +447,9 @@ function publishArchitecture(group: THREE.Group, grammar: BuildingGrammar): void
   group.userData['architectureRouting'] = spec.provenance.routing;
   group.userData['architecturePeriodLifted'] = spec.provenance.periodLifted;
   group.userData['architectureStageName'] = spec.provenance.stageName;
+  group.userData['architecturePurpose'] = spec.purpose;
+  group.userData['architectureForm'] = spec.form;
+  group.userData['architectureAdaptation'] = spec.adaptation;
 }
 
 /** The render surfaces one structure composes through, resolved once from its grammar. */
