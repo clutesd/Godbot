@@ -2099,16 +2099,7 @@ export class GodboxRenderer {
     const activeSite = hasActiveConstruction ? settlement.development ? reservedPlacements.find(p => p.key === settlement.development?.project?.plotId) : reservedPlacements[shownBuildings] : undefined;
     if (activeSite) {
       const response = settlement.development?.project?.response;
-      if (response?.adaptation) {
-        group.add(this.createActiveSurvivalConstructionSite(
-          activeSite,
-          response,
-          settlementY,
-          constructionProgress,
-          palette,
-          settlement,
-        ));
-      } else group.add(this.createActiveConstructionSite(
+      group.add(this.createActiveConstructionSite(
         activeSite,
         response?.style ?? cultureStyle,
         response ? developmentPresentationEra(response) : era,
@@ -2745,77 +2736,6 @@ export class GodboxRenderer {
   }
 
   /**
-   * Founding shelters use the same physical workface contract as later construction. Economic
-   * progress only authorizes pieces; actual posts, wall fabric and roof courses seat on visible
-   * assembler contact beats so the camp is made by people rather than by monthly state changes.
-   */
-  private createActiveSurvivalConstructionSite(
-    placement: BuildingPlacement,
-    response: DevelopmentResponse,
-    settlementY: number,
-    progress: number,
-    palette: MaterialPalette,
-    settlement: Settlement,
-  ): THREE.Group {
-    const site = new THREE.Group();
-    site.position.set(placement.localX, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.localZ);
-    site.rotation.y = placement.rotationY;
-    site.userData['placementKey'] = placement.key;
-    site.userData['constructionSite'] = true;
-    site.userData['foundingShelterAssembly'] = true;
-
-    const paidProgress = Math.max(0, Math.min(1, progress));
-    const fullShelter = createSurvivalStructure(
-      response,
-      1,
-      placement.width,
-      placement.depth,
-      palette,
-      this.shelterGroundAt(placement),
-    );
-    const assembly = new ConstructionAssembly(fullShelter, 1, placement.key, response.material ?? 'timber');
-    const previous = this.constructionAssemblies.get(placement.key)?.assembly.plan.progress;
-    // A new shelter begins as bare prepared ground. Rebuilds inherit only what workers have already
-    // seated; they never jump forward to the latest monthly paid-progress snapshot.
-    assembly.update(Math.min(paidProgress, previous ?? 0));
-    site.add(assembly.group);
-    placement.constructionPlan = assembly.plan;
-    placement.constructionWidth = assembly.plan.width;
-    placement.constructionDepth = assembly.plan.depth;
-
-    const visualProgress = assembly.plan.progress ?? 0;
-    const presentation = constructionStagePresentation(visualProgress);
-    site.userData['constructionStage'] = presentation.stage;
-    site.userData['constructionProgress'] = paidProgress;
-    site.userData['constructionPresentationProgress'] = visualProgress;
-    site.userData['constructionReveal'] = presentation.phase;
-    site.userData['constructionFinishing'] = presentation.finishing;
-    site.userData['constructionTargetRole'] = placement.role;
-    site.userData['constructionFootprintWidth'] = assembly.plan.width;
-    site.userData['constructionFootprintDepth'] = assembly.plan.depth;
-    site.userData['constructionTargetHeight'] = assembly.plan.height;
-
-    const scaffold = createConstructionScaffold(
-      assembly.plan,
-      palette,
-      constructionScaffoldSurface(developmentPresentationEra(response), placement.role, response.material),
-    );
-    updateConstructionScaffold(scaffold, assembly.plan, visualProgress);
-    if (visualProgress < 1) site.add(scaffold);
-    decorateConstructionWorksite(site, settlement, palette);
-    this.constructionAssemblies.set(placement.key, {
-      site,
-      assembly,
-      scaffold,
-      settlement,
-      mode: 'contact-led',
-    });
-    // ConstructionAssembly shares the source vertex attributes/materials; those references remain
-    // owned by the assembly meshes even though the source group itself is never added to the scene.
-    return site;
-  }
-
-  /**
    * Active construction is a partial realization of the exact future building grammar.
    * New builds reveal the canonical structure progressively; upgrades/repurposes derive their
    * target identity from the active project rather than the old fabric still occupying the plot.
@@ -2884,8 +2804,14 @@ export class GodboxRenderer {
     const fit = Math.min(targetPlacement.width / targetWidth, targetPlacement.depth / targetDepth) * developmentScale;
 
     const assembly = new ConstructionAssembly(targetAsset.mesh, fit, targetPlacement.key, project?.material ?? 'timber');
-    assembly.update(Math.min(paidProgress, this.constructionAssemblies.get(targetPlacement.key)?.assembly.plan.progress ?? paidProgress));
+    const previousProgress = this.constructionAssemblies.get(targetPlacement.key)?.assembly.plan.progress;
+    // Founding adaptations preserve the contact-led assembly behaviour they had before the
+    // architecture unification: a newly visible worksite starts from prepared ground and workers
+    // physically seat paid pieces. Ordinary later projects retain the existing bounded reveal.
+    const initialProgress = project?.adaptation ? (previousProgress ?? 0) : (previousProgress ?? paidProgress);
+    assembly.update(Math.min(paidProgress, initialProgress));
     site.add(assembly.group);
+    if (project?.adaptation) site.userData['foundingShelterAssembly'] = true;
     placement.constructionPlan = assembly.plan;
 
     const renderedWidth = targetWidth * fit;
@@ -2911,7 +2837,13 @@ export class GodboxRenderer {
     if (paidProgress < 1) site.add(scaffold);
     if (settlement && project) {
       decorateConstructionWorksite(site, settlement, constructionPalette);
-      this.constructionAssemblies.set(targetPlacement.key, { site, assembly, scaffold, settlement });
+      this.constructionAssemblies.set(targetPlacement.key, {
+        site,
+        assembly,
+        scaffold,
+        settlement,
+        ...(project.adaptation ? { mode: 'contact-led' as const } : {}),
+      });
     }
     return site;
   }
