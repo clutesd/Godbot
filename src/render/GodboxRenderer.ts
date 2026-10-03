@@ -2500,6 +2500,7 @@ export class GodboxRenderer {
       grammarContext: { ...this.climateContextFor(settlement), isLandmark: true },
       prosperity: settlement.prosperity,
       specialization: settlement.specialization,
+      waterfront: this.waterfrontFor(settlement),
     });
     const landmark = asset.mesh.clone(true);
     const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
@@ -2574,6 +2575,7 @@ export class GodboxRenderer {
       grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
       prosperity: settlement.prosperity,
       specialization: settlement.specialization,
+      waterfront: this.waterfrontFor(settlement),
       project: this.projectForPlot(settlement, placement.key),
     });
     const building = asset.mesh.clone(true);
@@ -2876,6 +2878,7 @@ export class GodboxRenderer {
       grammarContext: settlement ? { ...this.climateContextFor(settlement), floodDepth: targetPlacement.floodDepth } : undefined,
       prosperity: settlement?.prosperity,
       specialization: settlement?.specialization,
+      waterfront: settlement ? this.waterfrontFor(settlement) : undefined,
       project: this.projectForPlot(settlement, targetPlacement.key),
     };
     const stagedAsset = this.assetBuilder.getAsset('building', {
@@ -3320,6 +3323,17 @@ export class GodboxRenderer {
       moisture: cell?.moisture,
       biome: cell?.biome,
     };
+  }
+
+  /**
+   * Does this settlement sit on water?
+   *
+   * Authoritative cell geography. It is the difference between a freight depot and a quay, and
+   * between a trade store and a dock, so architecture reads it rather than guessing from role.
+   */
+  private waterfrontFor(settlement: Settlement): boolean {
+    const cell = this.state.world.cells[settlement.cellIndex];
+    return Boolean(cell?.coast || cell?.river || cell?.lake);
   }
 
   /**

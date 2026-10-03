@@ -6,6 +6,7 @@ import { Simulation } from '../src/sim/Simulation';
 import type { Settlement } from '../src/sim/types';
 import type { DevelopmentResponse } from '../src/sim/development/types';
 import { RenderMaintenanceScheduler } from '../src/render/RenderMaintenanceScheduler';
+import { CONSTRUCTION_STAGE_THRESHOLDS, constructionPresentationBucket } from '../src/render/construction/ConstructionVisualGrammar';
 
 interface SettlementVisualState {
   group: THREE.Group;
@@ -277,21 +278,30 @@ describe('settlement render budgeting', () => {
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
   });
 
-  it('rebuilds through pre-completion DETAIL reveal slices before the project disappears', () => {
+  it('rebuilds through the pre-completion fit-out and finishing reveal before the project disappears', () => {
     const test = harness('settlement-render-budget-detail');
     const settlement = test.state.settlements.find(candidate => candidate.alive)!;
-    attachActiveProject(settlement, test.state, 0.919);
+    // Start just inside the services stage, so the first step crosses into fit-out and the
+    // second advances a reveal slice within it. Both must rebuild; neither value is magic.
+    const beforeFitout = CONSTRUCTION_STAGE_THRESHOLDS.utilities + 0.01;
+    const intoFitout = CONSTRUCTION_STAGE_THRESHOLDS.fitout + 0.005;
+    const laterInFitout = CONSTRUCTION_STAGE_THRESHOLDS.fitout
+      + (CONSTRUCTION_STAGE_THRESHOLDS.detail - CONSTRUCTION_STAGE_THRESHOLDS.fitout) * 0.8;
+    expect(constructionPresentationBucket(beforeFitout)).not.toBe(constructionPresentationBucket(intoFitout));
+    expect(constructionPresentationBucket(intoFitout)).not.toBe(constructionPresentationBucket(laterInFitout));
+
+    attachActiveProject(settlement, test.state, beforeFitout);
     settlement.constructionProgress = 0.2;
     sync(test.renderer, true);
     test.resetCreated();
 
-    settlement.development!.project!.progress = 0.92;
+    settlement.development!.project!.progress = intoFitout;
     sync(test.renderer);
     expect(test.created()).toBe(1);
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);
 
     test.resetCreated();
-    settlement.development!.project!.progress = 0.94;
+    settlement.development!.project!.progress = laterInFitout;
     sync(test.renderer);
     expect(test.created()).toBe(1);
     expect((test.scene.userData['settlementRenderBudget'] as BudgetReport).rebuilt).toBe(1);

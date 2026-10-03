@@ -121,6 +121,26 @@ const CAPABILITY_PERIOD_FLOOR: Record<string, ArchitecturalPeriod> = {
   computation: 'contemporary',
 };
 
+/**
+ * The (era, development level) pair that drives each period, inverting `architecturalPeriod`.
+ *
+ * The period is never passed in anywhere — it is always derived from a presentation era and a
+ * development level — so anything that wants to *show* a particular period has to drive it
+ * through its real inputs. Level 1 sits at an era's floor and level 3 at its ceiling, which is
+ * what makes all eight periods reachable. The architecture browser and the acceptance tests both
+ * read this, so neither has to keep its own copy and drift from the resolver.
+ */
+export const PERIOD_DRIVE: Record<ArchitecturalPeriod, { era: Era; level: number }> = {
+  neolithic: { era: 'early', level: 1 },
+  bronzeIron: { era: 'early', level: 3 },
+  classical: { era: 'preIndustrial', level: 1 },
+  medieval: { era: 'preIndustrial', level: 2 },
+  earlyModern: { era: 'preIndustrial', level: 3 },
+  industrial: { era: 'industrial', level: 3 },
+  modern: { era: 'advanced', level: 1 },
+  contemporary: { era: 'advanced', level: 3 },
+};
+
 export interface ArchitecturalPeriodContext {
   /** Authoritative presentation era. Always clamps the result. */
   era: Era;

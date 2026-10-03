@@ -48,9 +48,9 @@ import type { BuildingArchetype, FunctionalEquipment, RoofArchetype } from './Bu
 import {
   archetypeEarliestPeriod,
   archetypeStageFor,
-  archetypesForRole,
   buildingArchetype,
 } from './BuildingArchetype';
+import { routeArchetype, type RoutingSource, type SettlementSpecialization } from './ArchetypeRouting';
 import type { MaterialEvidence } from './MaterialSourcing';
 import { classOnlyEvidence, consistentWithClass, deriveMaterialEvidence, evidenceFor } from './MaterialSourcing';
 
@@ -183,6 +183,20 @@ export interface SpecProvenance {
   stageName: string;
   stageDefinedIn: ArchitecturalPeriod;
   stagePeriodsOld: number;
+  /**
+   * How this structure came to be the archetype it is.
+   *
+   * `explicit` means a subsystem named it; `response` that the authoritative development response
+   * pinned it down; `role-default` that only the renderer role was available to go on. Recorded so
+   * that "why is this building a warehouse?" is answerable from the asset rather than by
+   * re-deriving the routing decision by hand.
+   */
+  routing: RoutingSource | 'explicit';
+  /**
+   * The archetype's lineage had not begun in the era's own period, so the period was lifted to its
+   * earliest stage. Expected for an early-era civic hall or market; never a substitution.
+   */
+  periodLifted: boolean;
 }
 
 export interface BuildingSpec {
@@ -282,7 +296,12 @@ export interface BuildingSpecContext {
   /** 0..1 settlement prosperity. Gates expensive materials. */
   prosperity?: number;
   /** Economic specialization, which biases equipment and scale. */
-  specialization?: 'agriculture' | 'forestry' | 'mining' | 'craft' | 'exchange';
+  specialization?: SettlementSpecialization;
+  /**
+   * The settlement sits on a coast, lake or navigable river. Authoritative cell geography, and
+   * the difference between a freight depot and a quay.
+   */
+  waterfront?: boolean;
   localSlopeDegrees?: number;
 
   /** Construction stage. Defaults to a finished building. */
@@ -692,15 +711,30 @@ function ageStateFor(
 
 // ---------------------------------------------------------------------------- resolver
 
-function pickArchetype(context: BuildingSpecContext, period: ArchitecturalPeriod): BuildingArchetype {
-  if (context.archetype) return context.archetype;
-  const candidates = archetypesForRole(context.role);
-  // Prefer an archetype whose lineage has actually begun by this period; fall back to the first
-  // declared for the role so every role always resolves.
-  for (const candidate of candidates) {
-    if (archetypeStageFor(candidate, period)) return candidate;
-  }
-  return candidates[0] ?? 'house';
+/**
+ * The archetype this structure is.
+ *
+ * An explicit archetype wins: the subsystem that owns a bridge or a perimeter wall knows better
+ * than any routing table. Otherwise the authoritative response decides, via ArchetypeRouting.
+ */
+function pickArchetype(
+  context: BuildingSpecContext,
+  period: ArchitecturalPeriod,
+): { archetype: BuildingArchetype; routing: RoutingSource | 'explicit' } {
+  if (context.archetype) return { archetype: context.archetype, routing: 'explicit' };
+  const development = context.development;
+  const decision = routeArchetype({
+    role: context.role,
+    period,
+    need: development?.need,
+    form: development?.form,
+    level: development?.level,
+    capabilities: development?.capabilities,
+    specialization: context.specialization,
+    waterfront: context.waterfront,
+    seed: context.seed,
+  });
+  return { archetype: decision.archetype, routing: decision.source };
 }
 
 /**
@@ -718,16 +752,18 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     capabilities,
   });
 
-  const archetypeId = pickArchetype(context, eraPeriod);
+  const { archetype: archetypeId, routing } = pickArchetype(context, eraPeriod);
   const archetypeDefinition = buildingArchetype(archetypeId);
 
-  // `pickArchetype` only ever returns an archetype whose lineage has begun, so on the simulation
-  // path the era's period stands. A caller that *names* an archetype directly — a debug preview,
-  // a documentation shot — can ask for one that does not exist yet; rather than fail or emit
-  // anachronistic fabric, the structure is presented as the earliest version of itself that
-  // ever existed. The lift is upward only, so it can never backdate a building.
+  // An archetype whose lineage has not begun in this period is presented as the earliest version
+  // of itself that ever existed. This is where that is handled for *every* caller: routing keeps
+  // the archetype the response actually calls for — a primitive-era civic hall stays a civic hall
+  // — and the period is lifted here so there is always a buildable stage. Routing used to demote
+  // such a structure to the role default and then to a house, which silently replaced the
+  // building with a different one. The lift is upward only, so it can never backdate a building.
   const earliest = archetypeEarliestPeriod(archetypeId);
-  const period = periodRank(earliest) > periodRank(eraPeriod) ? earliest : eraPeriod;
+  const periodLifted = periodRank(earliest) > periodRank(eraPeriod);
+  const period = periodLifted ? earliest : eraPeriod;
 
   const resolvedStage = archetypeStageFor(archetypeId, period)!;
   const stage = resolvedStage.stage;
@@ -791,8 +827,17 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   };
 
   // ----- dimensions -----
+  // Storeys are limited by whatever actually carries them. In a load-bearing wall that is the
+  // wall material; in a framed building the cladding carries nothing, so clamping a steel-framed
+  // silo to corrugated iron's one storey would be wrong — and squat.
+  const loadBearingWall = assembly === 'coursed-masonry'
+    || assembly === 'load-bearing-brick'
+    || assembly === 'monolithic-earth'
+    || assembly === 'stacked-log'
+    || assembly === 'hide-and-brush';
   const wallLoad = architecturalMaterial(wall).structure;
-  const maxStoreys = Math.max(1, Math.min(familyDefinition.maxStoreys, wallLoad.maxStoreys));
+  const carrying = loadBearingWall ? wallLoad : architecturalMaterial(frame).structure;
+  const maxStoreys = Math.max(1, Math.min(familyDefinition.maxStoreys, carrying.maxStoreys));
   const floors = Math.max(1, Math.min(maxStoreys, requestedFloors));
 
   const scaleJitter = random.range(0.94, 1.07);
@@ -894,6 +939,8 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     seed: context.seed,
     debug: context.debug ?? false,
     provenance: {
+      routing,
+      periodLifted,
       evidenceGrade: evidence.bestGrade,
       familyScore: ranking[0]?.score ?? 0,
       familyRanking: ranking,
@@ -1016,9 +1063,16 @@ export function validateBuildingSpec(spec: BuildingSpec, capabilities?: readonly
   if (spec.floors > familyDefinition.maxStoreys) {
     violations.push({ code: 'storeys-exceed-family', detail: `${spec.floors} storeys exceeds ${spec.family} limit of ${familyDefinition.maxStoreys}` });
   }
-  const wallMax = architecturalMaterial(spec.materials.wall).structure.maxStoreys;
-  if (spec.floors > wallMax) {
-    violations.push({ code: 'storeys-exceed-wall', detail: `${spec.floors} storeys exceeds ${spec.materials.wall} limit of ${wallMax}` });
+  // Checked against the element that carries the load, exactly as the resolver chose it.
+  const loadBearingWall = spec.wallAssembly === 'coursed-masonry'
+    || spec.wallAssembly === 'load-bearing-brick'
+    || spec.wallAssembly === 'monolithic-earth'
+    || spec.wallAssembly === 'stacked-log'
+    || spec.wallAssembly === 'hide-and-brush';
+  const carrier = loadBearingWall ? spec.materials.wall : spec.materials.frame;
+  const carrierMax = architecturalMaterial(carrier).structure.maxStoreys;
+  if (spec.floors > carrierMax) {
+    violations.push({ code: 'storeys-exceed-wall', detail: `${spec.floors} storeys exceeds ${carrier} limit of ${carrierMax}` });
   }
   if (spec.roof.intermediateSupport && spec.supportDensity <= familyDefinition.supportDensity) {
     violations.push({ code: 'span-without-support', detail: `span ${spec.roof.span.toFixed(2)} needs intermediate support but density was not raised` });

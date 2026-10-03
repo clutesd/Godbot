@@ -46,6 +46,9 @@ export class GeometryBuilder {
   private wear = 0;
   private tone = 0;
   private grain = 0;
+  private originX = 0;
+  private originY = 0;
+  private originZ = 0;
 
   get isEmpty(): boolean {
     return this.indices.length === 0;
@@ -60,6 +63,20 @@ export class GeometryBuilder {
    * shared surface shader; `tone` is a small deterministic lightness offset per building.
    * The macro architecture is untouched — this only drives shading.
    */
+  /**
+   * Translate everything emitted from now on.
+   *
+   * Every method eventually writes through `addTriangle`, so the offset lands on vertex
+   * positions *and* on the recorded assembly-piece bounds. That matters: the construction
+   * animation reads those bounds as geometry-local coordinates, so a structure composed away
+   * from the origin has to carry the offset in its geometry rather than in a parent transform.
+   */
+  setOrigin(x: number, y: number, z: number): void {
+    this.originX = x;
+    this.originY = y;
+    this.originZ = z;
+  }
+
   setWeathering(wear: number, tone = 0): void {
     this.wear = Math.round(Math.max(0, Math.min(1, wear)) * 127);
     this.tone = Math.round(Math.max(-1, Math.min(1, tone)) * 127);
@@ -89,7 +106,12 @@ export class GeometryBuilder {
     ny /= length;
     nz /= length;
     const base = this.positions.length / 3;
-    this.positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    const ox = this.originX, oy = this.originY, oz = this.originZ;
+    this.positions.push(
+      a.x + ox, a.y + oy, a.z + oz,
+      b.x + ox, b.y + oy, b.z + oz,
+      c.x + ox, c.y + oy, c.z + oz,
+    );
     this.normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
     this.indices.push(base, base + 1, base + 2);
     if (this.detailUsed) {

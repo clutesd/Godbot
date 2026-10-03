@@ -558,14 +558,35 @@ describe('Building spec resolver', () => {
     expect(timber.frameExposure).toBeGreaterThan(masonry.frameExposure);
   });
 
-  it('never exceeds the storeys its walls or family can carry', () => {
+  it('never exceeds the storeys its load-bearing element can carry', () => {
+    // Which element carries the storeys depends on how the wall is assembled. In a load-bearing
+    // wall it is the wall itself; in a framed building the cladding carries nothing, so a
+    // steel-framed silo is limited by its frame and not by the corrugated sheet hung on it.
+    const loadBearing = ['coursed-masonry', 'load-bearing-brick', 'monolithic-earth', 'stacked-log', 'hide-and-brush'];
     for (const archetype of BUILDING_ARCHETYPES) {
       for (const era of ERAS) {
         const spec = resolveBuildingSpec(context({ archetype, era, seed: `storeys:${archetype}:${era}`, development: development({ level: 3 }) }));
         expect(spec.floors).toBeLessThanOrEqual(structuralFamily(spec.family).maxStoreys);
-        expect(spec.floors).toBeLessThanOrEqual(architecturalMaterial(spec.materials.wall).structure.maxStoreys);
+        const carrier = loadBearing.includes(spec.wallAssembly) ? spec.materials.wall : spec.materials.frame;
+        expect(
+          spec.floors,
+          `${archetype}/${era}: ${spec.floors} storeys on ${carrier} (${spec.wallAssembly})`,
+        ).toBeLessThanOrEqual(architecturalMaterial(carrier).structure.maxStoreys);
       }
     }
+  });
+
+  it('lets a framed structure rise above what its cladding could ever carry', () => {
+    // The regression this guards: a steel-framed silo clamped to corrugated iron's single
+    // storey, which made every clad-frame structure squat.
+    const silo = resolveBuildingSpec(context({
+      archetype: 'silo', era: 'advanced', seed: 'silo-height',
+      development: development({ material: 'metal', level: 3 }),
+    }));
+    expect(silo.wallAssembly).toBe('clad-frame');
+    expect(architecturalMaterial(silo.materials.wall).structure.maxStoreys).toBe(1);
+    expect(silo.floors).toBeGreaterThan(1);
+    expect(validateBuildingSpec(silo, ALL_CAPABILITIES)).toEqual([]);
   });
 
   it('raises support density whenever the roof outspans its structure', () => {

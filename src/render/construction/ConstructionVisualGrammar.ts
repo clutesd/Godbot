@@ -94,17 +94,31 @@ export function constructionStagePresentation(progress: number): ConstructionSta
 }
 
 /**
- * Stable cache bucket for active construction. Four reveal slices per canonical stage preserve
- * readable growth without rebuilding a settlement for every microscopic simulation tick.
+ * Reveal slices inside each construction stage.
+ *
+ * Total cache buckets are (stages x slices), and each bucket boundary is one geometry rebuild for
+ * every building under construction. Going from five stages to eight therefore has to come with
+ * fewer slices each, or the finer lifecycle would silently cost ~60% more rebuilds across a
+ * build: eight stages at three slices is twenty-four buckets, close to the twenty this had
+ * before, so the added physical fidelity is free in rebuild terms.
+ */
+const STAGE_REVEAL_SLICES = 3;
+
+/**
+ * Stable cache bucket for active construction. A handful of reveal slices per canonical stage
+ * preserve readable growth without rebuilding a settlement for every microscopic simulation tick.
  */
 export function constructionPresentationBucket(progress: number): number {
   const paid = Math.max(0, Math.min(1, progress));
   if (paid <= 0) return 0;
   const presentation = constructionStagePresentation(paid);
-  // Small epsilon makes exact quarter-stage boundaries stable despite binary floating-point
-  // representation (e.g. DETAIL 0.94 => phase 0.25 rather than 0.249999999999...).
-  const revealSlice = Math.min(3, Math.floor(presentation.phase * 4 + 1e-9));
-  return 1 + presentation.stage * 4 + revealSlice;
+  // Small epsilon keeps exact slice boundaries stable despite binary floating-point
+  // representation (e.g. phase 0.3333 landing just under rather than just over a third).
+  const revealSlice = Math.min(
+    STAGE_REVEAL_SLICES - 1,
+    Math.floor(presentation.phase * STAGE_REVEAL_SLICES + 1e-9),
+  );
+  return 1 + presentation.stage * STAGE_REVEAL_SLICES + revealSlice;
 }
 
 /**

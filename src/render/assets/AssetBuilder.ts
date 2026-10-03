@@ -21,6 +21,7 @@ import { structureVisualHistorySignature } from './StructureVisualSignature';
 import { deriveArchitecturalGenerations, generationForCurrentFabric, generationForOriginFabric } from './StructureGenerations';
 import { deriveStructureHeritage } from './StructureHeritage';
 import { resolveBuildingSpec, type BuildingSpec } from '../architecture/BuildingSpec';
+import type { BuildingArchetype } from '../architecture/BuildingArchetype';
 import { applySpecToGrammar } from '../architecture/SpecGrammarBridge';
 import { materialBillSignature } from '../architecture/MaterialSourcing';
 
@@ -50,6 +51,18 @@ export interface AssetConfig {
   prosperity?: number;
   /** Economic specialization, which earns a structure its working fittings. */
   specialization?: 'agriculture' | 'forestry' | 'mining' | 'craft' | 'exchange';
+  /**
+   * The settlement sits on a coast, lake or navigable river. Routes a freight depot to a quay.
+   */
+  waterfront?: boolean;
+  /**
+   * Request one specific architectural archetype.
+   *
+   * Only for the subsystems that own a structure the development system never produces — a
+   * bridge belongs to TransportationSystem, a perimeter wall to settlement dressing. Ordinary
+   * buildings leave this unset and are routed from their authoritative response instead.
+   */
+  archetype?: BuildingArchetype;
 }
 
 export interface CachedAsset {
@@ -410,6 +423,7 @@ export class AssetBuilder {
   ): BuildingSpec | undefined {
     const context = config.grammarContext;
     return resolveBuildingSpec({
+      archetype: config.archetype,
       role,
       era: config.era,
       seed: config.seed,
@@ -433,6 +447,7 @@ export class AssetBuilder {
         : undefined,
       prosperity: config.prosperity,
       specialization: config.specialization,
+      waterfront: config.waterfront,
       localSlopeDegrees: config.localSlopeDegrees,
       stage,
     });
@@ -841,6 +856,7 @@ export class AssetBuilder {
     const specBucket = type === 'building'
       ? `:a${ctx?.temperature !== undefined ? Math.round(ctx.temperature * 8) : ''}.${ctx?.moisture !== undefined ? Math.round(ctx.moisture * 8) : ''}.${ctx?.biome ?? ''}`
         + `.${config.prosperity !== undefined ? Math.round(config.prosperity * 4) : ''}.${config.specialization ?? ''}`
+        + `.${config.waterfront ? 'w' : ''}.${config.archetype ?? ''}`
         + `.${materialBillSignature(config.project)}`
       : '';
     return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}${specBucket}`;

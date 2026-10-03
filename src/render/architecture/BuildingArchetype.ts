@@ -135,12 +135,39 @@ export interface ArchetypeStage {
   equipment: readonly FunctionalEquipment[];
 }
 
+/**
+ * Whether anything in the running game can actually produce this archetype.
+ *
+ * Declared here rather than inferred, so that the catalogue can cross-check the declaration
+ * against what `ArchetypeRouting` really does. A mismatch between the two is a test failure:
+ * an `active` archetype nothing routes to is dead content, and a `planned` one that something
+ * has quietly started routing to is an undeclared behaviour change. That check is what makes
+ * adding and removing archetypes safe — see `validateStructureCatalogue`.
+ */
+export type ArchetypeStatus =
+  /** Reachable from an authoritative development response through `archetypeForContext`. */
+  | 'active'
+  /**
+   * Buildable and inspectable, but no routing rule selects it and no subsystem requests it yet.
+   * Reachable only by naming it explicitly — the architecture browser and the tests do. Kept
+   * because the structural vocabulary is already there; see ARCHITECTURE.md for why each one is
+   * still waiting.
+   */
+  | 'planned'
+  /**
+   * Retained only so existing references keep resolving. Nothing routes to it, nothing should
+   * start, and it may be deleted once no caller names it.
+   */
+  | 'deprecated';
+
 export interface BuildingArchetypeDefinition {
   id: BuildingArchetype;
   label: string;
   category: string;
   /** The renderer role this archetype presents as. Keeps placement and LOD untouched. */
   role: BuildingRole;
+  /** Whether production can reach this archetype. Cross-checked against routing by the catalogue. */
+  status: ArchetypeStatus;
   /**
    * Lineage by period. Sparse on purpose: a period with no entry inherits the most recent
    * earlier stage, which is exactly how vernacular building behaves. The earliest entry is
@@ -154,7 +181,7 @@ const define = (definition: BuildingArchetypeDefinition): BuildingArchetypeDefin
 export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefinition> = {
   // ------------------------------------------------------------------ dwelling
   house: define({
-    id: 'house', label: 'House / dwelling', category: 'Settlement', role: 'house',
+    id: 'house', label: 'House / dwelling', category: 'Settlement', role: 'house', status: 'active',
     lineage: {
       neolithic: {
         name: 'Round hut', families: ['primitive-shelter', 'timber-post-and-beam', 'mud-brick'],
@@ -201,7 +228,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 
   // ------------------------------------------------------------------ agriculture
   barn: define({
-    id: 'barn', label: 'Barn', category: 'Agriculture & storage', role: 'granary',
+    id: 'barn', label: 'Barn', category: 'Agriculture & storage', role: 'granary', status: 'active',
     lineage: {
       neolithic: {
         name: 'Byre shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
@@ -259,7 +286,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   byre: define({
-    id: 'byre', label: 'Byre / cattle shed', category: 'Agriculture & livestock', role: 'granary',
+    id: 'byre', label: 'Byre / cattle shed', category: 'Agriculture & livestock', role: 'granary', status: 'active',
     lineage: {
       neolithic: {
         name: 'Stock shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
@@ -295,7 +322,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   stable: define({
-    id: 'stable', label: 'Stable', category: 'Agriculture & livestock', role: 'granary',
+    id: 'stable', label: 'Stable', category: 'Agriculture & livestock', role: 'granary', status: 'active',
     lineage: {
       bronzeIron: {
         name: 'Horse shelter', families: ['timber-post-and-beam', 'mud-brick', 'adobe'],
@@ -331,7 +358,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   'animal-pen': define({
-    id: 'animal-pen', label: 'Animal pen', category: 'Agriculture & livestock', role: 'store-pit',
+    id: 'animal-pen', label: 'Animal pen', category: 'Agriculture & livestock', role: 'store-pit', status: 'planned',
     lineage: {
       neolithic: {
         name: 'Stake pen', families: ['primitive-shelter'],
@@ -355,7 +382,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   granary: define({
-    id: 'granary', label: 'Granary', category: 'Agriculture & storage', role: 'granary',
+    id: 'granary', label: 'Granary', category: 'Agriculture & storage', role: 'granary', status: 'active',
     lineage: {
       neolithic: {
         name: 'Storage pit', families: ['primitive-shelter', 'mud-brick'],
@@ -393,7 +420,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   silo: define({
-    id: 'silo', label: 'Silo', category: 'Agriculture & storage', role: 'granary',
+    id: 'silo', label: 'Silo', category: 'Agriculture & storage', role: 'granary', status: 'active',
     lineage: {
       industrial: {
         name: 'Stave silo', families: ['brick-masonry', 'heavy-industrial-brick', 'timber-frame'],
@@ -411,7 +438,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 
   // ------------------------------------------------------------------ production
   workshop: define({
-    id: 'workshop', label: 'Workshop', category: 'Production', role: 'workshop',
+    id: 'workshop', label: 'Workshop', category: 'Production', role: 'workshop', status: 'active',
     lineage: {
       neolithic: {
         name: 'Working shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
@@ -458,7 +485,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   mill: define({
-    id: 'mill', label: 'Mill', category: 'Production', role: 'workshop',
+    id: 'mill', label: 'Mill', category: 'Production', role: 'workshop', status: 'active',
     lineage: {
       classical: {
         name: 'Water mill', families: ['stone-masonry', 'timber-post-and-beam', 'timber-frame'],
@@ -494,7 +521,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   factory: define({
-    id: 'factory', label: 'Factory', category: 'Industry', role: 'factory',
+    id: 'factory', label: 'Factory', category: 'Industry', role: 'factory', status: 'active',
     lineage: {
       earlyModern: {
         name: 'Manufactory', families: ['mixed-masonry', 'brick-masonry', 'timber-frame'],
@@ -527,7 +554,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 
   // ------------------------------------------------------------------ exchange
   market: define({
-    id: 'market', label: 'Market', category: 'Exchange', role: 'market',
+    id: 'market', label: 'Market', category: 'Exchange', role: 'market', status: 'active',
     lineage: {
       bronzeIron: {
         name: 'Open market ground', families: ['timber-post-and-beam', 'primitive-shelter'],
@@ -574,7 +601,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   warehouse: define({
-    id: 'warehouse', label: 'Warehouse', category: 'Exchange', role: 'warehouse',
+    id: 'warehouse', label: 'Warehouse', category: 'Exchange', role: 'warehouse', status: 'active',
     lineage: {
       classical: {
         name: 'Store range', families: ['stone-masonry', 'mud-brick', 'brick-masonry'],
@@ -605,7 +632,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 
   // ------------------------------------------------------------------ civic
   'civic-hall': define({
-    id: 'civic-hall', label: 'Civic hall', category: 'Civic', role: 'hall',
+    id: 'civic-hall', label: 'Civic hall', category: 'Civic', role: 'hall', status: 'active',
     lineage: {
       bronzeIron: {
         name: 'Chief’s hall', families: ['timber-post-and-beam', 'mud-brick', 'log-construction'],
@@ -641,7 +668,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   shrine: define({
-    id: 'shrine', label: 'Shrine / temple', category: 'Religion', role: 'shrine',
+    id: 'shrine', label: 'Shrine / temple', category: 'Religion', role: 'shrine', status: 'active',
     lineage: {
       neolithic: {
         name: 'Ritual enclosure', families: ['primitive-shelter', 'stone-masonry'],
@@ -678,7 +705,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 
   // ------------------------------------------------------------------ infrastructure
   gatehouse: define({
-    id: 'gatehouse', label: 'Gatehouse', category: 'Defence', role: 'gate-tower',
+    id: 'gatehouse', label: 'Gatehouse', category: 'Defence', role: 'gate-tower', status: 'active',
     lineage: {
       bronzeIron: {
         name: 'Timber gate tower', families: ['timber-post-and-beam', 'log-construction'],
@@ -708,7 +735,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   bridge: define({
-    id: 'bridge', label: 'Bridge', category: 'Transport', role: 'gate-tower',
+    id: 'bridge', label: 'Bridge', category: 'Transport', role: 'gate-tower', status: 'planned',
     lineage: {
       neolithic: {
         name: 'Log footbridge', families: ['primitive-shelter', 'timber-post-and-beam'],
@@ -745,7 +772,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   dock: define({
-    id: 'dock', label: 'Dock / quay', category: 'Transport', role: 'warehouse',
+    id: 'dock', label: 'Dock / quay', category: 'Transport', role: 'warehouse', status: 'active',
     lineage: {
       bronzeIron: {
         name: 'Timber jetty', families: ['timber-post-and-beam', 'log-construction'],
@@ -775,7 +802,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   'boundary-wall': define({
-    id: 'boundary-wall', label: 'Boundary wall', category: 'Defence', role: 'gate-tower',
+    id: 'boundary-wall', label: 'Boundary wall', category: 'Defence', role: 'gate-tower', status: 'planned',
     lineage: {
       neolithic: {
         name: 'Stake palisade', families: ['primitive-shelter', 'timber-post-and-beam'],
@@ -862,4 +889,30 @@ export function archetypeStageFor(id: BuildingArchetype, period: ArchitecturalPe
 /** Every archetype that presents as a given renderer role. */
 export function archetypesForRole(role: BuildingRole): readonly BuildingArchetype[] {
   return BUILDING_ARCHETYPES.filter(id => ARCHETYPE_LIBRARY[id].role === role);
+}
+
+export function archetypeStatus(id: BuildingArchetype): ArchetypeStatus {
+  return ARCHETYPE_LIBRARY[id].status;
+}
+
+/** Every archetype production can actually produce. The browser's default gallery. */
+export function archetypesWithStatus(status: ArchetypeStatus): readonly BuildingArchetype[] {
+  return BUILDING_ARCHETYPES.filter(id => ARCHETYPE_LIBRARY[id].status === status);
+}
+
+/**
+ * Resolve an archetype id that came from outside the type system — saved userData, a URL
+ * parameter, a debug console — and fail loudly when it names nothing.
+ *
+ * Deleting an archetype is a compile error for every call site that names it as a literal. This
+ * is the guard for the remaining cases, where the name arrives as a string: a reference to a
+ * deleted archetype throws here rather than silently becoming some other structure.
+ */
+export function requireBuildingArchetype(id: string): BuildingArchetype {
+  if (!isBuildingArchetype(id)) {
+    throw new Error(
+      `Unknown building archetype '${id}'. Known archetypes: ${BUILDING_ARCHETYPES.join(', ')}.`,
+    );
+  }
+  return id;
 }

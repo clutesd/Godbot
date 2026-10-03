@@ -13,6 +13,7 @@
 
 import * as THREE from 'three';
 import { GeometryBuilder, squareRing, type Vec3, type AssemblyPiece } from './GeometryBuilder';
+import { BUILD_STAGE, type BuildStage } from './BuildStages';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BuildingGrammar, RoofFamily, WallLayer } from './BuildingGrammar';
 import { eraRank } from './BuildingGrammar';
@@ -23,52 +24,12 @@ import { wallLayerForMaterial } from './StructureHeritage';
 import type { StructureMaterial } from '../../sim/development/types';
 import type { ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
 import { specSurfaceMaterials } from '../architecture/SpecGrammarBridge';
+import { emitSpecGeometry } from '../architecture/StructureGeometry';
+import { composeDedicated, composeMemorial, emitQuayWorks, hasDedicatedComposition, measuredHeight } from '../architecture/DedicatedStructures';
 
-/**
- * Construction lifecycle. Parts are emitted only once their stage has been reached.
- *
- * The sequence is the physical order of building work, which is what makes a site legible from
- * across a valley: ground is cleared and set out, footings go in, the frame or the first courses
- * rise, the envelope closes, the roof goes on, flues and services are run, joinery and equipment
- * are fitted, and only then does anything decorative appear.
- *
- * `DETAIL` is retained as an alias for the finished state so the many existing call sites that
- * mean "only on a completed building" keep meaning exactly that.
- */
-export const BUILD_STAGE = {
-  /** Site preparation: setting-out stakes, cleared ground, spoil and material stacks. */
-  SITE: 0,
-  FOUNDATION: 1,
-  FRAME: 2,
-  WALLS: 3,
-  ROOF: 4,
-  /** Flues, stacks, vents, water and power — run once the shell can carry them. */
-  UTILITIES: 5,
-  /** Joinery, doors, glazing and working equipment, fitted into a weathertight shell. */
-  FITOUT: 6,
-  /** Ornament, banners, lanterns, yard dressing: the last eight per cent of the work. */
-  FINISH: 7,
-  /** Legacy alias for a fully built structure. */
-  DETAIL: 7,
-} as const;
-
-export type BuildStage = (typeof BUILD_STAGE)[keyof typeof BUILD_STAGE];
-
-export const BUILD_STAGE_ORDER: readonly string[] = [
-  'site',
-  'foundation',
-  'frame',
-  'partial-walls',
-  'roof',
-  'utilities',
-  'fit-out',
-  'complete',
-];
-
-export function stageFromName(name: string | undefined): BuildStage {
-  const index = name ? BUILD_STAGE_ORDER.indexOf(name) : -1;
-  return (index < 0 ? BUILD_STAGE.DETAIL : index) as BuildStage;
-}
+// The construction lifecycle lives in BuildStages so the geometry modules this file calls can
+// reference stages without importing the composer back. Re-exported for existing callers.
+export { BUILD_STAGE, BUILD_STAGE_ORDER, stageFromName, type BuildStage } from './BuildStages';
 
 class BuildingCanvas {
   private readonly surfaces = new Map<string, { surface: SurfaceKey; stage: number; builder: GeometryBuilder }>();
@@ -85,6 +46,21 @@ class BuildingCanvas {
     private readonly materials?: ReadonlyMap<SurfaceKey, ArchitecturalMaterialId>,
   ) {}
 
+  private originX = 0;
+  private originZ = 0;
+
+  /**
+   * Compose everything from here on about a different point in the plot.
+   *
+   * Used by structures whose building does not sit at the centre of its own footprint — a
+   * farmstead's barn stands at the edge of cultivated ground that another renderer owns.
+   */
+  setOrigin(x: number, z: number): void {
+    this.originX = x;
+    this.originZ = z;
+    for (const entry of this.surfaces.values()) entry.builder.setOrigin(x, 0, z);
+  }
+
   /** Returns a builder only if the requested part belongs to a stage already built. */
   at(surface: SurfaceKey, requiredStage: number): GeometryBuilder | undefined {
     if (requiredStage > this.stage) return undefined;
@@ -92,6 +68,7 @@ class BuildingCanvas {
     let entry = this.surfaces.get(key);
     if (!entry) {
       const builder = new GeometryBuilder();
+      builder.setOrigin(this.originX, 0, this.originZ);
       builder.setWeathering(this.wear, this.tone);
       entry = { surface, stage: requiredStage, builder };
       this.surfaces.set(key, entry);
@@ -428,6 +405,122 @@ function emitPatternBand(
   }
 }
 
+/**
+ * Publish the resolved architecture onto a composed group.
+ *
+ * Routing tests, debug overlays and scene inspection all need to see which archetype and
+ * construction system was chosen without re-deriving it. Every composition path calls this, so
+ * a farmstead reports its architecture exactly as an ordinary building does. The renderer's own
+ * `grammarRole` stays authoritative for placement and LOD.
+ */
+function publishArchitecture(group: THREE.Group, grammar: BuildingGrammar): void {
+  group.userData['grammarRole'] = grammar.role;
+  group.userData['grammarEra'] = grammar.era;
+  // The grammar's own identity cues: the large, non-colour decisions that make a market, a
+  // council, a garrison and a foundry different *shapes*. Published so that readability
+  // validation and the architecture browser can read them off a finished production asset
+  // instead of re-resolving a grammar of their own and drifting from what is rendered.
+  group.userData['grammarMassing'] = grammar.massing;
+  group.userData['grammarRoofFamily'] = grammar.roofFamily;
+  group.userData['grammarRoofTiers'] = grammar.roofTiers;
+  group.userData['grammarFrontage'] = grammar.frontage;
+  group.userData['grammarCrown'] = grammar.crown;
+  group.userData['grammarProps'] = grammar.props;
+  group.userData['grammarEnclosure'] = grammar.enclosure;
+  group.userData['grammarVeranda'] = grammar.veranda;
+  group.userData['grammarGateway'] = grammar.gateway;
+  group.userData['grammarForecourt'] = grammar.forecourt;
+  group.userData['grammarChimneys'] = grammar.chimneys;
+  group.userData['grammarVents'] = grammar.vents;
+  const spec = grammar.spec;
+  if (!spec) return;
+  group.userData['architectureArchetype'] = spec.archetype;
+  group.userData['architecturePeriod'] = spec.period;
+  group.userData['structuralFamily'] = spec.family;
+  group.userData['architectureSilhouette'] = spec.silhouette;
+  group.userData['wallAssembly'] = spec.wallAssembly;
+  group.userData['foundationStyle'] = spec.foundation;
+  group.userData['architectureMaterials'] = { ...spec.materials };
+  group.userData['architectureEquipment'] = [...spec.equipment];
+  // Why this archetype, and whether its period had to be lifted. The architecture browser shows
+  // both, so an unexpected building is traceable to the decision that produced it.
+  group.userData['architectureRouting'] = spec.provenance.routing;
+  group.userData['architecturePeriodLifted'] = spec.provenance.periodLifted;
+  group.userData['architectureStageName'] = spec.provenance.stageName;
+}
+
+/** The render surfaces one structure composes through, resolved once from its grammar. */
+interface StructureSurfaces {
+  wallSurface: SurfaceKey;
+  roofSurface: SurfaceKey;
+  postSurface: SurfaceKey;
+  baseSurface?: SurfaceKey;
+  coreMaterial?: StructureMaterial;
+}
+
+/**
+ * Emit one complete structure into a canvas.
+ *
+ * Extracted so a structure can be composed somewhere other than the centre of its own plot. A
+ * farmstead is the case that needs it: the cultivated ground belongs to FarmFieldRenderer, so the
+ * farm's own building stands at the plot edge and must be emitted about that point.
+ */
+function emitStructure(
+  canvas: BuildingCanvas,
+  grammar: BuildingGrammar,
+  random: SeededRandom,
+  surfaces: StructureSurfaces,
+  seed: string,
+): { roofTop: number; crownTop: number } {
+  const { wallSurface, roofSurface, postSurface, baseSurface, coreMaterial } = surfaces;
+  const halfWidth = grammar.width / 2;
+  const halfDepth = grammar.depth / 2;
+  const plinthTop = grammar.plinthHeight;
+  const wallTop = plinthTop + grammar.wallHeight * grammar.storeys;
+
+  emitGroundworks(canvas, grammar, halfWidth, halfDepth);
+  emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
+  emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface, baseSurface, coreMaterial);
+  emitVernacularFabric(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
+  const roofTop = emitRoof(canvas, grammar, halfWidth, halfDepth, wallTop, roofSurface, wallSurface, postSurface, random);
+  const crownTop = emitCrown(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, roofSurface, wallSurface, postSurface);
+  emitFrontage(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofSurface, wallSurface, postSurface);
+  emitDetails(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, postSurface, random);
+  emitYardProps(canvas, grammar, halfWidth, halfDepth, random);
+  // Everything the architectural specification adds on top of the shell: what the structure
+  // stands on, how its wall is actually assembled, which bays are open, what is bolted to the
+  // side of it, and what work happens inside.
+  if (grammar.spec) {
+    const scaled = { ...grammar.spec, width: grammar.width, depth: grammar.depth, bays: grammar.bays };
+    emitSpecGeometry(canvas, scaled, plinthTop, wallTop, seed);
+    // A quay is part shed and part waterworks: the shell stays, the quay is added to it.
+    if (grammar.spec.archetype === 'dock') emitQuayWorks(canvas, scaled, plinthTop, seed);
+  }
+  return { roofTop, crownTop };
+}
+
+/**
+ * Scale a grammar down to a target plan width, keeping every dependent dimension proportional.
+ *
+ * Used by the two compositions whose plot belongs to something else: a farmstead standing at the
+ * edge of ground FarmFieldRenderer owns, and a structure standing on an open market precinct. Both
+ * need a smaller building in a larger reserved footprint, and both must stay proportionate rather
+ * than be squashed, so the shrink is uniform.
+ */
+function shrinkGrammar(grammar: BuildingGrammar, targetWidth: number): BuildingGrammar {
+  const shrink = Math.min(1, targetWidth / Math.max(0.2, grammar.width));
+  const scaled: BuildingGrammar = { ...grammar };
+  scaled.width = grammar.width * shrink;
+  scaled.depth = grammar.depth * shrink;
+  scaled.wallHeight = grammar.wallHeight * shrink;
+  scaled.plinthHeight = grammar.plinthHeight * shrink;
+  scaled.postThickness = grammar.postThickness * shrink;
+  if (grammar.wallThickness !== undefined) scaled.wallThickness = grammar.wallThickness * shrink;
+  if (grammar.openingWidth !== undefined) scaled.openingWidth = grammar.openingWidth * shrink;
+  if (grammar.openingHeight !== undefined) scaled.openingHeight = grammar.openingHeight * shrink;
+  return scaled;
+}
+
 interface ComposedBuilding {
   group: THREE.Group;
   height: number;
@@ -458,156 +551,104 @@ export function composeBuilding(
   const surfaceMaterials = grammar.spec
     ? specSurfaceMaterials(grammar.spec, { wallSurface, roofSurface, postSurface, baseSurface })
     : undefined;
+  const surfaces: StructureSurfaces = { wallSurface, roofSurface, postSurface, baseSurface, coreMaterial };
 
   const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift, surfaceMaterials);
   const memorial = grammar.development?.memorial;
   if (memorial) {
-    // The landscape renderer owns distributed burial markers. This asset is the ceremonial focal
-    // composition: a small, highly legible silhouette that survives settlement-camera distance.
-    const count = Math.min(12, Math.ceil(Math.log2(1 + memorial.deaths)));
-    const named = memorial.people.length;
-    const surface = memorial.form === 'ancestor-posts' ? 'timber' : memorial.form === 'earth-mounds' ? 'ground' : 'stone';
-    const fabric = canvas.at(surface, BUILD_STAGE.FRAME);
-    const weathering = Math.min(0.78, memorial.ageBand * 0.15);
-    fabric?.setWeathering(weathering, grammar.toneShift);
-
-    if (memorial.form === 'earth-mounds') {
-      canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addFanUp(
-        { x: 0, y: 0.12, z: 0.06 },
-        squareRing(0.48, 0.32, 0, 1).map(p => ({ x: p.x, y: p.y, z: p.z + 0.06 })),
-      );
-      for (const x of [-0.24, 0, 0.24]) {
-        canvas.at('stone', BUILD_STAGE.FRAME)?.addBox(x, 0.1, 0.46, x === 0 ? 0.14 : 0.1, x === 0 ? 0.24 : 0.17, 0.07, x * 0.22);
-      }
-    } else if (memorial.form === 'ancestor-posts') {
-      for (const [x, height] of [[-0.28, 0.58], [0, 0.76], [0.28, 0.62]] as const) {
-        canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(x, height / 2, 0.12, 0.075, height, 0.075, x * 0.18);
-        canvas.at('timber', BUILD_STAGE.DETAIL)?.addBox(x, height * 0.72, 0.12, 0.18, 0.045, 0.065, -x * 0.35);
-      }
-      canvas.at('timber', BUILD_STAGE.ROOF)?.addBox(0, 0.61, 0.12, 0.72, 0.07, 0.11);
-      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.78, 0.12, 0.13, 0.09, 0.08);
-    } else if (memorial.form === 'stone-cairns') {
-      for (let layer = 0; layer < 5; layer += 1) {
-        const width = 0.58 - layer * 0.085;
-        const y = 0.06 + layer * 0.105;
-        canvas.at('stone', BUILD_STAGE.FRAME)?.addBox(
-          (layer % 2 === 0 ? -1 : 1) * 0.018,
-          y,
-          0.1 + (layer % 2 === 0 ? 0.012 : -0.012),
-          width,
-          0.105,
-          width * 0.72,
-          layer * 0.23,
-        );
-      }
-      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.59, 0.1, 0.13, 0.12, 0.1, 0.35);
-    } else {
-      canvas.at('stone', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.05, 0.12, 0.72, 0.1, 0.46);
-      canvas.at('stone', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.12, 0.12, 0.52, 0.07, 0.34);
-      canvas.at('stone', BUILD_STAGE.WALLS)?.addBox(0, 0.48, 0.12, 0.27, 0.72, 0.12);
-      canvas.at('stone', BUILD_STAGE.ROOF)?.addBox(0, 0.85, 0.12, 0.33, 0.06, 0.15);
-      for (const x of [-0.31, 0.31]) canvas.at('stone', BUILD_STAGE.FRAME)?.addBox(x, 0.25, 0.12, 0.13, 0.36, 0.1, x * 0.12);
-      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.55, 0.055, 0.15, 0.22, 0.025);
-    }
-
-    if (memorial.events.length) {
-      canvas.at(surface, BUILD_STAGE.FOUNDATION)?.addBox(0, 0.045, 0.78, 0.72, 0.09, 0.3);
-      canvas.at(surface, BUILD_STAGE.WALLS)?.addBox(0, 0.3, 0.78, 0.3, 0.5, 0.11);
-      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.35, 0.72, 0.14, 0.17, 0.025);
-    }
-    if (memorial.sacred) {
-      for (const x of [-0.32, 0.32]) canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(x, 0.34, 0.84, 0.065, 0.68, 0.065);
-      canvas.at('timber', BUILD_STAGE.ROOF)?.addBox(0, 0.66, 0.84, 0.78, 0.075, 0.22);
-      canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(0, 0.74, 0.84, 0.14, 0.07, 0.05);
-    }
-
+    // A memorial has no shell, no storey and no structural family, so it never resolves a spec.
+    // Its geometry lives with the other non-buildings in DedicatedStructures; this branch only
+    // builds the group and publishes what the presentation layers read off it.
+    const composed = composeMemorial(canvas, memorial, grammar.toneShift);
     const group = canvas.build(palette);
     group.userData['memorialForm'] = memorial.form;
-    group.userData['individualMarkers'] = named;
-    group.userData['communalMarkers'] = count;
+    group.userData['individualMarkers'] = composed.individualMarkers;
+    group.userData['communalMarkers'] = composed.communalMarkers;
     group.userData['memorialVisualKit'] = 'v2';
     group.userData['ceremonialFocus'] = true;
-    group.userData['memorialWeathering'] = weathering;
-    return { group, height: memorial.form === 'stelae' ? 0.9 : memorial.sacred ? 0.8 : 0.66, extentX: 2.2, extentZ: 2.2 };
+    group.userData['memorialWeathering'] = composed.weathering;
+    return { group, height: composed.height, extentX: composed.extentX, extentZ: composed.extentZ };
   }
-  // Productive ground is rendered by FarmFieldRenderer, which can conform every vertex to the
-  // terrain. The structure asset contributes only a small above-ground farm store at the plot edge;
-  // it must never add a second rigid field slab or fake rows through the terrain.
-  if (grammar.development?.form === 'field') {
-    const level = grammar.development.level;
-    const shedX = 0.72, shedZ = 0.56;
-    const shedHeight = 0.32 + Math.min(0.16, (level - 1) * 0.08);
-    const halfX = 0.19 + Math.min(0.05, level * 0.015);
-    const halfZ = 0.16 + Math.min(0.04, level * 0.012);
-    canvas.at('timber', BUILD_STAGE.FOUNDATION)?.addBox(shedX, 0.035, shedZ, halfX * 2.35, 0.07, halfZ * 2.35);
-    for (const [x, z] of [[-halfX, -halfZ], [halfX, -halfZ], [-halfX, halfZ], [halfX, halfZ]] as const) {
-      canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(shedX + x, 0.11 + shedHeight * 0.35, shedZ + z, 0.035, shedHeight * 0.7, 0.035);
-    }
-    canvas.at('daub', BUILD_STAGE.WALLS)?.addBox(shedX, 0.1 + shedHeight * 0.5, shedZ,
-      halfX * 1.85, shedHeight, halfZ * 1.85);
-    canvas.at('timber', BUILD_STAGE.WALLS)?.addBox(shedX, 0.14 + shedHeight * 0.42, shedZ + halfZ * 0.94,
-      halfX * 0.55, shedHeight * 0.52, 0.018);
-    const eaveY = 0.12 + shedHeight, ridgeY = eaveY + 0.12;
-    for (const side of [-1, 1]) {
-      const eaveX = shedX + side * halfX * 1.2;
-      const roof = canvas.at('roof-thatch', BUILD_STAGE.ROOF);
-      const a = { x: eaveX, y: eaveY, z: shedZ - halfZ * 1.2 };
-      const b = { x: eaveX, y: eaveY, z: shedZ + halfZ * 1.2 };
-      const c = { x: shedX, y: ridgeY, z: shedZ + halfZ * 1.2 };
-      const d = { x: shedX, y: ridgeY, z: shedZ - halfZ * 1.2 };
-      if (side > 0) roof?.addQuad(a, b, c, d); else roof?.addQuad(d, c, b, a);
-      for (const end of [-1, 1]) canvas.at('timber', BUILD_STAGE.ROOF)?.addBeam(
-        { x: eaveX, y: eaveY - 0.015, z: shedZ + end * halfZ * 1.2 },
-        { x: shedX, y: ridgeY - 0.015, z: shedZ + end * halfZ * 1.2 }, 0.024, 0.024);
-    }
-    canvas.at('roof-thatch', BUILD_STAGE.ROOF)?.addBox(shedX, ridgeY, shedZ, 0.065, 0.045, halfZ * 2.45);
+  // Structures that are not buildings at all. A bridge and a perimeter wall have no storeys, no
+  // roof and no interior, so composing them as a walled box would produce a box; they replace the
+  // shell outright and report their own extents.
+  if (grammar.spec && hasDedicatedComposition(grammar.spec)) {
+    const dedicated = composeDedicated(canvas, grammar.spec, seed)!;
     const group = canvas.build(palette);
-    group.userData['grammarRole'] = grammar.role;
-    group.userData['grammarEra'] = grammar.era;
+    publishArchitecture(group, grammar);
+    group.userData['dedicatedStructure'] = grammar.spec.archetype;
+    group.userData['bodyWidth'] = grammar.width;
+    group.userData['bodyDepth'] = grammar.depth;
+    group.userData['floorHeight'] = grammar.plinthHeight;
+    group.userData['doorWidth'] = doorWidthFor(grammar);
+    return {
+      group,
+      height: measuredHeight(group, dedicated.height),
+      extentX: dedicated.extentX,
+      extentZ: dedicated.extentZ,
+    };
+  }
+
+  // Productive ground is rendered by FarmFieldRenderer, which can conform every vertex to the
+  // terrain. The structure asset contributes only the farm's own building, standing at the plot
+  // edge; it must never add a second rigid field slab or fake rows through the terrain.
+  //
+  // A farmstead's building is a barn, a byre or a stable — real architecture composed through the
+  // ordinary `emitStructure` path, not a hand-built shed. There is deliberately no separate
+  // no-spec variant: a second hard-coded shed here was a duplicate architecture system that
+  // production never reached, and only the direct callers in tests and dev previews ever saw it.
+  if (grammar.development?.form === 'field') {
+    // Sized to sit beside its fields rather than replace them, and stripped of any precinct
+    // paving, which would lay a slab over cultivated ground.
+    const shedX = 0.72, shedZ = 0.56;
+    const farm = shrinkGrammar({ ...grammar, forecourt: false, enclosure: 'none' }, 0.95);
+
+    canvas.setOrigin(shedX, shedZ);
+    emitStructure(canvas, farm, new SeededRandom(`${seed}:farmstead`), surfaces, `${seed}:farmstead`);
+    const group = canvas.build(palette);
+    publishArchitecture(group, grammar);
     group.userData['productiveGroundOwner'] = 'FarmFieldRenderer';
     group.userData['productiveStructureAnchorX'] = shedX;
     group.userData['productiveStructureAnchorZ'] = shedZ;
-    return { group, height: 0.28 + shedHeight, extentX: 2.3, extentZ: 1.9 };
+    group.userData['bodyWidth'] = farm.width;
+    group.userData['bodyDepth'] = farm.depth;
+    group.userData['floorHeight'] = farm.plinthHeight;
+    group.userData['doorWidth'] = doorWidthFor(farm);
+    const farmBounds = new THREE.Box3().setFromObject(group);
+    // The plot extent stays the field's, not the building's, so placement is unchanged.
+    return { group, height: Math.max(0.1, farmBounds.max.y), extentX: 2.3, extentZ: 1.9 };
   }
 
-  // Open gathering places keep a modest flat precinct because they are architectural surfaces,
-  // unlike cultivated earth which must follow the natural ground.
+  // Open gathering places keep a modest flat precinct, because unlike cultivated earth a market
+  // ground *is* an architectural surface. The structure that stands on it is composed through the
+  // ordinary path like any other: the market archetype's early stages already carry the high
+  // openness, the stalls and the awnings, so the hand-built ring of posts this replaced was both
+  // a duplicate and the one composition that reported no architecture at all.
   if (grammar.development?.form === 'gathering' && grammar.development.level === 1) {
     canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.012, 0, 2.2, 0.024, 1.8);
-    for (let i = 0; i < 6; i++) {
-      const angle = i / 6 * Math.PI * 2;
-      canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.1, Math.sin(angle) * 0.55, 0.3, 0.2, 0.22, angle);
-      if (grammar.development?.need === 'trade') {
-        canvas.at('timber', BUILD_STAGE.FRAME)?.addBox(Math.cos(angle) * 0.65, 0.3, Math.sin(angle) * 0.55, 0.04, 0.6, 0.04);
-        canvas.at('cloth', BUILD_STAGE.ROOF)?.addBox(Math.cos(angle) * 0.65, 0.6, Math.sin(angle) * 0.55, 0.48, 0.04, 0.4, angle);
-      }
-    }
+    const precinct = shrinkGrammar({ ...grammar, forecourt: false, enclosure: 'none' }, 1.3);
+    emitStructure(canvas, precinct, new SeededRandom(`${seed}:precinct`), surfaces, `${seed}:precinct`);
     const group = canvas.build(palette);
-    group.userData['grammarRole'] = grammar.role;
-    group.userData['grammarEra'] = grammar.era;
-    return { group, height: 0.62, extentX: 2.3, extentZ: 1.9 };
+    publishArchitecture(group, grammar);
+    group.userData['bodyWidth'] = precinct.width;
+    group.userData['bodyDepth'] = precinct.depth;
+    group.userData['floorHeight'] = precinct.plinthHeight;
+    group.userData['doorWidth'] = doorWidthFor(precinct);
+    group.userData['openPrecinct'] = true;
+    const precinctBounds = new THREE.Box3().setFromObject(group);
+    // The reserved plot extent is the precinct's, not the structure's, so placement is unchanged.
+    return { group, height: Math.max(0.1, precinctBounds.max.y), extentX: 2.3, extentZ: 1.9 };
   }
+
   const random = new SeededRandom(`${seed}:compose`);
   const rank = eraRank(grammar.era);
 
-  const halfWidth = grammar.width / 2;
-  const halfDepth = grammar.depth / 2;
   const plinthTop = grammar.plinthHeight;
   const wallTop = plinthTop + grammar.wallHeight * grammar.storeys;
-
-  emitGroundworks(canvas, grammar, halfWidth, halfDepth);
-  emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
-  emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface, baseSurface, coreMaterial);
-  emitVernacularFabric(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
-  const roofTop = emitRoof(canvas, grammar, halfWidth, halfDepth, wallTop, roofSurface, wallSurface, postSurface, random);
-  const crownTop = emitCrown(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, roofSurface, wallSurface, postSurface);
-  emitFrontage(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofSurface, wallSurface, postSurface);
-  emitDetails(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, roofTop, postSurface, random);
-  emitYardProps(canvas, grammar, halfWidth, halfDepth, random);
+  const { roofTop, crownTop } = emitStructure(canvas, grammar, random, surfaces, seed);
 
   const group = canvas.build(palette);
-  group.userData['grammarRole'] = grammar.role;
-  group.userData['grammarEra'] = grammar.era;
+  publishArchitecture(group, grammar);
   group.userData['bodyWidth'] = grammar.width;
   group.userData['bodyDepth'] = grammar.depth;
   group.userData['floorHeight'] = plinthTop;
@@ -620,7 +661,11 @@ export function composeBuilding(
   // only, and the reserved placement footprint is a circle centred on the origin.
   return {
     group,
-    height: Math.max(roofTop, crownTop) + (rank >= 4 ? 0.1 : 0),
+    // Height must describe everything that was actually emitted, not just the roof and crown.
+    // A portico, colonnade or ward pavilion can stand taller than a low-roofed body, and the
+    // LOD tiers are sized from this number — under-reporting it makes a distant building
+    // visibly pop shorter as it crosses a LOD boundary.
+    height: Math.max(Math.max(roofTop, crownTop) + (rank >= 4 ? 0.1 : 0), bounds.max.y),
     extentX: Math.max(grammar.width, Math.abs(bounds.min.x), Math.abs(bounds.max.x) ) * 2,
     extentZ: Math.max(grammar.depth, Math.abs(bounds.min.z), Math.abs(bounds.max.z)) * 2,
   };
