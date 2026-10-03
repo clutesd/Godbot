@@ -362,6 +362,120 @@ function bannerForSpec(spec: BuildingSpec): BannerStyle {
   return spec.culture.ornament > 0.7 ? 'cloth' : 'pennant';
 }
 
+function applyPurposePresentation(grammar: BuildingGrammar, spec: BuildingSpec): void {
+  const need = spec.purpose;
+  if (!need) return;
+  const level = spec.developmentLevel ?? 1;
+  const developed = level > 1;
+  const major = level >= 3;
+  const rank = periodRank(spec.period);
+  switch (need) {
+    case 'housing':
+      grammar.veranda = developed ? 'wrap' : grammar.veranda;
+      grammar.enclosure = developed ? 'yard' : grammar.enclosure;
+      grammar.banner = 'none';
+      grammar.lanterns = Math.max(grammar.lanterns, developed ? 2 : 1);
+      grammar.frontage = 'none'; grammar.crown = 'none'; grammar.props = 'domestic';
+      break;
+    case 'food':
+      grammar.banner = 'none';
+      grammar.enclosure = developed ? 'yard' : grammar.enclosure;
+      grammar.ornament = Math.min(grammar.ornament, 0.38);
+      grammar.lanterns = Math.min(grammar.lanterns, 1);
+      grammar.frontage = developed ? 'loading-dock' : 'none'; grammar.crown = 'none'; grammar.props = 'storage';
+      break;
+    case 'trade':
+      grammar.forecourt = true; grammar.veranda = 'front';
+      grammar.banner = major ? 'standard' : 'cloth';
+      grammar.lanterns = Math.max(grammar.lanterns, major ? 4 : 2);
+      grammar.massing = major ? 'court' : developed ? 'wing' : grammar.massing;
+      grammar.enclosure = major ? 'court' : 'none';
+      grammar.frontage = 'market-stalls'; grammar.crown = 'none'; grammar.props = 'market';
+      break;
+    case 'government':
+      grammar.forecourt = true; grammar.stairs = true; grammar.banner = 'standard';
+      grammar.gateway = developed;
+      grammar.enclosure = major ? 'court' : developed ? 'yard' : 'none';
+      grammar.massing = developed ? 'court' : grammar.massing;
+      grammar.ornament = Math.max(grammar.ornament, major ? 0.95 : 0.78);
+      grammar.lanterns = Math.max(grammar.lanterns, major ? 5 : 3);
+      grammar.frontage = 'portico'; grammar.crown = developed ? 'lantern-cupola' : 'none'; grammar.props = 'civic';
+      break;
+    case 'security':
+      grammar.forecourt = false; grammar.gateway = developed || spec.form === 'tower';
+      grammar.banner = major ? 'standard' : 'pennant';
+      grammar.enclosure = major || spec.form === 'tower' ? 'court' : developed ? 'yard' : 'stakes';
+      grammar.massing = spec.form === 'tower' ? grammar.massing : developed ? 'twin' : 'single';
+      grammar.veranda = 'none'; grammar.ornament = Math.min(Math.max(grammar.ornament, 0.34), 0.72);
+      grammar.lanterns = Math.min(grammar.lanterns, 2);
+      grammar.frontage = 'guard-screen'; grammar.crown = 'watch-tower'; grammar.props = 'defensive';
+      break;
+    case 'religion':
+      grammar.forecourt = developed; grammar.gateway = developed;
+      grammar.banner = developed ? 'standard' : 'cloth';
+      grammar.enclosure = developed ? 'court' : grammar.enclosure;
+      grammar.roofTiers = Math.max(grammar.roofTiers, level);
+      grammar.ornament = Math.max(grammar.ornament, 0.9);
+      grammar.lanterns = Math.max(grammar.lanterns, 2 + level);
+      grammar.frontage = 'none'; grammar.crown = 'spire'; grammar.props = 'altar';
+      break;
+    case 'knowledge':
+      grammar.forecourt = developed; grammar.gateway = false; grammar.banner = 'none'; grammar.enclosure = 'none';
+      grammar.massing = developed ? 'court' : 'single'; grammar.veranda = developed ? 'wrap' : 'front';
+      grammar.windowRows = Math.max(grammar.windowRows, developed ? 2 : 1);
+      grammar.ornament = Math.min(Math.max(grammar.ornament, 0.48), 0.72);
+      grammar.lanterns = Math.max(grammar.lanterns, major ? 4 : 2);
+      grammar.frontage = 'colonnade'; grammar.crown = major ? 'observatory' : 'none'; grammar.props = 'civic';
+      break;
+    case 'healthcare':
+      grammar.forecourt = developed; grammar.gateway = false; grammar.banner = 'none';
+      grammar.enclosure = major ? 'yard' : 'none'; grammar.massing = developed ? 'wing' : 'single';
+      grammar.veranda = 'wrap'; grammar.windowRows = Math.max(grammar.windowRows, developed ? 2 : 1);
+      grammar.ornament = Math.min(grammar.ornament, 0.52);
+      grammar.lanterns = Math.max(grammar.lanterns, major ? 4 : 2);
+      grammar.frontage = 'ward-pavilion'; grammar.crown = 'none'; grammar.props = 'herb-garden';
+      break;
+    case 'manufacturing':
+      grammar.forecourt = false; grammar.banner = 'none'; grammar.enclosure = developed ? 'yard' : 'none';
+      grammar.veranda = 'none'; grammar.ornament = Math.min(grammar.ornament, 0.32);
+      grammar.chimneys = Math.max(grammar.chimneys, major ? 2 : developed ? 1 : 0);
+      grammar.forgeGlow = Math.max(grammar.forgeGlow, major ? 0.7 : 0.35);
+      grammar.frontage = 'work-yard'; grammar.crown = major ? 'stack-cluster' : 'roof-monitor';
+      grammar.props = major ? 'foundry' : 'workshop';
+      break;
+    case 'transport':
+      grammar.forecourt = true; grammar.banner = 'pennant'; grammar.enclosure = developed ? 'yard' : 'none';
+      grammar.massing = developed ? 'wing' : grammar.massing; grammar.veranda = 'front';
+      grammar.ornament = Math.min(grammar.ornament, 0.35);
+      grammar.frontage = 'loading-dock'; grammar.crown = major ? 'roof-monitor' : 'none'; grammar.props = 'storage';
+      break;
+    case 'energy':
+      grammar.forecourt = false; grammar.banner = 'none'; grammar.enclosure = developed ? 'yard' : 'none';
+      grammar.veranda = 'none'; grammar.vents = Math.max(grammar.vents, major ? 4 : developed ? 2 : 1);
+      grammar.forgeGlow = Math.max(grammar.forgeGlow, major ? 0.95 : 0.55);
+      grammar.ornament = Math.min(grammar.ornament, 0.5);
+      grammar.frontage = 'work-yard'; grammar.crown = 'cooling-mass'; grammar.props = 'utility';
+      break;
+    case 'water':
+      grammar.forecourt = false; grammar.gateway = false; grammar.banner = 'none';
+      grammar.enclosure = major ? 'yard' : 'none'; grammar.massing = major ? 'twin' : developed ? 'wing' : 'single';
+      grammar.veranda = 'none'; grammar.vents = Math.max(grammar.vents, major ? 2 : 0);
+      grammar.ornament = Math.min(grammar.ornament, 0.38); grammar.lanterns = Math.min(grammar.lanterns, 1);
+      grammar.frontage = 'none'; grammar.crown = 'water-tank'; grammar.props = 'utility';
+      break;
+    case 'memory':
+      grammar.forecourt = developed; grammar.gateway = major; grammar.banner = 'none';
+      grammar.enclosure = developed ? 'court' : 'none'; grammar.massing = major ? 'court' : grammar.massing;
+      grammar.ornament = Math.max(grammar.ornament, major ? 1 : 0.82);
+      grammar.lanterns = Math.max(grammar.lanterns, developed ? 3 : 1); grammar.ridgeFinials = true;
+      grammar.frontage = 'none'; grammar.crown = 'obelisk'; grammar.props = 'civic';
+      break;
+  }
+  if (rank === 0) {
+    grammar.frontage = 'none';
+    grammar.crown = grammar.crown === 'obelisk' ? 'obelisk' : 'none';
+  }
+}
 /**
  * Build the downstream compatibility grammar from an already-resolved BuildingSpec.
  *
@@ -442,6 +556,9 @@ export function grammarFromBuildingSpec(
   };
 
   applySpecToGrammar(grammar, spec);
+  // Purpose is authoritative simulation state carried by BuildingSpec. Preserve the strong civic,
+  // industrial and service identity cues without consulting legacy BuildingRole.
+  applyPurposePresentation(grammar, spec);
 
   if (spec.adaptation) {
     grammar.massing = 'single';
