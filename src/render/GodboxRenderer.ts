@@ -30,7 +30,6 @@ import { FoundingStandardPresentation, type FoundingStandardTarget } from './fou
 import { foundingCommunityIsForming, foundingCommunitySupplyAnchor, isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
-import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, turnToward, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure, type LocalWorkstation } from './people/LocalActivityPresentation';
@@ -2530,13 +2529,6 @@ export class GodboxRenderer {
     return palette;
   }
 
-  private shelterGroundAt(placement: BuildingPlacement): (x: number, z: number) => number {
-    const cosine = Math.cos(placement.rotationY), sine = Math.sin(placement.rotationY);
-    const center = this.elevationAt(placement.worldX, placement.worldZ);
-    return (x, z) => this.elevationAt(placement.worldX + x * cosine + z * sine,
-      placement.worldZ - x * sine + z * cosine) - center;
-  }
-
   private installSleepingArea(placement: BuildingPlacement, building: THREE.Object3D,
     width: number, depth: number, floorHeight: number, doorWidth: number): void {
     if (!['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(placement.role)
@@ -2552,14 +2544,8 @@ export class GodboxRenderer {
   }
 
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number, settlement: Settlement): THREE.Object3D {
-    if (placement.development?.adaptation) {
-      const building = createSurvivalStructure(placement.development, 1, placement.width, placement.depth, this.getPalette(cultureStyle, era), this.shelterGroundAt(placement));
-      building.position.set(placement.localX, terrainY, placement.localZ); building.rotation.y = placement.rotationY;
-      building.userData['placementKey'] = placement.key;
-      this.installSleepingArea(placement, building, placement.width * 0.72, placement.depth * 0.7,
-        Number(building.userData['foundationLift'] ?? 0) + 0.05, placement.width * 0.30);
-      return building;
-    }
+    // Founding adaptations are ordinary BuildingSpec inputs now. They use this same AssetBuilder,
+    // material, geometry, LOD and construction path instead of escaping through SurvivalStructure.
     const stage = this.constructionStageFor(placement.key);
     // Geometry is shared per (settlement dialect, era, role, variation, stage) rather than per
     // instance, so a hundred houses cost a handful of buffers — but keyed per settlement, not per
