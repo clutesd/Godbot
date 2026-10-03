@@ -22,14 +22,14 @@ import { BUILD_STAGE, type BuildStage } from '../render/assets/BuildStages';
 import type { BuildingRole } from '../render/assets/BuildingGrammar';
 import {
   ARCHETYPE_LIBRARY, BUILDING_ARCHETYPES, archetypeEarliestPeriod, archetypeExistsIn,
-  archetypeStageFor, archetypesForRole, buildingArchetype, type BuildingArchetype,
+  archetypeStageFor, buildingArchetype, type BuildingArchetype,
 } from '../render/architecture/BuildingArchetype';
 import {
   ARCHITECTURAL_PERIODS, PERIOD_LABELS, periodRank, type ArchitecturalPeriod,
 } from '../render/architecture/ArchitecturalPeriod';
 import { structuralFamily, type StructuralFamily } from '../render/architecture/StructuralFamily';
 import { architecturalMaterial, isArchitecturalMaterial } from '../render/architecture/MaterialLibrary';
-import { archetypeForRole } from '../render/architecture/ArchetypeRouting';
+import { BUILDING_ROLES, archetypeForRole } from '../render/architecture/ArchetypeRouting';
 import type { MaterialAssignment } from '../render/architecture/BuildingSpec';
 import type { Era } from '../render/materials/MaterialPalette';
 
@@ -53,7 +53,7 @@ const seedInput = el<HTMLInputElement>('seed');
 const labelLayer = el<HTMLDivElement>('labels');
 const inspector = el<HTMLElement>('inspector');
 
-type ViewMode = 'gallery' | 'timeline' | 'street' | 'legacy';
+type ViewMode = 'gallery' | 'timeline' | 'street' | 'production';
 let view: ViewMode = 'gallery';
 
 // --------------------------------------------------------------------------- context presets
@@ -170,9 +170,18 @@ const STAGES: readonly { value: BuildStage; label: string }[] = [
 
 const SPECIALIZATIONS = ['agriculture', 'forestry', 'mining', 'craft', 'exchange'] as const;
 
-/** Renderer roles no archetype presents as. Derived, so it empties itself as archetypes land. */
-const LEGACY_ROLES: readonly BuildingRole[] = (Object.keys(ROLE_PROGRAM) as BuildingRole[])
-  .filter(role => archetypesForRole(role).length === 0);
+const ADAPTATION_CASES: readonly {
+  adaptation: NonNullable<DevelopmentResponse['adaptation']>;
+  role: BuildingRole;
+  need: SettlementNeed;
+  form: StructureForm;
+  material: DevelopmentResponse['material'];
+}[] = [
+  { adaptation: 'lean-to', role: 'lean-to', need: 'housing', form: 'dwelling', material: 'timber' },
+  { adaptation: 'earth-shelter', role: 'shelter', need: 'housing', form: 'dwelling', material: 'earth' },
+  { adaptation: 'hut', role: 'hut', need: 'housing', form: 'dwelling', material: 'timber' },
+  { adaptation: 'cache', role: 'store-pit', need: 'food', form: 'store', material: 'timber' },
+];
 
 const CATEGORIES = [...new Set(BUILDING_ARCHETYPES.map(id => ARCHETYPE_LIBRARY[id].category))].sort();
 
@@ -288,6 +297,10 @@ interface BuildRequest {
   role: BuildingRole;
   period: ArchitecturalPeriod;
   legacy?: boolean;
+  /** Reproduce a raw compatibility role with no DevelopmentResponse, as ambient fabric does. */
+  noDevelopment?: boolean;
+  adaptation?: NonNullable<DevelopmentResponse['adaptation']>;
+  program?: { need: SettlementNeed; form: StructureForm; material: DevelopmentResponse['material'] };
   title: string;
   subtitle: string;
 }
@@ -307,16 +320,18 @@ function configFor(request: BuildRequest): AssetConfig {
   // through its lineage rather than eight unrelated draws of the same archetype.
   const seed = `${seedInput.value}:${request.archetype ?? request.role}`;
 
-  // The minimal response the architecture system needs: it supplies the development level that
-  // drives the period, and the coarse structure class. With no project, no material bill and no
-  // stock, `deriveMaterialEvidence` reduces to exactly the class-only evidence the no-response
-  // path would use, so the browser adds no material bias of its own.
-  const development: DevelopmentResponse = {
-    need: program.need,
-    form: program.form,
-    name: request.archetype ?? request.role,
+  const selectedProgram = request.program ?? program;
+  // Normal gallery cards use the minimal response needed to drive the requested period. The
+  // Production Inputs view can deliberately omit it to reproduce raw compatibility roles, or
+  // attach a founding adaptation to prove those too traverse production AssetBuilder.
+  const development: DevelopmentResponse | undefined = request.noDevelopment ? undefined : {
+    need: selectedProgram.need,
+    form: selectedProgram.form,
+    name: request.adaptation ?? request.archetype ?? request.role,
     level: drive.level,
-    material: PERIOD_CLASS(request.period),
+    material: request.program?.material ?? PERIOD_CLASS(request.period),
+    adaptation: request.adaptation,
+    temporary: request.adaptation === 'lean-to',
     cultureId: culture.id,
     style: culture.style,
     services: {},
@@ -576,17 +591,26 @@ function rebuild(): void {
       ? ''
       : `Not built until ${PERIOD_LABELS[archetypeEarliestPeriod(id)].label}; the resolver presents the earliest version of itself instead.`;
   } else {
-    grid(LEGACY_ROLES.map(role => ({
+    const roleInputs: BuildRequest[] = BUILDING_ROLES.map(role => ({
       role,
       period,
       legacy: true,
-      title: role,
-      subtitle: `falls back to ${ARCHETYPE_LIBRARY[archetypeForRole(role)].label}`,
-    })));
-    el('count').textContent = `${LEGACY_ROLES.length} of ${Object.keys(ROLE_PROGRAM).length} renderer roles unmigrated`;
-    el('absent').textContent = LEGACY_ROLES.length
-      ? 'These renderer roles have no archetype declaring them. They still render, routed to a default archetype by role, and are the remaining migration surface.'
-      : 'Every renderer role is now claimed by an architecture archetype.';
+      noDevelopment: true,
+      title: `role: ${role}`,
+      subtitle: `compatibility input → ${ARCHETYPE_LIBRARY[archetypeForRole(role)].label}`,
+    }));
+    const adaptationInputs: BuildRequest[] = ADAPTATION_CASES.map(entry => ({
+      role: entry.role,
+      period,
+      legacy: true,
+      adaptation: entry.adaptation,
+      program: { need: entry.need, form: entry.form, material: entry.material },
+      title: `adaptation: ${entry.adaptation}`,
+      subtitle: 'production BuildingSpec modifier',
+    }));
+    grid([...roleInputs, ...adaptationInputs]);
+    el('count').textContent = `${roleInputs.length} compatibility roles + ${adaptationInputs.length} founding adaptations · ${PERIOD_LABELS[period].label}`;
+    el('absent').textContent = 'Every card is built through production AssetBuilder. Compatibility roles carry no visual authority; inspect the resolved archetype/spec on the right. Adaptations use the same spec/material/geometry path.';
   }
 
   applyLodMode();
@@ -651,6 +675,8 @@ function refreshSelection(): void {
     <dl>
       <dt>Archetype</dt><dd>${instance.archetype ? ARCHETYPE_LIBRARY[instance.archetype].label : '—'}</dd>
       <dt>Renderer role</dt><dd>${instance.role}</dd>
+      <dt>Purpose</dt><dd>${readString(data, 'architecturePurpose') ?? '—'}</dd>
+      <dt>Adaptation</dt><dd>${readString(data, 'architectureAdaptation') ?? '—'}</dd>
       <dt>Stage name</dt><dd>${instance.stageName}</dd>
       <dt>Period</dt><dd>${PERIOD_LABELS[instance.period].label}<br><i>${PERIOD_LABELS[instance.period].approx}</i></dd>
       <dt>Stage set in</dt><dd>${instance.definedIn ? PERIOD_LABELS[instance.definedIn].label : '—'}${instance.periodsOld > 0 ? ` · ${instance.periodsOld} period${instance.periodsOld === 1 ? '' : 's'} old` : ' · new this period'}</dd>
@@ -706,7 +732,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button => {
     view = button.dataset['view'] as ViewMode;
     document.querySelectorAll<HTMLButtonElement>('[data-view]')
       .forEach(other => other.setAttribute('aria-pressed', String(other === button)));
-    el('archetype-hint').textContent = view === 'gallery' || view === 'legacy' ? '(subject of timeline/street)' : '';
+    el('archetype-hint').textContent = view === 'gallery' || view === 'production' ? '(subject of timeline/street)' : '';
     rebuild();
   };
 });
