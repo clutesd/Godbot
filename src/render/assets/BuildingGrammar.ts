@@ -645,6 +645,13 @@ export interface BuildingGrammarContext {
   isLandmark?: boolean;
 }
 
+/**
+ * Compatibility-only grammar resolver.
+ *
+ * Production inhabited buildings resolve BuildingSpec first in AssetBuilder and adapt that spec
+ * into BuildingGrammar. This resolver remains for memorials and direct dev/test fixtures that do
+ * not have a BuildingSpec; BuildingRole must not be treated as architectural authority.
+ */
 export function resolveBuildingGrammar(
   profile: CultureStyleProfile,
   era: Era,
