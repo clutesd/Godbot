@@ -15,16 +15,22 @@
  * material, while every system downstream of the grammar keeps working unchanged.
  */
 
+import { SeededRandom } from '../../sim/prng';
+import type { CultureStyleProfile } from '../style/CultureStyleProfile';
 import type { ArchitecturalMaterialId } from './MaterialLibrary';
 import { architecturalMaterial } from './MaterialLibrary';
 import type { BuildingSpec } from './BuildingSpec';
 import { periodRank } from './ArchitecturalPeriod';
 import type {
+  BannerStyle,
   BuildingGrammar,
+  CrownFeature,
+  EnclosureStyle,
   FrontageStyle,
   OpeningStyle,
   PostStyle,
   RoofFamily,
+  VerandaStyle,
   WallLayer,
   YardProps,
 } from '../assets/BuildingGrammar';
@@ -267,6 +273,192 @@ function applyEquipmentToGrammar(grammar: BuildingGrammar, equipment: readonly F
   if (grammar.props === 'none' || PROPS_SPECIFICITY.indexOf(grammar.props) < 2) grammar.props = props;
 }
 
+function massingForSpec(spec: BuildingSpec): BuildingGrammar['massing'] {
+  if (spec.annexes >= 2) return 'court';
+  if (spec.annexes === 1) return 'wing';
+  switch (spec.silhouette) {
+    case 'arcaded': return 'court';
+    case 'industrial-shed':
+    case 'frame-grid': return 'wing';
+    case 'slab-stack': return spec.floors > 2 ? 'twin' : 'single';
+    default: return 'single';
+  }
+}
+
+function frontageForSpec(spec: BuildingSpec): FrontageStyle {
+  switch (spec.archetype) {
+    case 'market': return 'market-stalls';
+    case 'granary':
+    case 'silo':
+    case 'warehouse':
+    case 'dock': return 'loading-dock';
+    case 'workshop':
+    case 'mill':
+    case 'factory': return 'work-yard';
+    case 'gatehouse': return 'guard-screen';
+    case 'civic-hall': return spec.purpose === 'healthcare' ? 'ward-pavilion' : 'portico';
+    default: return 'none';
+  }
+}
+
+function crownForSpec(spec: BuildingSpec): CrownFeature {
+  switch (spec.archetype) {
+    case 'shrine': return spec.purpose === 'memory' ? 'obelisk' : 'spire';
+    case 'gatehouse': return 'watch-tower';
+    case 'civic-hall':
+      return spec.purpose === 'knowledge' ? 'observatory'
+        : spec.culture.ornament > 0.6 ? 'lantern-cupola' : 'none';
+    case 'factory':
+      return spec.purpose === 'energy' ? 'cooling-mass'
+        : spec.purpose === 'water' ? 'water-tank' : 'stack-cluster';
+    case 'silo': return 'roof-monitor';
+    case 'barn': return spec.roof.archetype === 'monitor' ? 'roof-monitor' : 'none';
+    default: return 'none';
+  }
+}
+
+function propsForSpec(spec: BuildingSpec): YardProps {
+  switch (spec.archetype) {
+    case 'house': return 'domestic';
+    case 'barn':
+    case 'byre':
+    case 'stable':
+    case 'animal-pen':
+    case 'granary':
+    case 'silo':
+    case 'warehouse':
+    case 'dock': return 'storage';
+    case 'market': return 'market';
+    case 'workshop':
+    case 'mill': return 'workshop';
+    case 'factory':
+      return spec.purpose === 'energy' || spec.purpose === 'water' ? 'utility'
+        : spec.equipment.includes('forge') || spec.equipment.includes('kiln') ? 'foundry' : 'workshop';
+    case 'shrine': return 'altar';
+    case 'gatehouse':
+    case 'boundary-wall': return 'defensive';
+    case 'civic-hall': return 'civic';
+    default: return 'none';
+  }
+}
+
+function verandaForSpec(spec: BuildingSpec): VerandaStyle {
+  if (spec.archetype === 'market') return 'front';
+  if (spec.openness > 0.45) return 'wrap';
+  if (spec.openness > 0.18 && (spec.archetype === 'house' || spec.archetype === 'shrine' || spec.archetype === 'civic-hall')) return 'front';
+  return 'none';
+}
+
+function enclosureForSpec(spec: BuildingSpec): EnclosureStyle {
+  if (spec.archetype === 'animal-pen') return 'yard';
+  if (spec.archetype === 'boundary-wall' || spec.archetype === 'gatehouse') return 'court';
+  if (spec.annexes > 1 && spec.openness > 0.2) return 'yard';
+  return 'none';
+}
+
+function bannerForSpec(spec: BuildingSpec): BannerStyle {
+  if (spec.culture.ornament < 0.45) return 'none';
+  if (spec.archetype === 'gatehouse' || spec.archetype === 'civic-hall' || spec.archetype === 'shrine') return 'standard';
+  return spec.culture.ornament > 0.7 ? 'cloth' : 'pennant';
+}
+
+/**
+ * Build the downstream compatibility grammar from an already-resolved BuildingSpec.
+ *
+ * BuildingRole survives only as a placement/LOD/diagnostic label. None of the geometry below
+ * branches on it; all visual decisions come from the spec, its culture, program and equipment.
+ */
+export function grammarFromBuildingSpec(
+  profile: CultureStyleProfile,
+  spec: BuildingSpec,
+  compatibilityRole: BuildingGrammar['role'],
+): BuildingGrammar {
+  const random = new SeededRandom(spec.seed + ':grammar-adapter');
+  const rank = periodRank(spec.period);
+  const primitive = spec.family === 'primitive-shelter';
+  const wallClass = architecturalMaterial(spec.materials.wall).structureMaterial;
+  const foundationClass = architecturalMaterial(spec.materials.foundation).structureMaterial;
+  const ornament = spec.culture.ornament;
+
+  const grammar: BuildingGrammar = {
+    role: compatibilityRole,
+    era: spec.era,
+    width: spec.width,
+    depth: spec.depth,
+    wallHeight: spec.storeyHeight,
+    storeys: spec.floors,
+    bays: spec.bays,
+    plinthHeight: spec.plinthHeight,
+    plinthInset: spec.foundation === 'masonry-plinth' || spec.foundation === 'brick-footing'
+      || spec.foundation === 'concrete-pad' || spec.foundation === 'concrete-raft' ? -0.08 : -0.04,
+    postStyle: postStyleFor(spec.materials.frame, primitive),
+    postThickness: Math.max(0.02, spec.wallThickness * 0.7),
+    wallLayer: wallLayerFor(spec.materials.wall),
+    ...(foundationClass !== wallClass ? { baseMaterial: foundationClass } : {}),
+    reinforced: spec.frameExposure > 0.45 && architecturalMaterial(spec.materials.frame).structure.span > 0.5,
+    roofFamily: roofFamilyFor(spec),
+    roofTiers: spec.roof.tiers,
+    roofPitch: spec.roof.pitch,
+    eaveOverhang: spec.roof.overhang,
+    eaveUpturn: profile.getEaveUpturn(ornament),
+    roofConcavity: profile.getRoofCurvatureValue(),
+    rafterTails: rank === 0 ? 0 : Math.max(0, Math.round(2 + ornament * 6)),
+    ridgeFinials: rank > 0 && ornament > 0.45 && spec.roof.archetype !== 'flat' && spec.roof.archetype !== 'flat-parapet',
+    motif: profile.motifFamily,
+    pattern: profile.patternStyle,
+    patternBands: rank === 0 ? 0 : Math.min(3, Math.round(ornament * 2.5)),
+    patternDensity: 0.4 + ornament * 0.7,
+    openings: openingStyleFor(spec),
+    windowRows: spec.openings.perBay <= 0 ? 1 : Math.max(1, Math.min(3, spec.floors)),
+    veranda: verandaForSpec(spec),
+    railing: rank >= 2 && spec.openness > 0.18,
+    stairs: spec.plinthHeight > 0.06,
+    banner: bannerForSpec(spec),
+    lanterns: rank < 2 ? 0 : Math.round(ornament * 3),
+    gateway: spec.archetype === 'gatehouse' || (ornament > 0.7 && (spec.archetype === 'shrine' || spec.archetype === 'civic-hall')),
+    forecourt: spec.archetype === 'market' || spec.archetype === 'civic-hall' || spec.archetype === 'shrine' || spec.archetype === 'gatehouse',
+    enclosure: enclosureForSpec(spec),
+    chimneys: 0,
+    vents: 0,
+    frontage: frontageForSpec(spec),
+    crown: crownForSpec(spec),
+    props: propsForSpec(spec),
+    massing: massingForSpec(spec),
+    ornament,
+    wear: spec.age.wear,
+    toneShift: random.range(-0.85, 0.85),
+    emissive: rank <= 1 ? 0.25 : rank === 2 ? 0.5 : rank === 3 ? 0.68 : rank === 4 ? 0.85 : 1,
+    forgeGlow: 0,
+    spec,
+    wallThickness: spec.wallThickness,
+    frameExposure: spec.frameExposure,
+    supportDensity: spec.supportDensity,
+    openingWidth: spec.openings.width,
+    openingHeight: spec.openings.height,
+    parapet: spec.parapet,
+    ...(spec.purpose && spec.form && spec.developmentLevel !== undefined && spec.developmentMaterial
+      ? { development: { need: spec.purpose, form: spec.form, level: spec.developmentLevel, material: spec.developmentMaterial } }
+      : {}),
+  };
+
+  applySpecToGrammar(grammar, spec);
+
+  if (spec.adaptation) {
+    grammar.massing = 'single';
+    grammar.crown = 'none';
+    grammar.gateway = false;
+    grammar.forecourt = false;
+    grammar.banner = 'none';
+    grammar.lanterns = 0;
+    grammar.railing = false;
+    grammar.enclosure = spec.adaptation === 'cache' ? 'stakes' : 'none';
+    grammar.veranda = 'none';
+    grammar.frontage = 'none';
+    grammar.props = spec.adaptation === 'cache' ? 'storage' : 'domestic';
+  }
+
+  return grammar;
+}
 /**
  * Apply a resolved spec to a grammar in place.
  *
