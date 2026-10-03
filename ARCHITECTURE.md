@@ -127,22 +127,22 @@ Settlement state (buildings, infrastructure, industry, urbanization)
         |
         | eraForSettlement + district zoning + role assignment
         v
-BuildingPlacement  (persistent plot: position, footprint, role, founding era)
+BuildingPlacement  (persistent plot: position, footprint, compatibility role, founding era)
         |
-        | resolveBuildingGrammar(culture profile, era, role, seed)
+        | resolveBuildingSpec(authoritative state)
         v
-BuildingGrammar    (massing, roof family, motif, ornament, openings, ...)
+BuildingSpec       (archetype, period, program/adaptation, family, materials, metrics, age)
         |
-        | resolveBuildingSpec(authoritative state) -> applySpecToGrammar
+        | grammarFromBuildingSpec(spec, compatibility role)
         v
-BuildingSpec       (period, structural family, material per role, metrics, age)
+BuildingGrammar    (downstream adapter for composer / LOD / construction contracts)
         |
         | composeBuilding(grammar, palette, seed, stage)
         v
 geometry batched per construction material -> shared, cached, instanced clones
 ```
 
-**Determinism.** A structure's appearance is a pure function of `(seed, culture style, era, role, variation, construction stage)`. No wall-clock time, no world position, no `Math.random()`. The renderer's PRNG stream is forked per plot and is separate from the simulation stream, so a visual choice cannot consume a simulation random draw.
+**Determinism.** A structure's appearance is a pure function of the authoritative `BuildingSpec` inputs plus construction stage. Legacy `BuildingRole` is a compatibility/placement label only and is not allowed to decide geometry. No wall-clock time, no world position, no `Math.random()`. The renderer's PRNG stream is forked per plot and is separate from the simulation stream, so a visual choice cannot consume a simulation random draw.
 
 **Placement contract.** A plot registers one persistent footprint through `PlacementContract` and `PlacementFootprint` at founding, sized for the finished structure *and its ceremonial precinct*, never for the primitive ancestor. Validation samples the center plus two perimeter rings, rejects any dry-building footprint that touches water or crosses the world boundary, and enforces both average and worst sampled slope. Public footprint registration repeats the terrain check, IDs are derived from the persistent entity, and a second registration may only be an exact idempotent match. Composition is uniformly scaled to fit inside the reserved footprint, so upgrading never needs new ground and cannot drift or re-layout. Docks, bridges, ferries, and other crossings must opt into their explicit water-tolerant contract.
 
@@ -152,7 +152,7 @@ geometry batched per construction material -> shared, cached, instanced clones
 
 ## Architectural system
 
-`src/render/architecture/` answers one question — *given everything the simulation knows, what is this building made of and how does it stand up?* — and answers it once, in `BuildingSpec`. Downstream consumers read the spec; none of them re-decide.
+`src/render/architecture/` answers one question — *given everything the simulation knows, what is this building made of and how does it stand up?* — and answers it once, in `BuildingSpec`. Downstream consumers read the spec; none of them re-decide. Production resolves the spec **before** `BuildingGrammar`; the grammar is only an adapter for the older composer/LOD/construction interfaces. Founding survival adaptations are fields on the spec, not a second building renderer.
 
 ```text
 MaterialLibrary        36 construction materials with real metadata
