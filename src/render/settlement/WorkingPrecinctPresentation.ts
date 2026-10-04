@@ -110,7 +110,9 @@ export function precinctStockOwner(settlement: Settlement, stock: BulkStock): st
       const development = activeDevelopment(plot);
       return development ? resourceEligible(settlement, development, stock) : false;
     })
-    .sort((a, b) => a.id.localeCompare(b.id))[0]?.id;
+    // Match the renderer's stable "oldest specialist first" bias so the authoritative stock owner
+    // stays inside the bounded establishing-shot sample whenever an eligible site is visible.
+    .sort((a, b) => a.foundedMonth - b.foundedMonth || a.id.localeCompare(b.id))[0]?.id;
 }
 
 function capability(development: StructureDevelopment, id: string): boolean {
