@@ -319,12 +319,21 @@ function wornPathAt(state: SimulationState, worldX: number, worldZ: number): boo
 
 interface InstanceRecord {
   primitive: PrecinctPrimitive;
-  worldX: number;
-  worldZ: number;
   localX: number;
   localZ: number;
   yaw: number;
   y: number;
+}
+
+function primitiveFitsPlot(plot: StructurePlot, primitive: PrecinctPrimitive): boolean {
+  const c = Math.cos(primitive.yaw), s = Math.sin(primitive.yaw);
+  const halfWidth = primitive.width * 0.5, halfDepth = primitive.depth * 0.5;
+  for (const [dx, dz] of [[-halfWidth, -halfDepth], [-halfWidth, halfDepth], [halfWidth, -halfDepth], [halfWidth, halfDepth]] as const) {
+    const x = primitive.x + dx * c + dz * s;
+    const z = primitive.z - dx * s + dz * c;
+    if (Math.hypot(x, z) > plot.radius + 0.025) return false;
+  }
+  return true;
 }
 
 /**
@@ -354,8 +363,7 @@ export function createWorkingPrecinctLayer(
 
     for (const primitive of plan.primitives) {
       // Hard stop at the real reserved plot. Ground and props never claim new settlement land.
-      const reach = Math.hypot(primitive.x, primitive.z) + Math.hypot(primitive.width, primitive.depth) * 0.5;
-      if (reach > plot.radius + 0.025) continue;
+      if (!primitiveFitsPlot(plot, primitive)) continue;
       const worldX = plot.worldX + primitive.x * c + primitive.z * s;
       const worldZ = plot.worldZ - primitive.x * s + primitive.z * c;
       if (primitive.keepPathClear && wornPathAt(state, worldX, worldZ)) continue;
@@ -366,8 +374,6 @@ export function createWorkingPrecinctLayer(
       const groundY = heightAt(worldX, worldZ) - settlementY;
       records[primitive.kind].push({
         primitive,
-        worldX,
-        worldZ,
         localX: worldX - settlement.position.x,
         localZ: worldZ - settlement.position.z,
         yaw,
