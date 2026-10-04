@@ -31,7 +31,8 @@ import type { MemorialSite } from '../../sim/development/types';
 import type { BuildingArchetype } from './BuildingArchetype';
 import type { BuildingSpec } from './BuildingSpec';
 import { architecturalMaterial } from './MaterialLibrary';
-import type { GeometrySink } from './StructureGeometry';
+import { emitEquipment, structureFrame, type GeometrySink } from './StructureGeometry';
+import { composeMill } from './MillArchitecture';
 
 /** What a dedicated composition reports back, matching the composer's own return shape. */
 export interface DedicatedComposition {
@@ -312,6 +313,119 @@ export function composeBoundaryWall(sink: GeometrySink, spec: BuildingSpec, seed
   return { height: height * 1.2 + t * 2, extentX: length + t * 4, extentZ };
 }
 
+// ---------------------------------------------------------------------------- animal pen
+
+/**
+ * An open enclosure.
+ *
+ * An animal pen is not a building with the roof switched off — it is a fence, a gate and a yard,
+ * with at most a small shelter in one corner. The shared composer has no notion of "mostly
+ * absent", so this replaces the shell outright the same way a bridge or a boundary wall does, and
+ * leans on the structure's own equipment list (`pen-gate`, `water-trough`, `manger`, `bedding`)
+ * for everything inside the fence rather than drawing any of that again.
+ */
+export function composeAnimalPen(sink: GeometrySink, spec: BuildingSpec, seed: string): DedicatedComposition {
+  const random = new SeededRandom(`${seed}:animal-pen`);
+  const halfWidth = spec.width / 2;
+  const halfDepth = spec.depth / 2;
+  const t = Math.max(0.016, spec.wallThickness);
+  // Stock fencing, not a defensive wall: a fraction of a storey is already taller than any animal
+  // needs to be kept in.
+  const fenceHeight = Math.max(0.1, spec.storeyHeight * 0.5);
+  const family = architecturalMaterial(spec.materials.wall).family;
+  const palisade = family === 'timber' || family === 'organic';
+  const masonry = family === 'stone' || family === 'ceramic' || family === 'binder';
+  const postSurface: SurfaceKey = palisade ? 'timber' : masonry ? 'stone' : 'metal';
+
+  const BUILD = BUILD_STAGE.WALLS;
+
+  // The gate gap matches the width the 'pen-gate' equipment item itself draws its leaf across, so
+  // the fence run and the gate leaf line up without this module knowing the leaf's own geometry.
+  const gateWidth = Math.max(t * 6, spec.width * 0.4);
+  const gateFrom = -gateWidth / 2;
+  const gateTo = gateWidth / 2;
+
+  // A trodden yard rather than a raised foundation — the ground itself is the floor.
+  sink.at('ground', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.01, 0, spec.width * 1.04, 0.02, spec.depth * 1.04);
+
+  const runSegment = (axis: 'x' | 'z', fixed: number, from: number, to: number): void => {
+    const run = to - from;
+    if (run <= 0) return;
+    const centre = (from + to) / 2;
+    const at = (pos: number): { x: number; z: number } =>
+      axis === 'x' ? { x: pos, z: fixed } : { x: fixed, z: pos };
+
+    if (masonry) {
+      const { x, z } = at(centre);
+      sink.at('stone', BUILD)?.addBox(
+        x, fenceHeight * 0.5, z,
+        axis === 'x' ? run : t * 2, fenceHeight, axis === 'x' ? t * 2 : run,
+      );
+      return;
+    }
+
+    // Palisade or panel fence: posts along the run, with one or two horizontal rails.
+    const step = palisade ? t * 1.3 : t * 9;
+    for (let pos = from; pos <= to + 1e-6; pos += step) {
+      const jitter = palisade ? random.range(-0.012, 0.012) : 0;
+      const { x, z } = at(pos);
+      sink.at(postSurface, BUILD)?.addBox(x, fenceHeight * 0.5 + jitter, z, t, fenceHeight, t);
+    }
+    const { x, z } = at(centre);
+    const rails = palisade ? [fenceHeight * 0.35, fenceHeight * 0.74] : [fenceHeight * 0.92];
+    for (const y of rails) {
+      sink.at(postSurface, BUILD)?.addBox(
+        x, y, z,
+        axis === 'x' ? run : t * 0.6, t * 0.5, axis === 'x' ? t * 0.6 : run,
+      );
+    }
+  };
+
+  // Entrance face carries the gate gap; the other three sides are a closed run.
+  runSegment('z', halfDepth, -halfWidth, gateFrom);
+  runSegment('z', halfDepth, gateTo, halfWidth);
+  runSegment('z', -halfDepth, -halfWidth, halfWidth);
+  runSegment('x', halfWidth, -halfDepth, halfDepth);
+  runSegment('x', -halfWidth, -halfDepth, halfDepth);
+
+  // An optional small shelter in one corner, kept subordinate to the yard: a roof on posts, no
+  // walls of its own, so the fence and the open ground still read as the structure.
+  let shelterHeight = 0;
+  if (spec.annexes > 0) {
+    const sx = spec.width * 0.32;
+    const sz = spec.depth * 0.32;
+    const cx = halfWidth - sx * 0.6;
+    const cz = -halfDepth + sz * 0.6;
+    const postHeight = fenceHeight * 1.7;
+    for (const dx of [-1, 1]) {
+      for (const dz of [-1, 1]) {
+        sink.at('timber', BUILD_STAGE.FRAME)?.addBox(
+          cx + dx * sx * 0.42, postHeight * 0.5, cz + dz * sz * 0.42, t * 1.1, postHeight, t * 1.1,
+        );
+      }
+    }
+    sink.at('thatch', BUILD_STAGE.ROOF)?.addBox(cx, postHeight + t * 0.5, cz, sx, t * 1.1, sz);
+    shelterHeight = postHeight + t;
+  }
+
+  // Everything that happens inside the fence — gate leaf, troughs, mangers, bedding — is the
+  // structure's own equipment, reused verbatim. `fence-line` is excluded because the perimeter
+  // above already is the real fence; forwarding it too would draw a second, disconnected run.
+  const frame = structureFrame(spec, 0, fenceHeight);
+  emitEquipment({
+    sink,
+    spec: { ...spec, equipment: spec.equipment.filter(item => item !== 'fence-line') },
+    frame,
+    random,
+  });
+
+  return {
+    height: Math.max(fenceHeight, shelterHeight),
+    extentX: spec.width + t * 4,
+    extentZ: spec.depth + t * 4,
+  };
+}
+
 // ---------------------------------------------------------------------------- quay works
 
 /**
@@ -458,7 +572,7 @@ export function composeMemorial(
 // ---------------------------------------------------------------------------- registry
 
 /** What kind of non-building a dedicated composition produces. Reported by the catalogue. */
-export type DedicatedGeometryKind = 'span' | 'perimeter';
+export type DedicatedGeometryKind = 'span' | 'perimeter' | 'enclosure' | 'machine';
 
 type DedicatedComposer = (sink: GeometrySink, spec: BuildingSpec, seed: string) => DedicatedComposition;
 
@@ -473,6 +587,14 @@ type DedicatedComposer = (sink: GeometrySink, spec: BuildingSpec, seed: string) 
 const DEDICATED_COMPOSITIONS: Partial<Record<BuildingArchetype, { kind: DedicatedGeometryKind; compose: DedicatedComposer }>> = {
   bridge: { kind: 'span', compose: composeBridge },
   'boundary-wall': { kind: 'perimeter', compose: composeBoundaryWall },
+  'animal-pen': { kind: 'enclosure', compose: composeAnimalPen },
+  // Machine buildings: drafted around their drive train, not dressed onto a workshop shell.
+  mill: { kind: 'machine', compose: composeMill },
+  windmill: { kind: 'machine', compose: composeMill },
+  'hand-mill': { kind: 'machine', compose: composeMill },
+  sawmill: { kind: 'machine', compose: composeMill },
+  'wind-pump': { kind: 'machine', compose: composeMill },
+  'smock-mill': { kind: 'machine', compose: composeMill },
 };
 
 /** The archetype ids with dedicated geometry, for the catalogue's orphan check. */

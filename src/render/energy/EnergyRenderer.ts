@@ -1,3 +1,7 @@
+import { AssetBuilder, type AssetConfig } from '../assets/AssetBuilder';
+import { productionBuildingShell, productionConstructionTarget } from '../assets/ProductionBuildingShell';
+import { developmentPresentationEra } from '../assets/BuildingGrammar';
+import { ConstructionAssembly } from '../construction/ConstructionAssembly';
 import * as THREE from 'three';
 import type { SimulationState } from '../../sim/types';
 import type { EnergyPlant, PowerLine, GridNode } from '../../sim/energy/types';
@@ -16,6 +20,22 @@ interface EnergyMachineVisual {
 /** Presentation reads dispatch; animation never creates fuel, generation or connectivity. */
 export class EnergyRenderer {
   readonly group = new THREE.Group();
+  private readonly assets: AssetBuilder;
+  private readonly ownsAssets: boolean;
+  private buildingConfig?: AssetConfig;
+  private constructionTargets: THREE.Group[] = [];
+
+  constructor(assets?: AssetBuilder) {
+    this.assets = assets ?? new AssetBuilder('energy-buildings');
+    this.ownsAssets = !assets;
+  }
+
+  private building(parent: THREE.Group, name: string, width: number, depth: number, x = 0, z = 0): void {
+    if (!this.buildingConfig) throw new Error('Energy building requires authoritative plant context');
+    const shell = productionBuildingShell(this.assets, { ...this.buildingConfig, seed: `${this.buildingConfig.seed}:${name}` }, width, depth, name);
+    shell.position.set(x, 0, z);
+    parent.add(shell);
+  }
   private signature = '';
   private machines: EnergyMachineVisual[] = [];
   private equipmentMaterials: THREE.Material[] = [];
@@ -117,11 +137,13 @@ export class EnergyRenderer {
 
   private clear(): void {
     this.group.traverse(o => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.Line) o.geometry.dispose();
+      if ((o instanceof THREE.Mesh || o instanceof THREE.Line) && !o.userData['sharedAsset']) o.geometry.dispose();
     });
     for (const machine of this.machines) (machine.lamp.material as THREE.Material).dispose();
     for (const material of this.equipmentMaterials) material.dispose();
     this.equipmentMaterials = [];
+    for (const target of this.constructionTargets) target.traverse(node => { if (node instanceof THREE.Mesh && !node.userData['sharedAsset']) node.geometry.dispose(); });
+    this.constructionTargets = [];
     this.group.clear();
     this.machines = [];
   }
@@ -140,6 +162,12 @@ export class EnergyRenderer {
         const plot = settlement.structurePlots?.find(p => p.id === plant.plotId);
         if (!plot || plot.development?.status !== 'active') continue;
 
+        this.buildingConfig = {
+          seed: `${settlement.id}:energy:${plant.id}`, culture: plot.development.style,
+          era: developmentPresentationEra(plot.development), development: plot.development,
+          archetype: plant.kind === 'waterwheel' || plant.kind === 'windmill' ? 'mill' : 'factory', variant: 'energy#7',
+          settlementIdentity: settlement.architecture, prosperity: settlement.prosperity,
+        };
         const root = new THREE.Group();
         root.name = `Energy plant ${plant.kind}:${plant.id}`;
         const scale = Math.min(1, Math.max(0.25, plot.radius / 2));
@@ -162,7 +190,6 @@ export class EnergyRenderer {
         root.scale.setScalar(scale);
         this.group.add(root);
 
-        const base = Math.max(0.05, plant.progress);
         const baseWidth = plant.kind === 'coal' ? 2.3 : plant.kind === 'gas' ? 2 : plant.kind === 'steam' ? 1.8 : 1.3;
         const baseDepth = plant.kind === 'coal' ? 1.45 : plant.kind === 'gas' ? 1.25 : 1;
         if (plant.kind !== 'waterwheel' && plant.kind !== 'hydro') {
@@ -173,11 +200,6 @@ export class EnergyRenderer {
           new THREE.MeshStandardMaterial({ color: '#e4b26b' }), 'Energy plant status lamp');
         const machine: EnergyMachineVisual = { plant, lamp, plumes: [] };
         this.machines.push(machine);
-
-        if (plant.progress < 1) {
-          this.box(root, 0, base * 0.6, 0, Math.min(baseWidth - 0.2, 1.6), base, Math.min(baseDepth - 0.2, 0.9), this.wood, 'Energy plant construction mass');
-          continue;
-        }
 
         if (plant.kind === 'animal') {
           this.drawAnimalPower(root, machine);
@@ -200,6 +222,17 @@ export class EnergyRenderer {
         } else if (plant.kind === 'gas') {
           this.drawGasPlant(root, machine);
         }
+        if (plant.progress < 1) {
+          const target = new THREE.Group();
+          for (const child of [...root.children]) target.add(child);
+          const future = productionConstructionTarget(target);
+          const assembly = new ConstructionAssembly(future, 1, plant.id, plot.development.material);
+          this.constructionTargets.push(future);
+          assembly.update(Math.max(0, Math.min(1, plant.progress)));
+          root.add(assembly.group);
+          this.constructionTargets.push(target);
+        }
+
       }
 
       if ((settlement.energy?.storageCapacity ?? 0) > 0) this.drawBatteryBank(settlement, height, state.energy?.nodes?.find(n => n.settlementId === settlement.id && n.kind === 'storage'), !!state.energy?.topologyVersion);
@@ -211,8 +244,10 @@ export class EnergyRenderer {
 
   private drawRotaryPrimitive(root: THREE.Group, machine: EnergyMachineVisual, kind: 'wind' | 'windmill'): void {
     const tall = kind === 'wind' ? 4.2 : 2.5;
-    this.cylinder(root, 0, tall / 2, 0, 0.07, kind === 'windmill' ? 0.5 : 0.12, tall,
-      kind === 'wind' ? this.concrete : this.wood, `${kind} tower`);
+    if (kind === 'windmill') this.building(root, 'windmill tower', 1, 1);
+    // The rotor shaft is machinery; an enclosed windmill base is canonical architecture.
+    this.cylinder(root, 0, tall / 2, 0, 0.07, 0.12, tall,
+      kind === 'wind' ? this.concrete : this.wood, kind === 'wind' ? 'wind tower' : 'windmill rotor shaft');
     const rotor = this.namedGroup(root, `${kind} rotor`);
     rotor.position.set(0, tall, 0.25);
     machine.rotor = rotor;
@@ -274,12 +309,7 @@ export class EnergyRenderer {
   private drawWatermill(root: THREE.Group, machine: EnergyMachineVisual, site?: HydraulicVisualSite): void {
     const mill = this.namedGroup(root, 'Riverside watermill');
     const bankSide = site?.bankSide ?? 1;
-    this.box(mill, 0.48 * bankSide, 0.48, 0.15, 0.9, 0.82, 0.82, this.wood, 'Watermill house');
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(0.72, 0.48, 4), this.brick);
-    roof.name = 'Watermill roof';
-    roof.position.set(0.48 * bankSide, 1.05, 0.15);
-    roof.rotation.y = Math.PI / 4;
-    mill.add(roof);
+    this.building(mill, 'Watermill house', 0.9, 0.82, 0.48 * bankSide, 0.15);
 
     const wheel = this.namedGroup(mill, 'Waterwheel assembly');
     const radius = 0.62;
@@ -338,8 +368,7 @@ export class EnergyRenderer {
 
     const powerhouse = this.namedGroup(hydro, 'Hydroelectric powerhouse');
     powerhouse.position.set(span * 0.46 * bankSide, 0, 0.6);
-    this.box(powerhouse, 0, 0.48, 0, 0.9, 0.82, 0.72, this.concrete, 'Hydro powerhouse building');
-    this.box(powerhouse, 0, 0.93, 0, 0.98, 0.08, 0.8, this.darkMetal, 'Hydro powerhouse roof');
+    this.building(powerhouse, 'Hydro powerhouse building', 0.9, 0.72);
     for (let i = -1; i <= 1; i++) this.cylinder(powerhouse, i * 0.24, 0.38, 0.39, 0.11, 0.11, 0.34, this.metal, 'Hydro turbine housing');
 
     const penstocks = this.namedGroup(hydro, 'Hydro penstocks');
@@ -401,8 +430,7 @@ export class EnergyRenderer {
 
   private drawEarlyGenerator(root: THREE.Group, machine: EnergyMachineVisual): void {
     const station = this.namedGroup(root, 'Early generator station');
-    this.box(station, -0.08, 0.42, 0, 1.45, 0.72, 0.78, this.brick, 'Generator hall');
-    this.box(station, -0.08, 0.82, 0, 1.22, 0.08, 0.9, this.darkMetal, 'Generator hall roof');
+    this.building(station, 'Generator hall', 1.22, 0.9, -0.08);
 
     const dynamo = this.namedGroup(station, 'Early generator dynamo');
     dynamo.position.set(0.05, 0.45, 0.48);
@@ -433,11 +461,10 @@ export class EnergyRenderer {
     const station = this.namedGroup(root, 'Coal power station');
 
     const boilerHouse = this.namedGroup(station, 'Coal boiler house');
-    this.box(boilerHouse, 0.18, 0.72, -0.12, 1.15, 1.35, 0.92, this.brick, 'Coal boiler block');
-    this.box(boilerHouse, 0.18, 1.43, -0.12, 1.25, 0.08, 1.02, this.darkMetal, 'Coal boiler roof');
+    this.building(boilerHouse, 'Coal boiler shell', 1.15, 0.92, 0.18, -0.12);
 
     const turbineHall = this.namedGroup(station, 'Coal turbine hall');
-    this.box(turbineHall, -0.68, 0.48, 0.36, 0.72, 0.78, 0.64, this.concrete, 'Coal turbine hall building');
+    this.building(turbineHall, 'Coal turbine hall building', 0.72, 0.64, -0.68, 0.36);
     const turbine = this.namedGroup(turbineHall, 'Coal turbine');
     turbine.position.set(-0.68, 0.54, 0.73);
     const turbineRim = new THREE.Mesh(new THREE.TorusGeometry(0.23, 0.045, 6, 18), this.metal);
@@ -467,8 +494,7 @@ export class EnergyRenderer {
 
   private drawGasPlant(root: THREE.Group, machine: EnergyMachineVisual): void {
     const station = this.namedGroup(root, 'Gas turbine station');
-    this.box(station, -0.22, 0.4, 0, 1.55, 0.7, 0.9, this.concrete, 'Gas turbine hall');
-    this.box(station, -0.22, 0.79, 0, 1.65, 0.08, 1, this.darkMetal, 'Gas turbine hall roof');
+    this.building(station, 'Gas turbine hall', 1.55, 0.9, -0.22);
 
     const train = this.namedGroup(station, 'Gas turbine train');
     train.position.set(-0.25, 0.48, 0.48);
@@ -658,6 +684,7 @@ export class EnergyRenderer {
 
   dispose(): void {
     this.clear();
+    if (this.ownsAssets) this.assets.dispose();
     [
       this.metal, this.darkMetal, this.wood, this.concrete, this.brick, this.copper, this.coal, this.panel,
       this.wire, this.steam, this.smoke, this.exhaust,

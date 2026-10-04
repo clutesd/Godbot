@@ -127,22 +127,24 @@ Settlement state (buildings, infrastructure, industry, urbanization)
         |
         | eraForSettlement + district zoning + role assignment
         v
-BuildingPlacement  (persistent plot: position, footprint, role, founding era)
+BuildingPlacement  (persistent plot: position, footprint, compatibility role, founding era)
         |
-        | resolveBuildingGrammar(culture profile, era, role, seed)
+        | resolveBuildingSpec(authoritative state)
         v
-BuildingGrammar    (massing, roof family, motif, ornament, openings, ...)
+BuildingSpec       (archetype, period, program/adaptation, family, materials, metrics, age)
         |
-        | resolveBuildingSpec(authoritative state) -> applySpecToGrammar
+        | grammarFromBuildingSpec(spec, compatibility role)
         v
-BuildingSpec       (period, structural family, material per role, metrics, age)
+BuildingGrammar    (downstream adapter for composer / LOD / construction contracts)
         |
         | composeBuilding(grammar, palette, seed, stage)
         v
-geometry batched per construction material -> shared, cached, instanced clones
+StructureGeometry / DedicatedStructures -> GeometryBuilder
+        |
+shared materials -> ConstructionAssembly / LOD -> renderer
 ```
 
-**Determinism.** A structure's appearance is a pure function of `(seed, culture style, era, role, variation, construction stage)`. No wall-clock time, no world position, no `Math.random()`. The renderer's PRNG stream is forked per plot and is separate from the simulation stream, so a visual choice cannot consume a simulation random draw.
+**Determinism.** A structure's appearance is a pure function of the authoritative `BuildingSpec` inputs plus construction stage. Legacy `BuildingRole` is a compatibility/placement label only and is not allowed to decide geometry. No wall-clock time, no world position, no `Math.random()`. The renderer's PRNG stream is forked per plot and is separate from the simulation stream, so a visual choice cannot consume a simulation random draw.
 
 **Placement contract.** A plot registers one persistent footprint through `PlacementContract` and `PlacementFootprint` at founding, sized for the finished structure *and its ceremonial precinct*, never for the primitive ancestor. Validation samples the center plus two perimeter rings, rejects any dry-building footprint that touches water or crosses the world boundary, and enforces both average and worst sampled slope. Public footprint registration repeats the terrain check, IDs are derived from the persistent entity, and a second registration may only be an exact idempotent match. Composition is uniformly scaled to fit inside the reserved footprint, so upgrading never needs new ground and cannot drift or re-layout. Docks, bridges, ferries, and other crossings must opt into their explicit water-tolerant contract.
 
@@ -152,7 +154,7 @@ geometry batched per construction material -> shared, cached, instanced clones
 
 ## Architectural system
 
-`src/render/architecture/` answers one question — *given everything the simulation knows, what is this building made of and how does it stand up?* — and answers it once, in `BuildingSpec`. Downstream consumers read the spec; none of them re-decide.
+`src/render/architecture/` answers one question — *given everything the simulation knows, what is this building made of and how does it stand up?* — and answers it once, in `BuildingSpec`. Downstream consumers read the spec; none of them re-decide. Production resolves the spec **before** `BuildingGrammar`; the grammar is only an adapter for the older composer/LOD/construction interfaces. Founding survival adaptations are fields on the spec, not a second building renderer.
 
 ```text
 MaterialLibrary        36 construction materials with real metadata
@@ -200,3 +202,27 @@ The semantic plan is shared with `PeopleSystem`; architectural grammar and geome
 **Specialization, read visually.** `settlement.specialization` plants its evidence at the working edge: field rows for agriculture, log stacks and saw trestles for forestry, spoil heaps and head-frames for mining, a smoking kiln and goods yard for craft, and a caravan rest for exchange or any settlement with three or more active routes.
 
 **Craft details.** Buildings gain contact shadows at ground level, laid roof courses on tile and thatch, relief-backed pattern bands, hung timber doors with stone thresholds, and motif door furniture. Routes grade from dirt track to kerbed cobbles as road infrastructure rises; water crossings carry railings and end posts. Terrain color is dithered per cell and fertile ground carries instanced grass tufts. All of it preserves the shared-geometry, per-surface-material budget: the new work is either merged into existing surface builders, pooled in single instanced meshes, or built once per settlement group.
+
+## BuildingSpec authority and founding construction
+
+Production building entry points are `GodboxRenderer.createPlacedBuilding` (persistent and ambient plots), `addLandmark` (registered landmark plots), and `createActiveConstructionSite` (all projects, including founding adaptations). Route portal carrier shelters and market stall shelters also request canonical warehouse/market assets; their ground coordinates, stock cargo and attendance remain renderer presentation. Each requests `AssetBuilder.getAsset('building', config)`. Development and architecture/construction review tools, the architecture browser and visual validation use that same API. AssetBuilder resolves ArchetypeRouting ? BuildingArchetype ? BuildingSpec (StructuralFamily + MaterialSourcing) ? SpecGrammarBridge ? StructureGeometry / DedicatedStructures ? GeometryBuilder and shared architectural materials. LOD and ConstructionAssembly consume this result.
+
+The four founding adaptations are development program fields, carried onto BuildingSpec:
+
+- Lean-to: one low storey, shed roof, open enclosure, small plinth and reduced footprint.
+- Earth shelter: low enclosed dwelling, packed-earth foundation, reduced plinth and openings, steep protective roof.
+- Hut: small single-storey enclosed dwelling with its lineage roof and no annexes.
+- Cache: small single-storey granary/storage variant with a hipped roof and no windows.
+
+These modify canonical dimensions, roof and openings before grammar adaptation. Purpose and form drive the adapter's frontage, crown, enclosure and working cues. Compatibility roles only select a default archetype when authoritative program is absent; aliases cannot independently alter the geometry of an already resolved spec. Unknown role and archetype IDs throw. Domestic structural detail and ceremonial footing steps consume spec archetype identity. Role-based grammar remains only for explicit non-building memorial compositions and direct compatibility fixtures; memorials have no building shell or storeys.
+
+Founding projects instantiate the completed future asset and reveal its actual assembly members. The seed, era, program, material evidence, climate, settlement identity and footprint fitting match completed plots. Workers authorize one installation contact at a time, bounded by paid progress; rendering never spends simulation resources. There is no SurvivalStructure implementation. Terrain placement and footing registration remain shared renderer placement responsibilities.
+
+The browser's Production Inputs view lists every compatibility role, four adaptations at the Neolithic stage, earliest active Neolithic lineages, development purpose/form programs and all active archetypes. Gallery, Timeline and Street remain production AssetBuilder views. Timeline starts at the selected archetype's earliest legitimate period. The inspector exposes resolved archetype, purpose, form, adaptation, family, foundation, materials and selected construction stage.
+
+To add a structure, declare a typed archetype and explicit earliest historical stage in BuildingArchetype, define its authoritative need/form routing in ArchetypeRouting, and declare family/material/equipment requirements. Extend spec-driven geometry only when the existing structural vocabulary cannot express it. Add catalogue/routing/spec/component tests and inspect it in the browser. Do not add a renderer branch or a role-driven shape rule.
+
+
+Subsystem architecture follows the same boundary. Enhanced station portals, harbour and caravan shelters, mill/powerhouse/generator/boiler/turbine halls, and processing storage/rolling sheds use `productionBuildingShell`, a placement adapter around AssetBuilder. EnergyRenderer and IndustryRenderer share the main renderer's AssetBuilder; standalone tests own a builder with the same production behavior. `productionConstructionTarget` bakes placement transforms into the finished detail geometry, retaining canonical assembly pieces and adding real machinery as fit-out members, so subsystem worksites reveal their actual future components rather than a generic construction mass. Processing upgrades target the declared future facility tier. Machinery motion, pressure vessels, dam walls, dispatch lamps and stock are non-building subsystem presentation.
+
+The browser's Structure program selector can inspect an explicit archetype with any valid simulation purpose/form program, including subsidiary manufacturing/storage buildings. It changes only production AssetBuilder inputs.

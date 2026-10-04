@@ -194,15 +194,24 @@ export interface SpecProvenance {
   routing: RoutingSource | 'explicit';
   /**
    * The archetype's lineage had not begun in the era's own period, so the period was lifted to its
-   * earliest stage. Expected for an early-era civic hall or market; never a substitution.
+   * earliest stage. Used for explicit requests preceding a lineage; never a substitution.
    */
   periodLifted: boolean;
 }
 
 export interface BuildingSpec {
   archetype: BuildingArchetype;
-  /** The renderer role this presents as. Unchanged from the existing grammar's vocabulary. */
+  /** The renderer role this presents as. Compatibility only: it never decides geometry. */
   role: BuildingRole;
+  /** Authoritative simulation purpose that produced this structure, when one exists. */
+  purpose?: DevelopmentResponse['need'];
+  /** Authoritative physical program that produced this structure, when one exists. */
+  form?: DevelopmentResponse['form'];
+  /** Founding adaptation, represented as a modifier of this spec rather than a renderer bypass. */
+  adaptation?: DevelopmentResponse['adaptation'];
+  developmentLevel?: number;
+  developmentMaterial?: StructureMaterial;
+  temporary?: boolean;
   era: Era;
   period: ArchitecturalPeriod;
   family: StructuralFamily;
@@ -838,12 +847,12 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   const wallLoad = architecturalMaterial(wall).structure;
   const carrying = loadBearingWall ? wallLoad : architecturalMaterial(frame).structure;
   const maxStoreys = Math.max(1, Math.min(familyDefinition.maxStoreys, carrying.maxStoreys));
-  const floors = Math.max(1, Math.min(maxStoreys, requestedFloors));
+  let floors = Math.max(1, Math.min(maxStoreys, requestedFloors));
 
   const scaleJitter = random.range(0.94, 1.07);
-  const width = stage.width * scaleJitter;
-  const depth = stage.depth * random.range(0.94, 1.07);
-  const storeyHeight = stage.storeyHeight * random.range(0.96, 1.05);
+  let width = stage.width * scaleJitter;
+  let depth = stage.depth * random.range(0.94, 1.07);
+  let storeyHeight = stage.storeyHeight * random.range(0.96, 1.05);
 
   const wallThickness = familyDefinition.wallThickness * climate.wallThickness
     // A weaker wall material inside the same family must be built thicker to stand up.
@@ -851,8 +860,6 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   const baySpacing = familyDefinition.baySpacing
     // The frame material's span capacity moves the rhythm: steel opens it, rubble closes it.
     * (0.72 + architecturalMaterial(frame).structure.span * 0.6);
-  const bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
-
   // ----- roof -----
   const roofArchetype = cultureRoof(stage.roof, context.culture.roofLanguage, context.culture.trimDensity);
   const span = depth;
@@ -864,7 +871,7 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   const ornament = Math.max(0, Math.min(1,
     context.culture.trimDensity * 0.8 + (context.culture.ornamentBias ?? 0) * 0.2,
   ));
-  const roof: SpecRoof = {
+  let roof: SpecRoof = {
     archetype: roofArchetype,
     pitch,
     overhang: 0.06 + ornament * 0.1 * climate.eaveOverhang + climate.eaveOverhang * 0.08,
@@ -876,14 +883,21 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   // ----- openings -----
   const openingDensity = Math.max(0, Math.min(1, stage.openingDensity * climate.openingDensity));
   const glazingMaterial = materials.glazing;
-  const openings: SpecOpenings = {
+  // A door-bay stage's ground floor is answered by a wagon, a cart or a led animal, not a window
+  // — so its opening is wide and there is only ever one per bay, whatever the family's own dare.
+  // Without this, a barn door and a house window of the same family resolve to the same size and
+  // differ only in how many there are, which is exactly the "residential fenestration" problem.
+  const doorBay = stage.doorBay === true;
+  let openings: SpecOpenings = {
     density: openingDensity,
     // The family sets the dare; the frame material sets the limit. A glazed opening can be
     // wider than an unglazed one because something fills it.
-    width: Math.max(0.04, 0.1 * familyDefinition.openingWidth * (glazingMaterial ? 1.1 : 0.9)),
-    height: Math.max(0.05, 0.14 * familyDefinition.openingHeight),
-    perBay: openingDensity <= 0.02 ? 0 : Math.max(1, Math.round(openingDensity * 3)),
-    arched: periodRank(period) >= periodRank('classical')
+    width: Math.max(0.04, 0.1 * familyDefinition.openingWidth * (glazingMaterial ? 1.1 : 0.9))
+      * (doorBay ? 2.2 : 1),
+    height: Math.max(0.05, 0.14 * familyDefinition.openingHeight) * (doorBay ? 1.3 : 1),
+    perBay: doorBay ? 1 : openingDensity <= 0.02 ? 0 : Math.max(1, Math.round(openingDensity * 3)),
+    arched: !doorBay
+      && periodRank(period) >= periodRank('classical')
       && (assembly === 'coursed-masonry' || assembly === 'load-bearing-brick')
       && ornament > 0.3,
   };
@@ -892,10 +906,43 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   const age = ageStateFor(context.heritage, development, wall, period, resolvedStage.periodsOld, random);
 
   const annexRange = stage.annexes;
-  const annexes = Math.max(
+  let annexes = Math.max(
     annexRange[0],
     Math.min(annexRange[1], annexRange[0] + random.int(0, annexRange[1] - annexRange[0] + 1) + (age.additions > 1 ? 1 : 0)),
   );
+  let openness = stage.openness;
+  let parapet = familyDefinition.parapetProne && periodRank(period) >= periodRank('classical');
+  let foundationStyle = familyDefinition.foundation;
+  let plinthHeight = storeyHeight * familyDefinition.plinthShare * (1 + climate.plinthBoost * 0.5);
+
+  // Founding survival forms are ordinary spec modifiers, not a second rendering system.
+  switch (development?.adaptation) {
+    case 'lean-to':
+      width *= 0.9; depth *= 0.78; storeyHeight *= 0.68; floors = 1; annexes = 0;
+      openness = Math.max(openness, 0.55); plinthHeight *= 0.35; parapet = false;
+      roof = { ...roof, archetype: 'shed', pitch: Math.max(0.2, Math.min(0.38, roof.pitch * 0.65)), tiers: 1, span: depth, intermediateSupport: false };
+      openings = { ...openings, density: Math.min(openings.density, 0.04), perBay: openings.density > 0 ? 1 : 0, arched: false };
+      break;
+    case 'earth-shelter':
+      foundationStyle = 'packed-earth';
+      width *= 0.95; depth *= 0.9; storeyHeight *= 0.72; floors = 1; annexes = 0;
+      openness = Math.min(openness, 0.08); plinthHeight *= 0.25; parapet = false;
+      roof = { ...roof, archetype: 'steep-gable', pitch: Math.max(0.5, roof.pitch), tiers: 1, span: depth };
+      openings = { ...openings, density: Math.min(openings.density, 0.05), perBay: openings.density > 0 ? 1 : 0, arched: false };
+      break;
+    case 'hut':
+      width *= 0.86; depth *= 0.84; storeyHeight *= 0.86; floors = 1; annexes = 0;
+      openness = Math.min(openness, 0.16); parapet = false;
+      roof = { ...roof, tiers: 1, span: depth };
+      break;
+    case 'cache':
+      width *= 0.58; depth *= 0.58; storeyHeight *= 0.62; floors = 1; annexes = 0;
+      openness = 0; plinthHeight *= 0.5; parapet = false;
+      roof = { ...roof, archetype: 'hipped', pitch: Math.max(0.42, roof.pitch), tiers: 1, span: depth, intermediateSupport: false };
+      openings = { ...openings, density: 0, perBay: 0, arched: false };
+      break;
+  }
+  const bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
 
   // A settlement's specialization earns its working fittings; it never removes the archetype's.
   const equipment = specEquipment(stage.equipment, context.specialization, period, level);
@@ -903,6 +950,12 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   const spec: BuildingSpec = {
     archetype: archetypeId,
     role: archetypeDefinition.role,
+    purpose: development?.need,
+    form: development?.form,
+    adaptation: development?.adaptation,
+    developmentLevel: development?.level,
+    developmentMaterial: development?.material,
+    temporary: development?.temporary,
     era: context.era,
     period,
     family,
@@ -914,19 +967,19 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     bays,
     baySpacing,
     wallThickness,
-    plinthHeight: storeyHeight * familyDefinition.plinthShare * (1 + climate.plinthBoost * 0.5),
+    plinthHeight,
     roof,
     openings,
     frameExposure: familyDefinition.frameExposure,
     supportDensity: Math.max(0, Math.min(1,
       familyDefinition.supportDensity + (roof.intermediateSupport ? 0.2 : 0),
     )),
-    foundation: familyDefinition.foundation,
+    foundation: foundationStyle,
     silhouette: familyDefinition.silhouette,
     wallAssembly: assembly,
-    parapet: familyDefinition.parapetProne && periodRank(period) >= periodRank('classical'),
+    parapet,
     annexes,
-    openness: stage.openness,
+    openness,
     culture: {
       materialBias: context.culture.materialBias,
       roofLanguage: context.culture.roofLanguage,
@@ -1105,6 +1158,7 @@ export function buildingSpecSignature(spec: BuildingSpec): string {
     .join(',');
   return [
     spec.archetype, spec.period, spec.family, materials,
+    spec.purpose ?? '-', spec.form ?? '-', spec.adaptation ?? '-', spec.developmentLevel ?? '-', spec.developmentMaterial ?? '-', spec.temporary ? 1 : 0,
     spec.floors, spec.bays, spec.roof.archetype,
     spec.roof.pitch.toFixed(3), spec.roof.tiers, spec.roof.intermediateSupport ? 1 : 0,
     spec.openings.density.toFixed(2), spec.openings.perBay, spec.openings.arched ? 1 : 0,

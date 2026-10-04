@@ -21,6 +21,7 @@ import { SeededRandom } from '../../sim/prng';
 import type { BuildingSpec } from './BuildingSpec';
 import type { FoundationStyle, WallAssembly } from './StructuralFamily';
 import type { FunctionalEquipment } from './BuildingArchetype';
+import type { RotorSpec } from './MillMotion';
 
 /**
  * What the geometry emitters need from the composer's canvas.
@@ -32,6 +33,18 @@ export interface GeometrySink {
   at(surface: SurfaceKey, requiredStage: number): GeometryBuilder | undefined;
   stain(builder: GeometryBuilder | undefined, extra: number): void;
   clean(builder: GeometryBuilder | undefined): void;
+  /**
+   * A part that turns about `pivot` on `axis`, so the motion system can drive it. Optional: a sink
+   * without it gets the same geometry as static parts, which is all a test fake needs.
+   */
+  rotor?(name: string, pivot: Vec3, surface: SurfaceKey, requiredStage: number, spec: RotorSpec): GeometryBuilder | undefined;
+}
+
+/** A moving part's builder, or the static one when the sink cannot animate. */
+export function rotorBuilder(
+  sink: GeometrySink, name: string, pivot: Vec3, surface: SurfaceKey, stage: number, spec: RotorSpec,
+): GeometryBuilder | undefined {
+  return sink.rotor ? sink.rotor(name, pivot, surface, stage, spec) : sink.at(surface, stage);
 }
 
 /** The plot frame every emitter works in: canonical origin, +Y up, entrance facing +Z. */
@@ -44,15 +57,19 @@ export interface StructureFrame {
   wallTop: number;
   /** Structural bay centre lines across the entrance elevation. */
   bayLines: readonly number[];
+  /** Apex of the roof, where one is known. Equipment that sits on the roof reads it from here. */
+  roofTop: number;
 }
 
-export function structureFrame(spec: BuildingSpec, plinthTop: number, wallTop: number): StructureFrame {
+export function structureFrame(spec: BuildingSpec, plinthTop: number, wallTop: number, roofTop?: number): StructureFrame {
   const halfWidth = spec.width / 2;
   const halfDepth = spec.depth / 2;
   const bays = Math.max(1, spec.bays);
   const bayLines: number[] = [];
   for (let index = 0; index <= bays; index += 1) bayLines.push(-halfWidth + (spec.width * index) / bays);
-  return { halfWidth, halfDepth, plinthTop, wallTop, bayLines };
+  // Without a measured roof, assume one rising half a body above the walls, which is what the older
+  // equipment placement was written against.
+  return { halfWidth, halfDepth, plinthTop, wallTop, bayLines, roofTop: roofTop ?? wallTop + (wallTop - plinthTop) * 1.25 };
 }
 
 // ---------------------------------------------------------------------------- foundations
@@ -379,6 +396,9 @@ export function emitAnnexes(sink: GeometrySink, spec: BuildingSpec, frame: Struc
     { x: -halfWidth, z: 0, alongX: false },
     { x: 0, z: -halfDepth, alongX: true },
   ];
+  // A breast wheel stands on the west wall in its own race. A lean-to built there would wrap the
+  // wheel and bury it, so the west side is kept clear and any annex goes to the rear instead.
+  if (spec.equipment.includes('waterwheel')) slots.splice(1, 1);
 
   const count = Math.min(spec.annexes, slots.length);
   for (let index = 0; index < count; index += 1) {
@@ -426,6 +446,20 @@ function box(
   x: number, y: number, z: number, sx: number, sy: number, sz: number, rotationY = 0,
 ): void {
   sink.at(surface, stage)?.addBox(x, y, z, sx, sy, sz, rotationY);
+}
+
+/** A solid round stone: a short cylinder lofted from two rings and capped top and bottom. */
+function disc(builder: GeometryBuilder | undefined, cx: number, y: number, cz: number, radius: number, thickness: number, segments = 14): void {
+  if (!builder) return;
+  const ring = (height: number): Vec3[] => Array.from({ length: segments }, (_, index) => {
+    const angle = (index / segments) * Math.PI * 2;
+    return { x: cx + Math.cos(angle) * radius, y: height, z: cz + Math.sin(angle) * radius };
+  });
+  const lower = ring(y);
+  const upper = ring(y + thickness);
+  builder.addLoft(lower, upper);
+  builder.addFanUp({ x: cx, y: y + thickness, z: cz }, upper);
+  builder.addFanDown({ x: cx, y, z: cz }, lower);
 }
 
 function beam(sink: GeometrySink, surface: SurfaceKey, stage: number, from: Vec3, to: Vec3, width: number): void {
@@ -492,7 +526,7 @@ function emitEquipmentItem(context: EquipmentContext, item: FunctionalEquipment)
     }
     case 'water-trough':
       box(sink, 'stone', FIT, halfWidth * 0.68, plinthTop + 0.035, halfDepth * 1.18, spec.width * 0.3, 0.07, t * 3);
-      box(sink, 'glow', FIT, halfWidth * 0.68, plinthTop + 0.062, halfDepth * 1.18, spec.width * 0.26, 0.012, t * 2.2);
+      box(sink, 'water', FIT, halfWidth * 0.68, plinthTop + 0.062, halfDepth * 1.18, spec.width * 0.26, 0.012, t * 2.2);
       break;
     case 'hitch-rail':
       for (const x of [-spec.width * 0.26, spec.width * 0.26]) {
@@ -575,9 +609,9 @@ function emitEquipmentItem(context: EquipmentContext, item: FunctionalEquipment)
       box(sink, 'forge', FIT, -halfWidth * 0.62, plinthTop + height * 0.1, -inner * 0.42, spec.width * 0.08, height * 0.07, 0.012);
       break;
     case 'millstone':
-      // The stone bed and runner, the heart of any mill.
-      box(sink, 'stone', FIT, 0, plinthTop + height * 0.1, -inner * 0.3, spec.width * 0.3, height * 0.08, spec.width * 0.3);
-      box(sink, 'stone', FIT, 0, plinthTop + height * 0.17, -inner * 0.3, spec.width * 0.24, height * 0.06, spec.width * 0.24);
+      // The stone bed and runner, the heart of any mill. Both are round: a millstone is a disc.
+      disc(sink.at('stone', FIT), 0, plinthTop + height * 0.1, -inner * 0.3, spec.width * 0.3, height * 0.08);
+      disc(sink.at('stone', FIT), 0, plinthTop + height * 0.17, -inner * 0.3, spec.width * 0.24, height * 0.06);
       box(sink, 'timber', FIT, 0, plinthTop + height * 0.3, -inner * 0.3, t, height * 0.26, t);
       break;
     case 'waterwheel': {
@@ -585,24 +619,80 @@ function emitEquipmentItem(context: EquipmentContext, item: FunctionalEquipment)
       const radius = Math.min(spec.depth * 0.42, height * 0.52);
       const cx = -halfWidth - radius * 0.42;
       const cy = plinthTop + radius * 0.75;
+      // The wheel turns on its axle, which runs across the race: the X axis through the hub. Its
+      // spokes, rim and paddles are one rotor so the motion system turns the whole wheel at once.
+      const pivot = { x: cx, y: cy, z: 0 };
+      const wheel = rotorBuilder(sink, 'Waterwheel', pivot, 'timber', UTIL, { axis: 'x', drive: 'water-wheel' });
       const spokes = 10;
       for (let index = 0; index < spokes; index += 1) {
         const angle = (index / spokes) * Math.PI * 2;
-        const from = { x: cx, y: cy, z: 0 };
         const to = { x: cx, y: cy + Math.sin(angle) * radius, z: Math.cos(angle) * radius };
-        beam(sink, 'timber', UTIL, from, to, t * 0.55);
+        wheel?.addBeam(pivot, to, t * 0.55, t * 0.55);
         // Paddle boards on the rim.
-        box(sink, 'timber', UTIL, cx, cy + Math.sin(angle) * radius, Math.cos(angle) * radius, t * 2.6, t * 1.4, t * 1.1, angle);
+        wheel?.addBox(cx, cy + Math.sin(angle) * radius, Math.cos(angle) * radius, t * 2.6, t * 1.4, t * 1.1, angle);
       }
-      box(sink, 'metal', UTIL, cx, cy, 0, t * 1.1, t * 1.1, radius * 0.3);
+      rotorBuilder(sink, 'Waterwheel axle', pivot, 'metal', UTIL, { axis: 'x', drive: 'water-wheel' })?.addBox(cx, cy, 0, radius * 0.3, t * 1.1, t * 1.1);
       // The race the wheel sits in.
       box(sink, 'stone', BUILD_STAGE.FOUNDATION, cx, 0.03, 0, radius * 1.3, 0.06, radius * 1.1);
-      box(sink, 'glow', UTIL, cx, 0.05, 0, radius * 1.1, 0.014, radius * 0.8);
+      box(sink, 'water', UTIL, cx, 0.05, 0, radius * 1.1, 0.014, radius * 0.8);
       break;
     }
-    case 'windshaft':
-      beam(sink, 'timber', UTIL, { x: 0, y: wallTop, z: 0 }, { x: 0, y: wallTop + height * 0.3, z: halfDepth * 0.6 }, t * 1.1);
+    case 'windshaft': {
+      // A sail cross on the cap, hub-and-arm just like the waterwheel's own radial pattern but
+      // four long arms instead of ten short spokes — the one cue that makes a windmill read as a
+      // windmill rather than a narrow tower with a pointed roof. Built entirely from beams, whose
+      // orientation follows their own endpoints, so the lattice stays correctly planar without
+      // leaning on addBox's Y-only rotation.
+      // The whole cross is one rotor about the hub, which is where the motion system spins it.
+      // Set 40% of the way up the cap, so the cross turns in the cap's upper body rather than floating
+      // above a tall roof or sinking into a squat one.
+      const hub = { x: 0, y: wallTop + (frame.roofTop - wallTop) * 0.4, z: halfDepth * 0.1 };
+      const sails = rotorBuilder(sink, 'Windshaft sail cross', hub, 'timber', UTIL, { axis: 'z', drive: 'wind-sails' });
+      const reach = Math.max(spec.width, spec.depth) * 1.4;
+      for (let arm = 0; arm < 4; arm += 1) {
+        const angle = (arm / 4) * Math.PI * 2 + Math.PI / 4;
+        const dirX = Math.cos(angle);
+        const dirY = Math.sin(angle);
+        const perpX = -dirY;
+        const perpY = dirX;
+        const tip = { x: hub.x + dirX * reach, y: hub.y + dirY * reach, z: hub.z };
+        sails?.addBeam(hub, tip, t * 0.7, t * 0.7);
+        // A lattice bar across each sail, which is what reads as canvas-on-a-frame rather than a
+        // bare spoke.
+        const mid = { x: hub.x + dirX * reach * 0.68, y: hub.y + dirY * reach * 0.68, z: hub.z };
+        const half = reach * 0.22;
+        sails?.addBeam(
+          { x: mid.x - perpX * half, y: mid.y - perpY * half, z: mid.z },
+          { x: mid.x + perpX * half, y: mid.y + perpY * half, z: mid.z },
+          t * 0.45, t * 0.45);
+      }
+      sails?.addBox(hub.x, hub.y, hub.z, t * 1.6, t * 1.6, t * 1.6);
       break;
+    }
+    case 'pump-rod': {
+      // The drive rod that carries the sail's crank down the body to a cylinder at the foot: how a
+      // wind pump lifted water rather than turning a stone.
+      beam(sink, 'timber', UTIL, { x: 0, y: wallTop + height * 0.3, z: 0 }, { x: 0, y: plinthTop + height * 0.12, z: 0 }, t * 0.9);
+      box(sink, 'metal', UTIL, 0, plinthTop + height * 0.1, 0, spec.width * 0.16, t * 1.2, spec.width * 0.16);
+      box(sink, 'metal', UTIL, 0, wallTop + height * 0.3, 0, t * 2.4, t * 0.5, t * 0.5);
+      break;
+    }
+    case 'saw-carriage': {
+      // A log carriage on rails along the depth, with the saw frame and blade standing over it.
+      // The carriage is the shop's long axis: it is what makes a sawmill a sawmill from outside.
+      const run = spec.depth * 0.8;
+      for (const x of [-spec.width * 0.12, spec.width * 0.12]) {
+        box(sink, 'metal', UTIL, x, plinthTop + 0.02, 0, t * 0.6, 0.03, run);
+      }
+      box(sink, 'timber', FIT, 0, plinthTop + 0.07, 0, spec.width * 0.26, 0.05, run * 0.9);
+      for (const x of [-spec.width * 0.13, spec.width * 0.13]) {
+        box(sink, 'metal', FIT, x, plinthTop + height * 0.36, 0, t * 0.6, height * 0.7, t * 0.6);
+      }
+      box(sink, 'metal', FIT, 0, plinthTop + height * 0.7, 0, spec.width * 0.3, t * 0.6, t * 0.6);
+      // The blade: a thin plate standing across the bed.
+      box(sink, 'metal', FIT, 0, plinthTop + height * 0.4, 0, 0.012, height * 0.5, spec.width * 0.2);
+      break;
+    }
     case 'line-shaft': {
       // An overhead shaft on hangers with its pulleys: how a powered shop was powered.
       const y = plinthTop + height * 0.78;
@@ -777,8 +867,9 @@ export function emitSpecGeometry(
   plinthTop: number,
   wallTop: number,
   seed: string,
+  roofTop?: number,
 ): void {
-  const frame = structureFrame(spec, plinthTop, wallTop);
+  const frame = structureFrame(spec, plinthTop, wallTop, roofTop);
   const random = new SeededRandom(`${seed}:spec-geometry`);
   emitFoundation(sink, spec, frame);
   emitWallAssembly(sink, spec, frame);

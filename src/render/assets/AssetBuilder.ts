@@ -22,7 +22,8 @@ import { deriveArchitecturalGenerations, generationForCurrentFabric, generationF
 import { deriveStructureHeritage } from './StructureHeritage';
 import { resolveBuildingSpec, type BuildingSpec } from '../architecture/BuildingSpec';
 import type { BuildingArchetype } from '../architecture/BuildingArchetype';
-import { applySpecToGrammar } from '../architecture/SpecGrammarBridge';
+import { grammarFromBuildingSpec } from '../architecture/SpecGrammarBridge';
+import { dedicatedGeometryKind } from '../architecture/DedicatedStructures';
 import { materialBillSignature } from '../architecture/MaterialSourcing';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
@@ -420,7 +421,7 @@ export class AssetBuilder {
     role: BuildingRole,
     stage: BuildStage,
     profile: CultureStyleProfile,
-  ): BuildingSpec | undefined {
+  ): BuildingSpec {
     const context = config.grammarContext;
     return resolveBuildingSpec({
       archetype: config.archetype,
@@ -483,17 +484,21 @@ export class AssetBuilder {
     const [roleName, stageName] = (config.variant ?? 'house').split('#');
     const role = (roleName || 'house') as BuildingRole;
     const stage = stageName === undefined ? BUILD_STAGE.DETAIL : (Number(stageName) as BuildStage);
-    const grammar = resolveBuildingGrammar(profile, config.era, role, config.seed, config.development, config.settlementIdentity, config.localSlopeDegrees, config.grammarContext);
-    // The architectural specification refines the grammar with decisions the grammar could not
-    // make on its own: a structural family, a real construction material per role, and the
-    // geometric consequences of both. Memorials are excluded — they are a ceremonial composition
-    // with their own geometry, not an inhabited building.
+    // Architectural authority resolves first. BuildingRole survives only as a compatibility label
+    // for placement, sleeping-area and legacy diagnostics. Memorials are non-building ceremonial
+    // compositions and therefore keep the compatibility-only grammar resolver.
     const spec = config.development?.memorial ? undefined : this.specFor(config, role, stage, profile);
-    if (spec) applySpecToGrammar(grammar, spec);
+    const grammar = spec
+      ? grammarFromBuildingSpec(profile, spec, role)
+      : resolveBuildingGrammar(profile, config.era, role, config.seed, config.development, config.settlementIdentity, config.localSlopeDegrees, config.grammarContext);
     const coreMaterial = this.coreMaterialFor(grammar, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
-    const lods = stage === BUILD_STAGE.DETAIL && !config.development?.memorial
+    // A machine building's silhouette is its machinery — sails, wheel, stack — which a massing box
+    // would erase exactly at the distances where it should be recognised. Mills are few, so they keep
+    // their full geometry at range and let the motion system throttle their moving parts instead.
+    const machine = grammar.spec ? dedicatedGeometryKind(grammar.spec.archetype) === 'machine' : false;
+    const lods = stage === BUILD_STAGE.DETAIL && !config.development?.memorial && !machine
       ? this.generateBuildingLODs(grammar, composed.height, palette)
       : [];
 
@@ -857,9 +862,9 @@ export class AssetBuilder {
       ? `:a${ctx?.temperature !== undefined ? Math.round(ctx.temperature * 8) : ''}.${ctx?.moisture !== undefined ? Math.round(ctx.moisture * 8) : ''}.${ctx?.biome ?? ''}`
         + `.${config.prosperity !== undefined ? Math.round(config.prosperity * 4) : ''}.${config.specialization ?? ''}`
         + `.${config.waterfront ? 'w' : ''}.${config.archetype ?? ''}`
-        + `.${materialBillSignature(config.project)}`
+        + `.${materialBillSignature(config.project, d)}.${[...(d?.capabilities ?? [])].sort().join(',')}`
       : '';
-    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}${specBucket}`;
+    return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.adaptation ?? '', d.temporary ? 1 : 0, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}${specBucket}`;
   }
 
   /**

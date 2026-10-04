@@ -79,7 +79,9 @@ const ROLE_DEFAULT: Record<BuildingRole, BuildingArchetype> = {
 };
 
 export function archetypeForRole(role: BuildingRole): BuildingArchetype {
-  return ROLE_DEFAULT[role];
+  const archetype = ROLE_DEFAULT[role];
+  if (!archetype) throw new Error(`Unknown building role: ${String(role)}`);
+  return archetype;
 }
 
 /**
@@ -109,10 +111,28 @@ function farmBuilding(context: ArchetypeRoutingContext): BuildingArchetype {
   if (!practises(context, 'animal-husbandry')) return 'barn';
   const random = new SeededRandom(`${context.seed ?? 'plot'}:farm-building`);
   const draw = random.float();
-  // The barn stays the commonest building on any farm; byres and stables are the minority.
-  if (draw < 0.55) return 'barn';
-  if (draw < 0.8) return 'byre';
-  return 'stable';
+  // The barn stays the commonest building on any farm; byres, stables and open pens split the
+  // rest. The pen is the only one of the four whose lineage reaches back to the neolithic, so it
+  // is also what lets a pre-bronzeIron farm show anything but a barn.
+  if (draw < 0.45) return 'barn';
+  if (draw < 0.65) return 'byre';
+  if (draw < 0.8) return 'animal-pen';
+  return periodRank(context.period) >= periodRank('bronzeIron') ? 'stable' : 'byre';
+}
+
+/**
+ * The mill a non-waterfront power building shows: a watermill needs flowing water, so a windmill
+ * is deterministic presentation variation on dry ground, seeded per plot and never a gameplay
+ * decision — exactly `farmBuilding`'s pattern. Windmill's own lineage only runs medieval through
+ * earlyModern (steam supersedes it), so classical and industrial-and-later stay watermills.
+ */
+function powerBuilding(context: ArchetypeRoutingContext): BuildingArchetype {
+  if (context.waterfront) return 'mill';
+  if (periodRank(context.period) < periodRank('medieval') || periodRank(context.period) > periodRank('earlyModern')) {
+    return 'mill';
+  }
+  const random = new SeededRandom(`${context.seed ?? 'plot'}:power-building`);
+  return random.float() < 0.5 ? 'mill' : 'windmill';
 }
 
 /** Where a routing decision came from. Published so a wrong building is diagnosable, not a mystery. */
@@ -198,7 +218,8 @@ function routeByResponse(context: ArchetypeRoutingContext): BuildingArchetype | 
     case 'energy':
       // The development system's own names are the clue: a 'fuel yard' and a 'power workshop'
       // are mills, and only the level-three 'generation station' is a works.
-      return form === 'works' ? 'factory' : 'mill';
+      return form === 'works' ? 'factory'
+        : periodRank(context.period) >= periodRank('classical') ? powerBuilding(context) : 'workshop';
 
     case 'water':
       // A sanitation works is industrial plant; a cistern and wash court is a store building.

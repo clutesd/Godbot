@@ -1,5 +1,8 @@
+import { productionBuildingShell } from './assets/ProductionBuildingShell';
+import type { BuildingSpec } from './architecture/BuildingSpec';
 import type { FreightTrip } from '../sim/transport/types';
 import { EnergyRenderer } from './energy/EnergyRenderer';
+import { MillMotionSystem } from './architecture/MillMotion';
 import { IndustryRenderer } from './industry/IndustryRenderer';
 import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
 import { socialGestureFrame } from './people/SocialGesturePresentation';
@@ -30,7 +33,6 @@ import { FoundingStandardPresentation, type FoundingStandardTarget } from './fou
 import { foundingCommunityIsForming, foundingCommunitySupplyAnchor, isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
 import { createFoundingHearthEmbers, createFoundingHearthFlameRig, createFoundingHearthInfrastructure, updateFoundingHearthAssembly, updateFoundingHearthFireMotion, updateFoundingHearthIgnition } from './founding/FoundingHearthVisual';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, FOUNDING_VESSEL_KEEP_OUT_RADIUS, foundingHearthBurning, foundingHearthEstablished, foundingHearthWorldPosition, foundingSettlementHearthOffset } from '../shared/FoundingCampLayout';
-import { createSurvivalStructure } from './founding/SurvivalStructure';
 import { AnimationController, presentationBodyTilt } from './animation/AnimationController';
 import { PeopleVisualStateStore, WALK_SPEED_THRESHOLD, turnToward, type PersonVisualGround } from './people/PeopleVisualState';
 import { LocalActivityPresentation, activityStructureSignature, clearActivityStructure, type ActivityStructure, type LocalWorkstation } from './people/LocalActivityPresentation';
@@ -248,9 +250,13 @@ export class GodboxRenderer {
   private readonly sleepGlyphs = new SleepGlyphRenderer();
   readonly observation: CurrentObservation;
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly energyRenderer = new EnergyRenderer();
+  private readonly energyRenderer: EnergyRenderer;
+  /** Turns mill sails and waterwheels from the simulation's wind and river flow. */
+  private readonly millMotion: MillMotionSystem;
+  /** Last daylight level: people work hand machinery by day and leave it at night. */
+  private millDaylight = 1;
   /** Read-only view of processing facilities: yards, machinery, smoke and lamps all come from facility state. */
-  private readonly industryRenderer = new IndustryRenderer();
+  private readonly industryRenderer: IndustryRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 900);
   private readonly cameraDirector: CameraDirector;
@@ -472,6 +478,9 @@ export class GodboxRenderer {
     this.reactionGlyphs = new ReactionGlyphRenderer(`${config.seed}:reaction-glyphs`);
     this.animationController = new AnimationController(`${config.seed}:humanoid-animation`);
     this.assetBuilder = new AssetBuilder(`${config.seed}:asset-builder`);
+    this.energyRenderer = new EnergyRenderer(this.assetBuilder);
+    this.millMotion = new MillMotionSystem(this.scene);
+    this.industryRenderer = new IndustryRenderer(this.assetBuilder);
     this.terrainQueries = new TerrainQueries(state.world);
     this.placementContract = new PlacementContract(state.world);
     this.placementFootprints = new PlacementFootprint(state.world, this.placementContract, `${config.seed}:visual-footprints`);
@@ -773,6 +782,10 @@ export class GodboxRenderer {
     // Water, sky and lightweight vegetation motion remain live throughout the prologue. These are
     // visible atmospheric cues, unlike settlement/human bookkeeping that cannot change yet.
     this.energyRenderer.update(this.state, elapsedSeconds, (x, z) => this.elevationAt(x, z));
+    this.millMotion.update({
+      deltaSeconds, elapsedSeconds, camera: this.camera.position, world: this.state.world, weather: this.state.weather,
+      manualWork: THREE.MathUtils.clamp((this.millDaylight - 0.2) * 3, 0, 1),
+    });
     this.industryRenderer.update(this.state, elapsedSeconds, (x, z) => this.elevationAt(x, z));
     this.waterSystem.update(elapsedSeconds);
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
@@ -2100,16 +2113,7 @@ export class GodboxRenderer {
     const activeSite = hasActiveConstruction ? settlement.development ? reservedPlacements.find(p => p.key === settlement.development?.project?.plotId) : reservedPlacements[shownBuildings] : undefined;
     if (activeSite) {
       const response = settlement.development?.project?.response;
-      if (response?.adaptation) {
-        group.add(this.createActiveSurvivalConstructionSite(
-          activeSite,
-          response,
-          settlementY,
-          constructionProgress,
-          palette,
-          settlement,
-        ));
-      } else group.add(this.createActiveConstructionSite(
+      group.add(this.createActiveConstructionSite(
         activeSite,
         response?.style ?? cultureStyle,
         response ? developmentPresentationEra(response) : era,
@@ -2137,7 +2141,7 @@ export class GodboxRenderer {
     if (eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);
     const bareFounderCamp = Boolean(settlement.foundingPodId && settlement.buildings === 0);
     if (!bareFounderCamp) this.addGroundCraft(group, era, palette, visualRandom);
-    this.addRoutePortals(group, settlement, layout, era, palette);
+    this.addRoutePortals(group, settlement, layout, era, palette, cultureStyle);
     // The processional axis points at the settlement's own sacred district anchor rather than an
     // arbitrary angle, so the landmark anchors the real building cluster it's meant to crown.
     const sacredAnchor = layout.anchors.sacred;
@@ -2153,7 +2157,7 @@ export class GodboxRenderer {
     const importance = settlement.buildings / 24 + settlement.institutionIds.length * 0.25 + routeCount * 0.2;
     if (importance >= 1 && eraRank(era) >= 2) this.addLandmark(group, settlement, cultureStyle, era, axisAngle, settlementY);
     const tradingDeliveries = this.state.tradeRoutes.filter(r => r.a === settlement.id || r.b === settlement.id).reduce((sum, r) => sum + (r.transport?.deliveries ?? 0), 0);
-    if (routeCount > 0 && tradingDeliveries >= 2) this.addMarket(group, settlement, layout, culture, Math.min(6, 1 + Math.floor(tradingDeliveries / 4)));
+    if (routeCount > 0 && tradingDeliveries >= 2) this.addMarket(group, settlement, layout, cultureStyle, Math.min(6, 1 + Math.floor(tradingDeliveries / 4)));
     if (politySize > 1) this.addWaystones(group, settlement, culture, Math.min(5, politySize));
     const smokeSources: SmokeSource[] = [];
     if (survivalFireActive) {
@@ -2175,7 +2179,7 @@ export class GodboxRenderer {
     if (settlement.alive) this.addInfrastructure(group, settlement, culture, smokeSources);
     if (!settlement.development) {
       this.addEraDressing(group, settlement, era, palette, visualRandom);
-      this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount);
+      this.addSpecializationDressing(group, settlement, era, palette, smokeSources, routeCount, cultureStyle);
     }
     const potteryAnchors: PotteryAnchor[] = placements.filter(placement =>
       this.constructionStageFor(placement.key) === BUILD_STAGE.DETAIL
@@ -2243,7 +2247,7 @@ export class GodboxRenderer {
     }
   }
 
-  private addRoutePortals(group: THREE.Group, settlement: Settlement, layout: SettlementLayoutPlan, era: Era, palette: MaterialPalette): void {
+  private addRoutePortals(group: THREE.Group, settlement: Settlement, layout: SettlementLayoutPlan, era: Era, _palette: MaterialPalette, cultureStyle: Culture['style']): void {
     const rank = eraRank(era);
     const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
     for (const portal of layout.portals.slice(0, 5)) {
@@ -2270,11 +2274,16 @@ export class GodboxRenderer {
         continue;
       }
       if (portal.kind === 'station') {
-        const station = new THREE.Group();
-        const platform = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.12, 0.55), palette.getSurfaceMaterial('ground'));
-        const roof = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.12, 0.38), new THREE.MeshStandardMaterial({ color: '#596167', roughness: 0.58, metalness: 0.2 }));
-        roof.position.y = 0.55;
-        station.add(platform, roof);
+        // A carrier shelter is a canonical transport/storage building, even at a route portal.
+        const source = this.assetBuilder.getAsset('building', {
+          seed: `${settlement.id}:portal:${portal.localX}:${portal.localZ}`,
+          culture: cultureStyle, era, archetype: 'warehouse',
+          variant: `warehouse#${BUILD_STAGE.DETAIL}`,
+          grammarContext: this.climateContextFor(settlement), prosperity: settlement.prosperity,
+        }).mesh;
+        const station = source.clone(true);
+        station.scale.setScalar(Math.min(1.55 / Number(source.userData['footprintWidth']), 0.55 / Number(source.userData['footprintDepth'])));
+        station.userData['sharedAsset'] = true;
         station.position.set(portal.localX, localY, portal.localZ);
         station.rotation.y = portal.angle + Math.PI / 2;
         station.userData['portalKind'] = portal.kind;
@@ -2530,16 +2539,9 @@ export class GodboxRenderer {
     return palette;
   }
 
-  private shelterGroundAt(placement: BuildingPlacement): (x: number, z: number) => number {
-    const cosine = Math.cos(placement.rotationY), sine = Math.sin(placement.rotationY);
-    const center = this.elevationAt(placement.worldX, placement.worldZ);
-    return (x, z) => this.elevationAt(placement.worldX + x * cosine + z * sine,
-      placement.worldZ - x * sine + z * cosine) - center;
-  }
-
   private installSleepingArea(placement: BuildingPlacement, building: THREE.Object3D,
     width: number, depth: number, floorHeight: number, doorWidth: number): void {
-    if (!['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(placement.role)
+    if (building.userData['architectureArchetype'] !== 'house'
       || placement.development && (placement.development.services.housing ?? 0) <= 0) return;
     const area: IndoorSleepingArea = { key: placement.key, worldX: placement.worldX, worldZ: placement.worldZ,
       rotationY: placement.rotationY, width, depth, doorWidth,
@@ -2552,14 +2554,8 @@ export class GodboxRenderer {
   }
 
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number, settlement: Settlement): THREE.Object3D {
-    if (placement.development?.adaptation) {
-      const building = createSurvivalStructure(placement.development, 1, placement.width, placement.depth, this.getPalette(cultureStyle, era), this.shelterGroundAt(placement));
-      building.position.set(placement.localX, terrainY, placement.localZ); building.rotation.y = placement.rotationY;
-      building.userData['placementKey'] = placement.key;
-      this.installSleepingArea(placement, building, placement.width * 0.72, placement.depth * 0.7,
-        Number(building.userData['foundationLift'] ?? 0) + 0.05, placement.width * 0.30);
-      return building;
-    }
+    // Founding adaptations are ordinary BuildingSpec inputs now. They use this same AssetBuilder,
+    // material, geometry, LOD and construction path instead of escaping through SurvivalStructure.
     const stage = this.constructionStageFor(placement.key);
     // Geometry is shared per (settlement dialect, era, role, variation, stage) rather than per
     // instance, so a hundred houses cost a handful of buffers — but keyed per settlement, not per
@@ -2579,6 +2575,8 @@ export class GodboxRenderer {
       project: this.projectForPlot(settlement, placement.key),
     });
     const building = asset.mesh.clone(true);
+    // Each placed copy owns its rotors, so a cached asset shared by many mills still turns per mill.
+    this.millMotion.adopt(building);
 
     // Fit the canonical grammar footprint into the reserved placement footprint. Uniform, so
     // proportions survive, and bounded by the footprint, so nothing spills onto its neighbour.
@@ -2622,7 +2620,7 @@ export class GodboxRenderer {
     });
 
     if (stage < BUILD_STAGE.DETAIL) {
-      building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), grammarWidth * fit, grammarDepth * fit, stage, undefined, era, Number(asset.mesh.userData['buildingHeight'] ?? placement.height) * fit));
+      building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), grammarWidth * fit, grammarDepth * fit, stage, undefined, era, Number(asset.mesh.userData['buildingHeight'] ?? placement.height) * fit, asset.mesh.userData['buildingSpec'] as BuildingSpec | undefined));
     }
     return building;
   }
@@ -2649,11 +2647,12 @@ export class GodboxRenderer {
     projectProgress?: number,
     era: Era = placement.builtEra,
     targetHeight = placement.height,
+    spec?: BuildingSpec,
   ): THREE.Group {
     const scaffold = new THREE.Group();
     scaffold.name = `construction-scaffold:${placement.key}`;
     scaffold.userData['constructionCue'] = 'scaffold';
-    const surface = constructionScaffoldSurface(era, placement.role, placement.development?.material);
+    const surface = constructionScaffoldSurface(era, placement.role, placement.development?.material, spec);
     const material = palette.getSurfaceMaterial(surface);
     const primitiveRig = era === 'primitive';
     const height = targetHeight * Math.min(0.94, 0.42 + stage * 0.14);
@@ -2759,77 +2758,6 @@ export class GodboxRenderer {
   }
 
   /**
-   * Founding shelters use the same physical workface contract as later construction. Economic
-   * progress only authorizes pieces; actual posts, wall fabric and roof courses seat on visible
-   * assembler contact beats so the camp is made by people rather than by monthly state changes.
-   */
-  private createActiveSurvivalConstructionSite(
-    placement: BuildingPlacement,
-    response: DevelopmentResponse,
-    settlementY: number,
-    progress: number,
-    palette: MaterialPalette,
-    settlement: Settlement,
-  ): THREE.Group {
-    const site = new THREE.Group();
-    site.position.set(placement.localX, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.localZ);
-    site.rotation.y = placement.rotationY;
-    site.userData['placementKey'] = placement.key;
-    site.userData['constructionSite'] = true;
-    site.userData['foundingShelterAssembly'] = true;
-
-    const paidProgress = Math.max(0, Math.min(1, progress));
-    const fullShelter = createSurvivalStructure(
-      response,
-      1,
-      placement.width,
-      placement.depth,
-      palette,
-      this.shelterGroundAt(placement),
-    );
-    const assembly = new ConstructionAssembly(fullShelter, 1, placement.key, response.material ?? 'timber');
-    const previous = this.constructionAssemblies.get(placement.key)?.assembly.plan.progress;
-    // A new shelter begins as bare prepared ground. Rebuilds inherit only what workers have already
-    // seated; they never jump forward to the latest monthly paid-progress snapshot.
-    assembly.update(Math.min(paidProgress, previous ?? 0));
-    site.add(assembly.group);
-    placement.constructionPlan = assembly.plan;
-    placement.constructionWidth = assembly.plan.width;
-    placement.constructionDepth = assembly.plan.depth;
-
-    const visualProgress = assembly.plan.progress ?? 0;
-    const presentation = constructionStagePresentation(visualProgress);
-    site.userData['constructionStage'] = presentation.stage;
-    site.userData['constructionProgress'] = paidProgress;
-    site.userData['constructionPresentationProgress'] = visualProgress;
-    site.userData['constructionReveal'] = presentation.phase;
-    site.userData['constructionFinishing'] = presentation.finishing;
-    site.userData['constructionTargetRole'] = placement.role;
-    site.userData['constructionFootprintWidth'] = assembly.plan.width;
-    site.userData['constructionFootprintDepth'] = assembly.plan.depth;
-    site.userData['constructionTargetHeight'] = assembly.plan.height;
-
-    const scaffold = createConstructionScaffold(
-      assembly.plan,
-      palette,
-      constructionScaffoldSurface(developmentPresentationEra(response), placement.role, response.material),
-    );
-    updateConstructionScaffold(scaffold, assembly.plan, visualProgress);
-    if (visualProgress < 1) site.add(scaffold);
-    decorateConstructionWorksite(site, settlement, palette);
-    this.constructionAssemblies.set(placement.key, {
-      site,
-      assembly,
-      scaffold,
-      settlement,
-      mode: 'contact-led',
-    });
-    // ConstructionAssembly shares the source vertex attributes/materials; those references remain
-    // owned by the assembly meshes even though the source group itself is never added to the scene.
-    return site;
-  }
-
-  /**
    * Active construction is a partial realization of the exact future building grammar.
    * New builds reveal the canonical structure progressively; upgrades/repurposes derive their
    * target identity from the active project rather than the old fabric still occupying the plot.
@@ -2881,25 +2809,27 @@ export class GodboxRenderer {
       waterfront: settlement ? this.waterfrontFor(settlement) : undefined,
       project: this.projectForPlot(settlement, targetPlacement.key),
     };
-    const stagedAsset = this.assetBuilder.getAsset('building', {
-      ...baseConfig,
-      variant: `${targetPlacement.role}#${stage}`,
-    });
     // Fit every construction stage against the completed grammar footprint. Forecourts, wings,
     // towers and crowns therefore never resize the whole project when a later stage appears.
-    const targetAsset = stage === BUILD_STAGE.DETAIL ? stagedAsset : this.assetBuilder.getAsset('building', {
+    const targetAsset = this.assetBuilder.getAsset('building', {
       ...baseConfig,
       variant: `${targetPlacement.role}#${BUILD_STAGE.DETAIL}`,
     });
     const targetWidth = Number(targetAsset.mesh.userData['footprintWidth'] ?? 1);
     const targetDepth = Number(targetAsset.mesh.userData['footprintDepth'] ?? 1);
     const targetHeight = Number(targetAsset.mesh.userData['buildingHeight'] ?? targetPlacement.height);
-    const developmentScale = targetPlacement.development ? 0.64 + targetPlacement.development.level * 0.12 : 1;
+    const developmentScale = targetPlacement.development ? Math.min(1, 0.64 + targetPlacement.development.level * 0.12) : 1;
     const fit = Math.min(targetPlacement.width / targetWidth, targetPlacement.depth / targetDepth) * developmentScale;
 
     const assembly = new ConstructionAssembly(targetAsset.mesh, fit, targetPlacement.key, project?.material ?? 'timber');
-    assembly.update(Math.min(paidProgress, this.constructionAssemblies.get(targetPlacement.key)?.assembly.plan.progress ?? paidProgress));
+    const previousProgress = this.constructionAssemblies.get(targetPlacement.key)?.assembly.plan.progress;
+    // Founding adaptations preserve the contact-led assembly behaviour they had before the
+    // architecture unification: a newly visible worksite starts from prepared ground and workers
+    // physically seat paid pieces. Ordinary later projects retain the existing bounded reveal.
+    const initialProgress = project?.adaptation ? (previousProgress ?? 0) : (previousProgress ?? paidProgress);
+    assembly.update(Math.min(paidProgress, initialProgress));
     site.add(assembly.group);
+    if (project?.adaptation) site.userData['foundingShelterAssembly'] = true;
     placement.constructionPlan = assembly.plan;
 
     const renderedWidth = targetWidth * fit;
@@ -2920,12 +2850,18 @@ export class GodboxRenderer {
 
     const constructionPalette = this.getPalette(cultureStyle, targetEra);
     const scaffold = createConstructionScaffold(assembly.plan, constructionPalette,
-      constructionScaffoldSurface(targetEra, targetPlacement.role, project?.material));
+      constructionScaffoldSurface(targetEra, targetPlacement.role, project?.material, targetAsset.mesh.userData['buildingSpec'] as BuildingSpec | undefined));
     updateConstructionScaffold(scaffold, assembly.plan, paidProgress);
     if (paidProgress < 1) site.add(scaffold);
     if (settlement && project) {
       decorateConstructionWorksite(site, settlement, constructionPalette);
-      this.constructionAssemblies.set(targetPlacement.key, { site, assembly, scaffold, settlement });
+      this.constructionAssemblies.set(targetPlacement.key, {
+        site,
+        assembly,
+        scaffold,
+        settlement,
+        ...(project.adaptation ? { mode: 'contact-led' as const } : {}),
+      });
     }
     return site;
   }
@@ -2967,9 +2903,9 @@ export class GodboxRenderer {
   }
 
   /**
-   * The structure a plot is ultimately destined to hold. Grammar resolution clamps this to
-   * whatever the era can actually build, so a future foundry stands as a workshop for
-   * centuries first and the skyline never jumps lineage. Founding era weights the mix: plots
+   * The compatibility/default-archetype input assigned to an ambient plot. BuildingSpec
+   * resolves its historical lineage; this label never clamps or substitutes geometry.
+   * Founding era weights the placement mix: plots
    * laid out by an industrial society are destined for heavier stock than a village's.
    */
   private roleForDistrict(district: BuildingDistrict, index: number, random: SeededRandom, foundingEra: Era): BuildingRole {
@@ -4077,9 +4013,7 @@ export class GodboxRenderer {
     }
   }
 
-  private addMarket(group: THREE.Group, settlement: Settlement, layout: SettlementLayoutPlan, culture: Culture | undefined, count: number): void {
-    const wood = new THREE.MeshStandardMaterial({ color: '#72503b', roughness: 0.95 });
-    const clothColors = [culture?.style.accent ?? '#efb758', culture?.style.primary ?? '#d96c86'];
+  private addMarket(group: THREE.Group, settlement: Settlement, layout: SettlementLayoutPlan, style: Culture['style'], count: number): void {
     const settlementY = this.elevationAt(settlement.position.x, settlement.position.z);
     const anchor = layout.anchors.market;
     const placedStalls: Array<{ worldX: number; worldZ: number }> = [];
@@ -4103,15 +4037,15 @@ export class GodboxRenderer {
       const angle = Math.atan2(position.localZ - anchor.localZ, position.localX - anchor.localX);
       const stall = new THREE.Group();
       stall.position.set(position.localX, this.elevationAt(position.worldX, position.worldZ) - settlementY, position.localZ);
-      const table = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.12, 0.48), wood);
-      table.position.y = 0.42;
-      const canopy = new THREE.Mesh(new THREE.BoxGeometry(1, 0.08, 0.68), new THREE.MeshStandardMaterial({ color: clothColors[index % clothColors.length], roughness: 0.9 }));
-      canopy.position.y = 1.05;
-      const posts = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.96, 0.05), wood);
-      posts.position.set(-0.38, 0.62, -0.2);
-      const secondPost = posts.clone();
-      secondPost.position.x = 0.38;
-      stall.add(table, canopy, posts, secondPost);
+      const source = this.assetBuilder.getAsset('building', {
+        seed: `${settlement.id}:market-stall:${index}`, culture: style,
+        era: this.eraForSettlement(settlement), archetype: 'market', variant: `market#${BUILD_STAGE.DETAIL}`,
+        grammarContext: this.climateContextFor(settlement), prosperity: settlement.prosperity,
+      }).mesh;
+      const shelter = source.clone(true);
+      shelter.scale.setScalar(Math.min(0.85 / Number(source.userData['footprintWidth']), 0.48 / Number(source.userData['footprintDepth'])));
+      shelter.userData['sharedAsset'] = true;
+      stall.add(shelter);
       const stock = Object.entries(settlement.localMaterials).filter(([, amount]) => amount > 0.1).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
       const item = stock[index % Math.max(1, stock.length)];
       if (item) {
@@ -4410,7 +4344,7 @@ export class GodboxRenderer {
    * farmers, log stacks for foresters, spoil heaps and scaffolds for miners, a kiln and goods
    * yard for crafters, a caravan rest for traders. Deterministic per settlement.
    */
-  private addSpecializationDressing(group: THREE.Group, settlement: Settlement, era: Era, palette: MaterialPalette, smokeSources: SmokeSource[], routeCount: number): void {
+  private addSpecializationDressing(group: THREE.Group, settlement: Settlement, era: Era, palette: MaterialPalette, smokeSources: SmokeSource[], routeCount: number, cultureStyle: Culture['style']): void {
     if (settlement.development) return;
     const rank = eraRank(era);
     if (rank < 1) return;
@@ -4516,16 +4450,12 @@ export class GodboxRenderer {
     if (freightVolume >= 10 && (settlement.specialization === 'exchange' || routeCount >= 2)) {
       const restX = Math.cos(angle + Math.PI * 0.66) * (baseRadius - 0.5);
       const restZ = Math.sin(angle + Math.PI * 0.66) * (baseRadius - 0.5);
-      for (const [sx, sz] of [[-0.5, -0.35], [0.5, -0.35], [0, 0.45]] as const) {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.9, 0.05), timber);
-        post.position.set(restX + sx, 0.45, restZ + sz);
-        group.add(post);
-      }
-      const canopy = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.04, 1.05), palette.getSurfaceMaterial('cloth'));
-      canopy.position.set(restX, 0.94, restZ);
-      canopy.rotation.z = 0.06;
-      canopy.castShadow = true;
-      group.add(canopy);
+      const shelter = productionBuildingShell(this.assetBuilder, {
+        seed: `${settlement.id}:caravan-rest`, culture: cultureStyle, era, archetype: 'warehouse',
+        variant: `warehouse#${BUILD_STAGE.DETAIL}`, grammarContext: this.climateContextFor(settlement),
+      }, 1.3, 1.05, 'Caravan rest shelter');
+      shelter.position.set(restX, 0, restZ);
+      group.add(shelter);
       for (let index = 0; index < 3; index += 1) {
         const bale = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.26), timber);
         bale.position.set(restX + (index - 1) * 0.3, 0.08, restZ - 0.1);
@@ -4807,6 +4737,7 @@ export class GodboxRenderer {
     this.visibleSolarHour = solarHour(elapsedSeconds);
     const phase = (elapsedSeconds / 58 + 0.16) % 1;
     const daylight = THREE.MathUtils.smoothstep(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 0.12, 0.72);
+    this.millDaylight = daylight;
     this.ecology.animate(elapsedSeconds, daylight);
     this.cosmicAccents.updateDaylight(daylight);
     for (const material of this.humanMaterials) updateCosmicBodyMaterial(material, daylight);

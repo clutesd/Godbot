@@ -19,6 +19,7 @@ import type { ArchitecturalPeriod } from './ArchitecturalPeriod';
 import { ARCHITECTURAL_PERIODS, periodRank } from './ArchitecturalPeriod';
 import type { StructuralFamily } from './StructuralFamily';
 import type { BuildingRole } from '../assets/BuildingGrammar';
+import type { SettlementNeed, StructureForm } from '../../sim/development/types';
 
 export const BUILDING_ARCHETYPES = [
   'house',
@@ -30,6 +31,11 @@ export const BUILDING_ARCHETYPES = [
   'silo',
   'workshop',
   'mill',
+  'windmill',
+  'hand-mill',
+  'sawmill',
+  'wind-pump',
+  'smock-mill',
   'factory',
   'market',
   'warehouse',
@@ -92,6 +98,8 @@ export type FunctionalEquipment =
   | 'millstone'
   | 'waterwheel'
   | 'windshaft'
+  | 'pump-rod'
+  | 'saw-carriage'
   | 'line-shaft'
   | 'machine-tool'
   | 'conveyor'
@@ -133,6 +141,15 @@ export interface ArchetypeStage {
   /** Inclusive range of subordinate annexes, lean-tos and service wings. */
   annexes: readonly [number, number];
   equipment: readonly FunctionalEquipment[];
+  /**
+   * This stage's main openings are cart/wagon doors, not a residential window rhythm.
+   *
+   * Without this, an opening's width comes from the structural family alone, so a barn door and a
+   * house window of the same family resolve to the same size — the barn just has fewer of them.
+   * Set on stages whose function genuinely needs a wide ground-level door: loading a wagon,
+   * leading livestock through, backing a cart in.
+   */
+  doorBay?: boolean;
 }
 
 /**
@@ -174,6 +191,13 @@ export interface BuildingArchetypeDefinition {
    * also the archetype's first appearance — nothing resolves to it before then.
    */
   lineage: Partial<Record<ArchitecturalPeriod, ArchetypeStage>>;
+  /**
+   * The development programme this archetype is shown with by tools that have no simulation
+   * response to read it from: the architecture browser's previews, and the purpose it presents for
+   * a catalogue request. Production routing stays authoritative. A mill grinds grain or makes power,
+   * not manufactures goods, so without this a preview would invent a purpose (and chimneys) for it.
+   */
+  presentationProgram?: { need: SettlementNeed; form: StructureForm };
 }
 
 const define = (definition: BuildingArchetypeDefinition): BuildingArchetypeDefinition => definition;
@@ -233,19 +257,19 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
       neolithic: {
         name: 'Byre shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
         width: 0.96, depth: 0.72, storeyHeight: 0.3, floors: [1, 1], openingDensity: 0.05,
-        roof: 'shed', openness: 0.42, annexes: [0, 1],
+        roof: 'shed', openness: 0.42, annexes: [0, 1], doorBay: true,
         equipment: ['bedding', 'fence-line', 'water-trough'],
       },
       bronzeIron: {
         name: 'Framed livestock and storage barn', families: ['timber-post-and-beam', 'log-construction', 'mud-brick'],
         width: 1.22, depth: 0.82, storeyHeight: 0.4, floors: [1, 1], openingDensity: 0.08,
-        roof: 'gable', openness: 0.22, annexes: [0, 1],
+        roof: 'gable', openness: 0.22, annexes: [0, 1], doorBay: true,
         equipment: ['bedding', 'manger', 'water-trough', 'fence-line', 'grain-bin'],
       },
       classical: {
         name: 'Estate barn', families: ['timber-post-and-beam', 'stone-masonry', 'mud-brick', 'adobe'],
         width: 1.38, depth: 0.9, storeyHeight: 0.44, floors: [1, 2], openingDensity: 0.1,
-        roof: 'gable', openness: 0.16, annexes: [0, 2],
+        roof: 'gable', openness: 0.16, annexes: [0, 2], doorBay: true,
         equipment: ['threshing-floor', 'grain-bin', 'manger', 'wagon-apron', 'hay-loft'],
       },
       medieval: {
@@ -253,13 +277,13 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
         // swing a flail. This is the stage that most needs its own silhouette.
         name: 'High-roof threshing barn', families: ['timber-frame', 'timber-post-and-beam', 'stone-masonry'],
         width: 1.62, depth: 0.98, storeyHeight: 0.62, floors: [1, 2], openingDensity: 0.07,
-        roof: 'steep-gable', openness: 0.1, annexes: [0, 2],
+        roof: 'steep-gable', openness: 0.1, annexes: [0, 2], doorBay: true,
         equipment: ['threshing-floor', 'hay-loft', 'grain-bin', 'wagon-apron', 'manger', 'ridge-vent'],
       },
       earlyModern: {
         name: 'Bank barn', families: ['mixed-masonry', 'timber-frame', 'stone-masonry', 'brick-masonry'],
         width: 1.7, depth: 1.04, storeyHeight: 0.54, floors: [2, 2], openingDensity: 0.12,
-        roof: 'gable', openness: 0.12, annexes: [1, 2],
+        roof: 'gable', openness: 0.12, annexes: [1, 2], doorBay: true,
         equipment: ['threshing-floor', 'hay-loft', 'grain-bin', 'side-ramp', 'loading-platform', 'manger', 'stall-divider'],
       },
       industrial: {
@@ -267,19 +291,19 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
         // buildings are real by this point, so a settlement working in metal can reach one.
         name: 'Monitor-roof barn', families: ['heavy-industrial-brick', 'timber-frame', 'brick-masonry', 'steel-industrial-frame'],
         width: 1.84, depth: 1.1, storeyHeight: 0.56, floors: [1, 2], openingDensity: 0.16,
-        roof: 'monitor', openness: 0.1, annexes: [1, 3],
+        roof: 'monitor', openness: 0.1, annexes: [1, 3], doorBay: true,
         equipment: ['hay-loft', 'grain-bin', 'loading-platform', 'side-ramp', 'louver-vent', 'manger', 'stall-divider', 'rail-track'],
       },
       modern: {
         name: 'Pole barn', families: ['steel-industrial-frame', 'reinforced-concrete'],
         width: 2.0, depth: 1.2, storeyHeight: 0.5, floors: [1, 1], openingDensity: 0.1,
-        roof: 'low-gable', openness: 0.2, annexes: [0, 2],
+        roof: 'low-gable', openness: 0.2, annexes: [0, 2], doorBay: true,
         equipment: ['loading-platform', 'conveyor', 'silo-chute', 'louver-vent', 'water-trough'],
       },
       contemporary: {
         name: 'Mechanised agricultural shed', families: ['steel-industrial-frame'],
         width: 2.2, depth: 1.32, storeyHeight: 0.52, floors: [1, 1], openingDensity: 0.08,
-        roof: 'open-span', openness: 0.26, annexes: [0, 2],
+        roof: 'open-span', openness: 0.26, annexes: [0, 2], doorBay: true,
         equipment: ['loading-platform', 'conveyor', 'silo-chute', 'gantry-crane', 'louver-vent'],
       },
     },
@@ -297,25 +321,33 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
       bronzeIron: {
         name: 'Byre', families: ['timber-post-and-beam', 'mud-brick', 'log-construction'],
         width: 1.14, depth: 0.66, storeyHeight: 0.36, floors: [1, 1], openingDensity: 0.06,
-        roof: 'gable', openness: 0.26, annexes: [0, 1],
+        roof: 'gable', openness: 0.26, annexes: [0, 1], doorBay: true,
         equipment: ['bedding', 'manger', 'water-trough', 'stall-divider', 'pen-gate'],
       },
       medieval: {
         name: 'Cattle byre', families: ['stone-masonry', 'timber-frame', 'timber-post-and-beam'],
         width: 1.26, depth: 0.72, storeyHeight: 0.4, floors: [1, 1], openingDensity: 0.08,
-        roof: 'gable', openness: 0.18, annexes: [0, 1],
+        roof: 'gable', openness: 0.18, annexes: [0, 1], doorBay: true,
         equipment: ['bedding', 'manger', 'water-trough', 'stall-divider', 'pen-gate', 'ridge-vent'],
+      },
+      earlyModern: {
+        // A lower, longer range than a barn ever gets: the low-gable keeps the roofline close
+        // over a run of repeated livestock bays rather than rising to cover a loft.
+        name: 'Byre range', families: ['mixed-masonry', 'brick-masonry', 'timber-frame'],
+        width: 1.5, depth: 0.74, storeyHeight: 0.42, floors: [1, 1], openingDensity: 0.1,
+        roof: 'low-gable', openness: 0.16, annexes: [1, 2], doorBay: true,
+        equipment: ['bedding', 'manger', 'water-trough', 'stall-divider', 'pen-gate', 'ridge-vent', 'loading-platform'],
       },
       industrial: {
         name: 'Dairy byre', families: ['brick-masonry', 'heavy-industrial-brick', 'timber-frame'],
         width: 1.38, depth: 0.78, storeyHeight: 0.44, floors: [1, 1], openingDensity: 0.14,
-        roof: 'low-gable', openness: 0.14, annexes: [1, 2],
+        roof: 'low-gable', openness: 0.14, annexes: [1, 2], doorBay: true,
         equipment: ['manger', 'water-trough', 'stall-divider', 'louver-vent', 'loading-platform'],
       },
       modern: {
         name: 'Livestock shed', families: ['steel-industrial-frame', 'reinforced-concrete'],
         width: 1.6, depth: 0.9, storeyHeight: 0.44, floors: [1, 1], openingDensity: 0.1,
-        roof: 'open-span', openness: 0.3, annexes: [0, 1],
+        roof: 'open-span', openness: 0.3, annexes: [0, 1], doorBay: true,
         equipment: ['manger', 'water-trough', 'conveyor', 'louver-vent'],
       },
     },
@@ -327,38 +359,46 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
       bronzeIron: {
         name: 'Horse shelter', families: ['timber-post-and-beam', 'mud-brick', 'adobe'],
         width: 1.06, depth: 0.68, storeyHeight: 0.38, floors: [1, 1], openingDensity: 0.08,
-        roof: 'gable', openness: 0.28, annexes: [0, 1],
+        roof: 'gable', openness: 0.28, annexes: [0, 1], doorBay: true,
         equipment: ['bedding', 'manger', 'hitch-rail', 'water-trough'],
       },
       classical: {
         name: 'Stable block', families: ['stone-masonry', 'timber-post-and-beam', 'brick-masonry'],
         width: 1.2, depth: 0.74, storeyHeight: 0.42, floors: [1, 1], openingDensity: 0.12,
-        roof: 'hipped', openness: 0.2, annexes: [0, 1],
+        roof: 'hipped', openness: 0.2, annexes: [0, 1], doorBay: true,
         equipment: ['bedding', 'manger', 'stall-divider', 'hitch-rail', 'water-trough'],
       },
       medieval: {
         name: 'Courtyard stable', families: ['stone-masonry', 'timber-frame', 'mixed-masonry'],
         width: 1.3, depth: 0.8, storeyHeight: 0.46, floors: [1, 2], openingDensity: 0.14,
-        roof: 'gable', openness: 0.16, annexes: [0, 2],
+        roof: 'gable', openness: 0.16, annexes: [0, 2], doorBay: true,
         equipment: ['bedding', 'manger', 'stall-divider', 'hitch-rail', 'water-trough', 'hay-loft'],
+      },
+      earlyModern: {
+        // Hipped, carried forward from the classical stable block's own identity: a manor
+        // stable's roof turns the corner rather than gabling, which a barn's or a byre's never do.
+        name: 'Manor stable', families: ['brick-masonry', 'mixed-masonry', 'stone-masonry'],
+        width: 1.36, depth: 0.84, storeyHeight: 0.46, floors: [1, 2], openingDensity: 0.18,
+        roof: 'hipped', openness: 0.16, annexes: [1, 2], doorBay: true,
+        equipment: ['bedding', 'manger', 'stall-divider', 'hitch-rail', 'water-trough', 'hay-loft', 'cart-stand'],
       },
       industrial: {
         name: 'Carriage stable', families: ['brick-masonry', 'mixed-masonry', 'heavy-industrial-brick'],
         width: 1.42, depth: 0.86, storeyHeight: 0.48, floors: [1, 2], openingDensity: 0.2,
-        roof: 'monitor', openness: 0.12, annexes: [1, 2],
+        roof: 'monitor', openness: 0.12, annexes: [1, 2], doorBay: true,
         equipment: ['manger', 'stall-divider', 'hitch-rail', 'hay-loft', 'louver-vent', 'cart-stand'],
       },
       modern: {
         name: 'Equestrian barn', families: ['steel-industrial-frame', 'brick-masonry'],
         width: 1.5, depth: 0.92, storeyHeight: 0.46, floors: [1, 1], openingDensity: 0.18,
-        roof: 'low-gable', openness: 0.18, annexes: [0, 2],
+        roof: 'low-gable', openness: 0.18, annexes: [0, 2], doorBay: true,
         equipment: ['manger', 'stall-divider', 'water-trough', 'louver-vent'],
       },
     },
   }),
 
   'animal-pen': define({
-    id: 'animal-pen', label: 'Animal pen', category: 'Agriculture & livestock', role: 'store-pit', status: 'planned',
+    id: 'animal-pen', label: 'Animal pen', category: 'Agriculture & livestock', role: 'store-pit', status: 'active',
     lineage: {
       neolithic: {
         name: 'Stake pen', families: ['primitive-shelter'],
@@ -486,36 +526,156 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 
   mill: define({
     id: 'mill', label: 'Mill', category: 'Production', role: 'workshop', status: 'active',
+    presentationProgram: { need: 'energy', form: 'workshop' },
     lineage: {
+      // A horizontal-wheeled mill: a stone room over a stream, a chute and a flat paddle wheel.
       classical: {
-        name: 'Water mill', families: ['stone-masonry', 'timber-post-and-beam', 'timber-frame'],
+        name: 'Rural gristmill', families: ['stone-masonry', 'timber-post-and-beam', 'timber-frame'],
         width: 0.96, depth: 0.78, storeyHeight: 0.46, floors: [1, 2], openingDensity: 0.14,
         roof: 'gable', openness: 0.1, annexes: [1, 2],
-        equipment: ['waterwheel', 'millstone', 'grain-bin', 'loading-platform'],
+        equipment: ['waterwheel', 'millstone', 'grain-bin'],
       },
+      // A breast-wheel mill house beside its race, sluice and millpond.
       medieval: {
-        name: 'Manorial mill', families: ['stone-masonry', 'timber-frame', 'mixed-masonry'],
+        name: 'Watermill', families: ['stone-masonry', 'timber-frame', 'mixed-masonry'],
         width: 1.04, depth: 0.82, storeyHeight: 0.5, floors: [2, 3], openingDensity: 0.16,
         roof: 'steep-gable', openness: 0.08, annexes: [1, 2],
-        equipment: ['waterwheel', 'millstone', 'grain-bin', 'hay-loft', 'loading-platform'],
+        equipment: ['waterwheel', 'millstone', 'grain-bin', 'loading-platform'],
       },
+      // A tall overshot-wheel mill fed by a launder on trestles.
       earlyModern: {
-        name: 'Powered mill', families: ['mixed-masonry', 'brick-masonry', 'timber-frame'],
-        width: 1.16, depth: 0.88, storeyHeight: 0.5, floors: [2, 3], openingDensity: 0.24,
+        name: 'Early industrial mill', families: ['mixed-masonry', 'brick-masonry', 'stone-masonry'],
+        width: 1.16, depth: 0.88, storeyHeight: 0.5, floors: [3, 4], openingDensity: 0.24,
         roof: 'gable', openness: 0.06, annexes: [1, 3],
-        equipment: ['waterwheel', 'millstone', 'line-shaft', 'grain-bin', 'loading-platform', 'louver-vent'],
+        equipment: ['waterwheel', 'millstone', 'line-shaft', 'grain-bin', 'loading-platform'],
       },
       industrial: {
-        name: 'Industrial mill', families: ['heavy-industrial-brick', 'brick-masonry'],
-        width: 1.34, depth: 0.96, storeyHeight: 0.56, floors: [3, 5], openingDensity: 0.42,
+        // Grain-handling drives this, not generic machine-shop dressing: the headhouse/elevator
+        // read (silo-chute) is what a flour mill actually looks like from the yard, not a lathe.
+        name: 'Mechanized industrial mill', families: ['heavy-industrial-brick', 'brick-masonry'],
+        width: 1.34, depth: 0.96, storeyHeight: 0.56, floors: [4, 5], openingDensity: 0.42,
         roof: 'low-gable', openness: 0.04, annexes: [1, 3],
-        equipment: ['chimney', 'line-shaft', 'machine-tool', 'conveyor', 'grain-bin', 'loading-platform', 'rail-track'],
+        equipment: ['chimney', 'line-shaft', 'silo-chute', 'conveyor', 'grain-bin', 'loading-platform', 'rail-track'],
       },
       modern: {
         name: 'Processing plant', families: ['reinforced-concrete', 'steel-industrial-frame'],
         width: 1.5, depth: 1.08, storeyHeight: 0.54, floors: [2, 4], openingDensity: 0.28,
         roof: 'flat-parapet', openness: 0.04, annexes: [1, 3],
         equipment: ['conveyor', 'pipework', 'silo-chute', 'transformer', 'loading-platform'],
+      },
+    },
+  }),
+
+  windmill: define({
+    id: 'windmill', label: 'Windmill', category: 'Production', role: 'workshop', status: 'active',
+    presentationProgram: { need: 'energy', form: 'workshop' },
+    lineage: {
+      // A post mill: the whole milling body is a small timber box on a post, which is why it
+      // stays narrow and short rather than growing like a watermill's wide, low range.
+      medieval: {
+        name: 'Post mill', families: ['timber-post-and-beam', 'log-construction'],
+        width: 0.34, depth: 0.34, storeyHeight: 0.42, floors: [1, 2], openingDensity: 0.04,
+        roof: 'conical', openness: 0, annexes: [0, 0],
+        equipment: ['millstone', 'windshaft'],
+      },
+      // A tower mill: a masonry shaft tall enough to clear the sails, with its own small store at
+      // the foot. Narrow and tall is the whole silhouette — nothing else in the gallery reads
+      // this way except the silo, and the conical cap plus sail cross keep the two apart.
+      earlyModern: {
+        name: 'Tower mill', families: ['stone-masonry', 'brick-masonry', 'mixed-masonry'],
+        width: 0.4, depth: 0.4, storeyHeight: 0.46, floors: [2, 3], openingDensity: 0.05,
+        roof: 'conical', openness: 0, annexes: [0, 1],
+        equipment: ['millstone', 'windshaft', 'grain-bin'],
+      },
+    },
+  }),
+
+  // The four subtypes below are `planned`: buildable and inspectable, but no routing rule selects
+  // them yet. Routing them is a gameplay-visible change to which buildings a settlement shows, so it
+  // is deliberately a separate step from adding their architecture.
+
+  'hand-mill': define({
+    id: 'hand-mill', label: 'Hand mill shelter', category: 'Production', role: 'workshop', status: 'planned',
+    presentationProgram: { need: 'food', form: 'store' },
+    lineage: {
+      // A quern in a lean shelter: the smallest thing that is still a mill. Nothing is raised, the
+      // stone sits on the floor under an open-sided roof, and the shelter is what makes it a building.
+      neolithic: {
+        name: 'Quern shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
+        width: 0.52, depth: 0.5, storeyHeight: 0.26, floors: [1, 1], openingDensity: 0.03,
+        roof: 'shed', openness: 0.46, annexes: [0, 0],
+        equipment: ['millstone', 'hearth'],
+      },
+      bronzeIron: {
+        name: 'Rotary quern house', families: ['timber-post-and-beam', 'mud-brick', 'log-construction'],
+        width: 0.6, depth: 0.56, storeyHeight: 0.34, floors: [1, 1], openingDensity: 0.06,
+        roof: 'gable', openness: 0.1, annexes: [0, 1],
+        equipment: ['millstone', 'grain-bin'],
+      },
+    },
+  }),
+
+  sawmill: define({
+    id: 'sawmill', label: 'Sawmill', category: 'Production', role: 'workshop', status: 'planned',
+    presentationProgram: { need: 'manufacturing', form: 'workshop' },
+    lineage: {
+      // A long open-ended shed: the saw carriage runs the length of the building, so the plan is
+      // deep and low, and the log yard is the front, not the roof.
+      classical: {
+        name: 'Water sawmill', families: ['timber-post-and-beam', 'timber-frame', 'stone-masonry'],
+        width: 1.18, depth: 0.7, storeyHeight: 0.4, floors: [1, 1], openingDensity: 0.12,
+        roof: 'gable', openness: 0.34, annexes: [0, 1], doorBay: true,
+        equipment: ['waterwheel', 'saw-carriage', 'crate-stack', 'loading-platform'],
+      },
+      earlyModern: {
+        name: 'Sash sawmill', families: ['timber-frame', 'mixed-masonry', 'brick-masonry'],
+        width: 1.3, depth: 0.78, storeyHeight: 0.44, floors: [1, 2], openingDensity: 0.18,
+        roof: 'gable', openness: 0.2, annexes: [0, 2], doorBay: true,
+        equipment: ['waterwheel', 'saw-carriage', 'line-shaft', 'crate-stack', 'loading-platform'],
+      },
+      industrial: {
+        name: 'Steam sawmill', families: ['heavy-industrial-brick', 'steel-industrial-frame', 'brick-masonry'],
+        width: 1.52, depth: 0.9, storeyHeight: 0.56, floors: [1, 2], openingDensity: 0.3,
+        roof: 'monitor', openness: 0.12, annexes: [1, 3], doorBay: true,
+        equipment: ['chimney', 'line-shaft', 'saw-carriage', 'conveyor', 'rail-track', 'loading-platform'],
+      },
+    },
+  }),
+
+  'wind-pump': define({
+    id: 'wind-pump', label: 'Wind pump', category: 'Production', role: 'workshop', status: 'planned',
+    presentationProgram: { need: 'water', form: 'works' },
+    lineage: {
+      // A polder pump: a squat masonry drum with a conical cap, drawing water up through a rod
+      // rather than grinding grain. Lower and wider than a windmill, so it never reads as one.
+      earlyModern: {
+        name: 'Polder wind pump', families: ['brick-masonry', 'timber-frame'],
+        width: 0.64, depth: 0.64, storeyHeight: 0.42, floors: [1, 1], openingDensity: 0.06,
+        roof: 'conical', openness: 0.04, annexes: [0, 0],
+        equipment: ['windshaft', 'pump-rod', 'water-trough'],
+      },
+      // The late lattice pump: an open steel tower with no enclosed body, which is what made the
+      // American pump a familiar sight on farms — the rod and rotor are the whole building.
+      industrial: {
+        name: 'Lattice wind pump', families: ['steel-industrial-frame', 'brick-masonry'],
+        width: 0.5, depth: 0.5, storeyHeight: 0.3, floors: [1, 1], openingDensity: 0,
+        roof: 'open-span', openness: 0.7, annexes: [0, 0],
+        equipment: ['windshaft', 'pump-rod', 'water-trough'],
+      },
+    },
+  }),
+
+  'smock-mill': define({
+    id: 'smock-mill', label: 'Smock mill', category: 'Production', role: 'workshop', status: 'planned',
+    presentationProgram: { need: 'food', form: 'store' },
+    lineage: {
+      // A timber smock on a low masonry base: wider and squatter than a tower mill, with the
+      // skirt projecting over a loading apron. The tower mill is tall and narrow; this is not.
+      earlyModern: {
+        name: 'Smock mill', families: ['timber-frame', 'timber-post-and-beam'],
+        width: 0.5, depth: 0.5, storeyHeight: 0.36, floors: [2, 3], openingDensity: 0.05,
+        roof: 'conical', openness: 0, annexes: [0, 0], doorBay: true,
+        equipment: ['millstone', 'windshaft', 'grain-bin', 'loading-platform'],
       },
     },
   }),
@@ -556,6 +716,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   market: define({
     id: 'market', label: 'Market', category: 'Exchange', role: 'market', status: 'active',
     lineage: {
+      neolithic: {
+        name: 'Exchange shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
+        width: 0.9, depth: 0.66, storeyHeight: 0.3, floors: [1, 1], openingDensity: 0,
+        roof: 'shed', openness: 0.8, annexes: [0, 0], equipment: ['market-stall', 'awning', 'counter'],
+      },
       bronzeIron: {
         name: 'Open market ground', families: ['timber-post-and-beam', 'primitive-shelter'],
         width: 1.3, depth: 0.92, storeyHeight: 0.26, floors: [1, 1], openingDensity: 0,
@@ -603,6 +768,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   warehouse: define({
     id: 'warehouse', label: 'Warehouse', category: 'Exchange', role: 'warehouse', status: 'active',
     lineage: {
+      neolithic: {
+        name: 'Carrier store shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
+        width: 0.82, depth: 0.68, storeyHeight: 0.32, floors: [1, 1], openingDensity: 0.04,
+        roof: 'gable', openness: 0.12, annexes: [0, 0], equipment: ['crate-stack'],
+      },
       classical: {
         name: 'Store range', families: ['stone-masonry', 'mud-brick', 'brick-masonry'],
         width: 1.4, depth: 0.92, storeyHeight: 0.46, floors: [1, 2], openingDensity: 0.08,
@@ -634,6 +804,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   'civic-hall': define({
     id: 'civic-hall', label: 'Civic hall', category: 'Civic', role: 'hall', status: 'active',
     lineage: {
+      neolithic: {
+        name: 'Communal meeting shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
+        width: 1.0, depth: 0.76, storeyHeight: 0.34, floors: [1, 1], openingDensity: 0.06,
+        roof: 'gable', openness: 0.36, annexes: [0, 0], equipment: ['hearth'],
+      },
       bronzeIron: {
         name: 'Chief’s hall', families: ['timber-post-and-beam', 'mud-brick', 'log-construction'],
         width: 1.3, depth: 0.9, storeyHeight: 0.5, floors: [1, 1], openingDensity: 0.1,
@@ -645,9 +820,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
         roof: 'pediment', openness: 0.3, annexes: [0, 2], equipment: ['arcade'],
       },
       medieval: {
+        // Hipped, not steep-gable: a guildhall's civic roof reads as a broad public gathering
+        // volume rather than the lancet-steep profile a church needs for its own verticality.
         name: 'Guildhall', families: ['stone-masonry', 'timber-frame', 'mixed-masonry'],
         width: 1.5, depth: 1.04, storeyHeight: 0.58, floors: [2, 3], openingDensity: 0.24,
-        roof: 'steep-gable', openness: 0.14, annexes: [0, 2], equipment: ['hearth', 'chimney', 'arcade'],
+        roof: 'hipped', openness: 0.14, annexes: [0, 2], equipment: ['hearth', 'chimney', 'arcade'],
       },
       earlyModern: {
         name: 'Town hall', families: ['classical-stone', 'mixed-masonry', 'brick-masonry'],
@@ -707,6 +884,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   gatehouse: define({
     id: 'gatehouse', label: 'Gatehouse', category: 'Defence', role: 'gate-tower', status: 'active',
     lineage: {
+      neolithic: {
+        name: 'Watch shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
+        width: 0.62, depth: 0.58, storeyHeight: 0.36, floors: [1, 1], openingDensity: 0.04,
+        roof: 'shed', openness: 0.4, annexes: [0, 0], equipment: ['fence-line'],
+      },
       bronzeIron: {
         name: 'Timber gate tower', families: ['timber-post-and-beam', 'log-construction'],
         width: 0.74, depth: 0.74, storeyHeight: 0.46, floors: [1, 2], openingDensity: 0.06,
@@ -774,6 +956,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   dock: define({
     id: 'dock', label: 'Dock / quay', category: 'Transport', role: 'warehouse', status: 'active',
     lineage: {
+      neolithic: {
+        name: 'Landing store shelter', families: ['primitive-shelter', 'timber-post-and-beam'],
+        width: 0.84, depth: 0.5, storeyHeight: 0.28, floors: [1, 1], openingDensity: 0,
+        roof: 'shed', openness: 0.8, annexes: [0, 0], equipment: ['crate-stack', 'slipway'],
+      },
       bronzeIron: {
         name: 'Timber jetty', families: ['timber-post-and-beam', 'log-construction'],
         width: 1.6, depth: 0.5, storeyHeight: 0.2, floors: [1, 1], openingDensity: 0,
@@ -837,7 +1024,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
 };
 
 export function buildingArchetype(id: BuildingArchetype): BuildingArchetypeDefinition {
-  return ARCHETYPE_LIBRARY[id];
+  return ARCHETYPE_LIBRARY[requireBuildingArchetype(id)];
 }
 
 export function isBuildingArchetype(id: string): id is BuildingArchetype {

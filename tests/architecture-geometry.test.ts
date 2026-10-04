@@ -281,6 +281,24 @@ describe('Structures that are not buildings', () => {
     expect(palisade.spec.materials.wall).not.toBe(curtain.spec.materials.wall);
   });
 
+  it('reads an animal pen as an enclosure rather than a building', () => {
+    const pen = build({ archetype: 'animal-pen', era: 'preIndustrial', material: 'timber', spec: { annexes: 0 } });
+    const barn = build({ archetype: 'barn', era: 'preIndustrial', material: 'timber' });
+    expect(pen.group.userData['dedicatedStructure']).toBe('animal-pen');
+    // A pen stays fence-height even though its footprint is comparable to a farm building's.
+    expect(pen.size.y).toBeLessThan(barn.size.y * 0.6);
+    expect(pen.spec.equipment).toContain('pen-gate');
+  });
+
+  it('gives an animal pen a subordinate shelter, never a dominant one', () => {
+    const sheltered = build({ archetype: 'animal-pen', era: 'preIndustrial', material: 'timber', spec: { annexes: 1 } });
+    const unsheltered = build({ archetype: 'animal-pen', era: 'preIndustrial', material: 'timber', spec: { annexes: 0 } });
+    expect(sheltered.vertices).toBeGreaterThan(unsheltered.vertices);
+    // The shelter must not grow the pen into building-scale height.
+    const barn = build({ archetype: 'barn', era: 'preIndustrial', material: 'timber' });
+    expect(sheltered.size.y).toBeLessThan(barn.size.y * 0.75);
+  });
+
   it('reaches a quay out over the water while keeping its shed', () => {
     const quay = build({ archetype: 'dock', era: 'industrial', material: 'masonry' });
     const inland = build({ archetype: 'warehouse', era: 'industrial', material: 'masonry' });
@@ -305,6 +323,23 @@ describe('Structures that are not buildings', () => {
     expect(mill.vertices).toBeGreaterThan(withoutWheel.vertices);
   });
 
+  it('gives a windmill a sail cross and a narrow tower, not a mill with a different roof', () => {
+    const windmill = build({ archetype: 'windmill', era: 'preIndustrial', material: 'timber' });
+    const watermill = build({ archetype: 'mill', era: 'preIndustrial', material: 'masonry' });
+    expect(windmill.spec.equipment).toContain('windshaft');
+    expect(windmill.spec.equipment).not.toContain('waterwheel');
+    expect(windmill.spec.roof.archetype).toBe('conical');
+    expect(watermill.spec.roof.archetype).not.toBe('conical');
+    // Narrow and roughly square in plan, the opposite of a watermill's wide, low range.
+    expect(Math.abs(windmill.spec.width - windmill.spec.depth)).toBeLessThan(windmill.spec.width * 0.2);
+    expect(watermill.spec.width).toBeGreaterThan(watermill.spec.depth * 1.1);
+    const withoutSails = build({
+      archetype: 'windmill', era: 'preIndustrial', material: 'timber',
+      spec: { equipment: windmill.spec.equipment.filter(item => item !== 'windshaft') },
+    });
+    expect(windmill.vertices).toBeGreaterThan(withoutSails.vertices);
+  });
+
   it('gives a barn its aisle posts, loft and threshing floor', () => {
     const barn = build({ archetype: 'barn', era: 'preIndustrial', material: 'timber' });
     expect(barn.spec.equipment).toContain('hay-loft');
@@ -316,10 +351,20 @@ describe('Structures that are not buildings', () => {
     expect(barn.vertices).toBeGreaterThan(stripped.vertices);
   });
 
+  it('gives a barn a wagon door, not a wide house window', () => {
+    const barn = build({ archetype: 'barn', era: 'preIndustrial', material: 'timber' });
+    const house = build({ archetype: 'house', era: 'preIndustrial', material: 'timber' });
+    // doorBay alone adds a flat x2.2 to opening width, comfortably past ordinary family-to-family
+    // variation, so this margin isolates it even though barn and house may resolve different
+    // structural families.
+    expect(barn.spec.openings.width).toBeGreaterThan(house.spec.openings.width * 1.3);
+    expect(barn.spec.openings.perBay).toBe(1);
+  });
+
   it('keeps every archetype inside a sane draw-call budget', () => {
     const archetypes: BuildingArchetype[] = ['house', 'barn', 'byre', 'stable', 'granary', 'silo',
-      'workshop', 'mill', 'factory', 'market', 'warehouse', 'civic-hall', 'shrine', 'gatehouse',
-      'bridge', 'dock', 'boundary-wall', 'animal-pen'];
+      'workshop', 'mill', 'windmill', 'factory', 'market', 'warehouse', 'civic-hall', 'shrine',
+      'gatehouse', 'bridge', 'dock', 'boundary-wall', 'animal-pen'];
     for (const archetype of archetypes) {
       const built = build({ archetype, era: 'industrial', material: 'ceramic' });
       expect(built.meshes, `${archetype} draw calls`).toBeLessThanOrEqual(14);
@@ -327,14 +372,92 @@ describe('Structures that are not buildings', () => {
     }
   });
 
-  it('gives all eighteen archetypes distinct built geometry', () => {
+  it('gives all nineteen archetypes distinct built geometry', () => {
     const archetypes: BuildingArchetype[] = ['house', 'barn', 'byre', 'stable', 'granary', 'silo',
-      'workshop', 'mill', 'factory', 'market', 'warehouse', 'civic-hall', 'shrine', 'gatehouse',
-      'bridge', 'dock', 'boundary-wall', 'animal-pen'];
+      'workshop', 'mill', 'windmill', 'factory', 'market', 'warehouse', 'civic-hall', 'shrine',
+      'gatehouse', 'bridge', 'dock', 'boundary-wall', 'animal-pen'];
     const signatures = archetypes.map(archetype => {
       const built = build({ archetype, era: 'industrial', material: 'ceramic' });
       return `${built.vertices}:${built.size.x.toFixed(2)}:${built.size.y.toFixed(2)}:${built.size.z.toFixed(2)}`;
     });
     expect(new Set(signatures).size).toBe(archetypes.length);
   });
+});
+
+// ---------------------------------------------------------------------------- confusable pairs
+
+/**
+ * The structural dimensions that must tell two archetypes apart.
+ *
+ * A vertex-count-and-bounding-box signature (above) proves two archetypes are not byte-identical,
+ * but two timber gables of slightly different width would already pass that. This is the stronger
+ * claim the task actually cares about: for each pair of archetypes a viewer could plausibly
+ * confuse, at least a few of these *independent* structural axes must differ — never size or
+ * material alone.
+ */
+interface SilhouetteProfile {
+  archetype: BuildingArchetype;
+  /** Footprint against overall height, not against depth — a tower and a long shed can share a
+   * width/depth ratio while standing nothing alike. */
+  aspectBucket: 'narrow-tall' | 'square' | 'wide-low';
+  roof: string;
+  crown: string;
+  geometry: 'generic' | 'dedicated';
+  opennessBucket: 'closed' | 'partial' | 'open';
+  equipmentFamily: Set<string>;
+}
+
+function silhouetteProfile(archetype: BuildingArchetype, era: Era, material: StructureMaterial): SilhouetteProfile {
+  const built = build({ archetype, era, material });
+  const overallHeight = built.spec.storeyHeight * built.spec.floors;
+  const ratio = built.spec.width / Math.max(0.01, overallHeight);
+  return {
+    archetype,
+    aspectBucket: ratio < 1 ? 'narrow-tall' : ratio > 2.2 ? 'wide-low' : 'square',
+    roof: built.spec.roof.archetype,
+    crown: String(built.group.userData['grammarCrown'] ?? 'none'),
+    geometry: built.group.userData['dedicatedStructure'] ? 'dedicated' : 'generic',
+    opennessBucket: built.spec.openness < 0.12 ? 'closed' : built.spec.openness < 0.5 ? 'partial' : 'open',
+    equipmentFamily: new Set(built.spec.equipment),
+  };
+}
+
+/** How many of the independent structural axes differ between two profiles. */
+function distinguishingAxes(a: SilhouetteProfile, b: SilhouetteProfile): number {
+  let axes = 0;
+  if (a.aspectBucket !== b.aspectBucket) axes += 1;
+  if (a.roof !== b.roof) axes += 1;
+  if (a.crown !== b.crown) axes += 1;
+  if (a.geometry !== b.geometry) axes += 1;
+  if (a.opennessBucket !== b.opennessBucket) axes += 1;
+  // Equipment families differ if either carries something the other lacks.
+  const symmetricDifference = [...a.equipmentFamily].some(item => !b.equipmentFamily.has(item))
+    || [...b.equipmentFamily].some(item => !a.equipmentFamily.has(item));
+  if (symmetricDifference) axes += 1;
+  return axes;
+}
+
+describe('Previously-confusable archetypes stay apart', () => {
+  // (archetype, archetype, minimum distinguishing axes, era, material) — the era/material pair is
+  // chosen per pair so both sides resolve a real stage, not an off-era fallback.
+  const PAIRS: readonly [BuildingArchetype, BuildingArchetype, number, Era, StructureMaterial][] = [
+    ['barn', 'byre', 2, 'preIndustrial', 'timber'],
+    ['byre', 'stable', 2, 'preIndustrial', 'timber'],
+    ['barn', 'stable', 2, 'preIndustrial', 'timber'],
+    ['mill', 'windmill', 3, 'preIndustrial', 'masonry'],
+    ['mill', 'workshop', 2, 'industrial', 'metal'],
+    ['civic-hall', 'shrine', 2, 'preIndustrial', 'masonry'],
+    ['silo', 'granary', 2, 'industrial', 'ceramic'],
+    ['animal-pen', 'barn', 3, 'preIndustrial', 'timber'],
+  ];
+
+  for (const [first, second, minimumAxes, era, material] of PAIRS) {
+    it(`distinguishes ${first} from ${second} on at least ${minimumAxes} structural axes`, () => {
+      const a = silhouetteProfile(first, era, material);
+      const b = silhouetteProfile(second, era, material);
+      const serialize = (p: SilhouetteProfile) => ({ ...p, equipmentFamily: [...p.equipmentFamily] });
+      expect(distinguishingAxes(a, b), JSON.stringify({ a: serialize(a), b: serialize(b) }))
+        .toBeGreaterThanOrEqual(minimumAxes);
+    });
+  }
 });
