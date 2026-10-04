@@ -36,12 +36,16 @@ export type SurfaceKey =
   | 'glow'
   | 'forge'
   | 'garden'
-  | 'ground';
+  | 'ground'
+  /** Open water in a millrace, pond or trough. */
+  | 'water'
+  /** Undyed working cloth: sailcloth, sacking, a canvas awning. */
+  | 'canvas';
 
 /** Every architectural surface, in a stable order. */
 export const SURFACE_KEYS: readonly SurfaceKey[] = [
   'hide', 'thatch', 'daub', 'plaster', 'stone', 'brick', 'panel', 'timber', 'metal', 'motif',
-  'roof-thatch', 'roof-tile', 'roof-metal', 'cloth', 'shadow', 'glow', 'forge', 'garden', 'ground',
+  'roof-thatch', 'roof-tile', 'roof-metal', 'cloth', 'shadow', 'glow', 'forge', 'garden', 'ground', 'water', 'canvas',
 ] as const;
 
 /**
@@ -196,6 +200,9 @@ export class MaterialPalette {
     // Tended planting: infirmary herb beds, temple offerings, courtyard greenery.
     this.createMaterial('garden', blend(0x5f7a3f, secondary, 0.1), 0.97, 0);
     this.createMaterial('ground', blend(MOSAIC.stone, accent, 0.16), 0.94, 0);
+    // Working surfaces that belong to the job, not the culture: river water and undyed canvas.
+    this.createMaterial('water', new THREE.Color(0x4f7480), 0.18, 0.1);
+    this.createMaterial('canvas', new THREE.Color(0xd9ccad), 0.9, 0);
 
     // Roof families: thatch early, deep blue-grey tile once the culture fires clay,
     // and a lighter alloy shell for industrial/advanced canopies.

@@ -192,9 +192,9 @@ export function structureClassOf(id: ArchitecturalMaterialId): StructureMaterial
  * project and then stay put, which is what makes this stable enough to key a cached mesh on
  * while still distinguishing a mostly-brick building from a mostly-timber one.
  */
-export function materialBillSignature(project: DevelopmentProject | undefined): string {
+export function materialBillSignature(project: DevelopmentProject | undefined, response?: DevelopmentResponse): string {
   const spent = (project as (DevelopmentProject & { materialSpent?: Partial<Record<MaterialKind, number>> }) | undefined)?.materialSpent;
-  const bill = spent ?? project?.response.materialCost;
+  const bill = spent ?? response?.materialCost ?? project?.response.materialCost;
   if (!bill) return '';
 
   const entries: [string, number][] = [];

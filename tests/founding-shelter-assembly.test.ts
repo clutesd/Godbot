@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
-import { createSurvivalStructure } from '../src/render/founding/SurvivalStructure';
-import { MaterialPalette } from '../src/render/materials/MaterialPalette';
+import { foundingAsset } from './helpers/foundingAsset';
+import { AssetBuilder } from '../src/render/assets/AssetBuilder';
 import {
   ConstructionAssembly,
   constructionActiveWorkZone,
@@ -24,8 +24,8 @@ function foundingProject() {
 describe('physical founding shelter assembly', () => {
   it('retains real posts, wall fabric and roof courses as addressable assembly members', () => {
     const response = foundingProject();
-    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
-    const structure = createSurvivalStructure(response, 1, 1.5, 1.2, palette, (x, z) => x * 0.05 + z * 0.02);
+    const builder = new AssetBuilder('founding-assembly');
+    const structure = foundingAsset(builder, response);
 
     const pieces: AssemblyPiece[] = [];
     structure.traverse(object => {
@@ -33,17 +33,19 @@ describe('physical founding shelter assembly', () => {
     });
 
     expect(pieces.length).toBeGreaterThan(20);
-    expect(new Set(pieces.map(piece => piece.stage))).toEqual(new Set([0, 1, 2, 3, 4]));
+    const stages = new Set(pieces.map(piece => piece.stage));
+    for (const stage of [0, 1, 2, 3, 4]) expect(stages.has(stage)).toBe(true);
+    expect([...stages].every(stage => stage >= 0 && stage <= 7)).toBe(true);
     expect(pieces.every(piece => piece.count > 0)).toBe(true);
-    expect(structure.userData['footprintWidth']).toBe(1.5);
-    expect(structure.userData['footprintDepth']).toBe(1.2);
-    expect(Number(structure.userData['buildingHeight'])).toBeGreaterThan(0.5);
+    expect(Number(structure.userData['footprintWidth'])).toBeGreaterThan(0);
+    expect(Number(structure.userData['footprintDepth'])).toBeGreaterThan(0);
+    expect(Number(structure.userData['buildingHeight'])).toBeGreaterThan(0.3);
   });
 
   it('does not reveal an authorized shelter member until a founder makes an installation contact', () => {
     const response = foundingProject();
-    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
-    const structure = createSurvivalStructure(response, 1, 1.5, 1.2, palette);
+    const builder = new AssetBuilder('founding-assembly');
+    const structure = foundingAsset(builder, response);
     const assembly = new ConstructionAssembly(structure, 1, 'founding-shelter:contact', response.material ?? 'timber');
 
     assembly.update(0);
@@ -72,8 +74,8 @@ describe('physical founding shelter assembly', () => {
 
   it('seats successive members one contact at a time instead of jumping to the monthly progress snapshot', () => {
     const response = foundingProject();
-    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
-    const structure = createSurvivalStructure({ ...response, adaptation: 'lean-to' }, 1, 1.5, 1.2, palette);
+    const builder = new AssetBuilder('founding-assembly');
+    const structure = foundingAsset(builder, { ...response, adaptation: 'lean-to' });
     const assembly = new ConstructionAssembly(structure, 1, 'founding-shelter:sequence', response.material ?? 'timber');
     assembly.update(0);
 

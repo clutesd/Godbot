@@ -166,9 +166,49 @@ describe('Archetype routing', () => {
       const routed = archetypeForContext({ ...base, capabilities: ['animal-husbandry'], seed: `plot-${plot}` });
       seen.set(routed, (seen.get(routed) ?? 0) + 1);
     }
-    expect(new Set(seen.keys())).toEqual(new Set(['barn', 'byre', 'stable']));
+    expect(new Set(seen.keys())).toEqual(new Set(['barn', 'byre', 'stable', 'animal-pen']));
     expect(seen.get('barn')!).toBeGreaterThan(seen.get('byre')!);
     expect(seen.get('barn')!).toBeGreaterThan(seen.get('stable')!);
+    expect(seen.get('barn')!).toBeGreaterThan(seen.get('animal-pen')!);
+  });
+
+  it('reaches an open pen even before husbandry has a byre or a stable to show', () => {
+    // animal-pen is the only one of the four livestock buildings whose lineage starts in the
+    // neolithic, so it is the one way a pre-bronzeIron farm can show anything but a plain barn.
+    const base = {
+      role: 'granary' as const, period: 'neolithic' as const, need: 'food' as SettlementNeed,
+      form: 'field' as StructureForm, level: 1, capabilities: ['animal-husbandry'],
+    };
+    const seen = new Set<string>();
+    for (let plot = 0; plot < 100; plot += 1) {
+      seen.add(archetypeForContext({ ...base, seed: `plot-${plot}` }));
+    }
+    expect(seen).toEqual(new Set(['barn', 'byre', 'animal-pen']));
+  });
+
+  it('only shows a windmill on dry ground, in the period it actually existed', () => {
+    const dry = {
+      role: 'workshop' as const, need: 'energy' as SettlementNeed, form: 'workshop' as StructureForm,
+      level: 2, capabilities: [], waterfront: false,
+    };
+    // A watermill needs flowing water: waterfront always keeps 'mill', every period.
+    for (const period of ['classical', 'medieval', 'earlyModern', 'industrial'] as const) {
+      for (let plot = 0; plot < 8; plot += 1) {
+        expect(archetypeForContext({ ...dry, period, waterfront: true, seed: `plot-${plot}` })).toBe('mill');
+      }
+    }
+    // On dry ground, medieval and earlyModern show a genuine mix of both.
+    const seen = new Set<string>();
+    for (let plot = 0; plot < 40; plot += 1) {
+      seen.add(archetypeForContext({ ...dry, period: 'medieval', seed: `dry-${plot}` }));
+    }
+    expect(seen).toEqual(new Set(['mill', 'windmill']));
+    // Classical pre-dates the windmill's own lineage, and industrial-and-later moves past it, so
+    // dry ground stays a watermill at both ends even without a waterfront.
+    for (let plot = 0; plot < 8; plot += 1) {
+      expect(archetypeForContext({ ...dry, period: 'classical', seed: `plot-${plot}` })).toBe('mill');
+      expect(archetypeForContext({ ...dry, period: 'industrial', seed: `plot-${plot}` })).toBe('mill');
+    }
   });
 
   it('is deterministic for identical authoritative state', () => {
@@ -219,7 +259,7 @@ describe('Archetype routing', () => {
       expect(decision.archetype, `${entry.role} in neolithic`).toBe(entry.expected);
       expect(decision.archetype).not.toBe('house');
       // Routing reports the mismatch rather than hiding it behind a different building.
-      expect(decision.beforeLineage, `${entry.expected} should be flagged early in neolithic`).toBe(true);
+      expect(decision.beforeLineage, `${entry.expected} lineage availability in neolithic`).toBe(entry.expected === 'factory');
     }
   });
 
@@ -281,11 +321,11 @@ describe('Production archetype routing through AssetBuilder', () => {
     // owning subsystems request explicitly. All twelve through one AssetBuilder call path.
     const built: { label: string; expected: BuildingArchetype; mesh: THREE.Object3D }[] = [
       { label: 'house', expected: 'house', mesh: productionAsset({ builder, response: response('housing', 'dwelling', 1, 'timber') }) },
-      { label: 'barn', expected: 'barn', mesh: productionAsset({ builder, response: response('food', 'field', 2, 'timber'), seed: 'farm-barn', specialization: 'agriculture' }) },
+      { label: 'barn', expected: 'barn', mesh: productionAsset({ builder, response: response('food', 'field', 2, 'timber'), seed: 'farm-barn-2', specialization: 'agriculture' }) },
       { label: 'granary', expected: 'granary', mesh: productionAsset({ builder, response: response('food', 'store', 2) }) },
       { label: 'silo', expected: 'silo', mesh: productionAsset({ builder, response: response('food', 'store', 3, 'metal'), era: 'industrial' }) },
       { label: 'workshop', expected: 'workshop', mesh: productionAsset({ builder, response: response('manufacturing', 'workshop', 2, 'ceramic') }) },
-      { label: 'mill', expected: 'mill', mesh: productionAsset({ builder, response: response('energy', 'workshop', 2, 'masonry') }) },
+      { label: 'mill', expected: 'mill', mesh: productionAsset({ builder, response: response('energy', 'workshop', 2, 'masonry'), waterfront: true }) },
       { label: 'factory', expected: 'factory', mesh: productionAsset({ builder, response: response('manufacturing', 'works', 3, 'metal'), era: 'industrial' }) },
       { label: 'shrine', expected: 'shrine', mesh: productionAsset({ builder, response: response('religion', 'sanctuary', 2) }) },
       { label: 'dock', expected: 'dock', mesh: productionAsset({ builder, response: response('transport', 'store', 2), waterfront: true, seed: 'quay' }) },
@@ -321,7 +361,7 @@ describe('Production archetype routing through AssetBuilder', () => {
     const store = productionAsset({ builder, response: response('food', 'store', 2, 'timber'), seed: 'same-seed' });
     // Both are role 'granary' on the same seed. Before routing read need and form, they were one
     // cached mesh. The farm building may be a barn, byre or stable; the store is always a granary.
-    expect(['barn', 'byre', 'stable']).toContain(archetypeOf(farmstead));
+    expect(['barn', 'byre', 'stable', 'animal-pen']).toContain(archetypeOf(farmstead));
     expect(archetypeOf(store)).toBe('granary');
     expect(archetypeOf(farmstead)).not.toBe(archetypeOf(store));
     expect(farmstead).not.toBe(store);

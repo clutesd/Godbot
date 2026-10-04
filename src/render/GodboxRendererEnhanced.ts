@@ -1,3 +1,6 @@
+import { productionBuildingShell } from './assets/ProductionBuildingShell';
+import type { AssetBuilder } from './assets/AssetBuilder';
+import type { Culture } from '../sim/types';
 import * as THREE from 'three';
 import { GodboxRenderer } from './GodboxRenderer';
 import { transportRibbon } from './transport/TransportGeometry';
@@ -49,6 +52,8 @@ interface SettlementVisualLike {
 }
 
 interface RendererInternals {
+  assetBuilder: AssetBuilder;
+  dominantCulture: (settlement: Settlement) => Culture | undefined;
   state: SimulationState;
   terrainQueries: TerrainQueries;
   terrainSurface: TerrainSurface;
@@ -157,9 +162,11 @@ function enhancedAddRoutePortals(
   layout: SettlementLayoutPlan,
   era: Era,
   palette: MaterialPalette,
+  cultureStyle?: Culture['style'],
 ): void {
   const self = this as unknown as RendererInternals;
   const rank = eraRank(era);
+  const style = cultureStyle ?? self.dominantCulture(settlement)?.style ?? { primary: '#72503b', secondary: '#35405c', accent: '#d8ad4f', symbol: 'sun-step', pattern: 'chevron', nameSyllables: ['ka'] };
   const settlementY = self.elevationAt(settlement.position.x, settlement.position.z);
   const activeRouteCount = self.state.tradeRoutes.filter(route => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
   const harbourActivity = Math.min(1, activeRouteCount / 4 + settlement.infrastructure.ports * 0.45);
@@ -200,6 +207,7 @@ function enhancedAddRoutePortals(
         identity: `${settlement.id}:${portal.routeId}`,
         activity: harbourActivity,
         materials: dockMaterials,
+        buildingShell: productionBuildingShell(self.assetBuilder, { seed: `${settlement.id}:harbour:${portal.routeId}`, culture: style, era, archetype: 'warehouse', variant: 'warehouse#7' }, 0.8, 0.64, 'harbour-shelter'),
         groundAt: (x, z) => self.elevationAt(settlement.position.x + x, settlement.position.z + z) - settlementY,
       });
       dockDetail.userData['routeId'] = portal.routeId;
@@ -235,21 +243,10 @@ function enhancedAddRoutePortals(
     if (portal.kind === 'station') {
       const station = new THREE.Group();
       station.name = 'transport-station';
-      const platform = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.12, 0.62), palette.getSurfaceMaterial('ground'));
-      platform.receiveShadow = true;
-      const roofMaterial = palette.getSurfaceMaterial(rank >= 4 ? 'roof-metal' : 'roof-tile');
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.09, 0.54), roofMaterial);
-      roof.position.y = 0.72;
-      roof.castShadow = true;
-      station.add(platform, roof);
-      for (const sideX of [-0.58, 0.58]) {
-        for (const sideZ of [-0.18, 0.18]) {
-          const post = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.66, 0.04), rank >= 4 ? palette.getSurfaceMaterial('metal') : palette.getSurfaceMaterial('timber'));
-          post.position.set(sideX, 0.36, sideZ);
-          post.castShadow = true;
-          station.add(post);
-        }
-      }
+      station.add(productionBuildingShell(self.assetBuilder, {
+        seed: `${settlement.id}:station:${portal.routeId}`, culture: style, era,
+        archetype: 'warehouse', variant: 'warehouse#7',
+      }, 1.72, 0.62, 'Station carrier shelter'));
       const bench = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.1, 0.18), palette.getSurfaceMaterial('timber'));
       bench.position.set(0, 0.22, -0.14);
       bench.castShadow = true;

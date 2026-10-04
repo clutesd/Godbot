@@ -252,7 +252,8 @@ export function buildStructureComponentManifest(
   const wallHeight = grammar.wallHeight * grammar.storeys;
   const wallTop = wallBottom + wallHeight;
   const roofHeight = Math.max(0.08, metrics.height - wallTop);
-  const coreKind: StructureComponentKind = development?.form === 'tower' || grammar.role === 'gate-tower' ? 'tower' : 'core';
+  const tower = grammar.spec ? grammar.spec.form === 'tower' || grammar.spec.archetype === 'gatehouse' : development?.form === 'tower' || grammar.role === 'gate-tower';
+  const coreKind: StructureComponentKind = tower ? 'tower' : 'core';
 
   // Open productive / gathering sites still have architectural generations: the ground belongs
   // to the founding fabric while rebuilt fixtures and later market canopies can belong to newer layers.

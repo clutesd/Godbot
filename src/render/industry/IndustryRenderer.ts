@@ -1,3 +1,8 @@
+import { facilityTierSpec } from '../../sim/processing/FacilityCatalog';
+import { AssetBuilder, type AssetConfig } from '../assets/AssetBuilder';
+import { productionBuildingShell, productionConstructionTarget } from '../assets/ProductionBuildingShell';
+import { developmentPresentationEra } from '../assets/BuildingGrammar';
+import { ConstructionAssembly } from '../construction/ConstructionAssembly';
 import * as THREE from 'three';
 import { facilityVisual, facilityVisualSignature, type FacilityPile, type FacilityVisual, type PileKind } from './FacilityPresentation';
 import type { FacilityStatus } from '../../sim/processing/types';
@@ -18,6 +23,8 @@ interface Plume { group: THREE.Group; intensity: number; puffs: THREE.Mesh[]; he
 
 interface Entry {
   signature: string;
+  buildingConfig: AssetConfig;
+  targets: THREE.Group[];
   root: THREE.Group;
   visual: FacilityVisual;
   motions: Motion[];
@@ -69,7 +76,17 @@ export class IndustryRenderer {
   private readonly smoke = new THREE.MeshBasicMaterial({ color: '#4a4741', transparent: true, opacity: 0.3, depthWrite: false });
   private readonly steam = new THREE.MeshBasicMaterial({ color: '#e7e9e4', transparent: true, opacity: 0.24, depthWrite: false });
 
-  constructor() { this.group.name = 'Processing facilities'; }
+  private readonly assets: AssetBuilder;
+  private readonly ownsAssets: boolean;
+
+  constructor(assets?: AssetBuilder) {
+    this.assets = assets ?? new AssetBuilder('industry-buildings'); this.ownsAssets = !assets;
+    this.group.name = 'Processing facilities';
+  }
+
+  private shell(entry: Entry, parent: THREE.Object3D, name: string, width: number, depth: number, archetype = entry.buildingConfig.archetype): void {
+    parent.add(productionBuildingShell(this.assets, { ...entry.buildingConfig, archetype, seed: `${entry.visual.id}:${name}` }, width, depth, name));
+  }
 
   private material(colour: string, roughness = 0.9, metalness = 0): THREE.MeshStandardMaterial {
     const key = `${colour}:${roughness}:${metalness}`;
@@ -101,14 +118,29 @@ export class IndustryRenderer {
     for (const settlement of state.settlements) {
       if (!settlement.alive) continue;
       for (const facility of settlement.processing?.facilities ?? []) {
-        const visual = facilityVisual(state, settlement, facility);
-        if (!visual) continue;
+        const current = facilityVisual(state, settlement, facility);
+        if (!current) continue;
+        const targetTier = facility.upgrade?.toTier ?? facility.tier;
+        const tier = facilityTierSpec(facility.family, targetTier)!;
+        const future = facility.upgrade ? facilityVisual(state, settlement, { ...facility,
+          tier: targetTier, kind: tier.kind, progress: 1, upgrade: undefined }) : current;
+        const visual = { ...future!, stage: current.stage, build: current.build };
+
         seen.add(visual.id);
         const signature = facilityVisualSignature(visual);
         const existing = this.entries.get(visual.id);
         if (existing?.signature === signature) continue;
         if (existing) this.discard(existing);
-        this.entries.set(visual.id, this.build(visual, signature, height));
+        const plot = settlement.structurePlots?.find(p => p.id === facility.plotId);
+        const development = plot?.development ? { ...plot.development, form: tier.form, material: tier.material, level: Math.min(3, targetTier) } : undefined;
+        const style = development?.style ?? state.cultures.find(c => c.id === Object.entries(settlement.cultureShares).sort((a, b) => b[1] - a[1])[0]?.[0])?.style
+          ?? { primary: '#72503b', secondary: '#35405c', accent: '#d8ad4f', symbol: 'sun-step' as const, pattern: 'chevron' as const, nameSyllables: ['ka'] };
+        this.entries.set(visual.id, this.build(visual, signature, height, {
+          seed: facility.id, culture: style, development,
+          era: development ? developmentPresentationEra(development) : visual.tier >= 3 ? 'industrial' : 'village',
+          archetype: visual.tier >= 3 ? 'factory' : 'workshop', variant: 'workshop#7',
+          settlementIdentity: settlement.architecture, prosperity: settlement.prosperity,
+        }));
       }
     }
     for (const [id, entry] of this.entries) if (!seen.has(id)) { this.discard(entry); this.entries.delete(id); }
@@ -117,7 +149,13 @@ export class IndustryRenderer {
 
   private discard(entry: Entry): void {
     this.group.remove(entry.root);
-    entry.root.traverse(object => { if (object instanceof THREE.Mesh && object.userData['ownedMaterial']) (object.material as THREE.Material).dispose(); });
+    entry.root.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      if (object.userData['ownedMaterial']) (object.material as THREE.Material).dispose();
+      if (object.userData['constructionCue'] === 'future-building-fabric' || object.name === 'Member being seated') object.geometry.dispose();
+    });
+    for (const target of entry.targets) target.traverse(node => { if (node instanceof THREE.Mesh) node.geometry.dispose(); });
+    for (const glow of entry.glows) glow.material.dispose();
   }
 
   /** Test/diagnostic access to what is currently drawn. */
@@ -161,18 +199,17 @@ export class IndustryRenderer {
   // Construction of one facility
   // -------------------------------------------------------------------------------------------
 
-  private build(v: FacilityVisual, signature: string, height: (x: number, z: number) => number): Entry {
+  private build(v: FacilityVisual, signature: string, height: (x: number, z: number) => number, buildingConfig: AssetConfig): Entry {
     const root = new THREE.Group();
     root.name = `Facility ${v.kind}:${v.id}`;
     root.position.set(v.position.x, height(v.position.x, v.position.z), v.position.z);
     root.rotation.y = v.yaw;
     this.group.add(root);
-    const entry: Entry = { signature, root, visual: v, motions: [], plumes: [], glows: [] };
+    const entry: Entry = { signature, buildingConfig, targets: [], root, visual: v, motions: [], plumes: [], glows: [] };
     const hw = v.width / 2, hd = v.depth / 2;
 
     this.pads(root, v, hw, hd);
-    if (v.stage === 'construction') this.worksite(entry, hw, hd);
-    else {
+    {
       this.yards(entry, hw, hd);
       if (v.stage !== 'ruined') {
         if (v.family === 'wood') this.woodCore(entry, hw, hd);
@@ -181,7 +218,17 @@ export class IndustryRenderer {
         this.utilities(entry, hw, hd);
         this.loading(entry, hw, hd);
       }
-      if (v.stage === 'upgrading') this.conversionSite(entry, hw, hd);
+      if (v.stage === 'construction' || v.stage === 'upgrading') {
+        const target = new THREE.Group();
+        for (const child of [...root.children]) target.add(child);
+        const future = productionConstructionTarget(target);
+        entry.targets.push(future);
+        const assembly = new ConstructionAssembly(future, 1, v.id, buildingConfig.development?.material ?? 'timber');
+        assembly.update(v.build);
+        root.add(assembly.group);
+        if (v.stage === 'construction') this.worksite(entry, hw, hd);
+        else this.scaffold(entry, hw, hd, 0.8 + v.build * 0.9, 'Conversion scaffold');
+      }
       if (v.stage === 'ruined') this.rubble(entry, hw, hd);
       if (v.damage > 0.25 && v.stage !== 'ruined') this.damage(entry, hw, hd);
       if (v.monthsSinceUpgrade !== undefined && v.monthsSinceUpgrade < 24 && v.stage === 'operating') this.freshWork(entry, hw, hd);
@@ -285,8 +332,7 @@ export class IndustryRenderer {
         this.plume(entry, x + hw * 0.3, 1.95, -hd - 0.5, v.steam, 1.4, 0.3, 'steam');
       }
       const shed = this.named(root, 'Lumber shed', hw + 1.0, 0, 0);
-      for (const x of [-0.5, 0.5]) for (const z of [-0.6, 0.6]) this.post(shed, x, 0.55, z, 0.04, 1.1, '#6b4a2f', 'Shed post');
-      this.slab(shed, 0, 1.12, 0, 1.3, 0.05, 1.5, '#5b5a55', 'Shed roof', 0.7, 0.3);
+      this.shell(entry, shed, 'Lumber storage shell', 1.3, 1.5, 'warehouse');
     }
   }
 
@@ -349,7 +395,7 @@ export class IndustryRenderer {
       entry.glows.push({ material: mouth, level: v.heat, flicker: true });
       entry.motions.push({ object: converter, kind: 'oscillate', axis: 'z', rate: 0.7, amount: 0.5, base: 0, needsActivity: true });
       const mill = this.named(root, 'Rolling mill', 0, 0, front + 0.2);
-      this.slab(mill, 0, 0.32, 0, 2.6, 0.64, 0.9, '#6a7379', 'Rolling shed', 0.6, 0.4);
+      this.shell(entry, mill, 'Rolling shed', 2.6, 0.9);
       for (let i = 0; i < 4; i++) {
         const roller = this.add(mill, this.cylinder, this.material('#c2c8cc', 0.3, 0.9), [-0.9 + i * 0.6, 0.68, 0], [0.09, 0.8, 0.09], 'Mill roller', [Math.PI / 2, 0, 0]);
         entry.motions.push({ object: roller, kind: 'spin', axis: 'x', rate: 6, amount: 0, base: 0, needsActivity: true });
@@ -457,7 +503,6 @@ export class IndustryRenderer {
   private worksite(entry: Entry, hw: number, hd: number): void {
     const v = entry.visual;
     const height = 0.3 + v.build * (v.family === 'metallurgy' ? 1.1 : 0.85);
-    this.slab(entry.root, 0, height / 2, 0, hw * 1.8, height, hd * 1.8, v.family === 'metallurgy' ? '#8f8577' : '#b09468', 'Works under construction', 0.95);
     this.scaffold(entry, hw, hd, Math.max(0.5, height + 0.4), 'Construction scaffold');
     this.pile(entry.root, { material: 'timber', kind: v.family === 'metallurgy' ? 'ore' : 'log', fill: 0.4 }, -hw - 0.95, 0, 0.9, 0.8, 3);
     this.pile(entry.root, { material: 'stone', kind: 'generic', fill: 0.3 }, hw + 0.95, 0.2, 0.9, 0.8, 4);
@@ -466,12 +511,6 @@ export class IndustryRenderer {
       this.slab(entry.root, hw + 0.45, 0.07, hd + 0.5, 0.5, 0.14, 0.34, '#6b5a42', 'Site tool chest', 0.9);
       this.add(entry.root, this.cylinder, this.material('#8a7a5e', 1), [hw + 0.95, 0.12, hd + 0.5], [0.16, 0.24, 0.16], 'Mortar tub');
     }
-  }
-
-  private conversionSite(entry: Entry, hw: number, hd: number): void {
-    const v = entry.visual;
-    this.scaffold(entry, hw, hd, 0.8 + v.build * 0.9, 'Conversion scaffold');
-    this.slab(entry.root, hw + 0.4 + v.build * 0.3, 0.2 + v.build * 0.4, 0, 0.7 * (0.3 + v.build), 0.4 + v.build * 0.8, hd * 1.4, '#c4b085', 'New works extension', 0.95);
   }
 
   private freshWork(entry: Entry, hw: number, hd: number): void {
@@ -504,5 +543,6 @@ export class IndustryRenderer {
     for (const material of this.materials.values()) material.dispose();
     for (const geometry of [this.box, this.cylinder, this.cone, this.sphere, this.dome, this.torus]) geometry.dispose();
     this.smoke.dispose(); this.steam.dispose();
+    if (this.ownsAssets) this.assets.dispose();
   }
 }

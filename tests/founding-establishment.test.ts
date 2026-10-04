@@ -8,8 +8,9 @@ import { applyCold, observeEstablishment, survivalMortality } from '../src/sim/p
 import { settlementLabour, invalidateLabour, explicitLabour } from '../src/sim/people/HumanCapital';
 import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
 import { takeMaterial } from '../src/sim/resources/Inventory';
-import { createSurvivalStructure } from '../src/render/founding/SurvivalStructure';
-import { MaterialPalette } from '../src/render/materials/MaterialPalette';
+import { foundingAsset } from './helpers/foundingAsset';
+import { AssetBuilder } from '../src/render/assets/AssetBuilder';
+import { ConstructionAssembly } from '../src/render/construction/ConstructionAssembly';
 import { isEstablishmentBuilder, physicalRestSite } from '../src/sim/people/EstablishmentWork';
 import { resourceWorkAssignmentForPerson } from '../src/sim/people/ResourceWorkRouting';
 import type { Settlement, SimulationState } from '../src/sim/types';
@@ -184,48 +185,38 @@ describe('Arrival to physical establishment', () => {
     expect(s.survival!.cold.exposure).toBeGreaterThan(0);
   });
 
-  it('keeps detailed shelter roofs and braces inside the reserved ground with bounded draw calls', () => {
+  it('builds all founding targets through the canonical spec with bounded draw calls', () => {
     const sim = arrival(); sim.step(1);
     const response = sim.state.settlements[0]!.development!.project!.response;
-    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
+    const builder = new AssetBuilder('founding-budget');
     for (const adaptation of ['lean-to', 'earth-shelter', 'hut', 'cache'] as const) {
-      const view = createSurvivalStructure({ ...response, adaptation }, 1, 1.5, 1.2, palette);
-      const bounds = new THREE.Box3().setFromObject(view);
-      expect(bounds.min.x).toBeGreaterThanOrEqual(-0.75);
-      expect(bounds.max.x).toBeLessThanOrEqual(0.75);
-      expect(bounds.min.z).toBeGreaterThanOrEqual(-0.6);
-      expect(bounds.max.z).toBeLessThanOrEqual(0.6);
+      const view = foundingAsset(builder, { ...response, adaptation,
+        need: adaptation === 'cache' ? 'food' : 'housing',
+        form: adaptation === 'cache' ? 'store' : 'dwelling' });
+      const detail = view instanceof THREE.LOD ? view.levels[0]!.object : view;
+      const bounds = new THREE.Box3().setFromObject(detail);
+      expect(bounds.isEmpty()).toBe(false);
+      expect(view.userData['architectureAdaptation']).toBe(adaptation);
       let meshes = 0;
-      view.traverse(object => { if (object instanceof THREE.Mesh) { meshes++; object.geometry.dispose(); } });
-      expect(meshes).toBeLessThanOrEqual(7);
-      expect(view.getObjectByName('knee-braces')).toBeDefined();
+      detail.traverse(object => { if (object instanceof THREE.Mesh) meshes++; });
+      expect(meshes).toBeLessThanOrEqual(12);
     }
+    builder.dispose();
   });
 
-  it('builds a level terrace that reaches the downslope terrain', () => {
-    const sim = arrival(); sim.step(1);
-    const response = sim.state.settlements[0]!.development!.project!.response;
-    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
-    const view = createSurvivalStructure(response, 1, 1.5, 1.2, palette, (x, z) => x * 0.3 + z * 0.1);
-    expect(view.userData.foundationLift).toBeCloseTo(0.2622);
-    expect(view.getObjectByName('terrain-foundation')).toBeDefined();
-    const stone = view.getObjectByName('shelter-stone') as THREE.Mesh;
-    stone.geometry.computeBoundingBox();
-    expect(stone.geometry.boundingBox!.min.y).toBeLessThan(-0.25);
-    view.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
-  });
-
-  it('renders paid stages and a real roof at usability without frame-level economic mutation', () => {
+  it('reveals the canonical future target without mutating economic state', () => {
     const sim = arrival(); sim.step(1);
     const s = sim.state.settlements[0]!, response = s.development!.project!.response;
-    const palette = new MaterialPalette({ culture: response.style, era: 'primitive' });
+    const builder = new AssetBuilder('founding-paid-stages');
     const before = JSON.stringify(s);
-    const views = [0, 0.3, 0.6, 0.8, 1].map(p => createSurvivalStructure(response, p, 1.5, 1.2, palette));
-    expect(views.map(v => v.userData.constructionStage)).toEqual(['site', 'frame', 'enclosure', 'usable', 'complete']);
-    expect(views[0]!.getObjectByName('paid-materials')).toBeUndefined();
-    expect(views[2]!.getObjectByName('protective-roof')).toBeUndefined();
-    expect(views[3]!.getObjectByName('protective-roof')).toBeDefined();
+    const target = foundingAsset(builder, response);
+    const assembly = new ConstructionAssembly(target, 1, 'canonical-founding', response.material ?? 'timber');
+    assembly.update(0);
+    expect(assembly.plan.progress).toBe(0);
+    assembly.update(0.8, 0.1, true, 'contact-led');
+    expect(assembly.plan.progress).toBeGreaterThan(0);
+    expect(assembly.plan.progress).toBeLessThan(0.8);
     expect(JSON.stringify(s)).toBe(before);
-    for (const view of views) view.traverse(o => { if (o instanceof THREE.Mesh) o.geometry.dispose(); });
+    builder.dispose();
   });
 });

@@ -218,8 +218,10 @@ const EQUIPMENT_PROPS: Partial<Record<FunctionalEquipment, YardProps>> = {
   'machine-tool': 'workshop',
   conveyor: 'workshop',
   'gantry-crane': 'workshop',
+  'saw-carriage': 'workshop',
   transformer: 'utility',
   pipework: 'utility',
+  'pump-rod': 'utility',
   forge: 'foundry',
   kiln: 'foundry',
   battlement: 'defensive',
@@ -294,6 +296,10 @@ function frontageForSpec(spec: BuildingSpec): FrontageStyle {
     case 'dock': return 'loading-dock';
     case 'workshop':
     case 'mill':
+    case 'windmill':
+    case 'hand-mill':
+    case 'smock-mill':
+    case 'sawmill':
     case 'factory': return 'work-yard';
     case 'gatehouse': return 'guard-screen';
     case 'civic-hall': return spec.purpose === 'healthcare' ? 'ward-pavilion' : 'portico';
@@ -330,7 +336,12 @@ function propsForSpec(spec: BuildingSpec): YardProps {
     case 'dock': return 'storage';
     case 'market': return 'market';
     case 'workshop':
-    case 'mill': return 'workshop';
+    case 'mill':
+    case 'windmill':
+    case 'hand-mill':
+    case 'smock-mill':
+    case 'sawmill':
+    case 'wind-pump': return 'workshop';
     case 'factory':
       return spec.purpose === 'energy' || spec.purpose === 'water' ? 'utility'
         : spec.equipment.includes('forge') || spec.equipment.includes('kiln') ? 'foundry' : 'workshop';

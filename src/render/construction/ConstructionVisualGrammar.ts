@@ -1,3 +1,4 @@
+import type { BuildingSpec } from '../architecture/BuildingSpec';
 import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
 import type { Settlement } from '../../sim/types';
 import type { Era } from '../materials/MaterialPalette';
@@ -144,9 +145,12 @@ export function constructionScaffoldSurface(
   era: Era,
   role: BuildingRole,
   material?: StructureMaterial,
+  spec?: BuildingSpec,
 ): 'timber' | 'metal' {
   if (era === 'advanced') return 'metal';
   if (era !== 'industrial') return 'timber';
+  if (spec) return ['steel-industrial-frame', 'reinforced-concrete', 'curtain-wall-frame'].includes(spec.family) ? 'metal' : 'timber';
+  // Compatibility fixtures and non-building memorial access only. Production shells supply spec.
   if (material === 'metal') return 'metal';
   return ['factory', 'foundry', 'warehouse', 'research', 'energy', 'gate-tower'].includes(role)
     ? 'metal'

@@ -1,3 +1,5 @@
+import { AssetBuilder } from '../assets/AssetBuilder';
+import { productionBuildingShell } from '../assets/ProductionBuildingShell';
 import * as THREE from 'three';
 import type { TransportSegment } from '../../sim/transport/types';
 
@@ -12,6 +14,7 @@ export interface DockStructureMaterials {
 }
 
 export interface DockStructureOptions {
+  buildingShell?: THREE.Object3D;
   bank: THREE.Vector3;
   water: THREE.Vector3;
   eraRank: number;
@@ -23,6 +26,8 @@ export interface DockStructureOptions {
   /** Terrain height in the same local Y frame as bank/water. */
   groundAt: (x: number, z: number) => number;
 }
+
+const fixtureAssets = new AssetBuilder('transport-fixture-shells');
 
 function stableUnit(value: string): number {
   let hash = 2166136261;
@@ -249,24 +254,13 @@ export function createDockStructure(options: DockStructureOptions): THREE.Group 
 
   // Modest roofed shelter at the shore end: nets and ledgers early, harbour office later.
   if (rank >= 3) {
-    const shelter = new THREE.Group();
+    const shelter = options.buildingShell ?? productionBuildingShell(fixtureAssets, {
+      seed: identity, era: rank >= 4 ? 'industrial' : 'village', archetype: 'warehouse', variant: 'warehouse#7',
+      culture: { primary: '#72503b', secondary: '#35405c', accent: '#d8ad4f', symbol: 'sun-step', pattern: 'chevron', nameSyllables: ['ka'] },
+    }, 0.8, 0.64, 'harbour-shelter');
     shelter.name = 'harbour-shelter';
-    const centerX = bank.x + dirX * 0.18 + perpX * deckWidth * 0.95 * protectedSide;
-    const centerZ = bank.z + dirZ * 0.18 + perpZ * deckWidth * 0.95 * protectedSide;
-    for (const side of [-1, 1]) {
-      const px = centerX + dirX * 0.34 * side;
-      const pz = centerZ + dirZ * 0.34 * side;
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.72, 0.045), materials.timber);
-      post.position.set(px, bank.y + 0.36, pz);
-      post.castShadow = true;
-      shelter.add(post);
-    }
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.05, 0.64), materials.cloth);
-    roof.position.set(centerX, bank.y + 0.76, centerZ);
-    roof.rotation.y = yaw;
-    roof.rotation.z = protectedSide * 0.05;
-    roof.castShadow = true;
-    shelter.add(roof);
+    shelter.position.set(bank.x + dirX * 0.18 + perpX * deckWidth * 0.95 * protectedSide, bank.y, bank.z + dirZ * 0.18 + perpZ * deckWidth * 0.95 * protectedSide);
+    shelter.rotation.y = yaw;
     group.add(shelter);
   }
 

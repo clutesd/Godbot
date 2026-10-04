@@ -26,13 +26,31 @@ import type { ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
 import { specSurfaceMaterials } from '../architecture/SpecGrammarBridge';
 import { emitSpecGeometry } from '../architecture/StructureGeometry';
 import { composeDedicated, composeMemorial, emitQuayWorks, hasDedicatedComposition, measuredHeight } from '../architecture/DedicatedStructures';
+import type { RotorSpec } from '../architecture/MillMotion';
 
 // The construction lifecycle lives in BuildStages so the geometry modules this file calls can
 // reference stages without importing the composer back. Re-exported for existing callers.
 export { BUILD_STAGE, BUILD_STAGE_ORDER, stageFromName, type BuildStage } from './BuildStages';
 
+/**
+ * A part that turns about its own pivot: a sail cross, a waterwheel, a pump crank.
+ *
+ * Rotors are kept out of the batched surface meshes so they can be animated without rebuilding
+ * any geometry. Their builder is offset by the negated pivot, which means emitters keep writing in
+ * the structure's own frame and the resulting mesh is local to the pivot.
+ */
+interface RotorEntry {
+  name: string;
+  pivot: Vec3;
+  stage: number;
+  spec: RotorSpec;
+  /** One builder per surface, so a sail can be timber and canvas and still move as one part. */
+  builders: Map<SurfaceKey, GeometryBuilder>;
+}
+
 class BuildingCanvas {
   private readonly surfaces = new Map<string, { surface: SurfaceKey; stage: number; builder: GeometryBuilder }>();
+  private readonly rotors: RotorEntry[] = [];
 
   constructor(
     private readonly stage: number,
@@ -86,6 +104,33 @@ class BuildingCanvas {
     builder?.setWeathering(this.wear, this.tone);
   }
 
+  /**
+   * A builder for a part that turns about `pivot` on `axis`.
+   *
+   * Emitters keep writing in the structure's local frame; the builder is offset by `-pivot` so the
+   * built mesh is pivot-local and its group can be rotated about the hub without touching anything
+   * else. Each call makes a new rotor, so a part is only ever animated as one unit.
+   */
+  rotor(name: string, pivot: Vec3, surface: SurfaceKey, stage: number, spec: RotorSpec): GeometryBuilder | undefined {
+    if (stage > this.stage) return undefined;
+    // A second call with the same name adds a surface to the same moving part.
+    let entry = this.rotors.find(candidate => candidate.name === name);
+    if (!entry) {
+      entry = { name, pivot, stage, spec, builders: new Map() };
+      this.rotors.push(entry);
+    }
+    let builder = entry.builders.get(surface);
+    if (!builder) {
+      builder = new GeometryBuilder();
+      // The group sits at the pivot in plot space, so the vertices carry everything else: the plot
+      // origin, minus the pivot the group already supplies.
+      builder.setOrigin(this.originX - entry.pivot.x, -entry.pivot.y, this.originZ - entry.pivot.z);
+      builder.setWeathering(this.wear, this.tone);
+      entry.builders.set(surface, builder);
+    }
+    return builder;
+  }
+
   build(palette: MaterialPalette): THREE.Group {
     const group = new THREE.Group();
     // Batches are keyed by the *resolved material*, not by the semantic surface. Two surfaces
@@ -127,6 +172,46 @@ class BuildingCanvas {
       mesh.name = architectural ?? surface;
       mesh.userData['batchKey'] = key;
       group.add(mesh);
+    }
+    // Moving parts: each rotor is its own pivoted group, so the motion system turns a transform,
+    // never a geometry. Built after the batches so the static draw-call count is unchanged.
+    const holders = new Map<string, THREE.Group>();
+    for (const rotor of this.rotors) {
+      const holder = new THREE.Group();
+      holder.name = rotor.name;
+      holder.position.set(rotor.pivot.x, rotor.pivot.y, rotor.pivot.z);
+      for (const [surface, builder] of rotor.builders) {
+        if (builder.isEmpty) continue;
+        const geometry = builder.build();
+        for (const piece of geometry.userData['assemblyPieces'] as AssemblyPiece[]) piece.stage = rotor.stage;
+        if (!geometry.hasAttribute('aSurfaceDetail')) geometry.setAttribute('aSurfaceDetail',
+          new THREE.Int8BufferAttribute(new Int8Array(geometry.getAttribute('position').count * 4), 4, true));
+        const architectural = this.materials?.get(surface);
+        const material = architectural
+          ? palette.getArchitecturalMaterial(architectural)
+          : palette.getSurfaceMaterial(surface);
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = architectural ?? surface;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        holder.add(mesh);
+      }
+      const { parent: _parent, ...info } = rotor.spec;
+      holder.userData['millRotor'] = { ...info, pivot: { ...rotor.pivot } };
+      holders.set(rotor.name, holder);
+    }
+    // Nest after every holder exists. A nested part sits at its pivot relative to its parent's,
+    // which is exactly where it was emitted while both were at rest.
+    for (const rotor of this.rotors) {
+      const holder = holders.get(rotor.name)!;
+      const parent = rotor.spec.parent ? this.rotors.find(candidate => candidate.name === rotor.spec.parent) : undefined;
+      const parentHolder = parent ? holders.get(parent.name) : undefined;
+      if (parent && parentHolder) {
+        holder.position.set(rotor.pivot.x - parent.pivot.x, rotor.pivot.y - parent.pivot.y, rotor.pivot.z - parent.pivot.z);
+        parentHolder.add(holder);
+      } else {
+        group.add(holder);
+      }
     }
     return group;
   }
@@ -434,6 +519,8 @@ function publishArchitecture(group: THREE.Group, grammar: BuildingGrammar): void
   group.userData['grammarVents'] = grammar.vents;
   const spec = grammar.spec;
   if (!spec) return;
+  // Published for production inspection; downstream geometry continues to consume grammar.spec.
+  group.userData['buildingSpec'] = spec;
   group.userData['architectureArchetype'] = spec.archetype;
   group.userData['architecturePeriod'] = spec.period;
   group.userData['structuralFamily'] = spec.family;
@@ -495,7 +582,7 @@ function emitStructure(
   // side of it, and what work happens inside.
   if (grammar.spec) {
     const scaled = { ...grammar.spec, width: grammar.width, depth: grammar.depth, bays: grammar.bays };
-    emitSpecGeometry(canvas, scaled, plinthTop, wallTop, seed);
+    emitSpecGeometry(canvas, scaled, plinthTop, wallTop, seed, roofTop);
     // A quay is part shed and part waterworks: the shell stays, the quay is added to it.
     if (grammar.spec.archetype === 'dock') emitQuayWorks(canvas, scaled, plinthTop, seed);
   }
@@ -580,6 +667,7 @@ export function composeBuilding(
     const group = canvas.build(palette);
     publishArchitecture(group, grammar);
     group.userData['dedicatedStructure'] = grammar.spec.archetype;
+    if ('subtype' in dedicated) group.userData['millSubtype'] = dedicated.subtype;
     group.userData['bodyWidth'] = grammar.width;
     group.userData['bodyDepth'] = grammar.depth;
     group.userData['floorHeight'] = grammar.plinthHeight;
@@ -658,7 +746,7 @@ export function composeBuilding(
   group.userData['doorWidth'] = doorWidthFor(grammar);
   group.userData['wallTop'] = wallTop;
   group.userData['vernacularFabric'] = (rank <= 1 || grammar.development?.level === 1)
-    && ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);
+    && (grammar.spec ? grammar.spec.archetype === 'house' : ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role));
   const bounds = new THREE.Box3().setFromObject(group);
   // Measured as reach from the origin, not raw span: forecourts and gateways sit on one side
   // only, and the reserved placement footprint is a circle centred on the origin.
@@ -720,7 +808,8 @@ function emitGroundworks(
   }
 
   const overhang = -grammar.plinthInset;
-  const steps = grammar.role === 'shrine' || grammar.role === 'hall' ? 2 : 1;
+  const ceremonial = grammar.spec ? ['shrine', 'civic-hall'].includes(grammar.spec.archetype) : grammar.role === 'shrine' || grammar.role === 'hall';
+  const steps = ceremonial ? 2 : 1;
   for (let step = 0; step < steps; step += 1) {
     const inset = (steps - 1 - step) * 0.06;
     const height = grammar.plinthHeight / steps;
@@ -905,7 +994,7 @@ function emitVernacularFabric(
   postSurface: SurfaceKey,
 ): void {
   const lowTier = eraRank(grammar.era) <= 1 || grammar.development?.level === 1;
-  const domestic = ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);
+  const domestic = grammar.spec ? grammar.spec.archetype === 'house' : ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role);
   if (!lowTier || !domestic) return;
 
   const timber = canvas.at(postSurface, BUILD_STAGE.FRAME);
