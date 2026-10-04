@@ -196,7 +196,8 @@ class BuildingCanvas {
         mesh.receiveShadow = true;
         holder.add(mesh);
       }
-      const { parent: _parent, ...info } = rotor.spec;
+      const info = { ...rotor.spec };
+      delete info.parent;
       holder.userData['millRotor'] = { ...info, pivot: { ...rotor.pivot } };
       holders.set(rotor.name, holder);
     }

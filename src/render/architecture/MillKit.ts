@@ -315,7 +315,7 @@ export class MillKit {
       }
       if (style === 'common') {
         // Canvas spread on the trailing side of the lattice, just behind it.
-        cloth && this.sheet(cloth, [at(inner + 0.2, 0.12, -0.12), at(radius * 0.97, 0.12, -0.12), at(radius * 0.97, width * 0.96, -0.12), at(inner + 0.2, width * 0.96, -0.12)]);
+        if (cloth) this.sheet(cloth, [at(inner + 0.2, 0.12, -0.12), at(radius * 0.97, 0.12, -0.12), at(radius * 0.97, width * 0.96, -0.12), at(inner + 0.2, width * 0.96, -0.12)]);
       } else {
         // Shutters: a row of pivoted boards per bay, each canted open a little.
         for (let index = 0; index < bays; index += 1) {
