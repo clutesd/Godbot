@@ -111,7 +111,8 @@ const CAPABILITY_PERIOD_FLOOR: Record<string, ArchitecturalPeriod> = {
   'mechanical-power': 'earlyModern',
   'standardized-parts': 'industrial',
   thermodynamics: 'industrial',
-  'rotary-machinery': 'industrial',
+  // Shafts and gears predate steam and mass production; this is presentation evidence only.
+  'rotary-machinery': 'medieval',
   'industrial-chemistry': 'industrial',
   'rail-transport': 'industrial',
   'precision-manufacturing': 'modern',

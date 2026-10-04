@@ -32,6 +32,8 @@ import type { SurfaceKey } from '../materials/MaterialPalette';
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
 export interface AssetConfig {
+  /** Authoritative generator, when this building belongs to an energy plant. */
+  energyKind?: import('../../sim/energy/types').GeneratorKind;
   development?: DevelopmentResponse;
   seed: string;
   culture: CultureStyle;
@@ -428,6 +430,7 @@ export class AssetBuilder {
     const context = config.grammarContext;
     return resolveBuildingSpec({
       archetype: config.archetype,
+      energyKind: config.energyKind,
       role,
       era: config.era,
       seed: config.seed,
@@ -887,7 +890,7 @@ export class AssetBuilder {
     const specBucket = type === 'building'
       ? `:a${ctx?.temperature !== undefined ? Math.round(ctx.temperature * 8) : ''}.${ctx?.moisture !== undefined ? Math.round(ctx.moisture * 8) : ''}.${ctx?.biome ?? ''}`
         + `.${config.prosperity !== undefined ? Math.round(config.prosperity * 4) : ''}.${config.specialization ?? ''}`
-        + `.${config.waterfront ? 'w' : ''}.${config.archetype ?? ''}`
+        + `.${config.waterfront ? 'w' : ''}.${config.archetype ?? ''}.${config.energyKind ?? ''}`
         + `.${materialBillSignature(config.project, d)}.${[...(d?.capabilities ?? [])].sort().join(',')}`
       : '';
     return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.adaptation ?? '', d.temporary ? 1 : 0, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}${specBucket}`;

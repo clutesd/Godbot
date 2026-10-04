@@ -32,6 +32,7 @@ import { ARCHETYPE_LIBRARY, BUILDING_ARCHETYPES, archetypeStageFor } from './Bui
 export type SettlementSpecialization = 'agriculture' | 'forestry' | 'mining' | 'craft' | 'exchange';
 
 export interface ArchetypeRoutingContext {
+  energyKind?: import('../../sim/energy/types').GeneratorKind;
   /** The renderer role, which stays authoritative for placement and LOD. */
   role: BuildingRole;
   period: ArchitecturalPeriod;
@@ -120,21 +121,6 @@ function farmBuilding(context: ArchetypeRoutingContext): BuildingArchetype {
   return periodRank(context.period) >= periodRank('bronzeIron') ? 'stable' : 'byre';
 }
 
-/**
- * The mill a non-waterfront power building shows: a watermill needs flowing water, so a windmill
- * is deterministic presentation variation on dry ground, seeded per plot and never a gameplay
- * decision — exactly `farmBuilding`'s pattern. Windmill's own lineage only runs medieval through
- * earlyModern (steam supersedes it), so classical and industrial-and-later stay watermills.
- */
-function powerBuilding(context: ArchetypeRoutingContext): BuildingArchetype {
-  if (context.waterfront) return 'mill';
-  if (periodRank(context.period) < periodRank('medieval') || periodRank(context.period) > periodRank('earlyModern')) {
-    return 'mill';
-  }
-  const random = new SeededRandom(`${context.seed ?? 'plot'}:power-building`);
-  return random.float() < 0.5 ? 'mill' : 'windmill';
-}
-
 /** Where a routing decision came from. Published so a wrong building is diagnosable, not a mystery. */
 export type RoutingSource =
   /** The authoritative development response pinned the answer down. */
@@ -166,7 +152,8 @@ export interface RoutingDecision {
  * the spec resolver, which handles it by presenting the archetype's earliest stage.
  */
 export function routeArchetype(context: ArchetypeRoutingContext): RoutingDecision {
-  const chosen = routeByResponse(context);
+  const chosen = context.energyKind === 'waterwheel' ? 'mill'
+    : context.energyKind === 'windmill' ? 'windmill' : routeByResponse(context);
   const archetype = chosen ?? archetypeForRole(context.role);
   return {
     archetype,
@@ -216,10 +203,8 @@ function routeByResponse(context: ArchetypeRoutingContext): BuildingArchetype | 
       return form === 'works' ? 'factory' : 'workshop';
 
     case 'energy':
-      // The development system's own names are the clue: a 'fuel yard' and a 'power workshop'
-      // are mills, and only the level-three 'generation station' is a works.
-      return form === 'works' ? 'factory'
-        : periodRank(context.period) >= periodRank('classical') ? powerBuilding(context) : 'workshop';
+      // A fuel yard does not establish a prime mover. EnergyPlant owns that choice.
+      return form === 'works' ? 'factory' : 'workshop';
 
     case 'water':
       // A sanitation works is industrial plant; a cistern and wash court is a store building.

@@ -250,6 +250,11 @@ function sweepRouting(): SweepResult {
     }
   }
 
+  // Prime movers are selected by EnergySystem, not inferred from a fuel-yard response.
+  for (const energyKind of ['waterwheel', 'windmill'] as const) {
+    const decision = routeArchetype({ role: 'workshop', period: 'medieval', energyKind });
+    record({ role: 'workshop', need: 'energy', form: 'workshop', waterfrontOnly: energyKind === 'waterwheel' }, decision.archetype);
+  }
   return { routes, roleDivergences };
 }
 

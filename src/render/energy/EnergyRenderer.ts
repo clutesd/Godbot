@@ -1,3 +1,4 @@
+import type { MillRotorInfo } from '../architecture/MillMotion';
 import { AssetBuilder, type AssetConfig } from '../assets/AssetBuilder';
 import { productionBuildingShell, productionConstructionTarget } from '../assets/ProductionBuildingShell';
 import { developmentPresentationEra } from '../assets/BuildingGrammar';
@@ -10,6 +11,8 @@ import { hydraulicRotationY, planHydraulicVisualSite, type HydraulicVisualSite }
 
 interface EnergyMachineVisual {
   plant: EnergyPlant;
+  parts?: { object: THREE.Object3D; info: MillRotorInfo; base: THREE.Vector3 }[];
+  angle?: number;
   rotor?: THREE.Group;
   rotorAxis?: 'z' | 'y';
   piston?: THREE.Mesh;
@@ -37,6 +40,7 @@ export class EnergyRenderer {
     parent.add(shell);
   }
   private signature = '';
+  private lastElapsed?: number;
   private machines: EnergyMachineVisual[] = [];
   private equipmentMaterials: THREE.Material[] = [];
   private terminals = new Map<string, number>();
@@ -111,9 +115,18 @@ export class EnergyRenderer {
       this.rebuild(state, height);
     }
 
+    const delta = Math.max(0, elapsed - (this.lastElapsed ?? elapsed));
+    this.lastElapsed = elapsed;
     for (const machine of this.machines) {
       const running = machine.plant.status === 'running';
       const factor = machine.plant.output / generatorDefinition(machine.plant.kind).capacity;
+      machine.angle = (machine.angle ?? 0) + delta * Math.min(3, factor * 6) * Number(running);
+      for (const { object, info, base } of machine.parts ?? []) {
+        const angle = machine.angle * (info.ratio ?? 1) + (info.phase ?? 0);
+        if (info.motion === 'yaw') continue;
+        if (info.motion === 'reciprocate') object.position[info.axis] = base[info.axis] + Math.sin(angle) * (info.stroke ?? 0);
+        else object.rotation[info.axis] = angle;
+      }
       if (machine.rotor) {
         const rotation = elapsed * Math.min(3, factor * 6) * Number(running);
         if (machine.rotorAxis === 'y') machine.rotor.rotation.y = rotation;
@@ -165,7 +178,7 @@ export class EnergyRenderer {
         this.buildingConfig = {
           seed: `${settlement.id}:energy:${plant.id}`, culture: plot.development.style,
           era: developmentPresentationEra(plot.development), development: plot.development,
-          archetype: plant.kind === 'waterwheel' || plant.kind === 'windmill' ? 'mill' : 'factory', variant: 'energy#7',
+          energyKind: plant.kind, archetype: 'factory', variant: 'energy#7',
           settlementIdentity: settlement.architecture, prosperity: settlement.prosperity,
         };
         const root = new THREE.Group();
@@ -204,9 +217,11 @@ export class EnergyRenderer {
         if (plant.kind === 'animal') {
           this.drawAnimalPower(root, machine);
         } else if (plant.kind === 'waterwheel') {
-          this.drawWatermill(root, machine, hydraulic);
-        } else if (plant.kind === 'wind' || plant.kind === 'windmill') {
-          this.drawRotaryPrimitive(root, machine, plant.kind);
+          this.drawCanonicalMill(root, machine, 'Riverside watermill');
+        } else if (plant.kind === 'windmill') {
+          this.drawCanonicalMill(root, machine, 'Windmill');
+        } else if (plant.kind === 'wind') {
+          this.drawRotaryPrimitive(root, machine);
         } else if (plant.kind === 'solar') {
           this.drawSolar(root);
         } else if (plant.kind === 'hydro') {
@@ -242,22 +257,28 @@ export class EnergyRenderer {
     for (const line of state.energy?.lines ?? []) if (!line.retired) this.drawLine(line, height);
   }
 
-  private drawRotaryPrimitive(root: THREE.Group, machine: EnergyMachineVisual, kind: 'wind' | 'windmill'): void {
-    const tall = kind === 'wind' ? 4.2 : 2.5;
-    if (kind === 'windmill') this.building(root, 'windmill tower', 1, 1);
-    // The rotor shaft is machinery; an enclosed windmill base is canonical architecture.
-    this.cylinder(root, 0, tall / 2, 0, 0.07, 0.12, tall,
-      kind === 'wind' ? this.concrete : this.wood, kind === 'wind' ? 'wind tower' : 'windmill rotor shaft');
-    const rotor = this.namedGroup(root, `${kind} rotor`);
+  private drawCanonicalMill(root: THREE.Group, machine: EnergyMachineVisual, name: string): void {
+    if (!this.buildingConfig) throw new Error('Mill requires plant context');
+    const mill = productionBuildingShell(this.assets, this.buildingConfig, 1.8, 1.6, name);
+    root.add(mill);
+    machine.parts = [];
+    mill.traverse(object => {
+      const info = object.userData['millRotor'] as MillRotorInfo | undefined;
+      if (info) machine.parts!.push({ object, info, base: object.position.clone() });
+    });
+  }
+
+  private drawRotaryPrimitive(root: THREE.Group, machine: EnergyMachineVisual): void {
+    const tall = 4.2;
+    this.cylinder(root, 0, tall / 2, 0, 0.07, 0.12, tall, this.concrete, 'wind tower');
+    const rotor = this.namedGroup(root, 'wind rotor');
     rotor.position.set(0, tall, 0.25);
     machine.rotor = rotor;
-    const blades = kind === 'wind' ? 3 : 4;
-    const radius = kind === 'wind' ? 1.25 : 0.95;
-    for (let i = 0; i < blades; i++) {
+    for (let i = 0; i < 3; i++) {
       const arm = new THREE.Group();
-      arm.rotation.z = i * Math.PI * 2 / blades;
+      arm.rotation.z = i * Math.PI * 2 / 3;
       rotor.add(arm);
-      this.box(arm, 0, radius * 0.5, 0, 0.1, radius, 0.08, kind === 'wind' ? this.concrete : this.wood);
+      this.box(arm, 0, 1.25 * 0.5, 0, 0.1, 1.25, 0.08, this.concrete);
     }
   }
 
@@ -304,50 +325,6 @@ export class EnergyRenderer {
     pulley.position.set(0.32, 0.3, -0.58);
     pulley.rotation.y = Math.PI / 2;
     drive.add(pulley);
-  }
-
-  private drawWatermill(root: THREE.Group, machine: EnergyMachineVisual, site?: HydraulicVisualSite): void {
-    const mill = this.namedGroup(root, 'Riverside watermill');
-    const bankSide = site?.bankSide ?? 1;
-    this.building(mill, 'Watermill house', 0.9, 0.82, 0.48 * bankSide, 0.15);
-
-    const wheel = this.namedGroup(mill, 'Waterwheel assembly');
-    const radius = 0.62;
-    const localWaterY = site
-      ? (site.waterY - root.position.y) / Math.max(0.001, root.scale.y)
-      : 0.18;
-    // Keep the lower paddles in the real river surface instead of pinning the wheel to bank grade.
-    const wheelCenterY = localWaterY + radius * 0.34;
-    wheel.position.set(-0.5 * bankSide, wheelCenterY, 0.12);
-    for (let ringIndex = 0; ringIndex < 2; ringIndex++) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.055, 6, 24), this.wood);
-      ring.name = 'Waterwheel rim';
-      ring.position.z = (ringIndex - 0.5) * 0.18;
-      wheel.add(ring);
-    }
-    for (let i = 0; i < 12; i++) {
-      const paddle = new THREE.Group();
-      paddle.rotation.z = i * Math.PI * 2 / 12;
-      wheel.add(paddle);
-      this.box(paddle, 0, radius * 0.48, 0, 0.24, radius * 0.92, 0.24, this.wood, 'Waterwheel paddle');
-    }
-    const axle = this.cylinder(wheel, 0, 0, 0, 0.07, 0.07, 0.48, this.darkMetal, 'Waterwheel axle');
-    axle.rotation.x = Math.PI / 2;
-    machine.rotor = wheel;
-
-    const race = this.namedGroup(mill, 'Watermill millrace');
-    this.box(race, -0.72 * bankSide, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank A');
-    this.box(race, -0.3 * bankSide, 0.18, -0.68, 0.12, 0.24, 1.35, this.concrete, 'Millrace bank B');
-    this.box(race, -0.51 * bankSide, 0.03, -0.68, 0.34, 0.06, 1.35, this.darkMetal, 'Millrace channel bed');
-    const sluice = this.namedGroup(mill, 'Watermill sluice gate');
-    this.box(sluice, -0.51 * bankSide, 0.34, -1.25, 0.44, 0.5, 0.07, this.wood, 'Watermill sluice board');
-    for (const x of [-0.71, -0.31]) this.box(sluice, x * bankSide, 0.46, -1.25, 0.05, 0.82, 0.05, this.wood, 'Watermill sluice post');
-
-    const gears = this.namedGroup(mill, 'Watermill gearing');
-    const gear = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.055, 6, 16), this.darkMetal);
-    gear.name = 'Watermill gear wheel';
-    gear.position.set(0.34 * bankSide, 0.44, 0.45);
-    gears.add(gear);
   }
 
   private drawHydro(root: THREE.Group, site?: HydraulicVisualSite): void {

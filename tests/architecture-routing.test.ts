@@ -70,6 +70,7 @@ function response(need: SettlementNeed, form: StructureForm, level: number, mate
  */
 function productionAsset(options: {
   builder: AssetBuilder;
+  energyKind?: import('../src/sim/energy/types').GeneratorKind;
   response?: DevelopmentResponse;
   era?: Era;
   seed?: string;
@@ -82,6 +83,7 @@ function productionAsset(options: {
   const role = options.role ?? (development ? developmentBuildingRole(development) : 'house');
   const era = options.era ?? (development ? developmentPresentationEra(development) : 'village');
   return options.builder.getAsset('building', {
+    energyKind: options.energyKind,
     seed: options.seed ?? `route:${role}:${development?.name ?? 'ambient'}`,
     culture: CULTURE,
     era,
@@ -122,7 +124,7 @@ describe('Archetype routing', () => {
       { need: 'transport', form: 'store', level: 2, expected: 'warehouse' },
       { need: 'manufacturing', form: 'workshop', level: 2, expected: 'workshop' },
       { need: 'manufacturing', form: 'works', level: 3, expected: 'factory' },
-      { need: 'energy', form: 'workshop', level: 2, expected: 'mill' },
+      { need: 'energy', form: 'workshop', level: 2, expected: 'workshop' },
       { need: 'energy', form: 'works', level: 3, expected: 'factory' },
       { need: 'government', form: 'hall', level: 2, expected: 'civic-hall' },
       { need: 'knowledge', form: 'hall', level: 2, expected: 'civic-hall' },
@@ -186,28 +188,14 @@ describe('Archetype routing', () => {
     expect(seen).toEqual(new Set(['barn', 'byre', 'animal-pen']));
   });
 
-  it('only shows a windmill on dry ground, in the period it actually existed', () => {
-    const dry = {
-      role: 'workshop' as const, need: 'energy' as SettlementNeed, form: 'workshop' as StructureForm,
-      level: 2, capabilities: [], waterfront: false,
-    };
-    // A watermill needs flowing water: waterfront always keeps 'mill', every period.
+  it('uses plant kind, never a seed or shoreline, to choose a prime mover', () => {
     for (const period of ['classical', 'medieval', 'earlyModern', 'industrial'] as const) {
-      for (let plot = 0; plot < 8; plot += 1) {
-        expect(archetypeForContext({ ...dry, period, waterfront: true, seed: `plot-${plot}` })).toBe('mill');
+      for (const waterfront of [false, true]) {
+        const context = { role: 'workshop' as const, need: 'energy' as const, form: 'workshop' as const, period, waterfront };
+        expect(archetypeForContext(context)).toBe('workshop');
+        expect(archetypeForContext({ ...context, energyKind: 'waterwheel' })).toBe('mill');
+        expect(archetypeForContext({ ...context, energyKind: 'windmill' })).toBe('windmill');
       }
-    }
-    // On dry ground, medieval and earlyModern show a genuine mix of both.
-    const seen = new Set<string>();
-    for (let plot = 0; plot < 40; plot += 1) {
-      seen.add(archetypeForContext({ ...dry, period: 'medieval', seed: `dry-${plot}` }));
-    }
-    expect(seen).toEqual(new Set(['mill', 'windmill']));
-    // Classical pre-dates the windmill's own lineage, and industrial-and-later moves past it, so
-    // dry ground stays a watermill at both ends even without a waterfront.
-    for (let plot = 0; plot < 8; plot += 1) {
-      expect(archetypeForContext({ ...dry, period: 'classical', seed: `plot-${plot}` })).toBe('mill');
-      expect(archetypeForContext({ ...dry, period: 'industrial', seed: `plot-${plot}` })).toBe('mill');
     }
   });
 
@@ -325,7 +313,7 @@ describe('Production archetype routing through AssetBuilder', () => {
       { label: 'granary', expected: 'granary', mesh: productionAsset({ builder, response: response('food', 'store', 2) }) },
       { label: 'silo', expected: 'silo', mesh: productionAsset({ builder, response: response('food', 'store', 3, 'metal'), era: 'industrial' }) },
       { label: 'workshop', expected: 'workshop', mesh: productionAsset({ builder, response: response('manufacturing', 'workshop', 2, 'ceramic') }) },
-      { label: 'mill', expected: 'mill', mesh: productionAsset({ builder, response: response('energy', 'workshop', 2, 'masonry'), waterfront: true }) },
+      { label: 'mill', expected: 'mill', mesh: productionAsset({ builder, response: response('energy', 'workshop', 2, 'masonry'), waterfront: true, energyKind: 'waterwheel' }) },
       { label: 'factory', expected: 'factory', mesh: productionAsset({ builder, response: response('manufacturing', 'works', 3, 'metal'), era: 'industrial' }) },
       { label: 'shrine', expected: 'shrine', mesh: productionAsset({ builder, response: response('religion', 'sanctuary', 2) }) },
       { label: 'dock', expected: 'dock', mesh: productionAsset({ builder, response: response('transport', 'store', 2), waterfront: true, seed: 'quay' }) },

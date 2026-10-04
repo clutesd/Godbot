@@ -302,6 +302,7 @@ export interface SpecCultureInput {
 }
 
 export interface BuildingSpecContext {
+  energyKind?: import('../../sim/energy/types').GeneratorKind;
   /** Explicit archetype. When absent it is derived from the role and period. */
   archetype?: BuildingArchetype;
   role: BuildingRole;
@@ -757,6 +758,9 @@ function pickArchetype(
   context: BuildingSpecContext,
   period: ArchitecturalPeriod,
 ): { archetype: BuildingArchetype; routing: RoutingSource | 'explicit' } {
+  if (context.energyKind === 'waterwheel' || context.energyKind === 'windmill') {
+    return { archetype: routeArchetype({ role: context.role, period, energyKind: context.energyKind }).archetype, routing: 'explicit' };
+  }
   if (context.archetype) return { archetype: context.archetype, routing: 'explicit' };
   const development = context.development;
   const decision = routeArchetype({
@@ -782,11 +786,14 @@ function pickArchetype(
 export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec {
   const development = context.development;
   const capabilities = development?.capabilities ?? [];
-  const eraPeriod = architecturalPeriod({
+  let eraPeriod = architecturalPeriod({
     era: context.era,
     developmentLevel: development?.level,
     capabilities,
   });
+
+  // A surviving waterwheel does not turn into a steam-powered mill when its town modernizes.
+  if (context.energyKind === 'waterwheel' && periodRank(eraPeriod) > periodRank('earlyModern')) eraPeriod = 'earlyModern';
 
   const { archetype: archetypeId, routing } = pickArchetype(context, eraPeriod);
   const archetypeDefinition = buildingArchetype(archetypeId);

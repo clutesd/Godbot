@@ -114,6 +114,23 @@ export function environmentFactor(
   return 1;
 }
 
+/** Long-run resource for investment, distinct from this month's dispatch weather.
+ * WeatherSystem draws ordinary wind uniformly from 0.12..0.32. Integrate that
+ * existing climate (without storm bonuses); do not assume rated wind at every site.
+ * The weather model currently has no geographic wind climatology.
+ */
+export function siteGenerationFactor(state: SimulationState, s: Settlement, kind: GeneratorKind): number {
+  const cell = state.world.cells[s.cellIndex];
+  if (!cell) return 0;
+  if (kind === 'windmill' || kind === 'wind') {
+    let total = 0;
+    for (let i = 0; i < 20; i++) total += windFactor(kind, 0.12 + (i + 0.5) * 0.2 / 20);
+    return total / 20;
+  }
+  if (kind === 'waterwheel' || kind === 'hydro') return cell.river ? clamp01(cell.flow * (kind === 'waterwheel' ? 0.78 : 0.96)) : 0;
+  return environmentFactor(state, s, kind);
+}
+
 export function eligibleGenerator(state: SimulationState, s: Settlement, g: GeneratorDefinition): boolean {
   if (!g.knowledge.every(k => knows(s, k))) return false;
   const cell = state.world.cells[s.cellIndex];

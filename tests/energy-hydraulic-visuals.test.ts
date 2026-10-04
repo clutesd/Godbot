@@ -97,16 +97,13 @@ describe('primitive and hydraulic energy presentation', () => {
     expect(root.position.x).toBeCloseTo(expected.bankX, 5);
     expect(root.position.z).toBeCloseTo(expected.bankZ, 5);
     expect(renderer.group.getObjectByName('Riverside watermill')).toBeDefined();
-    expect(renderer.group.getObjectByName('Waterwheel assembly')).toBeDefined();
-    expect(renderer.group.getObjectByName('Watermill millrace')).toBeDefined();
-    expect(renderer.group.getObjectByName('Watermill sluice gate')).toBeDefined();
-    expect(renderer.group.getObjectByName('Watermill gearing')).toBeDefined();
-
-    const wheel = renderer.group.getObjectByName('Waterwheel assembly')!;
-    const worldWheelCenter = root.position.y + wheel.position.y * root.scale.y;
-    const wheelRadius = 0.62 * root.scale.y;
-    expect(expected.waterY).toBeGreaterThan(worldWheelCenter - wheelRadius);
-    expect(expected.waterY).toBeLessThan(worldWheelCenter + wheelRadius);
+    const mill = renderer.group.getObjectByName('Riverside watermill')!;
+    expect(mill.userData['buildingSpec'].archetype).toBe('mill');
+    expect(mill.userData['buildingSpec'].equipment).toContain('waterwheel');
+    const drives: string[] = [];
+    mill.traverse(object => { if (object.userData['millRotor']) drives.push(object.userData['millRotor'].drive); });
+    expect(drives).toContain('water-wheel');
+    expect(drives).not.toContain('engine');
 
     renderer.dispose();
   });

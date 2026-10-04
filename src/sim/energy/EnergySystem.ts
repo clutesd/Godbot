@@ -19,7 +19,7 @@ import {
   storageDischargeOutputCapacity,
 } from './AdvancedEnergy';
 import { combustionFromFuel, combustionFuelPotential, isCombustionKind, planCombustion } from './Combustion';
-import { GENERATORS, eligibleGenerator, environmentFactor, generatorDefinition } from './Generation';
+import { GENERATORS, eligibleGenerator, environmentFactor, siteGenerationFactor, generatorDefinition } from './Generation';
 import { storageNodeId } from './GridTopology';
 import { buildWork, constructGrid, deliver, dispatchInputCapacity, powerPath } from './Transmission';
 import { prepareElectricDemand, type ElectricConsumer } from './Demand';
@@ -53,7 +53,7 @@ function constructPlants(state: SimulationState, s: Settlement): void {
             : g.fuel
               ? Math.min(1, (s.localMaterials[g.fuel] ?? 0) / 3)
               : 1;
-        return Math.min(g.capacity * environmentFactor(state, s, g.kind), e.ledgers[g.carrier].demand * 1.3) * fuelReadiness / g.work;
+        return Math.min(g.capacity * siteGenerationFactor(state, s, g.kind), e.ledgers[g.carrier].demand * 1.3) * fuelReadiness / g.work;
       }
       const chosen = choices.find(g => score(g) > 0 && Object.entries(g.cost).every(([id, n]) => (s.localMaterials[id] ?? 0) >= n * 0.1));
       if (!chosen) continue;
