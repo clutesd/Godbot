@@ -1,7 +1,7 @@
 import { stableHash } from '../prng';
 import { cellAt } from '../world';
-import type { DestinationKind, Person, Settlement, SimulationState, Vec2, WorldCell, WorldState } from '../types';
-import { PeopleSystem, settlementEraRank } from './PeopleSystem';
+import type { Person, Settlement, SimulationState, Vec2, WorldCell, WorldState } from '../types';
+import { PeopleSystem } from './PeopleSystem';
 
 const BASE_WEAR_PER_PASS = 0.0008;
 const MAX_RECORDED_STEP_MULTIPLIER = 3.5;
@@ -53,6 +53,28 @@ export function recordFootTrafficSegment(
   }
 }
 
+/** A completed monthly trip retains its actual consumed route. Observe that route, including
+ * bends around terrain/buildings, rather than wearing the straight chord between its endpoints. */
+function recordCompletedTrip(people: PeopleSystem, world: WorldState, from: Vec2, waypoints: readonly Vec2[],
+  month: number, ownerId: string, weight: number): void {
+  const seen = new Set<WorldCell>();
+  const wear = BASE_WEAR_PER_PASS * Math.max(0.25, Math.min(2.5, weight));
+  let start = from;
+  for (const end of waypoints) {
+    const distance = Math.hypot(end.x - start.x, end.z - start.z);
+    if (distance >= 0.025 && people.walkability.isSegmentWalkable(start, end)) {
+      const steps = Math.max(1, Math.ceil(distance / Math.max(0.15, world.cellSize * 0.45)));
+      for (let i = 0; i <= steps; i++) {
+        const cell = cellAt(world, start.x + (end.x - start.x) * i / steps, start.z + (end.z - start.z) * i / steps);
+        if (!cell || seen.has(cell)) continue;
+        seen.add(cell);
+        applyFootpathWear(cell, wear, month, ownerId);
+      }
+    }
+    start = end;
+  }
+}
+
 function trafficWeight(person: Person): number {
   if (person.role === 'child' || person.role === 'elder') return 0.65;
   if (['transporter', 'dock-worker', 'logistics-worker', 'farmer', 'miner', 'builder', 'laborer'].includes(person.role ?? '')) return 1.25;
@@ -64,51 +86,17 @@ function sampledThisMonth(person: Person, state: SimulationState): boolean {
   return state.month % TRAFFIC_SAMPLE_PERIOD === phase;
 }
 
-type PreferredRoadWaypoints = (
-  this: PeopleSystem,
-  person: Person,
-  settlement: Settlement,
-  state: SimulationState,
-  destination: DestinationKind,
-) => Vec2[];
-
 let trafficInstalled = false;
-let organicRoutingInstalled = false;
-
-/**
- * Local circulation stays geography-led through primitive, village and pre-industrial eras. Those
- * societies therefore provide no residential/civic/district template hints: WalkabilityLayer finds
- * the terrain-safe route to the real destination and repeated use decides which corridors survive.
- * Only industrial/advanced settlements (rank >= 4) regain deliberate planned-waypoint behaviour.
- */
-function installOrganicEarlyRouting(): void {
-  if (organicRoutingInstalled) return;
-  organicRoutingInstalled = true;
-  const prototype = PeopleSystem.prototype as unknown as Record<string, unknown>;
-  const plannedWaypoints = prototype['preferredRoadWaypoints'] as PreferredRoadWaypoints | undefined;
-  if (!plannedWaypoints) return;
-  prototype['preferredRoadWaypoints'] = (function organicPreferredRoadWaypoints(
-    this: PeopleSystem,
-    person: Person,
-    settlement: Settlement,
-    state: SimulationState,
-    destination: DestinationKind,
-  ): Vec2[] {
-    if (settlementEraRank(settlement, state) < 4) return [];
-    return plannedWaypoints.call(this, person, settlement, state, destination);
-  }) as PreferredRoadWaypoints;
-}
 
 /**
  * Instruments the existing PeopleSystem without changing its navigation authority. We observe the
- * position before and after `advancePerson`; only a short movement that began as an on-foot trip is
- * allowed to wear the ground. The PeopleSystem already validates every walking leg before moving,
- * so this observer deliberately avoids repeating its expensive segment-validation work. Every
+ * position before and after `advancePerson`, including trips which start and finish in one
+ * tick. Completed trips use their retained route. Both crossing modes must be pedestrian: a boat journey or
+ * emergency relocation cannot carve a shortcut through water or an existing footprint. Every
  * person contributes on a deterministic alternating month and carries double wear on sampled
  * months, preserving long-run traffic pressure while roughly halving bookkeeping cost.
  */
 export function installFootTrafficTracking(): void {
-  installOrganicEarlyRouting();
   if (trafficInstalled) return;
   trafficInstalled = true;
   const original = PeopleSystem.prototype.advancePerson;
@@ -119,17 +107,25 @@ export function installFootTrafficTracking(): void {
     state: SimulationState,
   ): void {
     const from = { ...person.position };
-    const wasTraveling = person.navigation?.traveling === true;
+    const previousNavigation = person.navigation;
     const crossingMode = person.navigation?.crossingMode ?? 'walk';
     original.call(this, person, settlement, state);
 
-    if (!wasTraveling || crossingMode !== 'walk' || !person.alive || !sampledThisMonth(person, state)) return;
+    if (crossingMode !== 'walk' || (person.navigation?.crossingMode ?? 'walk') !== 'walk'
+      || !person.alive || !sampledThisMonth(person, state)) return;
     if (person.navigation?.schedulePhase === 'emergency') return;
+    if (state.advanced?.scale === 'modern-statistical') return;
+    const navigation = person.navigation;
+    if (navigation && navigation !== previousNavigation && !navigation.traveling
+      && navigation.waypoints.length > 0 && navigation.waypointIndex === navigation.waypoints.length) {
+      recordCompletedTrip(this, state.world, from, navigation.waypoints, state.month, settlement.id,
+        trafficWeight(person) * TRAFFIC_SAMPLE_PERIOD);
+      return;
+    }
     const distance = Math.hypot(person.position.x - from.x, person.position.z - from.z);
     if (distance < 0.025 || distance > state.world.cellSize * MAX_RECORDED_STEP_MULTIPLIER) return;
-    if (!this.walkability.isWalkable(from) || !this.walkability.isWalkable(person.position)) return;
+    if (!this.walkability.isSegmentWalkable(from, person.position)) return;
 
-    if (state.advanced?.scale === 'modern-statistical') return;
     recordFootTrafficSegment(state.world, from, person.position, state.month, settlement.id, trafficWeight(person) * TRAFFIC_SAMPLE_PERIOD);
   };
 }

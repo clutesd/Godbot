@@ -11,7 +11,9 @@ import { createConstructionWorksite, updateConstructionWorksite } from '../rende
 import { constructionMaterialColour } from '../render/construction/ConstructionChoreography';
 import { constructionStagePresentation } from '../render/construction/ConstructionVisualGrammar';
 import { PhysicalWorkScene, type WorkPlacement } from '../render/people/PhysicalWorkScene';
-import { PeopleVisualStateStore } from '../render/people/PeopleVisualState';
+import { PeopleVisualStateStore, visualRouteClear, type PersonVisualGround } from '../render/people/PeopleVisualState';
+import { StructureNavigation } from '../sim/people/StructureNavigation';
+import { advanceConstructionPresentation } from '../render/construction/ConstructionPresentation';
 import { ResourceWorkerRenderer } from '../render/resources/ResourceWorkerRenderer';
 import { MaterialPalette, type Era } from '../render/materials/MaterialPalette';
 
@@ -57,7 +59,13 @@ let worksite: THREE.Group;
 let placement: WorkPlacement;
 let root = new THREE.Group();
 let bodies: THREE.Group[] = [];
-let playing = false, last = performance.now(), frames = 0, contactLatch = false;
+let playing = false, last = performance.now(), frames = 0;
+const navigation = new StructureNavigation();
+const movementGround: PersonVisualGround = { heightAt: () => 0, isStandable: () => true,
+  safeSegment: (a, b) => navigation.clear(a, b), detour: (a, b) => navigation.detour(a, b, (p, q) => navigation.clear(p, q)) };
+window.addEventListener('keydown', event => {
+  if (event.key.toLowerCase() === 'h') document.querySelectorAll<HTMLElement>('aside, footer').forEach(element => { element.hidden = !element.hidden; });
+});
 
 function rebuild(): void {
   scene.remove(root);
@@ -80,8 +88,10 @@ function rebuild(): void {
   settlement.development = { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: 0, nextAttemptMonth: 1, revision: 1,
     project: { plotId: 'review-plot', progress: Number(progress.value), response, action: 'founded', startedMonth: 0, spent: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 }, blockedReasons: [] } };
   placement = { key: 'review-plot', worldX: 0, worldZ: 0, width: 2.4, depth: Number(source.userData['footprintDepth']) * fit, rotationY: 0, constructionPlan: assembly.plan };
+  navigation.set([placement]);
   people = Array.from({ length: Number(input<HTMLSelectElement>('crew').value) }, (_, i) => ({ ...structuredClone(templatePerson), id: `review-worker-${i}`, homeId: settlement.id, alive: true, health: 1, displacedSinceMonth: undefined, activity: 'construct', occupation: 'builder', role: 'builder', position: { x: 2, z: 0 }, navigation: { destinationKind: 'construction-site', destinationId: 'review-plot', traveling: false, schedulePhase: 'work', reason: 'review', waypoints: [], waypointIndex: 0 } } as Person));
   workers = new PhysicalWorkScene(); visuals = new PeopleVisualStateStore();
+  for (const person of people) visuals.resolve(person.id, { destination: person.position }, 0, movementGround);
   bodies = people.map((_, i) => {
     const body = new THREE.Group();
     const coat = new THREE.Mesh(bodyGeometry, new THREE.MeshStandardMaterial({ color: ['#b4573a', '#345c78', '#d1a448'][i % 3] })); coat.position.y = 0.126; coat.castShadow = true;
@@ -102,17 +112,14 @@ function frame(now: number): void {
   if (playing && !missing && !interrupted) progress.value = String(Math.min(1, Number(progress.value) + dt / Number(input<HTMLSelectElement>('speed').value)));
   const paid = Number(progress.value), project = settlement.development!.project!;
   project.progress = paid; settlement.resources.wood = missing ? 0 : 20; project.blockedReasons = interrupted ? ['work-interrupted'] : [];
-  const contact = workers.installationContact(project.plotId);
-  assembly.update(paid, dt, contact === undefined ? undefined : contact && !contactLatch); contactLatch = contact ?? false;
-  updateConstructionScaffold(scaffold, assembly.plan, assembly.plan.progress ?? paid, dt);
-  updateConstructionWorksite(worksite, paid, missing, workers.materialInTransit(project.plotId));
   workers.beginFrame(people, [settlement]); visuals.beginFrame(); workerRenderer.beginFrame();
   people.forEach((person, i) => {
-    const worker = workers.plan(person, settlement, placement, undefined, undefined, () => true);
+    const worker = workers.plan(person, settlement, placement, undefined, undefined,
+      (a, b) => visualRouteClear(a, b, movementGround), visuals.get(person.id));
     const body = bodies[i]!; body.visible = !!worker;
     if (!worker) return;
     const a = worker.action;
-    const visual = visuals.resolve(person.id, { destination: a.locomotionTarget, restFacing: Math.atan2(a.interactionAnchor.x - a.locomotionTarget.x, a.interactionAnchor.z - a.locomotionTarget.z), arrivalEase: true }, dt, { heightAt: () => 0, isStandable: () => true });
+    const visual = visuals.resolve(person.id, { destination: a.locomotionTarget, restFacing: Math.atan2(a.interactionAnchor.x - a.locomotionTarget.x, a.interactionAnchor.z - a.locomotionTarget.z), arrivalEase: true }, dt, movementGround);
     workers.advance(person, worker, visual, dt);
     const y = worker.elevation ?? 0;
     body.position.set(visual.x, y - worker.motion.crouch * 0.28 * worker.blend, visual.z); body.rotation.set(worker.motion.lean * worker.blend, visual.facing, 0);
@@ -122,8 +129,12 @@ function frame(now: number): void {
       new THREE.Color(['#b4573a', '#345c78', '#d1a448'][i % 3]), false, worker.ready, visual.traveling, action.contactEffect ?? 'none', action.contactHeight);
   });
   workers.endFrame(); workerRenderer.endFrame();
+  if (paid === 1) assembly.update(1);
+  else advanceConstructionPresentation(assembly, workers, project.plotId, paid, dt);
+  updateConstructionScaffold(scaffold, assembly.plan, assembly.plan.progress ?? 0, dt);
+  updateConstructionWorksite(worksite, assembly.plan.progress ?? 0, missing, workers.materialInTransit(project.plotId));
   controls.update(); renderer.render(scene, camera);
-  if (frames++ % 20 === 0) input('status').textContent = `${['Foundation', 'Frame', 'Walls', 'Roof', 'Detail'][constructionStagePresentation(paid).stage]} · ${Math.round(paid * 100)}% · ${missing || interrupted ? 'paused site' : 'active'} · ${renderer.info.render.calls} draws`;
+  if (frames++ % 20 === 0) input('status').textContent = `${['Site', 'Foundation', 'Frame', 'Walls', 'Roof', 'Utilities', 'Fitout', 'Finish'][constructionStagePresentation(assembly.plan.progress ?? 0).stage]} · paid ${Math.round(paid * 100)}% / visible ${Math.round((assembly.plan.progress ?? 0) * 100)}% · ${missing || interrupted ? 'paused site' : 'active'} · ${renderer.info.render.calls} draws`;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

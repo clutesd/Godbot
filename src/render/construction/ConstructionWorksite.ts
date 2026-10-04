@@ -148,30 +148,29 @@ export function createConstructionWorksite(
 }
 
 function addWorkPad(group: THREE.Group, width: number, depth: number, palette: MaterialPalette): void {
-  // A visibly larger disturbed-earth rectangle makes the site readable from a documentary camera
-  // before the viewer can resolve individual scaffold poles or workers.
+  // Keep the prepared ground close to the footprint so hands, loads and fabric lead the scene.
   const pad = new THREE.Mesh(
-    new THREE.BoxGeometry(width * 1.42, 0.018, depth * 1.48),
+    new THREE.BoxGeometry(width * 1.14, 0.012, depth * 1.18),
     palette.getSurfaceMaterial('ground'),
   );
-  pad.position.y = 0.009;
+  pad.position.y = 0.006;
   pad.receiveShadow = true;
   pad.userData['constructionCue'] = 'work-pad';
   group.add(pad);
 
   // A narrow perimeter strip separates an intentional worksite from an ordinary dirt clearing.
   const stripMaterial = palette.getSurfaceMaterial('timber');
-  const railThickness = 0.035;
-  const railHeight = 0.025;
-  const longRail = new THREE.BoxGeometry(width * 1.48, railHeight, railThickness);
-  const shortRail = new THREE.BoxGeometry(railThickness, railHeight, depth * 1.54);
-  for (const z of [-depth * 0.77, depth * 0.77]) {
+  const railThickness = 0.018;
+  const railHeight = 0.015;
+  const longRail = new THREE.BoxGeometry(width * 1.18, railHeight, railThickness);
+  const shortRail = new THREE.BoxGeometry(railThickness, railHeight, depth * 1.22);
+  for (const z of [-depth * 0.61, depth * 0.61]) {
     const rail = new THREE.Mesh(longRail, stripMaterial);
     rail.position.set(0, railHeight * 0.5 + 0.012, z);
     rail.castShadow = true;
     group.add(rail);
   }
-  for (const x of [-width * 0.74, width * 0.74]) {
+  for (const x of [-width * 0.59, width * 0.59]) {
     const rail = new THREE.Mesh(shortRail, stripMaterial);
     rail.position.set(x, railHeight * 0.5 + 0.012, 0);
     rail.castShadow = true;

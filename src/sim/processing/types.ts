@@ -1,4 +1,4 @@
-import type { StructureForm, StructureMaterial } from '../development/types';
+import type { DevelopmentProject, StructureForm, StructureMaterial } from '../development/types';
 import type { Occupation, Vec2 } from '../types';
 import type { FreightVehicle } from '../transport/types';
 
@@ -166,6 +166,8 @@ export interface FacilityUpgrade {
 }
 
 export interface ProcessingFacility {
+  /** Paid construction/upgrade receipt shared with the human construction presentation. */
+  constructionWork?: DevelopmentProject;
   id: string;
   settlementId: string;
   family: FacilityFamilyId;

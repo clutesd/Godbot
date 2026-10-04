@@ -1,6 +1,7 @@
 import { reserveStructurePlot } from '../../shared/StructurePlots';
-import type { DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../development/types';
+import type { DevelopmentProject, DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../development/types';
 import { infrastructureLabourBudget } from '../people/HumanCapital';
+import { paidConstructionWorkerIds } from '../people/ConstructionLabour';
 import { materialEconomy, reconcileBulkStocks } from '../resources/Inventory';
 import { consumeMaterial } from '../resources/MaterialUse';
 import { MATERIAL_RECIPES, type MaterialKind } from '../resources/MaterialEconomy';
@@ -84,28 +85,46 @@ function dominantCulture(state: SimulationState, s: Settlement): { id: string; s
   return culture ? { id: culture.id, style: culture.style } : undefined;
 }
 
-/**
- * Makes the facility's structure real on its plot. The plot stays the single physical body
- * (grid attachment, weather/fire/flood damage, the renderer's building); tier changes rewrite the
- * same record so identity and location survive every upgrade.
- */
-export function installFacilityBody(state: SimulationState, s: Settlement, f: ProcessingFacility, action: StructureHistoryEntry['action']): void {
-  const plot = s.structurePlots?.find(p => p.id === f.plotId);
-  const spec = facilityTierSpec(f.family, f.tier);
+function facilityConstructionResponse(state: SimulationState, s: Settlement, f: ProcessingFacility, spec: FacilityTierSpec): DevelopmentResponse | undefined {
   const culture = dominantCulture(state, s);
-  if (!plot || !spec || !culture) return;
-  const response: DevelopmentResponse = {
-    need: 'manufacturing', form: spec.form, name: spec.name, level: Math.min(3, f.tier), material: spec.material,
+  if (!culture) return undefined;
+  return {
+    need: 'manufacturing', form: spec.form, name: spec.name, level: Math.min(3, spec.tier), material: spec.material,
     cultureId: culture.id, style: { ...culture.style }, services: { manufacturing: spec.service },
     reasons: ['processing-facility', `${f.family}:${spec.kind}`], capabilities: spec.knowledge.map(k => k.id),
     cost: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 }, labor: spec.build.work,
-    facilityId: f.id, facilityFamily: f.family, facilityTier: f.tier,
+    facilityId: f.id, facilityFamily: f.family, facilityTier: spec.tier,
   };
-  const record: StructureHistoryEntry = { month: state.month, action, name: spec.name, need: 'manufacturing', cultureId: culture.id,
+}
+
+/** Documentary receipt only; payBill remains the sole material and labour consumer. */
+export function recordFacilityConstruction(state: SimulationState, s: Settlement, f: ProcessingFacility, spec: FacilityTierSpec,
+  progress: number, startedMonth: number, action: StructureHistoryEntry['action'], spent: Record<string, number>, labourSpent: number): void {
+  const response = facilityConstructionResponse(state, s, f, spec);
+  if (!response) return;
+  const receipt: DevelopmentProject = f.constructionWork?.startedMonth === startedMonth && f.constructionWork.response.facilityTier === spec.tier ? f.constructionWork : {
+    plotId: f.plotId, response, startedMonth, action, progress: 0,
+    spent: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 },
+  };
+  Object.assign(receipt, { progress: progress >= 1 - 1e-8 ? 1 : progress, labourSpent, lastWorkMonth: state.month, materialSpent: { ...spent } });
+  // payBill's shared infrastructure pool is builder labour. This only chooses up to three actual
+  // builder representatives after that pool has paid; it performs no second labour allocation.
+  receipt.workerIds = paidConstructionWorkerIds(receipt, state.people, s.id, { builder: labourSpent > 0 ? 3 : 0 });
+  f.constructionWork = receipt;
+}
+
+/** Install the authoritative body in place, retaining its paid receipt for the human reveal. */
+export function installFacilityBody(state: SimulationState, s: Settlement, f: ProcessingFacility, action: StructureHistoryEntry['action']): void {
+  const plot = s.structurePlots?.find(p => p.id === f.plotId);
+  const spec = facilityTierSpec(f.family, f.tier);
+  const response = spec && facilityConstructionResponse(state, s, f, spec);
+  if (!plot || !spec || !response) return;
+  const record: StructureHistoryEntry = { month: state.month, action, name: spec.name, need: 'manufacturing', cultureId: response.cultureId,
     reasons: response.reasons, form: spec.form, level: response.level, material: spec.material };
   const prior = plot.development;
   const development: StructureDevelopment = {
     ...response, status: 'active', origin: prior?.origin ?? record, history: prior?.history ?? [],
+    constructionWork: f.constructionWork,
     transitionCount: (prior?.transitionCount ?? 0) + (prior ? 1 : 0), lastUsedMonth: state.month,
   };
   if (prior) development.history = [record, ...development.history].slice(0, 12);

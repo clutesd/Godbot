@@ -13,7 +13,7 @@ import { atInteraction, facingTarget, type PhysicalActionPresentation } from './
 import type { PersonVisualState } from './PeopleVisualState';
 import { constructionActiveWorkZone, type ConstructionAssemblyPlan } from '../construction/ConstructionAssembly';
 
-export interface WorkPlacement { key: string; worldX: number; worldZ: number; width: number; depth: number; constructionWidth?: number; constructionDepth?: number; constructionPlan?: ConstructionAssemblyPlan; rotationY: number }
+export interface WorkPlacement { key: string; worldX: number; worldZ: number; width: number; depth: number; constructionWidth?: number; constructionDepth?: number; constructionPlan?: ConstructionAssemblyPlan; constructionBaseY?: number; rotationY: number }
 export interface PhysicalWorker {
   action: PhysicalActionPresentation;
   motion: ResourceWorkMotion;
@@ -34,8 +34,36 @@ export interface PhysicalWorker {
   elevation?: number;
   presentationProgress?: number;
   receivedLoad?: StructureLoad;
+  workBaseY?: number;
+  /** True only after this frame's actual visual mover has advanced this worker. */
+  presented?: boolean;
+  accessReady?: boolean;
 }
 interface StructureLoad { material: StructureMaterial; source: string }
+
+/**
+ * Workface contract: the building and scaffold stay solid. StructureNavigation rejects any segment
+ * within `half + 0.14` of the plot footprint, so a stand point nearer than that is never reachable.
+ * Stands are pushed beyond that body clearance by this margin. The footprint is the placement's
+ * width/depth, which is what pedestrians collide with; rendered body size is not used here.
+ */
+export const CONSTRUCTION_WORKFACE_CLEARANCE = 0.24;
+const FACE_OUTWARD = [{ x: 1, z: 0 }, { x: 0, z: 1 }, { x: -1, z: 0 }, { x: 0, z: -1 }] as const;
+const HANDOFF_OFFSET = 0.22;
+
+/** Pushes a canonical stand point onto the given face's side of the collision footprint. */
+export function constructionWorkfaceStand(point: Vec2, face: number, footprintHalf: { x: number; z: number }): Vec2 {
+  const outward = FACE_OUTWARD[((face % 4) + 4) % 4]!;
+  return {
+    x: outward.x === 0 ? point.x : Math.max(outward.x * point.x, footprintHalf.x) * outward.x,
+    z: outward.z === 0 ? point.z : Math.max(outward.z * point.z, footprintHalf.z) * outward.z,
+  };
+}
+
+/** The placement the simulation's active project refers to. Never a placement-index fallback. */
+export function constructionSitePlacement<T extends { key: string }>(placements: readonly T[], project: DevelopmentProject | undefined): T | undefined {
+  return project ? placements.find(placement => placement.key === project.plotId) : undefined;
+}
 
 function constructionAnchorsFor(
   placement: WorkPlacement,
@@ -50,6 +78,7 @@ function constructionAnchorsFor(
     workWidth, workDepth, project.plotId,
     constructionWorkerLane(personId), constructionWorkfaceIndex(project.plotId, personId), project.progress,
   );
+  const recipientId = handoffRecipientId ?? personId;
   const recipientLocal = handoffRecipientId
     ? constructionWorksiteAnchors(
       workWidth, workDepth, project.plotId,
@@ -58,18 +87,29 @@ function constructionAnchorsFor(
     : local;
   const rotate = (p: Vec2) => rotateConstructionAnchor(p, center, placement.rotationY);
   const zone = placement.constructionPlan ? constructionActiveWorkZone(placement.constructionPlan, placement.constructionPlan.progress ?? project.progress) : undefined;
-  const stand = zone?.stand ?? recipientLocal.delivery;
-  const outward = zone ? [{ x: 1, z: 0 }, { x: 0, z: 1 }, { x: -1, z: 0 }, { x: 0, z: -1 }][zone.face]! : undefined;
+  const face = zone ? zone.face : constructionWorkfaceIndex(project.plotId, recipientId);
+  const footprintHalf = { x: placement.width / 2 + CONSTRUCTION_WORKFACE_CLEARANCE, z: placement.depth / 2 + CONSTRUCTION_WORKFACE_CLEARANCE };
+  const stand = constructionWorkfaceStand(zone ? zone.stand : recipientLocal.delivery, face, footprintHalf);
+  const outward = FACE_OUTWARD[((face % 4) + 4) % 4]!;
+  const handoff = { x: stand.x + outward.x * HANDOFF_OFFSET, z: stand.z + outward.z * HANDOFF_OFFSET };
+  // Preparation sits beside the sawhorses on the building's +Z or -Z side, outside the solid plot.
+  const prepFace = local.prep.z >= 0 ? 1 : 3;
+  const prep = constructionWorkfaceStand(local.prep, prepFace, footprintHalf);
+  // Finishing bays can coincide with the generic prep station. Keep cleanup/preparation people
+  // out of the assembler's body and receiving lane using the same exterior collision footprint.
+  if (Math.hypot(prep.x - stand.x, prep.z - stand.z) < 0.42) {
+    prep.x = stand.x + (Math.sign(local.prep.x || local.materialCenter.x) || 1) * 0.46;
+  }
   return {
     pickup: rotate(local.pickup),
     delivery: rotate(stand),
-    handoff: rotate(outward ? { x: stand.x + outward.x * 0.22, z: stand.z + outward.z * 0.22 } : recipientLocal.handoff),
+    handoff: rotate(handoff),
+    prep: rotate(prep),
     workContact: zone ? rotate(zone.contact) : undefined,
     contactHeight: zone?.contact.y,
     platformHeight: zone?.platform,
     workZoneId: zone?.piece,
     materialCenter: rotate(local.materialCenter),
-    prep: rotate(local.prep),
     prepCenter: rotate(local.prepCenter),
     siteCenter: center,
   };
@@ -93,7 +133,7 @@ export class PhysicalWorkScene {
     this.constructionAuthorityBySettlement.clear();
     for (const settlement of settlements) {
       const project = settlement.alive ? settlement.development?.project : undefined;
-      if (!project || project.progress >= 1) continue;
+      if (!project || project.progress >= 1 && !project.presentationPending) continue;
       const candidateIds = people
         .filter(person => person.alive
           && person.homeId === settlement.id
@@ -127,12 +167,17 @@ export class PhysicalWorkScene {
     // Test/tool convenience: callers may refresh authority here. Runtime supplies no arguments
     // because refreshVisiblePeople already reconciled against state.people.
     if (people && settlements) this.refreshConstructionCrewAuthority(people, settlements);
-    for (const worker of this.workers.values()) worker.seen = false;
+    for (const worker of this.workers.values()) { worker.seen = false; worker.presented = false; }
   }
+  /**
+   * `safeSegment` must be the mover's route authority (see `visualRouteClear`), so every work target
+   * approved here is one the visual mover can actually reach around the same collision.
+   */
   plan(person: Person, settlement: Settlement | undefined, placement: WorkPlacement | undefined,
     farm: { geometry: FarmGeometry; state: FarmPresentationState } | undefined, weather: WeatherCellState | undefined,
-    safeSegment: (a: Vec2, b: Vec2) => boolean): PhysicalWorker | undefined {
-    const builder = settlement && placement && builderCanPresent(person, settlement, weather);
+    safeSegment: (a: Vec2, b: Vec2) => boolean, currentPosition: Vec2 = person.position): PhysicalWorker | undefined {
+    const builder = settlement && placement && placement.key === settlement.development?.project?.plotId
+      && builderCanPresent(person, settlement, weather);
     const farmer = farm && farmerCanPresent(person, farm.geometry, farm.state, weather);
     if (!builder && !farmer) { this.workers.delete(person.id); return undefined; }
     let worker = this.workers.get(person.id);
@@ -167,7 +212,7 @@ export class PhysicalWorkScene {
         const anchors = constructionAnchorsFor(placement, project, person.id, handoffRecipientId);
         const crewRole = crew?.role ?? 'hauler';
         const initialTarget = crewRole === 'hauler' ? anchors.pickup : crewRole === 'assembler' ? anchors.delivery : anchors.prep;
-        if (!safeSegment(person.position, initialTarget)
+        if (!safeSegment(currentPosition, initialTarget)
           || crewRole === 'hauler' && !safeSegment(anchors.pickup, anchors.handoff)) return undefined;
         const playback = createConstructionPlayback();
         if (crewRole === 'assembler') playback.phase = 'assemble';
@@ -188,25 +233,33 @@ export class PhysicalWorkScene {
     if (builder && project && placement && worker.playback) {
       const candidateAnchors = constructionAnchorsFor(placement, project, person.id, worker.handoffRecipientId);
       worker.presentationProgress = placement.constructionPlan?.progress ?? project.progress;
-      const blocked = constructionBlockedReason(settlement);
+      // Empty stage intervals are traversed by seating the next canonical member, so its stage
+      // must also drive the tool/finishing routine while visual progress is at that boundary.
+      const zone = placement.constructionPlan ? constructionActiveWorkZone(placement.constructionPlan, worker.presentationProgress) : undefined;
+      if (zone) worker.presentationProgress = Math.max(worker.presentationProgress, placement.constructionPlan!.pieces[zone.piece]?.startProgress ?? 0);
+      worker.workBaseY = placement.constructionBaseY;
+      const blocked = project.presentationPending && project.progress < 1
+        && project.progress <= (placement.constructionPlan?.progress ?? -1) + 1e-8
+        ? 'awaiting-paid-construction-work' : constructionBlockedReason(settlement);
       const material = constructionPresentedMaterial(settlement);
       const candidateCrewSize = crewSize;
       const candidatePlayback: ConstructionPlayback = { ...worker.playback };
       const candidateMotion: ResourceWorkMotion = { ...worker.motion };
       advanceConstruction(candidatePlayback, 0, false, !!blocked, worker.crewRole, candidateCrewSize, true,
-        constructionStagePresentation(project.progress).finishing);
+        constructionStagePresentation(worker.presentationProgress).finishing);
       const handoff = !blocked && worker.crewRole === 'assembler' ? this.handoffFor(project, person.id) : undefined;
       const candidateAction = sampleConstructionAction(person, project.plotId, candidatePlayback, candidateAnchors,
         material, candidateMotion, blocked, worker.crewRole, candidateCrewSize, worker.presentationProgress,
-        handoff, developmentPresentationEra(project.response), !!placement.constructionPlan && worker.crewRole === 'assembler' && !candidatePlayback.carrying);
+        handoff, developmentPresentationEra(project.response), !!placement.constructionPlan && worker.crewRole === 'assembler' && !candidatePlayback.carrying && !worker.receivedLoad, worker.seconds);
 
       // Stage migration is presentation-only, but its new path must satisfy the same safety contract
       // as initial construction placement. Derive everything on temporary copies first; an unsafe
       // transition fails closed without changing anchors, playback or pose and can be retried later.
-      const migrationSafe = safeSegment(worker.action.locomotionTarget, candidateAction.locomotionTarget);
+      const migrationSafe = safeSegment(currentPosition, candidateAction.locomotionTarget)
+        && safeSegment(worker.action.locomotionTarget, candidateAction.locomotionTarget);
       const haulCorridorSafe = worker.crewRole !== 'hauler'
         || safeSegment(candidateAnchors.pickup, candidateAnchors.handoff);
-      if (!migrationSafe || !haulCorridorSafe) return undefined;
+      if (!migrationSafe || !haulCorridorSafe) { worker.seen = false; worker.ready = false; return undefined; }
 
       worker.anchors = candidateAnchors;
       worker.material = material;
@@ -223,19 +276,23 @@ export class PhysicalWorkScene {
     return worker;
   }
   advance(person: Person, worker: PhysicalWorker, visual: PersonVisualState, delta: number): void {
+    worker.presented = true;
     const action = worker.action;
     worker.ready = atInteraction(visual, action.locomotionTarget, visual.facing, facingTarget(action.locomotionTarget, action.interactionAnchor), visual.speed) && !visual.traveling;
-    const targetElevation = worker.ready ? action.platformHeight ?? 0 : 0;
+    const targetElevation = worker.ready && (action.platformHeight ?? 0) > 0
+      ? Math.max(0, (worker.workBaseY ?? visual.footY) + action.platformHeight! - visual.footY) : 0;
     const elevation = worker.elevation ?? 0;
     worker.elevation = elevation + Math.max(-delta * 0.32, Math.min(delta * 0.32, targetElevation - elevation));
     const accessReady = Math.abs(worker.elevation - targetElevation) < 0.01;
+    worker.accessReady = accessReady;
     worker.blend = Math.max(0, Math.min(1, worker.blend + (worker.ready ? 1 : -1) * Math.max(0, delta) / 0.25));
     // Acquisition/placement only starts once the approach blend has settled.
     const ready = worker.ready && worker.blend >= 1 && accessReady;
     if (worker.playback) {
+      if (ready) worker.seconds += Math.max(0, Math.min(0.1, delta));
       const handoff = !action.blockedReason && worker.crewRole === 'assembler'
         ? this.handoffFor(worker.project!, person.id) : undefined;
-      if (handoff && handoff.progress >= 0.52) {
+      if (ready && handoff && handoff.progress >= 0.52) {
         worker.playback.carrying = true;
         worker.playback.seconds = 0;
         worker.receivedLoad = { material: handoff.material, source: handoff.sourcePersonId };
@@ -246,13 +303,16 @@ export class PhysicalWorkScene {
         const handoffReady = !worker.handoffRecipientId
           || this.handoffRecipientReady(worker.project!, worker.handoffRecipientId);
         const waiting = !!worker.anchors?.workContact && worker.crewRole === 'assembler' && !worker.playback.carrying
-          && !constructionStagePresentation(worker.project!.progress).finishing;
+          && !worker.receivedLoad
+          && !constructionStagePresentation(worker.presentationProgress ?? worker.project!.progress).finishing;
+        const previousSeconds = worker.playback.seconds;
         advanceConstruction(worker.playback, delta * (0.92 + (worker.crewRank % 5) * 0.035), ready && !waiting, !!action.blockedReason, worker.crewRole, worker.crewSize, handoffReady,
-          constructionStagePresentation(worker.project!.progress).finishing);
+          constructionStagePresentation(worker.presentationProgress ?? worker.project!.progress).finishing);
+        if (worker.crewRole === 'assembler' && worker.playback.seconds < previousSeconds) worker.receivedLoad = undefined;
       }
       worker.action = sampleConstructionAction(person, worker.project!.plotId, worker.playback, worker.anchors!,
         worker.material!, worker.motion, action.blockedReason, worker.crewRole, worker.crewSize, worker.presentationProgress ?? worker.project!.progress,
-        handoff, developmentPresentationEra(worker.project!.response), !!worker.anchors?.workContact && worker.crewRole === 'assembler' && !worker.playback.carrying);
+        handoff, developmentPresentationEra(worker.project!.response), !!worker.anchors?.workContact && worker.crewRole === 'assembler' && !worker.playback.carrying && !worker.receivedLoad, worker.seconds);
       if (!ready) {
         worker.motion.impact = 0;
         worker.action = { ...worker.action, contactStrength: 0, contactEffect: undefined };
@@ -270,7 +330,7 @@ export class PhysicalWorkScene {
   private handoffFor(project: DevelopmentProject, recipientId: string): ConstructionHandoffCue | undefined {
     const source = [...this.workers.entries()]
       .filter(([, worker]) => worker.project === project && worker.crewRole === 'hauler'
-        && worker.handoffRecipientId === recipientId && worker.playback?.phase === 'handoff' && worker.material)
+        && worker.ready && worker.handoffRecipientId === recipientId && worker.playback?.phase === 'handoff' && worker.material)
       .sort((a, b) => a[1].crewRank - b[1].crewRank || a[0].localeCompare(b[0]))[0];
     if (!source?.[1].playback || !source[1].material) return undefined;
     return {
@@ -291,13 +351,30 @@ export class PhysicalWorkScene {
   installationContact(plotId: string): boolean | undefined {
     let present = false;
     for (const worker of this.workers.values()) {
-      if (worker.project?.plotId !== plotId || worker.action.blockedReason || worker.crewRole === 'site-worker') continue;
+      if (!worker.seen || !worker.presented || worker.project?.plotId !== plotId || worker.action.blockedReason || worker.crewRole === 'site-worker') continue;
       if (worker.crewRole === 'assembler' || worker.crewSize === 1) {
         present = true;
         if (worker.ready && worker.action.targetKind === 'workface' && worker.action.contactStrength > 0.03) return true;
       }
     }
     return present ? false : undefined;
+  }
+  /** Current-frame evidence for the exact member being revealed. No stale poses or nearby labour. */
+  installationPresentation(plotId: string, plan: ConstructionAssemblyPlan): { valid: boolean; contact: boolean } {
+    const zone = constructionActiveWorkZone(plan, plan.progress ?? 0);
+    let valid = false, contact = false;
+    for (const worker of this.workers.values()) {
+      if (!worker.seen || !worker.presented || !worker.ready || !worker.accessReady || worker.blend < 1
+        || worker.project?.plotId !== plotId || worker.action.targetId !== plotId
+        || worker.action.blockedReason || worker.anchors?.workZoneId !== zone.piece
+        || worker.action.targetKind !== 'workface' || worker.action.phase !== 'assemble'
+        || worker.crewRole === 'assembler' && !worker.playback?.carrying && !worker.receivedLoad
+          && !constructionStagePresentation(worker.presentationProgress ?? 0).finishing
+        || worker.crewRole !== 'assembler' && worker.crewSize !== 1) continue;
+      valid = true;
+      contact ||= worker.action.contactStrength > 0.03;
+    }
+    return { valid, contact };
   }
   endFrame(): void { for (const [id, worker] of this.workers) if (!worker.seen) this.workers.delete(id); }
 }

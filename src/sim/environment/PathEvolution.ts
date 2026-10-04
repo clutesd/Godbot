@@ -1,6 +1,5 @@
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { consumeMaterial } from '../resources/MaterialUse';
-import { TransportationSystem } from '../transport/TransportationSystem';
 import type { LandModification } from './types';
 import type { Settlement, SimulationState, WorldCell, WorldState } from '../types';
 
@@ -81,22 +80,13 @@ function canAffordRoadSurface(settlement: Settlement, requested: number, month: 
   return supplied;
 }
 
-let movementRoadAuthorityInstalled = false;
-
-/**
- * The legacy local-access planner draws three abstract roads from settlement centre to template
- * district anchors. Those roads are exactly the spoke pattern the movement model replaces. Keep
- * inter-settlement trade/rail/bridge projects intact, but stop creating synthetic district-access
- * projects so local roads have one authority: repeated real movement followed by promotion.
- */
-export function installMovementRoadAuthority(): void {
-  if (movementRoadAuthorityInstalled) return;
-  movementRoadAuthorityInstalled = true;
-  const prototype = TransportationSystem.prototype as unknown as Record<string, unknown>;
-  if (typeof prototype['planLocalAccess'] !== 'function') return;
-  prototype['planLocalAccess'] = function movementDrivenLocalAccess(): void {
-    // Intentionally empty. Step 3 can reintroduce deliberate urban planning as an institutional act.
-  };
+/** Shared clearance and presentation width; plot reservations must leave this corridor open. */
+export function movementPathHalfWidth(cellSize: number, stage: MovementPathStage, strength: number): number {
+  if (stage === 'none') return 0;
+  const base = stage === 'desire-path' ? 0.032 : stage === 'footpath' ? 0.048
+    : stage === 'packed-track' ? 0.071 : stage === 'cart-road' ? 0.098 : 0.125;
+  const growth = stage === 'engineered-road' ? 0.045 : stage === 'cart-road' ? 0.04 : 0.028;
+  return cellSize * Math.min(0.18, base + Math.sqrt(Math.min(1.5, strength)) * growth);
 }
 
 /**

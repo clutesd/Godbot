@@ -578,6 +578,8 @@ describe('construction workflow', () => {
     hauler.playback!.phase = 'handoff';
     hauler.playback!.seconds = CONSTRUCTION_HANDOFF_SECONDS * 0.62;
     hauler.playback!.carrying = false;
+    expect(scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => true)!.action.phase).not.toBe('receive');
+    hauler.ready = true;
     const receiving = scene.plan(assemblerPerson, settlement, placement, undefined, weather, () => true)!;
     expect(receiving.action.phase).toBe('receive');
     expect(receiving.action.carriedObject).toBe('timber');

@@ -134,10 +134,21 @@ export class AnimationController {
   resourcePose(base: AnimationPose | null, motion: ResourceWorkMotion, blend: number): AnimationPose {
     const out = this.resourceBuffer;
     if (base) copyPose(base, out);
+    else {
+      out.spineTwist = 0; out.spineRoll = 0; out.headPitch = 0;
+      out.positionOffset.x = 0; out.positionOffset.z = 0;
+    }
     out.pelvisRotation = motion.twist * blend;
     out.spineRotation = motion.lean * blend;
     out.positionOffset.y = -motion.crouch * blend;
     out.headRotation = motion.basket * 0.3 * blend;
+    if (motion.construction) {
+      out.spineTwist = -motion.twist * 0.45 * blend;
+      out.headPitch = motion.construction.headPitch * blend;
+      out.headRotation = -motion.twist * 0.65 * blend;
+      out.spineRoll = -motion.twist * 0.12 * blend;
+      out.positionOffset.z = motion.construction.weight * blend;
+    }
     return out;
   }
 

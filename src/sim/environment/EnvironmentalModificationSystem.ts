@@ -4,7 +4,7 @@ import { clamp01 } from '../terrain/noise';
 import type { ResourceDeposit, SimulationState, Vec2, WorldCell, WorldState } from '../types';
 import type { ModificationKind } from './types';
 import { forestFamily } from './SoilSystem';
-import { advanceMovementPaths, installMovementRoadAuthority } from './PathEvolution';
+import { advanceMovementPaths } from './PathEvolution';
 import { installFootTrafficTracking } from '../people/FootTraffic';
 
 
@@ -75,7 +75,6 @@ export function advanceEnvironment(state: SimulationState): void {
   // module. Top-level prototype writes can otherwise run before PeopleSystem/FootTraffic initialize.
   // ResourceSystem advances before people each month, so the first real movement is still tracked.
   installFootTrafficTracking();
-  installMovementRoadAuthority();
   if (state.month % 12 !== 0) return;
   // Movement is allowed to become infrastructure before abandonment/recovery is assessed, so an
   // actively used corridor renews its own maintenance clock rather than being faded in the same year.

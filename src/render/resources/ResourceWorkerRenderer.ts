@@ -110,7 +110,30 @@ export class ResourceWorkerRenderer {
     const toolAngle = 1.9 + (m.toolAngle - 1.9) * blend;
     const shaftY = Math.cos(toolAngle);
     const shaftZ = Math.sin(toolAngle);
-    if (surfaceY !== undefined && !walking && blend > 0.95) {
+    const gesture = m.construction;
+    const workGesture = gesture && ['strike', 'place', 'pack', 'finish', 'prepare'].includes(gesture.kind) && !walking;
+    let handX = 0;
+    const dx = (target.x - x) / size, dz = (target.z - z) / size;
+    const contactX = dx * this.cos - dz * this.sin;
+    const contactZ = dz * this.cos + dx * this.sin;
+    const contactY = surfaceY === undefined ? handY : (surfaceY - y) / size;
+    if (workGesture) {
+      // The head travels through an anticipation arc and reaches the actual surface only during
+      // contact. Previously the head stayed pinned while its shaft rotated underneath it.
+      const length = plant ? 0 : 0.32;
+      handX = (contactX + gesture.side) * blend;
+      handY += (contactY + gesture.lift - shaftY * length - handY) * blend;
+      handZ += (contactZ - gesture.pullback - shaftZ * length - handZ) * blend;
+      if (plant && load) {
+        const placement = gesture.loadPlacement * blend;
+        handX = contactX * placement;
+        handY = 0.45 + (contactY - 0.45) * placement + Math.sin(placement * Math.PI) * 0.14;
+        handZ = 0.25 + (contactZ - 0.25) * placement;
+      }
+    } else if (gesture && (gesture.kind === 'handoff' || gesture.kind === 'receive') && !walking) {
+      handX = contactX * gesture.reach * blend;
+      handZ += (contactZ - handZ) * gesture.reach * blend;
+    } else if (surfaceY !== undefined && !walking && blend > 0.95) {
       const reach = Math.hypot(target.x - x, target.z - z) / size;
       const toolLength = plant ? 0 : 0.32;
       // Both tool tip and evidence share the exact surface. The lift is anticipation/recovery.
@@ -120,9 +143,23 @@ export class ResourceWorkerRenderer {
     for (let side = 0; side < 2; side++) {
       const sign = side === 0 ? -1 : 1;
       const grip = plant ? 0 : side * 0.12;
-      const hx = load ? sign * (load === 'timber' || load === 'metal' ? 0.2 : 0.1) : plant ? sign * 0.075 + m.basket * 0.32 * blend : 0;
-      const hy = handY - shaftY * grip;
-      const hz = handZ - shaftZ * grip - (plant ? m.basket * 0.15 * blend : 0);
+      let hx = handX + (load ? sign * (load === 'timber' || load === 'metal' ? 0.2 : 0.1) : plant ? sign * 0.075 + m.basket * 0.32 * blend : 0);
+      let hy = handY - shaftY * grip;
+      let hz = handZ - shaftZ * grip - (plant ? m.basket * 0.15 * blend : 0);
+      if (workGesture && gesture.brace && side === 0) {
+        // The free hand steadies the member while the working hand raises and drives the hammer.
+        hx = contactX - 0.08;
+        hy = contactY - 0.035;
+        hz = contactZ;
+        if (load) {
+          const placement = gesture.loadPlacement * blend;
+          hx = contactX * placement - 0.08;
+          hy = 0.45 + (contactY - 0.035 - 0.45) * placement + Math.sin(placement * Math.PI) * 0.14;
+          hz = 0.25 + (contactZ - 0.25) * placement;
+        }
+      } else if (workGesture && !plant) {
+        hx = handX;
+      }
       let shoulderX = sign * 0.12, shoulderY = 0.71 - crouch, shoulderZ = 0;
       if (this.hasBodyTransform) {
         this.shoulder.set(sign * 0.12, 0.27, 0).applyMatrix4(this.bodyTransform);
@@ -131,26 +168,36 @@ export class ResourceWorkerRenderer {
         shoulderY = (this.shoulder.y - y) / size;
         shoulderZ = dz * this.cos + dx * this.sin;
       }
-      const elbowX = sign * (0.17 + (1 - blend) * 0.06);
+      const elbowX = gesture ? (shoulderX + hx) * 0.5 + sign * (workGesture ? 0.12 : 0.11 + (1 - blend) * 0.06)
+        : sign * (0.17 + (1 - blend) * 0.06);
       const elbowY = (shoulderY + hy) * 0.5 - 0.075;
       const elbowZ = hz * 0.5 + 0.015;
       this.segment(this.limbs, index * 10 + side * 2, shoulderX, shoulderY, shoulderZ, elbowX, elbowY, elbowZ, 1);
       this.segment(this.limbs, index * 10 + side * 2 + 1, elbowX, elbowY, elbowZ, hx, hy, hz, 0.85);
-      this.segment(this.limbs, index * 10 + 4 + side * 2, sign * 0.049, 0.43 - crouch, 0, sign * 0.052, 0.22 - crouch * 0.25, crouch * 0.65, walking ? 0 : 1.13);
-      this.segment(this.limbs, index * 10 + 5 + side * 2, sign * 0.052, 0.22 - crouch * 0.25, crouch * 0.65, sign * 0.049, 0.02, sign * 0.035, walking ? 0 : 1.02);
+      const stance = gesture?.stance ?? 0.049;
+      const stagger = gesture ? sign * 0.09 : sign * 0.035;
+      const weight = gesture ? gesture.weight * blend : 0;
+      const kneeX = sign * (0.052 + (gesture ? stance * 0.3 : 0));
+      const kneeZ = crouch * 0.65 + (gesture ? stagger * 0.3 : 0);
+      this.segment(this.limbs, index * 10 + 4 + side * 2, sign * 0.049, 0.43 - crouch, weight,
+        kneeX, 0.22 - crouch * 0.25, kneeZ, walking ? 0 : 1.13);
+      this.segment(this.limbs, index * 10 + 5 + side * 2, kneeX, 0.22 - crouch * 0.25, kneeZ,
+        sign * stance, 0.02, stagger, walking ? 0 : 1.02);
     }
     // Small integrated soles reuse the same opaque batch; the contact solver and targets stay intact.
     for (let side = 0; side < 2; side++) {
       const sign = side ? 1 : -1;
-      this.segment(this.limbs, index * 10 + 8 + side, sign * 0.049, 0.019, sign * 0.035 - 0.012,
-        sign * 0.049, 0.019, sign * 0.035 + 0.055, walking ? 0 : 0.72);
+      const stance = gesture?.stance ?? 0.049;
+      const stagger = sign * (gesture ? 0.09 : 0.035);
+      this.segment(this.limbs, index * 10 + 8 + side, sign * stance, 0.019, stagger - 0.012,
+        sign * stance, 0.019, stagger + 0.055, walking ? 0 : 0.72);
     }
     for (let limb = 0; limb < 10; limb++) this.limbs.setColorAt(index * 10 + limb, colour);
     const toolSize = plant ? 0 : 1;
     const tipY = handY + shaftY * 0.32;
     const tipZ = handZ + shaftZ * 0.32;
-    this.segment(this.handles, index, 0, handY - shaftY * 0.18, handZ - shaftZ * 0.18, 0, tipY, tipZ, toolSize);
-    this.position.set(x + tipZ * this.sin * size, y + tipY * size, z + tipZ * this.cos * size);
+    this.segment(this.handles, index, handX, handY - shaftY * 0.18, handZ - shaftZ * 0.18, handX, tipY, tipZ, toolSize);
+    this.position.set(x + (handX * this.cos + tipZ * this.sin) * size, y + tipY * size, z + (tipZ * this.cos - handX * this.sin) * size);
     this.scale.set((tool === 'axe' || tool === 'hammer' ? 0.2 : 0.3) * size * toolSize,
       (tool === 'axe' || tool === 'hammer' ? 0.13 : 0.055) * size * toolSize, 0.075 * size * toolSize);
     this.matrix.compose(this.position, this.rotation, this.scale);
@@ -164,6 +211,15 @@ export class ResourceWorkerRenderer {
     const loadZ = handZ - (plant ? receive * 0.15 : 0);
     this.position.set(x + (loadX * this.cos + loadZ * this.sin) * size,
       y + handY * size, z + (loadZ * this.cos - loadX * this.sin) * size);
+    if (load && workGesture) {
+      // The load has its own lift/align/seat trajectory, independent of the striking hand.
+      const placement = gesture.loadPlacement * blend;
+      this.position.set(
+        x + (0.25 * this.sin) * size + (target.x - x - 0.25 * this.sin * size) * placement,
+        y + 0.45 * size + ((surfaceY ?? y + 0.45 * size) - y - 0.45 * size) * placement + Math.sin(placement * Math.PI) * 0.14 * size,
+        z + (0.25 * this.cos) * size + (target.z - z - 0.25 * this.cos * size) * placement,
+      );
+    }
     const visible = load ? size : 0;
     this.rotation.setFromAxisAngle(this.up, facing);
     if (load) this.loads.draw(load, this.position.x, this.position.y, this.position.z, size, facing);

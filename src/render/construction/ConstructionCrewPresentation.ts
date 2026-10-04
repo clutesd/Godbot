@@ -29,7 +29,7 @@ export function constructionVisibleCrewIds(
 
   for (const settlement of settlements) {
     const project = settlement.alive ? settlement.development?.project : undefined;
-    if (!project || project.progress >= 1) continue;
+    if (!project || project.progress >= 1 && !project.presentationPending) continue;
     const candidates = people.filter(person => person.alive
       && person.homeId === settlement.id
       && person.activity === 'construct'

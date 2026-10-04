@@ -1,4 +1,5 @@
 import type { ResourceWorkProfile, ResourceWorkerVariation } from '../../sim/resources/ResourceWorkPresentation';
+import type { ConstructionGesture } from '../construction/ConstructionGesture';
 
 export interface ResourceWorkMotion {
   lean: number;
@@ -12,6 +13,7 @@ export interface ResourceWorkMotion {
   /** Gathered piece is visible only after contact and before the sorting/basket release. */
   held: number;
   reposition: boolean;
+  construction?: ConstructionGesture;
 }
 
 export function createResourceWorkMotion(): ResourceWorkMotion {
@@ -31,6 +33,7 @@ const smooth = (t: number): number => { const x = Math.min(1, Math.max(0, t)); r
 export function sampleResourceWorkMotion(
   profile: ResourceWorkProfile, variation: ResourceWorkerVariation, seconds: number, out: ResourceWorkMotion,
 ): ResourceWorkMotion {
+  if (out.construction) delete out.construction;
   const time = Math.max(0, seconds) * variation.cycleSpeed * (0.94 + profile.intensity * 0.12) / profile.cycleSeconds + variation.phaseOffset * 4;
   const phase = time % 1;
   const rest = Math.floor(time) % 4 === 3;

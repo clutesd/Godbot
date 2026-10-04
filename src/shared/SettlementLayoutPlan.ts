@@ -1,13 +1,14 @@
 import { SeededRandom } from '../sim/prng';
-import type { Settlement, TradeRoute, Vec2 } from '../sim/types';
+import { movementGatheringPoint, settlementMovementFrontage } from './MovementFrontage';
+import type { Settlement, TradeRoute, Vec2, WorldState } from '../sim/types';
 import type { TransportationState, TransportStop } from '../sim/transport/types';
 import type { DevelopmentResponse } from '../sim/development/types';
 import type { SettlementArchitecturalIdentity } from '../sim/development/SettlementIdentity';
 
 /**
  * Semantic city plan shared by simulation and presentation. It contains no render state: the
- * simulation uses it for destinations and road-biased movement, while the renderer uses the
- * same anchors for buildings, streets, gates, stations, and docks.
+ * simulation uses it for destinations, while the renderer uses the same anchors for
+ * classification, gates, stations, and docks. Streets belong to movement and transport history.
  */
 export type BuildingDistrict = 'civic' | 'sacred' | 'market' | 'residential' | 'craft' | 'industrial';
 
@@ -62,6 +63,7 @@ export interface SettlementLayoutInput {
   settlements: readonly Settlement[];
   routes: readonly TradeRoute[];
   transportation?: TransportationState;
+  world?: WorldState;
   eraRank: number;
   seed: string;
   /** Settlement-specific drift; biases morphology scale, never topology. */
@@ -103,10 +105,28 @@ export function createSettlementLayoutPlan(input: SettlementLayoutInput): Settle
   })) as Record<BuildingDistrict, LayoutAnchor>;
 
   const portals = createRoutePortals(settlement, settlements, activeRoutes, baseRadius, input.transportation);
-  const streets = settlement.foundingPodId && settlement.buildings === 0 ? [] : createStreetSegments(anchors, portals, baseRadius, eraRank, settlement.position);
+  // Destinations follow occupied sites and accumulated movement, not a prescribed district map.
+  const gathering = input.world ? movementGatheringPoint(settlementMovementFrontage(input.world, settlement)) : undefined;
+  for (const district of DISTRICTS) {
+    const sites = (settlement.structurePlots ?? []).filter(plot => plot.condition > 0.08
+      && plot.development?.status !== 'ruin' && plot.development?.status !== 'abandoned'
+      && (plot.development ? districtForResponse(plot.development) : 'residential') === district);
+    const site = sites[0];
+    let destination = site ? { x: site.worldX, z: site.worldZ } : input.world ? settlement.position : undefined;
+    if (!site && (district === 'market' || district === 'civic') && gathering) destination = gathering;
+    else if (!site && district === 'market' && portals[0]) {
+      const portal = portals[0];
+      destination = portal.bank ?? { x: portal.worldX, z: portal.worldZ };
+    }
+    if (!destination) continue;
+    Object.assign(anchors[district], { worldX: destination.x, worldZ: destination.z,
+      localX: destination.x - settlement.position.x, localZ: destination.z - settlement.position.z });
+  }
+  // Recorded paths are rendered by ResourceSiteRenderer. A semantic destination grants no street,
+  // even at advanced technology; commissioned transport projects retain their own authority.
+  const streets: StreetSegment[] = [];
   return { radius: baseRadius, anchors, portals, streets };
 }
-
 export function districtForPlot(index: number, settlement: Settlement): BuildingDistrict {
   const structure = settlement.structurePlots?.[index]?.development;
   if (structure) return districtForResponse(structure);
@@ -210,30 +230,4 @@ function createRoutePortals(settlement: Settlement, settlements: readonly Settle
   }
 
   return portals;
-}
-
-function createStreetSegments(
-  anchors: Record<BuildingDistrict, LayoutAnchor>,
-  portals: readonly RoutePortal[],
-  cityRadius: number,
-  eraRankValue: number,
-  settlementPosition: Vec2,
-): StreetSegment[] {
-  const width = eraRankValue >= 4 ? 0.34 : eraRankValue >= 2 ? 0.26 : 0.18;
-  const segments: StreetSegment[] = [];
-  for (const portal of portals) {
-    // Roads meet a harbour on the dry bank. They should never be drawn from the offshore end of
-    // the pier back through water or cliff terrain toward the market.
-    const fromX = portal.kind === 'dock' && portal.bank ? portal.bank.x - settlementPosition.x : portal.localX;
-    const fromZ = portal.kind === 'dock' && portal.bank ? portal.bank.z - settlementPosition.z : portal.localZ;
-    segments.push({ kind: 'primary', fromX, fromZ, toX: anchors.market.localX, toZ: anchors.market.localZ, width: width * 1.2 });
-  }
-  segments.push({ kind: 'primary', fromX: anchors.market.localX, fromZ: anchors.market.localZ, toX: anchors.civic.localX, toZ: anchors.civic.localZ, width: width * 1.15 });
-  for (const district of ['sacred', 'residential', 'craft', 'industrial'] as const) {
-    segments.push({ kind: district === 'industrial' ? 'service' : 'secondary', fromX: anchors.civic.localX, fromZ: anchors.civic.localZ, toX: anchors[district].localX, toZ: anchors[district].localZ, width });
-  }
-  if (portals.length === 0) {
-    segments.push({ kind: 'secondary', fromX: -cityRadius * 0.5, fromZ: 0, toX: cityRadius * 0.5, toZ: 0, width });
-  }
-  return segments;
 }

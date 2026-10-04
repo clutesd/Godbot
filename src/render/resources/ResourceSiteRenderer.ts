@@ -9,7 +9,7 @@ import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation
 import { MAX_ACTIVE_WORK_SITES, ResourceWorkScene, type ResourceWorkSite } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
 import { mineralAerialSignature, mineralVisualProfile, type MineralGeometryKind } from './MineralPresentation';
-import { strongestMovementPathNeighbour, movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
+import { strongestMovementPathNeighbour, movementPathStage, movementPathStrength, movementPathHalfWidth, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
 const PATH_COLOURS: Record<Exclude<MovementPathStage, 'none'>, THREE.Color> = {
   'desire-path': new THREE.Color('#79634e'),
@@ -1020,14 +1020,6 @@ export class ResourceSiteRenderer {
   }
 
   private pathHalfWidth(stage: Exclude<MovementPathStage, 'none'>, strength: number): number {
-    // These remain the exact movement-driven paths; only their presentation width is amplified so
-    // an establishing documentary shot can read settlement circulation without synthetic roads.
-    const base = stage === 'desire-path' ? 0.032
-      : stage === 'footpath' ? 0.048
-        : stage === 'packed-track' ? 0.071
-          : stage === 'cart-road' ? 0.098
-            : 0.125;
-    const growth = stage === 'engineered-road' ? 0.045 : stage === 'cart-road' ? 0.04 : 0.028;
-    return this.world.cellSize * Math.min(0.18, base + Math.sqrt(Math.min(1.5, strength)) * growth);
+    return movementPathHalfWidth(this.world.cellSize, stage, strength);
   }
 }

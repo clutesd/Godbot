@@ -1,9 +1,18 @@
 import * as THREE from 'three';
 import { SeededRandom } from '../../sim/prng';
 import { clamp01, fbm, smoothstep } from '../../sim/terrain/noise';
-import { nearestIndex } from '../../sim/terrain/TerrainField';
 import type { Vec2, WorldState } from '../../sim/types';
+import { isInsideReservedGround, type ReservedGround } from '../../shared/StructureGrounding';
 import type { TerrainSurface } from './TerrainSurface';
+
+/** A scattered instance set, with its ground positions and pristine matrices kept for clearing. */
+interface ScatterSet {
+  mesh: THREE.InstancedMesh;
+  xz: Float32Array;
+  count: number;
+  pristine: Float32Array;
+  hidden: Uint8Array;
+}
 
 export interface DecorReport {
   boulders: number;
@@ -19,20 +28,56 @@ interface BoulderCollider {
 
 /**
  * The small stuff that keeps the ground from reading as a painted surface: boulders clustered
- * along outcrops, scree under cliffs, grass and reeds softening every edge.
+ * along outcrops and scree under cliffs. Vegetation owns grass, reeds and scrub.
  */
 export class TerrainDecor {
   readonly group = new THREE.Group();
   readonly report: DecorReport;
   private readonly boulderBuckets = new Map<string, BoulderCollider[]>();
+  private readonly scatterSets: ScatterSet[] = [];
 
   constructor(world: WorldState, surface: TerrainSurface, seed: string, density: number) {
     this.group.name = 'terrain-decor';
     const random = new SeededRandom(`${seed}:decor`);
     const boulders = this.scatterRocks(world, surface, random, seed, Math.round(520 * density));
     const scree = this.scatterScree(world, surface, random, Math.round(900 * density));
-    const groundCover = this.scatterGroundCover(world, surface, random, seed, Math.round(2600 * density));
-    this.report = { boulders, scree, groundCover };
+    // The old four-sided green cones were a second, placeholder vegetation layer. In particular
+    // they poked through construction fabric. Keep plant geometry in VegetationRenderer.
+    this.report = { boulders, scree, groundCover: 0 };
+  }
+
+  /**
+   * Hides decorative instances that fall inside reserved ground (occupied plots, worksites, fields).
+   * Scatter is generated once at startup, but structures appear later, so this runs whenever the
+   * reserved set changes. Hidden instances collapse to a zero matrix and return when released.
+   * Presentation only: scatter positions and collisions are not part of simulation state.
+   */
+  setReservedGround(zones: readonly ReservedGround[]): void {
+    for (const set of this.scatterSets) {
+      let changed = false;
+      for (let index = 0; index < set.count; index += 1) {
+        const hide = isInsideReservedGround(set.xz[index * 2]!, set.xz[index * 2 + 1]!, 0.25, zones);
+        if (hide === Boolean(set.hidden[index])) continue;
+        set.hidden[index] = hide ? 1 : 0;
+        const offset = index * 16;
+        const target = set.mesh.instanceMatrix.array as Float32Array;
+        for (let element = 0; element < 16; element += 1) {
+          target[offset + element] = hide ? 0 : set.pristine[offset + element]!;
+        }
+        changed = true;
+      }
+      if (changed) set.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  private registerScatter(mesh: THREE.InstancedMesh, xz: Float32Array, count: number): void {
+    this.scatterSets.push({
+      mesh,
+      xz,
+      count,
+      pristine: (mesh.instanceMatrix.array as Float32Array).slice(0, count * 16),
+      hidden: new Uint8Array(count),
+    });
   }
 
   /** Boulders follow the rock field, so they gather along ridges and cliff bases instead of dusting the map evenly. */
@@ -43,6 +88,7 @@ export class TerrainDecor {
       Math.max(1, budget),
     );
     const matrix = new THREE.Matrix4();
+    const xz = new Float32Array(Math.max(1, budget) * 2);
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const euler = new THREE.Euler();
@@ -65,12 +111,15 @@ export class TerrainDecor {
       scale.set(size * random.range(0.8, 1.3), size * random.range(0.5, 0.9), size * random.range(0.8, 1.3));
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(placed, matrix);
+      xz[placed * 2] = worldX;
+      xz[placed * 2 + 1] = worldZ;
       this.addBoulderCollider(worldX, worldZ, 0.34 * Math.max(scale.x, scale.z));
       colour.setHSL(0.08, 0.05, 0.54 + random.range(-0.06, 0.1)).lerp(new THREE.Color('#b3a99c'), sample.elevation * 0.4);
       mesh.setColorAt(placed, colour);
       placed += 1;
     }
     mesh.count = placed;
+    this.registerScatter(mesh, xz, placed);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     if (placed > 0) this.group.add(mesh);
@@ -85,6 +134,7 @@ export class TerrainDecor {
       Math.max(1, budget),
     );
     const matrix = new THREE.Matrix4();
+    const xz = new Float32Array(Math.max(1, budget) * 2);
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const euler = new THREE.Euler();
@@ -105,11 +155,14 @@ export class TerrainDecor {
       scale.set(size, size * 0.55, size);
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(placed, matrix);
+      xz[placed * 2] = worldX;
+      xz[placed * 2 + 1] = worldZ;
       colour.setHSL(0.08, 0.05, 0.5 + random.range(-0.07, 0.08));
       mesh.setColorAt(placed, colour);
       placed += 1;
     }
     mesh.count = placed;
+    this.registerScatter(mesh, xz, placed);
     mesh.receiveShadow = true;
     if (placed > 0) this.group.add(mesh);
     return placed;
@@ -149,55 +202,6 @@ export class TerrainDecor {
         this.boulderBuckets.set(key, bucket);
       }
     }
-  }
-
-  /**
-   * Grass, reeds and low scrub. Density is deliberately uneven: heaviest at shorelines, riverbanks
-   * and forest edges, where a hard material boundary would otherwise show. Flower colours are kept
-   * out of this static layer; seasonal flowers are owned by the vegetation system.
-   */
-  private scatterGroundCover(world: WorldState, surface: TerrainSurface, random: SeededRandom, seed: string, budget: number): number {
-    const mesh = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(0.06, 0.22, 4),
-      new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, vertexColors: true }),
-      Math.max(1, budget),
-    );
-    const matrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    const euler = new THREE.Euler();
-    const scale = new THREE.Vector3();
-    const colour = new THREE.Color();
-    const half = world.size * world.cellSize * 0.5;
-    let placed = 0;
-    for (let attempt = 0; attempt < budget * 5 && placed < budget; attempt += 1) {
-      const worldX = random.range(-half, half);
-      const worldZ = random.range(-half, half);
-      const sample = surface.sample(worldX, worldZ);
-      if (sample.elevation < world.seaLevel + 0.002) continue;
-      const fieldIndex = nearestIndex(world.terrain, worldX, worldZ);
-      const bankside = world.terrain.river[fieldIndex] || world.terrain.lake[fieldIndex] ? 1 : 0;
-      const shore = smoothstep(world.seaLevel + 0.05, world.seaLevel + 0.004, sample.elevation);
-      const meadow = smoothstep(0.28, 0.62, sample.moisture) * smoothstep(0.62, 0.2, sample.slope);
-      const patch = fbm(`${seed}:ground-cover`, worldX * 0.2 + 12, worldZ * 0.2 - 7, 3);
-      if (!random.chance(clamp01(meadow * 0.8 + shore * 0.5 + bankside * 0.6) * smoothstep(0.32, 0.78, patch))) continue;
-      const size = random.range(0.5, 1.15);
-      position.set(worldX, surface.heightAt(worldX, worldZ) + 0.09 * size, worldZ);
-      euler.set(random.range(-0.16, 0.16), random.range(0, Math.PI * 2), random.range(-0.16, 0.16));
-      quaternion.setFromEuler(euler);
-      const reed = bankside > 0 && random.chance(0.55);
-      scale.set(size * (reed ? 0.7 : 1.25), size * (reed ? 1.9 : random.range(0.7, 1.2)), size * (reed ? 0.7 : 1.25));
-      matrix.compose(position, quaternion, scale);
-      mesh.setMatrixAt(placed, matrix);
-      colour.set(reed ? '#548779' : sample.moisture < 0.32 ? '#b5ae79' : sample.moisture > 0.64 ? '#528565' : '#789752');
-      colour.offsetHSL(random.range(-0.02, 0.02), random.range(-0.07, 0.07), random.range(-0.06, 0.06));
-      mesh.setColorAt(placed, colour);
-      placed += 1;
-    }
-    mesh.count = placed;
-    mesh.receiveShadow = true;
-    if (placed > 0) this.group.add(mesh);
-    return placed;
   }
 }
 

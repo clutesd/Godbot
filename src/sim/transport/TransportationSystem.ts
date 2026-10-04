@@ -2,7 +2,6 @@ import { recordFootTrafficSegment } from '../people/FootTraffic';
 import { freightVehicle, FREIGHT_CAPACITY, FREIGHT_SPEED, railReady, tradeOpportunity } from './FreightEconomy';
 import { infrastructureLabourBudget } from '../people/HumanCapital';
 import { settlementRepresentedPopulation } from '../Population';
-import { createSettlementLayoutPlan } from '../../shared/SettlementLayoutPlan';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { stableHash } from '../prng';
@@ -91,7 +90,6 @@ export class TransportationSystem {
   private readonly planner: RoutePlanner;
   private readonly walking: WalkabilityLayer;
   private readonly retries = new Map<string, number>();
-  private readonly localPlans = new Set<string>();
 
   constructor(private readonly state: SimulationState) {
     this.network = new TransportNetwork(state.world, state.transportation);
@@ -117,7 +115,7 @@ export class TransportationSystem {
   advanceMonth(): void {
     const { state } = this;
     if (state.month % 12 === 0) {
-      for (const settlement of state.settlements.filter(s => s.alive)) { this.planLocalAccess(settlement); this.planFacilityAccess(settlement); }
+      for (const settlement of state.settlements.filter(s => s.alive)) { this.planFacilityAccess(settlement); }
       for (const route of state.tradeRoutes.filter(r => r.active && r.transport)) {
         const a = state.settlements.find(s => s.id === route.a);
         const b = state.settlements.find(s => s.id === route.b);
@@ -481,18 +479,6 @@ export class TransportationSystem {
         const stop = network.stops[id]!;
         if (stop.status !== 'complete') { stop.status = 'complete'; network.revision++; }
       }
-    }
-  }
-
-  private planLocalAccess(settlement: Settlement): void {
-    if (settlement.buildings < 3 || this.localPlans.has(settlement.id)) return;
-    this.localPlans.add(settlement.id);
-    const layout = createSettlementLayoutPlan({ settlement, settlements: this.state.settlements, routes: [], eraRank: 1, seed: this.state.seed, identity: settlement.architecture });
-    for (const district of ['market', 'residential', 'craft'] as const) {
-      const anchor = layout.anchors[district];
-      const end = { x: settlement.position.x + anchor.localX, z: settlement.position.z + anchor.localZ };
-      const edges = this.planner.plan(settlement.position, end, 'road', this.state.transportation);
-      if (edges.length) this.register(`${settlement.id}:${district}:access`, settlement.id, settlement.id, 'road', edges, [], 'district-access');
     }
   }
 

@@ -8,6 +8,7 @@ import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation
 import type { ResourceWorkMotion } from '../animation/ResourceWorkMotion';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from '../people/PhysicalActionPresentation';
 import { constructionPresentationProgress, constructionStagePresentation } from './ConstructionVisualGrammar';
+import { sampleConstructionGesture } from './ConstructionGesture';
 
 export type ConstructionPhase = 'return' | 'pickup' | 'carry' | 'deliver' | 'handoff' | 'assemble' | 'inspect';
 export interface ConstructionPlayback { phase: ConstructionPhase; seconds: number; carrying: boolean }
@@ -23,7 +24,9 @@ export function createConstructionPlayback(): ConstructionPlayback { return { ph
 /** Current stock gates loads; already spent stock is in the structure, never back in the pile. */
 export function constructionBlockedReason(settlement: Settlement): string | undefined {
   const project = settlement.development?.project;
-  if (!settlement.alive || !project || project.progress >= 1) return 'no-active-project';
+  if (!settlement.alive || !project || project.progress >= 1 && !project.presentationPending) return 'no-active-project';
+  // These inputs were already paid. Future-stock shortages cannot erase their visible installation.
+  if (project.presentationPending && (project.labourSpent ?? 0) > 0 && project.progress > 0) return undefined;
   if (project.blockedReasons?.length) return project.blockedReasons[0];
   for (const requirement of project.materialRequirements ?? []) {
     if (requirement.amount > 0 && requirement.options.every(id => (settlement.localMaterials[id] ?? 0) <= 0.000001)) return `missing:${requirement.id}`;
@@ -50,7 +53,7 @@ export type ConstructionSitePresentationState =
  */
 export function constructionSitePresentationState(settlement: Settlement): ConstructionSitePresentationState {
   const project = settlement.development?.project;
-  if (!settlement.alive || !project || project.progress >= 1) return 'inactive';
+  if (!settlement.alive || !project || project.progress >= 1 && !project.presentationPending) return 'inactive';
   const blocked = constructionBlockedReason(settlement);
   if (blocked) return blocked.startsWith('missing:') ? 'blocked-material' : 'blocked-work';
   return constructionStagePresentation(constructionPresentationProgress(settlement)).finishing ? 'finishing' : 'active';
@@ -74,7 +77,7 @@ export function constructionPresentedMaterial(settlement: Settlement): Structure
 export function builderCanPresent(person: Person, settlement: Settlement, weather?: WeatherCellState): boolean {
   const project = settlement.development?.project;
   const plot = settlement.structurePlots?.find(p => p.id === project?.plotId);
-  return !workInterruption(person, weather) && settlement.alive && !!project && project.progress < 1
+  return !workInterruption(person, weather) && settlement.alive && !!project && (project.progress < 1 || !!project.presentationPending)
     && !!plot && !plot.fire && (plot.floodDepth ?? 0) <= 0.035 && plot.condition >= 0.65
     && person.homeId === settlement.id && person.activity === 'construct'
     && person.navigation?.destinationKind === 'construction-site'
@@ -155,7 +158,7 @@ export function advanceConstruction(
 export function sampleConstructionAction(person: Person, plotId: string, playback: ConstructionPlayback,
   anchors: ConstructionWorkerAnchors, material: StructureMaterial, motion: ResourceWorkMotion, blockedReason?: string,
   crewRole: ConstructionCrewRole = 'hauler', crewSize = 1, progress = 0.5,
-  handoff?: ConstructionHandoffCue, era: Era = 'early', waitingForDelivery = false): PhysicalActionPresentation {
+  handoff?: ConstructionHandoffCue, era: Era = 'early', waitingForDelivery = false, idleSeconds = 0): PhysicalActionPresentation {
   const phase = playback.phase;
   const blocked = blockedReason !== undefined;
   const choreography = constructionChoreography(material, progress);
@@ -174,7 +177,8 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
         : phase === 'deliver' ? CONSTRUCTION_DELIVER_SECONDS
           : phase === 'handoff' ? CONSTRUCTION_HANDOFF_SECONDS
             : phase === 'inspect' ? 1.6 : 1.8;
-  const p = Math.min(1, playback.seconds / duration);
+  // Waiting freezes material playback, not the person's attention and ready-to-receive posture.
+  const p = waiting ? Math.max(0, idleSeconds) % 2.6 / 2.6 : Math.min(1, playback.seconds / duration);
   if (blocked || waiting) applyQuietInspectionMotion(p, person.id, motion);
   else if (finishingCleanup) applyCleanupMotion(p, person.id, crewRole, motion);
   else if (receiving) applyReceiveMotion(handoff.progress, motion);
@@ -182,14 +186,29 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
   else if (assembling && phase === 'assemble') applyAssemblyMotion(choreography, p, person.id, motion);
   else if (prep) applyPrepMotion(choreography, p, person.id, motion);
   else applyHaulMotion(playback, phase, p, motion);
+  if (waiting) {
+    const attention = Math.sin(p * Math.PI);
+    motion.handY = 0.4 + attention * 0.14;
+    motion.handZ = 0.18 + attention * 0.08;
+    motion.lean = 0.04 + attention * 0.07;
+    motion.twist = Math.sin(p * Math.PI * 2) * 0.2;
+  }
+  sampleConstructionGesture(blocked || waiting || finishingCleanup ? 'quiet'
+    : receiving ? 'receive' : handoffing ? 'handoff'
+      : assembling && phase === 'assemble' ? choreography.finishing && choreography.assemblerTool === 'none' ? 'finish'
+        : choreography.assemblyMotion === 'pack' ? 'pack' : choreography.assemblyMotion === 'place' ? 'place' : 'strike'
+          : prep ? choreography.prepTool === 'none' ? 'place' : 'prepare'
+            : phase === 'pickup' ? 'pickup' : playback.carrying ? 'carry' : 'quiet',
+    receiving ? handoff.progress : p, choreography, motion);
   const haulingToHandoff = !blocked && !finishingCleanup && crewRole === 'hauler' && !pickup && phase !== 'assemble';
-  const cleanupTarget = crewRole === 'hauler' ? anchors.pickup : anchors.handoff;
+  // Cleanup must leave the active assembler's receive/approach lane clear.
+  const cleanupTarget = crewRole === 'hauler' ? anchors.pickup : anchors.prep;
   const blockedTarget = crewRole === 'hauler' ? anchors.pickup : crewRole === 'assembler' ? anchors.delivery : anchors.prep;
   const locomotionTarget = blocked ? blockedTarget
     : finishingCleanup ? cleanupTarget
       : prep ? anchors.prep : pickup ? anchors.pickup : haulingToHandoff ? anchors.handoff : anchors.delivery;
   const interactionCenter = blocked ? anchors.siteCenter
-    : finishingCleanup ? crewRole === 'hauler' ? anchors.materialCenter : anchors.siteCenter
+    : finishingCleanup ? crewRole === 'hauler' ? anchors.materialCenter : anchors.prepCenter
       : receiving || waiting ? anchors.handoff
         : haulingToHandoff ? anchors.delivery
           : prep ? anchors.prepCenter : pickup ? anchors.materialCenter : anchors.workContact ?? anchors.siteCenter;
@@ -202,14 +221,16 @@ export function sampleConstructionAction(person: Person, plotId: string, playbac
             : crewRole === 'assembler' ? 'construction-assemble' : crewRole === 'site-worker' ? 'construction-site'
               : soloGeneralist ? 'construction-generalist' : 'construction-haul',
     authoritativeActivity: person.activity,
-    sourceAuthority: 'development.project + construct destination + current material stocks + deterministic crew presentation', targetId: plotId,
+    sourceAuthority: 'development.project paid progress + construction labour receipt + exact construct destination + deterministic crew presentation', targetId: plotId,
     targetKind: receiving || haulingToHandoff ? 'handoff' : prep ? 'site-prep' : pickup ? 'material-pile' : 'workface',
-    interactionAnchor: assembling && anchors.workContact ? anchors.workContact : prep ? anchors.prepCenter : contactSurface(locomotionTarget, interactionCenter),
+    interactionAnchor: receiving || handoffing ? { x: (anchors.delivery.x + anchors.handoff.x) / 2, z: (anchors.delivery.z + anchors.handoff.z) / 2 }
+      : assembling && anchors.workContact ? anchors.workContact : prep ? anchors.prepCenter : contactSurface(locomotionTarget, interactionCenter),
     contactHeight: assembling ? anchors.contactHeight : prep ? 0.16 : undefined,
     platformHeight: !waiting && !receiving && !blocked && (crewRole === 'assembler' || soloGeneralist && phase === 'assemble') ? anchors.platformHeight : 0,
     locomotionTarget, phase: presentedPhase, phaseProgress: receiving ? handoff.progress : p,
     activeTool: blocked || waiting || finishingCleanup || receiving || handoffing ? 'none'
-      : assembling && phase === 'assemble' ? choreography.assemblerTool : prep ? choreography.prepTool : 'none',
+      : assembling && phase === 'assemble' ? choreography.assemblyMotion === 'place' && !choreography.finishing ? 'none' : choreography.assemblerTool
+        : prep ? choreography.prepTool : 'none',
     carriedObject: blocked || finishingCleanup ? undefined
       : receiving && handoff.progress >= 0.52 ? handoff.material
         : playback.carrying ? material : undefined,

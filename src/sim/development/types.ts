@@ -138,6 +138,8 @@ export interface StructureHistoryEntry {
 }
 
 export interface StructureDevelopment extends DevelopmentResponse {
+  /** Latest paid construction receipt, retained after the active project is retired. */
+  constructionWork?: DevelopmentProject;
   status: 'active' | 'abandoned' | 'ruin';
   origin: StructureHistoryEntry;
   /** Origin is permanent; the most recent twelve transitions are retained. */
@@ -148,6 +150,10 @@ export interface StructureDevelopment extends DevelopmentResponse {
 }
 
 export interface DevelopmentProject {
+  /** Bounded documentary cast from the occupation buckets which paid for this work. */
+  workerIds?: string[];
+  /** Renderer-owned copy only: paid work remains on screen until its contact-led reveal finishes. */
+  presentationPending?: boolean;
   blockedReasons?: string[];
   labourSpent?: number;
   lastWorkMonth?: number;

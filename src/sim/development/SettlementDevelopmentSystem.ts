@@ -1,5 +1,6 @@
 import { pendingRemembrance, refreshMemorials } from './Remembrance';
 import { settlementLabour } from '../people/HumanCapital';
+import { paidConstructionWorkerIds } from '../people/ConstructionLabour';
 import { seedHash } from '../prng';
 import type { Culture, Institution, InstitutionKind, Person, ResourceStock, Settlement, SimulationState, StructurePlot, TradeRoute } from '../types';
 import { practical, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem';
@@ -690,7 +691,13 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       const beforeProgress = project.progress;
       project.progress = Math.min(1, project.progress + progress);
       project.labourSpent = (project.labourSpent ?? 0) + progress * project.response.labor;
-      if (progress > 0) project.lastWorkMonth = state.month;
+      if (progress > 0) {
+        project.lastWorkMonth = state.month;
+        const budgets: Partial<Record<Person['occupation'], number>> = project.response.adaptation
+          ? { ...settlement.survival?.establishment?.constructionByOccupation }
+          : { builder: workRate > 0 ? c.builders : 0, farmer: fieldPreparation };
+        project.workerIds = paidConstructionWorkerIds(project, residents, settlement.id, budgets);
+      }
       if (project.response.adaptation && (project.response.services.housing ?? 0) > 0 && beforeProgress < 0.75 && project.progress >= 0.75) {
         events.push({ type: 'response-resolved', locationId: settlement.id, location: { x: plot.worldX, z: plot.worldZ },
           actors: [settlement.id, plot.id], causes: project.response.reasons,
@@ -703,6 +710,7 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         const record = entry(project.response, state.month, project.action);
         const prior = plot.development;
         plot.development = { ...project.response, status: 'active', origin: prior?.origin ?? record, history: prior?.history ?? [],
+          constructionWork: project,
           transitionCount: prior?.transitionCount ?? 0, lastUsedMonth: state.month };
         if (prior) remember(plot.development, record);
         plot.condition = 1; plot.accessRestricted = false;

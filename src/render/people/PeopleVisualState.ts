@@ -302,13 +302,22 @@ export class PeopleVisualStateStore {
     const previousX = state.x, previousZ = state.z;
     state.retrySeconds = Math.max(0, state.retrySeconds - dt);
     let next = state.path[state.waypoint];
+    // A shared detour corner is a corridor, not a station. Workers already clear of the corner
+    // continue toward their distinct work targets instead of crowding onto one exact waypoint.
+    const following = state.path[state.waypoint + 1];
+    if (state.arrivalEase && following && safeGroundSegment(state, following, ground)) {
+      state.waypoint++; next = following;
+    }
     const distanceToNext = next ? Math.hypot(next.x - state.x, next.z - state.z) : 0;
     const corridorEnd = next && distanceToNext > 3 ? { x: state.x + (next.x - state.x) * 3 / distanceToNext,
       z: state.z + (next.z - state.z) * 3 / distanceToNext } : next;
     if (corridorEnd && state.retrySeconds === 0 && !safeGroundSegment(state, corridorEnd, ground)) {
-      const route = ground.detour?.(state, corridorEnd) ?? [];
+      // Work planners validate the complete reachable station. A truncated endpoint can be inside
+      // a large plot even though the real pickup/workface is safely outside on its far side.
+      const detourEnd = state.arrivalEase && next ? next : corridorEnd;
+      const route = ground.detour?.(state, detourEnd) ?? [];
       if (route.length) {
-        state.path.splice(state.waypoint, distanceToNext > 3 ? 0 : 1, ...route);
+        state.path.splice(state.waypoint, detourEnd === next || distanceToNext <= 3 ? 1 : 0, ...route);
         next = state.path[state.waypoint]; state.blocked = false;
       } else {
         const bypass = this.localBypass(state, corridorEnd, ground);
@@ -536,6 +545,16 @@ export function safeGroundSegment(a: Vec2, b: Vec2, ground: PersonVisualGround):
     height = nextHeight;
   }
   return true;
+}
+
+/**
+ * Route authority shared with the mover: a target is reachable when the segment is clear, or when
+ * the same bounded detour the mover follows exists. Planners that approve work targets must use
+ * this rather than a straight-line check, or they approve stands the mover can never reach.
+ */
+export function visualRouteClear(a: Vec2, b: Vec2, ground: PersonVisualGround): boolean {
+  if (!ground.safeSegment || ground.safeSegment(a, b)) return true;
+  return (ground.detour?.(a, b).length ?? 0) > 0;
 }
 
 function stableVisualHash(value: string): number {

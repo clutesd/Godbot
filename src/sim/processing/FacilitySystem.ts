@@ -10,7 +10,7 @@ import type { ResourceEventDraft } from '../resources/ResourceSystem';
 import type { Settlement, SimulationState, StructurePlot } from '../types';
 import { facilityFamilies, facilityFamily, facilityTierSpec } from './FacilityCatalog';
 import {
-  adoptableWorkshop, beginUpgrade, billCoverage, foundFacility, installFacilityBody, legacyFacilityTier, newFacility, payBill, reserveFacilitySite, settlementProcessing,
+  adoptableWorkshop, beginUpgrade, billCoverage, foundFacility, installFacilityBody, legacyFacilityTier, newFacility, payBill, recordFacilityConstruction, reserveFacilitySite, settlementProcessing,
 } from './FacilityConstruction';
 import { facilityLedger, inTransitOf, bump } from './FacilityInventory';
 import { advanceTransit, deliverDue, dispatchInbound, dispatchOutbound, resolveFacilityAccess, type InboundRequest } from './FacilityHaul';
@@ -213,6 +213,7 @@ function erect(c: StepContext, f: ProcessingFacility, plot: StructurePlot): void
   const paid = halted ? 0 : payBill(state, s, spec.build, requested, f.spent);
   f.progress = Math.min(1, f.progress + paid);
   f.labourSpent += paid * spec.build.work;
+  if (paid > 0) recordFacilityConstruction(state, s, f, spec, f.progress, f.foundedMonth, 'founded', f.spent, f.labourSpent);
   setStatus(f, 'under-construction', 'none', halted ? [halted] : paid < requested - EPSILON ? ['materials-or-labour'] : []);
   if (f.progress < 1 - 1e-8) return;
   f.progress = 1;
@@ -235,6 +236,7 @@ function convert(c: StepContext, f: ProcessingFacility, plot: StructurePlot): vo
   const paid = halted ? 0 : payBill(state, s, spec.build, requested, up.spent);
   up.progress = Math.min(1, up.progress + paid);
   up.labourSpent += paid * spec.build.work;
+  if (paid > 0) recordFacilityConstruction(state, s, f, spec, up.progress, up.startedMonth, 'upgraded', up.spent, up.labourSpent);
   for (const [id, amount] of Object.entries(up.spent)) f.spent[id] = Math.max(f.spent[id] ?? 0, amount);
   // Retooling stops the line: no production, but hauls already under way still land.
   advanceTransit(f); deliverDue(s, f);

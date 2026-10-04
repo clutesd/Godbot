@@ -510,7 +510,7 @@ export class PeopleSystem {
     const destination = schedule.point
       ? this.walkability.nearestWalkable(schedule.point, `${person.id}:${schedule.destinationId ?? 'resource-work'}`)
       : this.destinationPoint(person, settlement, state, schedule.kind);
-    const preferred = schedule.preferredWaypoints ?? this.preferredRoadWaypoints(person, settlement, state, schedule.kind);
+    const preferred = schedule.preferredWaypoints ?? this.preferredRoadWaypoints();
     const waypoints = this.walkability.route(person.position, destination, preferred, mode);
     if (waypoints.length === 0) {
       const safe = this.walkability.nearestWalkable(person.position, `${person.id}:stranded`);
@@ -671,16 +671,10 @@ export class PeopleSystem {
     return destination;
   }
 
-  private preferredRoadWaypoints(person: Person, settlement: Settlement, state: SimulationState, destination: DestinationKind): Vec2[] {
-    const layout = this.layout(settlement, state);
-    const district = DESTINATION_DISTRICT[destination] ?? 'civic';
-    const points: Vec2[] = [];
-    if (person.navigation?.destinationKind === 'home' || Math.hypot(person.position.x - layout.anchors.residential.worldX, person.position.z - layout.anchors.residential.worldZ) < layout.radius * 0.65) {
-      points.push({ x: layout.anchors.residential.worldX, z: layout.anchors.residential.worldZ });
-    }
-    if (district !== 'residential') points.push({ x: layout.anchors.civic.worldX, z: layout.anchors.civic.worldZ });
-    if (district !== 'civic') points.push({ x: layout.anchors[district].worldX, z: layout.anchors[district].worldZ });
-    return points;
+  private preferredRoadWaypoints(): Vec2[] {
+    // Walkability and existing wear choose local circulation. Semantic district anchors must
+    // never become compulsory waypoints, including when technology reaches industrial eras.
+    return [];
   }
 
   private destinationId(person: Person, settlement: Settlement, kind: DestinationKind): string {
@@ -698,7 +692,7 @@ export class PeopleSystem {
       .filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id))
       .map((route) => `${route.id}:${route.transport?.path?.mode ?? 'unconnected'}:${Math.floor(route.volume * 5)}`)
       .join('|');
-    const signature = `${settlement.buildings}:${Math.floor(settlement.urbanization * 8)}:${settlementEraRank(settlement, state)}:${routeSignature}:${settlement.architecture?.dialectKey ?? ''}`;
+    const signature = `${state.month}:${state.transportation.revision}:${settlement.development?.revision ?? 0}:${settlement.buildings}:${Math.floor(settlement.urbanization * 8)}:${settlementEraRank(settlement, state)}:${routeSignature}:${settlement.architecture?.dialectKey ?? ''}`;
     const cached = this.layoutCache.get(settlement.id);
     if (cached?.signature === signature) return cached.layout;
     const layout = createSettlementLayoutPlan({
@@ -706,6 +700,7 @@ export class PeopleSystem {
       settlements: state.settlements,
       routes: state.tradeRoutes,
       transportation: state.transportation,
+      world: state.world,
       eraRank: settlementEraRank(settlement, state),
       seed: this.seed,
       identity: settlement.architecture,

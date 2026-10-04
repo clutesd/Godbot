@@ -6,6 +6,7 @@ import { Simulation } from '../src/sim/Simulation';
 import type { Settlement } from '../src/sim/types';
 import type { DevelopmentResponse } from '../src/sim/development/types';
 import { RenderMaintenanceScheduler } from '../src/render/RenderMaintenanceScheduler';
+import { ConstructionRuntime } from '../src/render/construction/ConstructionRuntime';
 import { CONSTRUCTION_STAGE_THRESHOLDS, constructionPresentationBucket } from '../src/render/construction/ConstructionVisualGrammar';
 
 interface SettlementVisualState {
@@ -42,6 +43,7 @@ function harness(seed: string): FakeRendererHarness {
   const scene = new THREE.Scene();
   const visuals = new Map<string, SettlementVisualState>();
   const fake = {
+    constructionRuntime: new ConstructionRuntime(),
     state: simulation.state,
     scene,
     settlementVisuals: visuals,
@@ -55,6 +57,7 @@ function harness(seed: string): FakeRendererHarness {
       created += 1;
       const group = new THREE.Group();
       group.userData['settlementId'] = settlement.id;
+      group.userData['constructionProject'] = settlement.development?.project;
       return {
         group,
         buildingCount: settlement.buildings,
@@ -224,6 +227,36 @@ describe('construction presentation progress authority', () => {
 });
 
 describe('settlement render budgeting', () => {
+  it('keeps paid completion in the enhanced live renderer until worker-led visual completion releases it', () => {
+    const test = harness('enhanced-paid-completion');
+    const settlement = test.state.settlements.find(s => s.alive)!;
+    attachActiveProject(settlement, test.state, 0.8);
+    const project = settlement.development!.project!;
+    const plot = settlement.structurePlots!.find(p => p.development)!;
+    project.plotId = plot.id;
+    project.workerIds = [test.state.people.find(p => p.alive && p.homeId === settlement.id)!.id];
+    project.labourSpent = project.progress * project.response.labor;
+    sync(test.renderer, true);
+    const runtime = (test.renderer as unknown as { constructionRuntime: ConstructionRuntime }).constructionRuntime;
+    const viewProject = runtime.settlement(settlement).development!.project!;
+    project.progress = 1; project.labourSpent = project.response.labor;
+    plot.development!.constructionWork = project;
+    settlement.development!.project = undefined;
+    settlement.development!.revision++;
+    test.state.month++;
+    sync(test.renderer);
+    expect(runtime.holds(plot.id)).toBe(true);
+    expect(runtime.settlement(settlement).development!.project).toBe(viewProject);
+    expect(viewProject.progress).toBe(1);
+    expect(settlement.development!.project).toBeUndefined();
+    const group = test.scene.children.find(g => g.userData['settlementId'] === settlement.id)!;
+    expect(group.userData['constructionProject']).toBe(viewProject);
+    runtime.finish(settlement, viewProject);
+    sync(test.renderer);
+    const finished = test.scene.children.find(g => g.userData['settlementId'] === settlement.id)!;
+    expect(finished.userData['constructionProject']).toBeUndefined();
+    expect(runtime.holds(plot.id)).toBe(false);
+  });
   it('spreads simultaneous heavy settlement changes across structural passes', () => {
     const test = harness('settlement-render-budget-queue');
     sync(test.renderer, true);

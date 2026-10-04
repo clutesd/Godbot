@@ -19,9 +19,10 @@ export function decorateConstructionWorksite(
   activeSite: THREE.Group,
   settlement: Settlement,
   palette: MaterialPalette,
+  visualProgress = constructionPresentationProgress(settlement),
 ): THREE.Group | undefined {
   const project = settlement.development?.project;
-  if (!project || project.progress >= 1) return undefined;
+  if (!project || project.progress >= 1 && !project.presentationPending) return undefined;
 
   const existing = activeSite.getObjectByName(`construction-worksite:${project.plotId}`);
   if (existing instanceof THREE.Group) return existing;
@@ -42,7 +43,7 @@ export function decorateConstructionWorksite(
   const worksite = createConstructionWorksite({
     width,
     depth,
-    progress: constructionPresentationProgress(settlement),
+    progress: visualProgress,
     response: { ...project.response, material: constructionPresentedMaterial(settlement) },
     seedKey: project.plotId,
     materialsAvailable: siteState !== 'blocked-material',

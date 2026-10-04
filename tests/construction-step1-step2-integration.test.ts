@@ -17,7 +17,7 @@ import {
 } from '../src/render/construction/ConstructionActionPresentation';
 import { constructionChoreography } from '../src/render/construction/ConstructionChoreography';
 import { constructionWorkfaceIndex } from '../src/render/construction/ConstructionCrewPresentation';
-import { constructionWorkerLane } from '../src/render/construction/ConstructionWorkerMotion';
+import { constructionWorkerLane, rotateConstructionAnchor } from '../src/render/construction/ConstructionWorkerMotion';
 import {
   constructionWorksiteAnchors,
   createConstructionWorksite,
@@ -229,10 +229,12 @@ describe('Step 1 + Step 2 construction presentation contract', () => {
       expect(worker.crewRole).toBe('assembler');
       expect(worker.crewRank).toBe(assemblerAssignment.rank);
       expect(worker.crewSize).toBe(people.length);
-      expect(worker.anchors!.delivery.x).toBeCloseTo(localAnchors.delivery.x);
-      expect(worker.anchors!.delivery.z).toBeCloseTo(localAnchors.delivery.z);
-      expect(worker.action.locomotionTarget.x).toBeCloseTo(localAnchors.delivery.x);
-      expect(worker.action.locomotionTarget.z).toBeCloseTo(localAnchors.delivery.z);
+      // The stand is the exact workface pushed just outside the solid plot, a small offset at most.
+      // The building contact itself is not moved by that offset.
+      const exactStand = rotateConstructionAnchor(localAnchors.delivery, { x: placement.worldX, z: placement.worldZ }, placement.rotationY);
+      expect(Math.hypot(worker.anchors!.delivery.x - exactStand.x, worker.anchors!.delivery.z - exactStand.z)).toBeLessThan(0.6);
+      expect(worker.action.locomotionTarget.x).toBeCloseTo(worker.anchors!.delivery.x);
+      expect(worker.action.locomotionTarget.z).toBeCloseTo(worker.anchors!.delivery.z);
       expect(worker.action.actionKind).toBe(checkpoint.finishing ? 'construction-finish' : 'construction-assemble');
 
       if (stablePlayback === undefined) stablePlayback = worker.playback;

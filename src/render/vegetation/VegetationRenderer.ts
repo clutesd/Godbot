@@ -362,6 +362,11 @@ export class VegetationRenderer {
     this.wildlife.setExclusionZones([...next, ...this.occupiedGround]);
   }
 
+  /** Ground that clutter must keep clear of: occupied plots, cultivated fields and camp artifacts. */
+  reservedGround(): readonly { x: number; z: number; radius: number }[] {
+    return this.occupiedGround;
+  }
+
   setSeason(season: number): void {
     this.targetSeason = ((season % 12) + 12) % 12;
     if (this.lastCalendarMonth === undefined || Math.abs(season - this.lastCalendarMonth) > 3) this.season = this.targetSeason;

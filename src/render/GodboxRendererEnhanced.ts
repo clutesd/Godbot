@@ -8,6 +8,7 @@ import { gradeViolations } from '../sim/transport/TransportNetwork';
 import { eraRank } from './assets/BuildingGrammar';
 import { constructionPresentationBucket, constructionPresentationProgress } from './construction/ConstructionVisualGrammar';
 import { constructionSitePresentationState } from './construction/ConstructionActionPresentation';
+import type { ConstructionRuntime } from './construction/ConstructionRuntime';
 import type { Settlement, SimulationState } from '../sim/types';
 import type { TransportSegment } from '../sim/transport/types';
 import type { Era, MaterialPalette } from './materials/MaterialPalette';
@@ -52,6 +53,7 @@ interface SettlementVisualLike {
 }
 
 interface RendererInternals {
+  constructionRuntime: ConstructionRuntime;
   assetBuilder: AssetBuilder;
   dominantCulture: (settlement: Settlement) => Culture | undefined;
   state: SimulationState;
@@ -450,6 +452,7 @@ function heavySettlementSignature(
     politySize,
     bannerSignature,
     settlement.development?.revision ?? 0,
+    self.constructionRuntime.signature(settlement.id),
     self.eraForSettlement(settlement),
     bucket(infrastructure.roads),
     bucket(infrastructure.ports),
@@ -485,6 +488,8 @@ function enqueueSettlement(budget: SettlementRenderBudgetState, settlementId: st
  */
 function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
   const self = this as unknown as RendererInternals;
+  self.constructionRuntime.sync(self.state);
+  const settlements = self.constructionRuntime.settlements(self.state.settlements);
   const budget = settlementBudgetState(this);
   if (force) {
     budget.pending.length = 0;
@@ -495,7 +500,7 @@ function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
   const signatureById = new Map<string, string>();
   const bannerById = new Map<string, string>();
   const metadataById = new Map<string, { routeCount: number; politySize: number }>();
-  for (const settlement of self.state.settlements) {
+  for (const settlement of settlements) {
     const routeCount = self.state.tradeRoutes.filter(route => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const politySize = self.state.polities.find(polity => polity.id === settlement.polityId)?.settlementIds.length ?? 1;
     const bannerSignature = self.bannerSignatureForSettlement(settlement);
@@ -506,12 +511,12 @@ function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
     if (existing) existing.powerLevel = settlement.infrastructure.power;
   }
 
-  const globalSignature = self.state.settlements.map(settlement => signatureById.get(settlement.id) ?? settlement.id).join('|');
+  const globalSignature = settlements.map(settlement => signatureById.get(settlement.id) ?? settlement.id).join('|');
   const stateChanged = force || globalSignature !== budget.observedSignature;
   if (stateChanged) {
     budget.observedSignature = globalSignature;
     self.lastSettlementSignature = globalSignature;
-    for (const settlement of self.state.settlements) {
+    for (const settlement of settlements) {
       const existing = self.settlementVisuals.get(settlement.id);
       if (!settlement.alive && !settlement.development) {
         if (existing) existing.group.visible = false;
@@ -540,7 +545,7 @@ function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
   while (budget.pending.length > 0 && rebuilt < rebuildLimit) {
     const settlementId = budget.pending.shift()!;
     budget.pendingIds.delete(settlementId);
-    const settlement = self.state.settlements.find(candidate => candidate.id === settlementId);
+    const settlement = settlements.find(candidate => candidate.id === settlementId);
     if (!settlement) continue;
     const existing = self.settlementVisuals.get(settlement.id);
     if (!settlement.alive && !settlement.development) {

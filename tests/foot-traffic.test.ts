@@ -18,15 +18,18 @@ type RoadWaypointProbe = {
 };
 
 describe('movement-driven desire paths', () => {
-  it('records actual represented pedestrian movement during a simulation', () => {
+  it('records pedestrian trips that start and finish within the monthly simulation tick', () => {
     const simulation = new Simulation({ seed: 'desire-path-live', startingPopulation: 30, settlementCount: [2, 2] });
+    expect(simulation.state.people.every(person => !person.navigation?.traveling)).toBe(true);
     simulation.step(10);
+    expect(simulation.state.people.some(person => person.navigation?.waypoints.length
+      && !person.navigation.traveling && person.navigation.waypointIndex === person.navigation.waypoints.length)).toBe(true);
     const worn = simulation.state.world.cells.filter(cell => (cell.modifications?.footpath?.intensity ?? 0) > 0);
     expect(worn.length).toBeGreaterThan(0);
     expect(worn.some(cell => cell.modifications?.track === undefined)).toBe(true);
   });
 
-  it('keeps local routing geography-led until industrial planning becomes plausible', () => {
+  it('keeps local routing geography-led even when industrial technology exists', () => {
     const simulation = new Simulation({ seed: 'organic-route-regression', startingPopulation: 30, settlementCount: [2, 2] });
     const settlement = simulation.state.settlements[0]!;
     const person = simulation.state.people.find(candidate => candidate.homeId === settlement.id)!;
@@ -43,7 +46,7 @@ describe('movement-driven desire paths', () => {
     expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop')).toEqual([]);
 
     settlement.industry.active = true;
-    expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop').length).toBeGreaterThan(0);
+    expect(probe.preferredRoadWaypoints(person, settlement, simulation.state, 'workshop')).toEqual([]);
   });
 
   it('turns repeated real pedestrian movement into persistent visible footpath wear', () => {

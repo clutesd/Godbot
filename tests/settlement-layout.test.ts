@@ -70,8 +70,8 @@ describe('Settlement layout plan', () => {
     expect(Math.abs(plan.anchors.market.localZ)).toBeLessThan(plan.radius * 0.05);
     expect(plan.portals).toHaveLength(1);
     expect(plan.portals[0]?.kind).toBe('gate');
-    expect(plan.portals[0]?.localX).toBeGreaterThan(plan.anchors.market.localX);
-    expect(plan.streets.some((street) => street.kind === 'primary')).toBe(true);
+    expect(plan.anchors.market.worldX).toBe(plan.portals[0]?.worldX);
+    expect(plan.streets).toEqual([]);
   });
 
   it('marks constructed maritime and railway routes at their actual endpoints', () => {
@@ -117,7 +117,8 @@ describe('Settlement layout plan', () => {
     expect(docks[0]?.worldZ).toBe(8);
     expect(docks[0]?.bank).toEqual({ x: 0, z: 6 });
     expect(gates).toHaveLength(1);
-    expect(plan.streets.some((street) => street.fromX === 0 && street.fromZ === 6)).toBe(true);
+    expect(plan.anchors.market.worldZ).toBe(6);
+    expect(plan.streets).toEqual([]);
   });
 
   it('keeps industrial plots on the industrial district only when the settlement supports it', () => {
