@@ -12,11 +12,11 @@ import { mineralAerialSignature, mineralVisualProfile, type MineralGeometryKind 
 import { strongestMovementPathNeighbour, movementPathStage, movementPathStrength, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
 const PATH_COLOURS: Record<Exclude<MovementPathStage, 'none'>, THREE.Color> = {
-  'desire-path': new THREE.Color('#8d775d'),
-  footpath: new THREE.Color('#7b6249'),
-  'packed-track': new THREE.Color('#66523e'),
-  'cart-road': new THREE.Color('#685a46'),
-  'engineered-road': new THREE.Color('#777168'),
+  'desire-path': new THREE.Color('#79634e'),
+  footpath: new THREE.Color('#68513e'),
+  'packed-track': new THREE.Color('#574535'),
+  'cart-road': new THREE.Color('#554936'),
+  'engineered-road': new THREE.Color('#66615a'),
 };
 const STAGE_RANK: Record<MovementPathStage, number> = {
   none: 0,
@@ -275,7 +275,7 @@ export class ResourceSiteRenderer {
       new THREE.MeshStandardMaterial({
         roughness: 1,
         transparent: true,
-        opacity: 0.8,
+        opacity: 0.92,
         depthWrite: false,
         polygonOffset: true,
         polygonOffsetFactor: -2,
@@ -993,7 +993,7 @@ export class ResourceSiteRenderer {
         [neighbour.worldX + sideX * widthB, neighbour.worldZ + sideZ * widthB],
         [neighbour.worldX - sideX * widthB, neighbour.worldZ - sideZ * widthB],
       ] as const;
-      for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.022, worldZ);
+      for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.03, worldZ);
       indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
 
       const colourA = PATH_COLOURS[stageA];
@@ -1011,6 +1011,8 @@ export class ResourceSiteRenderer {
     if (positions.length > 0) geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
     this.footpaths.userData['pathStageCounts'] = counts;
+    this.footpaths.userData['circulationAuthority'] = 'recorded-movement-wear';
+    this.footpaths.userData['wideShotReadable'] = true;
   }
 
   private strongestPathNeighbour(cellIndex: number): number | undefined {
@@ -1018,12 +1020,14 @@ export class ResourceSiteRenderer {
   }
 
   private pathHalfWidth(stage: Exclude<MovementPathStage, 'none'>, strength: number): number {
-    const base = stage === 'desire-path' ? 0.018
-      : stage === 'footpath' ? 0.027
-        : stage === 'packed-track' ? 0.043
-          : stage === 'cart-road' ? 0.064
-            : 0.082;
-    const growth = stage === 'engineered-road' ? 0.032 : stage === 'cart-road' ? 0.026 : 0.018;
-    return this.world.cellSize * Math.min(0.12, base + Math.sqrt(Math.min(1.5, strength)) * growth);
+    // These remain the exact movement-driven paths; only their presentation width is amplified so
+    // an establishing documentary shot can read settlement circulation without synthetic roads.
+    const base = stage === 'desire-path' ? 0.032
+      : stage === 'footpath' ? 0.048
+        : stage === 'packed-track' ? 0.071
+          : stage === 'cart-road' ? 0.098
+            : 0.125;
+    const growth = stage === 'engineered-road' ? 0.045 : stage === 'cart-road' ? 0.04 : 0.028;
+    return this.world.cellSize * Math.min(0.18, base + Math.sqrt(Math.min(1.5, strength)) * growth);
   }
 }
