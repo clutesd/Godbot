@@ -138,7 +138,6 @@ export function planWorkingPrecinct(
   const level = clamp(development.level, 1, 3);
   const condition = clamp(plot.condition, 0.2, 1);
   const fit = Math.min(1, 0.64 + level * 0.12);
-  const bodyWidth = placement.width * fit;
   const bodyDepth = placement.depth * fit;
   const spareZ = Math.max(0.14, plot.radius - bodyDepth / 2 - 0.03);
   const stripDepth = clamp(spareZ * 0.74, 0.14, Math.max(0.18, plot.radius * 0.38));
