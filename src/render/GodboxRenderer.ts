@@ -86,6 +86,7 @@ import { ResourceWorkerRenderer } from './resources/ResourceWorkerRenderer';
 import { resourceWorkAlternateAnchor } from './animation/ResourceWorkMotion';
 import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
 import { createWorkingPrecinctLayer } from './settlement/WorkingPrecinctPresentation';
+import { storageUnits } from './settlement/StorageYardPresentation';
 import { farmPlotRotation } from '../shared/FarmGeometry';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
@@ -2094,7 +2095,9 @@ export class GodboxRenderer {
     const placements = settlement.development ? reservedPlacements.filter(p => settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shownBuildings) : reservedPlacements.slice(0, shownBuildings);
     if (settlement.development) {
       group.add(createWorkingPrecinctLayer(this.state, settlement, placements, settlementY,
-        (worldX, worldZ) => this.elevationAt(worldX, worldZ)));
+        (worldX, worldZ) => this.elevationAt(worldX, worldZ),
+        (worldX, worldZ, radius) => this.placementFootprints.isAreaClear(worldX, worldZ, radius).clear,
+        `${this.config.seed}:${settlement.id}`));
     }
     for (const placement of placements) {
       const terrainY = this.elevationAt(placement.worldX, placement.worldZ) - settlementY;
@@ -3086,6 +3089,13 @@ export class GodboxRenderer {
       settlement.resources.goods,
       Object.values(settlement.localMaterials).reduce((sum, amount) => sum + Math.max(0, amount ?? 0), 0),
     ].map(value => Math.min(8, Math.floor(Math.log2(Math.max(0, value) + 1))));
+    // Storage yards rebuild when any material's visible unit count changes, not on every tick of stock.
+    const yardUnits = Object.entries(settlement.localMaterials)
+      .map(([id, amount]) => [id, storageUnits(amount)] as const)
+      .filter(([, units]) => units > 0)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, units]) => `${id}${units}`)
+      .join(',');
     const coarseBuckets = [
       infrastructure.roads,
       infrastructure.ports,
@@ -3117,6 +3127,7 @@ export class GodboxRenderer {
       constructionBlockedReason(settlement) ?? '',
       this.eraForSettlement(settlement),
       ...stockBuckets,
+      yardUnits,
       ...coarseBuckets,
       stops,
       ...(settlement.structurePlots ?? []).map(plot => Math.floor(plot.condition * 20)),

@@ -57,7 +57,9 @@ export class ResourceFlowRenderer {
 
   update(): void {
     const settlements = this.state.settlements.filter(s => s.alive).sort((a, b) => a.id.localeCompare(b.id)).slice(0, MAX_RESOURCE_SETTLEMENTS);
-    const plans = settlements.map(s => ({ s, stock: resourceStoragePresentation(s),
+    // Development settlements show stock through the storage-yard grammar on their working
+    // precincts (StorageYardPresentation); only legacy settlements keep this generic ring.
+    const plans = settlements.map(s => ({ s, stock: s.development ? [] : resourceStoragePresentation(s),
       processes: resourceProcessingPresentation(this.state.world, s, this.state.month) }));
     const signature = JSON.stringify([this.state.world.environmentRevision, plans.map(({ s, stock, processes }) =>
       [s.id, s.position, s.structurePlots?.map(p => [p.id, p.worldX, p.worldZ, p.radius, p.width, p.depth,

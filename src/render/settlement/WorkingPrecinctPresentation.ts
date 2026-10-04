@@ -3,6 +3,10 @@ import type { Settlement, SimulationState, StructurePlot } from '../../sim/types
 import type { SettlementNeed, StructureDevelopment, StructureMaterial } from '../../sim/development/types';
 import { movementPathStage } from '../../sim/environment/PathEvolution';
 import { cellAt } from '../../sim/world';
+import {
+  STOCKPILE_HOST_ID, arrivalSignFor, dominantArrival, frontStagedFamilies, planSettlementStorage, planYardBays, storageArrivals,
+  type SettlementStoragePlan, type StorageArrivals, type YardFrame, type YardPrimitive,
+} from './StorageYardPresentation';
 
 export type PrecinctCue =
   | 'working-ground'
@@ -11,16 +15,27 @@ export type PrecinctCue =
   | 'work-surface'
   | 'storage-surface'
   | 'domestic-yard'
+  | 'entrance-wear'
+  | 'mud'
+  | 'ash-refuse'
+  | 'drainage-cut'
+  | 'garden-edge'
+  | 'timber-working'
+  | 'livestock-wear'
   | 'fence'
   | 'sacred-marker'
   | 'water-handling'
   | 'stock:food'
-  | 'stock:wood'
-  | 'stock:minerals'
-  | 'stock:goods';
+  | 'stock:goods'
+  /** Storage-yard cues (`stock:timber`, `work:chopping`, `storage-shed`, ...) from StorageYardPresentation. */
+  | (string & {});
 
-type PrecinctPrimitiveKind = 'ground' | 'solid' | 'pile';
-type BulkStock = 'food' | 'wood' | 'minerals' | 'goods';
+type PrecinctPrimitiveKind = 'ground' | 'solid' | 'pile' | 'log' | 'drum' | 'clod';
+/**
+ * Bulk aggregates that are not aliases of `localMaterials`. `resources.wood`/`minerals` are published
+ * from `localMaterials.timber`/`stone`, so they appear only through the storage-yard grammar.
+ */
+type BulkStock = 'food' | 'goods';
 
 export interface PrecinctPlacement {
   key: string;
@@ -43,6 +58,13 @@ export interface PrecinctPrimitive {
   colour: string;
   /** Solid work props keep off cells already carrying authoritative movement wear. */
   keepPathClear: boolean;
+  /** Base above local ground for stacked courses. */
+  y?: number;
+  pitch?: number;
+  /** Stack members are validated together: one culled member culls the stack, so nothing floats. */
+  group?: string;
+  /** Visible stock units represented (storage-yard primitives only). */
+  stock?: number;
 }
 
 export interface WorkingPrecinctPlan {
@@ -78,8 +100,6 @@ const NEED_GROUND: Record<SettlementNeed, string> = {
 
 const STOCK_COLOURS: Record<BulkStock, string> = {
   food: '#8a7442',
-  wood: '#725236',
-  minerals: '#66635d',
   goods: '#7b6955',
 };
 
@@ -91,12 +111,8 @@ function activeDevelopment(plot: StructurePlot): StructureDevelopment | undefine
   return development;
 }
 
-function resourceEligible(settlement: Settlement, development: StructureDevelopment, stock: BulkStock): boolean {
+function resourceEligible(development: StructureDevelopment, stock: BulkStock): boolean {
   if (stock === 'food') return development.need === 'food' || development.form === 'store' && (development.services.food ?? 0) > 0;
-  if (stock === 'wood') return ['manufacturing', 'energy', 'transport'].includes(development.need)
-    || settlement.specialization === 'forestry' && ['trade', 'manufacturing'].includes(development.need);
-  if (stock === 'minerals') return development.need === 'manufacturing'
-    || settlement.specialization === 'mining' && ['trade', 'transport'].includes(development.need);
   return ['trade', 'transport', 'manufacturing'].includes(development.need) || development.form === 'store';
 }
 
@@ -108,7 +124,7 @@ export function precinctStockOwner(settlement: Settlement, stock: BulkStock): st
   return (settlement.structurePlots ?? [])
     .filter(plot => {
       const development = activeDevelopment(plot);
-      return development ? resourceEligible(settlement, development, stock) : false;
+      return development ? resourceEligible(development, stock) : false;
     })
     // Match the renderer's stable "oldest specialist first" bias so the authoritative stock owner
     // stays inside the bounded establishing-shot sample whenever an eligible site is visible.
@@ -128,10 +144,19 @@ function chordWidth(radius: number, z: number, depth: number): number {
  * Pure documentary projection from authoritative structure + settlement state.
  * It never mutates state, creates services, or synthesizes inventory/activity.
  */
+export interface PrecinctStorageContext {
+  /** Settlement-wide allocation of `localMaterials`; derived from the settlement alone when omitted. */
+  plan?: SettlementStoragePlan;
+  arrivals?: StorageArrivals;
+  seed?: string;
+}
+
 export function planWorkingPrecinct(
   settlement: Settlement,
   plot: StructurePlot,
-  placement: Pick<PrecinctPlacement, 'width' | 'depth'>,
+  placement: Pick<PrecinctPlacement, 'width' | 'depth'> & Partial<Pick<PrecinctPlacement, 'rotationY'>>,
+  groundHistory?: { month: number; moisture: number },
+  storage: PrecinctStorageContext = {},
 ): WorkingPrecinctPlan | undefined {
   const development = activeDevelopment(plot);
   if (!development) return undefined;
@@ -164,16 +189,72 @@ export function planWorkingPrecinct(
     yaw = 0,
   ) => primitives.push({ kind, cue, x, z, width, height, depth, yaw, colour, keepPathClear });
 
+  // Storage yards are laid out first: stock claims wall-side bays at the arrival end, and generic
+  // tables yield those bays so material and its handling space read as one working area.
+  const occupied: Record<'front' | 'rear', Set<1 | -1>> = { front: new Set(), rear: new Set() };
+  const host = (storage.plan ?? planSettlementStorage(settlement, storage.arrivals)).hosts.get(plot.id);
+  if (host) {
+    const front = frontStagedFamilies(host.role, host.maturity);
+    const arrivalSign = arrivalSignFor(dominantArrival(host, storage.arrivals ?? {}), placement.rotationY ?? 0,
+      `${storage.seed ?? settlement.id}:${plot.id}`);
+    for (const side of ['rear', 'front'] as const) {
+      const allocations = host.allocations.filter(allocation => front.has(allocation.family) === (side === 'front'));
+      if (!allocations.length) continue;
+      const frame: YardFrame = {
+        wallOffset: bodyDepth / 2,
+        stripDepth: Math.max(0, plot.radius - bodyDepth / 2 - 0.06),
+        stripWidth: side === 'front' ? frontWidth : rearWidth,
+        side,
+        arrivalSign,
+      };
+      const yard = planYardBays(host, allocations, frame, storage.seed ?? settlement.id);
+      for (const primitive of yard.primitives) primitives.push(yardPrimitive(primitive));
+      for (const sign of yard.occupiedSigns) occupied[side].add(sign);
+    }
+  }
+
   const pad = (cue: PrecinctCue, side: 'front' | 'rear', scale = 1) => {
     const z = side === 'front' ? frontZ : rearZ;
     const width = (side === 'front' ? frontWidth : rearWidth) * scale;
     add('ground', cue, 0, z, width, 0.018, stripDepth * 0.94, groundColour, false);
   };
 
+  if (groundHistory) {
+    const age = clamp((groundHistory.month - plot.foundedMonth) / 120, 0, 1);
+    if (age > 0) {
+      // Occupation wears entrances first, then spreads into yards. These patches
+      // represent local use; connecting paths remain earned by actual foot traffic.
+      add('ground', groundHistory.moisture > 0.6 ? 'mud' : 'entrance-wear',
+        0, frontZ, frontWidth * (0.28 + age * 0.6), 0.028,
+        stripDepth * (0.35 + age * 0.6), groundHistory.moisture > 0.6 ? '#554738' : '#88735a', false);
+      if (age > 0.15 && ['housing', 'food', 'manufacturing', 'energy'].includes(development.need)) {
+        add('ground', 'ash-refuse', rearWidth * 0.27, rearZ, rearWidth * 0.2,
+          0.028, stripDepth * 0.48 * age, '#514b43', false, 0.17);
+      }
+      if (age > 0.3 && groundHistory.moisture > 0.6) {
+        add('ground', 'drainage-cut', -frontWidth * 0.38, frontZ, 0.045,
+          0.028, stripDepth * 0.85, '#494336', false, 0.12);
+      }
+      if (development.need === 'housing' && age > 0.25) {
+        add('ground', 'garden-edge', -rearWidth * 0.25, rearZ, rearWidth * 0.27,
+          0.028, stripDepth * 0.65, '#655e3c', false);
+      }
+      if (development.need === 'manufacturing' && development.material === 'timber') {
+        add('ground', 'timber-working', -rearWidth * 0.25, rearZ, rearWidth * 0.3,
+          0.028, stripDepth * 0.7 * age, '#96805b', false);
+      }
+      if (development.need === 'food' && capability(development, 'animal-husbandry')) {
+        add('ground', 'livestock-wear', 0, rearZ, rearWidth * 0.55,
+          0.028, stripDepth * 0.6 * age, '#6b5b3f', false);
+      }
+    }
+  }
+
   const table = (cue: PrecinctCue, side: 'front' | 'rear', lateral = 1, scale = 1) => {
     const z = (side === 'front' ? frontZ : rearZ) + (side === 'front' ? -1 : 1) * stripDepth * 0.04;
     const available = side === 'front' ? frontWidth : rearWidth;
     const width = clamp(available * 0.25 * scale, 0.24, 0.62);
+    if (occupied[side].has(lateral >= 0 ? 1 : -1)) return;
     const x = lateral * Math.max(width * 0.62, available * 0.27);
     add('solid', cue, x, z, width, propHeight, 0.16 + level * 0.02, surfaceColour);
   };
@@ -246,15 +327,12 @@ export function planWorkingPrecinct(
       table('work-surface', 'rear', 1, 1.08);
     }
     if (settlement.specialization === 'craft') table('storage-surface', 'front', 1, 0.72);
-    addStock('wood');
-    addStock('minerals');
     addStock('goods');
   }
 
   if (development.need === 'energy') {
     pad('working-ground', 'rear', 0.94);
     table('work-surface', 'rear', 1, 0.92);
-    if (settlement.resources.wood > 0 && (development.services.energy ?? 0) > 0) addStock('wood');
   }
 
   if (development.need === 'water') {
@@ -318,6 +396,14 @@ function wornPathAt(state: SimulationState, worldX: number, worldZ: number): boo
   return Boolean(cell && movementPathStage(cell) !== 'none');
 }
 
+function yardPrimitive(primitive: YardPrimitive): PrecinctPrimitive {
+  return {
+    kind: primitive.kind, cue: primitive.cue, x: primitive.x, z: primitive.z, width: primitive.width, height: primitive.height,
+    depth: primitive.depth, yaw: primitive.yaw, colour: primitive.colour, keepPathClear: primitive.kind !== 'ground',
+    y: primitive.y, pitch: primitive.pitch, group: primitive.group, stock: primitive.stock,
+  };
+}
+
 interface InstanceRecord {
   primitive: PrecinctPrimitive;
   localX: number;
@@ -326,7 +412,10 @@ interface InstanceRecord {
   y: number;
 }
 
-function primitiveFitsPlot(plot: StructurePlot, primitive: PrecinctPrimitive): boolean {
+/** A host frame: a real structure plot, or the settlement's one common open-air stockpile. */
+interface PrecinctFrame { worldX: number; worldZ: number; radius: number; rotationY: number }
+
+function primitiveFitsPlot(plot: Pick<StructurePlot, 'radius'>, primitive: PrecinctPrimitive): boolean {
   const c = Math.cos(primitive.yaw), s = Math.sin(primitive.yaw);
   const halfWidth = primitive.width * 0.5, halfDepth = primitive.depth * 0.5;
   for (const [dx, dz] of [[-halfWidth, -halfDepth], [-halfWidth, halfDepth], [halfWidth, -halfDepth], [halfWidth, halfDepth]] as const) {
@@ -347,12 +436,59 @@ export function createWorkingPrecinctLayer(
   placements: readonly PrecinctPlacement[],
   settlementY: number,
   heightAt: (x: number, z: number) => number,
+  /** Renderer footprint query; the common stockpile must not sit on tents, stalls or other props. */
+  isAreaClear: (worldX: number, worldZ: number, radius: number) => boolean = () => true,
+  seed = settlement.id,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = `working-precincts:${settlement.id}`;
   const placementById = new Map(placements.map(placement => [placement.key, placement]));
-  const records: Record<PrecinctPrimitiveKind, InstanceRecord[]> = { ground: [], solid: [], pile: [] };
+  const records: Record<PrecinctPrimitiveKind, InstanceRecord[]> = { ground: [], solid: [], pile: [], log: [], drum: [], clod: [] };
   const needCounts: Partial<Record<SettlementNeed, number>> = {};
+  const arrivals = storageArrivals(state, settlement);
+  const storagePlan = planSettlementStorage(settlement, arrivals);
+  let stockUnits = 0;
+
+  const place = (frame: PrecinctFrame, primitives: readonly PrecinctPrimitive[]) => {
+    const c = Math.cos(frame.rotationY), s = Math.sin(frame.rotationY);
+    const groups = new Map<string, PrecinctPrimitive[]>();
+    primitives.forEach((primitive, index) => {
+      const key = primitive.group ?? `single:${index}`;
+      const members = groups.get(key) ?? [];
+      members.push(primitive);
+      groups.set(key, members);
+    });
+    for (const members of groups.values()) {
+      const pending: Array<{ primitive: PrecinctPrimitive; worldX: number; worldZ: number; yaw: number; ground: number }> = [];
+      let valid = true;
+      for (const primitive of members) {
+        // Hard stop at the real reserved plot. Ground and props never claim new settlement land.
+        if (!primitiveFitsPlot(frame, primitive)) { valid = false; break; }
+        const worldX = frame.worldX + primitive.x * c + primitive.z * s;
+        const worldZ = frame.worldZ - primitive.x * s + primitive.z * c;
+        if (primitive.keepPathClear && wornPathAt(state, worldX, worldZ)) { valid = false; break; }
+        const yaw = frame.rotationY + primitive.yaw;
+        const variance = terrainVariance(heightAt, worldX, worldZ, yaw, primitive.width, primitive.depth);
+        // Large rigid presentation slabs should disappear rather than hover across steep ground.
+        if (variance > (primitive.kind === 'ground' ? 0.2 : 0.28)) { valid = false; break; }
+        pending.push({ primitive, worldX, worldZ, yaw, ground: heightAt(worldX, worldZ) });
+      }
+      if (!valid) continue;
+      // A stack settles on its lowest support so upper courses never float over a dip.
+      const stackGround = members.length > 1 ? Math.min(...pending.map(entry => entry.ground)) : pending[0]?.ground ?? 0;
+      for (const entry of pending) {
+        const { primitive } = entry;
+        stockUnits += primitive.stock ?? 0;
+        records[primitive.kind].push({
+          primitive,
+          localX: entry.worldX - settlement.position.x,
+          localZ: entry.worldZ - settlement.position.z,
+          yaw: entry.yaw,
+          y: stackGround - settlementY + (primitive.y ?? 0) + primitive.height * 0.5 + (primitive.kind === 'ground' ? 0.006 : 0.012),
+        });
+      }
+    }
+  };
 
   for (const plot of [...(settlement.structurePlots ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
     const placement = placementById.get(plot.id);
@@ -361,29 +497,37 @@ export function createWorkingPrecinctLayer(
     // an upgrade/repurpose is underway, but ordinary precinct props must not compete with scaffolds,
     // material staging or crew clearance on that same reserved plot.
     if (settlement.development?.project?.plotId === plot.id) continue;
-    const plan = planWorkingPrecinct(settlement, plot, placement);
+    const plan = planWorkingPrecinct(settlement, plot, placement, {
+      month: state.month, moisture: cellAt(state.world, plot.worldX, plot.worldZ)?.moisture ?? 0,
+    }, { plan: storagePlan, arrivals, seed });
     if (!plan) continue;
     needCounts[plan.need] = (needCounts[plan.need] ?? 0) + 1;
-    const c = Math.cos(placement.rotationY), s = Math.sin(placement.rotationY);
+    place({ worldX: plot.worldX, worldZ: plot.worldZ, radius: plot.radius, rotationY: placement.rotationY }, plan.primitives);
+  }
 
-    for (const primitive of plan.primitives) {
-      // Hard stop at the real reserved plot. Ground and props never claim new settlement land.
-      if (!primitiveFitsPlot(plot, primitive)) continue;
-      const worldX = plot.worldX + primitive.x * c + primitive.z * s;
-      const worldZ = plot.worldZ - primitive.x * s + primitive.z * c;
-      if (primitive.keepPathClear && wornPathAt(state, worldX, worldZ)) continue;
-      const yaw = placement.rotationY + primitive.yaw;
-      const variance = terrainVariance(heightAt, worldX, worldZ, yaw, primitive.width, primitive.depth);
-      // Large rigid presentation slabs should disappear rather than hover across steep ground.
-      if (variance > (primitive.kind === 'ground' ? 0.2 : 0.28)) continue;
-      const groundY = heightAt(worldX, worldZ) - settlementY;
-      records[primitive.kind].push({
-        primitive,
-        localX: worldX - settlement.position.x,
-        localZ: worldZ - settlement.position.z,
-        yaw,
-        y: groundY + primitive.height * 0.5 + (primitive.kind === 'ground' ? 0.006 : 0.012),
-      });
+  // Stock no real structure can hold (a founding camp, or a yard-less early village) is kept in one
+  // shared open-air stockpile at the edge of the common ground, on the side its material arrives from.
+  const commonHost = storagePlan.hosts.get(STOCKPILE_HOST_ID);
+  if (commonHost) {
+    const toward = dominantArrival(commonHost, arrivals);
+    const base = toward ? Math.atan2(toward.z, toward.x) : (seed.length * 2.399) % (Math.PI * 2);
+    const radius = 0.85;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const angle = base + (attempt % 2 ? 1 : -1) * Math.ceil(attempt / 2) * 0.42;
+      const distance = 2.05 + Math.floor(attempt / 6) * 0.45;
+      const dx = Math.cos(angle), dz = Math.sin(angle);
+      const worldX = settlement.position.x + dx * distance;
+      const worldZ = settlement.position.z + dz * distance;
+      if ((settlement.structurePlots ?? []).some(plot => plot.condition > 0.08 && Math.hypot(worldX - plot.worldX, worldZ - plot.worldZ) < plot.radius + radius + 0.1)) continue;
+      if (!isAreaClear(worldX, worldZ, radius) || wornPathAt(state, worldX, worldZ)) continue;
+      // Local -z faces the settlement core: stock backs onto the outer edge, the handling floor faces home.
+      const rotationY = Math.atan2(dx, dz);
+      const frame: YardFrame = { wallOffset: -0.42, stripDepth: 0.76, stripWidth: 1.15, side: 'rear',
+        arrivalSign: arrivalSignFor(toward, rotationY, `${seed}:stockpile`) };
+      const yard = planYardBays(commonHost, commonHost.allocations, frame, seed);
+      place({ worldX, worldZ, radius, rotationY }, yard.primitives.map(yardPrimitive));
+      group.userData['commonStockpile'] = { worldX, worldZ };
+      break;
     }
   }
 
@@ -411,8 +555,10 @@ export function createWorkingPrecinctLayer(
       const entry = entries[index]!;
       const primitive = entry.primitive;
       scratch.position.set(entry.localX, entry.y, entry.localZ);
-      scratch.rotation.set(0, entry.yaw, 0);
-      scratch.scale.set(primitive.width, primitive.height, primitive.depth);
+      // Yaw outermost, then pitch (lean-to roofs, leaning sheaves), then roll for logs lying along local x.
+      scratch.rotation.set(primitive.pitch ?? 0, entry.yaw, kind === 'log' ? Math.PI / 2 : 0, 'YXZ');
+      if (kind === 'log') scratch.scale.set(primitive.height, primitive.width, primitive.depth);
+      else scratch.scale.set(primitive.width, primitive.height, primitive.depth);
       scratch.updateMatrix();
       mesh.setMatrixAt(index, scratch.matrix);
       colour.set(primitive.colour);
@@ -426,9 +572,18 @@ export function createWorkingPrecinctLayer(
   make('ground', boxGeometry, false);
   make('solid', boxGeometry, true);
   make('pile', pileGeometry, true);
+  const cylinderGeometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 7);
+  make('log', cylinderGeometry, true);
+  make('drum', cylinderGeometry, true);
+  make('clod', new THREE.IcosahedronGeometry(0.5, 0), true);
   group.userData['workingPrecinctCount'] = Object.values(needCounts).reduce((sum, count) => sum + (count ?? 0), 0);
   group.userData['needCounts'] = { ...needCounts };
-  group.userData['instanceCount'] = records.ground.length + records.solid.length + records.pile.length;
-  group.userData['authority'] = 'structurePlot.development + settlement inventory/services';
+  group.userData['instanceCount'] = Object.values(records).reduce((sum, entries) => sum + entries.length, 0);
+  group.userData['storageMaturity'] = storagePlan.maturity;
+  group.userData['storageHosts'] = [...storagePlan.hosts.values()].map(host => ({ id: host.hostId, role: host.role, maturity: host.maturity,
+    materials: host.allocations.map(allocation => allocation.materialId) }));
+  /** Visible stock units actually placed; never above the logarithmic units of real inventory. */
+  group.userData['visibleStockUnits'] = stockUnits;
+  group.userData['authority'] = 'structurePlot.development + settlement.localMaterials allocation + services';
   return group;
 }

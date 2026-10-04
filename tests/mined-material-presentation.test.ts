@@ -93,6 +93,8 @@ describe('mined material visual polish', () => {
       stone: 24, clay: 12, coal: 18, 'copper-ore': 10, 'iron-ore': 9, 'uranium-ore': 4,
     };
     settlement.structurePlots = [];
+    // The settlement-level ring is the legacy path; development settlements use storage yards.
+    settlement.development = undefined;
     const before = JSON.stringify(settlement.localMaterials);
     const scene = new ResourceWorkScene(fixture.world, 'mined-material-storage');
     const renderer = new ResourceFlowRenderer(fixture.simulation.state, fixture.surface, scene);

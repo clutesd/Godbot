@@ -25,6 +25,9 @@ import type { BuildingArchetype } from '../architecture/BuildingArchetype';
 import { grammarFromBuildingSpec } from '../architecture/SpecGrammarBridge';
 import { dedicatedGeometryKind } from '../architecture/DedicatedStructures';
 import { materialBillSignature } from '../architecture/MaterialSourcing';
+import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
+import { GeometryBuilder } from './GeometryBuilder';
+import type { SurfaceKey } from '../materials/MaterialPalette';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -538,6 +541,29 @@ export class AssetBuilder {
     height: number,
     palette: MaterialPalette,
   ): THREE.Object3D[] {
+    if (grammar.spec?.dwellingVariant) {
+      // Keep the plan, porch, additions and roof topology at range, with fewer cone facets
+      // and no individual rafters or interior equipment. Batch into four material surfaces.
+      const spec = grammar.spec;
+      const builders = new Map<SurfaceKey, GeometryBuilder>();
+      emitEarlyDwelling({
+        at: surface => {
+          let builder = builders.get(surface);
+          if (!builder) { builder = new GeometryBuilder(); builders.set(surface, builder); }
+          return builder;
+        }, stain: () => {}, clean: () => {},
+      }, spec, { wallSurface: 'daub', roofSurface: 'roof-thatch', postSurface: 'timber' },
+      grammar.plinthHeight, grammar.plinthHeight + grammar.wallHeight * grammar.storeys, true);
+      const group = new THREE.Group();
+      for (const [surface, builder] of builders) {
+        if (builder.isEmpty) continue;
+        const material = surface === 'daub' ? spec.materials.wall : surface === 'roof-thatch' ? spec.materials.roofCovering
+          : surface === 'timber' ? spec.materials.frame : surface === 'stone' ? spec.materials.foundation : undefined;
+        const mesh = new THREE.Mesh(builder.build(), material ? palette.getArchitecturalMaterial(material) : palette.getSurfaceMaterial(surface));
+        group.add(mesh);
+      }
+      return [group, group.clone()];
+    }
     const width = grammar.width;
     const depth = grammar.depth;
     const bodyMaterial = palette.getSurfaceMaterial('plaster');

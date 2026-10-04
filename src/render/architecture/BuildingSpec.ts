@@ -154,6 +154,11 @@ export interface SpecRoof {
 }
 
 export interface SpecOpenings {
+  /** Resolved facade rhythm; absent on traditional or service openings. */
+  facade?: 'divided' | 'factory' | 'grid' | 'ribbon' | 'curtain';
+  rows?: number;
+  columns?: number;
+  divisions?: number;
   /** 0..1 share of wall given to openings. */
   density: number;
   /** Opening width in canonical units. */
@@ -200,6 +205,18 @@ export interface SpecProvenance {
 }
 
 export interface BuildingSpec {
+  /** Coherent early dwelling silhouettes, resolved independently of material randomness. */
+  dwellingVariant?: {
+    family: 'round-hut' | 'longhouse';
+    silhouette: number;
+    entry: 'hood' | 'porch' | 'recess';
+    store: boolean;
+    aisle: boolean;
+    pen: boolean;
+    curvedRoof: boolean;
+    hippedEnds: boolean;
+    smokeOpening: boolean;
+  };
   archetype: BuildingArchetype;
   /** The renderer role this presents as. Compatibility only: it never decides geometry. */
   role: BuildingRole;
@@ -401,7 +418,10 @@ const ROLE_FALLBACK: Partial<Record<MaterialRole, ArchitecturalMaterialId>> = {
   finish: 'adobe',
 };
 
+const GLAZED_FACADE_FUNCTIONS: readonly BuildingArchetype[] = ['house', 'civic-hall', 'market', 'workshop', 'factory'];
+
 interface SelectionContext {
+  glazedFacade?: boolean;
   period: ArchitecturalPeriod;
   capabilities: readonly string[];
   zone: ClimateZone;
@@ -483,6 +503,9 @@ function scoreMaterials(
       // identical fabric. Too small to reorder materially different candidates.
       * context.random.range(0.97, 1.03);
 
+    // Consume the stable candidate jitter even when a facade excludes an opaque fitting,
+    // so a glazing decision does not perturb later age and annex choices.
+    if (role === 'glazing' && context.glazedFacade && architecturalMaterial(id).family !== 'glass') continue;
     if (score > bestScore) { bestScore = score; best = id; }
   }
 
@@ -543,15 +566,19 @@ function selectFamily(
   proposed: readonly StructuralFamily[],
   floors: number,
   context: Omit<SelectionContext, 'family'>,
+  preferCurtain = false,
 ): { chosen: StructuralFamily; ranking: FamilyScore[] } {
   const ranking: FamilyScore[] = [];
 
   for (let index = 0; index < proposed.length; index += 1) {
     const family = proposed[index]!;
     const definition = structuralFamily(family);
+    if (family === 'curtain-wall-frame' && (!materialAvailable('curtain-glass', context)
+      || !consistentWithClass(context.evidence, 'curtain-glass')
+      || !materialAvailable('structural-steel', context))) continue;
     if (periodRank(definition.earliestPeriod) > periodRank(context.period) && !context.debug) continue;
 
-    const preference = Math.max(0.25, 1 - index * 0.22);
+    const preference = preferCurtain && family === 'curtain-wall-frame' ? 2.6 : Math.max(0.25, 1 - index * 0.22);
     const custom = familyCustom(family, context.period);
 
     // How well the settlement's attested materials support this way of building. Averaged over
@@ -794,7 +821,13 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
 
   const floorRange = stage.floors;
   const desired = random.int(floorRange[0], floorRange[1] + 1);
-  const requestedFloors = Math.max(1, Math.min(floorRange[1], development ? Math.min(desired, level + 1) : desired));
+  const curtainSupported = materialAvailable('curtain-glass', { period, capabilities })
+    && materialAvailable('structural-steel', { period, capabilities })
+    && consistentWithClass(evidence, 'curtain-glass')
+    && consistentWithClass(evidence, 'structural-steel');
+  const towerStage = period === 'contemporary' && level >= 3
+    && stage.families.includes('curtain-wall-frame') && curtainSupported;
+  const requestedFloors = Math.max(1, Math.min(floorRange[1], development && !towerStage ? Math.min(desired, level + 1) : desired));
 
   const selectionBase = {
     period,
@@ -807,9 +840,16 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     debug: context.debug ?? false,
   };
 
-  const { chosen: family, ranking } = selectFamily(stage.families, requestedFloors, selectionBase);
+  // Only civic/commercial/residential tower stages propose curtain frames. Availability and
+  // the authoritative structural class must support both the frame and its glass skin.
+  const preferCurtain = towerStage && requestedFloors >= 3;
+  const { chosen: family, ranking } = selectFamily(stage.families, requestedFloors, selectionBase, preferCurtain);
   const familyDefinition = structuralFamily(family);
-  const selection: SelectionContext = { ...selectionBase, family };
+  const selection: SelectionContext = { ...selectionBase, family,
+    glazedFacade: GLAZED_FACADE_FUNCTIONS.includes(archetypeId) && !stage.doorBay
+      && periodRank(period) >= periodRank('earlyModern')
+      && materialAvailable('glass', { period, capabilities }),
+  };
 
   // Structural fabric is class-gated; finishes and fittings are not, because a timber building
   // may perfectly well have iron hinges and a tiled roof.
@@ -834,6 +874,10 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     ...(stage.openingDensity > 0.05 ? { glazing: selectMaterial('glazing', selection, false) } : {}),
     hardware: selectMaterial('hardware', selection, false),
   };
+
+  if (family === 'curtain-wall-frame' && materialAvailable('curtain-glass', { period, capabilities })) {
+    materials.glazing = 'curtain-glass';
+  }
 
   // ----- dimensions -----
   // Storeys are limited by whatever actually carries them. In a load-bearing wall that is the
@@ -902,6 +946,31 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
       && ornament > 0.3,
   };
 
+  // Facade coverage follows function and structure, never merely the presentation era.
+  // Stores, agricultural sheds and fortifications retain their sparse working openings.
+  const realGlass = glazingMaterial && architecturalMaterial(glazingMaterial).family === 'glass';
+  if (realGlass && !doorBay && GLAZED_FACADE_FUNCTIONS.includes(archetypeId) && periodRank(period) >= periodRank('earlyModern')) {
+    const industrialWork = (archetypeId === 'factory' || archetypeId === 'workshop' || archetypeId === 'market' && period === 'industrial')
+      && periodRank(period) >= periodRank('industrial');
+    const curtain = assembly === 'glazed-curtain' && materials.glazing === 'curtain-glass';
+    const modern = periodRank(period) >= periodRank('modern');
+    const facade: NonNullable<SpecOpenings['facade']> = curtain ? 'curtain'
+      : industrialWork ? 'factory' : modern ? (archetypeId === 'civic-hall' || archetypeId === 'market' ? 'ribbon' : 'grid') : 'divided';
+    const columns = Math.max(2, Math.min(10, Math.round(width / (curtain ? 0.3 : industrialWork ? 0.4 : 0.32))));
+    const widthShare = curtain ? 0.94 : facade === 'ribbon' ? 0.9 : industrialWork ? 0.82 : modern ? 0.76 : 0.58;
+    const heightShare = curtain ? 0.9 : industrialWork ? 0.78 : modern ? 0.7 : 0.68;
+    const exposure = Math.min(1, climate.openingDensity);
+    openings = {
+      ...openings, facade, columns, rows: floors,
+      divisions: facade === 'divided' ? 3 : facade === 'factory' ? 4 : 1,
+      width: width / columns * widthShare * Math.sqrt(exposure),
+      height: storeyHeight * heightShare * Math.sqrt(exposure),
+      density: widthShare * heightShare * exposure,
+      perBay: 1,
+      arched: facade === 'divided' && openings.arched,
+    };
+  }
+
   // ----- age and equipment -----
   const age = ageStateFor(context.heritage, development, wall, period, resolvedStage.periodsOld, random);
 
@@ -942,12 +1011,40 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
       openings = { ...openings, density: 0, perBay: 0, arched: false };
       break;
   }
+  let dwellingVariant: BuildingSpec['dwellingVariant'];
+  if (archetypeId === 'house' && !development?.temporary
+    && (stage.name === 'Round hut' || stage.name === 'Longhouse')) {
+    const variation = new SeededRandom(`${context.seed}:dwelling-silhouette`);
+    const silhouette = variation.int(0, 5);
+    const round = stage.name === 'Round hut';
+    dwellingVariant = {
+      family: round ? 'round-hut' : 'longhouse', silhouette,
+      entry: silhouette === 2 || silhouette === 4 ? 'porch' : silhouette === 1 ? 'recess' : 'hood',
+      store: round && silhouette === 3,
+      aisle: !round && silhouette === 3,
+      pen: !round && silhouette === 4 && capabilities.includes('animal-husbandry'),
+      curvedRoof: !round && (silhouette === 2 || silhouette === 4),
+      hippedEnds: !round && (silhouette === 1 || silhouette === 4),
+      smokeOpening: !round && silhouette !== 1,
+    };
+    // Plan and section choices dominate a deliberately small size jitter.
+    const jitter = variation.range(0.98, 1.02);
+    width = stage.width * (round ? 1 : [1, 1.18, 1.42, 1.28, 1.58][silhouette]!) * jitter;
+    depth = stage.depth * (round ? 1 : [1, 1.02, 0.96, 1, 1.04][silhouette]!) * jitter;
+    storeyHeight = stage.storeyHeight * (round ? [0.78, 1.28, 0.95, 1.08, 0.86] : [1, 0.9, 1.08, 1, 0.92])[silhouette]!;
+    roof = { ...roof, archetype: round ? 'conical' : dwellingVariant.hippedEnds ? 'hipped' : 'gable',
+      pitch: Math.max(0.15, Math.min(1.5, roof.pitch * (round ? [1.2, 0.76, 0.98, 0.9, 1.12] : [1, 0.86, 1.12, 0.94, 1.06])[silhouette]!)),
+      overhang: roof.overhang * [0.75, 0.85, 1.6, 1.15, 1.45][silhouette]!,
+      span: depth, intermediateSupport: depth > maxSpan, tiers: 1 };
+    annexes = dwellingVariant.store || dwellingVariant.aisle ? 1 : 0;
+  }
   const bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
 
   // A settlement's specialization earns its working fittings; it never removes the archetype's.
   const equipment = specEquipment(stage.equipment, context.specialization, period, level);
 
   const spec: BuildingSpec = {
+    dwellingVariant,
     archetype: archetypeId,
     role: archetypeDefinition.role,
     purpose: development?.need,
@@ -1162,6 +1259,8 @@ export function buildingSpecSignature(spec: BuildingSpec): string {
     spec.floors, spec.bays, spec.roof.archetype,
     spec.roof.pitch.toFixed(3), spec.roof.tiers, spec.roof.intermediateSupport ? 1 : 0,
     spec.openings.density.toFixed(2), spec.openings.perBay, spec.openings.arched ? 1 : 0,
+    spec.openings.width.toFixed(4), spec.openings.height.toFixed(4), spec.openings.facade ?? '-',
+    spec.openings.rows ?? '-', spec.openings.columns ?? '-', spec.openings.divisions ?? '-',
     spec.width.toFixed(3), spec.depth.toFixed(3), spec.storeyHeight.toFixed(3),
     spec.wallThickness.toFixed(4), spec.baySpacing.toFixed(3), spec.plinthHeight.toFixed(3),
     spec.frameExposure.toFixed(2), spec.supportDensity.toFixed(2),
@@ -1171,5 +1270,6 @@ export function buildingSpecSignature(spec: BuildingSpec): string {
     spec.stage, spec.age.condition, spec.age.wear.toFixed(2), spec.age.damage.toFixed(2),
     spec.age.originalMaterial ?? '-',
     spec.equipment.join('+'),
+    JSON.stringify(spec.dwellingVariant ?? null),
   ].join('|');
 }

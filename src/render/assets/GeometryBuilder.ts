@@ -25,6 +25,38 @@ export interface AssemblyPiece {
 
 type LocalMap = (x: number, y: number, z: number) => Vec3;
 
+// Buildable sizes, as shares of the building's span. Source buildings are authored at roughly one
+// unit across and are fitted to their plot later, so absolute lengths would be building-sized at
+// one scale and pebble-sized at another; a share of the span keeps the cut proportionate.
+
+/** Longest run a crew cuts and seats as one member (about a bay). */
+const SECTION_SPAN = 0.35;
+/** One laid course on a roof or skin: tile, shingle, thatch or board. Matches ConstructionAssembly's course rhythm. */
+const COURSE_SPAN = 0.12;
+/** Caps the cut count per member so a degenerate input cannot explode the mesh. */
+const MAX_SECTIONS = 12;
+/** Caps how finely one hand-placed face is divided into sub-triangles. */
+const MAX_FACE_DIVISIONS = 4;
+
+function sectionCount(length: number, maxSection: number, cap = MAX_SECTIONS): number {
+  return Math.min(cap, Math.max(1, Math.ceil(length / maxSection - 1e-9)));
+}
+
+/** Boundary `i` of `n` equal divisions of an interval; the ends are exact so unsplit primitives keep their numbers. */
+function cut(from: number, to: number, i: number, n: number): number {
+  return i <= 0 ? from : i >= n ? to : from + ((to - from) * i) / n;
+}
+
+function lerpPoint(a: Vec3, b: Vec3, t: number): Vec3 {
+  if (t <= 0) return a;
+  if (t >= 1) return b;
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+}
+
+function distance(a: Vec3, b: Vec3): number {
+  return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+}
+
 /** 0 = x, 1 = y, 2 = z. */
 function dominantAxis(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
@@ -49,6 +81,8 @@ export class GeometryBuilder {
   private originX = 0;
   private originY = 0;
   private originZ = 0;
+  private sectionLength = 1;
+  private courseHeight = 0.3;
 
   get isEmpty(): boolean {
     return this.indices.length === 0;
@@ -75,6 +109,15 @@ export class GeometryBuilder {
     this.originX = x;
     this.originY = y;
     this.originZ = z;
+  }
+
+  /**
+   * Sizes the cuts for a building whose span is `span` units across. Only changes how the
+   * finished surface is divided into pieces; the surface itself is the same.
+   */
+  setSectioning(span: number): void {
+    this.sectionLength = span * SECTION_SPAN;
+    this.courseHeight = span * COURSE_SPAN;
   }
 
   setWeathering(wear: number, tone = 0): void {
@@ -120,9 +163,67 @@ export class GeometryBuilder {
   }
 
   addQuad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
+    const order = this.recordingBox ? 1 : Math.max(this.faceOrder(a, b, c), this.faceOrder(a, c, d));
+    this.emitQuad(a, b, c, d, order);
+  }
+
+  /**
+   * Two triangles (a, b, c) and (a, c, d). At order 1 the quad is one piece, exactly as before.
+   * Above 1 each triangle becomes a grid of sub-triangles, one piece each.
+   */
+  private emitQuad(a: Vec3, b: Vec3, c: Vec3, d: Vec3, order: number): void {
+    if (order <= 1) {
+      const start = this.indices.length;
+      this.addTriangle(a, b, c);
+      this.addTriangle(a, c, d);
+      if (!this.recordingBox) this.recordPiece(start);
+      return;
+    }
+    this.addFaceGrid(a, b, c, order);
+    this.addFaceGrid(a, c, d, order);
+  }
+
+  /**
+   * How finely a flat face is divided: bays along its longest edge, courses across it.
+   * A single face therefore never spans a building-sized run of roof or wall.
+   */
+  private faceOrder(a: Vec3, b: Vec3, c: Vec3): number {
+    const longest = Math.max(distance(a, b), distance(b, c), distance(c, a));
+    if (longest <= 0) return 1;
+    const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+    const vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+    // |u × v| is twice the area, so dividing by the longest edge gives the altitude onto it.
+    const altitude = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / longest;
+    return Math.max(
+      sectionCount(longest, this.sectionLength, MAX_FACE_DIVISIONS),
+      sectionCount(altitude, this.courseHeight, MAX_FACE_DIVISIONS),
+    );
+  }
+
+  /** Divides triangle (a, b, c) into an order-`order` grid. Every new point lies on the original triangle. */
+  private addFaceGrid(a: Vec3, b: Vec3, c: Vec3, order: number): void {
+    const point = (i: number, j: number): Vec3 => {
+      if (i === 0 && j === 0) return a;
+      if (i === order && j === 0) return b;
+      if (i === 0 && j === order) return c;
+      const s = i / order, t = j / order;
+      return {
+        x: a.x + (b.x - a.x) * s + (c.x - a.x) * t,
+        y: a.y + (b.y - a.y) * s + (c.y - a.y) * t,
+        z: a.z + (b.z - a.z) * s + (c.z - a.z) * t,
+      };
+    };
+    for (let j = 0; j < order; j += 1) {
+      for (let i = 0; i < order - j; i += 1) {
+        this.addPieceTriangle(point(i, j), point(i + 1, j), point(i, j + 1));
+        if (i + j <= order - 2) this.addPieceTriangle(point(i + 1, j), point(i + 1, j + 1), point(i, j + 1));
+      }
+    }
+  }
+
+  private addPieceTriangle(a: Vec3, b: Vec3, c: Vec3): void {
     const start = this.indices.length;
     this.addTriangle(a, b, c);
-    this.addTriangle(a, c, d);
     if (!this.recordingBox) this.recordPiece(start);
   }
 
@@ -181,9 +282,19 @@ export class GeometryBuilder {
     this.grain = 0;
   }
 
-  /** Loft a closed strip between two rings of equal length. */
+  /**
+   * Loft a closed strip between two rings of equal length.
+   * A loft taller than one course is laid in horizontal courses; every quad uses the same course
+   * count so neighbouring quads meet on identical points.
+   */
   addLoft(lower: Vec3[], upper: Vec3[]): void {
     const count = Math.min(lower.length, upper.length);
+    let courses = 1;
+    for (let index = 0; index < count; index += 1) {
+      const l = lower[index];
+      const u = upper[index];
+      if (l && u) courses = Math.max(courses, sectionCount(distance(l, u), this.courseHeight));
+    }
     for (let index = 0; index < count; index += 1) {
       const next = (index + 1) % count;
       const l0 = lower[index];
@@ -191,31 +302,50 @@ export class GeometryBuilder {
       const u0 = upper[index];
       const u1 = upper[next];
       if (!l0 || !l1 || !u0 || !u1) continue;
-      this.addQuad(l0, u0, u1, l1);
+      if (courses === 1) {
+        // Ring-to-ring quads stay whole here: subdividing a shared ring edge would put T-junctions in
+        // the next loft up, so only the course strips below cut lofts.
+        this.emitQuad(l0, u0, u1, l1, 1);
+        continue;
+      }
+      // The quad is the triangles (l0, u0, u1) and (l0, u1, l1), cut into bands that never leave them.
+      for (let course = 0; course < courses; course += 1) {
+        const start = this.indices.length;
+        this.addStrip(l0, u0, u1, courses, course);
+        this.addStrip(u1, l1, l0, courses, course);
+        this.recordPiece(start);
+      }
     }
   }
 
   /** Cap a ring with an upward-facing fan (roof apex). */
   addFanUp(apex: Vec3, ring: Vec3[]): void {
+    const bands = this.fanBands(apex, ring);
     for (let index = 0; index < ring.length; index += 1) {
       const a = ring[index];
       const b = ring[(index + 1) % ring.length];
       if (!a || !b) continue;
-      const start = this.indices.length;
-      this.addTriangle(a, apex, b);
-      this.recordPiece(start);
+      // Wedge (a, apex, b) is the same triangle as (apex, b, a): cut it into bands from the apex out.
+      for (let band = 0; band < bands; band += 1) {
+        const start = this.indices.length;
+        this.addStrip(apex, b, a, bands, band);
+        this.recordPiece(start);
+      }
     }
   }
 
   /** Cap a ring with a downward-facing fan (eave soffit). */
   addFanDown(center: Vec3, ring: Vec3[]): void {
+    const bands = this.fanBands(center, ring);
     for (let index = 0; index < ring.length; index += 1) {
       const a = ring[index];
       const b = ring[(index + 1) % ring.length];
       if (!a || !b) continue;
-      const start = this.indices.length;
-      this.addTriangle(a, b, center);
-      this.recordPiece(start);
+      for (let band = 0; band < bands; band += 1) {
+        const start = this.indices.length;
+        this.addStrip(center, a, b, bands, band);
+        this.recordPiece(start);
+      }
     }
   }
 
@@ -239,17 +369,44 @@ export class GeometryBuilder {
     if (this.grain !== 0) this.ensureDetail();
   }
 
+  /**
+   * Emits a box as a grid of closed sections, one per buildable length on each axis it exceeds.
+   * Each section keeps its own faces, so a partly built member shows cut ends, and the joined
+   * member has the same outer surface and enclosed volume as one solid box.
+   */
   private emitBox(map: LocalMap, halfX: number, halfY: number, zMin: number, zMax: number): void {
+    const nx = sectionCount(halfX * 2, this.sectionLength);
+    const ny = sectionCount(halfY * 2, this.sectionLength);
+    const nz = sectionCount(zMax - zMin, this.sectionLength);
+    for (let i = 0; i < nx; i += 1) {
+      const x0 = cut(-halfX, halfX, i, nx), x1 = cut(-halfX, halfX, i + 1, nx);
+      for (let j = 0; j < ny; j += 1) {
+        const y0 = cut(-halfY, halfY, j, ny), y1 = cut(-halfY, halfY, j + 1, ny);
+        for (let k = 0; k < nz; k += 1) {
+          this.emitSection(map, x0, x1, y0, y1, cut(zMin, zMax, k, nz), cut(zMin, zMax, k + 1, nz));
+        }
+      }
+    }
+  }
+
+  /** Bands from a fan's centre to its rim, each one course deep. */
+  private fanBands(centre: Vec3, ring: Vec3[]): number {
+    let longest = 0;
+    for (const point of ring) longest = Math.max(longest, distance(centre, point));
+    return sectionCount(longest, this.courseHeight);
+  }
+
+  private emitSection(map: LocalMap, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): void {
     const start = this.indices.length;
     this.recordingBox = true;
-    const a = map(-halfX, -halfY, zMin);
-    const b = map(halfX, -halfY, zMin);
-    const c = map(halfX, -halfY, zMax);
-    const d = map(-halfX, -halfY, zMax);
-    const e = map(-halfX, halfY, zMin);
-    const f = map(halfX, halfY, zMin);
-    const g = map(halfX, halfY, zMax);
-    const h = map(-halfX, halfY, zMax);
+    const a = map(x0, y0, z0);
+    const b = map(x1, y0, z0);
+    const c = map(x1, y0, z1);
+    const d = map(x0, y0, z1);
+    const e = map(x0, y1, z0);
+    const f = map(x1, y1, z0);
+    const g = map(x1, y1, z1);
+    const h = map(x0, y1, z1);
     this.addQuad(a, b, c, d); // bottom
     this.addQuad(h, g, f, e); // top
     this.addQuad(d, c, g, h); // +z
@@ -258,6 +415,19 @@ export class GeometryBuilder {
     this.addQuad(a, d, h, e); // -x
     this.recordingBox = false;
     this.recordPiece(start);
+  }
+
+  /**
+   * Band `index` of `count` across the triangle (apex, p, q), emitted as two triangles.
+   * Every point is a lerp along an original edge, so the bands tile the original triangle exactly.
+   */
+  private addStrip(apex: Vec3, p: Vec3, q: Vec3, count: number, index: number): void {
+    const p0 = lerpPoint(apex, p, index / count);
+    const p1 = lerpPoint(apex, p, (index + 1) / count);
+    const q0 = lerpPoint(apex, q, index / count);
+    const q1 = lerpPoint(apex, q, (index + 1) / count);
+    this.addTriangle(p0, p1, q1);
+    this.addTriangle(p0, q1, q0);
   }
 
   private recordPiece(start: number): void {

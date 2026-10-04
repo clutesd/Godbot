@@ -762,6 +762,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
         roof: 'flat-parapet', openness: 0.24, annexes: [0, 2],
         equipment: ['market-stall', 'counter', 'crate-stack', 'loading-platform'],
       },
+      contemporary: {
+        name: 'Commercial centre', families: ['reinforced-concrete', 'curtain-wall-frame', 'steel-industrial-frame'],
+        width: 1.5, depth: 1.12, storeyHeight: 0.48, floors: [3, 8], openingDensity: 0.58,
+        roof: 'flat-parapet', openness: 0.12, annexes: [0, 1], equipment: ['market-stall', 'counter', 'crate-stack', 'loading-platform'],
+      },
     },
   }),
 
@@ -840,6 +845,11 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
         name: 'Civic centre', families: ['reinforced-concrete', 'curtain-wall-frame'],
         width: 1.8, depth: 1.22, storeyHeight: 0.52, floors: [2, 5], openingDensity: 0.5,
         roof: 'flat-parapet', openness: 0.12, annexes: [0, 2], equipment: [],
+      },
+      contemporary: {
+        name: 'Civic tower', families: ['reinforced-concrete', 'curtain-wall-frame'],
+        width: 1.8, depth: 1.22, storeyHeight: 0.52, floors: [3, 7], openingDensity: 0.56,
+        roof: 'flat-parapet', openness: 0.12, annexes: [0, 1], equipment: [],
       },
     },
   }),

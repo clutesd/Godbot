@@ -12,6 +12,7 @@
  */
 
 import * as THREE from 'three';
+import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
 import { GeometryBuilder, squareRing, type Vec3, type AssemblyPiece } from './GeometryBuilder';
 import { BUILD_STAGE, type BuildStage } from './BuildStages';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -66,6 +67,17 @@ class BuildingCanvas {
 
   private originX = 0;
   private originZ = 0;
+  private span = 1;
+
+  /**
+   * Sets the building's span so every builder cuts its members and courses to proportionate
+   * buildable sizes. Shared by all surfaces, so the building's pieces agree with one another.
+   */
+  setSpan(span: number): void {
+    this.span = span;
+    for (const entry of this.surfaces.values()) entry.builder.setSectioning(span);
+    for (const rotor of this.rotors) for (const builder of rotor.builders.values()) builder.setSectioning(span);
+  }
 
   /**
    * Compose everything from here on about a different point in the plot.
@@ -88,6 +100,7 @@ class BuildingCanvas {
       const builder = new GeometryBuilder();
       builder.setOrigin(this.originX, 0, this.originZ);
       builder.setWeathering(this.wear, this.tone);
+      builder.setSectioning(this.span);
       entry = { surface, stage: requiredStage, builder };
       this.surfaces.set(key, entry);
     }
@@ -126,6 +139,7 @@ class BuildingCanvas {
       // origin, minus the pivot the group already supplies.
       builder.setOrigin(this.originX - entry.pivot.x, -entry.pivot.y, this.originZ - entry.pivot.z);
       builder.setWeathering(this.wear, this.tone);
+      builder.setSectioning(this.span);
       entry.builders.set(surface, builder);
     }
     return builder;
@@ -359,8 +373,17 @@ function roofSurfaceFor(grammar: BuildingGrammar): SurfaceKey {
  * `doorWidth` hint other systems use to walk people to an entrance, so the two never disagree.
  */
 function doorWidthFor(grammar: BuildingGrammar): number {
+  if (grammar.spec?.dwellingVariant) return Math.min(0.22, grammar.width * 0.25);
+  if (grammar.spec?.openings.facade) return Math.min(grammar.width * 0.3, grammar.spec.storeyHeight * grammar.width / grammar.spec.width * 0.65);
   if (grammar.openingWidth === undefined) return Math.min(grammar.width * 0.3, 0.34);
   return Math.min(grammar.width * 0.46, Math.max(0.16, grammar.openingWidth * 2.1));
+}
+
+function doorHeightFor(grammar: BuildingGrammar, bodyHeight: number): number {
+  if (grammar.spec?.openings.facade) return bodyHeight / grammar.windowRows * 0.82;
+  return grammar.openingHeight !== undefined
+    ? Math.min(bodyHeight * 0.82, Math.max(0.16, grammar.openingHeight * 2.4))
+    : Math.min(bodyHeight * 0.78, 0.6);
 }
 
 function wallSurfaceFor(layer: WallLayer): SurfaceKey {
@@ -569,6 +592,13 @@ function emitStructure(
   const plinthTop = grammar.plinthHeight;
   const wallTop = plinthTop + grammar.wallHeight * grammar.storeys;
 
+  if (grammar.spec?.dwellingVariant) {
+    const scaled = { ...grammar.spec, width: grammar.width, depth: grammar.depth, bays: grammar.bays };
+    const roofTop = emitEarlyDwelling(canvas, scaled, surfaces, plinthTop, wallTop);
+    emitYardProps(canvas, grammar, halfWidth, halfDepth, random);
+    return { roofTop, crownTop: roofTop };
+  }
+
   emitGroundworks(canvas, grammar, halfWidth, halfDepth);
   emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
   emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface, baseSurface, coreMaterial);
@@ -645,6 +675,7 @@ export function composeBuilding(
   const surfaces: StructureSurfaces = { wallSurface, roofSurface, postSurface, baseSurface, coreMaterial };
 
   const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift, surfaceMaterials);
+  canvas.setSpan(Math.max(grammar.width, grammar.depth));
   const memorial = grammar.development?.memorial;
   if (memorial) {
     // A memorial has no shell, no storey and no structural family, so it never resolves a spec.
@@ -1120,28 +1151,21 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
     ? Math.max(0.012, grammar.wallThickness)
     : Math.max(0.035, grammar.postThickness * (earth ? 2.4 : 1.1));
   const doorWidth = doorWidthFor(grammar);
-  const doorHeight = grammar.openingHeight !== undefined
-    ? Math.min(height * 0.82, Math.max(0.16, grammar.openingHeight * 2.4))
-    : Math.min(height * 0.78, 0.6);
-  const perRow = Math.max(1, grammar.bays - 1);
+  const doorHeight = doorHeightFor(grammar, height);
+  const perRow = grammar.spec?.openings.columns ?? Math.max(1, grammar.bays - 1);
   const windowRows = grammar.windowRows;
   // Opening size follows what the wall can span over. A masonry wall keeps its holes small
   // because every one of them needs something above it; a steel frame does not care.
-  const ww = grammar.openingWidth !== undefined
-    ? Math.max(0.02, Math.min(grammar.openingWidth, (grammar.width / (perRow + 1)) * 0.8))
-    : Math.min(grammar.width / (perRow + 1) * 0.5, 0.2) * (grammar.openings === 'slit' ? 0.4 : 1);
-  const wh = grammar.openingHeight !== undefined
-    ? Math.max(0.03, Math.min(grammar.openingHeight, height * 0.62))
-    : grammar.openings === 'slit' ? Math.min(height * 0.4, 0.26) : Math.min(height * 0.3, 0.22);
+  const { width: ww, height: wh } = windowDimensions(grammar, height);
   for (const [faceIndex, face] of wallFrames(halfW, halfD).entries()) {
     const openings: { u: number; y: number; w: number; h: number }[] = [];
     if (faceIndex === 0) openings.push({ u: 0, y: doorHeight / 2, w: doorWidth, h: doorHeight });
     if (grammar.openings !== 'flap') {
       const count = faceIndex >= 2 ? Math.max(1, Math.round(perRow * grammar.depth / grammar.width)) : perRow;
       for (let row = 0; row < windowRows; row++) for (let i = 0; i < count; i++) {
-        const u = -face.length / 2 + face.length * (i + 1) / (count + 1);
+        const u = windowPosition(grammar, face.length, i, count);
         if (faceIndex === 0 && row === 0 && Math.abs(u) < doorWidth) continue;
-        openings.push({ u, y: height * ((row + 1) / (windowRows + 1) + 0.08), w: ww, h: wh });
+        openings.push({ u, y: windowLevel(grammar, height, row, windowRows), w: ww, h: wh });
       }
     }
     const columns = Math.min(8, Math.max(3, Math.ceil(face.length / (metal ? 0.4 : timber ? 0.13 : earth ? 0.32 : 0.24))));
@@ -1168,6 +1192,30 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
   }
 }
 
+function windowPosition(grammar: BuildingGrammar, length: number, index: number, count: number): number {
+  return -length / 2 + length * (grammar.spec?.openings.facade ? (index + 0.5) / count : (index + 1) / (count + 1));
+}
+
+function windowLevel(grammar: BuildingGrammar, height: number, row: number, rows: number): number {
+  return grammar.spec?.openings.facade ? height * (row + 0.52) / rows
+    : height * ((row + 1) / (rows + 1) + 0.08);
+}
+
+function windowDimensions(grammar: BuildingGrammar, bodyHeight: number): { width: number; height: number } {
+  if (grammar.spec?.openings.facade) {
+    // The resolved pane span is consumed unchanged by both the void and the fit-out.
+    return { width: grammar.openingWidth!, height: Math.min(grammar.openingHeight!, bodyHeight / grammar.windowRows * 0.94) };
+  }
+  const perRow = grammar.spec?.openings.columns ?? Math.max(1, grammar.bays - 1);
+  const width = grammar.openingWidth !== undefined
+    ? Math.max(0.02, Math.min(grammar.openingWidth, (grammar.width / (perRow + 1)) * 0.8))
+    : Math.min(grammar.width / (perRow + 1) * 0.5, 0.2) * (grammar.openings === 'slit' ? 0.4 : 1);
+  const height = grammar.openingHeight !== undefined
+    ? Math.max(0.03, Math.min(grammar.openingHeight, bodyHeight * 0.62))
+    : grammar.openings === 'slit' ? Math.min(bodyHeight * 0.4, 0.26) : Math.min(bodyHeight * 0.3, 0.22);
+  return { width, height };
+}
+
 function emitOpenings(
   canvas: BuildingCanvas,
   grammar: BuildingGrammar,
@@ -1179,14 +1227,18 @@ function emitOpenings(
 ): void {
   const shadow = canvas.at('shadow', BUILD_STAGE.WALLS);
   const trim = canvas.at(postSurface, BUILD_STAGE.WALLS);
-  const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
+  // A resolved spec alone decides whether this building contains glazing.
+  const hasGlazing = grammar.spec ? Boolean(grammar.spec.materials.glazing)
+    : grammar.openings === 'glazed' || grammar.openings === 'panel';
+  const glazing = hasGlazing ? canvas.at('glazing', BUILD_STAGE.FITOUT) : undefined;
+  const glow = glazing ? undefined : canvas.at('glow', BUILD_STAGE.FITOUT);
   const bodyHeight = wallTop - plinthTop;
   const frames = wallFrames(halfWidth, halfDepth);
   const proud = grammar.postThickness * 0.5;
 
   // Entrance
-  const doorWidth = Math.min(grammar.width * 0.3, 0.34);
-  const doorHeight = Math.min(bodyHeight * 0.78, 0.6);
+  const doorWidth = doorWidthFor(grammar);
+  const doorHeight = doorHeightFor(grammar, bodyHeight);
   shadow?.addBox(0, plinthTop + doorHeight / 2, halfDepth + proud * 0.4, doorWidth, doorHeight, proud);
   for (const side of [-1, 1]) {
     trim?.addBox(side * doorWidth * 0.58, plinthTop + doorHeight / 2, halfDepth + proud, grammar.postThickness * 0.8, doorHeight, proud * 1.4);
@@ -1212,26 +1264,40 @@ function emitOpenings(
   }
 
   const rows = grammar.windowRows;
-  const perRow = Math.max(1, grammar.bays - 1);
-  const windowWidth = Math.min((grammar.width / (perRow + 1)) * 0.5, 0.2);
-  const windowHeight = grammar.openings === 'slit' ? Math.min(bodyHeight * 0.4, 0.26) : Math.min(bodyHeight * 0.3, 0.22);
+  const perRow = grammar.spec?.openings.columns ?? Math.max(1, grammar.bays - 1);
+  const { width, height: windowHeight } = windowDimensions(grammar, bodyHeight);
 
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
     const frame = frames[frameIndex]!;
     const isEnd = frameIndex >= 2;
     const count = isEnd ? Math.max(1, Math.round(perRow * (grammar.depth / grammar.width))) : perRow;
     for (let row = 0; row < rows; row += 1) {
-      const y = plinthTop + bodyHeight * ((row + 1) / (rows + 1)) + bodyHeight * 0.08;
+      const y = plinthTop + windowLevel(grammar, bodyHeight, row, rows);
       for (let index = 0; index < count; index += 1) {
-        const u = -frame.length / 2 + (frame.length * (index + 1)) / (count + 1);
+        const u = windowPosition(grammar, frame.length, index, count);
         if (frameIndex === 0 && row === 0 && Math.abs(u) < doorWidth) continue;
-        const width = grammar.openings === 'slit' ? windowWidth * 0.4 : windowWidth;
         const opening = framePoint(frame, u, y, proud * 0.4);
         shadow?.addBox(opening.x, opening.y, opening.z, isEnd ? proud : width, windowHeight, isEnd ? width : proud);
-        const lit = framePoint(frame, u, y, proud * 0.22);
+        // Keep the pane's rear face ahead of the opaque recess backing (0.9 * proud).
+        const pane = framePoint(frame, u, y, proud * 1.2);
+        const paneShare = grammar.spec?.openings.facade ? 0.98 : 0.88;
+        glazing?.addBox(pane.x, pane.y, pane.z, isEnd ? proud * 0.2 : width * paneShare,
+          windowHeight * paneShare, isEnd ? width * paneShare : proud * 0.2);
+        const lit = framePoint(frame, u, y, proud * 1.2);
         glow?.addBox(lit.x, lit.y, lit.z, isEnd ? proud * 0.5 : width * 0.88, windowHeight * 0.88, isEnd ? width * 0.88 : proud * 0.5);
 
-        if (grammar.openings === 'lattice') {
+        if (grammar.spec?.openings.facade) {
+          const divisions = grammar.spec.openings.divisions ?? 1;
+          // Divided sash and factory lights use real slender joinery; later grids keep broad panes.
+          for (let division = 1; division < divisions; division++) {
+            const bar = framePoint(frame, u, y + windowHeight * (division / divisions - 0.5), proud * 1.35);
+            trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.25 : width, 0.006, isEnd ? width : proud * 0.25);
+          }
+          if (divisions > 1) {
+            const bar = framePoint(frame, u, y, proud * 1.35);
+            trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.25 : 0.006, windowHeight, isEnd ? 0.006 : proud * 0.25);
+          }
+        } else if (grammar.openings === 'lattice') {
           // Shoji-style grid: two mullions and two transoms across the opening.
           for (const fraction of [-0.24, 0.24]) {
             const bar = framePoint(frame, u + width * fraction, y, proud * 0.9);
@@ -1306,7 +1372,7 @@ function emitRoof(
     // so the workshop still belongs to the same architectural family.
     const teeth = Math.max(2, Math.round(grammar.bays * 0.6));
     const pitchHeight = grammar.depth * grammar.roofPitch;
-    const glow = canvas.at('glow', BUILD_STAGE.FITOUT);
+    const glow = canvas.at(grammar.spec?.materials.glazing ? 'glazing' : 'glow', BUILD_STAGE.FITOUT);
     for (let index = 0; index < teeth; index += 1) {
       const z0 = halfDepth - (grammar.depth * index) / teeth;
       const z1 = halfDepth - (grammar.depth * (index + 1)) / teeth;
@@ -1935,7 +2001,8 @@ function emitCrown(
         for (let index = 0; index < 4; index += 1) {
           metal?.addBox(0, roofTop + monitorHeight * (0.24 + index * 0.17), side * halfSpan * 1.06, halfLength * 1.94, monitorHeight * 0.1, 0.008);
         }
-        glow?.addBox(0, roofTop + monitorHeight * 0.6, side * halfSpan * 1.02, halfLength * 1.9, monitorHeight * 0.42, 0.006);
+        const monitorGlazing = canvas.at(grammar.spec?.materials.glazing ? 'glazing' : 'glow', BUILD_STAGE.FITOUT);
+        monitorGlazing?.addBox(0, roofTop + monitorHeight * 0.55, side * (halfSpan + 0.006), halfLength * 1.9, monitorHeight * 0.7, 0.006);
       }
       if (roof) {
         emitRoofShell(roof, undefined, {

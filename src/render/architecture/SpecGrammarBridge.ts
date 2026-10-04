@@ -534,7 +534,7 @@ export function grammarFromBuildingSpec(
     patternBands: rank === 0 ? 0 : Math.min(3, Math.round(ornament * 2.5)),
     patternDensity: 0.4 + ornament * 0.7,
     openings: openingStyleFor(spec),
-    windowRows: spec.openings.perBay <= 0 ? 1 : Math.max(1, Math.min(3, spec.floors)),
+    windowRows: spec.openings.rows ?? (spec.openings.perBay <= 0 ? 1 : Math.max(1, Math.min(3, spec.floors))),
     veranda: verandaForSpec(spec),
     railing: rank >= 2 && spec.openness > 0.18,
     stairs: spec.plinthHeight > 0.06,
@@ -570,6 +570,7 @@ export function grammarFromBuildingSpec(
   // Purpose is authoritative simulation state carried by BuildingSpec. Preserve the strong civic,
   // industrial and service identity cues without consulting legacy BuildingRole.
   applyPurposePresentation(grammar, spec);
+  if (spec.openings.rows !== undefined) grammar.windowRows = spec.openings.rows;
 
   if (spec.adaptation) {
     grammar.massing = 'single';
@@ -625,9 +626,9 @@ export function applySpecToGrammar(grammar: BuildingGrammar, spec: BuildingSpec)
   grammar.eaveOverhang = spec.roof.overhang;
 
   // ----- openings -----
-  grammar.windowRows = spec.openings.perBay <= 0
+  grammar.windowRows = spec.openings.rows ?? (spec.openings.perBay <= 0
     ? 1
-    : Math.max(1, Math.min(3, Math.min(spec.floors, Math.round(spec.openings.density * 3) + 1)));
+    : Math.max(1, Math.min(3, Math.min(spec.floors, Math.round(spec.openings.density * 3) + 1))));
 
   // ----- new structural decisions the grammar had no vocabulary for -----
   grammar.wallThickness = spec.wallThickness;
@@ -682,6 +683,7 @@ export function specSurfaceMaterials(
   claim(primary.baseSurface, materials.foundation);
 
   // Incidental surfaces the composer reaches for directly, mapped to the role they stand in for.
+  claim('glazing', materials.glazing);
   claim('stone', materials.foundation);
   claim('brick', materials.wall);
   claim('panel', materials.finish ?? materials.wall);

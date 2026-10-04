@@ -26,6 +26,7 @@ export function disturbForest(cell: WorldCell, fraction: number, month: number):
 export function forestRecoveryTarget(cell: WorldCell): number {
   const use = cell.modifications;
   const occupied = Math.max(use?.farmland?.intensity ?? 0, use?.industry?.intensity ?? 0,
+    use?.occupation?.intensity ?? 0,
     (use?.mine?.intensity ?? 0) * 0.8, (use?.quarry?.intensity ?? 0) * 0.8);
   return (cell.forestCapacity ?? cell.wood) * (1 - occupied);
 }
@@ -84,6 +85,25 @@ export function advanceEnvironment(state: SimulationState): void {
     const home = state.world.cells[s.cellIndex];
     if (!home || home.water) continue;
     if (!s.alive) { modifyLand(home, 'ruin', Math.min(1, s.buildings / 12), state.month); continue; }
+    // Reserved, occupied precincts clear vegetation without inventing harvested stock.
+    // Area coverage keeps a tiny hut from clearing an entire coarse world cell.
+    const occupiedArea = new Map<WorldCell, number>();
+    for (const plot of s.structurePlots ?? []) {
+      if (plot.condition <= 0.08 || plot.development && plot.development.status !== 'active') continue;
+      const cell = cellAt(state.world, plot.worldX, plot.worldZ);
+      if (!cell || cell.water) continue;
+      const age = clamp01((state.month - plot.foundedMonth) / 120);
+      occupiedArea.set(cell, (occupiedArea.get(cell) ?? 0) + Math.PI * plot.radius ** 2 * (0.5 + age * 0.5));
+    }
+    for (const [cell, area] of occupiedArea) {
+      modifyLand(cell, 'occupation', Math.min(0.85, area / state.world.cellSize ** 2), state.month, s.id);
+      delete cell.modifications!.occupation!.abandonedMonth;
+      const target = forestRecoveryTarget(cell);
+      if (cell.wood > target) {
+        disturbForest(cell, (cell.wood - target) / Math.max(0.01, cell.forestCapacity ?? 1), state.month);
+        cell.wood = target;
+      }
+    }
     const farming = settlementLabour(state, s).economy.farmer ?? 0;
     if (s.fields === undefined && (farming > 0 || s.specialization === 'agriculture')) {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {

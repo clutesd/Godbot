@@ -4,7 +4,7 @@ import { nearestIndex, sampleHeight } from '../sim/terrain/TerrainField';
 import { waterAt } from '../sim/transport/TerrainTraversal';
 import type { Settlement, SimulationState, StructurePlot } from '../sim/types';
 import { cellAt, TERRAIN_VERTICAL_SCALE } from '../sim/world';
-import { createSettlementLayoutPlan, type BuildingDistrict } from './SettlementLayoutPlan';
+import { createSettlementLayoutPlan, districtForResponse, type BuildingDistrict } from './SettlementLayoutPlan';
 import { FOUNDING_HEARTH_RESERVE_RADIUS, foundingHearthWorldPosition } from './FoundingCampLayout';
 import { PlacementContract } from './placement/PlacementContract';
 
@@ -31,12 +31,21 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
     const width = random.range(0.7, 1.18) * (major ? 1.55 * 2.6 : district === 'residential' ? 1.9 : 1.6) * (options.buildingScale ?? 1);
     const depth = width * 0.82;
     const radius = width * 0.66 * (options.precinct ?? 1);
+    const neighbours = plots.filter(plot => plot.condition > 0.08);
+    const peers = neighbours.filter(plot => (plot.development ? districtForResponse(plot.development) : 'residential') === district);
+    let best: { worldX: number; worldZ: number; score: number } | undefined;
     for (let attempt = 0; attempt < 128; attempt += 1) {
       const angle = index * 2.399 + attempt * 0.83 + random.range(-0.2, 0.2);
       const dispersal = (settlement.development?.informal.government ?? 0) > (settlement.development?.pressures.government ?? 0) ? 1.3 : 1;
       const searchRadius = (0.5 + Math.sqrt(attempt + 1) * 0.8) * dispersal;
-      const worldX = anchor.worldX + Math.cos(angle) * searchRadius;
-      const worldZ = anchor.worldZ + Math.sin(angle) * searchRadius;
+      // Grow from occupied ground rather than a district ring. Homes form compounds;
+      // stores and workshops follow their existing working neighbours and access.
+      const source = peers.length ? peers[attempt % peers.length] : neighbours[attempt % Math.max(1, neighbours.length)];
+      const originX = source?.worldX ?? settlement.position.x;
+      const originZ = source?.worldZ ?? settlement.position.z;
+      const reach = source ? source.radius + radius + 0.3 + (attempt % 8) * 0.55 : searchRadius;
+      const worldX = originX + Math.cos(angle) * reach;
+      const worldZ = originZ + Math.sin(angle) * reach;
       if (state.arrival?.pods.some(p => Math.hypot(worldX - p.position.x, worldZ - p.position.z) < radius + 1.5)) continue;
       if (foundingHearth && Math.hypot(worldX - foundingHearth.x, worldZ - foundingHearth.z) < radius + FOUNDING_HEARTH_RESERVE_RADIUS) continue;
       const cell = cellAt(state.world, worldX, worldZ);
@@ -68,6 +77,21 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
         if (water > height - 0.003 || Math.abs(height - ground) * TERRAIN_VERTICAL_SCALE > 0.65) valid = false;
       }
       if (!valid || !contract.validate({ type: major ? 'major-building' : 'small-building', worldX, worldZ, footprintRadius: radius }).valid) continue;
+      const wear = Math.max(cell.modifications?.footpath?.intensity ?? 0, cell.modifications?.track?.intensity ?? 0);
+      const distance = Math.hypot(worldX - settlement.position.x, worldZ - settlement.position.z);
+      const neighbourGap = source ? Math.hypot(worldX - source.worldX, worldZ - source.worldZ) - source.radius - radius : distance;
+      // Contours and established circulation compete with functional proximity. High,
+      // dry sites attract defensive/sacred uses; food seeks fertile, gentle ground.
+      const score = neighbourGap * (district === 'residential' ? 1.5 : 0.65)
+        + (source ? Math.abs(ground - sampleHeight(state.world.terrain, source.worldX, source.worldZ)) * 18 : 0)
+        + cell.slope * 12 + distance * 0.12 - wear * (district === 'market' || district === 'craft' ? 5 : 2)
+        + (district === 'craft' && settlement.specialization === 'agriculture' ? -cell.fertility * 2 : 0)
+        - (district === 'sacred' || settlement.architecture?.orientationBias === 'defense' ? ground * 2 : 0)
+        + (district === 'market' ? Math.hypot(worldX - anchor.worldX, worldZ - anchor.worldZ) * 0.25 : 0);
+      if (!best || score < best.score) best = { worldX, worldZ, score };
+    }
+    if (best) {
+      const { worldX, worldZ } = best;
       const plot: StructurePlot = { id: `${settlement.id}:building:${index}`, worldX, worldZ, radius, width, depth,
         height: random.range(0.55, 1.25) * (major ? 1.7 : 1), condition: 1, foundedMonth: state.month };
       plots.push(plot);

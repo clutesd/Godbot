@@ -75,6 +75,20 @@ function settlement(seed: string): Settlement {
 }
 
 describe('working precinct presentation', () => {
+  it('accumulates domestic ground history and responds to wet ground', () => {
+    const town = settlement('precinct-ground-history');
+    const site = plot('home', development(town, 'housing', 'dwelling', { housing: 1 }));
+    const fresh = planWorkingPrecinct(town, site, site, { month: 0, moisture: 0.8 })!;
+    const old = planWorkingPrecinct(town, site, site, { month: 120, moisture: 0.8 })!;
+    expect(fresh.primitives.some(p => p.cue === 'mud')).toBe(false);
+    for (const cue of ['mud', 'ash-refuse', 'garden-edge', 'drainage-cut']) {
+      expect(old.primitives.some(p => p.cue === cue)).toBe(true);
+    }
+    const dry = planWorkingPrecinct(town, site, site, { month: 120, moisture: 0.3 })!;
+    expect(dry.primitives.some(p => p.cue === 'entrance-wear')).toBe(true);
+    expect(dry.primitives.some(p => p.cue === 'mud')).toBe(false);
+    expect(old.primitives.some(p => p.cue === 'livestock-wear')).toBe(false);
+  });
   it('shows manufacturing function without inventing resource stock', () => {
     const town = settlement('precinct-empty-workshop');
     const site = plot('workshop-a', development(town, 'manufacturing', 'workshop', { manufacturing: 1 }, ['precision-tools']));
@@ -87,18 +101,28 @@ describe('working precinct presentation', () => {
     expect(plan!.primitives.some(primitive => primitive.cue.startsWith('stock:'))).toBe(false);
   });
 
-  it('renders real stock only at one deterministic eligible precinct', () => {
+  it('renders bulk goods only at one deterministic eligible precinct', () => {
     const town = settlement('precinct-stock-owner');
-    town.resources.minerals = 18;
+    town.resources.goods = 18;
     const first = plot('workshop-a', development(town, 'manufacturing', 'workshop', { manufacturing: 1 }));
     const second = plot('workshop-b', development(town, 'manufacturing', 'workshop', { manufacturing: 1 }));
     town.structurePlots = [second, first];
 
-    expect(precinctStockOwner(town, 'minerals')).toBe('workshop-a');
+    expect(precinctStockOwner(town, 'goods')).toBe('workshop-a');
     const firstPlan = planWorkingPrecinct(town, first, { width: first.width, depth: first.depth })!;
     const secondPlan = planWorkingPrecinct(town, second, { width: second.width, depth: second.depth })!;
-    expect(firstPlan.primitives.some(primitive => primitive.cue === 'stock:minerals')).toBe(true);
-    expect(secondPlan.primitives.some(primitive => primitive.cue === 'stock:minerals')).toBe(false);
+    expect(firstPlan.primitives.some(primitive => primitive.cue === 'stock:goods')).toBe(true);
+    expect(secondPlan.primitives.some(primitive => primitive.cue === 'stock:goods')).toBe(false);
+  });
+
+  it('never shows the wood/minerals aliases as a second copy of localMaterials', () => {
+    const town = settlement('precinct-alias-stock');
+    town.resources.wood = 40;
+    town.resources.minerals = 40;
+    const site = plot('workshop-a', development(town, 'manufacturing', 'workshop', { manufacturing: 1 }));
+    town.structurePlots = [site];
+    const plan = planWorkingPrecinct(town, site, { width: site.width, depth: site.depth })!;
+    expect(plan.primitives.some(primitive => primitive.cue.startsWith('stock:'))).toBe(false);
   });
 
   it('gives sacred and domestic structures distinct readable precinct grammar', () => {

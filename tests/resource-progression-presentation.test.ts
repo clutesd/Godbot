@@ -105,11 +105,13 @@ describe('resource progression authority', () => {
     expect(resourceProcessingPresentation(world, s, simulation.state.month)[0]?.active).toBe(false);
   });
 
-  it('wires stock into the production site renderer and clears emptied inventory', () => {
+  it('wires legacy stock into the production site renderer and clears emptied inventory', () => {
     const { simulation, world, surface, s } = fixture();
     for (const settlement of simulation.state.settlements) settlement.localMaterials = {};
     s.localMaterials = { timber: 12 };
     s.structurePlots = [];
+    const development = s.development;
+    s.development = undefined;
     const scene = new ResourceWorkScene(world, 'test', () => true, undefined, undefined, id => id === s.id ? s : undefined);
     const renderer = new ResourceSiteRenderer(world, surface, scene, simulation.state);
     renderer.update();
@@ -117,6 +119,10 @@ describe('resource progression authority', () => {
     expect(logs).toBeDefined();
     expect(logs.count).toBeGreaterThan(0);
     s.localMaterials = {};
+    renderer.update(); expect(logs.count).toBe(0);
+    // Development settlements show the same stock once, through storage yards on their precincts.
+    s.localMaterials = { timber: 12 };
+    s.development = development ?? { pressures: {}, unmet: {}, informal: {}, providers: {}, evaluatedMonth: 0, nextAttemptMonth: 0, revision: 0 };
     renderer.update(); expect(logs.count).toBe(0);
   });
 

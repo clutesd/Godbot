@@ -33,6 +33,7 @@ export type SurfaceKey =
   | 'roof-metal'
   | 'cloth'
   | 'shadow'
+  | 'glazing'
   | 'glow'
   | 'forge'
   | 'garden'
@@ -45,7 +46,7 @@ export type SurfaceKey =
 /** Every architectural surface, in a stable order. */
 export const SURFACE_KEYS: readonly SurfaceKey[] = [
   'hide', 'thatch', 'daub', 'plaster', 'stone', 'brick', 'panel', 'timber', 'metal', 'motif',
-  'roof-thatch', 'roof-tile', 'roof-metal', 'cloth', 'shadow', 'glow', 'forge', 'garden', 'ground', 'water', 'canvas',
+  'roof-thatch', 'roof-tile', 'roof-metal', 'cloth', 'shadow', 'glazing', 'glow', 'forge', 'garden', 'ground', 'water', 'canvas',
 ] as const;
 
 /**
@@ -258,6 +259,7 @@ export class MaterialPalette {
   }
 
   getSurfaceMaterial(surface: SurfaceKey): THREE.MeshStandardMaterial {
+    if (surface === 'glazing') return this.getArchitecturalMaterial('glass');
     return this.materials.get(surface) ?? this.materials.get('plaster')!;
   }
 

@@ -8,12 +8,12 @@ import { MaterialPalette, type Era } from '../src/render/materials/MaterialPalet
 import { CultureStyleProfileFactory } from '../src/render/style/CultureStyleProfile';
 import { resolveBuildingGrammar, type BuildingRole } from '../src/render/assets/BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from '../src/render/assets/BuildingComposer';
-import { resolveBuildingSpec, type BuildingSpec, type BuildingSpecContext } from '../src/render/architecture/BuildingSpec';
+import { resolveBuildingSpec, buildingSpecSignature, type BuildingSpec, type BuildingSpecContext } from '../src/render/architecture/BuildingSpec';
 import { applySpecToGrammar } from '../src/render/architecture/SpecGrammarBridge';
 import { architecturalMaterial, type ArchitecturalMaterialId } from '../src/render/architecture/MaterialLibrary';
 import type { BuildingArchetype } from '../src/render/architecture/BuildingArchetype';
 import { CONSTRUCTION_STAGE_SEQUENCE } from '../src/render/construction/ConstructionVisualGrammar';
-import { periodRank } from '../src/render/architecture/ArchitecturalPeriod';
+import { PERIOD_DRIVE, periodRank } from '../src/render/architecture/ArchitecturalPeriod';
 
 const CULTURE: CultureStyle = {
   primary: '#c36557',
@@ -96,13 +96,14 @@ function resolve(options: {
   climate?: { temperature: number; moisture: number };
   prosperity?: number;
   stage?: BuildStage;
+  capabilities?: string[];
 }): { spec: BuildingSpec; grammar: ReturnType<typeof resolveBuildingGrammar> } {
   const styleProfile = profile();
   const seed = options.seed ?? `${options.role}:${options.era}`;
   const response = development({
     material: options.material ?? 'timber',
     level: options.level ?? 2,
-    capabilities: ERA_CAPABILITIES[options.era],
+    capabilities: options.capabilities ?? ERA_CAPABILITIES[options.era],
   });
   const context: BuildingSpecContext = {
     archetype: options.archetype,
@@ -498,5 +499,143 @@ describe('Asset caching with specifications', () => {
     });
     expect(vertexCount(asset.mesh)).toBeGreaterThan(0);
     builder.dispose();
+  });
+});
+
+
+describe('Resolved architectural glazing', () => {
+  it.each(['glass', 'curtain-glass'] as const)('emits shared %s panes at FITOUT and lights them independently', id => {
+    const { spec, grammar } = resolve({ role: 'house', era: 'industrial', material: 'metal' });
+    spec.materials.glazing = id;
+    grammar.massing = 'single';
+    grammar.patternBands = 0;
+    grammar.bays = 3;
+    const palette = new MaterialPalette({ culture: CULTURE, era: 'industrial' });
+    const before = composeBuilding(grammar, palette, 'glazing', BUILD_STAGE.WALLS).group;
+    expect(materialNames(before).has(id)).toBe(false);
+    const group = composeBuilding(grammar, palette, 'glazing', BUILD_STAGE.FITOUT).group;
+    const pane = meshes(group).find(mesh => mesh.name === id);
+    expect(pane).toBeDefined();
+    const material = palette.getArchitecturalMaterial(id);
+    expect(pane!.material).toBe(material);
+    expect(material.transparent).toBe(true);
+    expect(material.emissiveIntensity).toBe(0);
+    const pieces = pane!.geometry.userData['assemblyPieces'];
+    expect(pieces.length).toBeGreaterThan(0);
+    expect(pieces.every((piece: { stage: number }) => piece.stage === BUILD_STAGE.FITOUT)).toBe(true);
+    // Raycast from outside a rear window: the pane must precede the opaque recess.
+    const rearPiece = pieces.find((piece: { min: THREE.Vector3; max: THREE.Vector3 }) => piece.max.z < 0 && piece.max.z - piece.min.z < piece.max.x - piece.min.x);
+    expect(rearPiece).toBeDefined();
+    const paneWidth = spec.openings.facade ? grammar.openingWidth! * 0.98
+      : Math.max(0.02, Math.min(grammar.openingWidth!, grammar.width / grammar.bays * 0.8)) * 0.88;
+    expect(rearPiece.max.x - rearPiece.min.x).toBeCloseTo(paneWidth);
+    const target = new THREE.Vector3(
+      rearPiece.min.x + (rearPiece.max.x - rearPiece.min.x) * 0.3,
+      rearPiece.min.y + (rearPiece.max.y - rearPiece.min.y) * 0.3,
+      rearPiece.min.z,
+    );
+    const ray = new THREE.Raycaster(target.clone().add(new THREE.Vector3(0, 0, -1)), new THREE.Vector3(0, 0, 1));
+    group.updateMatrixWorld(true);
+    const recessMeshes = meshes(group).filter(mesh => mesh === pane || mesh.name === 'shadow');
+    expect(ray.intersectObjects(recessMeshes, true)[0]?.object.name).toBe(id);
+    palette.setNightFactor(1);
+    expect(pane!.material).toBe(material);
+    expect(material.emissiveIntensity).toBeGreaterThan(0);
+    expect(palette.getSurfaceMaterial('glow')).not.toBe(material);
+    palette.setNightFactor(0);
+    expect(material.emissiveIntensity).toBe(0);
+    palette.dispose();
+  });
+
+  it('does not invent glazing when the spec omits it', () => {
+    const { spec, grammar } = resolve({ role: 'house', era: 'early' });
+    delete spec.materials.glazing;
+    const palette = new MaterialPalette({ culture: CULTURE, era: 'early' });
+    const group = composeBuilding(grammar, palette, 'unglazed', BUILD_STAGE.FITOUT).group;
+    expect(materialNames(group).has('glass')).toBe(false);
+    expect(materialNames(group).has('curtain-glass')).toBe(false);
+    palette.dispose();
+  });
+});
+
+
+describe('Facade glazing evolution', () => {
+  it.each([
+    ['earlyModern', 'house', 'house', 'masonry', 'divided'],
+    ['industrial', 'factory', 'factory', 'ceramic', 'factory'],
+    ['modern', 'house', 'house', 'metal', 'grid'],
+    ['modern', 'civic-hall', 'hall', 'masonry', 'ribbon'],
+    ['contemporary', 'house', 'house', 'metal', 'curtain'],
+    ['contemporary', 'civic-hall', 'hall', 'metal', 'curtain'],
+    ['contemporary', 'market', 'market', 'metal', 'curtain'],
+  ] as const)('%s %s resolves scaled facade glazing', (period, archetype, role, material, facade) => {
+    const drive = PERIOD_DRIVE[period];
+    const { spec, grammar } = resolve({ archetype, role, material, ...drive, seed: `facade:${archetype}:${period}` });
+    expect(spec.period).toBe(period);
+    expect(spec.openings.facade).toBe(facade);
+    expect(spec.openings.rows).toBe(spec.floors);
+    expect(spec.openings.height / spec.storeyHeight).toBeGreaterThan(0.6);
+    const coverage = spec.openings.width * spec.openings.height * spec.openings.columns! / (spec.width * spec.storeyHeight);
+    expect(coverage).toBeCloseTo(spec.openings.density);
+    expect(coverage).toBeGreaterThan(period === 'earlyModern' ? 0.35 : 0.45);
+    if (facade === 'curtain') {
+      expect(spec.family).toBe('curtain-wall-frame');
+      expect(spec.materials.glazing).toBe('curtain-glass');
+      expect(coverage).toBeGreaterThan(0.8);
+    }
+    const palette = new MaterialPalette({ culture: CULTURE, era: drive.era });
+    const group = composeBuilding(grammar, palette, 'facade', BUILD_STAGE.FITOUT).group;
+    const glass = meshes(group).find(mesh => mesh.name === spec.materials.glazing);
+    expect(glass).toBeDefined();
+    expect(glass!.material).toBe(palette.getArchitecturalMaterial(spec.materials.glazing!));
+    expect(meshes(group).length).toBeLessThan(20);
+    // Several clear facade samples must actually see glass before opaque fabric.
+    group.updateMatrixWorld(true);
+    const pieces = glass!.geometry.userData['assemblyPieces'] as { min: THREE.Vector3; max: THREE.Vector3; stage: number }[];
+    const rearPanes = pieces.filter(piece => piece.stage === BUILD_STAGE.FITOUT && piece.max.z < 0 && piece.max.z - piece.min.z < 0.02);
+    let visible = 0;
+    for (const piece of rearPanes) {
+      const origin = new THREE.Vector3(piece.min.x + (piece.max.x - piece.min.x) * 0.27,
+        piece.min.y + (piece.max.y - piece.min.y) * 0.37, piece.min.z - 0.1);
+      const hit = new THREE.Raycaster(origin, new THREE.Vector3(0, 0, 1)).intersectObjects(group.children, true)[0];
+      if (hit?.object === glass) visible++;
+    }
+    expect(visible).toBeGreaterThan(0);
+    const again = resolve({ archetype, role, material, ...drive, seed: `facade:${archetype}:${period}` });
+    expect(again.spec).toEqual(spec);
+    palette.dispose();
+  });
+
+  it('includes pane span and facade rhythm in the geometry signature', () => {
+    const { spec } = resolve({ archetype: 'house', role: 'house', era: 'advanced', level: 3, material: 'metal' });
+    const original = buildingSpecSignature(spec);
+    for (const openings of [
+      { ...spec.openings, width: spec.openings.width * 1.1 },
+      { ...spec.openings, height: spec.openings.height * 1.1 },
+      { ...spec.openings, columns: spec.openings.columns! + 1 },
+      { ...spec.openings, rows: spec.openings.rows! + 1 },
+      { ...spec.openings, divisions: 3 },
+    ]) expect(buildingSpecSignature({ ...spec, openings })).not.toBe(original);
+  });
+
+  it.each(['barn', 'warehouse', 'granary', 'shrine', 'boundary-wall'] as const)('keeps %s out of tower facade rules', archetype => {
+    const { spec } = resolve({ archetype, role: 'house', era: 'advanced', level: 3, material: 'metal' });
+    expect(spec.openings.facade).toBeUndefined();
+    expect(spec.family).not.toBe('curtain-wall-frame');
+  });
+});
+
+
+describe('Curtain facade authority gates', () => {
+  it.each(['timber', 'masonry'] as const)('does not substitute a glass tower for authoritative %s', material => {
+    const { spec } = resolve({ archetype: 'house', role: 'house', era: 'advanced', level: 3, material });
+    expect(spec.family).not.toBe('curtain-wall-frame');
+    expect(spec.openings.facade).not.toBe('curtain');
+  });
+  it('requires the observed curtain-glass manufacturing capabilities', () => {
+    const { spec } = resolve({ archetype: 'house', role: 'house', era: 'advanced', level: 3, material: 'metal', capabilities: ['iron-working'] });
+    expect(spec.family).not.toBe('curtain-wall-frame');
+    expect(spec.materials.glazing).not.toBe('curtain-glass');
+    expect(spec.openings.facade).toBeUndefined();
   });
 });
