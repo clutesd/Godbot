@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type * as THREE from 'three';
+import * as THREE from 'three';
+import { CANONICAL_ADULT_HEIGHT, HUMAN_METRES_TO_WORLD } from '../src/render/people/HumanScale';
 import { Simulation } from '../src/sim/Simulation';
 import { createPottery, MAX_POTTERY, planPottery, potteryStyle, potteryTier, type PotteryAnchor } from '../src/render/assets/Pottery';
 import { learn } from './fixtures/settlementDevelopment';
@@ -15,6 +16,35 @@ function fixture() {
 const anchor = (key: string, role = 'house'): PotteryAnchor => ({ key, role, localX: key === 'b' ? 4 : key === 'c' ? 8 : key === 'd' ? 12 : 0, localZ: 0, width: 2, depth: 2, rotationY: 0 });
 
 describe('cultural pottery presentation', () => {
+  it('keeps every cultural variant and finish within human-scale physical bounds', () => {
+    const { culture, identity } = fixture();
+    const base = potteryStyle(culture.id, culture.style, identity);
+    const motifs = ['sun-step', 'river-eye', 'woven-moon', 'mountain-knot', 'seed-spiral'] as const;
+    const patterns = ['chevron', 'diamond', 'terrace', 'crossweave', 'wave'] as const;
+    const vessels = ['bowl', 'cooking-pot', 'storage-jar', 'jug', 'ritual'] as const;
+    for (const [i, motif] of motifs.entries()) for (const variant of [0, 1, 2, 3]) {
+      for (const tier of [1, 2, 3]) for (const finish of ['greenware', 'fired', 'prestige'] as const) {
+        for (const vessel of vessels) {
+          const group = createPottery([{ vessel, finish, x: 2, z: -3, rotation: Math.PI / 4 }],
+            { ...base, motif, pattern: patterns[i]!, variant, marks: 3 }, tier, () => 0.4);
+          group.updateMatrixWorld(true);
+          const size = new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3());
+          const metres = size.clone().divideScalar(HUMAN_METRES_TO_WORLD);
+          const label = `${vessel}/${motif}/${variant}/${tier}/${finish}`;
+          expect(Math.max(metres.x, metres.y, metres.z), label).toBeLessThanOrEqual(vessel === 'storage-jar' ? 1.3 : 0.8);
+          expect(metres.y, label).toBeGreaterThanOrEqual(0.1);
+          if (vessel === 'bowl') {
+            expect(metres.y, label).toBeLessThanOrEqual(0.3);
+            expect(Math.max(size.x, size.z), label).toBeLessThan(CANONICAL_ADULT_HEIGHT * 0.4);
+          }
+          expect(group.scale.toArray()).toEqual([1, 1, 1]);
+          const mesh = group.children[0] as THREE.Mesh;
+          expect(mesh.scale.toArray()).toEqual([1, 1, 1]);
+          mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
+        }
+      }
+    }
+  });
   it('derives stable faction styles from existing culture and heraldry without settlement randomness', () => {
     const { culture, identity } = fixture();
     const style = potteryStyle(culture.id, culture.style, identity);
@@ -99,7 +129,7 @@ describe('cultural pottery presentation', () => {
     expect(mesh.geometry.getAttribute('position').array).toEqual(repeat.geometry.getAttribute('position').array);
     expect(Array.from(mesh.geometry.getAttribute('position').array).every(Number.isFinite)).toBe(true);
     mesh.geometry.computeBoundingBox();
-    expect(mesh.geometry.boundingBox!.min.y).toBeCloseTo(0.425, 2);
+    expect(mesh.geometry.boundingBox!.min.y).toBeCloseTo(0.4 + 0.025 * HUMAN_METRES_TO_WORLD, 5);
     expect(mesh.geometry.getAttribute('position').count).toBeLessThan(60000);
     expect(JSON.stringify(sim.state)).toBe(before);
     const early = createPottery(plan, style, 1, () => 0).children[0] as THREE.Mesh;

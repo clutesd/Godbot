@@ -9,6 +9,7 @@ import { socialGestureFrame } from './people/SocialGesturePresentation';
 import { soleTarget } from './people/FootContactPose';
 import { GroundedLocomotion, SUPPORT_SHIFT } from './people/GroundedLocomotion';
 import { HumanJointRig } from './people/HumanJointRig';
+import { HUMAN_WORLD_SCALE } from './people/HumanScale';
 import { createPottery, planPottery, potteryStyle, potteryTier, type PotteryAnchor } from './assets/Pottery';
 import { createResourceCargo } from './resources/ResourceCargo';
 import { StructureNavigation, type PedestrianFootprint } from '../sim/people/StructureNavigation';
@@ -47,7 +48,7 @@ import { indoorSleepingSpots, sleepAreaFloor, type IndoorSleepingArea } from './
 import { usableStructure } from '../sim/development/Shelter';
 import { sleepSchedule } from '../sim/people/SleepSchedule';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
-import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicReflectionEnvironment, createObsidianReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, cosmicAppearanceFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicReflectionEnvironment, createObsidianReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
 import { HUMAN_SURFACE_MODE, createHumanSurfaceMaterial } from './people/HumanSurfaceMaterial';
 import { HumanFigureAppearance } from './people/HumanFigureAppearance';
 import { humanLookFor as resolveHumanLook, type HeadPiece, type HumanLook } from './people/HumanAppearanceProfile';
@@ -217,15 +218,6 @@ const ERA_ORDER: readonly Era[] = ['primitive', 'early', 'village', 'preIndustri
 const SMOKE_PUFFS_PER_SOURCE = 5;
 /** Point lights across all settlements; beyond this, forward shading cost outruns the mood. */
 const SETTLEMENT_LIGHT_BUDGET = 18;
-/**
- * Authoritative humanoid world scale. All person geometry, position offsets and
- * `heightScale`/`buildScale` are expressed relative to a canonical adult of height 1; this
- * factor converts that canonical rig into world units so a normal adult reads as clearly
- * smaller than the smallest inhabited structure (huts/shelters) and never approaches an
- * ordinary house. Applying it once, at the top of the scale chain, keeps LOD and camera
- * framing changes from ever altering apparent world-space height.
- */
-const HUMAN_WORLD_SCALE = 0.28;
 const NO_ACTIVITY_STRUCTURES: readonly ActivityStructure[] = [];
 function foundingCampGroundArtifacts(state: SimulationState): Array<{ x: number; z: number; radius: number }> {
   const pods = state.arrival?.pods ?? [];
@@ -238,7 +230,7 @@ function foundingCampGroundArtifacts(state: SimulationState): Array<{ x: number;
   return artifacts;
 }
 /** Canonical adult humanoid height in world units (feet to crown) at `heightScale === 1`. */
-export const CANONICAL_ADULT_HEIGHT = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * COSMIC_CROWN_HEIGHT;
+export { CANONICAL_ADULT_HEIGHT } from './people/HumanScale';
 export const visiblePersonBudgetForDensity = (density: number): number => Math.max(48, Math.round(384 * density));
 /** Cap for the additional mantle batch reserved for notable and historical lives. */
 export const NOTABLE_VISUAL_BUDGET = 32;

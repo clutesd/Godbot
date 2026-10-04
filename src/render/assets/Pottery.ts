@@ -5,6 +5,7 @@ import type { DevelopmentResponse } from '../../sim/development/types';
 import { practical } from '../../sim/knowledge/KnowledgeSystem';
 import { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
 import type { BannerIdentity } from '../style/BannerIdentity';
+import { HUMAN_METRES_TO_WORLD } from '../people/HumanScale';
 
 export type Vessel = 'bowl' | 'cooking-pot' | 'storage-jar' | 'jug' | 'ritual';
 export type PotteryFinish = 'greenware' | 'fired' | 'prestige';
@@ -68,6 +69,9 @@ export function planPottery(settlement: Settlement, anchors: readonly PotteryAnc
   return result;
 }
 
+/** Radius/height in physical metres, including cultural variation below.
+ * Bowls are hand/table vessels; storage jars are portable household storage.
+ * Never inherit a building's fitted scale or grow with settlement population. */
 const PROFILES: Record<Vessel, readonly (readonly [number, number])[]> = {
   bowl: [[0.07, 0], [0.12, 0.04], [0.21, 0.17], [0.22, 0.2]],
   'cooking-pot': [[0.11, 0], [0.2, 0.1], [0.21, 0.24], [0.15, 0.31]],
@@ -91,7 +95,7 @@ export function createPottery(placements: readonly PotteryPlacement[], style: Po
     if (!template) { template = vesselGeometry(placement.vessel, style, tier, finish); templates.set(templateKey, template); }
     const geometry = template.clone();
     geometry.rotateY(placement.rotation);
-    geometry.translate(placement.x, ground(placement.x, placement.z) + 0.025, placement.z);
+    geometry.translate(placement.x, ground(placement.x, placement.z) + 0.025 * HUMAN_METRES_TO_WORLD, placement.z);
     pieces.push(geometry);
   }
   const geometry = mergeGeometries(pieces)!;
@@ -116,6 +120,9 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
   const add = (geometry: THREE.BufferGeometry, colour: THREE.ColorRepresentation) => {
     const flat = geometry.index ? geometry.toNonIndexed() : geometry;
     if (flat !== geometry) geometry.dispose();
+    // Convert at the source, once for every part (body, rim, handles, lid and runes).
+    // Placement/terrain coordinates remain world units; renderer groups stay at unit scale.
+    flat.scale(HUMAN_METRES_TO_WORLD, HUMAN_METRES_TO_WORLD, HUMAN_METRES_TO_WORLD);
     flat.deleteAttribute('uv');
     const color = new THREE.Color(colour);
     const values = new Float32Array(flat.getAttribute('position').count * 3);
@@ -148,7 +155,7 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
   const positions = surface.getAttribute('position');
   const colours = surface.getAttribute('color');
   for (let i = 0; i < positions.count; i++) {
-    const y = positions.getY(i), angle = Math.atan2(positions.getZ(i), positions.getX(i));
+    const y = positions.getY(i) / HUMAN_METRES_TO_WORLD, angle = Math.atan2(positions.getZ(i), positions.getX(i));
     const blush = 0.94 + Math.sin(angle * 3 + y * 9 + style.variant) * 0.035
       + Math.sin(y * 145) * 0.012 + y / lip.y * 0.055;
     const tint = clay.clone().multiplyScalar(blush);
