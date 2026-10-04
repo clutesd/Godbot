@@ -68,7 +68,8 @@ export function conceptionChance(person: Person, partner: Person | undefined, s:
   const health = unit((Math.min(person.health, partner.health) - 0.3) / 0.5);
   const nutrition = unit(1 - (s.survival?.deprivation ?? 0) / 3);
   const security = unit(1 - s.conflictPressure) * (0.5 + unit(s.foodSecurity) * 0.5);
-  return 0.065 * ageFactor * health * nutrition * security * densityFactor * populationFactor;
+  const illness = person.infection || partner.infection ? 0.35 : 1;
+  return 0.065 * ageFactor * health * nutrition * security * illness * densityFactor * populationFactor;
 }
 
 /** The common household registry is derived from authoritative living people. */

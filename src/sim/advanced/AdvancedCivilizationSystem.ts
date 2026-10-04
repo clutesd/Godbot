@@ -2,6 +2,7 @@ import { rememberMortality } from '../development/Remembrance';
 import { killPeople } from '../people/PersonLifecycle';
 import { workforceProfile } from '../people/HumanCapital';
 import { survivalMortality } from '../pressures/Survival';
+import { captureDiseasePopulation } from '../pressures/Disease';
 import { representedPopulation, settlementRepresentedPopulation } from '../Population';
 export { representedPopulation, settlementRepresentedPopulation } from '../Population';
 import type { GodboxConfig } from '../../config';
@@ -140,6 +141,9 @@ export class AdvancedCivilizationSystem {
     }, 0);
     const carryingCapacity = Math.min(this.config.advanced.statisticalPopulationCap,
       Math.max(25_000, landCapacity * (1 + advanced.sectors.industry * 18 + advanced.sectors.energy * 10)));
+    const diseasePrevalence = new Map(state.settlements.map(s => [s.id, s.survival?.disease?.prevalence ?? 0]));
+    const diseaseFertilityLoss = advanced.cities.reduce((sum, city) => sum + city.population
+      * (diseasePrevalence.get(city.settlementId) ?? 0), 0) / Math.max(1, advanced.representedPopulation);
     const annualGrowth = clamp(0.002 + foodSecurity * 0.012 + health * 0.01 - pressure * 0.018 - advanced.governance.fragmentation * 0.006, -0.035, 0.024);
     const logistic = Math.max(-1, 1 - advanced.representedPopulation / carryingCapacity);
     const cities = new Map(advanced.cities.map(city => [city.settlementId, city]));
@@ -150,7 +154,7 @@ export class AdvancedCivilizationSystem {
       if (settlement.alive) rememberMortality(state, settlement, survivalMortality(settlement) * (cities.get(settlement.id)?.population ?? 0) / 12);
     }
     // Mortality never changes sign above carrying capacity and is charged to represented citizens once.
-    advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 + (annualGrowth * logistic - deprivationHazard) / 12));
+    advanced.representedPopulation = Math.max(0, advanced.representedPopulation * (1 + (annualGrowth * logistic - deprivationHazard - diseaseFertilityLoss * 0.012) / 12));
     const elderTarget = clamp(0.1 + health * 0.16, 0.07, 0.3);
     const childTarget = clamp(0.3 - health * 0.12 - advanced.sectors.information * 0.04, 0.12, 0.34);
     advanced.cohorts.elders += (elderTarget - advanced.cohorts.elders) * 0.002;
@@ -167,11 +171,13 @@ export class AdvancedCivilizationSystem {
     const previous = new Map(state.advanced.cities.map((city) => [city.settlementId, city]));
     state.advanced.cities = living.map((settlement) => {
       const people = residents.get(settlement.id) ?? [];
+      if (captureWorkforce) captureDiseasePopulation(settlement, people, state.month);
       const local = people.length;
       const old = previous.get(settlement.id);
       const share = old && priorTotal > 0 ? old.population / priorTotal : 0;
       const health = clamp(0.35 + this.knowledgeAt(settlement, 'modern-medicine') * 0.42 + settlement.foodSecurity * 0.18 - settlement.pollution * 0.2
-        - Math.min(1, (settlement.survival?.deprivation ?? 0) / 6) * 0.3 - (settlement.survival?.cold.exposure ?? 0) * 0.05);
+        - Math.min(1, (settlement.survival?.deprivation ?? 0) / 6) * 0.3 - (settlement.survival?.cold.exposure ?? 0) * 0.05
+        - (settlement.survival?.disease?.prevalence ?? 0) * (settlement.survival?.disease?.severity ?? 0) * 0.12);
       const targetPopulation = state.advanced.scale === 'modern-statistical' ? state.advanced.representedPopulation * share : local;
       return {
         settlementId: settlement.id,
@@ -526,7 +532,10 @@ export class AdvancedCivilizationSystem {
         ? (1 - (armed[0]?.commandControlReliability ?? 1)) * 0.55 + (armed[0]?.riskTolerance ?? 0) * 0.2
         : 0;
     setRisk('nuclear-conflict', nuclearHazard, nuclearVulnerability, a.governance.coordination * 0.5 + (a.strategic.phase === 'negotiated-restraint' ? 0.35 : 0), 0.045);
-    setRisk('pandemic', 0.18 + a.sectors.biotechnology * (0.16 + a.governance.fragmentation * 0.35), clamp(0.58 + representedPopulation(state) / this.config.advanced.statisticalPopulationCap * 0.24), a.sectors.health * 0.55 + a.governance.coordination * 0.22 + offworldProtection * 0.2, 0.018);
+    // Epidemiology owns disease consequences at every scale. This is only a risk readout.
+    const diseaseBurden = mean(state.settlements.filter(s => s.alive).map(s => s.survival?.disease?.prevalence ?? 0));
+    setRisk('pandemic', diseaseBurden, 1 - a.sectors.health * 0.7, a.sectors.health * 0.55 + a.governance.coordination * 0.22, 0);
+    a.risks.pandemic.active = diseaseBurden >= 0.1;
     setRisk('ecological-overshoot', a.environment.ecologicalPressure, 0.45 + a.environment.resourcePressure * 0.35, a.governance.coordination * 0.28 + a.sectors.science * 0.18 + a.space.resourceActivity * 0.24, 0.035);
     setRisk('climate-destabilization', a.environment.climateStress, 0.5 + a.environment.ecologicalPressure * 0.28, a.atomic.applications.energy * 0.24 + a.governance.coordination * 0.28 + offworldProtection * 0.22, 0.032);
     setRisk('resource-stress', a.environment.resourcePressure, 0.4 + a.governance.fragmentation * 0.38, a.sectors.automation * 0.12 + a.space.resourceActivity * 0.42 + a.governance.coordination * 0.2, 0.03);
@@ -538,16 +547,6 @@ export class AdvancedCivilizationSystem {
 
     const nuclear = a.risks['nuclear-conflict'];
     if (nuclear.annualProbability > 0 && this.random.chance(nuclear.annualProbability)) events.push(...this.triggerNuclearUse(state, armed));
-    const pandemic = a.risks.pandemic;
-    if (this.canRepeatRisk(state, pandemic, 18) && this.random.chance(pandemic.annualProbability)) {
-      this.markRisk(state, pandemic);
-      const loss = clamp(0.015 + pandemic.vulnerability * 0.11 - pandemic.mitigation * 0.045, 0.006, 0.16);
-      const populationBefore = representedPopulation(state);
-      const affected = this.applyShock(state, loss, 0.08);
-      const realizedMortalityFraction = populationBefore === 0 ? 0 : affected / populationBefore;
-      state.stats.pandemics += 1;
-      events.push(this.event(state, 'pandemic', 'A large disease outbreak tests public health, communication, and institutional coordination.', { causes: [a.sectors.biotechnology > 0.55 && a.governance.fragmentation > 0.5 ? 'dual-use-biotechnology' : 'natural-pathogen', 'population-connectivity'], context: { mortalityFraction: realizedMortalityFraction, healthMitigation: pandemic.mitigation }, affectedPopulation: affected, magnitude: clamp(realizedMortalityFraction * 4), significance: 0.78, tags: ['risk', 'pandemic'] }));
-    }
     for (const [kind, eventType, threshold] of [['ecological-overshoot', 'ecological-crisis', 0.78], ['climate-destabilization', 'climate-crisis', 0.82], ['resource-stress', 'resource-crisis', 0.84]] as const) {
       const risk = a.risks[kind];
       if (risk.hazard >= threshold && !risk.active) {

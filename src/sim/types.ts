@@ -1,6 +1,6 @@
 import type { AgriculturalField } from './agriculture/types';
 import type { WorkforceProfile } from './people/HumanCapital';
-import type { SurvivalState } from './pressures/types';
+import type { Infection, Pathogen, SurvivalState } from './pressures/types';
 import type { FoundingArrivalState } from './founding/FoundingArrival';
 import type { TerrainField, WorldLandmark } from './terrain/TerrainField';
 import type { WaterDepthState } from './terrain/SurfaceGeometry';
@@ -423,6 +423,8 @@ export interface NotableFigure {
 }
 
 export interface Person {
+  infection?: Infection;
+  immunity?: Partial<Record<Pathogen, number>>;
   foundingOrigin?: { podId: string; groupId: string; position: Vec2; emergedSeconds: number };
   /** Bounded acquired skill; occupation labels never confer expertise. */
   expertise?: Array<{ domain: KnowledgeDomain; competence: number; lastPractisedMonth: number; teacherId?: string }>;
@@ -715,6 +717,7 @@ export interface Culture {
   dimensions: CultureDimensions;
   style: CultureStyle;
   memory: {
+    healthCrisis?: { strength: number; eventId: string };
     foodScarcity?: { strength: number; eventId: string };
     tradeSuccess: number;
     collectiveSuccess: number;

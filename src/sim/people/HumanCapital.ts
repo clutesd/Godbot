@@ -1,6 +1,7 @@
 import type { KnowledgeDomain, Occupation, Person, Settlement, SimulationState } from '../types';
 import { isStatistical, settlementRepresentedPopulation } from '../Population';
 import { allocateSurvivalLabour } from '../pressures/Survival';
+import { illnessAvailability } from '../pressures/Disease';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 export const OCCUPATIONS: readonly Occupation[] = ['farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper', 'child', 'elder'];
@@ -32,6 +33,7 @@ export interface WorkforceProfile {
   experts: Partial<Record<KnowledgeDomain, number>>;
 }
 export interface LabourSummary {
+  diseaseReserved?: number;
   /** Raw civilian time spent on adaptation construction and fire tending, after reassignment. */
   establishmentReserved?: number;
   survivalReassigned?: number;
@@ -53,7 +55,7 @@ export function competence(person: Person, domain: KnowledgeDomain): number {
 }
 export function workAvailability(person: Person): number {
   return !person.alive || person.occupation === 'child' || person.displacedSinceMonth !== undefined || person.activity === 'migrate'
-    ? 0 : clamp(person.health) * (person.occupation === 'elder' ? 0.25 : 1);
+    ? 0 : clamp(person.health) * illnessAvailability(person) * (person.occupation === 'elder' ? 0.25 : 1);
 }
 export function expertiseEntry(person: Person, domain: KnowledgeDomain, month: number): NonNullable<Person['expertise']>[number] {
   const slots = (person.expertise ??= []);
@@ -107,7 +109,9 @@ function allocate(summary: LabourSummary): void {
   summary.economy.builder = (summary.economy.builder ?? 0) * 0.9;
 }
 export function workforceProfile(residents: readonly Person[], month: number, healthAtCapture = 0.5): WorkforceProfile {
-  const s = explicitLabour(residents, month);
+  // Temporary infection is applied by aggregate epidemiology after transition, not fossilized
+  // into the permanent occupational profile and charged a second time forever.
+  const s = explicitLabour(residents.map(p => p.infection ? { ...p, infection: undefined } : p), month);
   const perCitizen = <T extends string>(v: Partial<Record<T, number>>): Partial<Record<T, number>> =>
     Object.fromEntries(Object.entries(v).map(([k, n]) => [k, Number(n) / Math.max(1, s.population)])) as Partial<Record<T, number>>;
   return { healthAtCapture, occupations: perCitizen(s.occupations), effective: perCitizen(s.effective), domains: perCitizen(s.domains), experts: perCitizen(s.experts) };
@@ -120,6 +124,7 @@ export function beginLabourMonth(state: SimulationState, residents: ReadonlyMap<
   for (const settlement of state.settlements) if (settlement.alive) {
     const summary = settlementLabour(state, settlement, residents.get(settlement.id) ?? []);
     if (settlement.survival) settlement.survival.reassignedLabour = summary.survivalReassigned ?? 0;
+    if (settlement.survival?.disease) settlement.survival.disease.labourSpent = summary.diseaseReserved ?? 0;
     summaries.set(settlement.id, summary);
   }
   monthlySummaries.set(state, { month: state.month, summaries });
@@ -140,6 +145,13 @@ export function settlementLabour(state: SimulationState, settlement: Settlement,
   for (const key of ['occupations', 'effective', 'domains', 'experts'] as const) {
     for (const [domain, share] of Object.entries(profile?.[key] ?? {})) (summary[key] as Record<string, number>)[domain] = share * population * (key === 'occupations' ? 1 : Math.min(1.2, (city?.health ?? 0.5) / Math.max(0.1, profile?.healthAtCapture ?? 0.5)));
   }
+  const disease = settlement.survival?.disease;
+  if (disease) {
+    for (const key of ['effective', 'domains', 'experts'] as const) for (const domain of Object.keys(summary[key])) {
+      const values = summary[key] as Record<string, number>;
+      values[domain] = values[domain]! * (1 - disease.prevalence * disease.severity * 0.65);
+    }
+  }
   allocate(summary);
   return reserveCivilianLabour(state, settlement, summary);
 }
@@ -158,6 +170,16 @@ function reserveCivilianLabour(state: SimulationState, settlement: Settlement, s
   if (settlement.industry.active) {
     summary.industry = (summary.economy.artisan ?? 0) * 0.5;
     summary.economy.artisan = (summary.economy.artisan ?? 0) * 0.5;
+  }
+  const h = settlement.survival?.disease;
+  summary.diseaseReserved = 0;
+  if (h && h.response !== 'wait') {
+    for (const occupation of OCCUPATIONS) {
+      const available = summary.economy[occupation] ?? 0;
+      const spend = available * (h.response === 'contain' ? 0.18 : 0.1);
+      summary.economy[occupation] = available - spend;
+      summary.diseaseReserved += spend;
+    }
   }
   return allocateSurvivalLabour(settlement, summary);
 }

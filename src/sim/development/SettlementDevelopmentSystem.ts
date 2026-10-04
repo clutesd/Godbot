@@ -139,6 +139,8 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
   };
   // A documented famine makes reserve infrastructure useful even after this year's harvest recovers.
   pressures.food = (pressures.food ?? 0) + scale * (c.culture.memory.foodScarcity?.strength ?? 0) * 0.7;
+  pressures.healthcare = (pressures.healthcare ?? 0) + scale * ((s.survival?.disease?.prevalence ?? 0) * 3 + (s.survival?.disease?.memory ?? 0));
+  pressures.water = (pressures.water ?? 0) + scale * (s.survival?.disease?.memory ?? 0) * 0.7;
   // Household care, elders, rituals and mutual watch do not imply dedicated buildings.
   const decentralized = d.hierarchy < 0.42 && s.politicalPower.kinship >= s.politicalPower.institutional;
   const informalWater = waterState

@@ -9,6 +9,8 @@ import { tradeOpportunity } from './transport/FreightEconomy';
 import { firstMilestones } from '../historian/Milestones';
 import { emitEvent } from './History';
 import { adaptFoodCareer, applyCold, beginFoodMonth, chooseFoodResponse, observeEstablishment, resolveSurvival, survivalHealthChange, survivalMortality } from './pressures/Survival';
+import { containment, planDisease, resolveDisease, seedInitialInfection } from './pressures/Disease';
+import { observeSocialPressures, pressureCauses } from './pressures/SocialPressures';
 import { assertPristine, createFoundingArrival, FoundingArrivalDirector, isArrivalFilmPhase, isFoundingOrientationPhase, type FoundingPod } from './founding/FoundingArrival';
 import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
 import { killPeople, observeDeaths } from './people/PersonLifecycle';
@@ -473,6 +475,7 @@ export class Simulation {
     for (const settlement of this.livingSettlements()) {
       const residents = this.peopleAt(settlement.id);
       const population = survivalPopulation(settlement);
+      planDisease(this.state, settlement, population);
       const workforce = survivalCities.get(settlement.id)?.workforce;
       const workers = this.state.advanced.scale === 'modern-statistical'
         ? Object.values(workforce?.effective ?? {}).reduce((sum, share) => sum + share, 0) * population
@@ -516,6 +519,8 @@ export class Simulation {
       resolveSurvival(this.state, settlement, survivalPopulation(settlement), this.dominantCulture(settlement));
     }
     this.tickProfiler.record('survival-resolution', phaseStarted);
+    resolveDisease(this.state);
+    observeSocialPressures(this.state);
 
     if (this.state.month % 3 === 1) {
       phaseStarted = this.tickProfiler.start();
@@ -884,6 +889,7 @@ export class Simulation {
       alive: true,
     };
     this.peopleSystem.initializePerson(person, settlement, this.state);
+    seedInitialInfection(this.state, person);
     return person;
   }
 
@@ -1057,7 +1063,8 @@ export class Simulation {
       const ledger = settlement.survival?.food;
       const intake = ledger && ledger.need > 0 ? clamp(ledger.consumed / ledger.need) : settlement.foodSecurity;
       const nutritionalChange = intake * 0.014;
-      person.health = clamp(person.health + nutritionalChange + survivalHealthChange(settlement) + this.random.range(-0.008, 0.008));
+      person.health = clamp(person.health + nutritionalChange + survivalHealthChange(settlement)
+        - (person.infection ? person.infection.severity * 0.008 : 0) + this.random.range(-0.008, 0.008));
       person.energy = clamp(person.energy + (settlement.foodSecurity - 0.38) * 0.11 + this.random.range(-0.12, 0.1));
       const contribution = person.occupation === 'keeper' ? settlement.knowledge.literacy : person.occupation === 'builder' ? settlement.buildings / 30 : person.occupation === 'carrier' ? this.routesAt(settlement.id).length / 8 : 0;
       person.prestige = clamp(person.prestige * 0.9996 + contribution * 0.0008 + person.traits.ambition * 0.00005);
@@ -1201,7 +1208,7 @@ export class Simulation {
     const settlements = this.livingSettlements();
     for (const source of settlements) {
       const sourcePeople = this.peopleAt(source.id);
-      const catastrophic = (source.survival?.deprivation ?? 0) >= 4 || (source.survival?.exposureDose ?? 0) >= 6 || source.conflictPressure > 0.8;
+      const catastrophic = (source.survival?.deprivation ?? 0) >= 4 || (source.survival?.exposureDose ?? 0) >= 6 || source.conflictPressure > 0.8 || (source.survival?.disease?.prevalence ?? 0) > 0.35;
       if (sourcePeople.length < 14 && !catastrophic) continue;
       const sourceCell = this.state.world.cells[source.cellIndex];
       const capacity = 52 + (sourceCell?.habitability ?? 0.5) * 175 + source.buildings * 4;
@@ -1223,6 +1230,7 @@ export class Simulation {
         + source.climateStress * 0.24
         + (source.survival?.establishment?.migration ?? 0) * 0.3
         + source.conflictPressure * 0.42
+        + (source.survival?.observations.disease?.perceived ?? 0) * 0.35
         + opportunity * 0.52
         + specializationPull
         + networkPull
@@ -1262,6 +1270,7 @@ export class Simulation {
       if (moved.length >= 3 || experts.length > 0) {
         const causes = [
           ...(source.foodSecurity < 0.4 ? ['food-scarcity'] : []),
+          ...(source.survival?.disease?.episodeEventId ? [source.survival.disease.episodeEventId, 'infectious-illness'] : []),
           ...(source.conflictPressure > 0.28 ? ['conflict'] : []),
           ...(source.climateStress > 0.24 ? ['climate-stress'] : []),
           ...(sourcePeople.length / capacity > 0.62 ? ['population-pressure'] : []),
@@ -1282,7 +1291,7 @@ export class Simulation {
   private migrationAppeal(target: Settlement, source: Settlement): number {
     const relation = this.relation(source.id, target.id);
     const travelPenalty = distance(source.position, target.position) / (this.state.world.size * this.state.world.cellSize) * 0.58;
-    return target.foodSecurity * 0.44 + target.prosperity * 0.3 + (relation?.trust ?? 0.15) * 0.18 + (relation?.culturalAffinity ?? 0.15) * 0.12 - travelPenalty - target.conflictPressure * 0.3 - target.climateStress * 0.12;
+    return target.foodSecurity * 0.44 + target.prosperity * 0.3 + (relation?.trust ?? 0.15) * 0.18 + (relation?.culturalAffinity ?? 0.15) * 0.12 - travelPenalty - target.conflictPressure * 0.3 - target.climateStress * 0.12 - (target.survival?.observations.disease?.perceived ?? 0) * 0.35;
   }
 
   private runTrade(): void {
@@ -1294,6 +1303,8 @@ export class Simulation {
         continue;
       }
       route.ageMonths += 1;
+      // Containment delays new departures; already loaded freight retains its conservation ledger.
+      if ((containment(a) || containment(b)) && (!route.transport?.trip || route.transport.trip.status === 'arrived')) continue;
       const previousTrip = route.transport?.trip?.id;
       const delivered = this.transportationSystem.advanceFreight(route, a, b);
       const trip = route.transport?.trip;
@@ -1574,6 +1585,8 @@ export class Simulation {
       const averageProsperity = mean(settlements.map((settlement) => settlement.prosperity));
       const administrativeMemory = mean(settlements.map((settlement) => (settlement.politicalPower.institutional + settlement.politicalPower.council) / 2));
       const conflict = mean(settlements.map((settlement) => settlement.conflictPressure));
+      const unrest = mean(settlements.map(s => s.survival?.observations.unrest?.perceived ?? 0));
+      polity.legitimacy = clamp(polity.legitimacy - Math.max(0, unrest - 0.25) * 0.04);
       const connectedRoutes = this.state.tradeRoutes.filter((route) => route.active && route.transport?.path && polity.settlementIds.includes(route.a) && polity.settlementIds.includes(route.b));
       const integration = clamp(connectedRoutes.length / Math.max(1, settlements.length - 1));
       const stabilityTarget = clamp(polity.legitimacy * 0.35 + administrativeMemory * 0.25 + averageProsperity * 0.18 + integration * 0.18 + Math.min(0.12, polity.successionCount * 0.015) - conflict * 0.28);
@@ -1592,7 +1605,7 @@ export class Simulation {
       if (previousArrangement !== proposed && this.state.month - polity.lastTransitionMonth >= this.config.historicalPace.minimumRegimeYears * 12 && (polity.phase === 'stressed' || polity.phase === 'declining' || polity.stability > 0.58)) {
         polity.arrangement = proposed;
         polity.lastTransitionMonth = this.state.month;
-        this.addEvent({ type: 'political-transition', location: capital.position, locationId: capital.id, actors: [polity.id, capital.id, ...(polity.leadingPersonId ? [polity.leadingPersonId] : [])], causes: [polity.phase === 'declining' ? 'legitimacy-crisis' : 'accumulated-shifting-influence'], context: { from: previousArrangement, to: proposed, phase: polity.phase, stability: polity.stability, leader: polity.leadingPersonId ?? 'collective' }, outcome: `${proposed} became the dominant political arrangement after a prolonged transition.`, affectedPopulation: polityPeople.length, magnitude: 0.58, significance: 0.69, tags: ['politics', polity.phase], summary: `${polity.name} passes from ${previousArrangement} to ${proposed}.` });
+        this.addEvent({ type: 'political-transition', location: capital.position, locationId: capital.id, actors: [polity.id, capital.id, ...(polity.leadingPersonId ? [polity.leadingPersonId] : [])], causes: [polity.phase === 'declining' ? 'legitimacy-crisis' : 'accumulated-shifting-influence', ...pressureCauses(capital)], context: { from: previousArrangement, to: proposed, phase: polity.phase, stability: polity.stability, leader: polity.leadingPersonId ?? 'collective' }, outcome: `${proposed} became the dominant political arrangement after a prolonged transition.`, affectedPopulation: polityPeople.length, magnitude: 0.58, significance: 0.69, tags: ['politics', polity.phase], summary: `${polity.name} passes from ${previousArrangement} to ${proposed}.` });
       }
     }
     const candidateRelations = this.state.relations.filter((relation) => relation.contact && relation.trust > 0.65 && (relation.allied || relation.tradeDependency > 0.28));
@@ -1659,7 +1672,7 @@ export class Simulation {
       this.addEvent({
         type: 'political-transition', location: candidate.settlement.position, locationId: candidate.settlement.id,
         actors: [polity.id, successor.id, candidate.settlement.id, culture.id],
-        causes: ['political-fragmentation', ...(candidate.culturalDifference ? ['cultural-autonomy'] : []), candidate.internalWar || candidate.settlement.conflictPressure > 0.6 ? 'sustained-conflict' : 'legitimacy-crisis'],
+        causes: ['political-fragmentation', ...pressureCauses(candidate.settlement), ...(candidate.culturalDifference ? ['cultural-autonomy'] : []), candidate.internalWar || candidate.settlement.conflictPressure > 0.6 ? 'sustained-conflict' : 'legitimacy-crisis'],
         context: { fromPolity: polity.id, toPolity: successor.id, secessionPressure: candidate.pressure },
         outcome: `${candidate.settlement.name} left ${polity.name} and formed an independent polity.`,
         affectedPopulation: settlementRepresentedPopulation(this.state, candidate.settlement.id), magnitude: 0.72, significance: 0.84,

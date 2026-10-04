@@ -39,7 +39,8 @@ export interface SurvivalState {
     heatingByOccupation: Partial<Record<Occupation, number>>;
     winterMemory: number; lastWinterEvent?: number; deficitEvent?: string;
   };
-  observations: Partial<Record<'food' | 'cold', PressureObservation>>;
+  observations: Partial<Record<'food' | 'cold' | 'disease' | 'scarcity' | 'migration' | 'politics' | 'unrest' | 'war', PressureObservation>>;
+  disease?: DiseaseState;
   food?: {
     month: number;
     population: number;
@@ -93,4 +94,38 @@ export interface SurvivalState {
   /** Documentary allocation, also available to presentation/debug consumers. */
   reassignedLabour: number;
   lastResolvedMonth: number;
+}
+
+export type Pathogen = 'enteric' | 'respiratory' | 'zoonotic';
+export interface Infection {
+  pathogen: Pathogen;
+  acquiredMonth: number;
+  infectiousMonth: number;
+  recoveryMonth: number;
+  severity: number;
+  sourceEventId?: string;
+}
+export interface DiseaseState {
+  populationBasis?: number;
+  plannedMonth: number;
+  resolvedMonth: number;
+  /** Fractions of authoritative citizens, also captured before statistical transition. */
+  compartments: Record<Pathogen, { exposed: number; infectious: number; immune: number }>;
+  prevalence: number;
+  severity: number;
+  response: 'wait' | 'care' | 'contain';
+  labourSpent: number;
+  goodsSpent: number;
+  totalLabour?: number;
+  totalGoods?: number;
+  protection: number;
+  practice: number;
+  memory: number;
+  cases: number;
+  deaths: number;
+  lastEventMonth: number;
+  episodeEventId?: string;
+  epidemicEventId?: string;
+  responseEventId?: string;
+  adaptationEventId?: string;
 }
