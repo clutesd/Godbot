@@ -10,7 +10,7 @@ import { BUILD_STAGE, composeBuilding } from '../src/render/assets/BuildingCompo
 import { resolveBuildingSpec } from '../src/render/architecture/BuildingSpec';
 import { applySpecToGrammar } from '../src/render/architecture/SpecGrammarBridge';
 import {
-  ARCHETYPE_LIBRARY, BUILDING_ARCHETYPES, archetypeStageFor, type BuildingArchetype,
+  ARCHETYPE_LIBRARY, BUILDING_ARCHETYPES, type BuildingArchetype,
 } from '../src/render/architecture/BuildingArchetype';
 import { archetypeForContext } from '../src/render/architecture/ArchetypeRouting';
 import {
