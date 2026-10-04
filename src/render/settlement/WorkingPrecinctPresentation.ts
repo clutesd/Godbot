@@ -357,6 +357,10 @@ export function createWorkingPrecinctLayer(
   for (const plot of [...(settlement.structurePlots ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
     const placement = placementById.get(plot.id);
     if (!placement) continue;
+    // Construction owns its worksite. Existing structures can remain authoritative providers while
+    // an upgrade/repurpose is underway, but ordinary precinct props must not compete with scaffolds,
+    // material staging or crew clearance on that same reserved plot.
+    if (settlement.development?.project?.plotId === plot.id) continue;
     const plan = planWorkingPrecinct(settlement, plot, placement);
     if (!plan) continue;
     needCounts[plan.need] = (needCounts[plan.need] ?? 0) + 1;
