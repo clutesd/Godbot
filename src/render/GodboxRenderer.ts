@@ -85,6 +85,7 @@ import {
 import { ResourceWorkerRenderer } from './resources/ResourceWorkerRenderer';
 import { resourceWorkAlternateAnchor } from './animation/ResourceWorkMotion';
 import { FarmFieldRenderer } from './farming/FarmFieldRenderer';
+import { createWorkingPrecinctLayer } from './settlement/WorkingPrecinctPresentation';
 import { farmPlotRotation } from '../shared/FarmGeometry';
 import { PhysicalWorkScene } from './people/PhysicalWorkScene';
 import { facingTarget, workInterruption, type PhysicalActionPresentation } from './people/PhysicalActionPresentation';
@@ -2091,6 +2092,10 @@ export class GodboxRenderer {
       || constructionProgress > 0 && settlement.buildings < settlement.targetBuildings;
     const reservedPlacements = this.getSettlementBuildingPlacements(settlement, shownBuildings + (hasActiveConstruction ? 1 : 0), layout);
     const placements = settlement.development ? reservedPlacements.filter(p => settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shownBuildings) : reservedPlacements.slice(0, shownBuildings);
+    if (settlement.development) {
+      group.add(createWorkingPrecinctLayer(this.state, settlement, placements, settlementY,
+        (worldX, worldZ) => this.elevationAt(worldX, worldZ)));
+    }
     for (const placement of placements) {
       const terrainY = this.elevationAt(placement.worldX, placement.worldZ) - settlementY;
       const buildingEra = placement.development ? developmentPresentationEra(placement.development) : this.eraForBuilding(placement, era);
@@ -2140,7 +2145,7 @@ export class GodboxRenderer {
     }
     if (eraRank(era) >= 2) this.addCivicPlaza(group, palette, profile, era);
     const bareFounderCamp = Boolean(settlement.foundingPodId && settlement.buildings === 0);
-    if (!bareFounderCamp) this.addGroundCraft(group, era, palette, visualRandom);
+    if (!bareFounderCamp) this.addGroundCraft(group, era, palette, visualRandom, !settlement.development);
     this.addRoutePortals(group, settlement, layout, era, palette, cultureStyle);
     // The processional axis points at the settlement's own sacred district anchor rather than an
     // arbitrary angle, so the landmark anchors the real building cluster it's meant to crown.
@@ -2202,9 +2207,9 @@ export class GodboxRenderer {
   }
 
   /**
-   * Ground treatment under the settlement: packed earth for camps, swept dirt paths for
-   * villages, and paved spokes once formal engineering arrives. Paths radiating from the core
-   * are what make the layout read as intentional from the documentary camera.
+   * Ground treatment under the settlement core. Authoritative development settlements do not
+   * receive synthetic spokes: circulation is left to movement-worn desire paths and real transport.
+   * Legacy settlements keep the older decorative spokes until they migrate to development authority.
    */
   private layoutForSettlement(settlement: Settlement, era = this.eraForSettlement(settlement)): SettlementLayoutPlan {
     return createSettlementLayoutPlan({ settlement, settlements: this.state.settlements, routes: this.state.tradeRoutes, transportation: this.state.transportation, eraRank: eraRank(era), seed: this.config.seed, identity: settlement.architecture });
@@ -2215,7 +2220,7 @@ export class GodboxRenderer {
     return Math.min(Math.max(12, Math.round(32 * this.config.render.visualDensity)), settlement.buildings + Math.floor(settlement.urbanization * 8));
   }
 
-  private addGroundCraft(group: THREE.Group, era: Era, palette: MaterialPalette, random: SeededRandom): void {
+  private addGroundCraft(group: THREE.Group, era: Era, palette: MaterialPalette, random: SeededRandom, allowDecorativeSpokes = true): void {
     const rank = eraRank(era);
     if (rank === 0) {
       const earth = new THREE.Mesh(
@@ -2232,6 +2237,15 @@ export class GodboxRenderer {
     const material = paved
       ? palette.getSurfaceMaterial('ground')
       : new THREE.MeshStandardMaterial({ color: '#8a7052', roughness: 1 });
+    if (!allowDecorativeSpokes) {
+      const core = new THREE.Mesh(new THREE.CircleGeometry(1.45 + rank * 0.12, 20), material);
+      core.rotation.x = -Math.PI / 2;
+      core.position.y = 0.012;
+      core.receiveShadow = true;
+      core.userData['circulationAuthority'] = 'movement-wear';
+      group.add(core);
+      return;
+    }
     const spokes = rank >= 4 ? 6 : rank >= 2 ? 5 : 4;
     const startAngle = random.range(0, Math.PI * 2);
     for (let index = 0; index < spokes; index += 1) {
@@ -3065,6 +3079,13 @@ export class GodboxRenderer {
       .filter(stop => stop.settlementId === settlement.id && stop.status === 'complete')
       .map(stop => stop.id)
       .join(',');
+    const stockBuckets = [
+      settlement.resources.food,
+      settlement.resources.wood,
+      settlement.resources.minerals,
+      settlement.resources.goods,
+      Object.values(settlement.localMaterials).reduce((sum, amount) => sum + Math.max(0, amount ?? 0), 0),
+    ].map(value => Math.min(8, Math.floor(Math.log2(Math.max(0, value) + 1))));
     const coarseBuckets = [
       infrastructure.roads,
       infrastructure.ports,
@@ -3095,6 +3116,7 @@ export class GodboxRenderer {
       settlement.development?.revision ?? 0,
       constructionBlockedReason(settlement) ?? '',
       this.eraForSettlement(settlement),
+      ...stockBuckets,
       ...coarseBuckets,
       stops,
       ...(settlement.structurePlots ?? []).map(plot => Math.floor(plot.condition * 20)),
