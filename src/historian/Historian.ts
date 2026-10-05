@@ -355,7 +355,7 @@ export class Historian {
       id: `event:${event.id}`,
       subjectId: attributedPerson?.id ?? event.locationId ?? event.actors[0] ?? event.id,
       kind,
-      position: attributedPerson?.position ?? event.location ?? this.positionForActors(state, event.actors),
+      position: event.type === 'death' || event.tags.includes('remains') ? event.location ?? this.positionForActors(state, event.actors) : attributedPerson?.position ?? event.location ?? this.positionForActors(state, event.actors),
       title: war ? `The ${state.settlements.find(s => s.id === war.defender)?.name ?? 'frontier'} campaign` : this.titleForEvent(state, event),
       statement,
       score,
@@ -399,6 +399,25 @@ export class Historian {
         sourceEntityIds: [settlement.id],
         claims: { population: { month: state.month, value: localPopulation, scopeEntityId: settlement.id }, entityIds: [settlement.id] },
       });
+      const disease = settlement.survival?.disease;
+      const perceivedDisease = settlement.survival?.observations.disease;
+      const remains = (state.bodies ?? []).filter(b => !b.removed && b.person.homeId === settlement.id);
+      const abandoned = remains.find(b => b.cause === 'war');
+      const epidemic = remains.find(b => b.cause === 'infection');
+      const visibleCrisis = (perceivedDisease?.perceived ?? 0) > 0.05 && (disease?.prevalence ?? 0) > 0.03;
+      const recovering = disease && disease.memory > 0 && disease.prevalence < 0.01 && (perceivedDisease?.trend ?? 0) < 0;
+      if (abandoned || epidemic || visibleCrisis || recovering) {
+        const body = abandoned ?? epidemic;
+        const text = abandoned ? `${settlement.name}'s conflict has left unremoved remains at the recorded battle site.`
+          : epidemic ? `${settlement.name} still bears the physical evidence of infectious deaths.`
+          : recovering ? `${settlement.name}'s recorded infections are receding as activity resumes.`
+          : disease?.response === 'care' && disease.labourSpent > 0
+            ? `${settlement.name} is committing labour to care during its observed outbreak.`
+            : `${settlement.name} is experiencing an observed cluster of infectious illness.`;
+        const evidence = this.statement({ month: state.month, text, epistemicStatus: 'derived-statistic', sourceEntityIds: [settlement.id], claims: { entityIds: [settlement.id] } });
+        result.push(this.candidate(`mortality:${settlement.id}`, settlement.id, 'street-observation', body?.person.position ?? settlement.position,
+          abandoned ? 'After the conflict' : recovering ? 'Outbreak recovery' : 'Life during illness', evidence, 0.7, 0.7, 'settlement'));
+      }
       const inventory = ` Food security is ${Math.round(settlement.foodSecurity * 100)}%; ${settlement.buildings} buildings are recorded here.`;
       const previous = this.settlementReadouts.get(settlement.id);
       if (previous && state.month > previous.month) {

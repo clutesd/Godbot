@@ -1,3 +1,4 @@
+import { advanceBodies } from './people/BodyLifecycle';
 import { advanceAgriculture, ensureFields } from './agriculture/AgricultureSystem';
 import { advanceSettlementWater } from './development/WaterCivilization';
 import { balanceFounderTrades, combinedSurvivalHazard, conceptionChance, founderLife, linkFoundingFamilies, migrationHouseholds, syncDemographicHouseholds } from './people/Demography';
@@ -571,6 +572,7 @@ export class Simulation {
     }
 
     phaseStarted = this.tickProfiler.start();
+    advanceBodies(this.state);
     this.state.people = this.state.people.filter((person) => person.alive);
     this.maintainModernRepresentatives();
     this.rebuildLookupIndexes();
@@ -1823,8 +1825,8 @@ export class Simulation {
       if ((this.state.month - campaign.battleStartedMonth) % 4 === 0) {
         const requestedCasualtiesA = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthB * 0.018)));
         const requestedCasualtiesB = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthA * 0.018)));
-        const casualtiesA = this.killCombatants(attacker.id, Math.min(Math.ceil(war.strengthA), requestedCasualtiesA));
-        const casualtiesB = this.killCombatants(defender.id, Math.min(Math.ceil(war.strengthB), requestedCasualtiesB));
+        const casualtiesA = this.killCombatants(attacker.id, Math.min(Math.ceil(war.strengthA), requestedCasualtiesA), campaignFront(war, defender.position));
+        const casualtiesB = this.killCombatants(defender.id, Math.min(Math.ceil(war.strengthB), requestedCasualtiesB), campaignFront(war, defender.position));
         war.casualtiesA += casualtiesA;
         war.casualtiesB += casualtiesB;
         const lossA = casualtiesA / Math.max(1, campaign.initialStrengthA);
@@ -1838,7 +1840,7 @@ export class Simulation {
         this.state.stats.battles += 1;
         campaign.battleCount += 1;
         campaign.lastBattleMonth = this.state.month;
-        this.addEvent({ type: 'battle', locationId: defender.id, location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
+        this.addEvent({ type: 'battle', locationId: defender.id, location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { explicitBodies: this.state.advanced.scale !== 'modern-statistical', casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
       }
       if (Math.min(supplyA, supplyB) < 0.25) this.campaignDispatch(war, attacker, defender, 'supply-crisis', `${supplyA <= supplyB ? attacker.name : defender.name}'s provisions are running dangerously low.`, ['supply-pressure']);
       const advantage = war.progress > 0.22 ? 1 : war.progress < -0.22 ? -1 : 0;
@@ -1914,7 +1916,7 @@ export class Simulation {
     this.addEvent({ type: 'war-ended', locationId: defender.id, location: campaignFocus(war, attacker.position, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: reason === 'impassable' ? ['terrain-barrier'] : reason === 'settlement-lost' ? ['settlement-loss'] : ['attrition', 'supply-pressure', war.moraleA < 0.2 || war.moraleB < 0.2 ? 'morale-collapse' : 'negotiation'], context: { months: this.state.month - war.startMonth, casualties: war.casualtiesA + war.casualtiesB, battles: war.campaign.battleCount, phase: war.phase, progress: war.progress, reason, truceUntil: this.state.month + TRUCE_MONTHS }, outcome, affectedPopulation: war.casualtiesA + war.casualtiesB, magnitude: 0.74, significance: 0.84, tags: ['war', 'peace', war.phase], summary: `The war between ${attacker.name} and ${defender.name} ends. ${outcome}` });
   }
 
-  private killCombatants(settlementId: string, requested: number): number {
+  private killCombatants(settlementId: string, requested: number, position?: Vec2): number {
     if (this.state.advanced.scale === 'modern-statistical') {
       const city = this.state.advanced.cities.find(c => c.settlementId === settlementId);
       if (!city) return 0;
@@ -1930,7 +1932,7 @@ export class Simulation {
     const victims: Person[] = [];
     for (let index = 0; index < requested && candidates.length > 0; index += 1) {
       const person = candidates.splice(this.random.int(0, candidates.length), 1)[0];
-      if (person) { victims.push(person); killed += 1; }
+      if (person) { if (position) person.position = { x: position.x + Math.sin(index * 2.399) * (0.2 + index * 0.045), z: position.z + Math.cos(index * 2.399) * (0.2 + index * 0.045) }; victims.push(person); killed += 1; }
     }
     killPeople(this.state, victims, 'war');
     return killed;

@@ -153,7 +153,7 @@ export class WarRenderer {
           visual.exchanges = createCombatExchanges(event.id, event.location, Math.atan2(after.x - before.x, after.z - before.z),
             engagementGap(styles, visual.eventMode), styles, [formationCount(war.campaign.initialStrengthA), formationCount(war.campaign.initialStrengthB)]);
         } else visual.exchanges = undefined;
-        visual.aftermath.sync(war, this.state.history, this.state.month, elapsed, [visual.companies[0].style, visual.companies[1].style]);
+        visual.aftermath.sync(war, this.state.aftermathEvents ?? this.state.history, this.state.month, elapsed, [visual.companies[0].style, visual.companies[1].style]);
         visual.evidenceMonth = this.state.month;
       }
       visual.spectacle.beginWeapons();
@@ -369,7 +369,7 @@ export class WarRenderer {
   }
 
   private sync(elapsed: number, focusId?: string): void {
-    const wars = this.state.wars.filter(w => w.active || (w.resolvedMonth !== undefined && this.state.month - w.resolvedMonth < 12))
+    const wars = this.state.wars.filter(w => w.active || (w.resolvedMonth !== undefined && this.state.month - w.resolvedMonth < 36))
       .sort((a, b) => Number(b.id === focusId) - Number(a.id === focusId) || Number(b.resolvedMonth === undefined) - Number(a.resolvedMonth === undefined) || b.startMonth - a.startMonth)
       .slice(0, MAX_CAMPAIGNS);
     const ids = new Set(wars.map(w => w.id));

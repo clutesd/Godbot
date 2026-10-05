@@ -1,3 +1,4 @@
+import { recordBody } from './BodyLifecycle';
 import { rememberPerson } from '../development/Remembrance';
 import type { Person, SimulationState } from '../types';
 import { emitEvent } from '../History';
@@ -25,8 +26,9 @@ export function killPeople(state: SimulationState, victims: readonly Person[], c
     person.partnerId = undefined;
     const settlement = settlements.get(person.homeId);
     const expert = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence)[0];
+    const firstEpidemicDeath = cause === 'infection' && !(state.bodies ?? []).some(b => b.cause === 'infection' && b.person.homeId === person.homeId);
     const deathEvent = emitEvent(state, {
-      type: 'death', location: settlement?.position ?? person.position, locationId: settlement?.id, actors: [person.id],
+      type: 'death', location: { ...person.position }, locationId: settlement?.id, actors: [person.id],
       causes: [cause, ...(cause === 'infection' && person.infection?.sourceEventId ? [person.infection.sourceEventId] : []), ...((cause === 'scarcity' || cause === 'exposure') && settlement?.survival?.observations[cause === 'scarcity' ? 'food' : 'cold']?.eventId
         ? [settlement.survival.observations[cause === 'scarcity' ? 'food' : 'cold']!.eventId!] : [])],
       context: { name: person.name, age: Math.floor(person.ageMonths / 12), bornMonth: person.bornMonth, occupation: person.occupation,
@@ -44,10 +46,11 @@ export function killPeople(state: SimulationState, victims: readonly Person[], c
         familyIds: [...person.parents, ...person.children, ...(partner ? [partner.id] : [])].join(','),
         expertise: expert?.domain ?? '', competence: expert?.competence ?? 0, teacherId: expert?.teacherId ?? '', documentary: isStatistical(state) },
       outcome: `${person.name}'s life ended.`, affectedPopulation: isStatistical(state) ? 0 : 1,
-      magnitude: 0.03, significance: (expert?.competence ?? 0) >= 0.7 ? 0.35 : 0.025,
+      magnitude: 0.03, significance: firstEpidemicDeath ? 0.7 : (expert?.competence ?? 0) >= 0.7 ? 0.35 : 0.025,
       tags: ['life', cause, ...((expert?.competence ?? 0) >= 0.7 ? ['expertise-loss'] : [])],
       summary: `${person.name} dies at ${Math.floor(person.ageMonths / 12)} in ${settlement?.name ?? 'the wilderness'}.`,
     });
+    recordBody(state, person, deathEvent.id, cause);
     if (settlement) rememberPerson(state, settlement, person, deathEvent.id);
     if (isStatistical(state)) state.stats.documentaryDeaths = (state.stats.documentaryDeaths ?? 0) + 1;
     else state.stats.deaths++;

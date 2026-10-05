@@ -19,6 +19,7 @@ export function emitEvent(state: SimulationState, draft: Omit<HistoricalEvent, '
   state.eventSequence = sequence;
   const event = { ...draft, id: `event-${sequence}`, sequence, month: state.month };
   state.history.push(event);
+  if (event.type === 'battle' && event.affectedPopulation > 0) (state.aftermathEvents ??= []).push(structuredClone(event));
   rememberHistoricalEvent(state, event);
   for (const observer of observers.get(state) ?? []) observer(event);
   return event;

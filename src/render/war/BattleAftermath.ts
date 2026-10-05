@@ -6,7 +6,7 @@ import { engagementGap } from './CombatChoreography';
 import { createCombatExchanges, exchangeFigurePose, exchangeImpactAt, formationCount, presentationHash, type CombatFigurePose } from './CombatExchanges';
 
 export const MAX_BATTLE_BODIES = 32;
-export const AFTERMATH_MONTHS = 12;
+export const AFTERMATH_MONTHS = 36;
 
 /** Presentation receipts, never population entities. Stable IDs are a future cleanup-system seam.
  * Missing/pruned history produces no receipt; cumulative war totals cannot invent a battle. */
@@ -52,7 +52,7 @@ export function casualtyReceipts(war: War, history: readonly HistoricalEvent[], 
   const seen = new Set<string>();
   for (let index = history.length - 1; index >= 0 && receipts.length < MAX_BATTLE_BODIES && seen.size < 16; index--) {
     const event = history[index]!;
-    if (event.type !== 'battle' || !event.actors.includes(war.id) || !event.location || event.month > month
+    if (event.context.explicitBodies === true || event.type !== 'battle' || !event.actors.includes(war.id) || !event.location || event.month > month
       || month - event.month >= AFTERMATH_MONTHS || seen.has(event.id)) continue;
     seen.add(event.id);
     const progress = Number(event.context['progress']);
@@ -159,7 +159,7 @@ export class BattleAftermath {
       }
       if (coincident) continue;
       const age = Math.max(0, month - record.month);
-      const fade = Math.min(1, Math.max(0, (AFTERMATH_MONTHS - age) / 4));
+      const fade = 1 - Math.min(1, age / AFTERMATH_MONTHS) * 0.15;
       const life = reducedMotion ? 10 : elapsed - this.started.get(record.id)! - record.impactAt;
       if (life < 0) continue;
       const motion = casualtyLifecycle(life, reducedMotion);

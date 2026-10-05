@@ -1118,7 +1118,15 @@ export interface SimulationStats {
   existentialRiskEvents: number;
 }
 
+export interface BodyRecord {
+  id: string; person: Person; deathEventId: string; cause: string; month: number; yaw: number;
+  removed?: { month: number; reason: 'burial' | 'removal' | 'destruction' | 'decomposition'; eventId: string };
+}
+
 export interface SimulationState {
+  bodies?: BodyRecord[];
+  /** Battle evidence retained independently of chronicle pruning until physical decomposition. */
+  aftermathEvents?: HistoricalEvent[];
   arrival?: FoundingArrivalState;
   eventSequence?: number;
   engineVersion: string;

@@ -1,3 +1,7 @@
+import { IllnessBreath } from './people/IllnessBreath';
+import { bodyWeathering } from '../sim/people/BodyLifecycle';
+import { casualtyLifecycle } from './war/BattleAftermath';
+import { physicalCondition, applyPhysicalCondition } from './animation/PhysicalCondition';
 import { productionBuildingShell } from './assets/ProductionBuildingShell';
 import type { BuildingSpec } from './architecture/BuildingSpec';
 import type { FreightTrip } from '../sim/transport/types';
@@ -256,6 +260,7 @@ export class GodboxRenderer {
   private arrivalLightingSeconds = 0;
   private visibleSolarHour = 12;
   private readonly sleepingPeople = new SleepPresentation();
+  private readonly illnessBreath = new IllnessBreath();
   private readonly sleepGlyphs = new SleepGlyphRenderer();
   readonly observation: CurrentObservation;
   private readonly renderer: THREE.WebGLRenderer;
@@ -374,6 +379,9 @@ export class GodboxRenderer {
   private readonly settlementVisuals = new Map<string, SettlementVisual>();
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
   private readonly settlementSolidObstacles = new Map<string, PedestrianFootprint[]>();
+  private readonly lastBodyPose = new Map<string, Map<string, THREE.Matrix4[]>>();
+  private readonly bodyStarted = new Map<string, number>();
+  private readonly bodyAnchors = new Map<string, { x: number; z: number; facing: number }>();
   private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number; width?: number; depth?: number }>();
   private readonly infrastructurePlacements = new Map<string, { worldX: number; worldZ: number; radius: number }>();
   private readonly palettesByCultureEra = new Map<string, MaterialPalette>();
@@ -635,7 +643,7 @@ export class GodboxRenderer {
     this.peopleTools.frustumCulled = false;
     this.peopleHeadwear.frustumCulled = false;
     this.scene.add(this.focalContactShadow, this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins, this.peopleTools, this.peopleHeadwear, this.peopleGarments, this.peopleCargo.group, this.peopleMantles, this.restPoses.group, this.reactionGlyphs.group);
-    this.scene.add(this.sleepGlyphs.group);
+    this.scene.add(this.sleepGlyphs.group, this.illnessBreath.mesh);
     this.syncSettlements(true);
     this.syncRoutes(true);
     this.postProcessing = new EcologyPostProcessing(this.renderer, this.scene, this.camera, config.render.bloomQuality);
@@ -884,6 +892,7 @@ export class GodboxRenderer {
     this.physicalWorkers.group.visible = visible;
     this.restPoses.group.visible = visible;
     this.sleepGlyphs.group.visible = visible;
+    this.illnessBreath.mesh.visible = visible;
     this.reactionGlyphs.group.visible = visible;
   }
 
@@ -1148,6 +1157,7 @@ export class GodboxRenderer {
     this.localActivities.beginFrame();
     this.worldAttention.beginFrame(deltaSeconds);
     const reactionSeriousShot = this.observation.audioCategory === 'conflict' || this.observation.audioCategory === 'tragedy';
+    this.illnessBreath.beginFrame();
     this.sleepGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.reducedMotion.matches, reactionSeriousShot);
     this.reactionGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.cameraDirector.current()?.subjectId,
       reactionSeriousShot, this.reducedMotion.matches);
@@ -1178,11 +1188,50 @@ export class GodboxRenderer {
       const person = this.visiblePeople[index];
       if (!person) continue;
       if (!person.alive) {
-        for (const mesh of [this.people, this.peopleRoleAccents, this.peopleHeads, this.peopleTools, this.peopleHeadwear]) {
-          this.setInstanceTransform(mesh, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
-        }
-        for (const mesh of [this.peopleArms, this.peopleLegs, this.peopleForearms, this.peopleShins]) for (let side = 0; side < 2; side++) {
-          this.setInstanceTransform(mesh, index * 2 + side, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+        const body = this.state.bodies?.find(b => b.id === person.id && !b.removed);
+        if (body) {
+          const look = this.humanLookFor(person, this.workSettlements.get(person.homeId), undefined);
+          this.humanAppearance.apply(index, look, this.cultureById.get(person.cultureId)?.style.pattern, false);
+          const prior = this.peopleVisuals.get(person.id);
+          if (!this.bodyAnchors.has(person.id)) this.bodyAnchors.set(person.id, { x: prior?.x ?? person.position.x, z: prior?.z ?? person.position.z, facing: prior?.facing ?? body.yaw });
+          const anchor = this.bodyAnchors.get(person.id)!;
+          const x = anchor.x, z = anchor.z;
+          const y = this.personGround.heightAt(x, z);
+          const yaw = anchor.facing;
+          const key = `body:${person.id}`;
+          let started = this.bodyStarted.get(key);
+          if (started === undefined) { started = body.month === this.state.month && prior ? elapsedSeconds : -Infinity; this.bodyStarted.set(key, started); }
+          const motion = casualtyLifecycle(elapsedSeconds - started, this.reducedMotion.matches);
+          const scale = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * (person.appearance?.heightScale ?? 1)
+            * (person.ageMonths < 168 ? 0.7 : 1) * cosmicAppearanceFor(person.id).height;
+          const root = new THREE.Matrix4().makeRotationY(yaw);
+          root.multiply(new THREE.Matrix4().makeRotationX(motion.pitch));
+          root.setPosition(x, y + motion.fall * scale * 0.10, z);
+          const part = (mesh: THREE.InstancedMesh, slot: number, px: number, py: number, pz: number, pitch = 0) => {
+            this.setInstanceTransform(mesh, slot, px * scale, py * scale, pz * scale,
+              scale, scale, scale, pitch, 0, 0);
+            const held = this.lastBodyPose.get(person.id)?.get(mesh.uuid);
+            const previous = held?.[held.length === 2 ? slot % 2 : 0];
+            if (previous && motion.fall < 1) {
+              for (let k = 0; k < 16; k++) this.personMatrix.elements[k] = previous.elements[k]! * (1 - motion.fall) + this.personMatrix.elements[k]! * motion.fall;
+            }
+            this.personMatrix.premultiply(root); mesh.setMatrixAt(slot, this.personMatrix);
+          };
+          part(this.people, index, 0, 0.44, 0, motion.reaction);
+          part(this.peopleHeads, index, 0, 0.85, 0);
+          part(this.peopleHeadwear, index, 0, 0.85, 0);
+          part(this.peopleRoleAccents, index, 0, 0.58, 0);
+          for (let side = 0; side < 2; side++) {
+            const sign = side ? 1 : -1;
+            part(this.peopleArms, index * 2 + side, sign * 0.16, 0.67, 0, 0.12 * motion.fall);
+            part(this.peopleForearms, index * 2 + side, sign * 0.17, 0.48, 0.02, -0.2 * motion.fall);
+            part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44, 0, 0.08 * motion.fall);
+            part(this.peopleShins, index * 2 + side, sign * 0.065, 0.225, 0.02, -0.1 * motion.fall);
+          }
+          this.setInstanceTransform(this.peopleTools, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+          this.personColor.set(look.palette.luminous).lerp(new THREE.Color('#726c61'), bodyWeathering(body, this.state.month) * 0.7);
+          for (const mesh of [this.people, this.peopleHeads, this.peopleRoleAccents, this.peopleHeadwear]) mesh.setColorAt(index, this.personColor);
+          for (const mesh of [this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins]) for (let side = 0; side < 2; side++) mesh.setColorAt(index * 2 + side, this.personColor);
         }
         continue;
       }
@@ -1502,6 +1551,7 @@ export class GodboxRenderer {
       const attentionTorsoBlend = Math.max(0, Math.min(1, (attentionBlend - 0.32) / 0.68));
       const attentionBodyYaw = (local?.attentionTorsoYaw ?? 0) * attentionTorsoBlend + (visual.passingTorsoYaw ?? 0) + worldAttention.torsoYaw;
       const attentionHeadYaw = (local?.attentionHeadYaw ?? 0) * attentionBlend + (visual.passingHeadYaw ?? 0) + worldAttention.headYaw - attentionBodyYaw;
+      applyPhysicalCondition(pose, physicalCondition(person, settlement, this.state.month, false, this.state.advanced.scale === 'modern-statistical'), elapsedSeconds + stableUnit(person.id) * 17);
       const bodyTilt = presentationBodyTilt(pose?.spineRotation ?? 0, person.appearance?.posture ?? 0, Boolean(working || physicalStanding || restArticulated || firstFireStanding || standardStanding));
       const sleepingPose = restPose.spot?.posture === 'sleep';
       // Permanent carriage: age and sustained work bend a spine, and it should stay bent.
@@ -1627,6 +1677,11 @@ export class GodboxRenderer {
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
         heightScale, heightScale, heightScale, headPitch, headFacing, headRoll);
       this.headAttachmentMatrix.copy(this.personMatrix);
+      if (!this.reducedMotion.matches && (weather?.temperature ?? 1) < 0.4
+        && physicalCondition(person, settlement, this.state.month, false, this.state.advanced.scale === 'modern-statistical').respiratory
+        && this.camera.position.distanceTo(this.partPosition) < 16)
+        this.illnessBreath.draw(this.partPosition.x, this.partPosition.y, this.partPosition.z, headFacing,
+          elapsedSeconds + stableUnit(person.id) * 17, heightScale);
       this.peopleHeads.setColorAt(index, this.personColor);
       if (!visual.traveling && restPose.spot?.posture === 'sleep') this.sleepGlyphs.draw(person.id,
         this.partPosition.x, this.partPosition.y, this.partPosition.z, heightScale, restPose.blend);
@@ -1750,6 +1805,25 @@ export class GodboxRenderer {
         this.peopleMantles.setColorAt(mantles, this.personDetailColor);
         mantles += 1;
       }
+    }
+    // Preserve the exact last rendered pose for the death handoff; final remains use a stable rest pose.
+    const poseIds = new Set(this.visiblePeople.map(p => p.id));
+    for (const id of this.lastBodyPose.keys()) if (!poseIds.has(id)) this.lastBodyPose.delete(id);
+    for (let i = 0; i < count; i++) {
+      const p = this.visiblePeople[i];
+      if (!p?.alive) continue;
+      const visual = this.peopleVisuals.get(p.id);
+      if (!visual) continue;
+      const inverse = new THREE.Matrix4().makeRotationY(visual.facing);
+      inverse.setPosition(visual.x, visual.footY, visual.z); inverse.invert();
+      const held = this.lastBodyPose.get(p.id) ?? new Map<string, THREE.Matrix4[]>();
+      for (const mesh of [this.people, this.peopleHeads, this.peopleRoleAccents, this.peopleHeadwear, this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins]) {
+        const limbs = [this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins].includes(mesh);
+        const matrices = held.get(mesh.uuid) ?? Array.from({ length: limbs ? 2 : 1 }, () => new THREE.Matrix4());
+        for (let side = 0; side < matrices.length; side++) { mesh.getMatrixAt(i * matrices.length + side, matrices[side]!); matrices[side]!.premultiply(inverse); }
+        held.set(mesh.uuid, matrices);
+      }
+      this.lastBodyPose.set(p.id, held);
     }
     this.peopleMantles.count = mantles;
     this.peopleGarments.count = garments;
@@ -1880,7 +1954,14 @@ export class GodboxRenderer {
           - Number(this.resourceWork.sites.has(`${a.homeId}\u0000${a.navigation?.destinationId ?? ''}`))
         || stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
       .slice(0, capacity);
-    this.socialGroups = buildSocialGroups(this.visiblePeople);
+    const activeBodies = new Set((this.state.bodies ?? []).filter(b => !b.removed).map(b => b.id));
+    for (const id of this.bodyAnchors.keys()) if (!activeBodies.has(id)) { this.bodyAnchors.delete(id); this.bodyStarted.delete(`body:${id}`); }
+    const remains = (this.state.bodies ?? []).filter(b => !b.removed)
+      .sort((a, b) => Math.hypot(a.person.position.x - this.camera.position.x, a.person.position.z - this.camera.position.z)
+        - Math.hypot(b.person.position.x - this.camera.position.x, b.person.position.z - this.camera.position.z) || a.id.localeCompare(b.id))
+      .slice(0, Math.min(64, Math.floor(capacity / 4))).map(b => b.person);
+    this.visiblePeople = [...this.visiblePeople.slice(0, capacity - remains.length), ...remains];
+    this.socialGroups = buildSocialGroups(this.visiblePeople.filter(p => p.alive));
     if (this.lastPersonGroundPosition.size > this.state.people.length * 2) {
       const living = new Set(this.state.people.map((person) => person.id));
       for (const id of this.lastPersonGroundPosition.keys()) {
@@ -5072,6 +5153,7 @@ export class GodboxRenderer {
     this.worldAttention.clear();
     this.reactionGlyphs.dispose();
     this.sleepGlyphs.dispose();
+    this.illnessBreath.dispose();
     this.localPeers.clear();
     this.localPeerPositions.clear();
     this.animationController.dispose();
