@@ -139,7 +139,10 @@ export interface FoundingResult { facility?: ProcessingFacility; blocker?: strin
 export function reserveFacilitySite(state: SimulationState, s: Settlement): StructurePlot | undefined {
   // The industrial district is preferred; a settlement hemmed in by water or the map edge falls back to its craft quarter, then the core.
   for (const district of ['industrial', 'craft', 'civic'] as const) {
-    const plot = reserveStructurePlot(state, s, district, { buildingScale: 0.72, precinct: 2 });
+    // Full district width: a facility is built at the size of its machinery, and `precinct` is
+    // what reserves the yard around it. Shrinking the building as well as reserving the yard
+    // charged the works twice and rendered it two thirds the size its own architecture declares.
+    const plot = reserveStructurePlot(state, s, district, { precinct: 2 });
     if (plot) return plot;
   }
   return undefined;

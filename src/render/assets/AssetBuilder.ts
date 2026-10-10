@@ -93,6 +93,54 @@ export interface AssetCacheStats {
   cultureProfiles: number;
 }
 
+/**
+ * Shading the massing LODs stand in with, since they have no detail to measure.
+ *
+ * The full-detail composition measures its own ambient occlusion and bakes it per vertex (see
+ * OcclusionField.ts). A massing LOD is a handful of boxes with none of the carpentry that occlusion
+ * comes from, so left alone it would render at full ambient brightness and a building would
+ * visibly flash lighter the moment it crossed the LOD boundary. These two numbers restate what the
+ * detailed mesh averages over the distance the LOD is seen from: a constant for the crevices the
+ * boxes do not have, and a contact gradient for the one cue a box can state honestly — the line
+ * where the structure meets the ground.
+ */
+const MASSING_OCCLUSION = 0.3;
+const MASSING_CONTACT = 0.45;
+/** Height over which the contact gradient fades out, as a share of the structure's height. */
+const MASSING_CONTACT_SHARE = 0.12;
+
+/**
+ * Write the massing stand-in shading into a LOD tier's geometry.
+ *
+ * Only the occlusion channel is touched, so a tier built through `GeometryBuilder` keeps the
+ * weathering and grain it already carries. Positions are read through each mesh's world matrix,
+ * because a LOD tier places its parts with `mesh.position` rather than baking them into vertices,
+ * and the tier root is still unparented here, so world space is the structure's own frame.
+ */
+function shadeMassingLod(root: THREE.Object3D, height: number): void {
+  const fade = Math.max(1e-4, height * MASSING_CONTACT_SHARE);
+  const vertex = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  root.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const geometry = object.geometry;
+    const position = geometry.getAttribute('position');
+    let detail = geometry.getAttribute('aSurfaceDetail') as THREE.BufferAttribute | undefined;
+    if (!detail) {
+      detail = new THREE.Int8BufferAttribute(new Int8Array(position.count * 4), 4, true);
+      geometry.setAttribute('aSurfaceDetail', detail);
+    }
+    for (let index = 0; index < position.count; index += 1) {
+      vertex.fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld);
+      const contact = Math.max(0, 1 - Math.max(0, vertex.y) / fade);
+      const occlusion = Math.min(1, MASSING_OCCLUSION + MASSING_CONTACT * contact * contact);
+      // A normalized Int8 attribute quantises on write, so this is the 0..1 share, not a byte.
+      detail.setW(index, occlusion);
+    }
+    detail.needsUpdate = true;
+  });
+}
+
 /** Share of the total structure height the crown occupies. Keeps LOD tiers the same height as full detail. */
 function crownHeightShare(crown: BuildingGrammar['crown']): number {
   switch (crown) {
@@ -528,6 +576,10 @@ export class AssetBuilder {
     root.userData['buildingHeight'] = composed.height;
     root.userData['footprintWidth'] = composed.extentX;
     root.userData['footprintDepth'] = composed.extentZ;
+    // The built mass, excluding the yards, paving and water a structure lays around itself. This
+    // is what the renderer fits against; the site extent above is what the plot reserves.
+    root.userData['massWidth'] = composed.massX;
+    root.userData['massDepth'] = composed.massZ;
     root.userData['structureComponents'] = componentManifest;
     root.userData['structureComponentSignature'] = componentManifest.visualSignature;
     root.userData['buildingLodDistances'] = lods.length >= 2 ? [0, 20, 42] : [0];
@@ -565,6 +617,7 @@ export class AssetBuilder {
         const mesh = new THREE.Mesh(builder.build(), material ? palette.getArchitecturalMaterial(material) : palette.getSurfaceMaterial(surface));
         group.add(mesh);
       }
+      shadeMassingLod(group, grammar.plinthHeight + grammar.wallHeight * grammar.storeys);
       return [group, group.clone()];
     }
     const width = grammar.width;
@@ -701,9 +754,8 @@ export class AssetBuilder {
     // BoxGeometry is centred; lift it so the distant silhouette remains grounded.
     lod2.position.y = farBodyHeight * 0.5;
     const farCrown = farCrownSilhouette(grammar, width, depth, farBodyHeight, crownHeight, bodyMaterial);
-    if (!farCrown) return [lod1, lod2];
-    const far = new THREE.Group();
-    far.add(lod2, farCrown);
+    const far: THREE.Object3D = farCrown ? new THREE.Group().add(lod2, farCrown) : lod2;
+    for (const tier of [lod1, far]) shadeMassingLod(tier, height);
     return [lod1, far];
   }
 

@@ -38,7 +38,10 @@ export function reserveStructurePlot(state: SimulationState, settlement: Settlem
     const index = plots.length;
     const random = new SeededRandom(`${state.seed}:${settlement.id}:structure:${index}`);
     const major = district === 'civic' || district === 'sacred' || district === 'industrial';
-    const width = random.range(0.7, 1.18) * (major ? 1.55 * 2.6 : district === 'residential' ? 1.9 : 1.6) * (options.buildingScale ?? 1);
+    // District plot widths are sized against what the architecture actually builds on them: a
+    // workshop's mass runs to ~2.4 canonical units against a house's ~1.9, so a craft plot that
+    // matched a house's left every workshop fitted down to two thirds of its designed size.
+    const width = random.range(0.7, 1.18) * (major ? 1.55 * 2.6 : district === 'residential' ? 1.9 : 2.0) * (options.buildingScale ?? 1);
     const depth = width * 0.82;
     const radius = width * 0.66 * (options.precinct ?? 1);
     const neighbours = plots.filter(plot => plot.condition > 0.08);

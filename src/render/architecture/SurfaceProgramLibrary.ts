@@ -20,9 +20,7 @@
 
 import type { ProceduralSurfaceProgram } from '../materials/SurfaceDetail';
 import type { SurfaceProgram } from './MaterialLibrary';
-
-/** One canonical building unit in metres. Mirrors the composer's own scale. */
-const UNIT_METRES = 6;
+import { GRAMMAR_UNIT_METRES as UNIT_METRES } from '../assets/StructureFit';
 
 /** A length in metres, as a GLSL literal in canonical building units. */
 const m = (metres: number): string => (metres / UNIT_METRES).toFixed(6);

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
-import { createPottery, MAX_POTTERY, planPottery, potteryStyle, potteryTier, type PotteryAnchor } from '../src/render/assets/Pottery';
+import { createPottery, MAX_POTTERY, planPottery, potteryStyle, potteryTier, type PotteryAnchor, type Vessel } from '../src/render/assets/Pottery';
+import { CANONICAL_ADULT_HEIGHT } from '../src/render/GodboxRenderer';
 import { learn } from './fixtures/settlementDevelopment';
 
 function fixture() {
@@ -99,12 +100,36 @@ describe('cultural pottery presentation', () => {
     expect(mesh.geometry.getAttribute('position').array).toEqual(repeat.geometry.getAttribute('position').array);
     expect(Array.from(mesh.geometry.getAttribute('position').array).every(Number.isFinite)).toBe(true);
     mesh.geometry.computeBoundingBox();
-    expect(mesh.geometry.boundingBox!.min.y).toBeCloseTo(0.425, 2);
+    // Vessels sit a hair above the ground (scaled with the vessel itself, not a fixed world offset).
+    expect(mesh.geometry.boundingBox!.min.y).toBeGreaterThan(0.4);
+    expect(mesh.geometry.boundingBox!.min.y).toBeLessThan(0.41);
     expect(mesh.geometry.getAttribute('position').count).toBeLessThan(60000);
     expect(JSON.stringify(sim.state)).toBe(before);
     const early = createPottery(plan, style, 1, () => 0).children[0] as THREE.Mesh;
     expect(early.geometry.getAttribute('position').count).toBeLessThan(mesh.geometry.getAttribute('position').count);
     for (const object of [mesh, repeat, early]) { object.geometry.dispose(); (object.material as THREE.Material).dispose(); }
     expect(createPottery(plan, style, 0, () => 0).children).toHaveLength(0);
+  });
+
+  it('never grows a vessel past human scale, across every vessel, tier and style variant', () => {
+    const { culture, identity } = fixture();
+    const vessels: Vessel[] = ['bowl', 'cooking-pot', 'storage-jar', 'jug', 'ritual'];
+    const motifs = ['sun-step', 'river-eye', 'woven-moon', 'mountain-knot', 'seed-spiral'] as const;
+    for (const tier of [1, 2, 3] as const) {
+      for (const variant of [0, 1, 2, 3]) {
+        for (const motif of motifs) {
+          const style = { ...potteryStyle(culture.id, culture.style, identity), motif, variant };
+          const placements = vessels.map((vessel, i) => ({ vessel, x: i * 2, z: 0, rotation: 0, finish: 'fired' as const }));
+          const group = createPottery(placements, style, tier, () => 0);
+          const mesh = group.children[0] as THREE.Mesh;
+          mesh.geometry.computeBoundingBox();
+          const height = mesh.geometry.boundingBox!.max.y - mesh.geometry.boundingBox!.min.y;
+          // Even the tallest ritual/storage vessel must stay well under an adult's height: no
+          // tank-scale props, ever, for any combination of tier, culture variant or motif.
+          expect(height).toBeLessThan(CANONICAL_ADULT_HEIGHT * 0.5);
+          mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
+        }
+      }
+    }
   });
 });

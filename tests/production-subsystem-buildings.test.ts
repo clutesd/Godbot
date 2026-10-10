@@ -36,4 +36,15 @@ describe('subsystem buildings share production architecture', () => {
     expect(renderer.group.getObjectByName('Works under construction')).toBeUndefined();
     renderer.dispose();
   });
+
+  it('draws a real kiln for every ceramics tier, not the generic reserved-family box', () => {
+    for (const [tier, kilnName] of [[1, 'Clamp kiln'], [2, 'Bottle kiln'], [3, 'Tunnel kiln']] as const) {
+      const { state, s } = processingWorld(`ceramics-tier-${tier}`);
+      placeFacility(state, s, 'ceramics', tier);
+      const renderer = new IndustryRenderer(); renderer.update(state, 0, () => 0);
+      expect(renderer.group.getObjectByName(kilnName)).toBeTruthy();
+      expect(renderer.group.getObjectByName('Process equipment')).toBeUndefined();
+      renderer.dispose();
+    }
+  });
 });

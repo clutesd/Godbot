@@ -8,6 +8,7 @@ import type {
   InfrastructureState,
   IndustrialState,
   Institution,
+  InstitutionKind,
   KnowledgeDomain,
   KnowledgePortfolio,
   KnowledgeRecord,
@@ -20,6 +21,7 @@ import type {
   WorldCell,
 } from '../types';
 import { capabilityPractice, hasKnowledgeCapability } from './CapabilityContract';
+import { combustibleAccess } from '../resources/Inventory';
 import { KNOWLEDGE_BY_ID, KNOWLEDGE_CATALOG, type DiscoveryConditions, type KnowledgeDefinition, type KnowledgeNeed } from './catalog';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
@@ -41,6 +43,17 @@ export interface KnowledgeEventDraft {
 }
 
 const DOMAINS: readonly KnowledgeDomain[] = ['agriculture', 'materials', 'navigation', 'records', 'medicine', 'mechanics', 'energy', 'manufacturing', 'chemistry', 'transport', 'physics', 'computation', 'biology', 'aerospace'];
+
+interface InfrastructureCandidate {
+  key: keyof InfrastructureState;
+  enabled: boolean;
+  target: number;
+  wood: number;
+  minerals: number;
+  goods: number;
+  wealth: number;
+  cause: string;
+}
 
 
 
@@ -272,7 +285,26 @@ export class KnowledgeSystem {
   canDiscover(state: SimulationState, settlement: Settlement, id: string): boolean {
     this.refreshIndexes(state);
     const definition = KNOWLEDGE_BY_ID.get(id);
-    return Boolean(definition && !settlement.knowledge.records[id] && this.requirementsMet(state, settlement, definition.conditions));
+    return Boolean(definition && !settlement.knowledge.records[id] && this.eligible(state, settlement, definition));
+  }
+
+  /**
+   * Institution kinds that unrealised knowledge is waiting for. A definition whose only unmet
+   * condition is a missing institution adds demand for that kind, so institutions form where the
+   * community is ready to use them rather than only from cultural temperament.
+   */
+  institutionalDemand(state: SimulationState, settlement: Settlement): Partial<Record<InstitutionKind, number>> {
+    this.refreshIndexes(state);
+    const demand: Partial<Record<InstitutionKind, number>> = {};
+    const held = new Set(this.institutionsAt(state, settlement.id).map((institution) => institution.kind));
+    for (const definition of KNOWLEDGE_CATALOG) {
+      const kinds = definition.conditions.institutionsAny;
+      if (!kinds || settlement.knowledge.records[definition.id] || kinds.some((kind) => held.has(kind))) continue;
+      if (!this.requirementsMet(state, settlement, { ...definition.conditions, institutionsAny: undefined })) continue;
+      const weight = definition.major ? 1 : 0.5;
+      for (const kind of kinds) demand[kind] = (demand[kind] ?? 0) + weight;
+    }
+    return demand;
   }
 
   /**
@@ -286,7 +318,7 @@ export class KnowledgeSystem {
     if (this.indexedState !== state) this.refreshIndexes(state);
     const definition = KNOWLEDGE_BY_ID.get(id);
     if (!definition || settlement.knowledge.records[id]) return 0;
-    if (!this.requirementsMet(state, settlement, definition.conditions)) return 0;
+    if (!this.eligible(state, settlement, definition)) return 0;
     const readiness = this.discoveryReadiness(state, settlement, definition);
     const maturity = this.prerequisiteMaturity(settlement, definition.conditions);
     const rediscovery = Boolean(settlement.knowledge.lost[id]);
@@ -334,6 +366,60 @@ export class KnowledgeSystem {
     };
   }
 
+  /**
+   * How badly the settlement currently needs a kind of knowledge, read from conditions it can
+   * actually feel. Every domain must answer, because a domain with no demand signal can never
+   * accumulate the experimental mass its discoveries require, however long the world runs.
+   * Magnitudes are comparable across domains (roughly 0..1.5) so no domain is privileged.
+   */
+  private domainPressure(state: SimulationState, settlement: Settlement, domain: KnowledgeDomain, people: Person[], routes: number): number {
+    const population = settlementRepresentedPopulation(state, settlement.id, people);
+    const economy = settlement.materialEconomy;
+    const disease = (settlement.survival?.disease?.prevalence ?? 0) + (settlement.survival?.disease?.memory ?? 0) * 0.5;
+    switch (domain) {
+      case 'agriculture':
+        return (settlement.survival?.observations.food?.perceived ?? (1 - settlement.foodSecurity)) + settlement.climateStress;
+      case 'medicine':
+        return settlement.pollution + settlement.conflictPressure * 0.5 + Math.min(1, (settlement.survival?.deprivation ?? 0) / 4) + disease;
+      case 'transport':
+      case 'navigation':
+        return routes * 0.08;
+      case 'materials':
+      case 'energy':
+        return settlement.conflictPressure * 0.35
+          // Heat and fuel that the settlement wanted and did not get is a standing material/energy problem.
+          + clamp((economy?.energyDemand ?? 0) > 0 ? 1 - (economy?.energySupplied ?? 0) / (economy!.energyDemand) : 0) * 0.5
+          + clamp((settlement.survival?.cold.fuelNeed ?? 0) / Math.max(2, settlement.buildings * 0.5)) * 0.3;
+      case 'records':
+        return Math.max(0, population / 80 - 0.4);
+      case 'mechanics':
+        // Hauling, lifting and quarrying load. Stone extraction literally waits on leverage, so
+        // stone the settlement wants but has not got is the clearest demand for mechanical advantage.
+        return clamp(Math.max(0, (economy?.demand.stone ?? 0) - (settlement.localMaterials.stone ?? 0)) / Math.max(4, economy?.demand.stone ?? 4)) * 0.5
+          + (settlement.development?.project ? 0.4 : 0)
+          + clamp((settlement.structurePlots ?? []).filter((plot) => plot.development && plot.development.status !== 'active').length / 6) * 0.3;
+      case 'manufacturing':
+        // Tools and gear the community is short of, against the holding its own work can keep in use.
+        return clamp(1 - ((economy?.tools ?? 0) + (economy?.arms ?? 0)) / Math.max(1, population * 0.3)) * 0.7
+          + settlement.infrastructure.workshops * 0.5;
+      case 'chemistry':
+        return clamp((economy?.energyDemand ?? 0) > 0 ? 1 - (economy?.energySupplied ?? 0) / (economy!.energyDemand) : 0) * 0.6
+          + settlement.pollution * 0.3 + disease * 0.2;
+      case 'physics':
+        // Written measurement is what turns craft rules of thumb into questions worth testing.
+        return settlement.knowledge.literacy * 0.6 + settlement.infrastructure.archives * 0.5;
+      case 'computation':
+        // Accounts to keep: people, institutions and trading partners all add reckoning work.
+        return clamp(population / 150 + settlement.institutionIds.length / 6 + routes * 0.05) * 0.8;
+      case 'biology':
+        return disease * 0.5 + (1 - settlement.foodSecurity) * 0.3;
+      case 'aerospace':
+        // Nothing in a pre-industrial settlement creates demand for flight; industrial intensity
+        // already contributes to the gain, so this stays at zero until industry exists.
+        return 0;
+    }
+  }
+
   private accumulateExperimentation(state: SimulationState, settlement: Settlement): void {
     const people = this.peopleAt(state, settlement.id);
     const culture = this.dominantCulture(state, settlement);
@@ -342,12 +428,7 @@ export class KnowledgeSystem {
     for (const domain of DOMAINS) {
       const specialists = this.domainWorkers(settlement, domain);
       const institutionalSupport = institutions.filter((institution) => this.institutionSupportsDomain(institution, domain)).reduce((sum, institution) => sum + institution.support * institution.prestige, 0);
-      const pressure = domain === 'agriculture' ? (settlement.survival?.observations.food?.perceived ?? (1 - settlement.foodSecurity)) + settlement.climateStress
-        : domain === 'medicine' ? settlement.pollution + settlement.conflictPressure * 0.5 + Math.min(1, (settlement.survival?.deprivation ?? 0) / 4)
-          + (settlement.survival?.disease?.prevalence ?? 0) + (settlement.survival?.disease?.memory ?? 0) * 0.5
-          : domain === 'transport' || domain === 'navigation' ? routes * 0.08
-            : domain === 'materials' || domain === 'energy' ? settlement.conflictPressure * 0.35
-              : domain === 'records' ? Math.max(0, settlementRepresentedPopulation(state, settlement.id, people) / 80 - 0.4) : 0;
+      const pressure = this.domainPressure(state, settlement, domain, people, routes);
       const gain = (specialists / Math.max(12, settlementRepresentedPopulation(state, settlement.id, people)) * 0.09 + institutionalSupport * 0.022 + (culture?.dimensions.curiosity ?? 0.5) * 0.012 + pressure * 0.018 + settlement.industry.intensity * 0.025) * (1 + settlement.knowledge.literacy * 0.55);
       settlement.knowledge.experimentation[domain] = Math.min(3, settlement.knowledge.experimentation[domain] * 0.985 + gain);
     }
@@ -424,7 +505,8 @@ export class KnowledgeSystem {
 
   private attemptDiscoveries(state: SimulationState, settlement: Settlement): KnowledgeEventDraft[] {
     const events: KnowledgeEventDraft[] = [];
-    const candidates = KNOWLEDGE_CATALOG.filter((definition) => !settlement.knowledge.records[definition.id] && this.requirementsMet(state, settlement, definition.conditions));
+    discoveryObserver?.(state, settlement);
+    const candidates = KNOWLEDGE_CATALOG.filter((definition) => !settlement.knowledge.records[definition.id] && this.eligible(state, settlement, definition));
     candidates.sort((a, b) => this.discoveryReadiness(state, settlement, b) - this.discoveryReadiness(state, settlement, a));
     for (const definition of candidates.slice(0, 6)) {
       if (events.length >= 2) break;
@@ -451,6 +533,79 @@ export class KnowledgeSystem {
     return events;
   }
 
+  /**
+   * Every condition a discovery is currently missing, in the same terms the eligibility rule uses.
+   * Read-only, so a stalled chain can be explained ("metal-smelting blocked: materialsAny
+   * copper-ore/iron-ore, artisan 3/4") instead of inferred. Empty means the settlement is eligible
+   * and only accumulated experimentation decides when it happens.
+   */
+  discoveryBlockers(state: SimulationState, settlement: Settlement, id: string): string[] {
+    this.refreshIndexes(state);
+    const definition = KNOWLEDGE_BY_ID.get(id);
+    if (!definition) return ['no-such-knowledge'];
+    if (settlement.knowledge.records[id]) return [];
+    const conditions = definition.conditions;
+    const people = this.peopleAt(state, settlement.id);
+    const population = settlementRepresentedPopulation(state, settlement.id, people);
+    const cell = state.world.cells[settlement.cellIndex];
+    const labour = this.labourBySettlement.get(settlement.id);
+    const blockers: string[] = [];
+    const short = (label: string, have: number, need: number): void => {
+      if (have < need) blockers.push(`${label} ${have.toFixed(2)}/${need}`);
+    };
+    for (const [material, amount] of Object.entries(conditions.materials ?? {})) short(`material:${material}`, settlement.localMaterials[material] ?? 0, amount);
+    if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([material, amount]) => (settlement.localMaterials[material] ?? 0) >= amount)) {
+      blockers.push(`materialsAny:${Object.entries(conditions.materialsAny).map(([material, amount]) => `${material} ${(settlement.localMaterials[material] ?? 0).toFixed(1)}/${amount}`).join(',')}`);
+    }
+    short('population', population, conditions.minPopulation ?? 0);
+    short('industrialIntensity', settlement.industry.intensity, conditions.minIndustrialIntensity ?? 0);
+    short('literacy', settlement.knowledge.literacy, conditions.minLiteracy ?? 0);
+    if (conditions.coastal && !cell?.coast) blockers.push('not-coastal');
+    short('fertility', cell?.fertility ?? 0, conditions.minFertility ?? 0);
+    short('foodSecurity', settlement.foodSecurity, conditions.minFoodSecurity ?? 0);
+    short('prosperity', settlement.prosperity, conditions.minProsperity ?? 0);
+    short('urbanization', settlement.urbanization, conditions.minUrbanization ?? 0);
+    short('tradeRoutes', state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length, conditions.minTradeRoutes ?? 0);
+    for (const [key, level] of Object.entries(conditions.minInfrastructure ?? {})) short(`infrastructure:${key}`, settlement.infrastructure[key as keyof InfrastructureState], level ?? 0);
+    for (const [resource, amount] of Object.entries(conditions.resources ?? {})) short(`resource:${resource}`, settlement.resources[resource as keyof Settlement['resources']], amount ?? 0);
+    short('fuel', combustibleAccess(settlement), conditions.minFuel ?? 0);
+    for (const [occupation, count] of Object.entries(conditions.occupations ?? {})) short(`occupation:${occupation}`, labour?.occupations[occupation as Occupation] ?? 0, count ?? 0);
+    if (!this.institutionRequirementMet(state, settlement, definition)) {
+      blockers.push(definition.kind === 'understanding'
+        ? `institutionsAny:${conditions.institutionsAny!.join('|')} or experimentation:${definition.domain} ${settlement.knowledge.experimentation[definition.domain].toFixed(2)}/${definition.difficulty}`
+        : `institutionsAny:${conditions.institutionsAny!.join('|')}`);
+    }
+    for (const need of conditions.foundations ?? []) {
+      const progress = this.needProgress(settlement, need);
+      if (progress < KnowledgeSystem.PREREQUISITE_FAMILIARITY) blockers.push(`foundation:${need.id} ${progress.toFixed(2)}/${KnowledgeSystem.PREREQUISITE_FAMILIARITY}`);
+    }
+    if (conditions.alternatives?.length && !conditions.alternatives.some((path) => path.every((need) => this.needProgress(settlement, need) >= KnowledgeSystem.PREREQUISITE_FAMILIARITY))) {
+      blockers.push(`alternatives:${conditions.alternatives.map((path) => path.map((need) => `${need.id} ${this.needProgress(settlement, need).toFixed(2)}`).join('+')).join(' | ')}`);
+    }
+    return blockers;
+  }
+
+  /**
+   * Whether a required institution is present, or — for an understanding — whether the community
+   * has already accumulated as much real experimental mass in the domain as the idea is hard.
+   * An institution formalizes and teaches an insight; it is not the only way to have one, and a
+   * community that has fired kilns for generations can recognize how a fire works without a guild.
+   * Capabilities and practices keep the hard requirement: those need organization, not just
+   * insight. The substitute is accumulated evidence, so it still has to be earned.
+   */
+  private institutionRequirementMet(state: SimulationState, settlement: Settlement, definition: KnowledgeDefinition): boolean {
+    const kinds = definition.conditions.institutionsAny;
+    if (!kinds?.length) return true;
+    if (kinds.some((kind) => this.institutionsAt(state, settlement.id).some((institution) => institution.kind === kind))) return true;
+    return definition.kind === 'understanding' && settlement.knowledge.experimentation[definition.domain] >= definition.difficulty;
+  }
+
+  /** Every discovery condition, with the institution requirement read through the rule above. */
+  private eligible(state: SimulationState, settlement: Settlement, definition: KnowledgeDefinition): boolean {
+    return this.institutionRequirementMet(state, settlement, definition)
+      && this.requirementsMet(state, settlement, { ...definition.conditions, institutionsAny: undefined });
+  }
+
   private requirementsMet(state: SimulationState, settlement: Settlement, conditions: DiscoveryConditions): boolean {
     if (Object.entries(conditions.materials ?? {}).some(([id, amount]) => (settlement.localMaterials[id] ?? 0) < amount)) return false;
     if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([id, amount]) => (settlement.localMaterials[id] ?? 0) >= amount)) return false;
@@ -471,6 +626,7 @@ export class KnowledgeSystem {
     for (const [resource, amount] of Object.entries(conditions.resources ?? {})) {
       if (settlement.resources[resource as keyof Settlement['resources']] < (amount ?? 0)) return false;
     }
+    if ((conditions.minFuel ?? 0) > combustibleAccess(settlement)) return false;
     for (const [occupation, count] of Object.entries(conditions.occupations ?? {})) {
       if ((this.labourBySettlement.get(settlement.id)?.occupations[occupation as Occupation] ?? 0) < (count ?? 0)) return false;
     }
@@ -529,13 +685,25 @@ export class KnowledgeSystem {
     return [...new Set(ids.map((id) => settlement.knowledge.records[id]?.lineageId).filter((id): id is string => Boolean(id)))];
   }
 
-  private buildInfrastructure(state: SimulationState, settlement: Settlement): KnowledgeEventDraft[] {
-    const events: KnowledgeEventDraft[] = [];
+  /** Below this share of a step's materials there is nothing worth organising a season of work around. */
+  private static readonly MINIMUM_BUILD_SHARE = 0.25;
+
+  /** The fraction of one construction step the settlement's stocks can actually supply, 0..1. */
+  private infrastructureSupply(settlement: Settlement, item: InfrastructureCandidate): number {
+    return Math.min(1,
+      item.wood > 0 ? settlement.resources.wood / item.wood : 1,
+      item.minerals > 0 ? settlement.resources.minerals / item.minerals : 1,
+      item.goods > 0 ? settlement.resources.goods / item.goods : 1,
+      item.wealth > 0 ? settlement.resources.wealth / item.wealth : 1);
+  }
+
+  /** The same candidate ladder buildInfrastructure spends against, exposed so diagnostics cannot drift from the rule. */
+  private infrastructureCandidates(state: SimulationState, settlement: Settlement): InfrastructureCandidate[] {
     const cell = state.world.cells[settlement.cellIndex];
     const routeCount = state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
     const hasInstitution = (kind: Institution['kind']): boolean => this.institutionsAt(state, settlement.id).some((institution) => institution.kind === kind);
     const transformed = (id: string): number => capabilityPractice(settlement, id, 'transformed');
-    const candidates: Array<{ key: keyof InfrastructureState; enabled: boolean; target: number; wood: number; minerals: number; goods: number; wealth: number; cause: string }> = [
+    return [
       { key: 'workshops', enabled: practical(settlement, 'pottery-firing') > 0.22 || practical(settlement, 'metal-smelting') > 0.18, target: 0.35 + transformed('precision-manufacturing') * 0.65, wood: 5, minerals: 2, goods: 1, wealth: 2, cause: 'specialized-craft' },
       { key: 'archives', enabled: practical(settlement, 'durable-records') > 0.28 && (hasInstitution('knowledge-keepers') || hasInstitution('council')), target: 0.25 + practical(settlement, 'printing') * 0.7, wood: 6, minerals: 1, goods: 3, wealth: 4, cause: 'durable-records' },
       { key: 'roads', enabled: routeCount > 0 && practical(settlement, 'wheel-axle') > 0.22, target: 0.28 + transformed('improved-roads') * 0.72, wood: 8, minerals: 3, goods: 2, wealth: 3, cause: 'trade-volume' },
@@ -544,18 +712,48 @@ export class KnowledgeSystem {
       { key: 'rail', enabled: hasKnowledgeCapability(settlement, 'rail-transport', 'transformed'), target: transformed('rail-transport'), wood: 8, minerals: 15, goods: 8, wealth: 10, cause: 'guided-powered-transport' },
       { key: 'factories', enabled: settlement.industry.active, target: 0.2 + settlement.industry.intensity * 0.8, wood: 9, minerals: 12, goods: 8, wealth: 11, cause: 'industrial-production' },
     ];
-    const candidate = candidates.filter((item) => item.enabled && settlement.infrastructure[item.key] + 0.04 < item.target && settlement.resources.wood >= item.wood && settlement.resources.minerals >= item.minerals && settlement.resources.goods >= item.goods && settlement.resources.wealth >= item.wealth).sort((a, b) => (b.target - settlement.infrastructure[b.key]) - (a.target - settlement.infrastructure[a.key]))[0];
+  }
+
+  /**
+   * Why each infrastructure kind is or is not under construction this year: the first unmet gate on
+   * the same ladder buildInfrastructure uses, so a stalled settlement can be explained without
+   * guessing. Read-only; it never spends labour or stock.
+   */
+  infrastructureDiagnostics(state: SimulationState, settlement: Settlement): Array<{ key: keyof InfrastructureState; blocker: string }> {
+    this.refreshIndexes(state);
+    const floor = KnowledgeSystem.MINIMUM_BUILD_SHARE;
+    return this.infrastructureCandidates(state, settlement).map((item) => ({
+      key: item.key,
+      blocker: !item.enabled ? 'capability-not-in-local-use'
+        : settlement.infrastructure[item.key] + 0.04 >= item.target ? 'already-at-target'
+          : settlement.resources.wood < item.wood * floor ? `timber ${settlement.resources.wood.toFixed(1)}/${(item.wood * floor).toFixed(1)}`
+            : settlement.resources.minerals < item.minerals * floor ? `stone ${settlement.resources.minerals.toFixed(1)}/${(item.minerals * floor).toFixed(1)}`
+              : settlement.resources.goods < item.goods * floor ? `goods ${settlement.resources.goods.toFixed(1)}/${(item.goods * floor).toFixed(1)}`
+                : settlement.resources.wealth < item.wealth * floor ? `wealth ${settlement.resources.wealth.toFixed(1)}/${(item.wealth * floor).toFixed(1)}`
+                  : infrastructureLabourBudget(state, settlement).remaining <= 0 ? 'no-construction-labour'
+                    : 'eligible',
+    }));
+  }
+
+  private buildInfrastructure(state: SimulationState, settlement: Settlement): KnowledgeEventDraft[] {
+    const events: KnowledgeEventDraft[] = [];
+    const candidates = this.infrastructureCandidates(state, settlement);
+    const candidate = candidates.filter((item) => item.enabled && settlement.infrastructure[item.key] + 0.04 < item.target && this.infrastructureSupply(settlement, item) >= KnowledgeSystem.MINIMUM_BUILD_SHARE).sort((a, b) => (b.target - settlement.infrastructure[b.key]) - (a.target - settlement.infrastructure[a.key]))[0];
     if (!candidate) return events;
     const budget = infrastructureLabourBudget(state, settlement);
     const construction = Math.min(0.36, budget.remaining);
     if (construction <= 0) return events;
-    budget.remaining -= construction;
+    // A part-supplied, part-staffed year buys part of a step and is charged for exactly that much.
+    // A flat annual toll made scarce timber pay full price for a fraction of the work.
+    const labourShare = Math.min(1.2, construction / 0.3);
+    const share = Math.min(labourShare, this.infrastructureSupply(settlement, candidate));
+    budget.remaining -= construction * (share / labourShare);
     const previous = settlement.infrastructure[candidate.key];
-    settlement.resources.wood -= candidate.wood;
-    settlement.resources.minerals -= candidate.minerals;
-    settlement.resources.goods -= candidate.goods;
-    settlement.resources.wealth -= candidate.wealth;
-    settlement.infrastructure[candidate.key] = clamp(previous + this.config.historicalPace.infrastructureStep * this.random.range(0.88, 1.12) * Math.min(1.2, construction / 0.3));
+    settlement.resources.wood -= candidate.wood * share;
+    settlement.resources.minerals -= candidate.minerals * share;
+    settlement.resources.goods -= candidate.goods * share;
+    settlement.resources.wealth -= candidate.wealth * share;
+    settlement.infrastructure[candidate.key] = clamp(previous + this.config.historicalPace.infrastructureStep * this.random.range(0.88, 1.12) * share);
     if (previous < 0.08 && settlement.infrastructure[candidate.key] >= 0.08) {
       events.push({
         type: 'infrastructure-built', location: settlement.position, locationId: settlement.id, actors: [settlement.id], causes: [candidate.cause, 'available-surplus'],
@@ -657,7 +855,7 @@ export class KnowledgeSystem {
     const definition = KNOWLEDGE_BY_ID.get(sourceRecord.id);
     if (!definition) return undefined;
     const existing = target.knowledge.records[sourceRecord.id];
-    const locallySupported = definition.kind === 'understanding' || this.requirementsMet(state, target, definition.conditions);
+    const locallySupported = definition.kind === 'understanding' || this.eligible(state, target, definition);
     const threshold = definition.difficulty * 0.11 + 0.035;
     if (existing) {
       const previousMastery = existing.theory + existing.practice;
@@ -825,3 +1023,10 @@ export function mastery(settlement: Settlement, id: string): { theory: number; p
 export function practical(settlement: Settlement, id: string): number {
   return capabilityPractice(settlement, id, 'adopted');
 }
+
+/**
+ * Diagnostic-only observation of the discovery decision, called for each settlement at the moment
+ * its candidate list is about to be filtered by `requirementsMet`. No branch depends on it.
+ */
+let discoveryObserver: ((state: SimulationState, settlement: Settlement) => void) | undefined;
+export function observeDiscoveryAttempts(observer?: (state: SimulationState, settlement: Settlement) => void): void { discoveryObserver = observer; }

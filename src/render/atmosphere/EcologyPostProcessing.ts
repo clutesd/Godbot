@@ -10,6 +10,7 @@ import { DirectionalAtmosphereRig } from './AtmosphericScattering';
 import { EnvironmentFrameRig } from './EnvironmentFrameState';
 import { EnvironmentalDepthRig } from './EnvironmentalDepth';
 import type { LowMistField } from './LowMistField';
+import { SceneRenderGuard } from '../SceneRenderGuard';
 import {
   CINEMATIC_LIGHT_GRADE_SHADER,
   CinematicMaterialPolish,
@@ -24,6 +25,7 @@ import {
  * moisture can create visible layers without turning the whole camera volume grey.
  */
 export class EcologyPostProcessing {
+  private readonly renderGuard: SceneRenderGuard;
   private readonly composer?: EffectComposer;
   private pixelRatio: number;
   private readonly aerialPerspective?: ShaderPass;
@@ -40,13 +42,16 @@ export class EcologyPostProcessing {
   constructor(private readonly renderer: THREE.WebGLRenderer, private readonly scene: THREE.Scene,
     private readonly camera: THREE.PerspectiveCamera, private readonly quality: 0 | 1 | 2) {
     this.pixelRatio = renderer.getPixelRatio();
+    this.renderGuard = new SceneRenderGuard(renderer);
     this.environmentFrame = new EnvironmentFrameRig(renderer, scene);
     this.directionalAtmosphere = new DirectionalAtmosphereRig(scene);
     this.environmentalDepth = new EnvironmentalDepthRig(scene, camera);
     this.materialPolish = new CinematicMaterialPolish(scene);
     const candidate = scene.getObjectByName('atmosphere')?.userData['lowMistField'] as LowMistField | undefined;
     if (candidate && typeof candidate.sample === 'function') this.lowMistField = candidate;
-    if (quality === 0) return;
+    // HDR framebuffer support is optional even when WebGL itself is available. The scene can
+    // still render beautifully to the canvas without these full-screen effects.
+    if (quality === 0 || !renderer.extensions.has('EXT_color_buffer_float')) return;
 
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 2 });
     // The first atmospheric pass only affected the sky dome, which made it nearly invisible in the
@@ -140,11 +145,7 @@ export class EcologyPostProcessing {
       }
     }
 
-    if (!this.composer) {
-      this.renderer.render(this.scene, this.camera);
-      return;
-    }
-    this.composer.render();
+    this.renderGuard.render(this.scene, this.camera, this.composer ? () => this.composer!.render() : undefined);
   }
 
   dispose(): void {

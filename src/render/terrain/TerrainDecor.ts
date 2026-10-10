@@ -84,7 +84,8 @@ export class TerrainDecor {
   private scatterRocks(world: WorldState, surface: TerrainSurface, random: SeededRandom, seed: string, budget: number): number {
     const mesh = new THREE.InstancedMesh(
       new THREE.DodecahedronGeometry(0.34, 0),
-      new THREE.MeshStandardMaterial({ roughness: 0.86, metalness: 0.04, vertexColors: true, flatShading: true }),
+      // Per-instance colors work without vertexColors; these geometries have no color attribute.
+      new THREE.MeshStandardMaterial({ roughness: 0.86, metalness: 0.04, flatShading: true }),
       Math.max(1, budget),
     );
     const matrix = new THREE.Matrix4();
@@ -100,7 +101,7 @@ export class TerrainDecor {
       const worldX = random.range(-half, half);
       const worldZ = random.range(-half, half);
       const sample = surface.sample(worldX, worldZ);
-      if (sample.elevation < world.seaLevel + 0.004) continue;
+      if (sample.elevation < world.seaLevel + 0.004 || sample.slope > 0.78) continue;
       const cluster = fbm(`${seed}:boulder-field`, worldX * 0.09, worldZ * 0.09, 3);
       const chance = clamp01(smoothstep(0.42, 0.86, sample.rock) * 0.75 + smoothstep(0.4, 0.8, sample.slope) * 0.55) * smoothstep(0.42, 0.84, cluster);
       if (!random.chance(chance)) continue;
@@ -114,7 +115,7 @@ export class TerrainDecor {
       xz[placed * 2] = worldX;
       xz[placed * 2 + 1] = worldZ;
       this.addBoulderCollider(worldX, worldZ, 0.34 * Math.max(scale.x, scale.z));
-      colour.setHSL(0.08, 0.05, 0.54 + random.range(-0.06, 0.1)).lerp(new THREE.Color('#b3a99c'), sample.elevation * 0.4);
+      colour.setHSL(0.08, 0.08, 0.24 + random.range(-0.04, 0.08)).lerp(new THREE.Color('#938879'), sample.elevation * 0.4);
       mesh.setColorAt(placed, colour);
       placed += 1;
     }
@@ -130,7 +131,7 @@ export class TerrainDecor {
   private scatterScree(world: WorldState, surface: TerrainSurface, random: SeededRandom, budget: number): number {
     const mesh = new THREE.InstancedMesh(
       new THREE.TetrahedronGeometry(0.16, 0),
-      new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, vertexColors: true, flatShading: true }),
+      new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, flatShading: true }),
       Math.max(1, budget),
     );
     const matrix = new THREE.Matrix4();
@@ -147,7 +148,8 @@ export class TerrainDecor {
       const worldZ = random.range(-half, half);
       const sample = surface.sample(worldX, worldZ);
       if (sample.elevation < world.seaLevel + 0.006) continue;
-      if (!random.chance(smoothstep(0.4, 0.78, sample.slope) * (0.25 + sample.rock * 0.6))) continue;
+      const talus = smoothstep(0.16, 0.34, sample.slope) * smoothstep(0.7, 0.46, sample.slope);
+      if (!random.chance(talus * (0.25 + sample.rock * 0.6))) continue;
       const size = random.range(0.4, 1.2);
       position.set(worldX, surface.heightAt(worldX, worldZ) + 0.03, worldZ);
       euler.set(random.range(-1, 1), random.range(0, Math.PI * 2), random.range(-1, 1));
@@ -157,7 +159,7 @@ export class TerrainDecor {
       mesh.setMatrixAt(placed, matrix);
       xz[placed * 2] = worldX;
       xz[placed * 2 + 1] = worldZ;
-      colour.setHSL(0.08, 0.05, 0.5 + random.range(-0.07, 0.08));
+      colour.setHSL(0.08, 0.07, 0.26 + random.range(-0.05, 0.07));
       mesh.setColorAt(placed, colour);
       placed += 1;
     }

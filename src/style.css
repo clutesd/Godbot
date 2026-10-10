@@ -143,6 +143,7 @@ body { min-width: 320px; }
 .opening.departed { opacity: 0; visibility: hidden; }
 .opening.restarting { transition: opacity .24s ease, visibility 0s; }
 .opening.failed .opening-mark { animation: none; border-color: #a99a82; }
+.opening.failed #opening-status { max-width: min(80vw, 560px); line-height: 1.8; overflow-wrap: anywhere; }
 #restart {
   min-height: 44px;
   min-width: 96px;

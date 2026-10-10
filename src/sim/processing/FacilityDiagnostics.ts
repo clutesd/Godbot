@@ -56,7 +56,7 @@ export interface SettlementIndustryDiagnostic {
 /** Implemented families plus the reserved ids, so "not built yet" and "not written yet" stay distinct. */
 function allFamilies(): readonly FacilityFamilySpec[] {
   const implemented = facilityFamilies();
-  const reserved = (['ceramics', 'textiles', 'machinery', 'chemicals', 'electrical-equipment', 'strategic'] as const)
+  const reserved = (['textiles', 'chemicals', 'electrical-equipment', 'strategic'] as const)
     .map(id => facilityFamily(id))
     .filter((family): family is FacilityFamilySpec => !!family && family.tiers.length === 0);
   return [...implemented, ...reserved];

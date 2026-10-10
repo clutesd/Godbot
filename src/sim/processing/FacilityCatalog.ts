@@ -152,12 +152,61 @@ const MACHINERY: FacilityFamilySpec = {
   ],
 };
 
+/**
+ * Ceramics reference industry.
+ *   pottery yard and clamp kiln -> bottle kiln works -> industrial ceramics works
+ * All three tiers run the same `pottery-vessels` recipe (clay + timber -> pottery); higher tiers
+ * only add capacity, heat, power and yield, mirroring the wood/metallurgy ladders. Firing needs a
+ * warmed kiln like a furnace, so the family carries a heat spec even though it never smelts ore.
+ */
+const CERAMICS_RECIPES: readonly RecipeRef[] = [catalog('pottery-vessels')];
+const CERAMICS: FacilityFamilySpec = {
+  id: 'ceramics',
+  name: 'Ceramics',
+  description: 'Clay is dug, prepared, shaped, dried and fired into household, storage and trade pottery at a kiln yard.',
+  triggerMaterials: ['clay'],
+  tiers: [
+    {
+      tier: 1, kind: 'pottery-yard', name: 'pottery yard and clamp kiln', form: 'workshop', material: 'timber',
+      capacity: 3, workers: 3, occupations: ['artisan', 'forager'], yard: 20,
+      knowledge: [{ id: 'pottery-firing', minPractice: 0.18 }],
+      power: { mode: 'none', demand: 0, fallback: 1, minimumCoverage: 0 },
+      heat: { minimum: 0.45, warmup: 0.3 }, yieldBonus: 0,
+      recipes: CERAMICS_RECIPES,
+      build: { lines: [{ options: ['timber', 'lumber'], amount: 4 }, { options: ['clay'], amount: 2 }], work: 2 },
+      maintenance: { lines: [{ options: ['timber', 'lumber'], amount: 0.1 }, { options: ['clay'], amount: 0.05 }], work: 0.2 },
+      service: 0.5,
+    },
+    {
+      tier: 2, kind: 'bottle-kiln-works', name: 'bottle kiln works', form: 'works', material: 'masonry',
+      capacity: 9, workers: 5, occupations: ['artisan', 'carrier'], yard: 50,
+      knowledge: [{ id: 'high-temperature-ceramics', minPractice: 0.3 }],
+      power: { mode: 'either', demand: 4, fallback: 0.4, minimumCoverage: 0.3 },
+      heat: { minimum: 0.6, warmup: 0.8 }, yieldBonus: 0.06,
+      recipes: CERAMICS_RECIPES,
+      build: { lines: [{ options: ['brick', 'stone'], amount: 8 }, { options: ['timber', 'lumber'], amount: 4 }], work: 8 },
+      maintenance: { lines: [{ options: ['brick', 'stone'], amount: 0.12 }, { options: ['timber', 'lumber'], amount: 0.08 }], work: 0.25 },
+      service: 1.1,
+    },
+    {
+      tier: 3, kind: 'ceramics-works', name: 'industrial ceramics works', form: 'works', material: 'masonry',
+      capacity: 24, workers: 8, occupations: ['artisan', 'carrier'], yard: 120,
+      knowledge: [{ id: 'high-temperature-ceramics', minPractice: 0.45 }, { id: 'precision-manufacturing', minPractice: 0.25 }],
+      power: { mode: 'electric', demand: 10, fallback: 0.1, minimumCoverage: 0.5 },
+      heat: { minimum: 0.7, warmup: 2 }, yieldBonus: 0.1,
+      recipes: CERAMICS_RECIPES,
+      build: { lines: [{ options: ['brick', 'stone'], amount: 10 }, { options: ['iron', 'iron-tools'], amount: 2 }, { options: ['timber', 'lumber'], amount: 4 }], work: 16 },
+      maintenance: { lines: [{ options: ['machine-parts', 'iron'], amount: 0.08 }, { options: ['brick', 'stone'], amount: 0.15 }], work: 0.35 },
+      service: 2,
+    },
+  ],
+};
+
 /** Families reserved for later passes. They are declared so ids, saves and UI never have to change. */
 const reserved = (id: FacilityFamilyId, name: string, description: string): FacilityFamilySpec =>
   ({ id, name, description, tiers: [], triggerMaterials: [] });
 
 const RESERVED: readonly FacilityFamilySpec[] = [
-  reserved('ceramics', 'Ceramics', 'Kilns, brickworks and glass: pottery-vessels and fire-brick recipes are candidates.'),
   reserved('textiles', 'Textiles', 'Retting, spinning and weaving of plant fibre.'),
   reserved('chemicals', 'Chemicals', 'Reaction vessels and refineries.'),
   reserved('electrical-equipment', 'Electrical equipment', 'Wire, motors, cells and semiconductors.'),
@@ -165,7 +214,7 @@ const RESERVED: readonly FacilityFamilySpec[] = [
 ];
 
 const registry = new Map<FacilityFamilyId, FacilityFamilySpec>();
-for (const family of [WOOD, METALLURGY, MACHINERY, ...RESERVED]) registry.set(family.id, family);
+for (const family of [WOOD, METALLURGY, MACHINERY, CERAMICS, ...RESERVED]) registry.set(family.id, family);
 
 /** Replaces a family definition (used by later passes and tests) and returns a restorer. */
 export function registerFacilityFamily(spec: FacilityFamilySpec): () => void {

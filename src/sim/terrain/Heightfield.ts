@@ -1,5 +1,6 @@
 import { beltSeeded, clamp01, domainWarpSeeded, fbm, fbmSeeded, octaveSeeds, ridgedSeeded, smoothstep, type OctaveSeeds } from './noise';
 import { geologySampler } from '../environment/GeologySystem';
+import { erodeMountainDrainage } from './MountainErosion';
 
 export interface HeightfieldOptions {
   readonly seed: string;
@@ -217,6 +218,23 @@ export function synthesizeHeightfield(options: HeightfieldOptions): RawHeightfie
   thermalErosion(height, resolution, 0.05, 22);
   depositionalSmoothing(height, resolution, seaLevel, 3);
   redistribute(height, seaLevel, mountainLevel);
+
+  // Secondary spurs break up broad mountain shoulders at a smaller scale than the tectonic
+  // belts. Apply after redistribution so the quantile curve cannot flatten their silhouettes.
+  // The smooth altitude mask leaves shorelines, farms and floodplains exactly alone.
+  const spurSeeds = octaveSeeds(seed, 'mountain-spurs', 3);
+  for (let z = 0; z < resolution; z += 1) {
+    for (let x = 0; x < resolution; x += 1) {
+      const index = z * resolution + x;
+      const elevation = height[index]!;
+      const upland = smoothstep(seaLevel + 0.16, mountainLevel, elevation);
+      if (upland === 0) continue;
+      const wx = originX + x * step, wz = originZ + z * step;
+      const spurs = ridgedSeeded(spurSeeds, wx * 0.115 + wz * 0.037, wz * 0.085 - wx * 0.025);
+      height[index] = clamp01(elevation + (spurs - 0.46) * upland * 0.085);
+    }
+  }
+  erodeMountainDrainage(height, resolution, step, seaLevel);
 
   return { resolution, step, originX, originZ, height };
 }

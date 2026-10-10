@@ -18,12 +18,13 @@ import type { GeometryBuilder, Vec3 } from '../assets/GeometryBuilder';
 import type { SurfaceKey } from '../materials/MaterialPalette';
 import type { RotorSpec } from './MillMotion';
 import { rotorBuilder, type GeometrySink } from './StructureGeometry';
+import { GRAMMAR_UNIT_METRES } from '../assets/StructureFit';
 
 export type Builder = GeometryBuilder | undefined;
 export type Axis = 'x' | 'y' | 'z';
 
-/** One building unit is roughly six metres. */
-export const METRE = 1 / 6;
+/** Metres to building units, against the one authority for that conversion. */
+export const METRE = 1 / GRAMMAR_UNIT_METRES;
 
 export const v = (x: number, y: number, z: number): Vec3 => ({ x, y, z });
 const add = (a: Vec3, b: Vec3): Vec3 => v(a.x + b.x, a.y + b.y, a.z + b.z);
@@ -49,6 +50,16 @@ export interface DraftBounds {
   /** The extent of everything that stands on the ground, which is what placement reserves. */
   groundMin: Vec3;
   groundMax: Vec3;
+  /**
+   * The extent of the machine building itself, with its water engineering and yard excluded.
+   *
+   * A mill is a site, not a box: a header pond, a dam, a headrace and launder, a tailrace and a
+   * cart yard can run thirty metres while the mill house is eight. The renderer fits a structure
+   * to its plot against *this*, and lets the site works extend into the plot's reserved precinct,
+   * because fitting the whole site into a building-sized plot is what shrank mills to toys.
+   */
+  coreMin: Vec3;
+  coreMax: Vec3;
 }
 
 /**
@@ -59,7 +70,10 @@ export class MillKit {
   readonly bounds: DraftBounds = {
     min: v(Infinity, Infinity, Infinity), max: v(-Infinity, -Infinity, -Infinity),
     groundMin: v(Infinity, 0, Infinity), groundMax: v(-Infinity, 0, -Infinity),
+    coreMin: v(Infinity, 0, Infinity), coreMax: v(-Infinity, 0, -Infinity),
   };
+
+  private draftingSite = false;
 
   constructor(private readonly sink: GeometrySink, readonly scale = METRE) {}
 
@@ -81,6 +95,17 @@ export class MillKit {
     }
   }
 
+  /**
+   * Draft the mill's water engineering and yard: pond, dam, race, launder, sluice, tailrace,
+   * standings. Everything emitted inside counts towards the reserved site but not towards the
+   * building the renderer fits to the plot.
+   */
+  site(body: () => void): void {
+    const was = this.draftingSite;
+    this.draftingSite = true;
+    try { body(); } finally { this.draftingSite = was; }
+  }
+
   private note(point: Vec3): void {
     const b = this.bounds;
     b.min.x = Math.min(b.min.x, point.x); b.min.y = Math.min(b.min.y, point.y); b.min.z = Math.min(b.min.z, point.z);
@@ -88,6 +113,10 @@ export class MillKit {
     if (point.y < 2.5) {
       b.groundMin.x = Math.min(b.groundMin.x, point.x); b.groundMin.z = Math.min(b.groundMin.z, point.z);
       b.groundMax.x = Math.max(b.groundMax.x, point.x); b.groundMax.z = Math.max(b.groundMax.z, point.z);
+    }
+    if (!this.draftingSite) {
+      b.coreMin.x = Math.min(b.coreMin.x, point.x); b.coreMin.z = Math.min(b.coreMin.z, point.z);
+      b.coreMax.x = Math.max(b.coreMax.x, point.x); b.coreMax.z = Math.max(b.coreMax.z, point.z);
     }
   }
 
@@ -428,9 +457,9 @@ export class MillKit {
     }
   }
 
-  /** Open water as a flat sheet at `y`. */
+  /** Open water as a flat sheet at `y`. Always site, never building. */
   water(b: Builder, x0: number, x1: number, z0: number, z1: number, y: number): void {
-    this.face(b, [v(x0, y, z0), v(x1, y, z0), v(x1, y, z1), v(x0, y, z1)], v(0, 1, 0));
+    this.site(() => this.face(b, [v(x0, y, z0), v(x1, y, z0), v(x1, y, z1), v(x0, y, z1)], v(0, 1, 0)));
   }
 
   /** A sack of grain or flour, lying or leaning. */

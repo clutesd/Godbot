@@ -134,6 +134,47 @@ describe('machinery: the family that makes what the rest of industry wears out',
   });
 });
 
+describe('ceramics: clay becomes fired pottery only at a kiln, never by decoration alone', () => {
+  it('fires pottery only in a pottery yard, out of real clay and a warmed kiln', () => {
+    const w = processingWorld('pottery-yard');
+    const f = placeFacility(w.state, w.s, 'ceramics', 1);
+    learn(w.s, 'pottery-firing');
+    stock(w.s, { clay: 20, timber: 10 });
+    for (let month = 0; month < 6; month++) runFacilityMonth(w.state, w.s, CREW, w.random);
+    const batches = f.processes['catalog:pottery-vessels'];
+    expect(batches?.lifetimeBatches ?? 0).toBeGreaterThan(0);
+    expect(f.totals.consumed.clay ?? 0).toBeGreaterThan(0);
+    expect(w.s.knownRecipes).toContain('pottery-vessels');
+    expect((w.s.localMaterials.pottery ?? 0) + (f.outputs.pottery ?? 0)).toBeGreaterThan(0);
+    expect(facilityConservationError(f)).toBeLessThan(1e-4);
+
+    // Same clay, same skill, no kiln: a governed settlement without one fires nothing.
+    const bare = processingWorld('pottery-yard-bare');
+    learn(bare.s, ...WOOD_KNOWLEDGE, ...METAL_KNOWLEDGE, ...INDUSTRIAL_KNOWLEDGE, ...MACHINE_KNOWLEDGE, 'pottery-firing');
+    bare.s.infrastructure.workshops = 0.6;
+    bare.s.buildings = 2;
+    stock(bare.s, { clay: 20, timber: 10 });
+    step(bare.state, bare.system, 12);
+    expect(facilitiesOf(bare.s, 'ceramics')).toHaveLength(0);
+    expect(bare.s.localMaterials.pottery ?? 0).toBe(0);
+  });
+
+  it('upgrades the pottery ladder from a clamp kiln to a bottle kiln to an industrial works', () => {
+    for (const tier of [1, 2, 3]) expect(facilityTierSpec('ceramics', tier)).toBeDefined();
+    const w = processingWorld('pottery-works-3');
+    const works = placeFacility(w.state, w.s, 'ceramics', 3);
+    learn(w.s, 'pottery-firing');
+    for (let month = 0; month < 10; month++) {
+      works.power = { carrier: 'electric', demand: 10, supplied: 10, coverage: 1 };
+      stock(w.s, { clay: 10, timber: 4 });
+      runFacilityMonth(w.state, w.s, CREW, w.random);
+    }
+    expect(works.processes['catalog:pottery-vessels']?.lifetimeBatches ?? 0).toBeGreaterThan(0);
+    expect((w.s.localMaterials.pottery ?? 0) + (works.outputs.pottery ?? 0)).toBeGreaterThan(0);
+    expect(facilityConservationError(works)).toBeLessThan(1e-4);
+  });
+});
+
 describe('industrial diagnostics', () => {
   it('explains each family in the vocabulary of what is actually wrong', () => {
     const w = processingWorld('diagnostics');
@@ -149,9 +190,9 @@ describe('industrial diagnostics', () => {
     // The planner's own blocker function is what the report quotes.
     expect(wood.blocker).toBe(facilityUpgradeBlocker(w.state, w.s, f));
 
-    const ceramics = report.families.find(entry => entry.family === 'ceramics')!;
-    expect(ceramics.standing).toBe('no-family-implementation');
-    expect(ceramics.summary).toContain('no family implementation');
+    const textiles = report.families.find(entry => entry.family === 'textiles')!;
+    expect(textiles.standing).toBe('no-family-implementation');
+    expect(textiles.summary).toContain('no family implementation');
 
     const lines = industryDiagnosticLines(w.state);
     expect(lines.some(line => line.includes(`${w.s.name}: wood processing tier 1 of 3`))).toBe(true);

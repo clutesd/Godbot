@@ -45,6 +45,7 @@ declare global {
       tick: ReturnType<Simulation['tickPerformance']>;
       scheduler: { estimatedTickMs: number; estimatedFrameMs: number; pendingTicks: number; openingWarmupMs: number };
       frame: ReturnType<FramePacingProfiler['snapshot']>;
+      sections: ReturnType<GodboxRenderer['frameSections']['snapshot']>;
     };
     __godboxResetPerformance?: () => void;
     __godboxRestart?: (seed?: string) => Promise<void>;
@@ -276,7 +277,7 @@ function reportRestartFailure(error: unknown): void {
   openingElement.classList.remove('departed', 'ready', 'preparing', 'restarting');
   openingElement.classList.add('failed');
   openingTitleElement.textContent = 'A pause in history';
-  openingStatusElement.textContent = 'Unable to prepare this world. Select Restart to try again.';
+  openingStatusElement.textContent = `Unable to display this world. ${detail} Select Restart to try again.`;
   console.error('GODBOX restart failed', error);
 }
 
@@ -512,6 +513,9 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   window.__godboxPacing = () => presentation.telemetry();
   if (import.meta.env.DEV) {
     simulation.setTickProfiling(true);
+    // Long-frame attribution: on by default in development so the first observed hitch is already
+    // broken down by renderer subsystem instead of needing a second reproduction to diagnose.
+    view.setFrameSectionProfiling(true);
     window.__godboxPerformance = () => ({
       month: simulation.state.month,
       year: simulation.year,
@@ -524,10 +528,12 @@ async function beginObservation(seedOverride?: string): Promise<void> {
         openingWarmupMs: Number(openingWarmupMs.toFixed(2)),
       },
       frame: framePacing.snapshot(),
+      sections: view.frameSections.snapshot(),
     });
     window.__godboxResetPerformance = () => {
       simulation.resetTickProfiling();
       framePacing.reset();
+      view.frameSections.reset();
     };
   }
   const audio = new AudioDirector(simulation.config);
@@ -586,7 +592,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
 
   await persist();
 
-  const frame = (now: number): void => {
+  const renderFrame = (now: number): void => {
     if (disposed) return;
     if (document.hidden) {
       lastTime = now;
@@ -730,6 +736,16 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     framePacing.observe(completedFrameMs, beforeHistoryNow);
     interactiveTickBudget.observeFrame(Math.max(0, completedFrameMs - tickWorkMs));
     rafId = window.requestAnimationFrame(frame);
+  };
+
+  const frame = (now: number): void => {
+    try {
+      renderFrame(now);
+    } catch (error) {
+      // RAF exceptions otherwise strand a dark/stale canvas under still-visible narration.
+      arrivalCaptionElement.style.opacity = '0';
+      reportRestartFailure(error);
+    }
   };
 
   const persistWhenHidden = (): void => {

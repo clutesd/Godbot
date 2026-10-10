@@ -35,6 +35,7 @@ import { deriveMaterialEvidence } from '../render/architecture/MaterialSourcing'
 import type { BuildingSpec } from '../render/architecture/BuildingSpec';
 import { BROWSER_CATALOGUE, FOUNDING_ADAPTATIONS, MATERIAL_SCENARIOS, validBrowserPeriods, validMaterialScenarios, scenarioEvidence } from './architectureBrowserModel';
 import { MillMotionSystem, type MillConditionWeather, type MillConditionWorld } from '../render/architecture/MillMotion';
+import { occlusionStrength, setOcclusionStrength } from '../render/materials/SurfaceDetail';
 
 if (!import.meta.env.DEV) throw new Error('The architecture browser is a development fixture.');
 
@@ -55,6 +56,7 @@ const prosperityInput = el<HTMLInputElement>('prosperity');
 const waterfrontInput = el<HTMLInputElement>('waterfront');
 const fullDetailInput = el<HTMLInputElement>('full-detail');
 const shadowsInput = el<HTMLInputElement>('shadows');
+const occlusionInput = el<HTMLInputElement>('occlusion');
 const seedInput = el<HTMLInputElement>('seed');
 const labelLayer = el<HTMLDivElement>('labels');
 const inspector = el<HTMLElement>('inspector');
@@ -919,9 +921,24 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
+/** The shipped occlusion strength, captured before the slider ever moves it. */
+const PRODUCTION_OCCLUSION = occlusionStrength();
+
+/**
+ * Scale the production occlusion strength by the slider.
+ *
+ * Nothing is rebuilt: the bake already rode into the geometry at composition time and the strength
+ * is one shared uniform, so dragging this re-shades every structure on screen in the same frame.
+ */
+function applyOcclusionStrength(): void {
+  const scale = Number(occlusionInput.value);
+  el('occlusion-out').textContent = scale.toFixed(2);
+  setOcclusionStrength(PRODUCTION_OCCLUSION.x * scale, PRODUCTION_OCCLUSION.y * scale);
+}
+
 // --------------------------------------------------------------------------- wiring
 
-const stateControlIds = ['archetype', 'category', 'period', 'material-scenario', 'program', 'culture', 'climate', 'specialization', 'stage', 'seed', 'prosperity', 'wind', 'wind-direction', 'flow', 'motion-time', 'yaw'] as const;
+const stateControlIds = ['occlusion', 'archetype', 'category', 'period', 'material-scenario', 'program', 'culture', 'climate', 'specialization', 'stage', 'seed', 'prosperity', 'wind', 'wind-direction', 'flow', 'motion-time', 'yaw'] as const;
 const booleanControlIds = ['waterfront', 'full-detail', 'shadows', 'river', 'pivots', 'motion-play'] as const;
 const viewModes: readonly ViewMode[] = ['gallery', 'timeline', 'street', 'production', 'era-matrix', 'material-matrix', 'catalogue', 'founding'];
 
@@ -1013,6 +1030,11 @@ prosperityInput.oninput = () => { el('prosperity-out').textContent = Number(pros
 prosperityInput.onchange = rebuild;
 fullDetailInput.onchange = () => { applyLodMode(); persistState(); refreshSelection(); };
 shadowsInput.onchange = () => { sun.castShadow = shadowsInput.checked; persistState(); };
+// Occlusion strength is a shared uniform, so this needs no rebuild and no recompile: the whole
+// built environment moves at once. It is the one setting in this file that has to be judged by
+// eye rather than reasoned about, which is why it is a live slider rather than a constant.
+occlusionInput.oninput = () => { applyOcclusionStrength(); };
+occlusionInput.onchange = persistState;
 seedInput.onchange = rebuild;
 el('reseed').onclick = reseed;
 el('reset-seed').onclick = () => { seedCounter = 0; seedInput.value = 'browser'; rebuild(); };
@@ -1051,5 +1073,6 @@ syncPreviewOutputs();
 // Machinery runs by default: a quern, a saw or a sail that is not working does not explain itself.
 playing = el<HTMLInputElement>('motion-play').checked;
 sun.castShadow = shadowsInput.checked;
+applyOcclusionStrength();
 setView(view);
 requestAnimationFrame(frame);

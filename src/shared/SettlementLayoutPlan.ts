@@ -17,7 +17,11 @@ export function districtForResponse(response: Pick<DevelopmentResponse, 'need' |
   if (response.need === 'religion' || response.need === 'memory') return 'sacred';
   if (response.need === 'trade' || response.need === 'transport') return 'market';
   if (response.form === 'works') return 'industrial';
-  if (response.need === 'food' || response.need === 'manufacturing' || response.need === 'energy') return 'craft';
+  // Power is industrial, not craft. A mill is a machine the size of a building — a tower mill is
+  // 27 m to its cap, a water mill drags a pond and a race behind it — and routing it to the craft
+  // quarter reserved it a workshop's plot, which is what left mills rendering waist-high.
+  if (response.need === 'energy') return 'industrial';
+  if (response.need === 'food' || response.need === 'manufacturing') return 'craft';
   return 'civic';
 }
 

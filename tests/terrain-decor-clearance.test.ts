@@ -25,6 +25,14 @@ describe('terrain decor clearance: props stay out of reserved structure and work
     expect(visible).toBeGreaterThan(0);
   });
 
+  it('supplies every color source requested by the stone materials', () => {
+    for (const mesh of instancedSets(decor)) {
+      expect(mesh.instanceColor).not.toBeNull();
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      expect(!material.vertexColors || mesh.geometry.hasAttribute('color')).toBe(true);
+    }
+  });
+
   it('hides every instance inside a reserved disc and leaves the rest untouched', () => {
     const sets = instancedSets(decor);
     const anchor = sets.find((mesh) => mesh.count > 20)!;

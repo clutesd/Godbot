@@ -1,3 +1,4 @@
+import { loseCombatArms } from './resources/ArmsDemand';
 import { advanceBodies } from './people/BodyLifecycle';
 import { advanceAgriculture, ensureFields } from './agriculture/AgricultureSystem';
 import { advanceSettlementWater } from './development/WaterCivilization';
@@ -5,7 +6,6 @@ import { balanceFounderTrades, combinedSurvivalHazard, conceptionChance, founder
 import { advanceEnergy } from './energy/EnergySystem';
 import { ensureProcessingAuthority } from './processing/FacilitySystem';
 import { industryDiagnosticLines } from './processing/FacilityDiagnostics';
-import { poweredProductivity } from './energy/types';
 import { tradeOpportunity } from './transport/FreightEconomy';
 import { firstMilestones } from '../historian/Milestones';
 import { emitEvent } from './History';
@@ -327,7 +327,8 @@ export class Simulation {
       camp.name = `${pod.name} Landing`;
       pod.settlementId = camp.id;
       camp.resources.food = pod.supplies.food;
-      camp.resources.goods = pod.supplies.goods;
+      // Carried vessels and tools are physical stock like the spars, not an abstract goods balance.
+      addMaterial(camp, 'pottery', pod.supplies.goods);
       // Packing spars and mineral ballast are finite physical stocks, spent by normal construction.
       addMaterial(camp, 'timber', pod.supplies.timber);
       addMaterial(camp, 'stone', pod.supplies.stone);
@@ -727,7 +728,8 @@ export class Simulation {
       cellIndex: cell.z * this.state.world.size + cell.x,
       foundedMonth,
       cultureShares: { [culture.id]: 1 },
-      resources: { food: 210, wood: 0, minerals: 0, goods: 22, wealth: 14 },
+      // No settlement begins with manufactured surplus it never made; goods are earned by crafting.
+      resources: { food: 210, wood: 0, minerals: 0, goods: 0, wealth: 14 },
       monthlyBalance: emptyStock(),
       buildings: founder ? 0 : 4,
       targetBuildings: founder ? 0 : 4,
@@ -934,7 +936,6 @@ export class Simulation {
       }
       const artisans = count('artisan');
       const carriers = count('carrier');
-      const keepers = count('keeper');
       const productivity = this.knowledgeSystem.productionFactors(settlement);
       const balance = emptyStock();
       this.random.float();
@@ -984,11 +985,19 @@ export class Simulation {
       const mineralUse = Math.min(settlement.resources.minerals, artisans * 0.03 + settlement.buildings * 0.012 + settlement.infrastructure.workshops * 0.12);
       balance.wood = woodDemand - woodUse;
       balance.minerals = mineralDemand - mineralUse;
-      balance.goods = (artisans * 0.4 * 0.18 + keepers * 0.5 * 0.038) * productivity.goods * poweredProductivity(settlement) - population * (0.016 + settlement.urbanization * 0.006);
+      // Goods are the value this settlement's own crafts added this month. Households wear out
+      // manufactured items physically in consumeMaterials (spoilage, tool and arms wear, medicine),
+      // so no second abstract per-capita charge belongs here.
+      const economy = materialEconomy(settlement);
+      balance.goods = economy.craftedThisMonth ?? 0;
+      economy.craftedThisMonth = 0;
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
       for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) {
         settlement.resources[key] = Math.max(0, settlement.resources[key] + balance[key]);
       }
+      // Manufactured stock wears out at roughly a decade of service, so the surplus a settlement can
+      // hold is bounded by what its crafts keep replacing rather than by everything it ever made.
+      settlement.resources.goods = Math.max(0, settlement.resources.goods * (1 - 0.008));
       balance.wood += materialEconomy(settlement).delivered.timber ?? 0;
       balance.minerals += materialEconomy(settlement).delivered.stone ?? 0;
       settlement.monthlyBalance = balance;
@@ -1494,13 +1503,16 @@ export class Simulation {
       const present = new Set(settlement.institutionIds.map((id) => this.institution(id)?.kind));
       const artisanShare = (settlementLabour(this.state, settlement, this.peopleAt(settlement.id)).occupations.artisan ?? 0) / Math.max(1, population);
       const routeCount = this.state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length;
+      // Knowledge the community can already practise but cannot yet use without an institution is the demand signal.
+      const blocked = this.knowledgeSystem.institutionalDemand(this.state, settlement);
+      const demand = (kind: InstitutionKind): number => Math.min(0.32, (blocked[kind] ?? 0) * 0.05);
       const possibilities: Array<{ kind: InstitutionKind; pressure: number; cause: string }> = [
-        { kind: 'council', pressure: culture.dimensions.cooperation * 0.55 + population / 220 + settlement.prosperity * 0.18, cause: 'need-for-coordination' },
-        { kind: 'temple', pressure: culture.dimensions.religiousTendency * 0.64 + population / 300, cause: 'shared-ritual-practice' },
-        { kind: 'merchant-association', pressure: culture.dimensions.tradeOrientation * 0.54 + routeCount * 0.24, cause: 'regular-long-distance-trade' },
-        { kind: 'military-order', pressure: culture.dimensions.militarism * 0.42 + this.hostilityAround(settlement.id) * 0.55, cause: 'persistent-external-threat' },
-        { kind: 'craft-circle', pressure: settlement.resources.goods / Math.max(25, population) + artisanShare * 2.4 + settlement.infrastructure.workshops * 0.36 + (settlement.specialization === 'craft' ? 0.35 : 0), cause: 'specialized-production' },
-        { kind: 'knowledge-keepers', pressure: culture.dimensions.curiosity * 0.6 + culture.dimensions.longTermOrientation * 0.34, cause: 'preservation-of-knowledge' },
+        { kind: 'council', pressure: culture.dimensions.cooperation * 0.55 + population / 220 + settlement.prosperity * 0.18 + demand('council'), cause: 'need-for-coordination' },
+        { kind: 'temple', pressure: culture.dimensions.religiousTendency * 0.64 + population / 300 + demand('temple'), cause: 'shared-ritual-practice' },
+        { kind: 'merchant-association', pressure: culture.dimensions.tradeOrientation * 0.54 + routeCount * 0.24 + demand('merchant-association'), cause: 'regular-long-distance-trade' },
+        { kind: 'military-order', pressure: culture.dimensions.militarism * 0.42 + this.hostilityAround(settlement.id) * 0.55 + demand('military-order'), cause: 'persistent-external-threat' },
+        { kind: 'craft-circle', pressure: settlement.resources.goods / Math.max(25, population) + artisanShare * 2.4 + settlement.infrastructure.workshops * 0.36 + (settlement.specialization === 'craft' ? 0.35 : 0) + demand('craft-circle'), cause: 'specialized-production' },
+        { kind: 'knowledge-keepers', pressure: culture.dimensions.curiosity * 0.6 + culture.dimensions.longTermOrientation * 0.34 + demand('knowledge-keepers'), cause: 'preservation-of-knowledge' },
       ];
       const candidate = possibilities.filter(({ kind }) => !present.has(kind)).sort((a, b) => b.pressure - a.pressure)[0];
       const administrativeCapacity = 2 + Math.floor(settlement.knowledge.literacy * 3) + (settlement.infrastructure.archives > 0.18 ? 1 : 0);
@@ -1827,6 +1839,8 @@ export class Simulation {
         const requestedCasualtiesB = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthA * 0.018)));
         const casualtiesA = this.killCombatants(attacker.id, Math.min(Math.ceil(war.strengthA), requestedCasualtiesA), campaignFront(war, defender.position));
         const casualtiesB = this.killCombatants(defender.id, Math.min(Math.ceil(war.strengthB), requestedCasualtiesB), campaignFront(war, defender.position));
+        loseCombatArms(attacker, casualtiesA);
+        loseCombatArms(defender, casualtiesB);
         war.casualtiesA += casualtiesA;
         war.casualtiesB += casualtiesB;
         const lossA = casualtiesA / Math.max(1, campaign.initialStrengthA);

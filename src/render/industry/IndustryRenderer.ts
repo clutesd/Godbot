@@ -48,7 +48,8 @@ const LAMP: Record<FacilityStatus, { colour: string; power: number }> = {
 };
 
 const PILE_COLOUR: Record<PileKind, string> = {
-  log: '#7a5638', lumber: '#c9a06a', charcoal: '#25282a', ore: '#7d5a48', coal: '#1d1f21', ingot: '#a7b0b5', slag: '#5d5a55', generic: '#9b9484',
+  log: '#7a5638', lumber: '#c9a06a', charcoal: '#25282a', ore: '#7d5a48', coal: '#1d1f21', ingot: '#a7b0b5', slag: '#5d5a55',
+  clay: '#8a6a4a', pottery: '#b77b53', generic: '#9b9484',
 };
 
 const hash = (text: string): number => {
@@ -214,6 +215,7 @@ export class IndustryRenderer {
       if (v.stage !== 'ruined') {
         if (v.family === 'wood') this.woodCore(entry, hw, hd);
         else if (v.family === 'metallurgy') this.metalCore(entry, hw, hd);
+        else if (v.family === 'ceramics') this.ceramicsCore(entry, hw, hd);
         else this.genericCore(entry, hw, hd);
         this.utilities(entry, hw, hd);
         this.loading(entry, hw, hd);
@@ -239,7 +241,7 @@ export class IndustryRenderer {
 
   /** Packed ground under the yards; extends below grade so slopes never leave anything floating. */
   private pads(root: THREE.Group, v: FacilityVisual, hw: number, hd: number): void {
-    const colour = v.family === 'metallurgy' ? '#4c4640' : '#6d5b45';
+    const colour = v.family === 'metallurgy' ? '#4c4640' : v.family === 'ceramics' ? '#8a6a4a' : '#6d5b45';
     const span = Math.max(v.radius * 1.55, hw * 2 + 3.2);
     this.slab(root, 0, -0.14, 0, span, 0.3, Math.max(hd * 2 + 2.2, v.radius * 1.25), colour, 'Facility ground pad', 1);
   }
@@ -265,6 +267,15 @@ export class IndustryRenderer {
       const rows = Math.max(1, Math.round(fill * 5));
       for (let i = 0; i < rows; i++) for (let k = 0; k < 3; k++) {
         this.slab(g, (k - 1) * 0.22, 0.05 + i * 0.09, 0, 0.19, 0.07, depth * 0.5, i % 2 ? '#9aa4a9' : '#b3bcc0', 'Stored ingot', 0.4, 0.7);
+      }
+    } else if (pile.kind === 'pottery') {
+      // Finished vessels stacked on a pallet, never taller than a knee: a stock shelf, not a monument.
+      const count = Math.max(2, Math.round(fill * 9));
+      this.slab(g, 0, 0.02, 0, width * 0.75, 0.03, depth * 0.75, '#6b5a42', 'Pottery stock pallet', 0.95);
+      for (let i = 0; i < count; i++) {
+        const row = i % 3, col = Math.floor(i / 3);
+        const colour = i % 2 ? '#b77b53' : '#a66c47';
+        this.add(g, this.cylinder, this.material(colour, 0.95), [(row - 1) * 0.16, 0.04 + 0.075, (col - 1) * 0.16], [0.07, 0.15, 0.07], 'Stacked vessel');
       }
     } else {
       const radius = 0.22 + fill * 0.32;
@@ -407,6 +418,58 @@ export class IndustryRenderer {
       entry.motions.push({ object: trolley, kind: 'slide', axis: 'x', rate: 0.6, amount: 0.95, base: 0, needsActivity: true });
       this.post(root, hw * 0.9, 0.7, -hd - 1.3, 0.42, 1.4, '#a09f97', 'Cooling tower', 0.1);
       this.plume(entry, hw * 0.9, 1.4, -hd - 1.3, v.steam, 2.6, 0.5, 'steam');
+    }
+    void active;
+  }
+
+  // --- ceramics --------------------------------------------------------------------------------
+
+  private ceramicsCore(entry: Entry, hw: number, hd: number): void {
+    const v = entry.visual, root = entry.root, active = v.activity > 0.05;
+    const front = hd + 0.95;
+    if (v.tier === 1) {
+      const bench = this.named(root, 'Wedging bench', -0.6, 0, front);
+      this.slab(bench, 0, 0.3, 0, 0.6, 0.06, 0.4, '#6b5a42', 'Wedging bench top', 0.95);
+      for (const x of [-0.26, 0.26]) this.post(bench, x, 0.15, 0, 0.03, 0.3, '#4a3a28', 'Bench leg');
+      if (v.inputs.some(p => p.kind === 'clay') || active) this.add(bench, this.dome, this.material('#8a6a4a', 1), [0, 0.35, 0], [0.16, 0.1, 0.14], 'Clay lump on bench');
+      const wheel = this.named(root, "Potter's wheel", 0.45, 0, front + 0.1);
+      this.post(wheel, 0, 0.14, 0, 0.04, 0.28, '#5a4a36', 'Wheel post');
+      const head = this.add(wheel, this.cylinder, this.material('#3f3a32', 0.8), [0, 0.3, 0], [0.22, 0.03, 0.22], 'Wheel head');
+      entry.motions.push({ object: head, kind: 'spin', axis: 'y', rate: 7, amount: 0, base: 0, needsActivity: true });
+      if (active) this.add(wheel, this.dome, this.material('#9c7a56', 0.9), [0, 0.34, 0], [0.07, 0.1, 0.07], 'Throwing on the wheel');
+      const kiln = this.named(root, 'Clamp kiln', hw * 0.4, 0, -hd - 0.75);
+      const dome = this.add(kiln, this.dome, this.material('#7a5f45', 1), [0, 0, 0], [0.56, 0.42, 0.56], 'Clamp kiln dome');
+      dome.castShadow = true;
+      this.furnaceGlow(entry, kiln, 0, 0.18, 0.5, 0.18, 0.14);
+      this.plume(entry, hw * 0.4, 0.5, -hd - 0.75, v.smoke, 1.3, 0.35, 'smoke');
+      const rack = this.named(root, 'Drying rack', -hw - 0.75, 0, -hd * 0.2);
+      this.slab(rack, 0, 0.32, 0, 0.5, 0.03, 0.26, '#5a4a36', 'Drying shelf', 0.9);
+      for (const x of [-0.16, 0, 0.16]) this.add(rack, this.cylinder, this.material('#bc8767', 0.95), [x, 0.37, 0], [0.05, 0.08, 0.05], 'Greenware on rack');
+    } else if (v.tier === 2) {
+      const kiln = this.named(root, 'Bottle kiln', hw * 0.3, 0, -hd - 0.5);
+      this.add(kiln, this.cone, this.material('#8c5b4a', 0.95), [0, 1.0, 0], [0.62, 2.0, 0.62], 'Bottle kiln body');
+      for (const y of [0.3, 0.7]) this.add(kiln, this.torus, this.material('#6f4638', 0.9), [0, y, 0], [0.62 - y * 0.18, 0.08, 0.62 - y * 0.18], 'Kiln hoop', [Math.PI / 2, 0, 0]);
+      this.furnaceGlow(entry, kiln, 0, 0.3, 0.6, 0.26, 0.2);
+      this.plume(entry, hw * 0.3, 2.1, -hd - 0.5, v.smoke, 2.2, 0.5, 'smoke');
+      const shed = this.named(root, 'Drying shed', -hw - 0.9, 0, 0);
+      this.shell(entry, shed, 'Drying shed shell', 1.1, 1.2, 'workshop');
+      const saggars = this.named(root, 'Saggar stack', hw * 0.3, 0, front);
+      for (let i = 0; i < 3; i++) this.slab(saggars, 0, 0.1 + i * 0.16, 0, 0.3, 0.14, 0.3, i % 2 ? '#6f5a42' : '#7a6349', 'Stacked saggar', 0.95);
+    } else {
+      const kiln = this.named(root, 'Tunnel kiln', 0, 0, -hd - 0.4);
+      this.shell(entry, kiln, 'Tunnel kiln shell', 2.6, 1.0, 'factory');
+      const mouth = new THREE.MeshStandardMaterial({ color: '#2a1408', emissive: new THREE.Color('#ff8a2b'), emissiveIntensity: 0 });
+      const mouthMesh = this.add(kiln, this.box, mouth, [0, 0.4, 0.55], [0.5, 0.26, 0.04], 'Tunnel kiln mouth');
+      mouthMesh.userData['ownedMaterial'] = true;
+      entry.glows.push({ material: mouth, level: v.heat, flicker: true });
+      const belt = this.named(root, 'Ware conveyor', 0, 0.26, front);
+      this.slab(belt, 0, 0, 0, 0.5, 0.05, 2.2, '#2d3033', 'Conveyor bed', 0.5, 0.4);
+      for (let i = 0; i < 4; i++) {
+        const car = this.add(belt, this.cylinder, this.material('#b77b53', 0.95), [0, 0.1, -0.9 + i * 0.6], [0.09, 0.14, 0.09], 'Conveyed ware');
+        entry.motions.push({ object: car, kind: 'slide', axis: 'z', rate: 0.9, amount: 0.3, base: -0.9 + i * 0.6, needsActivity: true });
+      }
+      const stock = this.named(root, 'Finished stock warehouse', hw + 1.0, 0, 0);
+      this.shell(entry, stock, 'Finished stock shell', 1.3, 1.4, 'warehouse');
     }
     void active;
   }

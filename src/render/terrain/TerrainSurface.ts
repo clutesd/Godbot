@@ -7,6 +7,7 @@ import { clamp01, fbmSeeded, octaveSeeds, smoothstep } from '../../sim/terrain/n
 import { nearestIndex, sampleField } from '../../sim/terrain/TerrainField';
 import type { WorldCell, WorldState } from '../../sim/types';
 import { buildWorldEdgeTransition } from './WorldEdgeTransition';
+import { createTerrainMaterial } from './TerrainMaterial';
 
 export interface SurfaceSample {
   elevation: number;
@@ -37,6 +38,8 @@ const PALETTE = {
   warmRock: new THREE.Color('#8a7761'),
   darkRock: new THREE.Color('#4a4744'),
   alpine: new THREE.Color('#8b8781'),
+  alpineMeadow: new THREE.Color('#777e57'),
+  scree: new THREE.Color('#969080'),
   snow: new THREE.Color('#e8edef'),
 };
 
@@ -54,6 +57,7 @@ export class TerrainSurface {
   private readonly grainSeeds = octaveSeeds('terrain', 'surface-grain', 3);
   private readonly rockTone = new THREE.Color();
   private readonly scratch = new THREE.Color();
+  private readonly normal = new THREE.Vector3();
 
   constructor(world: WorldState) {
     this.world = world;
@@ -205,7 +209,7 @@ export class TerrainSurface {
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
 
-    const material = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, vertexColors: true, flatShading: false });
+    const material = createTerrainMaterial(this.seaLevelY);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = true;
     mesh.castShadow = true;
@@ -233,7 +237,8 @@ export class TerrainSurface {
     const wood = this.sampleCellField(this.woodField, worldX, worldZ);
     const rock = terrain.rock[index] ?? 0;
     const flow = terrain.flow[index] ?? 0;
-    const slope = this.slopeAt(worldX, worldZ);
+    this.normalAt(worldX, worldZ, this.normal);
+    const slope = clamp01(Math.hypot(this.normal.x, this.normal.z) / this.normal.y * 0.6);
 
     if (elevation < seaLevel) {
       const depth = smoothstep(seaLevel, seaLevel - 0.16, elevation);
@@ -255,16 +260,27 @@ export class TerrainSurface {
     }
 
     // Rock is a mix, not a single grey: warm strata low down, cold stone on the exposed faces.
-    const exposure = clamp01(smoothstep(0.3, 0.68, slope) * 0.9 + smoothstep(0.35, 0.85, rock) * 0.6);
+    const upland = smoothstep(mountainLevel - 0.19, mountainLevel + 0.03, elevation);
+    colour.lerp(PALETTE.alpineMeadow, upland * smoothstep(0.5, 0.15, slope) * 0.65);
+    const exposure = clamp01(smoothstep(0.24, 0.65, slope) * 0.95 + smoothstep(0.35, 0.85, rock) * 0.6);
     const strata = fbmSeeded(this.grainSeeds, worldX * 0.11 + 4.7, worldZ * 0.11 - 9.3);
     this.rockTone.copy(PALETTE.rock).lerp(PALETTE.warmRock, strata);
     colour.lerp(this.rockTone, exposure * 0.88);
     colour.lerp(PALETTE.darkRock, smoothstep(0.62, 0.95, slope) * 0.55);
     colour.lerp(PALETTE.alpine, smoothstep(mountainLevel - 0.1, mountainLevel + 0.08, elevation) * 0.5);
 
+    // Loose stone accumulates below cliffs; snow holds on shelves and shaded slopes, leaving
+    // the steepest faces exposed. The broken snowline avoids a uniform white altitude stripe.
+    colour.lerp(PALETTE.scree, upland * smoothstep(0.12, 0.3, slope) * smoothstep(0.65, 0.38, slope) * 0.32);
+    const snowline = mountainLevel + 0.02 + temperature * 0.08
+      + (strata - 0.5) * 0.075 + this.normal.z * 0.022;
+    const snow = smoothstep(snowline, snowline + 0.09, elevation)
+      * smoothstep(0.98, 0.52, slope);
+    colour.lerp(PALETTE.snow, snow * 0.96);
+
     // Fine deterministic grain, so large flat surfaces still have life at close range.
     const grain = stableHash(`${seed}:surface-grain`, index % terrain.resolution, (index / terrain.resolution) | 0) - 0.5;
-    colour.offsetHSL(grain * 0.012, grain * 0.05, grain * 0.055);
+    colour.offsetHSL(grain * 0.006, grain * 0.025, grain * 0.022 * (1 - snow));
   }
 }
 

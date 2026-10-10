@@ -1,8 +1,9 @@
 import { poweredProductivity } from '../energy/types';
 import type { SeededRandom } from '../prng';
 import { mastery } from '../knowledge/KnowledgeSystem';
+import { recordHeatWork, recordMaterialWork } from '../knowledge/HeatExperience';
 import type { Occupation, Settlement, SimulationState } from '../types';
-import { MATERIAL_BY_ID, RECIPE_CATALOG, type RecipeDefinition } from './catalog';
+import { craftValueAdded, MATERIAL_BY_ID, RECIPE_CATALOG, type RecipeDefinition } from './catalog';
 import { materialEconomy, storageRoom } from './Inventory';
 import { settlementLedger, type MaterialLedger } from './MaterialLedger';
 import type { ResourceEventDraft } from './ResourceSystem';
@@ -93,10 +94,17 @@ export function runCatalogCycle(
     if (record) { record.lastUsedMonth = state.month; record.practice = Math.min(1, record.practice + 0.001); }
   }
   s.knowledge.experimentation[recipe.id === 'herbal-remedy' ? 'medicine' : 'materials'] += 0.01;
+  if (recipe.heat) recordHeatWork(s, recipe.heat, state.month);
+  recordMaterialWork(s, 1, state.month);
   // Early trials consume samples but do not imply a reproducible blueprint.
   if ((!s.knownRecipes.includes(recipe.id) && economy.recipeResearch[recipe.id]! < (recipe.researchWork ?? 2)) || random.chance(recipe.failureRisk * (1 - practiced))) return;
   const efficiency = Math.min(1, recipe.baseEfficiency + (options.efficiencyBonus ?? 0) + (1 - recipe.baseEfficiency) * practiced);
-  for (const [id, quantity] of Object.entries(recipe.outputs)) ledger.add(id, quantity * efficiency, quality * 0.6 + practiced * 0.4);
+  const accepted: Record<string, number> = {};
+  for (const [id, quantity] of Object.entries(recipe.outputs)) accepted[id] = ledger.add(id, quantity * efficiency, quality * 0.6 + practiced * 0.4);
+  // Only output a store actually took in is worth anything: a full warehouse ends the value, not just the stock.
+  const crafted = craftValueAdded(accepted, inputs);
+  economy.craftedThisMonth = (economy.craftedThisMonth ?? 0) + crafted;
+  economy.craftedTotal = (economy.craftedTotal ?? 0) + crafted;
   for (const [id, quantity] of Object.entries(recipe.byproducts ?? {})) ledger.add(id, quantity, quality);
   if (!s.knownRecipes.includes(recipe.id)) {
     s.knownRecipes.push(recipe.id);

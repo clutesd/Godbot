@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import type { CultureStyle } from '../../sim/types';
-import { applySurfaceDetail } from './SurfaceDetail';
+import { applySurfaceDetail, installSurfaceOcclusion } from './SurfaceDetail';
 import type { ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
 import { ArchitecturalMaterialSet } from '../architecture/ArchitecturalMaterialSet';
 
@@ -236,7 +236,11 @@ export class MaterialPalette {
     // is a fragment-stage program, so draw calls and geometry are unchanged.
     for (const surface of SURFACE_KEYS) {
       const material = this.materials.get(surface);
-      if (material) applySurfaceDetail(material, surface, rank);
+      if (!material) continue;
+      // Patterned surfaces take occlusion as part of their program; the smooth ones — inlay,
+      // lantern glass, water, awning canvas — still need it, because they are still built into
+      // reveals and under eaves.
+      if (!applySurfaceDetail(material, surface, rank)) installSurfaceOcclusion(material);
     }
     this.applyNightFactor();
   }

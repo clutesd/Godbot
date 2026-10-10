@@ -5,6 +5,15 @@ import type { DevelopmentResponse } from '../../sim/development/types';
 import { practical } from '../../sim/knowledge/KnowledgeSystem';
 import { CultureStyleProfileFactory } from '../style/CultureStyleProfile';
 import type { BannerIdentity } from '../style/BannerIdentity';
+import { metresToWorld } from '../people/HumanScale';
+
+/**
+ * PROFILES and every other absolute size below are authored as if they were metres (a bowl's rim
+ * at ~0.2, a storage jar's shoulder at ~0.5). `VESSEL_SCALE` is the one place that number is
+ * actually converted into world units, so a vessel's size is always load-bearing against the same
+ * human-scale reference every figure in the scene uses, not an independent guess.
+ */
+const VESSEL_SCALE = metresToWorld(1);
 
 export type Vessel = 'bowl' | 'cooking-pot' | 'storage-jar' | 'jug' | 'ritual';
 export type PotteryFinish = 'greenware' | 'fired' | 'prestige';
@@ -91,7 +100,7 @@ export function createPottery(placements: readonly PotteryPlacement[], style: Po
     if (!template) { template = vesselGeometry(placement.vessel, style, tier, finish); templates.set(templateKey, template); }
     const geometry = template.clone();
     geometry.rotateY(placement.rotation);
-    geometry.translate(placement.x, ground(placement.x, placement.z) + 0.025, placement.z);
+    geometry.translate(placement.x, ground(placement.x, placement.z) + 0.025 * VESSEL_SCALE, placement.z);
     pieces.push(geometry);
   }
   const geometry = mergeGeometries(pieces)!;
@@ -245,5 +254,6 @@ function vesselGeometry(vessel: Vessel, style: PotteryStyle, tier: number, finis
   }
   const merged = mergeGeometries(pieces)!;
   pieces.forEach(piece => piece.dispose());
+  merged.scale(VESSEL_SCALE, VESSEL_SCALE, VESSEL_SCALE);
   return merged;
 }

@@ -145,6 +145,13 @@ export interface RecipeDefinition {
   labour?: number;
   researchWork?: number;
   energy?: { fuel: string; quantity: number; minimumHeat: number };
+  /**
+   * How much sustained, contained heat the process actually applies, relative to a kiln or
+   * charcoal burn (1). Running it is real evidence about airflow, fuel and containment, so it
+   * keeps `fire-control` in practice and accumulates experimental mass in the energy domain.
+   * Absent means the process applies no working heat.
+   */
+  heat?: number;
   byproducts?: Readonly<Record<string, number>>;
   unlocks?: readonly string[];
 }
@@ -157,7 +164,7 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     baseEfficiency: 0.7, failureRisk: 0.05, labour: 2, researchWork: 5 },
   { id: 'silicon-refining', name: 'Semiconductor refining', description: 'Purification of mineral silica using high heat and precision chemical processing.',
     requiredKnowledge: [{ id: 'photovoltaics', minPractice: 0.5 }], inputs: { stone: 3, charcoal: 2 }, outputs: { silicon: 1 },
-    craftOccupations: ['artisan'], requiredInfrastructure: { factories: 0.15, power: 0.1 },
+    craftOccupations: ['artisan'], heat: 1.2, requiredInfrastructure: { factories: 0.15, power: 0.1 },
     baseEfficiency: 0.6, failureRisk: 0.12, labour: 1.5, researchWork: 3 },
   {
     id: 'herbal-remedy', name: 'Herbal remedy preparation',
@@ -173,14 +180,14 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     requiredKnowledge: [{ id: 'fire-control', minPractice: 0.2 }],
     inputs: { timber: 4 }, outputs: { charcoal: 2 },
     craftOccupations: ['forager', 'builder'], baseEfficiency: 0.7, failureRisk: 0.1,
-    labour: 0.4, researchWork: 0.8, byproducts: { ash: 0.3 }, unlocks: ['fuel-yard'],
+    labour: 0.4, researchWork: 0.8, heat: 1, byproducts: { ash: 0.3 }, unlocks: ['fuel-yard'],
   },
   {
     id: 'bronze-ingot', name: 'Bronze casting',
     description: 'Alloying copper and tin under sustained charcoal heat.',
     requiredKnowledge: [{ id: 'metal-smelting', minPractice: 0.3 }],
     inputs: { 'copper-ore': 3, 'tin-ore': 1 }, outputs: { bronze: 2 },
-    energy: { fuel: 'charcoal', quantity: 2, minimumHeat: 0.6 }, labour: 1, researchWork: 2,
+    energy: { fuel: 'charcoal', quantity: 2, minimumHeat: 0.6 }, labour: 1, researchWork: 2, heat: 1.2,
     byproducts: { slag: 0.5 }, unlocks: ['bronze-foundry'],
     craftOccupations: ['artisan'], requiredInfrastructure: { workshops: 0.05 },
     baseEfficiency: 0.6, failureRisk: 0.2,
@@ -190,7 +197,7 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     description: 'Smelting iron ore into workable blooms and forging them into tools and weapons.',
     requiredKnowledge: [{ id: 'iron-working', minPractice: 0.3 }],
     inputs: { 'iron-ore': 4 }, outputs: { 'iron-tools': 2 },
-    energy: { fuel: 'charcoal', quantity: 3, minimumHeat: 0.7 }, labour: 1.2, researchWork: 3,
+    energy: { fuel: 'charcoal', quantity: 3, minimumHeat: 0.7 }, labour: 1.2, researchWork: 3, heat: 1.4,
     byproducts: { slag: 0.7 }, unlocks: ['smithy'],
     craftOccupations: ['artisan'], requiredInfrastructure: { workshops: 0.08 },
     baseEfficiency: 0.55, failureRisk: 0.22,
@@ -201,7 +208,7 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     requiredKnowledge: [{ id: 'pottery-firing', minPractice: 0.18 }],
     inputs: { clay: 2, timber: 0.6 }, outputs: { pottery: 1.6 },
     craftOccupations: ['artisan'], baseEfficiency: 0.68, failureRisk: 0.18,
-    labour: 0.65, researchWork: 1.2, unlocks: ['pottery-yard'],
+    labour: 0.65, researchWork: 1.2, heat: 0.9, unlocks: ['pottery-yard'],
   },
   {
     id: 'timber-framing', name: 'Timber framing', description: 'Seasoned and joined structural timber.',
@@ -212,7 +219,7 @@ export const RECIPE_CATALOG: readonly RecipeDefinition[] = [
     id: 'machine-parts', name: 'Machine parts', description: 'Gears, bearings, shafts and castings cut and fitted to a repeatable size.',
     requiredKnowledge: [{ id: 'precision-tools', minPractice: 0.3 }, { id: 'rotary-machinery', minPractice: 0.25 }],
     inputs: { iron: 2, timber: 0.5 }, outputs: { 'machine-parts': 1.5 },
-    energy: { fuel: 'charcoal', quantity: 1, minimumHeat: 0.6 }, labour: 1.1, researchWork: 2.5,
+    energy: { fuel: 'charcoal', quantity: 1, minimumHeat: 0.6 }, labour: 1.1, researchWork: 2.5, heat: 0.6,
     byproducts: { slag: 0.15 }, unlocks: ['machine-shop'],
     craftOccupations: ['artisan', 'builder'], requiredInfrastructure: { workshops: 0.1 },
     baseEfficiency: 0.58, failureRisk: 0.18,
@@ -258,3 +265,28 @@ export const MATERIAL_CATALOG: readonly MaterialDefinition[] = [
   { id: 'machine-parts', name: 'Machine parts', spoilage: 0 }, { id: 'engine', name: 'Engines', spoilage: 0 },
 ];
 export const MATERIAL_BY_ID = new Map(MATERIAL_CATALOG.map(m => [m.id, m]));
+
+/**
+ * What a worked material is worth as tradeable manufactured output. Raw extraction and waste carry
+ * no manufactured value: a deposit becomes valuable only once labour and knowledge have shaped it.
+ * Finer work is worth more per unit than bulk material, so a settlement that only saws timber
+ * accumulates surplus far more slowly than one forging tools.
+ */
+export const MANUFACTURED_VALUE: Readonly<Record<string, number>> = {
+  charcoal: 0.3, lumber: 0.5, brick: 0.6, 'timber-frame': 0.7, 'dressed-stone': 0.7,
+  pottery: 1, 'herbal-remedy': 1, textile: 1.2, medicine: 1.5,
+  copper: 1, tin: 1, iron: 1, bronze: 1.6, steel: 1.8, 'iron-tools': 2.2,
+  'machine-parts': 3.5, silicon: 4, 'nuclear-fuel': 6, engine: 8,
+};
+
+/**
+ * The value one transformation adds: its priced outputs less the priced inputs it consumed. Credit
+ * is therefore taken once along a chain (ore to iron to tools), never once per step.
+ */
+export function craftValueAdded(
+  outputs: Readonly<Record<string, number>>, inputs: Readonly<Record<string, number>>, outputScale = 1,
+): number {
+  const priced = (stock: Readonly<Record<string, number>>): number =>
+    Object.entries(stock).reduce((sum, [id, quantity]) => sum + (MANUFACTURED_VALUE[id] ?? 0) * quantity, 0);
+  return Math.max(0, priced(outputs) * outputScale - priced(inputs));
+}

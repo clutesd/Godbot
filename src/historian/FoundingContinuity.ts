@@ -136,7 +136,8 @@ export function foundingCommunitySnapshot(
     shelterCapacity: shelterCapacity(settlement, state).capacity,
     constructionProgress: settlement.development?.project?.response.temporary ? 0 : clamp(settlement.constructionProgress),
     food: settlement.resources.food,
-    goods: settlement.resources.goods,
+    // The vessels and tools the community carried are physical stock, so the fact follows them.
+    goods: settlement.localMaterials['pottery'] ?? 0,
     timber: settlement.localMaterials['timber'] ?? 0,
     stone: settlement.localMaterials['stone'] ?? 0,
     foodSecurity: settlement.foodSecurity,

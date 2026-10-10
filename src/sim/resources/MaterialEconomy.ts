@@ -2,8 +2,10 @@ import { poweredProductivity } from '../energy/types';
 import { resourceLabourBudget } from '../people/HumanCapital';
 import { useLabour } from './Processing';
 import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/CapabilityContract';
+import { recordHeatWork, recordMaterialWork } from '../knowledge/HeatExperience';
 import type { Person, Settlement, SimulationState } from '../types';
-import { addMaterial, publishBulkStocks, reconcileBulkStocks } from './Inventory';
+import { craftValueAdded } from './catalog';
+import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks } from './Inventory';
 import { settlementLedger, type MaterialLedger } from './MaterialLedger';
 import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
 
@@ -101,6 +103,8 @@ export interface MaterialRecipe {
   work: number;
   /** Maximum share of the primary input converted in one month. */
   maxInputShare: number;
+  /** Sustained contained heat the process applies, against one kiln firing. See `recordHeatWork`. */
+  heat?: number;
 }
 
 const recipe = (
@@ -110,7 +114,8 @@ const recipe = (
   knowledge: MaterialRecipe['knowledge'],
   work: number,
   maxInputShare = 0.25,
-): MaterialRecipe => ({ id, inputs, outputs, knowledge, work, maxInputShare });
+  heat?: number,
+): MaterialRecipe => ({ id, inputs, outputs, knowledge, work, maxInputShare, heat });
 
 /**
  * Advanced production not yet represented by the newer ResourceSystem recipe catalog. Charcoal
@@ -123,22 +128,22 @@ export const MATERIAL_RECIPES: readonly MaterialRecipe[] = [
   ], 0.3, 0.22),
   recipe('fire-brick', { clay: 1, timber: 0.22 }, { brick: 0.88 }, [
     { id: 'pottery-firing', stage: 'adopted', minPractice: 0.28 },
-  ], 0.48, 0.28),
+  ], 0.48, 0.28, 0.9),
   recipe('smelt-copper', { 'copper-ore': 1, charcoal: 0.32 }, { copper: 0.68 }, [
     { id: 'metal-smelting', stage: 'adopted', minPractice: 0.3 },
-  ], 0.62, 0.32),
+  ], 0.62, 0.32, 1.2),
   recipe('smelt-iron', { 'iron-ore': 1, charcoal: 0.55 }, { iron: 0.56 }, [
     { id: 'iron-working', stage: 'adopted', minPractice: 0.34 },
     { id: 'high-temperature-ceramics', stage: 'adopted', minPractice: 0.28 },
-  ], 0.82, 0.32),
+  ], 0.82, 0.32, 1.4),
   recipe('make-steel', { iron: 1, coal: 0.2 }, { steel: 0.9 }, [
     { id: 'iron-working', stage: 'adopted', minPractice: 0.45 },
     { id: 'industrial-chemistry', stage: 'transformed', minPractice: 0.45 },
-  ], 1.05, 0.4),
+  ], 1.05, 0.4, 1.4),
   recipe('prepare-medicine', { 'medicinal-flora': 1 }, { medicine: 0.65 }, [
     { id: 'anatomical-observation', stage: 'adopted', minPractice: 0.18 },
     { id: 'fire-control', stage: 'adopted', minPractice: 0.18 },
-  ], 0.34, 0.24),
+  ], 0.34, 0.24, 0.3),
   recipe('work-textile', { 'plant-fiber': 1 }, { textile: 0.8 }, [
     { id: 'stone-composites', stage: 'adopted', minPractice: 0.18 },
   ], 0.28, 0.24),
@@ -269,13 +274,24 @@ export function applyRecipe(
     inventory.lifetimeConsumed[kind] = round((inventory.lifetimeConsumed[kind] ?? 0) + consumed);
     flow.consumed[kind] = round((flow.consumed[kind] ?? 0) + consumed);
   }
+  const accepted: Record<string, number> = {};
   for (const [kind, perBatch] of Object.entries(recipeDefinition.outputs) as Array<[ProcessedMaterialKind, number | undefined]>) {
     if (!perBatch || perBatch <= 0) continue;
     const produced = round(ledger.add(kind, round(perBatch * batches)));
+    accepted[kind] = produced;
     inventory.lifetimeProduced[kind] = round((inventory.lifetimeProduced[kind] ?? 0) + produced);
     flow.produced[kind] = round((flow.produced[kind] ?? 0) + produced);
   }
   flow.recipes[recipeDefinition.id] = round((flow.recipes[recipeDefinition.id] ?? 0) + batches);
+  if (recipeDefinition.heat) recordHeatWork(settlement, recipeDefinition.heat * batches, month);
+  recordMaterialWork(settlement, batches, month);
+  // The typed economy is a legitimate manufacturing path, so the value it adds counts as craft output too.
+  const economy = materialEconomy(settlement);
+  const consumed: Record<string, number> = {};
+  for (const [kind, perBatch] of Object.entries(recipeDefinition.inputs)) if (perBatch) consumed[kind] = perBatch * batches;
+  const crafted = craftValueAdded(accepted, consumed);
+  economy.craftedThisMonth = (economy.craftedThisMonth ?? 0) + crafted;
+  economy.craftedTotal = (economy.craftedTotal ?? 0) + crafted;
   inventory.revision += 1;
 }
 

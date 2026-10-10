@@ -11,6 +11,12 @@ export interface DiscoveryConditions {
   alternatives?: KnowledgeNeed[][];
   minPopulation?: number;
   resources?: Partial<Pick<ResourceStock, 'wood' | 'minerals' | 'goods' | 'wealth'>>;
+  /**
+   * Heat-weighted combustible fuel the settlement can put under a furnace now, across its store
+   * and its own works' yards (see `combustibleAccess`). Use this, not `resources.wood`, wherever
+   * the real requirement is usable high-temperature fuel rather than possession of raw logs.
+   */
+  minFuel?: number;
   materials?: Record<string, number>;
   materialsAny?: Record<string, number>;
   minFertility?: number;
@@ -60,7 +66,7 @@ export const KNOWLEDGE_CATALOG: readonly KnowledgeDefinition[] = [
   understanding('material-testing', 'Material testing', 'materials', 'Comparing fracture, hardness, heat response, and durability.', 0.42, 0.025, { alternatives: [[need('stone-composites', 0.12, 0.3)], [need('pottery-firing', 0.12, 0.28)]], occupations: { artisan: 3 } }),
   understanding('combustion-dynamics', 'Combustion dynamics', 'energy', 'Recognizing how airflow, fuel, and containment alter heat.', 0.5, 0.019, { foundations: [need('fire-control', 0.36, 0.3)], occupations: { artisan: 3 }, institutionsAny: ['craft-circle', 'knowledge-keepers'] }),
   practice('high-temperature-ceramics', 'High-temperature ceramics', 'materials', 'Refractory vessels and structures that survive intense heat.', 0.66, 0.014, { foundations: [need('pottery-firing', 0.18, 0.48), need('combustion-dynamics', 0.38, 0.18)], resources: { minerals: 8 }, occupations: { artisan: 5 }, institutionsAny: ['craft-circle'] }, true),
-  practice('metal-smelting', 'Metal smelting', 'materials', 'Separating workable metal from mineral-bearing material.', 0.58, 0.017, { foundations: [need('combustion-dynamics', 0.28, 0.15), need('material-testing', 0.3, 0.15)], materialsAny: { 'copper-ore': 2, 'iron-ore': 2 }, resources: { wood: 6 }, occupations: { artisan: 4 }, pressure: 'conflict' }, true),
+  practice('metal-smelting', 'Metal smelting', 'materials', 'Separating workable metal from mineral-bearing material.', 0.58, 0.017, { foundations: [need('combustion-dynamics', 0.28, 0.15), need('material-testing', 0.3, 0.15)], materialsAny: { 'copper-ore': 2, 'iron-ore': 2 }, minFuel: 2.1, occupations: { artisan: 4 }, pressure: 'conflict' }, true),
   practice('iron-working', 'Iron working', 'materials', 'Repeated heating, shaping, and treatment of iron-rich material.', 0.74, 0.012, { foundations: [need('metal-smelting', 0.2, 0.48)], alternatives: [[need('high-temperature-ceramics', 0.16, 0.4)], [need('combustion-dynamics', 0.5, 0.24)]], materials: { 'iron-ore': 3 }, occupations: { artisan: 6 }, institutionsAny: ['craft-circle', 'military-order'] }, true),
   understanding('counting-measure', 'Counting and measure', 'records', 'Repeatable quantities, comparison, geometry, and accounting.', 0.34, 0.03, { occupations: { keeper: 2 }, pressure: 'trade' }, true),
   practice('durable-records', 'Durable records', 'records', 'External symbols capable of preserving speech, quantities, and agreements.', 0.58, 0.017, { foundations: [need('counting-measure', 0.38, 0.16)], minPopulation: 42, occupations: { keeper: 4, artisan: 2 }, institutionsAny: ['knowledge-keepers', 'council', 'merchant-association'], pressure: 'administration' }, true),

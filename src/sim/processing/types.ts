@@ -5,8 +5,8 @@ import type { FreightVehicle } from '../transport/types';
 /**
  * Facility families share one authority. A family is data: an ordered ladder of tiers, each naming
  * the *existing* recipes (resource catalog or typed material economy) it can physically run.
- * Ceramics, textiles, machinery, chemicals, electrical equipment and strategic processing are
- * reserved ids so a later pass only adds a family definition, never a new architecture.
+ * Textiles, chemicals, electrical equipment and strategic processing are still reserved ids so a
+ * later pass only adds a family definition, never a new architecture.
  */
 export type FacilityFamilyId =
   | 'wood' | 'metallurgy'

@@ -33,6 +33,7 @@ export interface FoundingCastProgress {
 interface FoundingCastMemory {
   readonly members: readonly FoundingCastMember[];
   readonly introducedPersonIds: Set<string>;
+  readonly skippedPersonIds: Set<string>;
   readonly normalAppearances: Map<string, number>;
   releaseShown: boolean;
 }
@@ -149,6 +150,7 @@ function memoryFor(historian: Historian, state: SimulationState): FoundingCastMe
     memory = {
       members: foundingDocumentaryCast(state),
       introducedPersonIds: new Set(),
+      skippedPersonIds: new Set(),
       normalAppearances: new Map(),
       releaseShown: false,
     };
@@ -254,7 +256,7 @@ export function foundingCastProgress(historian: Historian, state: SimulationStat
   if (!memory && state.arrival?.phase === 'HISTORY_RUNNING') {
     return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
   }
-  if (memory?.releaseShown && introduced.length >= members.length) {
+  if (memory?.releaseShown && introduced.length + memory.skippedPersonIds.size >= members.length) {
     return { phase: 'complete', members, introducedPersonIds: Object.freeze(introduced), targetSize: members.length };
   }
   if (state.month > baseline.eventMonth + FOUNDING_CAST_LATEST_INTRO_MONTH) {
@@ -305,7 +307,8 @@ function releaseScene(
   memory: FoundingCastMemory,
 ): ObservationCandidate | undefined {
   const arrival = state.history.find(event => event.id === baseline.eventId && event.type === 'ARRIVAL_DAY');
-  const member = [...memory.members].reverse().find(candidate => memory.introducedPersonIds.has(candidate.personId));
+  const member = [...memory.members].reverse().find(candidate => memory.introducedPersonIds.has(candidate.personId))
+    ?? memory.members.find(candidate => state.people.some(person => person.id === candidate.personId && person.alive));
   const person = member ? state.people.find(candidate => candidate.id === member.personId && candidate.alive) : undefined;
   const settlement = member ? state.settlements.find(candidate => candidate.id === member.settlementId) : undefined;
   if (!arrival || !member || !person || !settlement) return undefined;
@@ -359,18 +362,20 @@ export function chooseFoundingCastScene(historian: Historian, state: SimulationS
 
   for (let castIndex = 0; castIndex < memory.members.length; castIndex += 1) {
     const member = memory.members[castIndex]!;
-    if (memory.introducedPersonIds.has(member.personId)) continue;
+    if (memory.introducedPersonIds.has(member.personId) || memory.skippedPersonIds.has(member.personId)) continue;
     const scene = introductionScene(historian, state, baseline, member, castIndex);
     if (!scene) continue;
     historian.whenAcquired(scene.id, () => memory.introducedPersonIds.add(member.personId));
+    historian.whenUnavailable(scene.id, () => memory.skippedPersonIds.add(member.personId));
     holdIntroduction(historian, state, memory);
     return scene;
   }
 
-  if (!memory.releaseShown && memory.introducedPersonIds.size >= memory.members.length) {
+  if (!memory.releaseShown && memory.introducedPersonIds.size + memory.skippedPersonIds.size >= memory.members.length) {
     const release = releaseScene(historian, state, baseline, memory);
     if (release) {
       historian.whenAcquired(release.id, () => { memory.releaseShown = true; });
+      historian.whenUnavailable(release.id, () => { memory.releaseShown = true; });
       releaseStates.add(state);
       return release;
     }

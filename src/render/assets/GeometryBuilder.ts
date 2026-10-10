@@ -7,6 +7,7 @@
  */
 
 import * as THREE from 'three';
+import type { OccluderBox, OcclusionField } from './OcclusionField';
 
 export interface Vec3 {
   x: number;
@@ -72,7 +73,7 @@ export class GeometryBuilder {
   private readonly positions: number[] = [];
   private readonly normals: number[] = [];
   private readonly indices: number[] = [];
-  /** (weathering, tone jitter, grain axis, unused) per vertex as normalized bytes; only materialised once something asks for it. */
+  /** (weathering, tone jitter, grain axis, occlusion) per vertex as normalized bytes; only materialised once something asks for it. */
   private readonly details: number[] = [];
   private detailUsed = false;
   private wear = 0;
@@ -346,6 +347,39 @@ export class GeometryBuilder {
         this.addStrip(center, a, b, bands, band);
         this.recordPiece(start);
       }
+    }
+  }
+
+  /**
+   * Hand this builder's assembled pieces to a structure-wide occlusion measurement.
+   *
+   * Appends rather than returns, because occlusion is a property of the whole structure: the
+   * posts that shade a wall and the eave that shades them both are emitted into different
+   * builders, one per surface, and a builder that only measured itself would miss exactly the
+   * junctions that matter.
+   */
+  collectOccluders(into: OccluderBox[]): void {
+    for (const piece of this.pieces) into.push({ min: piece.min, max: piece.max });
+  }
+
+  /**
+   * Record, per vertex, how much of its hemisphere the structure blocks.
+   *
+   * Written into the fourth channel of `aSurfaceDetail`, where the shared surface shader reads it
+   * back as ambient occlusion. Zero means unoccluded, so geometry that never ran this — the
+   * mid-distance LODs, anything built outside a composition — keeps rendering exactly as before.
+   */
+  bakeOcclusion(field: OcclusionField): void {
+    const vertices = this.positions.length / 3;
+    if (vertices === 0) return;
+    this.ensureDetail();
+    for (let index = 0; index < vertices; index += 1) {
+      const p = index * 3;
+      const occlusion = field.occlusionAt(
+        this.positions[p]!, this.positions[p + 1]!, this.positions[p + 2]!,
+        this.normals[p]!, this.normals[p + 1]!, this.normals[p + 2]!,
+      );
+      this.details[index * 4 + 3] = Math.round(occlusion * 127);
     }
   }
 

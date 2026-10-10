@@ -1,3 +1,4 @@
+import { armsReadiness } from '../resources/ArmsDemand';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { materialAmount } from '../resources/MaterialEconomy';
 import { materialReadiness } from '../resources/MaterialUse';
@@ -190,7 +191,8 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
   );
   const sustainment = clamp(baseSustainment * (typed ? 0.55 + militarySupply * 0.45 : 1));
 
-  const primitiveMelee = blend([stone, 0.52], [typed ? timberMaterial : wood, 0.16], [institutionalSupport, 0.12], [sustainment, 0.2]);
+  const equipmentReadiness = armsReadiness(settlement);
+  const primitiveMelee = (0.5 + equipmentReadiness * 0.5) * blend([stone, 0.52], [typed ? timberMaterial : wood, 0.16], [institutionalSupport, 0.12], [sustainment, 0.2]);
   const locallyEquippedMetal = stock(materialEconomy(settlement).arms, 8);
   const metalMelee = Math.max(
     gate(iron, Math.max(typed ? metalMaterial : minerals, 0.2), Math.max(workshops, 0.12), typed ? militarySupply : 1),

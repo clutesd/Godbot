@@ -5,9 +5,17 @@ export interface PedestrianFootprint {
   worldX: number; worldZ: number; width: number; depth: number; rotationY?: number;
 }
 
+/**
+ * Numeric bucket key. The grid is a terrain index a few dozen buckets wide, so the multiplier is
+ * far larger than any reachable |z| and the mapping is injective. Numeric keys matter because
+ * `clear` runs tens of thousands of times per simulated month; string keys made every one of
+ * those probes allocate.
+ */
+const bucketKey = (x: number, z: number): number => x * 1_048_576 + z;
+
 /** Spatially indexed, expanded rectangles. The expansion includes the pedestrian's body. */
 export class StructureNavigation {
-  private buckets = new Map<string, PedestrianFootprint[]>();
+  private buckets = new Map<number, PedestrianFootprint[]>();
   private signature = '';
   revision = 0;
 
@@ -19,7 +27,7 @@ export class StructureNavigation {
       const radius = Math.hypot(s.width, s.depth) / 2 + 0.16;
       for (let x = Math.floor((s.worldX - radius) / 4); x <= Math.floor((s.worldX + radius) / 4); x++) {
         for (let z = Math.floor((s.worldZ - radius) / 4); z <= Math.floor((s.worldZ + radius) / 4); z++) {
-          const key = `${x}:${z}`, bucket = this.buckets.get(key) ?? [];
+          const key = bucketKey(x, z), bucket = this.buckets.get(key) ?? [];
           bucket.push(s); this.buckets.set(key, bucket);
         }
       }
@@ -31,14 +39,37 @@ export class StructureNavigation {
     const result = new Set<PedestrianFootprint>();
     for (let x = Math.floor((Math.min(a.x, b.x) - margin) / 4); x <= Math.floor((Math.max(a.x, b.x) + margin) / 4); x++) {
       for (let z = Math.floor((Math.min(a.z, b.z) - margin) / 4); z <= Math.floor((Math.max(a.z, b.z) + margin) / 4); z++) {
-        for (const s of this.buckets.get(`${x}:${z}`) ?? []) result.add(s);
+        for (const s of this.buckets.get(bucketKey(x, z)) ?? []) result.add(s);
       }
     }
     return [...result];
   }
 
+  /**
+   * Allocation-free equivalent of `nearby(a, b).every(...)` for the blocking test. A footprint
+   * registered in several buckets is tested more than once, which is harmless because the test is
+   * a pure predicate, and that is what lets this avoid the deduplicating Set, the spread array and
+   * the per-probe string key that `nearby` needs for its ordered callers.
+   */
+  private obstructed(a: Vec2, b: Vec2, interiorKey: string | undefined): boolean {
+    const minX = Math.floor(Math.min(a.x, b.x) / 4), maxX = Math.floor(Math.max(a.x, b.x) / 4);
+    const minZ = Math.floor(Math.min(a.z, b.z) / 4), maxZ = Math.floor(Math.max(a.z, b.z) / 4);
+    for (let x = minX; x <= maxX; x++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        const bucket = this.buckets.get(bucketKey(x, z));
+        if (!bucket) continue;
+        for (let index = 0; index < bucket.length; index++) {
+          const s = bucket[index]!;
+          if (interiorKey !== undefined && s.key === interiorKey) continue;
+          if (intersects(a, b, s)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   clear(a: Vec2, b = a, interior?: PedestrianFootprint & { key: string; doorWidth: number }): boolean {
-    if (!this.nearby(a, b).every(s => s.key === interior?.key && interior !== undefined || !intersects(a, b, s))) return false;
+    if (this.obstructed(a, b, interior?.key)) return false;
     if (!interior) return true;
     const { width: w, depth: d, doorWidth: door } = interior;
     const walls = [[-w / 2, 0, 0.04, d], [w / 2, 0, 0.04, d], [0, -d / 2, w, 0.04],

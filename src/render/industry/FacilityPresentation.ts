@@ -3,7 +3,7 @@ import type { FacilityFamilyId, FacilityStatus, ProcessingFacility } from '../..
 import type { Settlement, SimulationState, StructurePlot } from '../../sim/types';
 
 export type FacilityStage = 'construction' | 'operating' | 'upgrading' | 'ruined';
-export type PileKind = 'log' | 'lumber' | 'charcoal' | 'ore' | 'coal' | 'ingot' | 'slag' | 'generic';
+export type PileKind = 'log' | 'lumber' | 'charcoal' | 'ore' | 'coal' | 'ingot' | 'slag' | 'clay' | 'pottery' | 'generic';
 
 export interface FacilityPile {
   material: string;
@@ -69,7 +69,9 @@ export const pileKindOf = (material: string): PileKind =>
         : material === 'coal' ? 'coal'
           : /-ore$/.test(material) ? 'ore'
             : material === 'slag' || material === 'ash' ? 'slag'
-              : /^(copper|tin|iron|steel|bronze|iron-tools|machine-parts|engine)$/.test(material) ? 'ingot' : 'generic';
+              : material === 'clay' ? 'clay'
+                : material === 'pottery' ? 'pottery'
+                  : /^(copper|tin|iron|steel|bronze|iron-tools|machine-parts|engine)$/.test(material) ? 'ingot' : 'generic';
 
 function piles(stock: Record<string, number>, yard: number): FacilityPile[] {
   return Object.entries(stock)

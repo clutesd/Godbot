@@ -7,6 +7,12 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Node-side tooling scripts. Plain JS keeps `no-undef` active, unlike the TypeScript files
+    // where the type checker already covers it, so the Node globals have to be declared.
+    files: ['scripts/**/*.mjs', 'scripts/**/*.js'],
+    languageOptions: { globals: { ...globals.node } },
+  },
+  {
     files: ['src/**/*.ts', 'tests/**/*.ts', 'vite.config.ts'],
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },

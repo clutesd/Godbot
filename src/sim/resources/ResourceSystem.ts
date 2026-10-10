@@ -4,7 +4,7 @@ import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem'
 import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
-import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageRoom, takeMaterial } from './Inventory';
+import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageCapacity, storageRoom, storedVolume, takeMaterial } from './Inventory';
 import { processRecipes, useLabour, useLabourDetailed, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
 import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
@@ -16,6 +16,18 @@ import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, m
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 export type ResourceEventDraft = KnowledgeEventDraft;
+
+/**
+ * Diagnostic-only observation of the extraction decision. Nothing in the simulation reads it and
+ * no branch depends on whether an observer is installed; it exists so an audit can record why a
+ * deposit was not worked at the branch that rejected it instead of inferring it afterwards.
+ */
+export interface GatherDecision {
+  month: number; settlementId: string; depositId: string; resourceId: string;
+  stage: 'queue' | 'loop'; reason: string; context: Record<string, number | boolean | null>;
+}
+let gatherObserver: ((decision: GatherDecision) => void) | undefined;
+export function observeGatherDecisions(observer?: (decision: GatherDecision) => void): void { gatherObserver = observer; }
 export function createMaterialState(): { localMaterials: LocalMaterialInventory; discoveredDeposits: string[]; workedDeposits: string[]; knownRecipes: string[] } {
   return { localMaterials: {}, discoveredDeposits: [], workedDeposits: [], knownRecipes: [] };
 }
@@ -134,8 +146,25 @@ export class ResourceSystem {
   private gather(state: SimulationState, s: Settlement, nearby: ResourceDeposit[], budget: LabourBudget, events: ResourceEventDraft[]): void {
     const economy = materialEconomy(s);
     const value = (d: ResourceDeposit) => d.quality * (d.accessibility ?? 1) / ((this.access!.resolve(s, d)?.cost ?? Infinity) * (1 + (d.extractionDifficulty ?? 0)));
-    const queue = nearby.filter(d => s.discoveredDeposits.includes(d.id) && depositControlled(state, s, d) && extractableQuantity(s, d) > 0
-      && (s.localMaterials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))
+    const note = (d: ResourceDeposit, stage: GatherDecision['stage'], reason: string, context: GatherDecision['context'] = {}): void => {
+      gatherObserver?.({ month: state.month, settlementId: s.id, depositId: d.id, resourceId: d.resourceId, stage, reason, context });
+    };
+    // Same predicates, same short-circuit order as the eligibility filter; the name of the first
+    // failing one is reported to the observer and nothing else changes.
+    const ineligible = (d: ResourceDeposit): string | undefined => {
+      if (!s.discoveredDeposits.includes(d.id)) return 'deposit-not-discovered';
+      if (!depositControlled(state, s, d)) return 'deposit-not-controlled';
+      if (!(extractableQuantity(s, d) > 0)) return d.depleted ? 'deposit-depleted' : 'extraction-capability-failure';
+      if (!((s.localMaterials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))) return 'stock-at-extraction-target';
+      return undefined;
+    };
+    const queue = nearby.filter(d => {
+      const reason = ineligible(d);
+      if (reason) note(d, 'queue', reason, { stock: s.localMaterials[d.resourceId] ?? 0, demand: economy.demand[d.resourceId] ?? 0,
+        target: Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2), extractable: extractableQuantity(s, d),
+        abundance: d.abundance, standing: d.capacity * d.abundance, depleted: Boolean(d.depleted) });
+      return !reason;
+    })
       .map(d => ({ d, value: value(d), need: (s.localMaterials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6),
         urgent: Math.max(0, (s.survival?.establishment?.materialDemand[d.resourceId] ?? 0) - (s.localMaterials[d.resourceId] ?? 0)
           - economy.inTransit.filter(t => t.resourceId === d.resourceId).reduce((n, t) => n + t.quantity, 0)) > 0 }))
@@ -145,18 +174,29 @@ export class ResourceSystem {
     for (const deposit of queue) {
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       const available = extractableQuantity(s, deposit);
-      if (available <= 0.00001 || storageRoom(s) <= 0) continue;
+      if (available <= 0.00001 || storageRoom(s) <= 0) {
+        note(deposit, 'loop', available <= 0.00001 ? (deposit.depleted ? 'deposit-depleted' : 'extraction-capability-failure') : 'storage-room-zero',
+          { available, storageRoom: storageRoom(s), storageCapacity: storageCapacity(s), storedVolume: storedVolume(s) });
+        continue;
+      }
       const incoming = economy.inTransit.filter(t => t.resourceId === definition.id).reduce((n, t) => n + t.quantity, 0);
       const desired = Math.max(definition.id === 'timber' ? 35 : 12, (economy.demand[definition.id] ?? 0) * 2);
-      if ((s.localMaterials[definition.id] ?? 0) + incoming >= desired) continue;
+      if ((s.localMaterials[definition.id] ?? 0) + incoming >= desired) {
+        note(deposit, 'loop', incoming > 0 ? 'incoming-shipment-satisfies-target' : 'stock-at-extraction-target',
+          { stock: s.localMaterials[definition.id] ?? 0, incoming, desired });
+        continue;
+      }
       const cell = state.world.cells[deposit.cellIndex]!;
-      if (cell.water) continue;
+      if (cell.water) { note(deposit, 'loop', 'deposit-cell-flooded-terrain', {}); continue; }
       const weather = state.world.weather?.cells[deposit.cellIndex];
       const season = definition.category === 'plant' ? harvestSeason(state.world, deposit, state.month)
         : definition.category === 'timber' ? 0.55 + harvestSeason(state.world, deposit, state.month) * 0.45 : 1;
-      if (season <= 0 || (weather?.snowpack ?? 0) > 0.9 || (weather?.floodDepth ?? 0) > 0.1) continue;
+      if (season <= 0 || (weather?.snowpack ?? 0) > 0.9 || (weather?.floodDepth ?? 0) > 0.1) {
+        note(deposit, 'loop', 'weather-season-restriction', { season, snowpack: weather?.snowpack ?? 0, floodDepth: weather?.floodDepth ?? 0 });
+        continue;
+      }
       const access = this.access!.resolve(s, deposit);
-      if (!access || access.cost > 8) continue;
+      if (!access || access.cost > 8) { note(deposit, 'loop', 'access-path-unavailable', { cost: access?.cost ?? null }); continue; }
       const { path } = access;
       const transportCost = access.cost * (1 + (deposit.extractionDifficulty ?? 0));
       const survivalWork = (s.survival?.establishment?.materialDemand[definition.id] ?? 0) > (s.localMaterials[definition.id] ?? 0);
@@ -166,12 +206,23 @@ export class ResourceSystem {
       const primitiveWood = definition.category === 'timber' && mastery(s, 'stone-composites').practice < 0.18 ? 0.25 : 1;
       const exposed = Math.max(0, 1 - (weather?.blizzard ?? 0) * 0.5 - (weather?.snowpack ?? 0) * 0.3);
       const rate = definition.gatherYieldPerWorker * Math.max(0.12, deposit.quality) * (deposit.accessibility ?? 1) * season * tools * Math.max(0, 1 - s.conflictPressure * 0.8) * primitiveWood * exposed / transportCost;
-      if (rate <= 0) continue;
+      if (rate <= 0) {
+        note(deposit, 'loop', 'extraction-rate-zero', { quality: deposit.quality, season, conflictPressure: s.conflictPressure, primitiveWood, exposed });
+        continue;
+      }
       const surfaceRemaining = deposit.capacity * Math.max(0, (deposit.surfaceShare ?? 1) - (1 - deposit.abundance));
       const fuel = deposit.depth !== undefined ? definition.deepEnergy : undefined;
       const deepCapacity = fuel ? (s.localMaterials[fuel.material] ?? 0) / fuel.perUnit : Infinity;
       const amount = Math.min(available, surfaceRemaining + deepCapacity, labour * rate, storageRoom(s), desired - (s.localMaterials[definition.id] ?? 0) - incoming);
-      if (amount <= 0.00001) continue;
+      if (amount <= 0.00001) {
+        const limits: Array<[string, number]> = [['deposit-depleted', available], ['deep-fuel-unavailable', surfaceRemaining + deepCapacity],
+          ['insufficient-resource-labour', labour * rate], ['storage-room-zero', storageRoom(s)], ['stock-at-extraction-target', desired - (s.localMaterials[definition.id] ?? 0) - incoming]];
+        const binding = limits.reduce((a, b) => (b[1] < a[1] ? b : a));
+        note(deposit, 'loop', binding[0], { available, surfaceRemaining, deepCapacity, labour, rate, labourYield: labour * rate,
+          storageRoom: storageRoom(s), headroom: desired - (s.localMaterials[definition.id] ?? 0) - incoming, forager: budget.forager ?? 0, builder: budget.builder ?? 0, artisan: budget.artisan ?? 0, carrier: budget.carrier ?? 0 });
+        continue;
+      }
+      note(deposit, 'loop', 'extracted', { amount, labour, rate, storageRoom: storageRoom(s), standing: deposit.capacity * deposit.abundance });
       // Convert unfamiliar labour at reduced output while spending the full source time.
       const labourUse = { total: 0, byOccupation: {} as LabourBudget };
       let remainingWork = amount / rate;

@@ -107,7 +107,8 @@ export function createFoundingArrival(world: WorldState, seed: string): Founding
         groundY: surfaceHeightAt(world, site.point.x, site.point.z), cellIndex: site.cell.z * world.size + site.cell.x,
         population: 22, personIds: [], landed: false, condition: 1, shelterCapacity: 4,
         entrySeconds: 5 + [0, 1.8, 4.3, 5.5, 7.6][i]!, descentSeconds: 12 + [0, 1.2, -0.4, 0.7, 1.4][i]!,
-        entryOffset: { x: -20 + i * 6, z: -25 - i * 2 }, supplies: { food: 100, goods: 6, timber: 8, stone: 3 },
+        // Emergency rations only: construction materials and crafted goods must be earned locally.
+        entryOffset: { x: -20 + i * 6, z: -25 - i * 2 }, supplies: { food: 100, goods: 0, timber: 0, stone: 0 },
         site: {
           biome: site.cell.biome,
           landform: site.cell.landform,

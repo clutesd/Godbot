@@ -54,6 +54,9 @@ export interface MillComposition {
   height: number;
   extentX: number;
   extentZ: number;
+  /** The mill building, with its pond, race, launder and yard excluded. See `DraftBounds.coreMin`. */
+  massX: number;
+  massZ: number;
   /** Which subtype was drafted, for inspection. */
   subtype: MillSubtype;
 }
@@ -109,11 +112,17 @@ export function composeMill(sink: GeometrySink, spec: BuildingSpec, seed: string
   const b = k.bounds;
   const s = k.scale;
   const reach = (min: number, max: number): number => Math.max(Math.abs(min), Math.abs(max)) * 2 * s;
+  const extentX = Number.isFinite(b.groundMin.x) ? reach(b.groundMin.x, b.groundMax.x) : spec.width;
+  const extentZ = Number.isFinite(b.groundMin.z) ? reach(b.groundMin.z, b.groundMax.z) : spec.depth;
   return {
     subtype,
     height: Math.max(0.1, b.max.y * s),
-    extentX: Number.isFinite(b.groundMin.x) ? reach(b.groundMin.x, b.groundMax.x) : spec.width,
-    extentZ: Number.isFinite(b.groundMin.z) ? reach(b.groundMin.z, b.groundMax.z) : spec.depth,
+    extentX,
+    extentZ,
+    // The mill building alone. A mill with no water engineering — a hand mill, a steam mill —
+    // drafts nothing as site, so its core and its site are simply the same.
+    massX: Number.isFinite(b.coreMin.x) ? Math.min(extentX, reach(b.coreMin.x, b.coreMax.x)) : extentX,
+    massZ: Number.isFinite(b.coreMin.z) ? Math.min(extentZ, reach(b.coreMin.z, b.coreMax.z)) : extentZ,
   };
 }
 
@@ -139,7 +148,7 @@ const DRAFTERS: Record<MillSubtype, (d: Draft) => void> = {
 
 /** A trodden working yard. Everything a mill does happens on beaten ground. */
 function yard(d: Draft, x: number, z: number, sx: number, sz: number): void {
-  d.k.block(d.k.at('ground', SITE), x, 0, z, sx, 0.04, sz);
+  d.k.site(() => d.k.block(d.k.at('ground', SITE), x, 0, z, sx, 0.04, sz));
 }
 
 function sackPile(d: Draft, x: number, z: number, count: number): void {
@@ -165,20 +174,24 @@ function spareStone(d: Draft, x: number, z: number, radius: number): void {
 
 /** A stone-lined race: water between two walls, running along Z. */
 function race(d: Draft, x0: number, x1: number, z0: number, z1: number, waterY: number, wallH: number): void {
-  const stone = d.k.at('stone', FOUNDATION);
-  for (const x of [x0, x1]) d.k.block(stone, x, -0.4, (z0 + z1) / 2, 0.45, wallH + 0.4, z1 - z0);
-  d.k.water(d.k.at('water', FOUNDATION), x0 + 0.22, x1 - 0.22, z0, z1, waterY);
+  d.k.site(() => {
+    const stone = d.k.at('stone', FOUNDATION);
+    for (const x of [x0, x1]) d.k.block(stone, x, -0.4, (z0 + z1) / 2, 0.45, wallH + 0.4, z1 - z0);
+    d.k.water(d.k.at('water', FOUNDATION), x0 + 0.22, x1 - 0.22, z0, z1, waterY);
+  });
 }
 
 /** A sluice: two posts, a head beam, a gate board raised to let water through, and its windlass. */
 function sluice(d: Draft, x0: number, x1: number, z: number, top: number, gateBottom: number): void {
-  const timber = d.k.at('timber', UTILITIES);
-  for (const x of [x0, x1]) d.k.bar(timber, v(x, -0.2, z), v(x, top, z), 0.24);
-  d.k.bar(timber, v(x0 - 0.2, top, z), v(x1 + 0.2, top, z), 0.24);
-  d.k.block(timber, (x0 + x1) / 2, gateBottom, z, x1 - x0 - 0.3, 1.0, 0.12);
-  // The rack rod the gate is wound up by, and the hand wheel that winds it.
-  d.k.bar(timber, v((x0 + x1) / 2, gateBottom + 1.0, z), v((x0 + x1) / 2, top + 0.6, z), 0.08);
-  d.k.rim(d.k.at('metal', UTILITIES), v((x0 + x1) / 2, top + 0.35, z + 0.25), 'z', 0.35, 0.05, 12);
+  d.k.site(() => {
+    const timber = d.k.at('timber', UTILITIES);
+    for (const x of [x0, x1]) d.k.bar(timber, v(x, -0.2, z), v(x, top, z), 0.24);
+    d.k.bar(timber, v(x0 - 0.2, top, z), v(x1 + 0.2, top, z), 0.24);
+    d.k.block(timber, (x0 + x1) / 2, gateBottom, z, x1 - x0 - 0.3, 1.0, 0.12);
+    // The rack rod the gate is wound up by, and the hand wheel that winds it.
+    d.k.bar(timber, v((x0 + x1) / 2, gateBottom + 1.0, z), v((x0 + x1) / 2, top + 0.6, z), 0.08);
+    d.k.rim(d.k.at('metal', UTILITIES), v((x0 + x1) / 2, top + 0.35, z + 0.25), 'z', 0.35, 0.05, 12);
+  });
 }
 
 /** A gabled house body: walls on a plinth, gable ends and a pitched roof. Returns the eave height. */
@@ -351,7 +364,8 @@ function ruralGristmill(d: Draft): void {
   yard(d, 4.2, 0, 4.6, 9);
   yard(d, -4.0, -1, 3.8, 9);
   const stone = k.at('stone', FOUNDATION);
-  for (const x of [-1.25, 1.25]) k.block(stone, x, -0.3, -0.5, 0.35, 1.1, 9.0);
+  // Revetment walls running the length of the stream: bank works, not the mill.
+  k.site(() => { for (const x of [-1.25, 1.25]) k.block(stone, x, -0.3, -0.5, 0.35, 1.1, 9.0); });
   // The undercroft: side walls on each bank, and piers with a lintel over the stream.
   for (const x of [-2.3, 2.3]) k.block(stone, x, -0.3, 0, 0.6, floorY + 0.3, 4.2);
   for (const z of [-2.0, 2.0]) {
@@ -377,16 +391,18 @@ function ruralGristmill(d: Draft): void {
 
   // The headrace: a raised stone tank upstream, and the steep chute that drives the wheel.
   if (d.has('waterwheel')) {
-    k.block(stone, 0, -0.3, -8.6, 2.6, 2.8, 1.8);
-    k.water(k.at('water', FOUNDATION), -1.1, 1.1, -9.4, -7.8, 2.52);
-    const chute = k.at('timber', UTILITIES);
-    const top = v(0, 2.45, -7.7), bottom = v(0.45, 0.82, -1.0);
-    k.bar(chute, top, bottom, 0.5, 0.08, v(0, 1, 0));
-    for (const side of [-0.28, 0.28]) k.bar(chute, v(top.x + side, top.y + 0.15, top.z), v(bottom.x + side, bottom.y + 0.15, bottom.z), 0.06, 0.32);
-    k.bar(chute, v(-0.5, -0.2, -4.8), v(-0.4, 1.9, -4.8), 0.14);
-    k.bar(chute, v(0.7, -0.2, -4.8), v(0.6, 1.9, -4.8), 0.14);
-    k.bar(chute, v(-0.6, 1.8, -4.8), v(0.8, 1.8, -4.8), 0.12);
-    k.sheet(k.at('water', UTILITIES), [v(-0.18, 2.52, -7.7), v(0.18, 2.52, -7.7), v(0.63, 0.9, -1.0), v(0.27, 0.9, -1.0)]);
+    k.site(() => {
+      k.block(stone, 0, -0.3, -8.6, 2.6, 2.8, 1.8);
+      k.water(k.at('water', FOUNDATION), -1.1, 1.1, -9.4, -7.8, 2.52);
+      const chute = k.at('timber', UTILITIES);
+      const top = v(0, 2.45, -7.7), bottom = v(0.45, 0.82, -1.0);
+      k.bar(chute, top, bottom, 0.5, 0.08, v(0, 1, 0));
+      for (const side of [-0.28, 0.28]) k.bar(chute, v(top.x + side, top.y + 0.15, top.z), v(bottom.x + side, bottom.y + 0.15, bottom.z), 0.06, 0.32);
+      k.bar(chute, v(-0.5, -0.2, -4.8), v(-0.4, 1.9, -4.8), 0.14);
+      k.bar(chute, v(0.7, -0.2, -4.8), v(0.6, 1.9, -4.8), 0.14);
+      k.bar(chute, v(-0.6, 1.8, -4.8), v(0.8, 1.8, -4.8), 0.12);
+      k.sheet(k.at('water', UTILITIES), [v(-0.18, 2.52, -7.7), v(0.18, 2.52, -7.7), v(0.63, 0.9, -1.0), v(0.27, 0.9, -1.0)]);
+    });
     k.block(k.at('stone', FOUNDATION), 0, -0.2, 0, 0.5, 0.45, 0.5);
 
     // The wheel, shaft and runner stone are one rotor: a horizontal mill has no gearing to show.
@@ -415,7 +431,7 @@ function ruralGristmill(d: Draft): void {
   sackPile(d, 3.6, 1.6, 4);
   spareStone(d, 2.75, -1.3, 0.55);
   // A cart track down to the stream.
-  d.k.block(d.k.at('ground', SITE), 5.8, 0, 3.0, 1.8, 0.05, 6.0);
+  d.k.site(() => d.k.block(d.k.at('ground', SITE), 5.8, 0, 3.0, 1.8, 0.05, 6.0));
 }
 
 /**
@@ -563,18 +579,20 @@ function earlyIndustrialMill(d: Draft): void {
   // Header pond, launder on trestles, and the overshot wheel in its pit.
   const wheelX = -7.4, radius = 3.0, width = 1.6, wheelY = 2.9;
   const launderY = wheelY + radius + 0.35;
-  k.block(k.at('ground', FOUNDATION), -7.4, -0.3, -17.5, 8.0, launderY + 0.2, 4.0);
-  k.block(k.at('stone', FOUNDATION), -7.4, -0.3, -15.4, 8.0, launderY + 0.3, 0.4);
-  k.water(k.at('water', FOUNDATION), -11, -3.8, -19.3, -15.7, launderY - 0.05);
-  const launder = k.at('timber', UTILITIES);
   const z0 = -15.4, z1 = 0.3;
-  k.block(launder, wheelX, launderY - 0.1, (z0 + z1) / 2, width - 0.1, 0.1, z1 - z0);
-  for (const side of [-width / 2 + 0.05, width / 2 - 0.05]) k.block(launder, wheelX + side, launderY - 0.1, (z0 + z1) / 2, 0.08, 0.6, z1 - z0);
-  for (const z of [-3.5, -7.2, -10.9, -14.4]) {
-    for (const side of [-1.1, 1.1]) k.bar(launder, v(wheelX + side, -0.3, z), v(wheelX + side * 0.6, launderY - 0.12, z), 0.24);
-    k.bar(launder, v(wheelX - 1.0, launderY * 0.5, z), v(wheelX + 1.0, launderY * 0.5, z), 0.18);
-    k.bar(launder, v(wheelX - 1.0, 0.4, z), v(wheelX + 0.75, launderY - 0.3, z), 0.14);
-  }
+  k.site(() => {
+    k.block(k.at('ground', FOUNDATION), -7.4, -0.3, -17.5, 8.0, launderY + 0.2, 4.0);
+    k.block(k.at('stone', FOUNDATION), -7.4, -0.3, -15.4, 8.0, launderY + 0.3, 0.4);
+    k.water(k.at('water', FOUNDATION), -11, -3.8, -19.3, -15.7, launderY - 0.05);
+    const launder = k.at('timber', UTILITIES);
+    k.block(launder, wheelX, launderY - 0.1, (z0 + z1) / 2, width - 0.1, 0.1, z1 - z0);
+    for (const side of [-width / 2 + 0.05, width / 2 - 0.05]) k.block(launder, wheelX + side, launderY - 0.1, (z0 + z1) / 2, 0.08, 0.6, z1 - z0);
+    for (const z of [-3.5, -7.2, -10.9, -14.4]) {
+      for (const side of [-1.1, 1.1]) k.bar(launder, v(wheelX + side, -0.3, z), v(wheelX + side * 0.6, launderY - 0.12, z), 0.24);
+      k.bar(launder, v(wheelX - 1.0, launderY * 0.5, z), v(wheelX + 1.0, launderY * 0.5, z), 0.18);
+      k.bar(launder, v(wheelX - 1.0, 0.4, z), v(wheelX + 0.75, launderY - 0.3, z), 0.14);
+    }
+  });
   if (d.has('waterwheel')) {
     const water = k.at('water', UTILITIES);
     k.water(water, wheelX - 0.7, wheelX + 0.7, z0, z1, launderY + 0.2);
@@ -879,19 +897,22 @@ function sawmill(d: Draft, kind: 'water' | 'sash'): void {
     // Sawdust heaps under the blade.
     k.cyl(k.at('canvas', FINISH), v(sawX, 0, 1.6), v(sawX, 0.5, 1.6), 1.1, 0.1, 10);
   }
-  // Log yard: a pile, skids up to the saw floor, and sawn boards drying under the eaves.
-  k.logPile(k.at('timber', FINISH), x1 + 4.5, -1.5, 5.0, 4, Math.PI / 2);
-  if (kind === 'sash') {
-    // The slipway the logs are hauled up, and the capstan that hauls them.
-    k.bar(frame, v(x1 + 6, 0, 0.8), v(x1 + 0.2, deck, 0.8), 0.24);
-    k.bar(frame, v(x1 + 6, 0, -0.8), v(x1 + 0.2, deck, -0.8), 0.24);
-    k.cyl(k.at('timber', FITOUT), v(x1 - 0.8, deck, -1.8), v(x1 - 0.8, deck + 1.0, -1.8), 0.3, 0.3, 8);
-    k.bar(k.at('timber', FITOUT), v(x1 - 1.9, deck + 0.85, -1.8), v(x1 + 0.3, deck + 0.85, -1.8), 0.08);
-  } else {
-    for (const z of [-0.7, 0.7]) k.bar(frame, v(x1 + 3, 0, z), v(x1 + 0.2, deck, z), 0.2);
-  }
-  k.boardStack(k.at('timber', FINISH), (x0 + x1) / 2, halfZ + 2.2, 5.0, 1.4, 6);
-  k.boardStack(k.at('timber', FINISH), (x0 + x1) / 2 + 3.5, halfZ + 2.2, 4.2, 1.2, 4);
+  // Log yard: a pile, skids up to the saw floor, and sawn boards drying under the eaves. All of
+  // it is yard — the ground a sawmill works over, not the sawmill.
+  k.site(() => {
+    k.logPile(k.at('timber', FINISH), x1 + 4.5, -1.5, 5.0, 4, Math.PI / 2);
+    if (kind === 'sash') {
+      // The slipway the logs are hauled up, and the capstan that hauls them.
+      k.bar(frame, v(x1 + 6, 0, 0.8), v(x1 + 0.2, deck, 0.8), 0.24);
+      k.bar(frame, v(x1 + 6, 0, -0.8), v(x1 + 0.2, deck, -0.8), 0.24);
+      k.cyl(k.at('timber', FITOUT), v(x1 - 0.8, deck, -1.8), v(x1 - 0.8, deck + 1.0, -1.8), 0.3, 0.3, 8);
+      k.bar(k.at('timber', FITOUT), v(x1 - 1.9, deck + 0.85, -1.8), v(x1 + 0.3, deck + 0.85, -1.8), 0.08);
+    } else {
+      for (const z of [-0.7, 0.7]) k.bar(frame, v(x1 + 3, 0, z), v(x1 + 0.2, deck, z), 0.2);
+    }
+    k.boardStack(k.at('timber', FINISH), (x0 + x1) / 2, halfZ + 2.2, 5.0, 1.4, 6);
+    k.boardStack(k.at('timber', FINISH), (x0 + x1) / 2 + 3.5, halfZ + 2.2, 4.2, 1.2, 4);
+  });
   for (let index = 0; index < 4; index += 1) k.bar(k.at('timber', FINISH), v(x0 - 0.5 + index * 0.4, 0, -halfZ - 1.0), v(x0 - 0.4 + index * 0.4, 2.6, -halfZ - 1.4), 0.24, 0.08);
 }
 
@@ -936,10 +957,13 @@ function steamSawmill(d: Draft): void {
     k.cyl(brick, v(ex + 8.2, 1.7, -3.6), v(ex + 8.2, 17, -3.6), 0.8, 0.55, 12);
   }
   // The wigwam burner: an iron cone with a mesh crown, fed by a conveyor of slabs and dust.
+  // Detached yard plant standing well clear of the mill, so it belongs to the site.
   const bx = -x0 + 9;
-  k.cyl(k.at('metal', WALLS), v(bx, -0.2, -6), v(bx, 9, -6), 3.2, 1.2, 16, false);
-  k.cyl(k.at('shadow', ROOF), v(bx, 9, -6), v(bx, 10.6, -6), 1.2, 0.5, 16);
-  k.bar(k.at('metal', UTILITIES), v(x1 - 1, deck + 0.4, -3), v(bx - 1.6, 6.8, -5.4), 0.6, 0.4);
+  k.site(() => {
+    k.cyl(k.at('metal', WALLS), v(bx, -0.2, -6), v(bx, 9, -6), 3.2, 1.2, 16, false);
+    k.cyl(k.at('shadow', ROOF), v(bx, 9, -6), v(bx, 10.6, -6), 1.2, 0.5, 16);
+    k.bar(k.at('metal', UTILITIES), v(x1 - 1, deck + 0.4, -3), v(bx - 1.6, 6.8, -5.4), 0.6, 0.4);
+  });
 
   const iron = k.at('metal', UTILITIES);
   const belts = k.at('shadow', UTILITIES);

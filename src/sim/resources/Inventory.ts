@@ -1,4 +1,5 @@
 import type { MaterialEconomy, Settlement } from '../types';
+import { MATERIAL_BY_ID } from './catalog';
 
 export function materialEconomy(s: Settlement): MaterialEconomy {
   return s.materialEconomy ??= {
@@ -6,6 +7,28 @@ export function materialEconomy(s: Settlement): MaterialEconomy {
     bulkSnapshot: { wood: s.resources.wood, minerals: s.resources.minerals },
     tools: 0, arms: 0, timberArms: 0, medicineCoverage: 0, energyDemand: 0, energySupplied: 0, labourUsed: 0, shortageMonths: 0,
   };
+}
+
+/**
+ * Fuel the settlement could actually put under a furnace now, weighted by how hot the material
+ * burns, counting the store and its own works' yards alike. Charcoal is far denser fuel than raw
+ * timber, so a few charcoal is worth several times its weight in logs, and timber already carried
+ * into a saw pit's yard is exactly as combustible as timber in the store.
+ *
+ * This is present physical capability and nothing else. It reads stock that exists this month; no
+ * part of it is earned by having produced fuel in the past, so a settlement that burned through
+ * its charcoal has no fuel access until it holds some again.
+ */
+export function combustibleAccess(s: Settlement): number {
+  const heatOf = (id: string): number => MATERIAL_BY_ID.get(id)?.fuelHeat ?? 0;
+  let total = 0;
+  for (const [id, amount] of Object.entries(s.localMaterials)) total += Math.max(0, amount) * heatOf(id);
+  for (const facility of s.processing?.facilities ?? []) {
+    for (const stock of [facility.inputs, facility.outputs]) {
+      for (const [id, amount] of Object.entries(stock)) total += Math.max(0, amount) * heatOf(id);
+    }
+  }
+  return total;
 }
 
 export function storageCapacity(s: Settlement): number {

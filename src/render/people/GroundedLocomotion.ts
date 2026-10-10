@@ -34,6 +34,8 @@ export interface GroundedStride {
   /** Body-space foot separation and its delayed shoulder response, independent of clip phase. */
   hipDrive: number;
   shoulderDrive: number;
+  /** Grade under the body, filtered independently of individual sole contacts. */
+  grade: number;
 }
 
 const angle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -117,6 +119,7 @@ export class GroundedLocomotion {
         locomotionBlend: 0,
         hipDrive: 0,
         shoulderDrive: 0,
+        grade: 0,
       };
       this.states.set(v.id, s);
     }
@@ -125,6 +128,14 @@ export class GroundedLocomotion {
     s.supportTime = Math.max(0, s.supportTime - dt);
 
     const moving = v.speed > 0.018;
+    const probe = scale * legLength * 0.18;
+    const forwardX = Math.sin(v.facing), forwardZ = Math.cos(v.facing);
+    const grade = (ground.heightAt(v.x + forwardX * probe, v.z + forwardZ * probe)
+      - ground.heightAt(v.x - forwardX * probe, v.z - forwardZ * probe)) / (2 * probe);
+    s.grade += (Math.max(-0.85, Math.min(0.85, grade)) - s.grade) * (1 - Math.exp(-dt * 12));
+    // Uphill support must release sooner: holding a long flat-ground stride drags the pelvis
+    // down toward the trailing, lower foot until both knees fold into a crouch.
+    const slopeStride = 1 / (1 + Math.max(Math.abs(s.grade), Math.min(0.85, Math.abs(grade))) * 2.4);
     const wasMoving = s.previousSpeed > 0.018;
     const starting = moving && !wasMoving;
     const stopping = !moving && wasMoving;
@@ -154,7 +165,7 @@ export class GroundedLocomotion {
       f.pitch = 0.27 * toe * s.motion - 0.145 * heel;
     }
 
-    const reach = 0.16 * legLength * scale * stride;
+    const reach = 0.16 * legLength * scale * stride * slopeStride;
     const stepThreshold = reach * (starting ? 0.22 : moving ? 0.58 : 0.72);
 
     // Only one foot moves at a time. A first step begins immediately; a final settling step is
@@ -181,20 +192,35 @@ export class GroundedLocomotion {
         const nominal = (0.30 + (1 - s.motion) * 0.055) * legRatio;
         // Short legs take quicker steps at the same world speed. A fixed adult swing time can
         // leave a child's support foot farther behind than either rigid leg can reach.
-        const reachDuration = 0.19 * scale * legLength / Math.max(0.04, v.speed);
-        const duration = Math.max(0.10, Math.min(0.40, reachDuration, nominal / Math.max(0.88, stride)));
+        const accelerating = Math.max(0, Math.min(0.8, acceleration));
+        const anticipatedSpeed = Math.max(v.speed, Math.min(v.maxPhysicalSpeed,
+          v.speed + accelerating * nominal));
+        const reachDuration = 0.19 * scale * legLength * slopeStride / Math.max(0.04, anticipatedSpeed);
+        const duration = Math.max(0.055, Math.min(starting ? 0.16 * legRatio * slopeStride : 0.40,
+          reachDuration, nominal / Math.max(0.88, stride)));
         const brakingDistance = Math.hypot(v.destinationX - v.x, v.destinationZ - v.z);
-        const advance = moving ? Math.min(v.speed * duration, brakingDistance) : 0;
-        const firstStepScale = starting ? 0.72 : 1;
-        const lead = (advance + Math.min(reach * 0.58, v.speed * duration * 0.52)) * firstStepScale;
+        const advance = moving ? Math.min(v.speed * duration + accelerating * duration * duration * 0.5,
+          anticipatedSpeed * duration, brakingDistance) : 0;
+        const lead = advance + Math.min(reach * 0.58, advance * 0.52);
 
         // Place the next foot along the upcoming travel arc, not merely under the body's current
         // heading. A small turn-dependent widening gives the centre of mass somewhere to go.
         const turnWidth = Math.min(0.018 * scale, Math.abs(turnAhead) * 0.018 * scale);
         const lateral = side * (stance * scale + turnWidth);
-        const x = v.x + Math.cos(stepFacing) * lateral + Math.sin(stepFacing) * lead;
-        const z = v.z - Math.sin(stepFacing) * lateral + Math.cos(stepFacing) * lead;
-        if (ground.isStandable(x, z) && (!ground.safeSegment || ground.safeSegment(v, { x, z }))) {
+        let x = 0, z = 0, accepted = false;
+        // A shoulder-width stance can fall outside a narrow walkable strip. Retry shorter and
+        // narrower steps on the already approved body corridor instead of pinning this foot forever.
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const fit = [1, 0.65, 0.3, 0][attempt % 4]!;
+          const forwardFit = attempt < 4 ? 1 : 0;
+          x = v.x + Math.cos(stepFacing) * lateral * fit + Math.sin(stepFacing) * lead * forwardFit;
+          z = v.z - Math.sin(stepFacing) * lateral * fit + Math.cos(stepFacing) * lead * forwardFit;
+          if (ground.isStandable(x, z) && (!ground.safeSegment || ground.safeSegment(v, { x, z }))) {
+            accepted = true;
+            break;
+          }
+        }
+        if (accepted) {
           const landingY = ground.heightAt(x, z);
           sampleSoleSlope(this.slope, x, z, stepFacing, scale, ground);
           let clearance = scale * legLength * (0.035 + 0.009 * s.motion);
@@ -241,7 +267,7 @@ export class GroundedLocomotion {
       if (t >= 1) {
         f.x = f.toX; f.y = f.toY; f.z = f.toZ; f.yaw = f.toYaw;
         f.planted = true; f.contactAge = 0; f.pitch = -0.145;
-        s.supportTime = moving ? Math.min(0.065, f.duration * 0.21) : 0.10;
+        s.supportTime = moving ? Math.min(0.065 * slopeStride, f.duration * 0.21) : 0.10;
         s.next = 1 - s.active;
         s.active = -1;
       }

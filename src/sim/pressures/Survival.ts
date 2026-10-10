@@ -1,6 +1,7 @@
 import { emitEvent } from '../History';
 import { shelterCapacity } from '../development/Shelter';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
+import { recordHeatWork } from '../knowledge/HeatExperience';
 import { SeededRandom } from '../prng';
 import { takeMaterial } from '../resources/Inventory';
 import type { LabourSummary } from '../people/HumanCapital';
@@ -388,6 +389,8 @@ export function applyCold(state: SimulationState, s: Settlement, population: num
   const fireEstablished = !s.foundingPodId || Boolean(survival.firstFire);
   const fuelUsed = fuelNeed > 0 && fireEstablished && capabilityPractice(s, 'fire-control', 'adopted') >= 0.15
     ? takeMaterial(s, 'timber', fuelNeed * tending) : 0;
+  // A hearth kept alight through a real winter is the commonest sustained fire work there is.
+  if (fuelUsed > 0) recordHeatWork(s, fuelUsed * 4, state.month, 0.08);
   const warmth = fuelNeed > 0 ? unit(fuelUsed / fuelNeed) : 1;
   const insulation = population > 0 ? unit(shelter.protection / population) : 1;
   const exposure = severity * (1 - insulation) * (1 - warmth * 0.65);

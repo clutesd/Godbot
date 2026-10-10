@@ -282,6 +282,7 @@ export function chooseFoundingChapterScene(historian: Historian, state: Simulati
   const scene = overviewScene(historian, state, memory.baseline);
   if (scene) {
     historian.whenAcquired(scene.id, () => { memory.nextBeat = 1; memory.complete = true; });
+    historian.whenUnavailable(scene.id, () => { memory.nextBeat = 1; memory.complete = true; });
     holdFoundingChapter(historian, state, memory);
     return scene;
   }

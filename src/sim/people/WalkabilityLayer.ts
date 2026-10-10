@@ -13,6 +13,12 @@ interface GridPoint {
 const keyFor = (x: number, z: number): number => z * 10_000 + x;
 const GRID_OFFSETS = [[0, -1], [-1, 0], [1, 0], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]] as const;
 
+/** One slot per 3x3 neighbour offset, so an 8-neighbour step always has a distinct address. */
+const EDGE_SLOTS = 9;
+const EDGE_UNKNOWN = 0;
+const EDGE_CLEAR = 1;
+const EDGE_BLOCKED = 2;
+
 /**
  * Lightweight deterministic pedestrian navigation over the simulation terrain grid. Local
  * roads are supplied as preferred waypoints; A* is only used when a preferred segment would
@@ -24,10 +30,23 @@ export class WalkabilityLayer {
   setStructures(structures: readonly PedestrianFootprint[]): void {
     if (!this.structures.set(structures)) return;
     this.routeCache.clear(); this.groundCache.clear();
-    this.gridEdges.clear(); this.components.fill(0); this.nextComponent = 1; this.gridRevision++;
+    this.gridEdgeCache.fill(EDGE_UNKNOWN); this.components.fill(0); this.nextComponent = 1; this.gridRevision++;
   }
   private readonly routeCache = new Map<string, { revision: number; points: Vec2[] }>();
-  private readonly gridEdges = new Map<number, boolean>();
+  private readonly gridEdgeCache: Uint8Array;
+  private readonly edgeStart: Vec2 = { x: 0, z: 0 };
+  private readonly edgeEnd: Vec2 = { x: 0, z: 0 };
+  /**
+   * Reusable A* working set. `searchStamp`/`searchClosed` hold the generation that last wrote a
+   * cell, which makes every search O(expanded cells) instead of O(grid) with no clearing pass.
+   */
+  private readonly searchCost: Float64Array;
+  private readonly searchEstimate: Float64Array;
+  private readonly searchCameFrom: Int32Array;
+  private readonly searchStamp: Int32Array;
+  private readonly searchClosed: Int32Array;
+  private readonly searchQueue: MinScoreQueue;
+  private searchGeneration = 0;
   private readonly groundCache = new Map<string, { point: Vec2; regions: number[]; revisions: number[] }>();
   private readonly regionWidth: number;
   private readonly regionRevisions: Uint32Array;
@@ -45,6 +64,13 @@ export class WalkabilityLayer {
   constructor(private readonly world: WorldState) {
     this.regionWidth = Math.ceil(world.size / 4);
     this.regionRevisions = new Uint32Array(this.regionWidth ** 2);
+    this.gridEdgeCache = new Uint8Array(world.cells.length * EDGE_SLOTS);
+    this.searchCost = new Float64Array(world.cells.length);
+    this.searchEstimate = new Float64Array(world.cells.length);
+    this.searchCameFrom = new Int32Array(world.cells.length);
+    this.searchStamp = new Int32Array(world.cells.length);
+    this.searchClosed = new Int32Array(world.cells.length);
+    this.searchQueue = new MinScoreQueue(world.cells.length);
     this.components = new Int32Array(world.cells.length);
     this.componentQueue = new Int32Array(world.cells.length);
   }
@@ -256,47 +282,57 @@ export class WalkabilityLayer {
       return [];
     }
 
-    const startKey = keyFor(startCell.x, startCell.z);
-    const endKey = keyFor(endCell.x, endCell.z);
-    const open = new MinScoreQueue();
-    const points = new Map<number, GridPoint>([[startKey, { x: startCell.x, z: startCell.z }]]);
-    const cameFrom = new Map<number, number>();
-    const cost = new Map<number, number>([[startKey, 0]]);
-    const estimate = new Map<number, number>([[startKey, heuristic(startCell, endCell)]]);
-    const closed = new Set<number>();
-    open.push(startKey, estimate.get(startKey)!);
+    // A* over reusable per-cell arrays. The previous implementation allocated four Maps, a Set, a
+    // heap and one GridPoint per expanded cell on every call; with up to 1024 closed cells per
+    // search that was the largest single source of simulation garbage. Scores, tie-breaks, the
+    // neighbour order and the closed-set bound are all unchanged, so the chosen route is identical.
+    const size = this.world.size;
+    const generation = ++this.searchGeneration;
+    const startIndex = startCell.z * size + startCell.x;
+    const endIndex = endCell.z * size + endCell.x;
+    const open = this.searchQueue;
+    open.reset();
+    this.searchStamp[startIndex] = generation;
+    this.searchCost[startIndex] = 0;
+    this.searchEstimate[startIndex] = heuristic(startCell, endCell);
+    this.searchCameFrom[startIndex] = -1;
+    open.push(startIndex, keyFor(startCell.x, startCell.z), this.searchEstimate[startIndex]!);
 
-    while (open.size > 0 && closed.size < 1024) {
-      const currentEntry = open.pop();
-      if (!currentEntry) break;
-      const currentKey = currentEntry.key;
-      if (closed.has(currentKey) || currentEntry.score !== estimate.get(currentKey)) continue;
-      if (currentKey === endKey) {
-        const route = this.reconstruct(cameFrom, points, currentKey);
+    let closedCount = 0;
+    while (open.size > 0 && closedCount < 1024) {
+      if (!open.pop()) break;
+      const currentIndex = open.poppedIndex;
+      // Lazy-deletion guard: a stale heap entry whose score no longer matches the best known
+      // estimate for that cell is skipped, exactly as the Map-based version did.
+      if (this.searchClosed[currentIndex] === generation) continue;
+      if (this.searchStamp[currentIndex] !== generation || open.poppedScore !== this.searchEstimate[currentIndex]) continue;
+      if (currentIndex === endIndex) {
+        const route = this.reconstruct(currentIndex, generation);
         this.routeCache.set(cacheKey, { revision: this.gridRevision, points: route });
         return this.attachExactEnd(route, end);
       }
-      closed.add(currentKey);
-      const current = points.get(currentKey);
-      if (!current) continue;
+      this.searchClosed[currentIndex] = generation;
+      closedCount += 1;
+      const currentX = currentIndex % size;
+      const currentZ = (currentIndex - currentX) / size;
+      const currentCost = this.searchCost[currentIndex]!;
       for (const [dx, dz] of GRID_OFFSETS) {
-        const x = current.x + dx;
-        const z = current.z + dz;
-        if (x < 0 || z < 0 || x >= this.world.size || z >= this.world.size) continue;
-        const cell = this.world.cells[z * this.world.size + x];
-        const fromIndex = current.z * this.world.size + current.x;
-        const toIndex = z * this.world.size + x;
-        if (!cell || !this.gridStepClear(fromIndex, toIndex)) continue;
-        const neighborKey = keyFor(x, z);
+        const x = currentX + dx;
+        const z = currentZ + dz;
+        if (x < 0 || z < 0 || x >= size || z >= size) continue;
+        const toIndex = z * size + x;
+        const cell = this.world.cells[toIndex];
+        if (!cell || !this.gridStepClear(currentIndex, toIndex)) continue;
         const travel = Math.hypot(dx, dz) * (0.7 + cell.movementCost);
-        const tentative = (cost.get(currentKey) ?? Infinity) + travel;
-        if (tentative >= (cost.get(neighborKey) ?? Infinity)) continue;
-        cameFrom.set(neighborKey, currentKey);
-        points.set(neighborKey, { x, z });
-        cost.set(neighborKey, tentative);
+        const tentative = currentCost + travel;
+        const known = this.searchStamp[toIndex] === generation ? this.searchCost[toIndex]! : Infinity;
+        if (tentative >= known) continue;
+        this.searchStamp[toIndex] = generation;
+        this.searchCameFrom[toIndex] = currentIndex;
+        this.searchCost[toIndex] = tentative;
         const score = tentative + Math.hypot(endCell.x - x, endCell.z - z);
-        estimate.set(neighborKey, score);
-        open.push(neighborKey, score);
+        this.searchEstimate[toIndex] = score;
+        open.push(toIndex, keyFor(x, z), score);
       }
     }
     this.routeCache.set(cacheKey, { revision: this.gridRevision, points: [] });
@@ -312,12 +348,21 @@ export class WalkabilityLayer {
       const sideB = this.world.cells[to.z * this.world.size + from.x];
       if (!sideA || !sideB || !this.isWalkableCell(sideA) || !this.isWalkableCell(sideB)) return false;
     }
-    const edgeKey = Math.min(fromIndex, toIndex) * this.world.cells.length + Math.max(fromIndex, toIndex);
-    let clear = this.gridEdges.get(edgeKey);
-    if (clear === undefined) {
-      clear = this.isSegmentWalkable({ x: from.worldX, z: from.worldZ }, { x: to.worldX, z: to.worldZ });
-      this.gridEdges.set(edgeKey, clear);
-    }
+    // Dense slot cache in place of a Map keyed by an index pair. Steps are always between
+    // 8-neighbours, so the undirected edge addresses exactly one slot of the owning lower cell.
+    // The canonical (lower-index) orientation keeps the cache symmetric, as the Map key did.
+    const lowIndex = fromIndex < toIndex ? fromIndex : toIndex;
+    const low = fromIndex < toIndex ? from : to;
+    const high = fromIndex < toIndex ? to : from;
+    const slot = lowIndex * EDGE_SLOTS + (high.z - low.z + 1) * 3 + (high.x - low.x + 1);
+    const cached = this.gridEdgeCache[slot]!;
+    if (cached !== EDGE_UNKNOWN) return cached === EDGE_CLEAR;
+    // Scratch vectors: this runs tens of thousands of times per simulated month and none of the
+    // walkability predicates retain their arguments.
+    this.edgeStart.x = from.worldX; this.edgeStart.z = from.worldZ;
+    this.edgeEnd.x = to.worldX; this.edgeEnd.z = to.worldZ;
+    const clear = this.isSegmentWalkable(this.edgeStart, this.edgeEnd);
+    this.gridEdgeCache[slot] = clear ? EDGE_CLEAR : EDGE_BLOCKED;
     return clear;
   }
 
@@ -393,7 +438,7 @@ export class WalkabilityLayer {
 
     if (changed) {
       this.gridRevision++;
-      this.gridEdges.clear();
+      this.gridEdgeCache.fill(EDGE_UNKNOWN);
       this.components.fill(0);
       this.nextComponent = 1;
     }
@@ -404,18 +449,18 @@ export class WalkabilityLayer {
     return { coarse: this.coarseRevisionScans, fine: this.fineRevisionScans };
   }
 
-  private reconstruct(cameFrom: Map<number, number>, points: Map<number, GridPoint>, currentKey: number): Vec2[] {
+  private reconstruct(currentIndex: number, generation: number): Vec2[] {
+    const size = this.world.size;
     const reversed: Vec2[] = [];
-    while (true) {
-      const point = points.get(currentKey);
-      if (point) {
-        reversed.push({
-          x: (point.x - this.world.size / 2) * this.world.cellSize,
-          z: (point.z - this.world.size / 2) * this.world.cellSize,
-        });
-      }
-      if (!cameFrom.has(currentKey)) break;
-      currentKey = cameFrom.get(currentKey)!;
+    while (currentIndex >= 0) {
+      const x = currentIndex % size;
+      const z = (currentIndex - x) / size;
+      reversed.push({
+        x: (x - size / 2) * this.world.cellSize,
+        z: (z - size / 2) * this.world.cellSize,
+      });
+      if (this.searchStamp[currentIndex] !== generation) break;
+      currentIndex = this.searchCameFrom[currentIndex]!;
     }
     return dedupe(reversed.reverse());
   }
@@ -453,51 +498,90 @@ function dedupe(points: readonly Vec2[]): Vec2[] {
   return result;
 }
 
-interface ScoredCell {
-  key: number;
-  score: number;
-}
-
-/** Small deterministic binary heap for A*: lower score wins, then lower cell key. */
+/**
+ * Deterministic binary heap for A*: lower score wins, then lower cell key. Entries live in three
+ * parallel growable arrays and the popped entry is read from `poppedIndex`/`poppedScore`, so a
+ * whole search allocates nothing. Ordering is identical to the previous object-per-entry heap.
+ */
 class MinScoreQueue {
-  private readonly values: ScoredCell[] = [];
+  private indices: Int32Array;
+  private orders: Float64Array;
+  private scores: Float64Array;
+  private length = 0;
+  poppedIndex = -1;
+  poppedScore = 0;
+
+  constructor(capacity: number) {
+    const initial = Math.max(64, capacity);
+    this.indices = new Int32Array(initial);
+    this.orders = new Float64Array(initial);
+    this.scores = new Float64Array(initial);
+  }
 
   get size(): number {
-    return this.values.length;
+    return this.length;
   }
 
-  push(key: number, score: number): void {
-    const value = { key, score };
-    this.values.push(value);
-    let index = this.values.length - 1;
-    while (index > 0) {
-      const parent = Math.floor((index - 1) / 2);
-      if (!less(value, this.values[parent]!)) break;
-      this.values[index] = this.values[parent]!;
-      index = parent;
+  reset(): void {
+    this.length = 0;
+    this.poppedIndex = -1;
+  }
+
+  private grow(): void {
+    const indices = new Int32Array(this.indices.length * 2);
+    const orders = new Float64Array(this.orders.length * 2);
+    const scores = new Float64Array(this.scores.length * 2);
+    indices.set(this.indices); orders.set(this.orders); scores.set(this.scores);
+    this.indices = indices; this.orders = orders; this.scores = scores;
+  }
+
+  /** `order` is the historical cell key, preserved so equal scores break ties as before. */
+  push(index: number, order: number, score: number): void {
+    if (this.length === this.indices.length) this.grow();
+    let slot = this.length++;
+    while (slot > 0) {
+      const parent = (slot - 1) >> 1;
+      if (!less(score, order, this.scores[parent]!, this.orders[parent]!)) break;
+      this.indices[slot] = this.indices[parent]!;
+      this.orders[slot] = this.orders[parent]!;
+      this.scores[slot] = this.scores[parent]!;
+      slot = parent;
     }
-    this.values[index] = value;
+    this.indices[slot] = index;
+    this.orders[slot] = order;
+    this.scores[slot] = score;
   }
 
-  pop(): ScoredCell | undefined {
-    const first = this.values[0];
-    const tail = this.values.pop();
-    if (!first || !tail || this.values.length === 0) return first;
-    let index = 0;
+  /** Returns false when empty; otherwise the winner is in `poppedIndex`/`poppedScore`. */
+  pop(): boolean {
+    if (this.length === 0) return false;
+    this.poppedIndex = this.indices[0]!;
+    this.poppedScore = this.scores[0]!;
+    this.length -= 1;
+    if (this.length === 0) return true;
+    const tailIndex = this.indices[this.length]!;
+    const tailOrder = this.orders[this.length]!;
+    const tailScore = this.scores[this.length]!;
+    let slot = 0;
     while (true) {
-      const left = index * 2 + 1;
+      const left = slot * 2 + 1;
+      if (left >= this.length) break;
       const right = left + 1;
-      if (left >= this.values.length) break;
-      const child = right < this.values.length && less(this.values[right]!, this.values[left]!) ? right : left;
-      if (!less(this.values[child]!, tail)) break;
-      this.values[index] = this.values[child]!;
-      index = child;
+      const child = right < this.length && less(this.scores[right]!, this.orders[right]!, this.scores[left]!, this.orders[left]!)
+        ? right : left;
+      if (!less(this.scores[child]!, this.orders[child]!, tailScore, tailOrder)) break;
+      this.indices[slot] = this.indices[child]!;
+      this.orders[slot] = this.orders[child]!;
+      this.scores[slot] = this.scores[child]!;
+      slot = child;
     }
-    this.values[index] = tail;
-    return first;
+    this.indices[slot] = tailIndex;
+    this.orders[slot] = tailOrder;
+    this.scores[slot] = tailScore;
+    return true;
   }
 }
 
-function less(a: ScoredCell, b: ScoredCell): boolean {
-  return a.score < b.score || (a.score === b.score && a.key < b.key);
+function less(scoreA: number, orderA: number, scoreB: number, orderB: number): boolean {
+  return scoreA < scoreB || (scoreA === scoreB && orderA < orderB);
 }

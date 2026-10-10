@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
 import { GeometryBuilder, squareRing, type Vec3, type AssemblyPiece } from './GeometryBuilder';
+import { OcclusionField, type OccluderBox } from './OcclusionField';
 import { BUILD_STAGE, type BuildStage } from './BuildStages';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BuildingGrammar, RoofFamily, WallLayer } from './BuildingGrammar';
@@ -145,7 +146,42 @@ class BuildingCanvas {
     return builder;
   }
 
+  /**
+   * Surfaces that must not contribute to the occlusion measurement.
+   *
+   * The `shadow` surface is the composer's own painted contact pad — a dark slab laid under the
+   * walls. It is a stand-in for the very occlusion being measured here, so counting it as fabric
+   * would darken every plinth twice over.
+   */
+  private static readonly TRANSPARENT_TO_OCCLUSION = new Set<SurfaceKey>(['shadow']);
+
+  /** Surfaces that light themselves, and so must not be shaded by the structure around them. */
+  private static readonly UNSHADED = new Set<SurfaceKey>(['shadow', 'glow', 'forge']);
+
+  /**
+   * Measure the structure's own ambient occlusion and bake it into its vertices.
+   *
+   * Done here, once, because this is the only place that holds every surface of one structure at
+   * the same time — which is what occlusion needs: a wall is shaded by the roof over it and the
+   * posts against it, all of which live in other builders. Rotors are left out on both sides:
+   * a sail cross turns, and occlusion baked from where it happened to rest would turn with it.
+   */
+  private bakeOcclusion(): void {
+    const occluders: OccluderBox[] = [];
+    for (const { surface, builder } of this.surfaces.values()) {
+      if (BuildingCanvas.TRANSPARENT_TO_OCCLUSION.has(surface)) continue;
+      builder.collectOccluders(occluders);
+    }
+    const field = OcclusionField.build(occluders, this.span);
+    if (!field) return;
+    for (const { surface, builder } of this.surfaces.values()) {
+      if (BuildingCanvas.UNSHADED.has(surface)) continue;
+      builder.bakeOcclusion(field);
+    }
+  }
+
   build(palette: MaterialPalette): THREE.Group {
+    this.bakeOcclusion();
     const group = new THREE.Group();
     // Batches are keyed by the *resolved material*, not by the semantic surface. Two surfaces
     // that turn out to be the same construction material therefore merge into one draw call,
@@ -185,6 +221,10 @@ class BuildingCanvas {
       // Name by what it is made of when that is known, so scene inspection reads architecturally.
       mesh.name = architectural ?? surface;
       mesh.userData['batchKey'] = key;
+      // The semantic surface survives the material batching, so the mass measurement below can
+      // tell a building's fabric from the ground it lays around itself even when both resolved
+      // to the same architectural material.
+      mesh.userData['surface'] = surface;
       group.add(mesh);
     }
     // Moving parts: each rotor is its own pivoted group, so the motion system turns a transform,
@@ -206,6 +246,7 @@ class BuildingCanvas {
           : palette.getSurfaceMaterial(surface);
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = architectural ?? surface;
+        mesh.userData['surface'] = surface;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         holder.add(mesh);
@@ -648,6 +689,52 @@ interface ComposedBuilding {
   /** Plan extent of everything emitted, precinct included, not just the walled body. */
   extentX: number;
   extentZ: number;
+  /** Plan extent of the built mass alone. See `measureMassExtent`. */
+  massX: number;
+  massZ: number;
+}
+
+/**
+ * Surfaces that are site, not structure: the paving and yards a building lays around itself, a
+ * mill's pond and race, a garden, the shadow pad under the walls.
+ */
+const SITE_SURFACES = new Set<SurfaceKey>(['ground', 'water', 'garden', 'shadow']);
+
+/**
+ * Plan extent of the built mass: everything emitted except the site surfaces above.
+ *
+ * This is the number a structure must be *fitted* against, and it is deliberately not the same as
+ * `extentX`/`extentZ`. A watermill's composition is a 19 x 27 m site — millpond, dam, headrace,
+ * tailrace, cart yard — wrapped around an 8 x 6 m mill house. Fitting the whole site into a plot
+ * sized for a building is what rendered the mill at the height of its own doorway; the pond and
+ * the yard belong to the plot's reserved precinct, which exists for exactly this, and may spill
+ * past the building footprint.
+ *
+ * Measured as reach from the origin and doubled, matching `extentX`/`extentZ`, because a reserved
+ * footprint is centred on the origin rather than spanning the geometry's own bounding box.
+ */
+function measureMassExtent(group: THREE.Object3D): { x: number; z: number } {
+  group.updateWorldMatrix(false, true);
+  const box = new THREE.Box3();
+  let x = 0, z = 0;
+  group.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return;
+    if (SITE_SURFACES.has(object.userData['surface'] as SurfaceKey)) return;
+    box.setFromObject(object);
+    if (box.isEmpty()) return;
+    x = Math.max(x, Math.abs(box.min.x), Math.abs(box.max.x));
+    z = Math.max(z, Math.abs(box.min.z), Math.abs(box.max.z));
+  });
+  return { x: x * 2, z: z * 2 };
+}
+
+/** The mass can never be larger than the site that contains it, and never zero. */
+function massWithin(group: THREE.Object3D, extentX: number, extentZ: number): { massX: number; massZ: number } {
+  const mass = measureMassExtent(group);
+  return {
+    massX: mass.x > 0 ? Math.min(extentX, mass.x) : extentX,
+    massZ: mass.z > 0 ? Math.min(extentZ, mass.z) : extentZ,
+  };
 }
 
 export function composeBuilding(
@@ -689,7 +776,8 @@ export function composeBuilding(
     group.userData['memorialVisualKit'] = 'v2';
     group.userData['ceremonialFocus'] = true;
     group.userData['memorialWeathering'] = composed.weathering;
-    return { group, height: composed.height, extentX: composed.extentX, extentZ: composed.extentZ };
+    return { group, height: composed.height, extentX: composed.extentX, extentZ: composed.extentZ,
+      ...massWithin(group, composed.extentX, composed.extentZ) };
   }
   // Structures that are not buildings at all. A bridge and a perimeter wall have no storeys, no
   // roof and no interior, so composing them as a walled box would produce a box; they replace the
@@ -709,6 +797,10 @@ export function composeBuilding(
       height: measuredHeight(group, dedicated.height),
       extentX: dedicated.extentX,
       extentZ: dedicated.extentZ,
+      // A composition that knows which of its parts are site works says so; the rest are measured.
+      ...(dedicated.massX !== undefined && dedicated.massZ !== undefined
+        ? { massX: Math.min(dedicated.extentX, dedicated.massX), massZ: Math.min(dedicated.extentZ, dedicated.massZ) }
+        : massWithin(group, dedicated.extentX, dedicated.extentZ)),
     };
   }
 
@@ -738,8 +830,11 @@ export function composeBuilding(
     group.userData['floorHeight'] = farm.plinthHeight;
     group.userData['doorWidth'] = doorWidthFor(farm);
     const farmBounds = new THREE.Box3().setFromObject(group);
-    // The plot extent stays the field's, not the building's, so placement is unchanged.
-    return { group, height: Math.max(0.1, farmBounds.max.y), extentX: 2.3, extentZ: 1.9 };
+    // The plot extent stays the field's, not the building's, so placement is unchanged — and so
+    // does the mass, deliberately: the shed is anchored to the plot edge by the renderer rather
+    // than centred, so a reach-from-origin mass would not describe it. Fields keep fitting to
+    // their cultivated ground.
+    return { group, height: Math.max(0.1, farmBounds.max.y), extentX: 2.3, extentZ: 1.9, massX: 2.3, massZ: 1.9 };
   }
 
   // Open gathering places keep a modest flat precinct, because unlike cultivated earth a market
@@ -760,7 +855,8 @@ export function composeBuilding(
     group.userData['openPrecinct'] = true;
     const precinctBounds = new THREE.Box3().setFromObject(group);
     // The reserved plot extent is the precinct's, not the structure's, so placement is unchanged.
-    return { group, height: Math.max(0.1, precinctBounds.max.y), extentX: 2.3, extentZ: 1.9 };
+    return { group, height: Math.max(0.1, precinctBounds.max.y), extentX: 2.3, extentZ: 1.9,
+      ...massWithin(group, 2.3, 1.9) };
   }
 
   const random = new SeededRandom(`${seed}:compose`);
@@ -781,16 +877,22 @@ export function composeBuilding(
     && (grammar.spec ? grammar.spec.archetype === 'house' : ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role));
   const bounds = new THREE.Box3().setFromObject(group);
   // Measured as reach from the origin, not raw span: forecourts and gateways sit on one side
-  // only, and the reserved placement footprint is a circle centred on the origin.
+  // only, and the reserved placement footprint is a circle centred on the origin. Both terms
+  // are spans — `grammar.width` already is one, and a reach is doubled to become one. Mixing a
+  // span with an undoubled reach reported every ordinary building at twice its true size, which
+  // fitted it into half the plot it had been given.
+  const extentX = Math.max(grammar.width, Math.abs(bounds.min.x) * 2, Math.abs(bounds.max.x) * 2);
+  const extentZ = Math.max(grammar.depth, Math.abs(bounds.min.z) * 2, Math.abs(bounds.max.z) * 2);
   return {
     group,
+    extentX,
+    extentZ,
+    ...massWithin(group, extentX, extentZ),
     // Height must describe everything that was actually emitted, not just the roof and crown.
     // A portico, colonnade or ward pavilion can stand taller than a low-roofed body, and the
     // LOD tiers are sized from this number — under-reporting it makes a distant building
     // visibly pop shorter as it crosses a LOD boundary.
     height: Math.max(Math.max(roofTop, crownTop) + (rank >= 4 ? 0.1 : 0), bounds.max.y),
-    extentX: Math.max(grammar.width, Math.abs(bounds.min.x), Math.abs(bounds.max.x) ) * 2,
-    extentZ: Math.max(grammar.depth, Math.abs(bounds.min.z), Math.abs(bounds.max.z)) * 2,
   };
 }
 

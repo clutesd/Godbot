@@ -9,7 +9,7 @@ import { EnergyRenderer } from './energy/EnergyRenderer';
 import { MillMotionSystem } from './architecture/MillMotion';
 import { IndustryRenderer } from './industry/IndustryRenderer';
 import { CarriedMaterialRenderer } from './people/CarriedMaterialRenderer';
-import { socialGestureFrame } from './people/SocialGesturePresentation';
+import { socialGestureFrame, applyConversationGesture } from './people/SocialGesturePresentation';
 import { soleTarget } from './people/FootContactPose';
 import { GroundedLocomotion, SUPPORT_SHIFT } from './people/GroundedLocomotion';
 import { HumanJointRig } from './people/HumanJointRig';
@@ -19,6 +19,7 @@ import { StructureNavigation, type PedestrianFootprint } from '../sim/people/Str
 import * as THREE from 'three';
 import { AdaptiveResolution } from './AdaptiveResolution';
 import { RenderMaintenanceScheduler, type RenderMaintenanceTask } from './RenderMaintenanceScheduler';
+import { FrameSectionProfiler, type FrameSection } from './FrameSectionProfiler';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNetwork';
 import type { GodboxConfig } from '../config';
@@ -31,7 +32,7 @@ import { setAutonomousCameraMode } from './CameraControlMode';
 import { ManualCameraController } from './ManualCameraController';
 import { FoundingPodRenderer } from './founding/FoundingPodRenderer';
 import { arrivalRenderPolicy, arrivalVegetationAnchor } from './founding/ArrivalRenderBudget';
-import { arrivalClearingRadius, arrivalFounderPose } from './founding/ArrivalChoreography';
+import { arrivalClearingRadius, arrivalFounderPose, arrivalGroundFor, type ArrivalGround } from './founding/ArrivalChoreography';
 import { FoundingFirstFirePresentation, type FirstFireStagingTarget } from './founding/FoundingFirstFirePresentation';
 import { FoundingStandardPresentation, type FoundingStandardTarget } from './founding/FoundingStandardPresentation';
 import { foundingCommunityIsForming, foundingCommunitySupplyAnchor, isFoundingCommunityDestinationId } from '../sim/people/FoundingCommunityRoutine';
@@ -51,13 +52,18 @@ import { indoorSleepingSpots, sleepAreaFloor, type IndoorSleepingArea } from './
 import { usableStructure } from '../sim/development/Shelter';
 import { sleepSchedule } from '../sim/people/SleepSchedule';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor, visualTierFor, type SocialGroup, type VisualTier } from './people/PeoplePresentation';
-import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, COSMIC_CROWN_HEIGHT, cosmicAppearanceFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicReflectionEnvironment, createObsidianReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
+import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, COSMIC_BUILD_MULTIPLIER, cosmicAppearanceFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicArmGeometry, createCosmicLegGeometry, createCosmicReflectionEnvironment, createObsidianReflectionEnvironment, bindCosmicVariation, updateCosmicBodyMaterial } from './people/CosmicPeople';
+import { HUMAN_WORLD_SCALE } from './people/HumanScale';
 import { HUMAN_SURFACE_MODE, createHumanSurfaceMaterial } from './people/HumanSurfaceMaterial';
 import { HumanFigureAppearance } from './people/HumanFigureAppearance';
 import { humanLookFor as resolveHumanLook, type HeadPiece, type HumanLook } from './people/HumanAppearanceProfile';
 import { createGarmentAtlasGeometry, createHeadAtlasGeometry, createHumanMantleGeometry } from './people/HumanWardrobeAtlas';
 import { createFocalContactShadow } from './people/FocalContactShadow';
 import { AssetBuilder } from './assets/AssetBuilder';
+import { structureFit } from './assets/StructureFit';
+
+/** Ground a settlement's landmark registers for itself, standing clear of the plot grid. */
+const LANDMARK_FOOTPRINT_RADIUS = 1.7;
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingGrammarContext, type BuildingRole } from './assets/BuildingGrammar';
 import type { DevelopmentProject, DevelopmentResponse } from '../sim/development/types';
@@ -229,15 +235,6 @@ const ERA_ORDER: readonly Era[] = ['primitive', 'early', 'village', 'preIndustri
 const SMOKE_PUFFS_PER_SOURCE = 5;
 /** Point lights across all settlements; beyond this, forward shading cost outruns the mood. */
 const SETTLEMENT_LIGHT_BUDGET = 18;
-/**
- * Authoritative humanoid world scale. All person geometry, position offsets and
- * `heightScale`/`buildScale` are expressed relative to a canonical adult of height 1; this
- * factor converts that canonical rig into world units so a normal adult reads as clearly
- * smaller than the smallest inhabited structure (huts/shelters) and never approaches an
- * ordinary house. Applying it once, at the top of the scale chain, keeps LOD and camera
- * framing changes from ever altering apparent world-space height.
- */
-const HUMAN_WORLD_SCALE = 0.28;
 const NO_ACTIVITY_STRUCTURES: readonly ActivityStructure[] = [];
 function foundingCampGroundArtifacts(state: SimulationState): Array<{ x: number; z: number; radius: number }> {
   const pods = state.arrival?.pods ?? [];
@@ -250,7 +247,7 @@ function foundingCampGroundArtifacts(state: SimulationState): Array<{ x: number;
   return artifacts;
 }
 /** Canonical adult humanoid height in world units (feet to crown) at `heightScale === 1`. */
-export const CANONICAL_ADULT_HEIGHT = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * COSMIC_CROWN_HEIGHT;
+export { CANONICAL_ADULT_HEIGHT } from './people/HumanScale';
 export const visiblePersonBudgetForDensity = (density: number): number => Math.max(48, Math.round(384 * density));
 /** Cap for the additional mantle batch reserved for notable and historical lives. */
 export const NOTABLE_VISUAL_BUDGET = 32;
@@ -290,6 +287,8 @@ export class GodboxRenderer {
   private readonly peopleShins: THREE.InstancedMesh;
   private readonly focalContactShadow = createFocalContactShadow();
   private readonly groundedLocomotion = new GroundedLocomotion();
+  private readonly arrivalGrounds = new Map<string, ArrivalGround>();
+  private arrivalPeopleSeconds = 0;
   private readonly footTarget = new THREE.Vector3();
   private readonly headAttachmentMatrix = new THREE.Matrix4();
   private readonly humanJoints = new HumanJointRig();
@@ -662,6 +661,9 @@ export class GodboxRenderer {
    */
   async warmUpOpening(): Promise<number> {
     const startedAt = performance.now();
+    // The reveal must use the same daylight/exposure state as the first live Arrival frame.
+    // Previously the readiness gate rendered with uninitialized environmental lighting.
+    this.updateDayNight(this.state.arrival ? this.arrivalLightingSeconds : 0);
     this.cameraDirector.update(0, 0, this.state, (x, z) => this.elevationAt(x, z));
     this.skyAtmosphere.followCamera(this.camera);
 
@@ -709,9 +711,26 @@ export class GodboxRenderer {
     return !this.manualCamera.active;
   }
 
+  /** Diagnostic long-frame attribution. Disabled by default; the hot path costs one branch. */
+  readonly frameSections = new FrameSectionProfiler();
+
+  setFrameSectionProfiling(enabled: boolean): void {
+    this.frameSections.setEnabled(enabled);
+  }
+
+  /** Section mark bound as a method so an instrumented frame allocates no closures. */
+  private mark(section: FrameSection): void {
+    if (this.frameSections.active) this.frameSections.mark(section, performance.now());
+  }
+
   update(deltaSeconds: number, elapsedSeconds: number): void {
+    const profiling = this.frameSections.active;
+    const frameStartedAt = profiling ? performance.now() : 0;
+    this.frameSections.begin(frameStartedAt);
+
     this.constructionRuntime.sync(this.state);
     if (this.adaptiveResolution.sample(deltaSeconds)) this.resize();
+    this.mark('construction-sync');
 
     const renderPolicy = arrivalRenderPolicy(this.state);
     if (renderPolicy.active && this.state.arrival) {
@@ -737,6 +756,7 @@ export class GodboxRenderer {
       this.humanPresentationVisible = shouldShowHumans;
       this.setHumanPresentationVisible(shouldShowHumans);
     }
+    this.mark('arrival-policy');
 
     // Human presentation time still advances during Arrival so history does not inherit a giant
     // first-frame delta. Once founders begin emerging, the character pass comes alive because the
@@ -765,19 +785,23 @@ export class GodboxRenderer {
       this.accentByCulture.set(culture.id, new THREE.Color(culture.style.accent));
     }
     this.transitionTimeline.updateTime(deltaSeconds);
+    this.mark('presentation-state');
 
     // Hold a readable daylight composition during the opening, then resume from that phase.
     if (this.state.arrival) this.arrivalLightingSeconds += deltaSeconds * (this.state.arrival.phase === 'HISTORY_RUNNING' ? 1 : 0.035);
     this.updateDayNight(this.state.arrival ? this.arrivalLightingSeconds : elapsedSeconds);
+    this.mark('day-night');
 
     // Resolve and draw humans before consuming workface evidence. A suspended human pass must
     // never leave last frame's contact driving new construction geometry.
     if (renderPolicy.animateHumans) this.updatePeople(humanLife.deltaSeconds, humanLife.elapsedSeconds);
+    this.mark('people');
 
     if (renderPolicy.refreshWorldPresentation) {
       this.updateSettlementBanners(elapsedSeconds);
       this.updateAdvancedAtmosphere(elapsedSeconds);
       if (this.state.month !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
+      this.mark('settlement-presentation');
       for (const [key, entry] of this.constructionAssemblies) {
         const authoritativeSettlement = this.state.settlements.find(s => s.id === entry.settlement.id);
         if (!authoritativeSettlement) continue;
@@ -798,12 +822,14 @@ export class GodboxRenderer {
         }
       }
     }
+    this.mark('construction-presentation');
 
     if (renderPolicy.refreshWorldPresentation) {
       this.updateFirstFirePresentationVisuals(humanLife.elapsedSeconds);
       this.updateCaravans();
       this.updateSmoke(elapsedSeconds);
     }
+    this.mark('ambient-presentation');
 
     // Water, sky and lightweight vegetation motion remain live throughout the prologue. These are
     // visible atmospheric cues, unlike settlement/human bookkeeping that cannot change yet.
@@ -813,9 +839,11 @@ export class GodboxRenderer {
       manualWork: THREE.MathUtils.clamp((this.millDaylight - 0.2) * 3, 0, 1),
     });
     this.industryRenderer.update(this.state, elapsedSeconds, (x, z) => this.elevationAt(x, z));
+    this.mark('energy-industry');
     this.waterSystem.update(elapsedSeconds);
     this.skyAtmosphere.update(deltaSeconds, elapsedSeconds);
     this.vegetation.updateLeaves(elapsedSeconds);
+    this.mark('water-sky-vegetation');
 
     if (renderPolicy.refreshWorldPresentation || renderPolicy.refreshVegetationLod) {
       this.maintenance.advance(
@@ -826,23 +854,32 @@ export class GodboxRenderer {
       const maintenanceTask = this.maintenance.next();
       if (maintenanceTask) this.runMaintenanceTask(maintenanceTask);
     }
+    this.mark('maintenance');
 
     if (this.manualCamera.active) this.manualCamera.update(deltaSeconds);
     else this.cameraDirector.update(deltaSeconds, elapsedSeconds, this.state, (x, z) => this.elevationAt(x, z));
     this.vegetation.softenCameraCorridor(this.camera.position, this.manualCamera.active ? this.camera.position : this.cameraDirector.framingTarget());
+    this.mark('camera');
     this.skyAtmosphere.followCamera(this.camera);
     this.foundingPods.update(this.camera);
 
     if (renderPolicy.updateAmbientWorldEffects) {
       this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     }
+    this.mark('war');
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
     const blizzard = this.weatherRenderer.report.blizzard;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.density += blizzard * 0.035;
       this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
     }
+    this.mark('weather');
     this.postProcessing.render(this.ecology.night.value);
+    if (profiling) {
+      const completed = performance.now();
+      this.frameSections.mark('render', completed);
+      this.frameSections.end(completed - frameStartedAt, elapsedSeconds);
+    }
   }
 
   private runMaintenanceTask(task: RenderMaintenanceTask): void {
@@ -1134,6 +1171,10 @@ export class GodboxRenderer {
   }
 
   private updatePeople(deltaSeconds: number, elapsedSeconds: number): void {
+    const arrival = this.state.arrival;
+    this.arrivalPeopleSeconds = arrival?.phase === 'FOUNDING_ORIENTATION'
+      ? Math.max(arrival.elapsedSeconds, this.arrivalPeopleSeconds + Math.min(0.1, Math.max(0, deltaSeconds)))
+      : arrival?.elapsedSeconds ?? 0;
     for (const settlement of this.state.settlements) this.workSettlements.set(settlement.id, this.constructionRuntime.settlement(settlement));
     this.focalContactShadow.count = 0;
     this.sleepingPeople.beginFrame(this.state.people);
@@ -1348,8 +1389,15 @@ export class GodboxRenderer {
         ? worker.station.alternate : worker.station.anchor : physical?.action.locomotionTarget ?? firstFire ?? foundingStandard ?? sleepSpot?.destination ?? local?.destination ?? base;
       const foundingPod = person.foundingOrigin && this.state.arrival?.phase !== 'HISTORY_RUNNING'
         ? this.state.arrival?.pods.find(p => p.id === person.foundingOrigin?.podId) : undefined;
-      const egress = foundingPod ? arrivalFounderPose(person, foundingPod, this.state.arrival!.elapsedSeconds, this.personGround.heightAt) : undefined;
-      const visual = egress ? this.peopleVisuals.stageArrival(person.id, egress, this.personGround) : this.peopleVisuals.resolve(person.id, {
+      let arrivalGround = foundingPod ? this.arrivalGrounds.get(foundingPod.id) : undefined;
+      if (foundingPod && !arrivalGround) {
+        arrivalGround = arrivalGroundFor(foundingPod, this.personGround);
+        this.arrivalGrounds.set(foundingPod.id, arrivalGround);
+      }
+      const egress = foundingPod && arrivalGround ? arrivalFounderPose(person, foundingPod, this.arrivalPeopleSeconds,
+        arrivalGround.heightAt, arrivalGround.ramp) : undefined;
+      const contactGround = egress && arrivalGround ? arrivalGround : movementGround;
+      const visual = egress ? this.peopleVisuals.stageArrival(person.id, egress, contactGround, deltaSeconds) : this.peopleVisuals.resolve(person.id, {
         destination: aim,
         greetingPartnerId: local?.encounter?.beat === 0 && ['hug', 'handshake'].includes(local.encounter.greeting ?? '') ? local.encounter.partnerId : undefined,
         embracing: local?.encounter?.beat === 0 && local.encounter.greeting === 'hug',
@@ -1437,6 +1485,8 @@ export class GodboxRenderer {
         ? socialGestureFrame(person.id, this.localActivities.snapshot(person.id),
           partnerId ? this.localActivities.snapshot(partnerId) : undefined,
           this.peopleVisuals.snapshot(person.id), socialPartner) : undefined;
+      if (pose && !articulated) applyConversationGesture(pose, person.id, local,
+        partnerId ? this.localActivities.snapshot(partnerId) : undefined, visual, person.traits.sociability);
       if (worker) {
         const m = this.resourceWorkers.motion;
         this.actionInspections.set(person.id, { personId: person.id, actionKind: `resource-${worker.site.profile.kind}`,
@@ -1506,7 +1556,7 @@ export class GodboxRenderer {
       const contactGait = detailed && !articulated && !firstFireStanding && !standardStanding
         && visual.speed < 0.6 && !sleepSpot && !['dance', 'play'].includes(local?.animation ?? '')
         ? this.groundedLocomotion.update(visual, deltaSeconds, heightScale, proportions.legLength,
-          posture.stanceWidth * buildScale, posture.strideStyle, movementGround, posture.weightShift) : undefined;
+          posture.stanceWidth * buildScale, posture.strideStyle, contactGround, posture.weightShift) : undefined;
       if (!contactGait) this.groundedLocomotion.forget(person.id);
       if (contactGait && pose && (contactGait.motion > 0.01 || contactGait.active >= 0)) {
         const motion = contactGait.motion;
@@ -1518,7 +1568,7 @@ export class GodboxRenderer {
         pose.pelvisRotation = hipDrive * 0.052 + turnDrive * 0.018;
         pose.spineTwist = -hipDrive * 0.086 - turnDrive * 0.012;
         pose.spineRoll = -contactGait.weight * 0.019 - turnDrive * 0.008;
-        pose.spineRotation += contactGait.lean + Math.abs(contactGait.weight) * motion * 0.004;
+        pose.spineRotation += contactGait.lean + contactGait.grade * motion * 0.10 + Math.abs(contactGait.weight) * motion * 0.004;
         if (!loaded && contactGait.motion > 0.01) {
           pose.leftShoulderRotation = -shoulderDrive * 0.22 - turnDrive * 0.018;
           pose.rightShoulderRotation = shoulderDrive * 0.21 - turnDrive * 0.018;
@@ -1658,21 +1708,28 @@ export class GodboxRenderer {
       // the shoulders, which is most of what makes a child or a heavy-set adult read correctly.
       const neckDrop = (1 - proportions.neckScale) * 0.034;
       this.partPosition.set(0, 0.425 - neckDrop, 0).applyMatrix4(this.personMatrix);
+      const conversationTarget = socialPartner ?? (local?.socialFocusId ? this.peopleVisuals.snapshot(local.socialFocusId) : undefined);
       const focalTarget = worker?.station.target ?? physical?.action.interactionAnchor
         ?? foundingStandard?.interactionTarget
         ?? (firstFire ? hearthPosition : undefined)
+        ?? conversationTarget
         ?? (local && !local.partnerId && !local.attentionId && ['approach', 'action'].includes(local.phase) ? local.focus : undefined);
       const focalDelta = focalTarget ? facingTarget(display, focalTarget) - bodyFacing : 0;
       const focalYaw = focalTarget && Math.hypot(focalTarget.x - display.x, focalTarget.z - display.z) > 0.05
         && !local?.attentionId && !visual.passingPeer && !worldAttention.targetId
         ? Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(focalDelta), Math.cos(focalDelta)))) : 0;
       visual.focalHeadYaw = turnToward(visual.focalHeadYaw ?? 0, focalYaw, Math.min(0.1, Math.max(0, deltaSeconds)) * 1.8);
+      const eyePitch = conversationTarget && !articulated
+        ? Math.max(-0.3, Math.min(0.3, -Math.atan2(
+          conversationTarget.footY + (conversationTarget.bodyScale ?? heightScale) * 0.84 - this.partPosition.y,
+          Math.max(0.08, Math.hypot(conversationTarget.x - display.x, conversationTarget.z - display.z))))) : 0;
+      visual.focalHeadPitch = turnToward(visual.focalHeadPitch ?? 0, eyePitch, Math.min(0.1, Math.max(0, deltaSeconds)) * 0.8);
       const headFacing = restPose.spot?.posture === 'sleep' ? bodyFacing : bodyFacing + (contactGait?.headLead ?? 0) + visual.focalHeadYaw + (pose?.headRotation ?? 0) + attentionHeadYaw + (restArticulated ? restPose.headYaw : 0) + spineTwist * 0.3 - (sleepingPose ? 0 : (pose?.pelvisRotation ?? 0) * 0.55);
       // Head stabilisation: the skull resists the torso's walking pitch instead of nodding with it,
       // then carries a small permanent tilt of its own.
       // Head stabilisation: the skull resists the torso's walking pitch and most of the shoulder
       // twist, so a walking person keeps looking where they are going instead of nodding along.
-      const headPitch = bodyPitch * 0.35 + (sleepingPose ? 0 : pose?.headPitch ?? 0);
+      const headPitch = bodyPitch * 0.35 + (sleepingPose ? 0 : (pose?.headPitch ?? 0) + visual.focalHeadPitch);
       const headRoll = sleepingPose ? 0 : posture.headTilt;
       this.setInstanceTransform(this.peopleHeads, index, this.partPosition.x, this.partPosition.y, this.partPosition.z,
         heightScale, heightScale, heightScale, headPitch, headFacing, headRoll);
@@ -1727,7 +1784,7 @@ export class GodboxRenderer {
           if (contact && !contact.planted) continue;
           const x = contact?.x ?? display.x + Math.cos(facing) * (side ? 1 : -1) * posture.stanceWidth * heightScale;
           const z = contact?.z ?? display.z - Math.sin(facing) * (side ? 1 : -1) * posture.stanceWidth * heightScale;
-          const y = movementGround.heightAt(x, z);
+          const y = contactGround.heightAt(x, z);
           this.setInstanceTransform(this.focalContactShadow, this.focalContactShadow.count++, x, y + 0.003, z,
             heightScale * 0.10, 1, heightScale * 0.18,
             contact?.terrainPitch ?? 0, contact?.yaw ?? facing, contact?.roll ?? 0);
@@ -2616,7 +2673,7 @@ export class GodboxRenderer {
           type: 'major-building',
           worldX,
           worldZ,
-          footprintRadius: 1.7,
+          footprintRadius: LANDMARK_FOOTPRINT_RADIUS,
           biomeWhitelist: ['grassland', 'forest', 'dryland', 'highland', 'wetland'],
         });
         if (!validation.valid || validation.terrain.water) continue;
@@ -2624,7 +2681,7 @@ export class GodboxRenderer {
           kind: 'building',
           worldX,
           worldZ,
-          radius: 1.7,
+          radius: LANDMARK_FOOTPRINT_RADIUS,
           placedMonth: this.state.month,
           entityId: `${settlement.id}:landmark`,
           persistent: true,
@@ -2655,11 +2712,15 @@ export class GodboxRenderer {
       waterfront: this.waterfrontFor(settlement),
     });
     const landmark = asset.mesh.clone(true);
-    const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
-    const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
-    const fit = 2.9 / Math.max(grammarWidth, grammarDepth);
-    placement.width = grammarWidth * fit;
-    placement.depth = grammarDepth * fit;
+    const massWidth = Number(asset.mesh.userData['massWidth'] ?? asset.mesh.userData['footprintWidth'] ?? 1);
+    const massDepth = Number(asset.mesh.userData['massDepth'] ?? asset.mesh.userData['footprintDepth'] ?? 1);
+    // True to size within the footprint this landmark registered. Normalising every landmark to
+    // one fixed span instead made a cathedral and a gate tower the same height.
+    const fit = structureFit({
+      plotWidth: LANDMARK_FOOTPRINT_RADIUS * 2, plotDepth: LANDMARK_FOOTPRINT_RADIUS * 2, massWidth, massDepth,
+    });
+    placement.width = massWidth * fit;
+    placement.depth = massDepth * fit;
     landmark.position.set(placement.worldX - settlement.position.x, this.elevationAt(placement.worldX, placement.worldZ) - settlementY, placement.worldZ - settlement.position.z);
     landmark.rotation.y = placement.rotationY;
     landmark.scale.setScalar(fit);
@@ -2721,19 +2782,23 @@ export class GodboxRenderer {
     // Each placed copy owns its rotors, so a cached asset shared by many mills still turns per mill.
     this.millMotion.adopt(building);
 
-    // Fit the canonical grammar footprint into the reserved placement footprint. Uniform, so
-    // proportions survive, and bounded by the footprint, so nothing spills onto its neighbour.
-    const grammarWidth = Number(asset.mesh.userData['footprintWidth'] ?? 1);
-    const grammarDepth = Number(asset.mesh.userData['footprintDepth'] ?? 1);
-    const fit = Math.min(placement.width / grammarWidth, placement.depth / grammarDepth) * (placement.development ? Math.min(1, 0.64 + placement.development.level * 0.12) : 1);
+    // Draw the structure at the size its architecture declares, shrinking it only where the plot
+    // cannot hold it. Fitted against the built mass, not the site extent, so a mill's pond, race
+    // and cart yard spill into the plot's reserved precinct instead of crushing the mill house.
+    const massWidth = Number(asset.mesh.userData['massWidth'] ?? asset.mesh.userData['footprintWidth'] ?? 1);
+    const massDepth = Number(asset.mesh.userData['massDepth'] ?? asset.mesh.userData['footprintDepth'] ?? 1);
+    const fit = structureFit({ plotWidth: placement.width, plotDepth: placement.depth,
+      massWidth, massDepth, level: placement.development?.level });
 
     // Field assets contain only a small edge store; FarmFieldRenderer owns the cultivated ground.
     // Ground the store where it is actually drawn rather than at the plot centre so sloped fields
     // do not leave the agricultural structure hovering or buried.
-    // Ordinary structures stand on the highest ground under their whole reserved plot, so no
-    // corner is buried; a skirt closes the downhill gap. Fields keep their own store anchoring below.
+    // Ordinary structures stand on the highest ground under the footprint they actually cover —
+    // not their whole reserved plot, which on a slope would pin a building to high ground it does
+    // not stand on and leave it hovering. A skirt closes the downhill gap under that footprint.
     const isField = placement.development?.form === 'field';
-    const grounding = isField ? undefined : this.groundPlot(placement);
+    const renderedMassWidth = massWidth * fit, renderedMassDepth = massDepth * fit;
+    const grounding = isField ? undefined : this.groundFootprint(placement, renderedMassWidth, renderedMassDepth);
     const settlementBaseY = this.elevationAt(settlement.position.x, settlement.position.z);
     let groundedTerrainY = grounding ? grounding.baseY - settlementBaseY : terrainY;
     let structureOffsetX = 0, structureOffsetZ = 0;
@@ -2753,8 +2818,10 @@ export class GodboxRenderer {
     building.rotation.y = placement.rotationY;
     building.scale.setScalar(fit);
     if (grounding) {
-      // Skirt lives in the building's scaled local frame, so its dimensions are the rendered footprint.
-      const skirt = createGroundingSkirt(grounding, grounding.baseY, grammarWidth, grammarDepth, fit);
+      // Skirt lives in the building's scaled local frame, so its dimensions are the rendered
+      // footprint — the mass the building actually stands on. Sized from the site extent it drew
+      // a pad several times wider than the structure on it, which is what read as a bare slab.
+      const skirt = createGroundingSkirt(grounding, grounding.baseY, massWidth, massDepth, fit);
       if (skirt) building.add(skirt);
     }
     if (stage >= BUILD_STAGE.ROOF) this.installSleepingArea(placement, building,
@@ -2773,7 +2840,8 @@ export class GodboxRenderer {
     });
 
     if (stage < BUILD_STAGE.DETAIL) {
-      building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), grammarWidth * fit, grammarDepth * fit, stage, undefined, era, Number(asset.mesh.userData['buildingHeight'] ?? placement.height) * fit, asset.mesh.userData['buildingSpec'] as BuildingSpec | undefined));
+      // Scaffolding stands against the building, not around its yard, so it takes the mass too.
+      building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), renderedMassWidth, renderedMassDepth, stage, undefined, era, Number(asset.mesh.userData['buildingHeight'] ?? placement.height) * fit, asset.mesh.userData['buildingSpec'] as BuildingSpec | undefined));
     }
     return building;
   }
@@ -2937,9 +3005,12 @@ export class GodboxRenderer {
       : placement;
     const targetEra = targetIdentity.era;
 
-    // Start from the reserved plot's base, then survey the full canonical target below. Neither
-    // paid progress nor a smaller early-stage silhouette may lower the construction foundation.
-    let siteGrounding = this.groundPlot(targetPlacement);
+    // Start from the ground under the plot centre, then survey the full canonical target below,
+    // which is what actually sets the base. Starting from the whole reserved plot instead took
+    // the highest ground anywhere in the precinct, and `constructionGrounding` keeps the higher
+    // of the two — so a worksite rose to meet ground its building would never stand on.
+    // Neither paid progress nor a smaller early-stage silhouette may lower the foundation.
+    let siteGrounding = this.groundPoint(targetPlacement.worldX, targetPlacement.worldZ);
     const site = new THREE.Group();
     site.position.set(targetPlacement.localX, siteGrounding.baseY - settlementY, targetPlacement.localZ);
     site.rotation.y = targetPlacement.rotationY;
@@ -2971,11 +3042,13 @@ export class GodboxRenderer {
       ...baseConfig,
       variant: `${targetPlacement.role}#${BUILD_STAGE.DETAIL}`,
     });
-    const targetWidth = Number(targetAsset.mesh.userData['footprintWidth'] ?? 1);
-    const targetDepth = Number(targetAsset.mesh.userData['footprintDepth'] ?? 1);
     const targetHeight = Number(targetAsset.mesh.userData['buildingHeight'] ?? targetPlacement.height);
-    const developmentScale = targetPlacement.development ? Math.min(1, 0.64 + targetPlacement.development.level * 0.12) : 1;
-    const fit = Math.min(targetPlacement.width / targetWidth, targetPlacement.depth / targetDepth) * developmentScale;
+    const targetMassWidth = Number(targetAsset.mesh.userData['massWidth'] ?? targetAsset.mesh.userData['footprintWidth'] ?? 1);
+    const targetMassDepth = Number(targetAsset.mesh.userData['massDepth'] ?? targetAsset.mesh.userData['footprintDepth'] ?? 1);
+    // Exactly createPlacedBuilding's fit, against the same completed asset: a worksite's geometry
+    // has to converge on the building it is scaffolding.
+    const fit = structureFit({ plotWidth: targetPlacement.width, plotDepth: targetPlacement.depth,
+      massWidth: targetMassWidth, massDepth: targetMassDepth, level: targetPlacement.development?.level });
 
     const assembly = new ConstructionAssembly(targetAsset.mesh, fit, targetPlacement.key, project?.material ?? 'timber');
     siteGrounding = constructionGrounding(assembly.plan, (x, z) => this.elevationAt(x, z),
@@ -2995,8 +3068,10 @@ export class GodboxRenderer {
     placement.constructionPlan = assembly.plan;
     placement.constructionBaseY = siteGrounding.baseY;
 
-    const renderedWidth = targetWidth * fit;
-    const renderedDepth = targetDepth * fit;
+    // The structure's own footprint, not its site's: this is the ground the foundation skirt
+    // closes and the perimeter the worksite dressing and worker choreography work around.
+    const renderedWidth = targetMassWidth * fit;
+    const renderedDepth = targetMassDepth * fit;
     const renderedHeight = targetHeight * fit;
     const siteSkirt = createGroundingSkirt(siteGrounding, siteGrounding.baseY, renderedWidth, renderedDepth);
     if (siteSkirt) {
@@ -5016,10 +5091,25 @@ export class GodboxRenderer {
    * buildings and construction stages share one base height regardless of which asset variant
    * is currently drawn. Water under the plot suppresses the skirt, leaving waterfront edges open.
    */
-  private groundPlot(placement: BuildingPlacement): StructureGrounding {
+  /**
+   * Grounds a structure against the terrain under the footprint it actually covers.
+   *
+   * Surveying the whole reserved plot instead sets the base to the highest ground anywhere in it,
+   * including the precinct the building does not stand on — on a slope that lifts the building
+   * clear of the ground beneath it, and no skirt drawn under the building itself can close a gap
+   * that is outside it. Width and depth are the rendered structure, in world units.
+   */
+  /** Grounding at a single point, with no footprint to bridge and so no skirt. */
+  private groundPoint(worldX: number, worldZ: number): StructureGrounding {
+    const height = this.elevationAt(worldX, worldZ);
+    return { baseY: height, relief: 0, skirt: false, skirtBottomY: height };
+  }
+
+  private groundFootprint(placement: BuildingPlacement, width: number, depth: number): StructureGrounding {
     return groundStructure(surveyFootprintGround(
       (x, z) => this.elevationAt(x, z),
-      placement.worldX, placement.worldZ, placement.width, placement.depth, placement.rotationY,
+      placement.worldX, placement.worldZ,
+      Math.min(width, placement.width), Math.min(depth, placement.depth), placement.rotationY,
       (x, z) => Boolean(this.terrainQueries.queryTerrainAt(x, z)?.water),
     ));
   }
@@ -5149,6 +5239,8 @@ export class GodboxRenderer {
     this.weatherRenderer.dispose();
     this.peopleVisuals.clear();
     this.groundedLocomotion.clear();
+    this.arrivalGrounds.clear();
+    this.arrivalPeopleSeconds = 0;
     this.localActivities.clear();
     this.worldAttention.clear();
     this.reactionGlyphs.dispose();

@@ -17,7 +17,11 @@
     "batch": "tsx src/batch.ts",
     "pacing": "tsx src/pacing.ts",
     "demography": "tsx scripts/demographic-seeds.ts",
-    "profile:camera": "node --import tsx scripts/profile-camera-runtime.ts"
+    "profile:camera": "node --import tsx scripts/profile-camera-runtime.ts",
+    "perf:sim": "tsx scripts/perf/sim-baseline.ts",
+    "perf:tick": "tsx scripts/perf/tick-bench.ts",
+    "perf:fingerprints": "tsx scripts/perf/fingerprints.ts",
+    "perf:frames": "node scripts/perf/frame-harness.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

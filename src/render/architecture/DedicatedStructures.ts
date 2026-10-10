@@ -39,6 +39,13 @@ export interface DedicatedComposition {
   height: number;
   extentX: number;
   extentZ: number;
+  /**
+   * The built mass the renderer fits to a plot, when it differs from the reserved site extent.
+   * Only compositions whose site genuinely exceeds their building declare it — a mill and its
+   * water engineering. Left out, the composer measures the mass from the geometry instead.
+   */
+  massX?: number;
+  massZ?: number;
 }
 
 /** How a span is carried, derived from what the structure is actually made of. */

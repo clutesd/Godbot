@@ -73,12 +73,15 @@ describe('construction geometry regression', () => {
     const placement = { key: 'sloped-production', role: 'house', builtEra: 'village', variation: 0,
       localX: 0, localZ: 0, worldX: 0, worldZ: 0, rotationY: 0.6, width: 3, depth: 2, height: 1,
       constructionPlan: undefined as ConstructionAssembly['plan'] | undefined };
-    const reserved = groundStructure(surveyFootprintGround(height, 0, 0, 3, 2, placement.rotationY));
+    // A worksite starts from the ground under the plot centre, and the survey of the completed
+    // target is what actually sets its base. Starting from the whole reserved plot instead took
+    // the highest ground anywhere in the precinct, which is ground the building never stands on.
+    const centre = { baseY: height(0, 0), relief: 0, skirt: false, skirtBottomY: height(0, 0) };
     const context = {
       assetBuilder: builder, constructionAssemblies: new Map(),
       state: { world: { terrain: { originX: 0, originZ: 0, step: 0.1 } } },
       elevationAt: height, terrainQueries: { queryTerrainAt: () => ({ water: false }) },
-      groundPlot: () => reserved, projectForPlot: () => undefined,
+      groundPoint: () => centre, projectForPlot: () => undefined,
       getPalette: () => new MaterialPalette({ culture: style, era: 'village' }),
     };
     const create = (GodboxRenderer.prototype as unknown as {
@@ -89,7 +92,14 @@ describe('construction geometry regression', () => {
     const roofStage = create.call(context as unknown as GodboxRenderer, placement, style, 'village', 0, 0.8);
     expect(roofStage.getObjectByName('grounding-skirt')!.visible).toBe(true);
     expect(early.position.y).toBe(roofStage.position.y);
-    expect(roofStage.position.y).toBeGreaterThanOrEqual(reserved.baseY);
+    expect(roofStage.position.y).toBeGreaterThanOrEqual(centre.baseY);
+    // The base clears the ground under the structure's own footprint, which is the whole of what
+    // it has to clear — and no more, or the building hovers over the ground it stands on.
+    const built = placement.constructionPlan!.pieces;
+    const span = (pick: (piece: typeof built[number]) => number) => Math.max(...built.map(piece => Math.abs(pick(piece)))) * 2;
+    const footprint = groundStructure(surveyFootprintGround(height, 0, 0,
+      span(piece => piece.max.x), span(piece => piece.max.z), placement.rotationY));
+    expect(roofStage.position.y).toBeGreaterThanOrEqual(footprint.baseY - 1e-6);
     const cos = Math.cos(placement.rotationY), sin = Math.sin(placement.rotationY);
     for (const piece of placement.constructionPlan!.pieces.filter(piece => piece.stage >= 1 && piece.stage <= 3)) {
       for (const x of [piece.min.x, piece.max.x]) for (const z of [piece.min.z, piece.max.z]) {

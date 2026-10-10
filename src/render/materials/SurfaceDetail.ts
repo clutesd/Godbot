@@ -336,12 +336,98 @@ function surfaceProgram(surface: SurfaceKey, rank: number): ProceduralSurfacePro
   }
 }
 
-export function injectSurfaceVertexStage(source: string): string {
+/**
+ * How baked occlusion is spent.
+ *
+ * Nearly all of it goes on indirect light, which is where it belongs: ambient occlusion describes
+ * how much of the sky and the bounce a point can see, and in this scene the hemisphere term is
+ * bright enough that unoccluded crevices are the whole reason detailed geometry reads flat. A much
+ * smaller share dims albedo as well, so a recess stays legible on a face the sun is hitting
+ * directly without the structure looking dirty.
+ */
+const OCCLUSION_AMBIENT = 0.75;
+const OCCLUSION_ALBEDO = 0.18;
+/** Saturation gained in a crevice: light that reaches it has bounced off the material's own colour. */
+const OCCLUSION_SATURATION = 0.3;
+
+/**
+ * The two strengths above, as one uniform shared by every material in the world.
+ *
+ * Every surface program is injected with this same object, so moving it moves the whole built
+ * environment at once, with no shader recompile and no material rebuild. That is what makes the
+ * setting judgeable: occlusion strength is the kind of number that has to be looked at rather than
+ * reasoned about, and the architecture browser exposes it as a slider for exactly that.
+ */
+const OCCLUSION_UNIFORM = { value: new THREE.Vector2(OCCLUSION_AMBIENT, OCCLUSION_ALBEDO) };
+
+/**
+ * How much of the baked occlusion to spend, globally.
+ *
+ * `ambient` is the share taken off indirect light, `albedo` the smaller share taken off the
+ * surface colour itself. Passing nothing restores the defaults.
+ */
+export function setOcclusionStrength(ambient = OCCLUSION_AMBIENT, albedo = OCCLUSION_ALBEDO): void {
+  OCCLUSION_UNIFORM.value.set(Math.max(0, Math.min(1, ambient)), Math.max(0, Math.min(1, albedo)));
+}
+
+/** The live occlusion strength, as (ambient, albedo). */
+export function occlusionStrength(): THREE.Vector2 {
+  return OCCLUSION_UNIFORM.value.clone();
+}
+
+/**
+ * Read the baked occlusion channel and spend it.
+ *
+ * Split out from the pattern programs because occlusion is not a material property: it belongs to
+ * every surface a structure is built from, including the ornament and trim surfaces that stay
+ * deliberately pattern-free. Geometry that never measured occlusion carries zero in the channel —
+ * and the attribute defaults to zero — so this is a no-op on anything but a composed structure.
+ */
+const OCCLUSION_ALBEDO_GLSL = /* glsl */ `
+float gbOcclude = clamp(vGbOcclusion, 0.0, 1.0);
+float gbAmbientAccess = 1.0 - gbOcclude * gbOcclusionStrength.x;
+diffuseColor.rgb *= 1.0 - gbOcclude * gbOcclusionStrength.y;
+float gbShadeLuma = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+diffuseColor.rgb = clamp(mix(vec3(gbShadeLuma), diffuseColor.rgb, 1.0 + gbOcclude * ${OCCLUSION_SATURATION.toFixed(3)}), 0.0, 1.0);
+`;
+
+const OCCLUSION_LIGHT_GLSL = /* glsl */ `
+reflectedLight.indirectDiffuse *= gbAmbientAccess;
+reflectedLight.indirectSpecular *= gbAmbientAccess;
+`;
+
+/** Declares the shared detail attribute and carries the occlusion channel to the fragment stage. */
+export function injectOcclusionVertexStage(source: string): string {
   return source
     .replace(
       '#include <common>',
       `#include <common>
 attribute vec4 aSurfaceDetail;
+varying float vGbOcclusion;`,
+    )
+    .replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+vGbOcclusion = aSurfaceDetail.w;`,
+    );
+}
+
+/** Spends the occlusion channel, with no pattern program attached. */
+export function injectOcclusionFragmentStage(source: string): string {
+  return source
+    .replace(
+      '#include <common>',
+      '#include <common>\nvarying float vGbOcclusion;\nuniform vec2 gbOcclusionStrength;',
+    )
+    .replace('#include <map_fragment>', `#include <map_fragment>\n${OCCLUSION_ALBEDO_GLSL}`)
+    .replace('#include <aomap_fragment>', `#include <aomap_fragment>\n${OCCLUSION_LIGHT_GLSL}`);
+}
+
+export function injectSurfaceVertexStage(source: string): string {
+  return injectOcclusionVertexStage(source)
+    .replace(
+      '#include <common>',
+      `#include <common>
 varying vec3 vGbLocal;
 varying vec3 vGbNormalLocal;
 varying vec3 vGbDetail;`,
@@ -374,7 +460,7 @@ diffuseColor.rgb *= clamp(gbTone, 0.5, 1.35);
 // Age dulls colour as well as value: sooted brick and salt-bleached plaster lose saturation.
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), gbSoot);
 `;
-  return source
+  return injectOcclusionFragmentStage(source)
     .replace('#include <common>', `#include <common>\n${SURFACE_COMMON_GLSL}`)
     .replace('#include <map_fragment>', `#include <map_fragment>\n${detail}`)
     .replace(
@@ -421,12 +507,32 @@ export function installProceduralSurface(
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = injectSurfaceVertexStage(shader.vertexShader);
     shader.fragmentShader = injectSurfaceFragmentStage(program, shader.fragmentShader);
+    shader.uniforms['gbOcclusionStrength'] = OCCLUSION_UNIFORM;
   };
   // Two patterns can share identical onBeforeCompile source text, so the default cache key would
   // let them reuse one program. Key on the caller's identity instead.
   material.customProgramCacheKey = () => cacheKey;
   // Geometry without the optional detail attribute (plaza paving, portals, scaffolds) renders
   // as unweathered, straight-grained material rather than failing to bind.
+  const defaults = material as unknown as { defaultAttributeValues?: Record<string, number[]> };
+  defaults.defaultAttributeValues = { ...(defaults.defaultAttributeValues ?? {}), aSurfaceDetail: [0, 0, 0, 0] };
+}
+
+/**
+ * Give a material the baked occlusion channel without a pattern program.
+ *
+ * For the surfaces that are meant to stay smooth — motif inlay, trim, a canvas awning, open water.
+ * They are still parts of a building and still sit under its eaves and inside its reveals, so they
+ * must take the structure's shading even though they take none of its texture. Every such material
+ * compiles to the one shared program, because the injected source is identical.
+ */
+export function installSurfaceOcclusion(material: THREE.MeshStandardMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = injectOcclusionVertexStage(shader.vertexShader);
+    shader.fragmentShader = injectOcclusionFragmentStage(shader.fragmentShader);
+    shader.uniforms['gbOcclusionStrength'] = OCCLUSION_UNIFORM;
+  };
+  material.customProgramCacheKey = () => 'godbox-occlusion';
   const defaults = material as unknown as { defaultAttributeValues?: Record<string, number[]> };
   defaults.defaultAttributeValues = { ...(defaults.defaultAttributeValues ?? {}), aSurfaceDetail: [0, 0, 0, 0] };
 }

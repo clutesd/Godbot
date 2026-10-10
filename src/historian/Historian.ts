@@ -56,6 +56,15 @@ export interface HistorianOptions {
 export class Historian {
   private readonly acquisitionCallbacks = new Map<string, () => void>();
   whenAcquired(sceneId: string, callback: () => void): void { this.acquisitionCallbacks.set(sceneId, callback); }
+  private readonly unavailableCallbacks = new Map<string, () => void>();
+  whenUnavailable(sceneId: string, callback: () => void): void { this.unavailableCallbacks.set(sceneId, callback); }
+
+  /** Advance an authored sequence past an unreachable shot without recording it as witnessed. */
+  abandonScene(sceneId: string): void {
+    this.unavailableCallbacks.get(sceneId)?.();
+    this.unavailableCallbacks.delete(sceneId);
+    this.acquisitionCallbacks.delete(sceneId);
+  }
 
   private readonly documentaryMemory = new DocumentaryMemory();
   private readonly milestoneIndex = new MilestoneIndex();
@@ -220,6 +229,7 @@ export class Historian {
     }
     this.acquisitionCallbacks.get(choice.id)?.();
     this.acquisitionCallbacks.delete(choice.id);
+    this.unavailableCallbacks.delete(choice.id);
     this.shownSubjects.set(choice.subjectId, (this.shownSubjects.get(choice.subjectId) ?? 0) + 1);
     if (choice.event) this.shownEventTypes.set(choice.event.type, (this.shownEventTypes.get(choice.event.type) ?? 0) + 1);
     if (choice.id.startsWith('century:')) this.shownCenturies.add(Number(choice.id.replace('century:', '')));

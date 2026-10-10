@@ -2,13 +2,19 @@ import type { AssemblyPiece } from './GeometryBuilder';
 import { BUILD_STAGE } from './BuildStages';
 import * as THREE from 'three';
 import type { AssetBuilder, AssetConfig } from './AssetBuilder';
+import { structureFit } from './StructureFit';
 
 /** Placement adapter only: every shell, including subsystem buildings, is a production asset. */
 export function productionBuildingShell(builder: AssetBuilder, config: AssetConfig, width: number, depth: number, name: string): THREE.Object3D {
   const source = builder.getAsset('building', config).mesh;
   const shell = source.clone(true);
   shell.name = name;
-  shell.scale.setScalar(Math.min(width / Number(source.userData['footprintWidth']), depth / Number(source.userData['footprintDepth'])));
+  // Against the built mass and capped at true size, exactly as a placed building is fitted.
+  shell.scale.setScalar(structureFit({
+    plotWidth: width, plotDepth: depth,
+    massWidth: Number(source.userData['massWidth'] ?? source.userData['footprintWidth'] ?? 1),
+    massDepth: Number(source.userData['massDepth'] ?? source.userData['footprintDepth'] ?? 1),
+  }));
   shell.traverse(node => { node.userData['sharedAsset'] = true; });
   return shell;
 }

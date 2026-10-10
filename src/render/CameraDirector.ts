@@ -2634,6 +2634,11 @@ export class CameraDirector {
     // Commit the semantic handoff immediately as well; otherwise the last internal "Arrival Day"
     // transit label can survive beneath a clock that has already started moving.
     if (this.currentScene) {
+      this.historian.abandonScene(this.currentScene.id);
+      if (isFoundingReleaseScene(this.currentScene.id)) {
+        this.foundingPresentationDone = true;
+        this.releaseFoundingOverlayForTransit(true);
+      }
       this.transitionScene(this.currentScene.id, 'released');
       // An unreachable destination yields to other subjects instead of being re-proposed at once.
       this.consecutiveAbandons += 1;

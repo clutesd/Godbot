@@ -89,6 +89,7 @@ export interface PersonVisualState {
   embracing?: boolean;
   bodyScale?: number;
   focalHeadYaw?: number;
+  focalHeadPitch?: number;
   passingPeer?: string;
   passingSeconds?: number;
   passingCooldown?: number;
@@ -223,11 +224,17 @@ export class PeopleVisualStateStore {
   }
 
   /** An authored physical egress path may stand on the vessel ramp instead of terrain. */
-  stageArrival(personId: string, pose: Vec2 & { footY: number; facing: number; speed: number }, ground: PersonVisualGround): PersonVisualState {
-    const state = this.states.get(personId) ?? this.spawn(personId, pose, ground);
+  stageArrival(personId: string, pose: Vec2 & { footY: number; facing: number; speed: number }, ground: PersonVisualGround, deltaSeconds = 1 / 60): PersonVisualState {
+    const existing = this.states.get(personId);
+    const state = existing ?? this.spawn(personId, pose, ground);
+    const jumped = !existing || Math.hypot(pose.x - state.x, pose.z - state.z) > 0.2;
+    const facing = jumped ? pose.facing : turnToward(state.facing, pose.facing,
+      Math.min(0.1, Math.max(0, deltaSeconds)) * (pose.speed > 0 ? TURN_RATE : STANDING_TURN_RATE));
     this.states.set(personId, state);
-    Object.assign(state, pose, { lastFrame: this.frame, snapped: false, traveling: pose.speed > 0,
-      originX: pose.x, originZ: pose.z, destinationX: pose.x, destinationZ: pose.z,
+    Object.assign(state, pose, { facing, lastFrame: this.frame, snapped: jumped, traveling: pose.speed > 0,
+      originX: pose.x, originZ: pose.z,
+      destinationX: pose.x + Math.sin(pose.facing) * pose.speed,
+      destinationZ: pose.z + Math.cos(pose.facing) * pose.speed,
       velocityX: Math.sin(pose.facing) * pose.speed, velocityZ: Math.cos(pose.facing) * pose.speed,
       lastGroundX: pose.x, lastGroundZ: pose.z, path: [{ x: pose.x, z: pose.z }], waypoint: 1, progress: 1,
       desiredFacing: pose.facing, blocked: false });

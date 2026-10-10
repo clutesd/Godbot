@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { isArrivalFilmPhase, podPosition, podTouchdown, type FoundingPod } from '../../sim/founding/FoundingArrival';
 import type { SimulationState } from '../../sim/types';
-import { ARRIVAL_HATCH } from './ArrivalChoreography';
+import { ARRIVAL_HATCH, arrivalRampFor } from './ArrivalChoreography';
+import { surfaceHeightAt } from '../../sim/terrain/SurfaceGeometry';
 import { PodHullAsset } from './PodHullAsset';
 
 const TRAIL_SAMPLES = 64;
@@ -11,6 +12,7 @@ interface PodVisual {
   pod: FoundingPod;
   hull: THREE.Group;
   hatch: THREE.Group;
+  rampAngle: number;
   light: THREE.MeshBasicMaterial;
   runeCore: THREE.MeshBasicMaterial;
   runeHalo: THREE.MeshBasicMaterial;
@@ -92,7 +94,8 @@ export class FoundingPodRenderer {
     dust.frustumCulled = false;
     this.root.add(hull, ...trails, dust);
     hull.visible = false;
-    return { pod, hull, hatch, light, runeCore, runeHalo, trails, dust };
+    const rampAngle = arrivalRampFor(pod, (x, z) => surfaceHeightAt(this.state.world, x, z)).angle;
+    return { pod, hull, hatch, rampAngle, light, runeCore, runeHalo, trails, dust };
   }
 
   /**
@@ -231,7 +234,7 @@ export class FoundingPodRenderer {
       const settling = age >= 0 ? Math.exp(-age * 4) : 0;
       v.hull.rotation.z = age < 0 ? (1 - Math.min(1, (t - v.pod.entrySeconds) / v.pod.descentSeconds)) * 0.18 : Math.sin(age * 31) * settling * 0.015;
       v.hull.position.y -= settling * Math.sin(Math.max(0, age) * 16) * 0.045;
-      v.hatch.rotation.x = -THREE.MathUtils.smoothstep(age, 0.45, 1.65) * ARRIVAL_HATCH.angle;
+      v.hatch.rotation.x = -THREE.MathUtils.smoothstep(age, 0.45, 1.65) * v.rampAngle;
       v.light.opacity = age < 0 ? 0.9 : Math.max(0.36, Math.exp(-age * 0.6));
       const runePulse = 0.5 + Math.sin(t * 0.72 + v.pod.entrySeconds * 0.41) * 0.5;
       v.runeCore.opacity = (age < 0 ? 0.66 : 0.48) + runePulse * 0.12;

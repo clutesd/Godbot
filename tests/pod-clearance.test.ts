@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { FoundingPodRenderer } from '../src/render/founding/FoundingPodRenderer';
-import { ARRIVAL_HATCH, arrivalRampEnd, arrivalFounderPose } from '../src/render/founding/ArrivalChoreography';
+import { ARRIVAL_HATCH, arrivalRampFor, arrivalFounderPose } from '../src/render/founding/ArrivalChoreography';
+import { surfaceHeightAt } from '../src/sim/terrain/SurfaceGeometry';
 import { podTouchdown } from '../src/sim/founding/FoundingArrival';
 
 /** Check real triangles, including the emissive trim. A bounding box for a horseshoe-shaped
@@ -35,15 +36,19 @@ describe('founding vessel physical portal', () => {
     // Test actual arrival choreography, including each lane, using taller/wider bounds than
     // the rendered founders. Retain hull world transform to catch hinge/height disagreements.
     const people = pod.personIds.slice(0, 2).map(id => sim.state.people.find(person => person.id === id)!);
+    const heightAt = (x: number, z: number) => surfaceHeightAt(sim.state.world, x, z);
     expect(people).toHaveLength(2);
     for (const person of people) {
       expect(person.foundingOrigin).toBeDefined();
-      for (let step = 0; step <= 28; step++) {
-        const pose = arrivalFounderPose(person, pod, person.foundingOrigin!.emergedSeconds + step * 0.09, () => pod.groundY)!;
+      let complete = false;
+      for (let step = 0; step <= 120 && !complete; step++) {
+        const pose = arrivalFounderPose(person, pod, person.foundingOrigin!.emergedSeconds + step * 0.09, heightAt)!;
         const body = new THREE.Box3(new THREE.Vector3(pose.x - 0.07, pose.footY + 0.04, pose.z - 0.025),
           new THREE.Vector3(pose.x + 0.07, pose.footY + 0.67, pose.z + 0.025));
         expect(intersectingMeshes(hull, body), `lane ${person.id}, step ${step}`).toEqual([]);
+        complete = pose.complete;
       }
+      expect(complete).toBe(true);
     }
     renderer.dispose();
   });
@@ -65,10 +70,11 @@ describe('founding vessel physical portal', () => {
       .toContain('dark-bronze-hatch');
     sim.state.arrival!.elapsedSeconds = podTouchdown(pod) + 1.7;
     renderer.update(camera);
-    expect(hatch.rotation.x).toBeCloseTo(-ARRIVAL_HATCH.angle, 8);
+    const ramp = arrivalRampFor(pod, (x, z) => surfaceHeightAt(sim.state.world, x, z));
+    expect(hatch.rotation.x).toBeCloseTo(-ramp.angle, 8);
     const tip = hatch.localToWorld(new THREE.Vector3(0, ARRIVAL_HATCH.length, 0));
-    expect(tip.z - pod.position.z).toBeCloseTo(arrivalRampEnd.z, 5);
-    expect(tip.y - pod.groundY).toBeCloseTo(arrivalRampEnd.height, 3);
+    expect(tip.z - pod.position.z).toBeCloseTo(ramp.z, 5);
+    expect(tip.y).toBeCloseTo(surfaceHeightAt(sim.state.world, tip.x, tip.z), 3);
     renderer.dispose();
   });
 

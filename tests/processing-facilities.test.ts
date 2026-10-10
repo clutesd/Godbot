@@ -77,9 +77,9 @@ describe('facility authority: production requires a physical place', () => {
       expect((ref.source === 'catalog' ? owned.catalog : owned.material).has(ref.id)).toBe(true);
       expect(processSpec(ref)).toBeDefined();
     }
-    // Exactly the existing lumber, charcoal, copper, bronze, iron, steel, machine-part and engine
-    // recipes: every one is defined by the recipe catalogs, never redefined here.
-    expect([...owned.catalog].sort()).toEqual(['bronze-ingot', 'charcoal', 'engine-assembly', 'iron-tools', 'machine-parts', 'timber-framing']);
+    // Exactly the existing lumber, charcoal, copper, bronze, iron, steel, machine-part, engine and
+    // pottery recipes: every one is defined by the recipe catalogs, never redefined here.
+    expect([...owned.catalog].sort()).toEqual(['bronze-ingot', 'charcoal', 'engine-assembly', 'iron-tools', 'machine-parts', 'pottery-vessels', 'timber-framing']);
     expect([...owned.material].sort()).toEqual(['make-steel', 'saw-lumber', 'smelt-copper', 'smelt-iron']);
     for (const id of owned.catalog) expect(RECIPE_BY_ID.has(id)).toBe(true);
     for (const id of owned.material) expect(MATERIAL_RECIPES.some(recipe => recipe.id === id)).toBe(true);
@@ -373,8 +373,8 @@ describe('integrated works and multi-step chains', () => {
 
 describe('reusable family framework', () => {
   it('runs a family the engine has never seen from data alone', () => {
-    const ceramics: FacilityFamilySpec = {
-      id: 'ceramics', name: 'Ceramics', description: 'test family', triggerMaterials: ['clay'],
+    const textiles: FacilityFamilySpec = {
+      id: 'textiles', name: 'Textiles', description: 'test family', triggerMaterials: ['clay'],
       tiers: [{
         tier: 1, kind: 'kiln-yard', name: 'kiln yard', form: 'workshop', material: 'masonry', capacity: 4, workers: 2,
         occupations: ['artisan'], yard: 20, knowledge: [], power: { mode: 'none', demand: 0, fallback: 1, minimumCoverage: 0 },
@@ -382,18 +382,18 @@ describe('reusable family framework', () => {
         build: { lines: [{ options: ['stone'], amount: 2 }], work: 1 }, maintenance: { lines: [], work: 0.1 }, service: 0.4,
       }],
     };
-    const restore = registerFacilityFamily(ceramics);
+    const restore = registerFacilityFamily(textiles);
     try {
-      expect(facilityFamilies().map(f => f.id)).toContain('ceramics');
+      expect(facilityFamilies().map(f => f.id)).toContain('textiles');
       expect(facilityOwnedRecipes().catalog.has('pottery-vessels')).toBe(true);
-      const w = processingWorld('ceramics');
+      const w = processingWorld('textiles');
       learn(w.s, 'pottery-firing');
       w.s.knowledge.records['pottery-firing']!.practice = 0.9;
       stock(w.s, { clay: 30, timber: 20, stone: 10 });
       w.s.buildings = 6;
       step(w.state, w.system, 1);
       // Pottery at settlement level is now impossible; only the kiln yard can make it.
-      const kiln = facilitiesOf(w.s, 'ceramics')[0];
+      const kiln = facilitiesOf(w.s, 'textiles')[0];
       expect(kiln).toBeDefined();
       expect(w.s.localMaterials.pottery ?? 0).toBe(0);
       for (let i = 0; i < 30; i++) {
@@ -404,14 +404,14 @@ describe('reusable family framework', () => {
       expect((kiln!.totals.produced.pottery ?? 0) + (kiln!.totals.produced.brick ?? 0)).toBeGreaterThan(0);
       expect(facilityConservationError(kiln!)).toBeLessThan(1e-4);
     } finally { restore(); }
-    expect(facilityFamilies().map(f => f.id)).not.toContain('ceramics');
+    expect(facilityFamilies().map(f => f.id)).not.toContain('textiles');
     expect(facilityOwnedRecipes().catalog.has('pottery-vessels')).toBe(false);
   });
 
   it('reserves every later family id without any implementation', () => {
     const ids = facilityFamilies().map(f => f.id).sort();
-    expect(ids).toEqual(['machinery', 'metallurgy', 'wood']);
-    for (const reserved of ['ceramics', 'textiles', 'chemicals', 'electrical-equipment', 'strategic'] as const) {
+    expect(ids).toEqual(['ceramics', 'machinery', 'metallurgy', 'wood']);
+    for (const reserved of ['textiles', 'chemicals', 'electrical-equipment', 'strategic'] as const) {
       expect(facilityTierSpec(reserved, 1)).toBeUndefined();
     }
   });

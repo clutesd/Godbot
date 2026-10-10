@@ -38,6 +38,14 @@ in place. Community geography returns through normal history rather than a five-
 
 The first-year continuity layer begins only after that release. Community revisits are spaced across authoritative months so the opening cannot collapse back into a second five-card carousel. From that point onward, founding context is part of normal documentary history rather than the Arrival Day cinematic.
 
+Camera acquisition and sequence progress are separate when a route fails. After the bounded flight
+recovery is exhausted, an unavailable orientation or portrait is skipped without archiving it as
+witnessed. A failed final release still completes the presentation barrier; `OpeningHandoff` starts
+history and commits Month 1 on the next frame. This prevents an unreachable camera destination from
+repeatedly proposing the same opening scene while the simulation remains frozen at Day 0.
+`tests/opening-progression.test.ts` exercises the real camera, installed Historian layers, terrain,
+and handoff for normal playback, blocked opening routes, and a blocked final release.
+
 
 ## Founding reality
 
@@ -60,6 +68,14 @@ Each camp starts with zero structures, roads, workshops, institutions and indust
 5. **A beginning without promises:** “Five vessels found the ground. No promise waited for them. They carried enough to begin. What they would keep, lose, or become was still unknown.”
 
 ## Review and verification
+
+The opening initializes daylight before shader warmup and the readiness reveal. HDR effects are
+enabled only when floating-point color buffers are supported. The first effects frame is checked
+for WebGL errors, and shader failures are monitored during rendering. A failed effects chain falls
+back to the ordinary scene renderer, restoring the canvas framebuffer first. If that renderer also
+fails, or the graphics context is lost, playback stops and shows a Restart message instead of
+leaving narration over a missing world. `tests/scene-render-guard.test.ts` covers these recovery
+paths. These checks do not replace live GPU and visual review.
 
 Run `npm run dev`, then open `/tests/arrival-preview.html`. The preview uses the production app with seed `arrival-day-preview`, starts paused, and keeps its archive in memory. Choose a moment and click Inspect; use Play/pause or quarter-second steps. Rewinding recreates the entire run, which also exercises restart cleanup. Debug controls are absent from normal presentation and production builds.
 

@@ -153,12 +153,17 @@ export interface MaterialEconomy {
   bulkSnapshot: { wood: number; minerals: number };
   tools: number;
   arms: number;
+  /** Finished, usable wooden equipment equivalents (quality-weighted), including issued arms and reserves. */
   timberArms: number;
   medicineCoverage: number;
   energyDemand: number;
   energySupplied: number;
   labourUsed: number;
   shortageMonths: number;
+  /** Finished units the settlement's own recipes put into localMaterials since the last economy pass. */
+  craftedThisMonth?: number;
+  /** Lifetime finished units credited to the economy; diagnostics only, never spent. */
+  craftedTotal?: number;
 }
 
 export type WeatherKind = 'clear' | 'cloudy' | 'rain' | 'heavy-rain' | 'snow' | 'heavy-snow' | 'thunderstorm' | 'windstorm' | 'tornado' | 'hurricane';
