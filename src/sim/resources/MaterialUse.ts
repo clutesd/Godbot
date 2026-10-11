@@ -44,7 +44,7 @@ declare module '../types' {
 
 declare module '../development/types' {
   interface DevelopmentProject {
-    /** Frozen physical bill of materials selected when the project begins. */
+    /** Physical bill for remaining progress; a documented founding redesign may revise it. */
     materialRequirements?: FlexibleMaterialRequirement[];
     /** Exact materials consumed by this project over its lifetime. */
     materialSpent?: Partial<Record<MaterialKind, number>>;

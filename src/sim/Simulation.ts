@@ -27,6 +27,7 @@ import { syncStructurePlots } from '../shared/StructurePlots';
 import { advanceSettlementDevelopment, initializeSettlementDevelopment, planEstablishment } from './development/SettlementDevelopmentSystem';
 import { applyFloodConsequences, applyTornadoConsequences, repairWeatherDamage } from './weather/WeatherConsequences';
 import { advanceStructureFires } from './fire/StructureFireSystem';
+import { advanceVolcano, createVolcano } from './environment/VolcanoSystem';
 import { TransportationSystem } from './transport/TransportationSystem';
 import { createTransportationState } from './transport/types';
 import { ResourceSystem, createMaterialState, type ResourceEventDraft } from './resources/ResourceSystem';
@@ -58,6 +59,9 @@ import type {
 } from './types';
 import { cellAt, generateWorld, strategicSettlementCells } from './world';
 import { TickProfiler, type TickPerformanceSnapshot } from './TickProfiler';
+import { setMonthInFlight } from './MonthAuthority';
+import { type Slices } from './TimeSlicing';
+import { publishResourceWorkMonth } from './resources/ResourceWorkAssignments';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const distance = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.z - b.z);
@@ -207,6 +211,7 @@ export class Simulation {
   private resourceSystem!: ResourceSystem;
   private readonly widespreadAdoptions = new Set<string>();
   private readonly tickProfiler = new TickProfiler();
+  private monthJob: Slices | undefined;
   private readonly baseOverrides: GodboxConfigInput;
 
   constructor(overrides: GodboxConfigInput = {}) {
@@ -254,6 +259,7 @@ export class Simulation {
       month: 0,
       world,
       weather: this.weatherSystem.state,
+      volcano: createVolcano(world, this.config.seed),
       people: [],
       notableFigures: [],
       settlements: [],
@@ -443,24 +449,95 @@ export class Simulation {
 
   step(months = 1): void {
     if (!this.historyRunning) return;
+    // A sliced month already began; it must commit before any later month starts.
+    this.finishMonthInFlight();
     const count = Math.max(0, Math.floor(months));
     for (let index = 0; index < count; index += 1) this.stepMonth();
   }
 
+  /** True while a time-sliced month has begun but not yet committed. */
+  get monthInFlight(): boolean { return this.monthJob !== undefined; }
+
+  /**
+   * Interactive driver: advances at most one month, returning control at a safe boundary once
+   * `deadlineMs` has passed (at least one slice always runs, so history can never starve). Returns
+   * true when the month commits. The month performs exactly the operations and random draws of
+   * step(); slicing only chooses where the main thread may draw a frame in between.
+   */
+  advanceMonthSliced(deadlineMs: number, clock: () => number = () => performance.now()): boolean {
+    if (!this.monthJob) {
+      if (!this.historyRunning) return false;
+      this.monthJob = this.monthSlices();
+    } else {
+      this.tickProfiler.resume();
+    }
+    try {
+      for (;;) {
+        if (this.monthJob.next().done) {
+          this.monthJob = undefined;
+          return true;
+        }
+        if (clock() >= deadlineMs) {
+          this.tickProfiler.suspend();
+          return false;
+        }
+      }
+    } catch (error) {
+      this.abandonMonthJob();
+      throw error;
+    }
+  }
+
+  /** Synchronously commits a sliced month (before persistence, restart or a direct step()). */
+  finishMonthInFlight(): void {
+    if (!this.monthJob) return;
+    this.tickProfiler.resume();
+    try {
+      while (!this.monthJob.next().done) { /* drain */ }
+    } finally {
+      this.abandonMonthJob();
+    }
+  }
+
+  private abandonMonthJob(): void {
+    this.monthJob = undefined;
+    setMonthInFlight(this.state, false);
+  }
+
   private stepMonth(): void {
+    const job = this.monthSlices();
+    try {
+      while (!job.next().done) { /* run the month without pausing */ }
+    } finally {
+      setMonthInFlight(this.state, false);
+    }
+  }
+
+  /**
+   * One authoritative month. Each `yield` is a quiescent point: no phase is half-applied, lookup
+   * indexes are valid, and every person/settlement is wholly before or after its own update.
+   */
+  private *monthSlices(): Slices {
     const tickStarted = this.tickProfiler.start();
     this.state.month += 1;
+    setMonthInFlight(this.state, true);
     const annual = this.state.month % 12 === 0;
 
     let phaseStarted = this.tickProfiler.start();
-    this.weatherSystem.advanceMonth();
+    yield* this.weatherSystem.advanceMonthSlices();
     this.state.weather = this.weatherSystem.state;
+    this.tickProfiler.record('weather', phaseStarted);
+    yield;
+
+    phaseStarted = this.tickProfiler.start();
     syncStructurePlots(this.state);
     this.tickProfiler.record('weather', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     for (const event of applyFloodConsequences(this.state)) this.addEvent(event);
     for (const event of advanceStructureFires(this.state, this.config.seed)) this.addEvent(event);
+    if (this.state.volcano) for (const event of advanceVolcano(this.state, this.state.volcano, this.config.seed)) this.addEvent(event);
     for (const tornado of this.state.weather.tornadoes) {
       if (tornado.month === this.state.month) {
         for (const event of applyTornadoConsequences(this.state, tornado)) this.addEvent(event);
@@ -468,6 +545,7 @@ export class Simulation {
     }
     this.rebuildLookupIndexes();
     this.tickProfiler.record('environment', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     // Observe locally and choose before the shared monthly labour allocation is frozen.
@@ -490,12 +568,14 @@ export class Simulation {
     }
     beginLabourMonth(this.state, this.peopleBySettlement);
     this.tickProfiler.record('survival-planning', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     ensureProcessingAuthority(this.state);
     advanceEnergy(this.state);
-    this.applyResourceEvents(this.resourceSystem.advanceMonth(this.state));
+    this.applyResourceEvents(yield* this.resourceSystem.advanceMonthSlices(this.state));
     this.tickProfiler.record('resources', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     this.runEconomy();
@@ -505,15 +585,18 @@ export class Simulation {
       }
     }
     this.tickProfiler.record('economy', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     this.knowledgeSystem.advanceMonth(this.state);
     this.tickProfiler.record('knowledge-month', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     this.transportationSystem.advanceMonth();
     this.runTrade();
     this.tickProfiler.record('transport-trade', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     for (const settlement of this.livingSettlements()) {
@@ -521,6 +604,7 @@ export class Simulation {
       resolveSurvival(this.state, settlement, survivalPopulation(settlement), this.dominantCulture(settlement));
     }
     this.tickProfiler.record('survival-resolution', phaseStarted);
+    yield;
     resolveDisease(this.state);
     observeSocialPressures(this.state);
 
@@ -528,48 +612,58 @@ export class Simulation {
       phaseStarted = this.tickProfiler.start();
       this.formPartnerships();
       this.tickProfiler.record('quarterly-partnerships', phaseStarted);
+      yield;
     }
 
     phaseStarted = this.tickProfiler.start();
     advanceHumanCapital(this.state);
-    this.runPeople();
+    yield* this.runPeopleSlices();
     this.tickProfiler.record('people', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     this.runWars();
     this.tickProfiler.record('wars', phaseStarted);
+    yield;
 
     if (this.state.month % 3 === 0) {
       phaseStarted = this.tickProfiler.start();
       this.runMigration();
       this.tickProfiler.record('migration', phaseStarted);
+      yield;
     }
 
     if (annual) {
       phaseStarted = this.tickProfiler.start();
-      this.runDiplomacy();
+      yield* this.runDiplomacySlices();
       this.tickProfiler.record('annual-diplomacy', phaseStarted);
+      yield;
 
       phaseStarted = this.tickProfiler.start();
       this.runInstitutions();
       this.tickProfiler.record('annual-institutions', phaseStarted);
+      yield;
 
       phaseStarted = this.tickProfiler.start();
       this.runPolitics();
       this.tickProfiler.record('annual-politics', phaseStarted);
+      yield;
 
       phaseStarted = this.tickProfiler.start();
       this.applyKnowledgeEvents(this.knowledgeSystem.advanceYear(this.state));
       this.assessWidespreadAdoption();
       this.tickProfiler.record('knowledge-year', phaseStarted);
+      yield;
 
       phaseStarted = this.tickProfiler.start();
       this.runCulture();
       this.tickProfiler.record('annual-culture', phaseStarted);
+      yield;
 
       phaseStarted = this.tickProfiler.start();
       this.runSettlementChange();
       this.tickProfiler.record('settlement-change', phaseStarted);
+      yield;
     }
 
     phaseStarted = this.tickProfiler.start();
@@ -579,10 +673,12 @@ export class Simulation {
     this.rebuildLookupIndexes();
     this.recomputeCultureShares();
     this.tickProfiler.record('bookkeeping', phaseStarted);
+    yield;
 
     phaseStarted = this.tickProfiler.start();
     this.applyAdvancedEvents(this.advancedSystem.advanceMonth(this.state));
     this.tickProfiler.record('advanced-month', phaseStarted);
+    yield;
 
     if (annual) {
       phaseStarted = this.tickProfiler.start();
@@ -592,6 +688,7 @@ export class Simulation {
       this.rebuildLookupIndexes();
       this.recomputeCultureShares();
       this.tickProfiler.record('advanced-year', phaseStarted);
+      yield;
     }
 
     phaseStarted = this.tickProfiler.start();
@@ -602,12 +699,16 @@ export class Simulation {
     this.state.notableFigures = this.importanceSystem.roster(this.state.people);
     invalidateLabour(this.state);
     this.tickProfiler.record('bookkeeping', phaseStarted);
+    yield;
 
     if (this.state.history.length > this.config.simulation.historyLimit) {
       phaseStarted = this.tickProfiler.start();
       this.trimHistory();
       this.tickProfiler.record('history-trim', phaseStarted);
+      yield;
     }
+    publishResourceWorkMonth(this.state);
+    setMonthInFlight(this.state, false);
     this.tickProfiler.finish(this.state.month, annual, tickStarted);
   }
 
@@ -1042,13 +1143,19 @@ export class Simulation {
     }
   }
 
-  private runPeople(): void {
+  /**
+   * Pauses only between people. Deaths and births are collected and applied after the loop, so a
+   * pause never exposes a half-removed person or a child missing from the indexes.
+   */
+  private *runPeopleSlices(): Slices {
     const newborns: Person[] = [];
     const deaths: Array<{ person: Person; cause: string }> = [];
     this.importanceSystem.ingest(this.state);
     const popLimitFactor = clamp(1 - this.population / this.config.simulation.populationSoftCap, 0.04, 1);
+    let sinceYield = 0;
     for (const person of this.state.people) {
       if (!person.alive) continue;
+      if (++sinceYield === 8) { sinceYield = 0; yield; }
       let settlement = this.settlement(person.homeId);
       person.ageMonths += 1;
       if (!settlement?.alive) {
@@ -1392,8 +1499,9 @@ export class Simulation {
     }
   }
 
-  private runDiplomacy(): void {
+  private *runDiplomacySlices(): Slices {
     for (const relation of this.state.relations) {
+      yield;
       const a = this.settlement(relation.a);
       const b = this.settlement(relation.b);
       if (!a?.alive || !b?.alive) continue;
@@ -1427,7 +1535,7 @@ export class Simulation {
       relation.trust = clamp(relation.trust + (connected ? 0.012 : -0.007) + relation.culturalAffinity * 0.006 - relation.hostility * 0.016);
       const tradeInterest = mean([cultureA?.dimensions.tradeOrientation ?? 0.5, cultureB?.dimensions.tradeOrientation ?? 0.5]);
       if (!tradeRoute && !this.warBetween(a.id, b.id) && relation.trust + relation.culturalAffinity + tradeInterest > 1.35 && tradeOpportunity(a, b) * this.config.society.tradeConnectivity > 0.08) {
-        this.establishTrade(a, b, relation);
+        yield* this.establishTradeSlices(a, b, relation);
       } else if (tradeRoute) {
         tradeRoute.volume = clamp(0.42 + (tradeRoute.transport?.recentFreight ?? 0) / 12 - relation.hostility * 0.1, 0.1, 2.4);
       }
@@ -1475,10 +1583,10 @@ export class Simulation {
     });
   }
 
-  private establishTrade(a: Settlement, b: Settlement, relation: Relation): void {
+  private *establishTradeSlices(a: Settlement, b: Settlement, relation: Relation): Slices {
     const mode = 'land' as const;
     const route: TradeRoute = { id: `route-${this.nextRouteId}`, a: a.id, b: b.id, volume: 0.42, ageMonths: 0, caravanProgress: 0, caravanDirection: 1, mode, knowledgeFlow: 0, cumulativeKnowledge: 0, active: true };
-    if (!this.transportationSystem.planTrade(route, a, b)) return;
+    if (!(yield* this.transportationSystem.planTradeSlices(route, a, b))) return;
     this.nextRouteId++;
     this.state.tradeRoutes.push(route);
     for (const settlementId of [route.a, route.b]) {

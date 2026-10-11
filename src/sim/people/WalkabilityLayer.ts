@@ -88,8 +88,15 @@ export class WalkabilityLayer {
   }
 
   isSegmentWalkable(start: Vec2, end: Vec2): boolean {
+    return this.segmentWalkable(start, end, this.walkablePoint);
+  }
+
+  private readonly walkablePoint = (point: Vec2): boolean => this.isWalkable(point);
+
+  /** isSegmentWalkable with the endpoint test supplied, so a caller may reuse known endpoints. */
+  private segmentWalkable(start: Vec2, end: Vec2, walkable: (point: Vec2) => boolean): boolean {
     if (!this.structures.clear(start, end)) return false;
-    if (!this.isWalkable(start) || !this.isWalkable(end)) return false;
+    if (!walkable(start) || !walkable(end)) return false;
     if (!fineSegmentDry(this.world, start, end)) return false;
     // Exact cell-level traversal (supercover DDA). Walkability is a per-cell predicate, so
     // walking every touched cell makes validation exact and sub-segment consistent: any point
@@ -219,7 +226,18 @@ export class WalkabilityLayer {
       const to = nodes[index];
       if (!to) continue;
       let segment = this.isSegmentWalkable(cursor, to) ? [{ ...to }] : [];
-      if (!segment.length && !this.structures.clear(cursor, to)) segment = this.structures.detour(cursor, to, (a, b) => this.isSegmentWalkable(a, b));
+      if (!segment.length && !this.structures.clear(cursor, to)) {
+        // A detour tests every pair of its corner nodes, and each segment test re-checks both
+        // endpoints. Walkability is a pure predicate and nothing changes during one detour, so
+        // each node is tested once (keyed by node identity) with identical results.
+        const known = new Map<Vec2, boolean>();
+        const walkable = (point: Vec2): boolean => {
+          let result = known.get(point);
+          if (result === undefined) { result = this.isWalkable(point); known.set(point, result); }
+          return result;
+        };
+        segment = this.structures.detour(cursor, to, (a, b) => this.segmentWalkable(a, b, walkable));
+      }
       if (!segment.length) segment = this.gridRoute(cursor, to);
       if (segment.length > 0 && !this.isSegmentWalkable(cursor, segment[0]!)) {
         return [];

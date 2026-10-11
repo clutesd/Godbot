@@ -1,4 +1,5 @@
 import type { Occupation, SimulationState, Vec2, WorldState } from '../types';
+import { monthInFlight } from '../MonthAuthority';
 
 export type ResourceWorkSource = 'world-resource' | 'deposit-system';
 
@@ -36,8 +37,22 @@ interface MonthlyWorkSnapshot {
 }
 
 const snapshots = new WeakMap<SimulationState, MonthlyWorkSnapshot>();
-/** Presentation renderers own the WorldState already; mirror the same transient snapshot by world. */
+/**
+ * Presentation renderers own the WorldState already; mirror the same transient snapshot by world.
+ * While a time-sliced month is in flight the mirror keeps the last complete month, so a renderer
+ * never presents a ledger that only some settlements have written yet.
+ */
 const snapshotsByWorld = new WeakMap<WorldState, MonthlyWorkSnapshot>();
+
+function mirror(state: SimulationState, ledger: MonthlyWorkSnapshot): void {
+  if (!monthInFlight(state)) snapshotsByWorld.set(state.world, ledger);
+}
+
+/** Called when a month commits: the finished ledger becomes the one presentation observes. */
+export function publishResourceWorkMonth(state: SimulationState): void {
+  const current = snapshots.get(state);
+  if (current) snapshotsByWorld.set(state.world, current);
+}
 
 function authorityKey(settlementId: string, resourceId: string): string {
   return `${settlementId}\u0000${resourceId}`;
@@ -50,12 +65,12 @@ function freshSnapshot(month: number): MonthlyWorkSnapshot {
 function snapshot(state: SimulationState): MonthlyWorkSnapshot {
   const current = snapshots.get(state);
   if (current?.month === state.month) {
-    snapshotsByWorld.set(state.world, current);
+    mirror(state, current);
     return current;
   }
   const next = freshSnapshot(state.month);
   snapshots.set(state, next);
-  snapshotsByWorld.set(state.world, next);
+  mirror(state, next);
   return next;
 }
 
@@ -71,12 +86,12 @@ function copyPoint(point: Readonly<Vec2>): Readonly<Vec2> {
 export function beginResourceWorkMonth(state: SimulationState): void {
   const current = snapshots.get(state);
   if (current?.month === state.month) {
-    snapshotsByWorld.set(state.world, current);
+    mirror(state, current);
     return;
   }
   const next = freshSnapshot(state.month);
   snapshots.set(state, next);
-  snapshotsByWorld.set(state.world, next);
+  mirror(state, next);
 }
 
 /** Records one real extraction site. This never mutates simulation resource quantities. */

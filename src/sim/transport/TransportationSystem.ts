@@ -16,6 +16,7 @@ import { consumeMaterial } from '../resources/MaterialUse';
 import { surfaceHeightAt, surfaceWaterAt } from '../terrain/SurfaceGeometry';
 import type { Settlement, SimulationState, TradeRoute } from '../types';
 import { RoutePlanner, type PlannedEdge } from './RoutePlanner';
+import { drain, type Slices } from '../TimeSlicing';
 import { distance, edgeKey, landAllowed, navigableAt, pointKey, snowTravelMultiplier, surveyEdge } from './TerrainTraversal';
 import { pathLength, positionAlongPath, segmentUsable, TransportNetwork } from './TransportNetwork';
 import type { FreightTrip, NetworkMode, TransportProject, TransportSegment, TransportStop, TraversalPath } from './types';
@@ -98,11 +99,16 @@ export class TransportationSystem {
   }
 
   planTrade(route: TradeRoute, a: Settlement, b: Settlement): boolean {
+    return drain(this.planTradeSlices(route, a, b));
+  }
+
+  /** planTrade() with pause points inside each corridor survey. */
+  *planTradeSlices(route: TradeRoute, a: Settlement, b: Settlement): Slices<boolean> {
     const projects: string[] = [];
-    const road = this.planConnection(route.id, a, b, 'road');
+    const road = yield* this.planConnectionSlices(route.id, a, b, 'road');
     if (road) projects.push(road.id);
     if (this.canShip(a) && this.canShip(b)) {
-      const water = this.planConnection(route.id, a, b, 'water');
+      const water = yield* this.planConnectionSlices(route.id, a, b, 'water');
       if (water) projects.push(water.id);
     }
     const footpath = this.footPath(a, b);
@@ -355,6 +361,10 @@ export class TransportationSystem {
   }
 
   private planConnection(id: string, a: Settlement, b: Settlement, mode: NetworkMode): TransportProject | undefined {
+    return drain(this.planConnectionSlices(id, a, b, mode));
+  }
+
+  private *planConnectionSlices(id: string, a: Settlement, b: Settlement, mode: NetworkMode): Slices<TransportProject | undefined> {
     const projectId = `${id}:${mode}`;
     if (this.state.transportation.projects[projectId]) return this.state.transportation.projects[projectId];
     const retryKey = `${a.id}:${b.id}:${mode}`;
@@ -366,7 +376,7 @@ export class TransportationSystem {
       && capabilityPractice(a, 'improved-roads', 'adopted') > 0.28
       && capabilityPractice(b, 'improved-roads', 'adopted') > 0.28
       && Math.min(a.resources.wealth, b.resources.wealth) > 12;
-    const edges = this.planner.plan(stops[0].position, stops[1].position, mode, this.state.transportation, bridgeCapability);
+    const edges = yield* this.planner.planSlices(stops[0].position, stops[1].position, mode, this.state.transportation, bridgeCapability);
     if (!edges.length) return undefined;
     return this.register(projectId, a.id, b.id, mode, edges, [stops[0], stops[1]], 'trade');
   }

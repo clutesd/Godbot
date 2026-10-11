@@ -1,5 +1,7 @@
+import { BodyRecoveryPresentation } from './people/BodyRecoveryPresentation';
 import { IllnessBreath } from './people/IllnessBreath';
 import { bodyWeathering } from '../sim/people/BodyLifecycle';
+import { committedMonth, monthInFlight } from '../sim/MonthAuthority';
 import { casualtyLifecycle } from './war/BattleAftermath';
 import { physicalCondition, applyPhysicalCondition } from './animation/PhysicalCondition';
 import { productionBuildingShell } from './assets/ProductionBuildingShell';
@@ -25,7 +27,7 @@ import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNe
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
-import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2, WeatherCellState } from '../sim/types';
+import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, StructurePlot, Vec2, WeatherCellState } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { CameraObstacleField, type CameraObstacleBox } from './CameraObstacleField';
 import { setAutonomousCameraMode } from './CameraControlMode';
@@ -83,6 +85,7 @@ import { TerrainDecor } from './terrain/TerrainDecor';
 import { TerrainSurface } from './terrain/TerrainSurface';
 import { WaterSystem } from './terrain/WaterSystem';
 import { WeatherRenderer } from './atmosphere/WeatherRenderer';
+import { VolcanoRenderer } from './geology/VolcanoRenderer';
 import { WarRenderer } from './war/WarRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
 import { ResourceSiteRenderer } from './resources/ResourceSiteRenderer';
@@ -379,6 +382,7 @@ export class GodboxRenderer {
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
   private readonly settlementSolidObstacles = new Map<string, PedestrianFootprint[]>();
   private readonly lastBodyPose = new Map<string, Map<string, THREE.Matrix4[]>>();
+  private readonly bodyRecovery = new BodyRecoveryPresentation();
   private readonly bodyStarted = new Map<string, number>();
   private readonly bodyAnchors = new Map<string, { x: number; z: number; facing: number }>();
   private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number; width?: number; depth?: number }>();
@@ -387,6 +391,7 @@ export class GodboxRenderer {
   private readonly terrainSurface: TerrainSurface;
   private readonly waterSystem: WaterSystem;
   private readonly weatherRenderer: WeatherRenderer;
+  private readonly volcanoRenderer?: VolcanoRenderer;
   private readonly terrainDecor: TerrainDecor;
   private readonly vegetation: VegetationRenderer;
   private readonly resourceSites: ResourceSiteRenderer;
@@ -469,6 +474,8 @@ export class GodboxRenderer {
   private visiblePeople: Person[] = [];
   private visiblePeopleSubject: string | undefined;
   private visiblePeopleMonth = -1;
+  /** Per-frame sleeping-structure view per settlement; rebuilt every frame from the current plots. */
+  private readonly frameSleepStructures = new Map<string, readonly ActivityStructure[]>();
   private visiblePeoplePopulation = -1;
   private readonly lastPersonGroundPosition = new Map<string, Vec2>();
   private readonly smokeMatrix = new THREE.Matrix4();
@@ -570,6 +577,14 @@ export class GodboxRenderer {
     this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
+    if (state.volcano) {
+      try {
+        this.volcanoRenderer = new VolcanoRenderer(state, this.terrainSurface);
+        this.scene.add(this.volcanoRenderer.group);
+      } catch (error) {
+        console.error('GODBOX volcano presentation could not be built; the world continues without it.', error);
+      }
+    }
     this.warRenderer = new WarRenderer(state, (x, z) => this.elevationAt(x, z));
     this.scene.add(this.routeGroup, this.caravanGroup, this.warRenderer.group);
     this.smoke = this.createSmokePool();
@@ -700,6 +715,7 @@ export class GodboxRenderer {
     this.skyAtmosphere.update(0, 0);
     this.vegetation.updateLeaves(0);
     this.weatherRenderer.update(0, 0, this.camera);
+    this.volcanoRenderer?.update(0, 0, this.camera);
     this.postProcessing.render(this.ecology.night.value);
   }
 
@@ -709,6 +725,15 @@ export class GodboxRenderer {
 
   get autonomousCamera(): boolean {
     return !this.manualCamera.active;
+  }
+
+  /**
+   * The latest month whose consequences are complete. Once-per-month presentation caches key on
+   * this, not `state.month`, so a time-sliced month in flight is picked up after it commits rather
+   * than captured half-advanced and then held for the whole month.
+   */
+  private get authorityMonth(): number {
+    return committedMonth(this.state);
   }
 
   /** Diagnostic long-frame attribution. Disabled by default; the hot path costs one branch. */
@@ -800,7 +825,7 @@ export class GodboxRenderer {
     if (renderPolicy.refreshWorldPresentation) {
       this.updateSettlementBanners(elapsedSeconds);
       this.updateAdvancedAtmosphere(elapsedSeconds);
-      if (this.state.month !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
+      if (this.authorityMonth !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
       this.mark('settlement-presentation');
       for (const [key, entry] of this.constructionAssemblies) {
         const authoritativeSettlement = this.state.settlements.find(s => s.id === entry.settlement.id);
@@ -868,6 +893,7 @@ export class GodboxRenderer {
     }
     this.mark('war');
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
+    this.volcanoRenderer?.update(deltaSeconds, elapsedSeconds, this.camera);
     const blizzard = this.weatherRenderer.report.blizzard;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.density += blizzard * 0.035;
@@ -955,10 +981,11 @@ export class GodboxRenderer {
   }
 
   private updateSeasonalPresentation(force = false): void {
-    const season = this.state.month % 12;
-    if (!force && this.state.month === this.lastVisualSeason) return;
-    this.lastVisualSeason = this.state.month;
-    this.vegetation.setSeason(this.state.month);
+    const month = this.authorityMonth;
+    const season = month % 12;
+    if (!force && month === this.lastVisualSeason) return;
+    this.lastVisualSeason = month;
+    this.vegetation.setSeason(month);
     this.resourceSites.update();
     this.farmFields.update(this.state, (x, z) => this.elevationAt(x, z), (x, z) => this.personStandable(x, z));
     this.workSettlements.clear();
@@ -1181,8 +1208,8 @@ export class GodboxRenderer {
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
     this.refreshHumanNavigation();
-    if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
-      this.resourceWorkersMonth = this.state.month;
+    if (this.resourceWorkersMonth !== this.authorityMonth || this.resourceWorkersRevision !== this.resourceWork.revision) {
+      this.resourceWorkersMonth = this.authorityMonth;
       this.resourceWorkersRevision = this.resourceWork.revision;
       this.resourceWork.bindWorkers(this.visiblePeople);
     }
@@ -1203,12 +1230,24 @@ export class GodboxRenderer {
     this.reactionGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.cameraDirector.current()?.subjectId,
       reactionSeriousShot, this.reducedMotion.matches);
     this.localPeers.clear();
+    this.frameSleepStructures.clear();
     for (const person of this.visiblePeople) if (person.alive) {
       this.localPeers.set(person.id, person);
       const previous = this.peopleVisuals.get(person.id) ?? person.position;
       const snapshot = this.localPeerPositions.get(person.id);
       if (snapshot) { snapshot.x = previous.x; snapshot.z = previous.z; }
       else this.localPeerPositions.set(person.id, { x: previous.x, z: previous.z });
+    }
+    this.bodyRecovery.prune(this.state.bodies ?? [], this.state.people, elapsedSeconds);
+    for (const body of this.state.bodies ?? []) {
+      if (!body.recovery || body.removed) continue;
+      const helper = this.visiblePeople.find(p => p.id === body.recovery!.helperId && p.alive);
+      const anchor = this.bodyAnchors.get(body.id);
+      const started = this.bodyStarted.get(`body:${body.id}`);
+      if (!helper || !this.visiblePeople.some(p => p.id === body.id) || !anchor || started === undefined || elapsedSeconds - started < 2.4) continue;
+      this.bodyRecovery.start(body, helper, anchor, this.peopleVisuals.get(helper.id) ?? helper.position,
+        anchor.facing, elapsedSeconds, (a, b) => this.humanNavigation.clear(a, b)
+          && this.personGround.isStandable(a.x, a.z) && this.personGround.isStandable(b.x, b.z));
     }
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
@@ -1229,14 +1268,21 @@ export class GodboxRenderer {
       const person = this.visiblePeople[index];
       if (!person) continue;
       if (!person.alive) {
-        const body = this.state.bodies?.find(b => b.id === person.id && !b.removed);
+        const body = this.state.bodies?.find(b => b.id === person.id);
         if (body) {
           const look = this.humanLookFor(person, this.workSettlements.get(person.homeId), undefined);
           this.humanAppearance.apply(index, look, this.cultureById.get(person.cultureId)?.style.pattern, false);
           const prior = this.peopleVisuals.get(person.id);
           if (!this.bodyAnchors.has(person.id)) this.bodyAnchors.set(person.id, { x: prior?.x ?? person.position.x, z: prior?.z ?? person.position.z, facing: prior?.facing ?? body.yaw });
           const anchor = this.bodyAnchors.get(person.id)!;
-          const x = anchor.x, z = anchor.z;
+          const recovery = this.bodyRecovery.pose(body.id, elapsedSeconds, this.reducedMotion.matches);
+          if (body.removed && (!recovery || recovery.done)) {
+            for (const mesh of [this.people, this.peopleHeads, this.peopleHeadwear, this.peopleTools]) this.setInstanceTransform(mesh, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+            for (const mesh of [this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins]) for (let side = 0; side < 2; side++) this.setInstanceTransform(mesh, index * 2 + side, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+            continue;
+          }
+          const x = recovery?.body.x ?? anchor.x, z = recovery?.body.z ?? anchor.z;
+          if (recovery) { anchor.x = x; anchor.z = z; }
           const y = this.personGround.heightAt(x, z);
           const yaw = anchor.facing;
           const key = `body:${person.id}`;
@@ -1247,6 +1293,7 @@ export class GodboxRenderer {
             * (person.ageMonths < 168 ? 0.7 : 1) * cosmicAppearanceFor(person.id).height;
           const root = new THREE.Matrix4().makeRotationY(yaw);
           root.multiply(new THREE.Matrix4().makeRotationX(motion.pitch));
+          root.multiply(new THREE.Matrix4().makeRotationZ(motion.roll));
           root.setPosition(x, y + motion.fall * scale * 0.10, z);
           const part = (mesh: THREE.InstancedMesh, slot: number, px: number, py: number, pz: number, pitch = 0) => {
             this.setInstanceTransform(mesh, slot, px * scale, py * scale, pz * scale,
@@ -1254,19 +1301,23 @@ export class GodboxRenderer {
             const held = this.lastBodyPose.get(person.id)?.get(mesh.uuid);
             const previous = held?.[held.length === 2 ? slot % 2 : 0];
             if (previous && motion.fall < 1) {
-              for (let k = 0; k < 16; k++) this.personMatrix.elements[k] = previous.elements[k]! * (1 - motion.fall) + this.personMatrix.elements[k]! * motion.fall;
+              const oldPosition = new THREE.Vector3(), oldRotation = new THREE.Quaternion(), oldScale = new THREE.Vector3();
+              const newPosition = new THREE.Vector3(), newRotation = new THREE.Quaternion(), newScale = new THREE.Vector3();
+              previous.decompose(oldPosition, oldRotation, oldScale);
+              this.personMatrix.decompose(newPosition, newRotation, newScale);
+              this.personMatrix.compose(oldPosition.lerp(newPosition, motion.fall), oldRotation.slerp(newRotation, motion.fall), oldScale.lerp(newScale, motion.fall));
             }
             this.personMatrix.premultiply(root); mesh.setMatrixAt(slot, this.personMatrix);
           };
           part(this.people, index, 0, 0.44, 0, motion.reaction);
-          part(this.peopleHeads, index, 0, 0.85, 0);
+          part(this.peopleHeads, index, 0, 0.85 - motion.buckle * 0.3, 0, motion.reaction * 0.6);
           part(this.peopleHeadwear, index, 0, 0.85, 0);
           part(this.peopleRoleAccents, index, 0, 0.58, 0);
           for (let side = 0; side < 2; side++) {
             const sign = side ? 1 : -1;
-            part(this.peopleArms, index * 2 + side, sign * 0.16, 0.67, 0, 0.12 * motion.fall);
+            part(this.peopleArms, index * 2 + side, sign * (0.16 + motion.fall * 0.045), 0.67, 0, (side ? 0.22 : -0.12) * motion.fall);
             part(this.peopleForearms, index * 2 + side, sign * 0.17, 0.48, 0.02, -0.2 * motion.fall);
-            part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44, 0, 0.08 * motion.fall);
+            part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44, 0, 0.08 * motion.fall + motion.buckle * 2);
             part(this.peopleShins, index * 2 + side, sign * 0.065, 0.225, 0.02, -0.1 * motion.fall);
           }
           this.setInstanceTransform(this.peopleTools, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
@@ -1274,6 +1325,37 @@ export class GodboxRenderer {
           for (const mesh of [this.people, this.peopleHeads, this.peopleRoleAccents, this.peopleHeadwear]) mesh.setColorAt(index, this.personColor);
           for (const mesh of [this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins]) for (let side = 0; side < 2; side++) mesh.setColorAt(index * 2 + side, this.personColor);
         }
+        continue;
+      }
+      const recoveringBody = this.bodyRecovery.bodyForHelper(person.id, elapsedSeconds);
+      const recoveryPose = recoveringBody ? this.bodyRecovery.pose(recoveringBody, elapsedSeconds, this.reducedMotion.matches) : undefined;
+      if (recoveryPose && !recoveryPose.done) {
+        const look = this.humanLookFor(person, this.workSettlements.get(person.homeId), undefined);
+        this.humanAppearance.apply(index, look, this.cultureById.get(person.cultureId)?.style.pattern, false);
+        const scale = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * (person.appearance?.heightScale ?? 1) * cosmicAppearanceFor(person.id).height;
+        const y = this.personGround.heightAt(recoveryPose.helper.x, recoveryPose.helper.z);
+        const root = new THREE.Matrix4().makeRotationY(recoveryPose.yaw);
+        root.setPosition(recoveryPose.helper.x, y, recoveryPose.helper.z);
+        const bend = recoveryPose.bend;
+        const part = (mesh: THREE.InstancedMesh, slot: number, x: number, h: number, z: number, pitch = 0) => {
+          this.setInstanceTransform(mesh, slot, x * scale, h * scale, z * scale, scale, scale, scale, pitch, 0, 0);
+          this.personMatrix.premultiply(root); mesh.setMatrixAt(slot, this.personMatrix);
+          mesh.setColorAt(slot, this.personColor);
+        };
+        this.personColor.set(look.palette.luminous);
+        part(this.people, index, 0, 0.44 - bend * 0.12, 0, bend * 0.75);
+        part(this.peopleHeads, index, 0, 0.85 - bend * 0.23, bend * 0.23, bend * 0.3);
+        part(this.peopleHeadwear, index, 0, 0.85 - bend * 0.23, bend * 0.23, bend * 0.3);
+        for (let side = 0; side < 2; side++) {
+          const sign = side ? 1 : -1;
+          part(this.peopleArms, index * 2 + side, sign * 0.16, 0.67 - bend * 0.21, bend * 0.16, -bend * 0.25);
+          part(this.peopleForearms, index * 2 + side, sign * 0.16, 0.48 - bend * 0.21, bend * 0.21, -bend * 0.3);
+          part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44 - bend * 0.10, 0, sign * recoveryPose.stride - bend * 0.35);
+          part(this.peopleShins, index * 2 + side, sign * 0.065, 0.225, bend * 0.05, -sign * recoveryPose.stride + bend * 0.25);
+        }
+        this.setInstanceTransform(this.peopleTools, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+        const visual = this.peopleVisuals.resolve(person.id, { destination: recoveryPose.helper, restFacing: recoveryPose.yaw }, 0, this.personGround);
+        if (visual) { visual.x = recoveryPose.helper.x; visual.z = recoveryPose.helper.z; visual.footY = y; visual.facing = recoveryPose.yaw; }
         continue;
       }
       const group = this.socialGroups.get(groupKeyFor(person) ?? '');
@@ -1341,10 +1423,18 @@ export class GodboxRenderer {
         }
       }
       const structures = this.settlementBuildingPlacements.get(person.homeId) ?? NO_ACTIVITY_STRUCTURES;
-      const sleepStructures = structures.map(structure => {
-        const plot = settlement?.structurePlots?.find(p => p.id === structure.key);
-        return plot && !usableStructure(plot) ? { ...structure, sleepingArea: undefined } : structure;
-      });
+      // Plots cannot change within a frame, so every resident of a settlement shares one derivation
+      // instead of rescanning structures x plots per person.
+      let sleepStructures = this.frameSleepStructures.get(person.homeId);
+      if (!sleepStructures) {
+        const plots = new Map<string, StructurePlot>();
+        for (const plot of settlement?.structurePlots ?? []) if (!plots.has(plot.id)) plots.set(plot.id, plot);
+        sleepStructures = structures.map(structure => {
+          const plot = plots.get(structure.key);
+          return plot && !usableStructure(plot) ? { ...structure, sleepingArea: undefined } : structure;
+        });
+        this.frameSleepStructures.set(person.homeId, sleepStructures);
+      }
       const sleepRoutine = sleepSchedule(person, this.visibleSolarHour);
       const sleepDue = Boolean(settlement && sleepRoutine.returningHome
         && !constructionOwnsBody
@@ -1968,8 +2058,8 @@ export class GodboxRenderer {
   }
 
   private refreshSocialRelationshipIndex(): void {
-    if (this.socialRelationshipMonth === this.state.month) return;
-    this.socialRelationshipMonth = this.state.month;
+    if (this.socialRelationshipMonth === this.authorityMonth) return;
+    this.socialRelationshipMonth = this.authorityMonth;
     this.socialRelationshipByPair.clear();
     for (const relationship of this.state.socialRelationships ?? []) {
       this.socialRelationshipByPair.set(socialPairKey(relationship.a, relationship.b), relationship);
@@ -1978,10 +2068,13 @@ export class GodboxRenderer {
 
   private refreshVisiblePeople(): void {
     const subjectId = this.cameraDirector.current()?.subjectId;
-    if (this.visiblePeopleMonth === this.state.month && this.visiblePeoplePopulation === this.state.people.length
+    // Deaths and births land mid-month; a month in flight waits for its commit instead of re-sorting
+    // the whole population twice.
+    if (this.visiblePeopleMonth === this.authorityMonth
+      && (monthInFlight(this.state) || this.visiblePeoplePopulation === this.state.people.length)
       && this.visiblePeopleSubject === subjectId) return;
     this.visiblePeopleSubject = subjectId;
-    this.visiblePeopleMonth = this.state.month;
+    this.visiblePeopleMonth = this.authorityMonth;
     this.visiblePeoplePopulation = this.state.people.length;
     // Reconcile construction roles against the full authoritative workforce before any rendering
     // budget is applied. Visibility can choose representatives; it cannot define their jobs.
@@ -1999,10 +2092,12 @@ export class GodboxRenderer {
     );
     const protectedFoundingStandard = this.foundingStandardPresentation.participantIds();
     const protectedFirstFire = this.firstFirePresentation.participantIds();
+    const protectedRecovery = new Set((this.state.bodies ?? []).filter(b => b.recovery && (!b.removed || this.bodyRecovery.has(b.id))).map(b => b.recovery!.helperId));
     this.visiblePeople = alive
       // Notable/historical lives remain first. Then preserve live construction and one-time
       // founding-standard participants so a crowded settlement cannot hide the people doing the act.
       .sort((a, b) => Number(b.id === subjectId) - Number(a.id === subjectId)
+        || Number(protectedRecovery.has(b.id)) - Number(protectedRecovery.has(a.id))
         || Number(protectedFirstFire.has(b.id)) - Number(protectedFirstFire.has(a.id))
         || Number(protectedConstruction.has(b.id)) - Number(protectedConstruction.has(a.id))
         || tierRank(b) - tierRank(a)
@@ -2011,9 +2106,9 @@ export class GodboxRenderer {
           - Number(this.resourceWork.sites.has(`${a.homeId}\u0000${a.navigation?.destinationId ?? ''}`))
         || stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
       .slice(0, capacity);
-    const activeBodies = new Set((this.state.bodies ?? []).filter(b => !b.removed).map(b => b.id));
+    const activeBodies = new Set((this.state.bodies ?? []).map(b => b.id));
     for (const id of this.bodyAnchors.keys()) if (!activeBodies.has(id)) { this.bodyAnchors.delete(id); this.bodyStarted.delete(`body:${id}`); }
-    const remains = (this.state.bodies ?? []).filter(b => !b.removed)
+    const remains = (this.state.bodies ?? []).filter(b => !b.removed || this.bodyRecovery.has(b.id))
       .sort((a, b) => Math.hypot(a.person.position.x - this.camera.position.x, a.person.position.z - this.camera.position.z)
         - Math.hypot(b.person.position.x - this.camera.position.x, b.person.position.z - this.camera.position.z) || a.id.localeCompare(b.id))
       .slice(0, Math.min(64, Math.floor(capacity / 4))).map(b => b.person);
@@ -2129,9 +2224,9 @@ export class GodboxRenderer {
 
   /** Station plans follow the authoritative month; the cast follows the plan. */
   private refreshFacilityCrews(): void {
-    const month = this.facilityCrewMonth !== this.state.month;
+    const month = this.facilityCrewMonth !== this.authorityMonth;
     if (month) {
-      this.facilityCrewMonth = this.state.month;
+      this.facilityCrewMonth = this.authorityMonth;
       this.facilityCrew.update(this.state);
     }
     if (month || this.facilityCrewRevision !== this.facilityCrew.revision) {
@@ -2143,9 +2238,9 @@ export class GodboxRenderer {
   private refreshMarketStalls(): void {
     const stalls = [...this.settlementMarketStalls.values()].flat();
     const plan = marketStallSignature(stalls);
-    if (plan === this.marketStallPlan && this.marketStallMonth === this.state.month) return;
+    if (plan === this.marketStallPlan && this.marketStallMonth === this.authorityMonth) return;
     this.marketStallPlan = plan;
-    this.marketStallMonth = this.state.month;
+    this.marketStallMonth = this.authorityMonth;
     if (stalls.length === 0) { this.marketStalls = new Map(); return; }
     const attending = this.visiblePeople.filter((person) => person.alive && !person.navigation?.traveling
       && person.navigation?.destinationKind === 'market');
@@ -5237,6 +5332,7 @@ export class GodboxRenderer {
     this.waterSystem.dispose();
     this.warRenderer.dispose();
     this.weatherRenderer.dispose();
+    this.volcanoRenderer?.dispose();
     this.peopleVisuals.clear();
     this.groundedLocomotion.clear();
     this.arrivalGrounds.clear();

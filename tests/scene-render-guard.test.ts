@@ -43,6 +43,31 @@ describe('scene rendering recovery', () => {
     expect(renderer.debug.onShaderError).toBe(previous);
   });
 
+  it('hides a single object whose shader fails and keeps drawing the world with effects', () => {
+    const gl = { isContextLost: () => false, getError: vi.fn(() => 0), NO_ERROR: 0,
+      getProgramInfoLog: () => 'link failed', getShaderInfoLog: () => 'instanceColor undeclared' };
+    const broken = new THREE.MeshBasicMaterial(), healthy = new THREE.MeshBasicMaterial();
+    const programs = new Map<THREE.Material, object>([
+      [broken, { currentProgram: { diagnostics: { runnable: false } } }], [healthy, { currentProgram: { diagnostics: { runnable: true } } }]]);
+    const renderer = { getContext: () => gl, debug: { onShaderError: null as THREE.WebGLRenderer['debug']['onShaderError'] },
+      properties: { get: (m: THREE.Material) => programs.get(m) ?? {} }, setRenderTarget: vi.fn(), render: vi.fn() };
+    const guard = new SceneRenderGuard(renderer as unknown as THREE.WebGLRenderer);
+    const scene = new THREE.Scene();
+    const bad = new THREE.Mesh(new THREE.BufferGeometry(), broken), good = new THREE.Mesh(new THREE.BufferGeometry(), healthy);
+    scene.add(bad, good);
+    const composite = vi.fn(() => {
+      if (bad.visible) renderer.debug.onShaderError!(gl as unknown as WebGLRenderingContext,
+        {} as Parameters<NonNullable<THREE.WebGLRenderer['debug']['onShaderError']>>[1], {} as WebGLShader, {} as WebGLShader);
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    guard.render(scene, new THREE.PerspectiveCamera(), composite);
+    guard.render(scene, new THREE.PerspectiveCamera(), composite);
+    expect(bad.visible).toBe(false);
+    expect(good.visible).toBe(true);
+    expect(composite).toHaveBeenCalledTimes(3);
+    expect(renderer.render).not.toHaveBeenCalled();
+  });
+
   it('surfaces direct-render failures so narration cannot continue over a broken world', () => {
     const { draw, renderer } = harness();
     renderer.render.mockImplementation(() => { throw new Error('Scene unavailable'); });

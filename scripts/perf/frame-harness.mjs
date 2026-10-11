@@ -56,6 +56,10 @@ const SCENARIOS = {
     description: 'Arrival film and founding presentation, no advance',
     advanceMonths: 0,
   },
+  'early-history': {
+    description: 'Year ~12: history ticking live under the documentary camera',
+    advanceMonths: 144,
+  },
 };
 
 const argument = (name, fallback) => {
@@ -108,6 +112,18 @@ class Session {
     }
     return result.result.value;
   }
+}
+
+async function closeBrowser() {
+  const version = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`).then(response => response.json());
+  const socket = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', () => reject(new Error('socket error')), { once: true });
+  });
+  socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+  await sleep(500);
+  try { socket.close(); } catch { /* closed by the browser */ }
 }
 
 async function connect() {
@@ -269,9 +285,16 @@ async function main() {
     '--ignore-gpu-blocklist', '--enable-gpu-rasterization',
   ];
   if (headless) flags.push('--headless=new');
-  flags.push(`http://localhost:${PORT}/`);
+  // --query=atomic-ticks (for example) is appended to the page URL for same-build A/B runs.
+  const query = argument('query', '');
+  flags.push(`http://localhost:${PORT}/${query ? `?${query}` : ''}`);
 
   log(`launching ${browserPath.split(/[/\\]/).pop()} (${headless ? 'headless' : 'headful'})...`);
+  // A browser still listening on the debug port (for example from an interrupted run) would be
+  // attached to silently, measuring the wrong page with stale flags and accumulated frames.
+  if (await cdpTargets().then(() => true, () => false)) {
+    throw new Error(`a browser is already listening on CDP port ${DEBUG_PORT}; close it or set GODBOX_CDP_PORT`);
+  }
   const browser = spawn(browserPath, flags, { stdio: 'ignore', detached: false });
 
   let session;
@@ -438,6 +461,9 @@ async function main() {
     }
   } finally {
     try { session?.socket.close(); } catch { /* already closed */ }
+    // On Windows the spawned launcher is not the browser process, so kill() alone leaves the real
+    // browser running on the debug port. Close it through CDP first.
+    await closeBrowser().catch(() => undefined);
     browser.kill();
   }
 }

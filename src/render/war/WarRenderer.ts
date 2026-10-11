@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { HistoricalEvent, SimulationState, War } from '../../sim/types';
 import { campaignPoint } from '../../sim/war/Campaign';
+import { committedMonth } from '../../sim/MonthAuthority';
 import { deriveMilitaryProfile, militaryProfileForWar, type MilitaryCapabilityProfile } from '../../sim/war/MilitaryCapability';
 import { WalkabilityLayer } from '../../sim/people/WalkabilityLayer';
 import type { PedestrianFootprint } from '../../sim/people/StructureNavigation';
@@ -122,9 +123,11 @@ export class WarRenderer {
 
   update(delta: number, elapsed: number, focusId?: string, reducedMotion = false): void {
     if (this.disposed) return;
-    if (this.lastMonth !== this.state.month || this.lastFocus !== focusId) {
+    // Keyed on the committed month so a time-sliced month is synced after its wars phase, not before.
+    const month = committedMonth(this.state);
+    if (this.lastMonth !== month || this.lastFocus !== focusId) {
       this.sync(elapsed, focusId);
-      this.lastMonth = this.state.month;
+      this.lastMonth = month;
       this.lastFocus = focusId;
     }
     const time = reducedMotion ? 0 : elapsed;
@@ -135,7 +138,7 @@ export class WarRenderer {
       if (!a || !b) continue;
       const resolved = war.resolvedMonth !== undefined;
       const fade = resolved ? clamp(1 - (this.state.month - war.resolvedMonth!) / 12, 0, 1) : 1;
-      if (visual.evidenceMonth !== this.state.month || visual.lastBattleCount !== war.campaign.battleCount) {
+      if (visual.evidenceMonth !== month || visual.lastBattleCount !== war.campaign.battleCount) {
         let event: HistoricalEvent | undefined;
         for (let i = this.state.history.length - 1; i >= 0; i--) {
           const candidate = this.state.history[i]!;
@@ -154,7 +157,7 @@ export class WarRenderer {
             engagementGap(styles, visual.eventMode), styles, [formationCount(war.campaign.initialStrengthA), formationCount(war.campaign.initialStrengthB)]);
         } else visual.exchanges = undefined;
         visual.aftermath.sync(war, this.state.aftermathEvents ?? this.state.history, this.state.month, elapsed, [visual.companies[0].style, visual.companies[1].style]);
-        visual.evidenceMonth = this.state.month;
+        visual.evidenceMonth = month;
       }
       visual.spectacle.beginWeapons();
       const gap = engagementGap([visual.companies[0].style, visual.companies[1].style], visual.eventMode);

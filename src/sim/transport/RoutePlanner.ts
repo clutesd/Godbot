@@ -3,6 +3,7 @@ import type { Vec2, WorldState } from '../types';
 import type { NetworkMode, TransportationState } from './types';
 import { surfaceHeightAt } from '../terrain/SurfaceGeometry';
 import { distance, edgeKey, MinQueue, pointKey, surveyEdge, type SurveyedEdge } from './TerrainTraversal';
+import { drain, type Slices } from '../TimeSlicing';
 
 export interface PlannedEdge extends SurveyedEdge { a: Vec2; b: Vec2 }
 const directions = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]] as const;
@@ -14,6 +15,11 @@ export class RoutePlanner {
   constructor(private readonly world: WorldState) {}
 
   plan(start: Vec2, end: Vec2, mode: NetworkMode, network: TransportationState, bridges = false, maxExpansions = 12_000): PlannedEdge[] {
+    return drain(this.planSlices(start, end, mode, network, bridges, maxExpansions));
+  }
+
+  /** plan() with a pause point every few hundred expansions; a long survey can span frames. */
+  *planSlices(start: Vec2, end: Vec2, mode: NetworkMode, network: TransportationState, bridges = false, maxExpansions = 12_000): Slices<PlannedEdge[]> {
     if (this.environmentRevision !== (this.world.environmentRevision ?? 0)) {
       this.cache.clear();
       this.environmentRevision = this.world.environmentRevision ?? 0;
@@ -49,6 +55,7 @@ export class RoutePlanner {
       if (closed.has(current.key)) continue;
       closed.add(current.key);
       expansions++;
+      if ((expansions & 255) === 0) yield;
       const [index, heading] = current.key.split(':').map(Number) as [number, number];
       if (index === endIndex) {
         const result: PlannedEdge[] = [];

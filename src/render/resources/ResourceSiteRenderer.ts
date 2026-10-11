@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { roadSurfaceMaterial } from '../transport/RoadSurfaceMaterial';
 import type { SimulationState, WorldState } from '../../sim/types';
 import { ResourceFlowRenderer } from './ResourceFlowRenderer';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
@@ -87,7 +88,7 @@ export class ResourceSiteRenderer {
   private readonly scars: THREE.InstancedMesh;
   private readonly historicalStumps: THREE.InstancedMesh;
   private readonly historicalFaces: THREE.InstancedMesh;
-  private readonly trails = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#796b4f', transparent: true, opacity: 0.42 }));
+  private readonly trails = new THREE.Mesh(new THREE.BufferGeometry(), roadSurfaceMaterial('#948263'));
   private readonly footpaths: THREE.Mesh;
   private readonly activeWork = new THREE.Group();
   private readonly activeLogs: THREE.InstancedMesh;
@@ -270,18 +271,10 @@ export class ResourceSiteRenderer {
       new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 }), 768);
     this.group.add(this.historicalStumps, this.historicalFaces);
     this.trails.name = 'Resource access trails';
+    this.trails.receiveShadow = true;
     this.footpaths = new THREE.Mesh(
       new THREE.BufferGeometry(),
-      new THREE.MeshStandardMaterial({
-        roughness: 1,
-        transparent: true,
-        opacity: 0.92,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        vertexColors: true,
-        side: THREE.DoubleSide,
-      }),
+      roadSurfaceMaterial('#ffffff', true),
     );
     // Keep the Step-1 object name stable for diagnostics/tests even though the mesh now spans the
     // whole desire-path -> road hierarchy.
@@ -942,19 +935,39 @@ export class ResourceSiteRenderer {
   }
 
   private rebuildAccessTrails(): void {
-    const vertices: number[] = [];
+    const vertices: number[] = [], roadUV: number[] = [], indices: number[] = [];
     for (const deposit of this.world.resourceDeposits) {
       if (deposit.establishedMonth === undefined || (deposit.extracted ?? 0) < 8) continue;
-      for (const path of deposit.accessTrails ?? []) for (let i = 1; i < path.length; i++) {
-        const a = path[i - 1]!, b = path[i]!;
-        const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.4));
-        for (let j = 0; j < steps; j++) for (const t of [j / steps, (j + 1) / steps]) {
-          const x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
-          vertices.push(x, this.surface.heightAt(x, z) + 0.045, z);
+      for (const path of deposit.accessTrails ?? []) {
+        let distance = 0;
+        for (let i = 1; i < path.length; i++) {
+          const a = path[i - 1]!, b = path[i]!;
+          const length = Math.hypot(b.x - a.x, b.z - a.z);
+          if (length < 0.001) continue;
+          const nx = -(b.z - a.z) / length, nz = (b.x - a.x) / length;
+          const steps = Math.max(1, Math.ceil(length / 0.16));
+          const base = vertices.length / 3;
+          for (let j = 0; j <= steps; j++) {
+            const t = j / steps;
+            for (const side of [-1, 1]) {
+              const x = a.x + (b.x - a.x) * t + nx * side * 0.065;
+              const z = a.z + (b.z - a.z) * t + nz * side * 0.065;
+              vertices.push(x, this.surface.heightAt(x, z) + 0.019, z);
+              roadUV.push((side + 1) / 2, distance + length * t, 2);
+            }
+            if (j > 0) {
+              const n = base + j * 2;
+              indices.push(n - 2, n, n - 1, n - 1, n, n + 1);
+            }
+          }
+          distance += length;
         }
       }
     }
     this.trails.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    this.trails.geometry.setAttribute('roadUV', new THREE.Float32BufferAttribute(roadUV, 3));
+    this.trails.geometry.setIndex(indices);
+    this.trails.geometry.computeVertexNormals();
     this.trails.geometry.computeBoundingSphere();
   }
 
@@ -962,6 +975,7 @@ export class ResourceSiteRenderer {
     const positions: number[] = [];
     const colours: number[] = [];
     const indices: number[] = [];
+    const roadUV: number[] = [];
     const emitted = new Set<string>();
     const counts: Record<MovementPathStage, number> = { none: 0, 'desire-path': 0, footpath: 0, 'packed-track': 0, 'cart-road': 0, 'engineered-road': 0 };
 
@@ -987,25 +1001,35 @@ export class ResourceSiteRenderer {
       const widthA = this.pathHalfWidth(stageA, movementPathStrength(cell));
       const widthB = this.pathHalfWidth(stageB, movementPathStrength(neighbour));
       const base = positions.length / 3;
-      const corners = [
-        [cell.worldX + sideX * widthA, cell.worldZ + sideZ * widthA],
-        [cell.worldX - sideX * widthA, cell.worldZ - sideZ * widthA],
-        [neighbour.worldX + sideX * widthB, neighbour.worldZ + sideZ * widthB],
-        [neighbour.worldX - sideX * widthB, neighbour.worldZ - sideZ * widthB],
-      ] as const;
-      for (const [worldX, worldZ] of corners) positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.03, worldZ);
-      indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
-
+      // Sample both sides and the crown so terrain changes cannot turn paths into slabs.
+      const steps = Math.max(1, Math.ceil(length / 0.16));
       const colourA = PATH_COLOURS[stageA];
       const colourB = PATH_COLOURS[stageB];
-      for (let corner = 0; corner < 2; corner += 1) colours.push(colourA.r, colourA.g, colourA.b);
-      for (let corner = 0; corner < 2; corner += 1) colours.push(colourB.r, colourB.g, colourB.b);
+      for (let step = 0; step <= steps; step++) {
+        const t = step / steps;
+        const halfWidth = THREE.MathUtils.lerp(widthA, widthB, t);
+        for (let lane = 0; lane < 5; lane++) {
+          const u = lane / 4;
+          const lateral = (u * 2 - 1) * halfWidth;
+          const worldX = cell.worldX + vx * t + sideX * lateral;
+          const worldZ = cell.worldZ + vz * t + sideZ * lateral;
+          positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.018, worldZ);
+          roadUV.push(u, length * t, THREE.MathUtils.lerp(STAGE_RANK[stageA], STAGE_RANK[stageB], t));
+          colours.push(THREE.MathUtils.lerp(colourA.r, colourB.r, t),
+            THREE.MathUtils.lerp(colourA.g, colourB.g, t), THREE.MathUtils.lerp(colourA.b, colourB.b, t));
+          if (step > 0 && lane < 4) {
+            const n = base + step * 5 + lane;
+            indices.push(n - 5, n - 4, n, n, n - 4, n + 1);
+          }
+        }
+      }
       counts[STAGE_RANK[stageA] >= STAGE_RANK[stageB] ? stageA : stageB] += 1;
     }
 
     const geometry = this.footpaths.geometry;
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+    geometry.setAttribute('roadUV', new THREE.Float32BufferAttribute(roadUV, 3));
     geometry.setIndex(indices);
     geometry.deleteAttribute('normal');
     if (positions.length > 0) geometry.computeVertexNormals();

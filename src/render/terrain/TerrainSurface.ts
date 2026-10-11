@@ -41,6 +41,9 @@ const PALETTE = {
   alpineMeadow: new THREE.Color('#777e57'),
   scree: new THREE.Color('#969080'),
   snow: new THREE.Color('#e8edef'),
+  basalt: new THREE.Color('#3b3532'),
+  ash: new THREE.Color('#5e5753'),
+  scorched: new THREE.Color('#4a2c24'),
 };
 
 /**
@@ -56,6 +59,7 @@ export class TerrainSurface {
   private readonly fertilityField: Float32Array;
   private readonly grainSeeds = octaveSeeds('terrain', 'surface-grain', 3);
   private readonly rockTone = new THREE.Color();
+  private readonly volcanicTone = new THREE.Color();
   private readonly scratch = new THREE.Color();
   private readonly normal = new THREE.Vector3();
 
@@ -269,13 +273,26 @@ export class TerrainSurface {
     colour.lerp(PALETTE.darkRock, smoothstep(0.62, 0.95, slope) * 0.55);
     colour.lerp(PALETTE.alpine, smoothstep(mountainLevel - 0.1, mountainLevel + 0.08, elevation) * 0.5);
 
+    // The volcano's cone is dark basalt under ash, scorched inside the crater, and too hot to hold
+    // snow near the summit; lower flanks fade back into the mountain's own colours.
+    const vent = this.world.volcanicVent;
+    let volcanicHeat = 0;
+    if (vent) {
+      const distance = Math.hypot(worldX - vent.worldX, worldZ - vent.worldZ);
+      const ash = smoothstep(vent.coneRadius, vent.craterRadius * 1.3, distance);
+      volcanicHeat = smoothstep(vent.coneRadius * 0.7, vent.craterRadius, distance);
+      this.volcanicTone.copy(PALETTE.basalt).lerp(PALETTE.ash, strata * 0.7);
+      colour.lerp(this.volcanicTone, ash * 0.85);
+      colour.lerp(PALETTE.scorched, smoothstep(vent.craterRadius * 1.05, vent.craterRadius * 0.2, distance) * 0.75);
+    }
+
     // Loose stone accumulates below cliffs; snow holds on shelves and shaded slopes, leaving
     // the steepest faces exposed. The broken snowline avoids a uniform white altitude stripe.
     colour.lerp(PALETTE.scree, upland * smoothstep(0.12, 0.3, slope) * smoothstep(0.65, 0.38, slope) * 0.32);
     const snowline = mountainLevel + 0.02 + temperature * 0.08
       + (strata - 0.5) * 0.075 + this.normal.z * 0.022;
     const snow = smoothstep(snowline, snowline + 0.09, elevation)
-      * smoothstep(0.98, 0.52, slope);
+      * smoothstep(0.98, 0.52, slope) * (1 - volcanicHeat);
     colour.lerp(PALETTE.snow, snow * 0.96);
 
     // Fine deterministic grain, so large flat surfaces still have life at close range.

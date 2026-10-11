@@ -73,8 +73,26 @@ export class TickProfiler {
   private enabled = false;
   private readonly samples: TickSample[] = [];
   private phases: Partial<Record<TickPhase, number>> = {};
+  /** Wall time spent suspended between slices of a time-sliced month, excluded from all timings. */
+  private suspendedMs = 0;
+  private suspendedAt = -1;
 
   constructor(private readonly sampleWindow = 360) {}
+
+  /** Work clock: wall time minus time a sliced month spent waiting for later frames. */
+  private clock(): number {
+    return now() - this.suspendedMs;
+  }
+
+  suspend(): void {
+    if (this.enabled && this.suspendedAt < 0) this.suspendedAt = now();
+  }
+
+  resume(): void {
+    if (this.suspendedAt < 0) return;
+    this.suspendedMs += now() - this.suspendedAt;
+    this.suspendedAt = -1;
+  }
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
@@ -89,18 +107,18 @@ export class TickProfiler {
   }
 
   start(): number {
-    return this.enabled ? now() : 0;
+    return this.enabled ? this.clock() : 0;
   }
 
   record(phase: TickPhase, startedAt: number): void {
     if (!this.enabled) return;
-    const elapsed = Math.max(0, now() - startedAt);
+    const elapsed = Math.max(0, this.clock() - startedAt);
     this.phases[phase] = (this.phases[phase] ?? 0) + elapsed;
   }
 
   finish(month: number, annual: boolean, startedAt: number): void {
     if (!this.enabled) return;
-    this.samples.push({ month, annual, totalMs: Math.max(0, now() - startedAt), phases: this.phases });
+    this.samples.push({ month, annual, totalMs: Math.max(0, this.clock() - startedAt), phases: this.phases });
     this.phases = {};
     if (this.samples.length > this.sampleWindow) this.samples.splice(0, this.samples.length - this.sampleWindow);
   }

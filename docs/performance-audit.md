@@ -410,3 +410,75 @@ node scripts/perf/frame-harness.mjs --scenario=opening --cpu-profile=page.cpupro
 The frame harness needs a Chromium-family browser; it autodetects Edge and Chrome, and
 `GODBOX_BROWSER` overrides. Run it **headful and unoccluded** — an occluded window makes Chromium
 throttle `requestAnimationFrame`, which silently produces a 98 % idle profile.
+
+---
+
+## 11. Second pass (2026-10-10): time-sliced months
+
+### What was measured
+
+| world | people | month mean | month p95 | month max | dominant cost |
+|---|---|---|---|---|---|
+| year 12 | 453 | 115 ms | 188 ms | 213 ms | `people` 52 % |
+| year 140 | 979 | 771 ms | 1 239 ms | 2 523 ms | `people` 64 % |
+
+An annual month at year 5 contained a single 408 ms trade-corridor survey (`RoutePlanner.plan`).
+At year 140 a CPU profile attributes **48 % of all simulation CPU to `StructureNavigation.detour`**
+(Dijkstra over up to 194 building-corner nodes, each relaxation a full segment test). That term
+grows with both population and settlement density, which is why the per-person cost rises from
+~130 µs at year 12 to ~500 µs at year 140.
+
+A naive Web Worker is not viable: a full structured clone of the state is 7.5 MiB and costs
+69 ms to serialize plus 113 ms to deserialize at year 12, as much as the tick itself.
+
+### What changed
+
+- **Time-sliced months.** `Simulation.advanceMonthSliced(deadline)` runs a month as a generator
+  that pauses only at quiescent points: between phases, between people (every 8), between
+  settlements in the resource phase, between 512-cell weather blocks, every 256 route-survey
+  expansions, and between diplomatic relations. `step()` drains the same generator, so headless
+  runs and tests are unchanged. The browser loop gives history a per-frame share from
+  `InteractiveTickBudget.sliceDeadline` (the larger of frame headroom and what the current pacing
+  needs, capped at 10 ms) instead of an all-or-nothing atomic month.
+- **Committed-month authority.** `src/sim/MonthAuthority.ts` marks a state whose month is in
+  flight (outside `SimulationState`, so never archived). Once-per-month presentation caches
+  (visible people, social index, facility crews, market stalls, seasonal refresh, war sync,
+  `DocumentaryMemory`, workshop heat) key on `committedMonth(state)`; the world-keyed resource-work
+  ledger is published at commit. Persistence, checkpoints and the ending only act on committed
+  months.
+- **Exact cost reductions:** per-world memo of the 31x31 coast-distance scan; per-footprint trig
+  and half-extents resolved once in `StructureNavigation`; detour-local endpoint walkability memo;
+  per-frame, per-settlement sleeping-structure derivation in the renderer people pass.
+
+### Results
+
+`scripts/perf/slice-bench.ts` (year 2-5, every safe boundary taken):
+
+| | atomic month | longest uninterrupted slice |
+|---|---|---|
+| p99 | 129-210 ms | **8-13 ms** |
+| max | 339-554 ms | **34-36 ms** |
+
+Determinism: sliced and atomic states are deep-equal (`tests/time-sliced-month.test.ts`), and
+`scripts/perf/fingerprints.ts` is identical across all six seeds against the pre-change tree.
+Paired concurrent A/B at year 40 (786 people): mean month 300 -> 270 ms and 252 -> 224 ms
+(about -10 %), fingerprint `bf0953d7` unchanged.
+
+The in-browser A/B (`--scenario=early-history`, `?atomic-ticks` versus sliced) was **inconclusive**:
+run-to-run renderer variance (11-30 fps for the same mode) swamped the effect, because documentary
+pacing advanced only ~3 months per 30 s window.
+
+### What now dominates frames
+
+At year 12 on the RTX 4060 the renderer itself is 30-45 ms per frame before any simulation work:
+the per-person presentation pass is ~30 ms (56 %) and `render` ~18 ms. A page CPU profile shows
+**14.6 % of all page CPU inside `getProgramInfoLog` via three.js `onFirstUse`**: synchronous
+first-use shader linking for newly visible content, a few hundred ms per program on ANGLE/D3D11.
+This is the isolated multi-hundred-millisecond spike source. The next passes, in order:
+
+1. Compile newly created materials with `renderer.compileAsync` and reveal their objects when
+   ready, so no frame blocks on a shader link.
+2. Reduce the renderer people pass (`queryTerrainAt` is 8.8 % of page CPU from per-person,
+   per-frame ground probes).
+3. Section 10's geometry/material batching for mature worlds.
+4. An algorithmic, still exact, replacement for the O(n^2) `detour` visibility search.

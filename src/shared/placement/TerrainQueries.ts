@@ -15,6 +15,8 @@ import { DANGEROUS_WATER_DEPTH, waterDepthAt } from '../../sim/terrain/SurfaceGe
 import { waterAt } from '../../sim/transport/TerrainTraversal';
 import * as THREE from 'three';
 
+const coastDistanceByWorld = new WeakMap<WorldState, Float64Array>();
+
 /**
  * Terrain properties queried at a specific world position
  */
@@ -244,6 +246,15 @@ export class TerrainQueries {
    */
   private distanceToCoastFrom(cell: WorldCell): number {
     if (cell.coast) return -1;
+    // Coast flags are fixed at world generation, so the 31x31 scan is a pure per-cell value.
+    let memo = coastDistanceByWorld.get(this.world);
+    if (!memo) {
+      memo = new Float64Array(this.world.cells.length).fill(Number.NaN);
+      coastDistanceByWorld.set(this.world, memo);
+    }
+    const index = cell.z * this.world.size + cell.x;
+    const known = memo[index]!;
+    if (!Number.isNaN(known)) return known;
 
     let minDistance = Infinity;
     const searchRadius = 15;
@@ -259,7 +270,9 @@ export class TerrainQueries {
       }
     }
 
-    return isFinite(minDistance) ? minDistance : Infinity;
+    const result = isFinite(minDistance) ? minDistance : Infinity;
+    memo[index] = result;
+    return result;
   }
 
   /**

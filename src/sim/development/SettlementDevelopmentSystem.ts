@@ -410,13 +410,57 @@ function processedMaterialBlockers(settlement: Settlement, response: Development
       available: settlement.localMaterials[id] ?? 0, required }));
 }
 
+/** Reconsider a stone-dependent founding design only after a sustained material stall.
+ * Keep the site and all paid work; the revised bill applies only to remaining progress.
+ */
+function replanStalledShelter(state: SimulationState, settlement: Settlement): KnowledgeEventDraft[] {
+  const dev = settlement.development!;
+  const project = dev.project;
+  if (!project || state.month - (project.lastWorkMonth ?? project.startedMonth) < 6) return [];
+  const adaptation = project.response.adaptation;
+  if (adaptation !== 'hut' && !(adaptation === 'earth-shelter' && project.progress === 0)) return [];
+  const requirements = project.materialRequirements;
+  const foundation = requirements?.find(r => r.id === 'foundation');
+  const frame = requirements?.find(r => r.id === 'frame');
+  if (!requirements || !foundation || !frame || foundation.options.some(id => (settlement.localMaterials[id] ?? 0) > 0.000001)) return [];
+  const plot = settlement.structurePlots?.find(p => p.id === project.plotId);
+  if (!plot || !usableStructure(plot)) return [];
+
+  // Combine timber uses in one requirement so the same stock cannot fund both twice.
+  const revised: FlexibleMaterialRequirement[] = requirements.filter(r => r.id !== 'foundation').map(r => r.id === 'frame'
+    ? { ...r, amount: adaptation === 'hut' ? r.amount + foundation.amount * 2 : 1.2,
+      reason: adaptation === 'hut' ? 'frame-roof-and-timber-footings' : 'frame-and-roof' }
+    : { ...r });
+  const remaining = 1 - project.progress;
+  const fuelReserve = settlement.survival?.establishment?.fuelTarget ?? 0;
+  const available = { ...settlement, localMaterials: { ...settlement.localMaterials,
+    timber: Math.max(0, (settlement.localMaterials.timber ?? 0) - fuelReserve) } };
+  if (maxMaterialProgressIncrement(available, revised) + 1e-8 < remaining) return [];
+
+  const previousName = project.response.name;
+  project.materialRequirements = revised;
+  project.response = { ...project.response,
+    name: adaptation === 'hut' ? 'timber-footed permanent hut' : 'communal lean-to',
+    reasons: [...project.response.reasons, 'material-shortage-replanned'],
+    ...(adaptation === 'earth-shelter' ? { adaptation: 'lean-to' as const, material: 'timber' as const, labor: 3, insulation: 0.5 } : {}),
+  };
+  project.blockedReasons = [];
+  dev.revision++;
+  return [{ type: 'response-attempted', locationId: settlement.id, location: { x: plot.worldX, z: plot.worldZ },
+    actors: [settlement.id, plot.id], causes: ['material-shortage-replanned'],
+    context: { project: plot.id, previousName, progress: project.progress, materials: JSON.stringify(revised) },
+    summary: `${settlement.name} revises its ${previousName} to use available timber.`,
+    outcome: 'The site and paid work are retained; remaining construction still requires materials and labour.',
+    significance: 0.4, tags: ['survival', 'settlement-development', 'construction'] }];
+}
+
 /** Uses the existing single project, placement, inventory and completion path. Called before labour freezes. */
 export function planEstablishment(state: SimulationState, settlement: Settlement, residents: Person[]): KnowledgeEventDraft[] {
   const e = settlement.survival?.establishment;
   if (!e || !settlement.alive) return [];
   initializeSettlementDevelopment(state, settlement, residents);
   const dev = settlement.development!;
-  const events: KnowledgeEventDraft[] = [];
+  const events: KnowledgeEventDraft[] = replanStalledShelter(state, settlement);
   // Temporary fabric deteriorates and is vulnerable to ordinary storms, even between major disasters.
   const weather = state.weather.cells[settlement.cellIndex];
   for (const p of settlement.structurePlots ?? []) if (p.development?.temporary && p.development.status === 'active') {

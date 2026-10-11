@@ -1,6 +1,7 @@
 import { DEFAULT_CONFIG, type GodboxConfig } from '../../config';
 import { SeededRandom, stableHash } from '../prng';
 import { DynamicHydrology } from '../terrain/Hydrology';
+import { drain, type Slices } from '../TimeSlicing';
 import { classifyWaterDepth, waterDepthAt } from '../terrain/SurfaceGeometry';
 import { cellAt } from '../world';
 import { tornadoDamage, tornadoExposure, tornadoPotential } from './Tornado';
@@ -82,6 +83,11 @@ export class WeatherSystem {
   }
 
   advanceMonth(): void {
+    drain(this.advanceMonthSlices());
+  }
+
+  /** advanceMonth with safe pause points between blocks of cells and before hydrology. */
+  *advanceMonthSlices(): Slices {
     this.state.month += 1;
     this.state.wind = 0.12 + this.random.float() * 0.2;
     const direction = Math.sin(this.state.month / 9) * 0.6;
@@ -105,7 +111,12 @@ export class WeatherSystem {
       this.createFront({ x: cell.worldX, z: cell.worldZ }, kind, this.random.range(0.5, 1),
         this.world.cellSize * this.random.range(3, 7), this.random.range(0.5, 1.5), this.random.int(2, 5));
     }
-    for (const cell of this.world.cells) this.applyWeatherToCell(cell, {});
+    const cells = this.world.cells;
+    for (let index = 0; index < cells.length; index += 1) {
+      this.applyWeatherToCell(cells[index]!, {});
+      if ((index & 511) === 511) yield;
+    }
+    yield;
     this.advanceTornadoes();
     this.state.lightning = [];
     for (const front of this.state.fronts) {
@@ -117,6 +128,7 @@ export class WeatherSystem {
       const cell = cellAt(this.world, x, z);
       if (cell && this.temperatureAt(cell) > FREEZING) this.state.lightning.push({ id: `lightning:${front.id}:${this.state.month}`, month: this.state.month, x, z, intensity: front.intensity });
     }
+    yield;
     this.hydrology.advance(this.state.cells);
     // DynamicHydrology already tracks floodplain storage while it advances the fine field. Use
     // that authoritative result instead of hashing the entire fine terrain before and after every

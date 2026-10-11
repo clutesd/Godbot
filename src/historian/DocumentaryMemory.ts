@@ -1,4 +1,5 @@
 import type { SimulationState, Vec2 } from '../sim/types';
+import { monthInFlight } from '../sim/MonthAuthority';
 import type { ObservationCandidate, ObservationKind } from './types';
 
 interface Snapshot {
@@ -45,7 +46,8 @@ export class DocumentaryMemory {
   private month = -1;
 
   observe(state: SimulationState): void {
-    if (state.month === this.month) return;
+    // A time-sliced month is observed once it commits, never as a partially advanced snapshot.
+    if (monthInFlight(state) || state.month === this.month) return;
     if (state.month < this.month) { this.previous.clear(); this.threads.clear(); this.shownEvents.clear(); this.witnessedPlaces.clear(); this.spoken.clear(); this.progressRates.clear(); }
     const snapshots: Snapshot[] = state.people.filter(p => p.alive || this.previous.has(p.id)).map(p => ({
       id: p.id, name: p.name, position: { ...p.position }, kind: p.alive ? 'worker-follow' : 'aftermath-pullback', activity: p.activity,

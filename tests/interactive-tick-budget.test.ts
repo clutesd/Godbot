@@ -48,6 +48,27 @@ describe('interactive tick budget', () => {
     expect(budget.estimatedTickMs).toBeLessThan(afterSpike);
     expect(budget.estimatedTickMs).toBeGreaterThan(0.5);
   });
+
+  it('gives sliced months what pacing needs even when the renderer leaves no headroom, within a cap', () => {
+    const budget = new InteractiveTickBudget(10);
+    for (let month = 0; month < 12; month += 1) budget.observe(100);
+    budget.observeFrame(45);
+    // 100 ms months at 1 month/s over 45 ms frames need ~4.5 ms per frame; headroom alone is negative.
+    expect(budget.sliceDeadline(0, 1, 0.045, 0)).toBeCloseTo(4.5, 0);
+    // Backlog may at most double the share, and the cap always holds.
+    expect(budget.sliceDeadline(0, 1, 0.045, 3)).toBeCloseTo(9, 0);
+    expect(budget.sliceDeadline(0, 6, 0.045, 3)).toBe(10);
+  });
+
+  it('lets sliced months use spare frame headroom and never drops below a minimum share', () => {
+    const budget = new InteractiveTickBudget(10);
+    budget.observe(1);
+    budget.observeFrame(6);
+    expect(budget.sliceDeadline(0, 0.3, 0.016, 0)).toBeCloseTo(1000 / 60 - 6 - 1.5, 5);
+    budget.observeFrame(100);
+    for (let frame = 0; frame < 60; frame += 1) budget.observeFrame(100);
+    expect(budget.sliceDeadline(0, 0, 0.1, 0)).toBe(1.5);
+  });
 });
 
 

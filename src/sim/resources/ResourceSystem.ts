@@ -12,6 +12,7 @@ import { advanceProcessingFacilities } from '../processing/FacilitySystem';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
 import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
+import { drain, type Slices } from '../TimeSlicing';
 import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, modifyLand, wearExtractionPath } from '../environment/EnvironmentalModificationSystem';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
@@ -53,6 +54,11 @@ export class ResourceSystem {
   private world?: SimulationState['world'];
   constructor(private readonly random: SeededRandom) {}
   advanceMonth(state: SimulationState): ResourceEventDraft[] {
+    return drain(this.advanceMonthSlices(state));
+  }
+
+  /** advanceMonth with a safe pause point after each settlement's stocks are published. */
+  *advanceMonthSlices(state: SimulationState): Slices<ResourceEventDraft[]> {
     if (this.world !== state.world) { this.world = state.world; this.access = new ExtractionAccessibility(state); }
     // Clear last month's documentary work before either extraction authority records this month.
     // This also guarantees a renderer cannot keep showing workers at a site when extraction drops to zero.
@@ -89,6 +95,7 @@ export class ResourceSystem {
       consumeMaterials(state, s, people, budget, events);
       for (const [occupation, time] of Object.entries(fiberTime.byOccupation) as Array<[keyof LabourBudget, number]>) budget[occupation] = (budget[occupation] ?? 0) + time;
       publishBulkStocks(s);
+      yield;
     }
     for (const deposit of state.world.resourceDeposits) {
       if (!deposit.controlledBy || deposit.abandonedMonth !== undefined) continue;

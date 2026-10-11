@@ -26,12 +26,17 @@ export interface CasualtyReceipt {
 /** Shared by the original company meshes from the instant of impact through permanent rest. */
 export function casualtyLifecycle(life: number, reducedMotion: boolean) {
   const t = reducedMotion ? Infinity : Math.max(0, life);
-  const fall = Math.min(1, Math.max(0, (t - 0.38) / 0.95));
+  const fall = Math.min(1, Math.max(0, (t - 0.38) / 1.25));
+  // A slow loss of balance accelerates into contact, then a small damped recoil settles.
   const eased = fall * fall * (3 - 2 * fall);
   const stagger = Math.min(1, t / 0.38);
+  const contact = Math.max(0, t - 1.63);
+  const recoil = contact < 0.37 ? Math.sin(contact / 0.37 * Math.PI) * Math.exp(-contact * 10) * 0.035 : 0;
   return {
-    phase: t < 0.12 ? 'hit' : t < 0.38 ? 'stagger' : t < 1.33 ? 'fall' : 'corpse',
-    fall: eased, pitch: -eased * Math.PI / 2,
+    phase: t < 0.12 ? 'hit' : t < 0.38 ? 'stagger' : t < 1.63 ? 'fall' : 'corpse',
+    fall: eased, pitch: -eased * Math.PI / 2 + recoil,
+    buckle: Math.sin(fall * Math.PI) * 0.18,
+    roll: Math.sin(fall * Math.PI) * 0.09,
     retreat: stagger * 0.035,
     reaction: Math.sin(Math.min(1, t / 0.38) * Math.PI) * 0.18,
     settle: Math.min(1, t / 0.6),

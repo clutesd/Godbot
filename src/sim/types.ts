@@ -8,6 +8,8 @@ import type { RouteTransport, TransportationState, TraversalPath } from './trans
 import type { Remembrance, SettlementDevelopment, StructureDevelopment } from './development/types';
 import type { SettlementArchitecturalIdentity } from './development/SettlementIdentity';
 import type { ForestCommunity, Geology, LandModification, ModificationKind, Soil } from './environment/types';
+import type { VolcanoState } from './environment/VolcanoSystem';
+import type { VolcanicVent } from './terrain/VolcanicCone';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
 
@@ -81,6 +83,8 @@ export interface WorldState {
   environmentRevision?: number;
   /** Geographically sited raw-material deposits; see src/sim/resources. */
   resourceDeposits: ResourceDeposit[];
+  /** The summit sculpted into a volcano at world generation, if the world has land high enough. */
+  volcanicVent?: VolcanicVent;
 }
 
 /**
@@ -680,6 +684,8 @@ export interface StructurePlot {
   /** Retained after extinction; repair removes char, ground scars weather slowly. */
   char?: number;
   scorch?: number;
+  /** 0..1 volcanic ash buildup from a nearby eruption; purely cosmetic, weathers slowly. */
+  ashDepth?: number;
 }
 
 export type FireCause = 'accident' | 'lightning' | 'attack' | 'spread' | 'sabotage' | 'wildfire' | 'developer';
@@ -1125,6 +1131,7 @@ export interface SimulationStats {
 
 export interface BodyRecord {
   id: string; person: Person; deathEventId: string; cause: string; month: number; yaw: number;
+  recovery?: { helperId: string; month: number };
   removed?: { month: number; reason: 'burial' | 'removal' | 'destruction' | 'decomposition'; eventId: string };
 }
 
@@ -1139,6 +1146,8 @@ export interface SimulationState {
   month: number;
   world: WorldState;
   weather: WeatherState;
+  /** The world's one active volcano; absent only if world generation found no viable site. */
+  volcano?: VolcanoState;
   people: Person[];
   /** Living and deceased people the simulation considers historically significant. */
   notableFigures?: NotableFigure[];

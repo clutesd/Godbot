@@ -13,9 +13,25 @@ export interface PedestrianFootprint {
  */
 const bucketKey = (x: number, z: number): number => x * 1_048_576 + z;
 
+/** Default body clearance for the blocking test. */
+const BODY_CLEARANCE = 0.14;
+
+/**
+ * A footprint with its rotation and expanded half-extents resolved once at registration. The
+ * values are the exact expressions `intersects` used to evaluate on every probe, so every test
+ * returns bit-identical results without recomputing two trig calls per footprint per probe.
+ */
+interface IndexedFootprint {
+  readonly s: PedestrianFootprint;
+  readonly cos: number;
+  readonly sin: number;
+  readonly halfWidth: number;
+  readonly halfDepth: number;
+}
+
 /** Spatially indexed, expanded rectangles. The expansion includes the pedestrian's body. */
 export class StructureNavigation {
-  private buckets = new Map<number, PedestrianFootprint[]>();
+  private buckets = new Map<number, IndexedFootprint[]>();
   private signature = '';
   revision = 0;
 
@@ -24,11 +40,16 @@ export class StructureNavigation {
     if (signature === this.signature) return false;
     this.signature = signature; this.revision++; this.buckets.clear();
     for (const s of structures) {
+      const rotation = s.rotationY ?? 0;
+      const indexed: IndexedFootprint = {
+        s, cos: Math.cos(rotation), sin: Math.sin(rotation),
+        halfWidth: s.width / 2 + BODY_CLEARANCE, halfDepth: s.depth / 2 + BODY_CLEARANCE,
+      };
       const radius = Math.hypot(s.width, s.depth) / 2 + 0.16;
       for (let x = Math.floor((s.worldX - radius) / 4); x <= Math.floor((s.worldX + radius) / 4); x++) {
         for (let z = Math.floor((s.worldZ - radius) / 4); z <= Math.floor((s.worldZ + radius) / 4); z++) {
           const key = bucketKey(x, z), bucket = this.buckets.get(key) ?? [];
-          bucket.push(s); this.buckets.set(key, bucket);
+          bucket.push(indexed); this.buckets.set(key, bucket);
         }
       }
     }
@@ -39,7 +60,7 @@ export class StructureNavigation {
     const result = new Set<PedestrianFootprint>();
     for (let x = Math.floor((Math.min(a.x, b.x) - margin) / 4); x <= Math.floor((Math.max(a.x, b.x) + margin) / 4); x++) {
       for (let z = Math.floor((Math.min(a.z, b.z) - margin) / 4); z <= Math.floor((Math.max(a.z, b.z) + margin) / 4); z++) {
-        for (const s of this.buckets.get(bucketKey(x, z)) ?? []) result.add(s);
+        for (const indexed of this.buckets.get(bucketKey(x, z)) ?? []) result.add(indexed.s);
       }
     }
     return [...result];
@@ -59,9 +80,9 @@ export class StructureNavigation {
         const bucket = this.buckets.get(bucketKey(x, z));
         if (!bucket) continue;
         for (let index = 0; index < bucket.length; index++) {
-          const s = bucket[index]!;
-          if (interiorKey !== undefined && s.key === interiorKey) continue;
-          if (intersects(a, b, s)) return true;
+          const f = bucket[index]!;
+          if (interiorKey !== undefined && f.s.key === interiorKey) continue;
+          if (slabIntersects(a, b, f.s.worldX, f.s.worldZ, f.cos, f.sin, f.halfWidth, f.halfDepth)) return true;
         }
       }
     }
@@ -100,21 +121,21 @@ export class StructureNavigation {
       const point = { x: s.worldX + c * lx + sn * lz, z: s.worldZ - sn * lx + c * lz };
       if (safe(point, point)) nodes.push(point);
     }
-    const cost = nodes.map(() => Infinity), previous = nodes.map(() => -1), visited = new Set<number>();
+    const cost = nodes.map(() => Infinity), previous = nodes.map(() => -1), visited = new Uint8Array(nodes.length);
     cost[0] = 0;
     for (let pass = 0; pass < nodes.length; pass++) {
       let next = -1;
-      for (let i = 0; i < nodes.length; i++) if (!visited.has(i) && (next < 0 || cost[i]! < cost[next]!)) next = i;
+      for (let i = 0; i < nodes.length; i++) if (!visited[i] && (next < 0 || cost[i]! < cost[next]!)) next = i;
       if (next < 0 || !Number.isFinite(cost[next])) break;
       if (next === 1) {
         const path: Vec2[] = [];
         for (let i = 1; i > 0; i = previous[i]!) path.push(nodes[i]!);
         return path.reverse();
       }
-      visited.add(next);
+      visited[next] = 1;
       for (let i = 1; i < nodes.length; i++) {
         const distance = cost[next]! + Math.hypot(nodes[next]!.x - nodes[i]!.x, nodes[next]!.z - nodes[i]!.z);
-        if (visited.has(i) || distance >= cost[i]! || !safe(nodes[next]!, nodes[i]!)) continue;
+        if (visited[i] || distance >= cost[i]! || !safe(nodes[next]!, nodes[i]!)) continue;
         cost[i] = distance; previous[i] = next;
       }
     }
@@ -123,21 +144,36 @@ export class StructureNavigation {
 }
 
 /** Slab intersection in building-local coordinates; catches thin walls between frame samples. */
-function intersects(a: Vec2, b: Vec2, s: PedestrianFootprint, clearance = 0.14): boolean {
-  const c = Math.cos(s.rotationY ?? 0), sn = Math.sin(s.rotationY ?? 0);
-  const ax = c * (a.x - s.worldX) - sn * (a.z - s.worldZ);
-  const az = sn * (a.x - s.worldX) + c * (a.z - s.worldZ);
-  const bx = c * (b.x - s.worldX) - sn * (b.z - s.worldZ);
-  const bz = sn * (b.x - s.worldX) + c * (b.z - s.worldZ);
+function intersects(a: Vec2, b: Vec2, s: PedestrianFootprint, clearance = BODY_CLEARANCE): boolean {
+  const rotation = s.rotationY ?? 0;
+  return slabIntersects(a, b, s.worldX, s.worldZ, Math.cos(rotation), Math.sin(rotation),
+    s.width / 2 + clearance, s.depth / 2 + clearance);
+}
+
+/**
+ * Allocation-free slab test with the footprint's trig and half-extents supplied. The two axes are
+ * evaluated in the original order with the original expressions, so results are bit-identical.
+ */
+function slabIntersects(a: Vec2, b: Vec2, worldX: number, worldZ: number, c: number, sn: number,
+  halfWidth: number, halfDepth: number): boolean {
+  const ax = c * (a.x - worldX) - sn * (a.z - worldZ);
+  const az = sn * (a.x - worldX) + c * (a.z - worldZ);
+  const bx = c * (b.x - worldX) - sn * (b.z - worldZ);
+  const bz = sn * (b.x - worldX) + c * (b.z - worldZ);
   let low = 0, high = 1;
-  for (const [start, end, half] of [[ax, bx, s.width / 2 + clearance], [az, bz, s.depth / 2 + clearance]]) {
-    const delta = end! - start!;
-    if (Math.abs(delta) < 1e-9) { if (Math.abs(start!) > half!) return false; }
-    else {
-      const t1 = (-half! - start!) / delta, t2 = (half! - start!) / delta;
-      low = Math.max(low, Math.min(t1, t2)); high = Math.min(high, Math.max(t1, t2));
-      if (low > high) return false;
-    }
+  const deltaX = bx - ax;
+  if (Math.abs(deltaX) < 1e-9) { if (Math.abs(ax) > halfWidth) return false; }
+  else {
+    const t1 = (-halfWidth - ax) / deltaX, t2 = (halfWidth - ax) / deltaX;
+    low = Math.max(low, Math.min(t1, t2)); high = Math.min(high, Math.max(t1, t2));
+    if (low > high) return false;
+  }
+  const deltaZ = bz - az;
+  if (Math.abs(deltaZ) < 1e-9) { if (Math.abs(az) > halfDepth) return false; }
+  else {
+    const t1 = (-halfDepth - az) / deltaZ, t2 = (halfDepth - az) / deltaZ;
+    low = Math.max(low, Math.min(t1, t2)); high = Math.min(high, Math.max(t1, t2));
+    if (low > high) return false;
   }
   return true;
 }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { SimulationState, Vec2 } from '../../sim/types';
+import { committedMonth } from '../../sim/MonthAuthority';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { ResourceWorkScene } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
@@ -60,7 +61,7 @@ export class ResourceFlowRenderer {
     // Development settlements show stock through the storage-yard grammar on their working
     // precincts (StorageYardPresentation); only legacy settlements keep this generic ring.
     const plans = settlements.map(s => ({ s, stock: s.development ? [] : resourceStoragePresentation(s),
-      processes: resourceProcessingPresentation(this.state.world, s, this.state.month) }));
+      processes: resourceProcessingPresentation(this.state.world, s, committedMonth(this.state)) }));
     const signature = JSON.stringify([this.state.world.environmentRevision, plans.map(({ s, stock, processes }) =>
       [s.id, s.position, s.structurePlots?.map(p => [p.id, p.worldX, p.worldZ, p.radius, p.width, p.depth,
         p.condition > 0.2, p.accessRestricted, p.development?.form, p.development?.status]),
