@@ -160,7 +160,7 @@ describe('deterministic combat exchanges and continuous casualties', () => {
   });
 
 
-  it.each(['clubs', 'stone-spears', 'bows', 'rifles', 'automatic-weapons'] as const)('keeps fallen %s equipment above the ground', equipment => {
+  it.each(['clubs', 'stone-spears', 'metal-weapons', 'bows', 'gunpowder-weapons', 'rifles', 'automatic-weapons'] as const)('keeps fallen %s equipment above the ground', equipment => {
     const f = fixture();
     f.state.month = 1; f.state.history.push(f.event);
     f.war.phase = 'battle'; f.war.campaign.battleCount = 1; f.war.campaign.lastBattleMonth = 1;

@@ -300,7 +300,7 @@ describe('human-caused construction through the runtime presentation path', () =
     expect(bridge.holds(project.plotId)).toBe(false);
     expect(raw!.structurePlots!.find(p => p.id === project.plotId)!.development!.status).toBe('active');
     assetBuilder.dispose();
-  }, 20000);
+  });
   it('starts builders from the renderer grounded position when the logical destination is inside the active plot', () => {
     const s = site(0);
     s.crew = s.crew.slice(0, 2);
@@ -491,5 +491,5 @@ describe('human-caused construction through the runtime presentation path', () =
       traces.push(trace);
     }
     expect(traces[0]).toEqual(traces[1]);
-  }, 20000);
+  });
 });

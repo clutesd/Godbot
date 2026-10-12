@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { learn } from './fixtures/settlementDevelopment';
 import {
-  CREW, INDUSTRIAL_KNOWLEDGE, METAL_KNOWLEDGE, WOOD_KNOWLEDGE, placeFacility, processingWorld, runFacilityMonth, step, stock,
+  CREW, INDUSTRIAL_KNOWLEDGE, METAL_KNOWLEDGE, SATURATING_TIMBER, WOOD_KNOWLEDGE, deliver, placeFacility, processingWorld, runFacilityMonth, step, stock,
 } from './fixtures/processingFacilities';
 import { SeededRandom } from '../src/sim/prng';
 import { ExtractionAccessibility } from '../src/sim/resources/ExtractionAccessibility';
@@ -12,7 +12,7 @@ import { energyAt } from '../src/sim/energy/types';
 import { facilityFamilies, facilityOwnedRecipes, facilityTierSpec, registerFacilityFamily } from '../src/sim/processing/FacilityCatalog';
 import { beginUpgrade } from '../src/sim/processing/FacilityConstruction';
 import { facilityConservationError, transitConservationError } from '../src/sim/processing/FacilityInventory';
-import { facilityHoldings, facilitiesOf, ensureProcessingAuthority } from '../src/sim/processing/FacilitySystem';
+import { facilityHoldings, facilitiesOf, ensureProcessingAuthority, facilityUpgradeBlocker } from '../src/sim/processing/FacilitySystem';
 import { facilityGoverned } from '../src/sim/processing/FacilityOwnership';
 import { processSpec } from '../src/sim/processing/FacilityProcesses';
 import type { FacilityFamilySpec } from '../src/sim/processing/types';
@@ -58,10 +58,15 @@ describe('facility authority: production requires a physical place', () => {
     legacy.s.buildings = 2;
     legacy.s.infrastructure.workshops = 0.5;
     stock(legacy.s, { timber: 30, 'copper-ore': 20, 'tin-ore': 8, 'iron-ore': 20, charcoal: 15 });
-    for (let month = 1; month <= 36; month++) { legacy.state.month = month; legacy.system.advanceMonth(legacy.state); }
+    // The settlement casts bronze early and then wears it out as tools, so the peak is the evidence.
+    let legacyBronze = 0;
+    for (let month = 1; month <= 36; month++) {
+      legacy.state.month = month; legacy.system.advanceMonth(legacy.state);
+      legacyBronze = Math.max(legacyBronze, legacy.s.localMaterials.bronze ?? 0);
+    }
     expect(legacy.state.processing).toBeUndefined();
     expect(legacy.s.knownRecipes).toEqual(expect.arrayContaining(['bronze-ingot']));
-    expect(legacy.s.localMaterials.bronze ?? 0).toBeGreaterThan(0);
+    expect(legacyBronze).toBeGreaterThan(0);
     const legacyTyped = processingWorld('no-facility-typed');
     learn(legacyTyped.s, ...WOOD_KNOWLEDGE);
     legacyTyped.s.buildings = 2;
@@ -177,13 +182,15 @@ describe('facility construction and upgrades', () => {
   it('starts an upgrade only from sustained saturation, with the knowledge and a power source, and never from decoration', () => {
     const w = processingWorld('upgrade-gates');
     const f = placeFacility(w.state, w.s, 'wood', 1);
-    stock(w.s, { timber: 60, iron: 6 });
+    stock(w.s, { timber: 60 });
     materialEconomy(w.s).demand.lumber = 200;
     const drive = (months: number) => {
       for (let i = 0; i < months; i++) {
-        f.inputs.timber = 20;
+        f.inputs.timber = SATURATING_TIMBER;
         materialEconomy(w.s).demand.lumber = 200;
         w.s.localMaterials.lumber = 0; w.s.localMaterials.charcoal = 0; w.s.localMaterials['timber-frame'] = 0;
+        // Keep the sawmill's gearing iron on hand: the settlement's own tool-making also draws on it.
+        w.s.localMaterials.iron = Math.max(w.s.localMaterials.iron ?? 0, 6);
         f.outputs = {};
         runFacilityMonth(w.state, w.s, CREW, w.random, { infrastructure: 3 });
       }
@@ -191,6 +198,8 @@ describe('facility construction and upgrades', () => {
     drive(6);
     expect(f.saturationMonths).toBeGreaterThanOrEqual(3);
     // Saturated, funded and skilled - but there is no wheel or engine to drive a sawmill yet.
+    infrastructureLabourBudget(w.state, w.s).remaining = 3;
+    expect(facilityUpgradeBlocker(w.state, w.s, f)).toBe('no-power-source');
     expect(f.upgrade).toBeUndefined();
     expect(f.tier).toBe(1);
     energyAt(w.s).plants.push({ id: 'wheel', plotId: 'none', kind: 'waterwheel', progress: 1, condition: 1, output: 4, fuelUsed: 0, status: 'running' });
@@ -234,15 +243,16 @@ describe('facility throughput, conservation and physical limits', () => {
   it('cannot produce beyond the inputs it holds and consumes exactly the recipe inputs', () => {
     const w = processingWorld('exact-inputs');
     const f = placeFacility(w.state, w.s, 'metallurgy', 1);
-    f.inputs['iron-ore'] = 3; f.inputs.charcoal = 2;
+    deliver(f, { 'iron-ore': 3, charcoal: 2 });
     runFacilityMonth(w.state, w.s, CREW, w.random);
     // smelt-iron: 1 ore + 0.55 charcoal -> 0.56 iron. Warm-up burns 0.6 charcoal first, so 1.4 remains.
     expect(f.totals.consumed.charcoal).toBeGreaterThan(0);
+    expect(f.totals.consumed.charcoal).toBeLessThanOrEqual(2 + 1e-9);
     const smelted = f.processes['material:smelt-iron'];
     expect(smelted?.batches ?? 0).toBeGreaterThan(0);
     const oreUsed = f.totals.consumed['iron-ore'] ?? 0;
     expect(oreUsed).toBeLessThanOrEqual(3 + 1e-9);
-    expect((f.totals.produced.iron ?? 0)).toBeCloseTo(oreUsed * 0.56 - (f.totals.consumed['iron-ore'] ?? 0) * 0 - 0, 3);
+    expect(f.totals.produced.iron ?? 0).toBeCloseTo(oreUsed * 0.56, 3);
     expect(facilityConservationError(f)).toBeLessThan(1e-6);
   });
 
@@ -250,7 +260,7 @@ describe('facility throughput, conservation and physical limits', () => {
     const measure = (budget: Record<string, number>) => {
       const w = processingWorld('labour');
       const f = placeFacility(w.state, w.s, 'wood', 1);
-      f.inputs.timber = 20;
+      f.inputs.timber = SATURATING_TIMBER;
       w.s.localMaterials.timber = 0;
       runFacilityMonth(w.state, w.s, budget, w.random);
       return f;
@@ -274,7 +284,7 @@ describe('facility throughput, conservation and physical limits', () => {
       const w = processingWorld('damage');
       const f = placeFacility(w.state, w.s, 'wood', 1);
       const plot = w.s.structurePlots!.find(p => p.id === f.plotId)!;
-      f.inputs.timber = 20;
+      f.inputs.timber = SATURATING_TIMBER;
       damage(f, plot);
       runFacilityMonth(w.state, w.s, CREW, w.random);
       return f;
@@ -289,7 +299,7 @@ describe('facility throughput, conservation and physical limits', () => {
     expect(halfMachinery.throughput).toBeCloseTo(0.5, 1);
     expect(wrecked.status).toBe('damaged');
     expect(wrecked.throughput).toBe(0);
-    expect(wrecked.inputs.timber).toBe(20);
+    expect(wrecked.inputs.timber).toBe(SATURATING_TIMBER);
     expect(burning.status).toBe('damaged');
     expect(burning.throughput).toBe(0);
   });
@@ -297,14 +307,22 @@ describe('facility throughput, conservation and physical limits', () => {
   it('wears with use and is kept up only by paid maintenance', () => {
     const w = processingWorld('wear');
     const f = placeFacility(w.state, w.s, 'wood', 1);
-    for (let i = 0; i < 12; i++) { f.inputs.timber = 20; runFacilityMonth(w.state, w.s, CREW, w.random, { infrastructure: 0 }); }
+    // Keep the works busy: a stocked store would let it idle, and idle machinery barely wears.
+    const work = (infrastructure: number) => {
+      f.inputs.timber = SATURATING_TIMBER; f.outputs = {};
+      materialEconomy(w.s).demand.lumber = 200;
+      w.s.localMaterials.lumber = 0; w.s.localMaterials.charcoal = 0; w.s.localMaterials['timber-frame'] = 0;
+      runFacilityMonth(w.state, w.s, CREW, w.random, { infrastructure });
+    };
+    for (let i = 0; i < 12; i++) work(0);
+    expect(f.throughput).toBeGreaterThan(0.9);
     expect(f.condition).toBeLessThan(0.95);
     const worn = f.condition;
-    stock(w.s, { timber: 20 });
-    const before = w.s.localMaterials.timber!;
-    for (let i = 0; i < 6; i++) { f.inputs.timber = 20; runFacilityMonth(w.state, w.s, CREW, w.random, { infrastructure: 2 }); }
+    w.s.localMaterials.timber = 20;
+    for (let i = 0; i < 6; i++) work(2);
     expect(f.condition).toBeGreaterThan(worn);
-    expect(before - w.s.localMaterials.timber!).toBeGreaterThan(0);
+    // Repair is paid for out of the store, not conjured.
+    expect(20 - w.s.localMaterials.timber!).toBeGreaterThan(0);
   });
 
   it('is demand-driven: a works that has made enough goes idle instead of burning inputs', () => {
@@ -334,7 +352,7 @@ describe('integrated works and multi-step chains', () => {
     const works = processingWorld('steel-works');
     const steelworks = placeFacility(works.state, works.s, 'metallurgy', 3);
     transform(works.s, 'industrial-chemistry');
-    steelworks.inputs['iron-ore'] = 60; steelworks.inputs.charcoal = 40; steelworks.inputs.coal = 20;
+    deliver(steelworks, { 'iron-ore': 60, charcoal: 40, coal: 20 });
     steelworks.power = { carrier: 'electric', demand: 30, supplied: 30, coverage: 1 };
     for (let i = 0; i < 12; i++) {
       steelworks.power.supplied = 30; steelworks.power.coverage = 1;
@@ -364,9 +382,11 @@ describe('integrated works and multi-step chains', () => {
     runFacilityMonth(w.state, w.s, CREW, w.random);
     expect(f.totals.produced.iron ?? 0).toBeGreaterThan(0);
     expect(f.heat).toBe(1);
-    // Left unfed the furnace cools again.
+    // Left unfed the furnace cools again: heat halves each idle month and is out below 0.04.
     f.inputs = {};
-    for (let i = 0; i < 4; i++) runFacilityMonth(w.state, w.s, CREW, w.random);
+    runFacilityMonth(w.state, w.s, CREW, w.random);
+    expect(f.heat).toBeCloseTo(0.5, 6);
+    for (let i = 0; i < 5; i++) runFacilityMonth(w.state, w.s, CREW, w.random);
     expect(f.heat).toBe(0);
   });
 });
@@ -382,14 +402,20 @@ describe('reusable family framework', () => {
         build: { lines: [{ options: ['stone'], amount: 2 }], work: 1 }, maintenance: { lines: [], work: 0.1 }, service: 0.4,
       }],
     };
+    const ownedBefore = facilityOwnedRecipes();
+    const snapshot = { catalog: [...ownedBefore.catalog].sort(), material: [...ownedBefore.material].sort() };
+    // fire-brick belongs to no shipped family, so ownership of it can only come from this registration.
+    expect(ownedBefore.material.has('fire-brick')).toBe(false);
     const restore = registerFacilityFamily(textiles);
     try {
       expect(facilityFamilies().map(f => f.id)).toContain('textiles');
-      expect(facilityOwnedRecipes().catalog.has('pottery-vessels')).toBe(true);
+      expect(facilityOwnedRecipes().material.has('fire-brick')).toBe(true);
       const w = processingWorld('textiles');
       learn(w.s, 'pottery-firing');
       w.s.knowledge.records['pottery-firing']!.practice = 0.9;
-      stock(w.s, { clay: 30, timber: 20, stone: 10 });
+      // No timber yet: with timber on hand the wood family would claim the settlement's single
+      // construction slot first, and this scenario is about the new family.
+      stock(w.s, { clay: 30, stone: 10 });
       w.s.buildings = 6;
       step(w.state, w.system, 1);
       // Pottery at settlement level is now impossible; only the kiln yard can make it.
@@ -398,14 +424,17 @@ describe('reusable family framework', () => {
       expect(w.s.localMaterials.pottery ?? 0).toBe(0);
       for (let i = 0; i < 30; i++) {
         runFacilityMonth(w.state, w.s, CREW, w.random, { infrastructure: 2 });
-        if (kiln!.progress >= 1) stock(w.s, { clay: 3, timber: 2 });
+        // The settlement spends stone elsewhere too; keep the kiln's bill payable, then feed it.
+        if (kiln!.progress < 1) stock(w.s, { stone: 1 });
+        else stock(w.s, { clay: 3, timber: 2 });
       }
       expect(kiln!.progress).toBe(1);
       expect((kiln!.totals.produced.pottery ?? 0) + (kiln!.totals.produced.brick ?? 0)).toBeGreaterThan(0);
       expect(facilityConservationError(kiln!)).toBeLessThan(1e-4);
     } finally { restore(); }
     expect(facilityFamilies().map(f => f.id)).not.toContain('textiles');
-    expect(facilityOwnedRecipes().catalog.has('pottery-vessels')).toBe(false);
+    const ownedAfter = facilityOwnedRecipes();
+    expect({ catalog: [...ownedAfter.catalog].sort(), material: [...ownedAfter.material].sort() }).toEqual(snapshot);
   });
 
   it('reserves every later family id without any implementation', () => {
@@ -437,9 +466,10 @@ describe('determinism and legacy compatibility', () => {
     expect(a.processing).toEqual(b.processing);
     expect(a.materials).toEqual(b.materials);
     expect(a.plots).toEqual(b.plots);
-    expect(JSON.parse(a.processing).facilities.length).toBeGreaterThan(0);
-    // Different seeds explore different craft outcomes, so the comparison above is not vacuous.
-    expect(run('replay-other').materials).not.toEqual(a.materials);
+    // The comparison is not vacuous: the works were founded and actually made things.
+    const facilities = JSON.parse(a.processing).facilities as Array<{ totals: { produced: Record<string, number> } }>;
+    expect(facilities.length).toBeGreaterThan(0);
+    expect(facilities.some(f => Object.values(f.totals.produced).some(amount => amount > 0))).toBe(true);
   });
 
   it('converts a legacy save\'s aggregate capacity into facilities exactly once, keeping production alive', () => {
@@ -461,8 +491,11 @@ describe('determinism and legacy compatibility', () => {
     // The converted works are real places; production resumes only once they are supplied and staffed.
     stock(w.s, { timber: 30, 'copper-ore': 20, 'tin-ore': 8, charcoal: 20 });
     step(w.state, w.system, 24);
-    expect((w.s.localMaterials.bronze ?? 0) + (w.s.localMaterials.copper ?? 0)).toBeGreaterThan(0);
-    expect(facilitiesOf(w.s, 'metallurgy')[0]!.totals.produced.bronze ?? 0).toBeGreaterThan(0);
+    // Production is measured at the works: the settlement wears finished bronze out as tools.
+    const metallurgy = facilitiesOf(w.s, 'metallurgy')[0]!;
+    expect((metallurgy.totals.produced.bronze ?? 0) + (metallurgy.totals.produced.copper ?? 0)).toBeGreaterThan(0);
+    expect(metallurgy.totals.produced.bronze ?? 0).toBeGreaterThan(0);
+    expect(metallurgy.totals.deliveredOut.bronze ?? 0).toBeGreaterThan(0);
   });
 
   it('adopts an existing manufacturing workshop as the facility body instead of duplicating it', () => {
@@ -494,10 +527,14 @@ describe('determinism and legacy compatibility', () => {
     learn(w.s, ...METAL_KNOWLEDGE);
     w.s.infrastructure.workshops = 0.3;
     stock(w.s, { 'copper-ore': 20, 'tin-ore': 8, charcoal: 12 });
-    for (let month = 1; month <= 12; month++) { w.state.month = month; w.system.advanceMonth(w.state); }
+    let bronze = 0;
+    for (let month = 1; month <= 12; month++) {
+      w.state.month = month; w.system.advanceMonth(w.state);
+      bronze = Math.max(bronze, w.s.localMaterials.bronze ?? 0);
+    }
     expect(w.state.processing).toBeUndefined();
     expect(w.s.processing).toBeUndefined();
-    expect(w.s.localMaterials.bronze ?? 0).toBeGreaterThan(0);
+    expect(bronze).toBeGreaterThan(0);
   });
 });
 
@@ -532,12 +569,15 @@ describe('access via the real network', () => {
       runFacilityMonth(w.state, w.s, budget, w.random, { resolver });
       return f.totals.dispatchedIn.timber ?? 0;
     };
+    // Orders are sized to the crew that will run the works, then carried by whoever can be spared.
     const crew = carried({ carrier: 6, artisan: 3, builder: 3 });
-    const porters = carried({ carrier: 0.5 });
+    const thin = carried({ builder: 1 });
     const nobody = carried({});
-    expect(crew).toBeGreaterThan(porters);
-    expect(porters).toBeGreaterThan(0);
+    expect(crew).toBeGreaterThan(thin);
+    expect(thin).toBeGreaterThan(0);
     expect(nobody).toBe(0);
+    // Porters alone fetch nothing: there is no point hauling timber to a works nobody can operate.
+    expect(carried({ carrier: 6 })).toBe(0);
   });
 
   it('spends haul labour from the same crew that runs the works', () => {

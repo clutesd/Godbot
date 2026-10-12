@@ -40,10 +40,14 @@ describe('mass-balanced dynamic hydrology', () => {
     for (const cell of weather.state.cells) cell.runoff = 0.035;
     hydrology.advance(weather.state.cells);
 
-    const low = riverSamples[Math.floor(riverSamples.length * 0.25)]!;
-    const high = riverSamples[Math.floor(riverSamples.length * 0.8)]!;
-    expect(drainage.accumulation[high]).toBeGreaterThan(drainage.accumulation[low]! * 1.5);
-    expect(world.terrain.flow[high]).toBeGreaterThan(world.terrain.flow[low]!);
+    // Compare the network's small-catchment and large-catchment quartiles rather than two single
+    // samples: one reach just below a lake or confluence can locally invert the order without the
+    // model averaging catchments away.
+    const quartile = Math.floor(riverSamples.length / 4);
+    const small = riverSamples.slice(0, quartile), large = riverSamples.slice(-quartile);
+    const mean = (indices: number[], values: ArrayLike<number>) => indices.reduce((sum, index) => sum + values[index]!, 0) / indices.length;
+    expect(mean(large, drainage.accumulation)).toBeGreaterThan(mean(small, drainage.accumulation) * 1.5);
+    expect(mean(large, world.terrain.flow)).toBeGreaterThan(mean(small, world.terrain.flow) + 0.05);
   });
 
   it('draws a headwater reach below baseline during prolonged drought and recovers with runoff', () => {

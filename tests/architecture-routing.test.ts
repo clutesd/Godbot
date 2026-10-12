@@ -23,6 +23,7 @@ import {
 import { ARCHITECTURAL_PERIODS } from '../src/render/architecture/ArchitecturalPeriod';
 import { resolveBuildingSpec } from '../src/render/architecture/BuildingSpec';
 import { PERIOD_DRIVE, specContextFor } from './helpers/architecturePeriods';
+import type { GeneratorKind } from '../src/sim/energy/types';
 
 const CULTURE: CultureStyle = {
   primary: '#c36557',
@@ -70,7 +71,7 @@ function response(need: SettlementNeed, form: StructureForm, level: number, mate
  */
 function productionAsset(options: {
   builder: AssetBuilder;
-  energyKind?: import('../src/sim/energy/types').GeneratorKind;
+  energyKind?: GeneratorKind;
   response?: DevelopmentResponse;
   era?: Era;
   seed?: string;

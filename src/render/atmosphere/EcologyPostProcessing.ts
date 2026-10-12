@@ -103,6 +103,15 @@ export class EcologyPostProcessing {
     this.bloom?.setSize(Math.max(2, Math.round(width * scale)), Math.max(2, Math.round(height * scale)));
   }
 
+  /**
+   * Where the scene pass draws this frame: the composer's read buffer, or the canvas (null) when
+   * effects are unavailable. Program variants depend on it (tone mapping and output colour space are
+   * applied only on the canvas), so shader precompilation must bind the same target.
+   */
+  sceneTarget(): THREE.WebGLRenderTarget | null {
+    return this.composer && this.renderGuard.compositeHealthy ? this.composer.readBuffer : null;
+  }
+
   render(night: number): void {
     const frame = this.environmentFrame.update(night);
     if (frame) {

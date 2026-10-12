@@ -8,21 +8,11 @@ import type { HistoricalEvent, LandmarkKind, Person, Relation, SimulationState, 
 import type { AudioCategory, CandidateScoreBreakdown, CrossRunContext, DocumentaryEditorialIntent, DocumentaryShotScale, HistorianPrediction, HistorianStatement, ObservationCandidate, ObservationKind } from './types';
 import { campaignMemory, isWarEvent, liveWarStory, WAR_CHAPTERS, warEventStory, warForEvent } from './WarStory';
 import { campaignFocus } from '../sim/war/Campaign';
+import { eventNewsWindow, isChronicleEvent } from './EventCoverage';
+import { elapsedTime, historicalDate, personStory, recordedEventText, sentence } from './Narrative';
+import { HistoryEvidence } from './HistoryEvidence';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
-
-const SIGNIFICANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
-  'pressure-detected', 'response-attempted', 'response-resolved', 'adaptation-established',
-  'resource-deposit-discovered', 'resource-site-established', 'resource-site-abandoned', 'resource-depleted', 'recipe-learned', 'resource-trade',
-  'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'technology-widespread', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
-  'institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended',
-  'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'harvest-crisis', 'recovery', 'cultural-shift',
-  'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'nuclear-restraint',
-  'nuclear-disarmament', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'pandemic', 'ecological-crisis', 'climate-crisis',
-  'resource-crisis', 'autonomous-weapons-crisis', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement',
-  'interplanetary-transition', 'fermi-question', 'natural-catastrophe', 'civilization-collapse', 'civilization-recovery',
-  'planetary-stability', 'post-biological-transition', 'observation-lost', 'outcome-classified',
-]);
 
 const POLITICAL_EVENTS = new Set<HistoricalEvent['type']>(['institution-formed', 'alliance-formed', 'alliance-ended', 'political-transition', 'leadership-succession', 'war-declared', 'war-ended', 'nuclear-restraint', 'nuclear-disarmament', 'nuclear-crisis', 'civilization-collapse', 'planetary-stability']);
 const TECHNICAL_EVENTS = new Set<HistoricalEvent['type']>(['discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'technology-widespread', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'post-biological-transition']);
@@ -66,7 +56,8 @@ export class Historian {
     this.acquisitionCallbacks.delete(sceneId);
   }
 
-  private readonly documentaryMemory = new DocumentaryMemory();
+  private readonly historyEvidence = new HistoryEvidence();
+  private readonly documentaryMemory = new DocumentaryMemory(this.historyEvidence);
   private readonly milestoneIndex = new MilestoneIndex();
   readonly statements: HistorianStatement[] = [];
   readonly predictions: HistorianPrediction[] = [];
@@ -75,6 +66,7 @@ export class Historian {
   private readonly shownSubjects = new Map<string, number>();
   private readonly shownEventTypes = new Map<HistoricalEvent['type'], number>();
   private readonly shownCenturies = new Set<number>();
+  private lastChapterMonth = -Infinity;
   private readonly recentEditorialSelections: Array<{ subjectId: string; kind: ObservationKind; threadId: string; scale: DocumentaryShotScale; x: number; z: number }> = [];
   /** Subjects the camera could not frame readably; they sit out a few selections instead of being re-picked instantly. */
   private readonly deferredSubjects = new Map<string, number>();
@@ -85,10 +77,14 @@ export class Historian {
   private acquiredCount = 0;
   private lastNarratedCount = 0;
   private readonly settlementReadouts = new Map<string, { month: number; population: number; food: number; buildings: number }>();
+  private readonly introducedPeople = new Set<string>();
+  private planningSnapshot?: { scene: ObservationCandidate; state: SimulationState; month: number;
+    history: SimulationState['history']; length: number; last?: HistoricalEvent; candidates: ObservationCandidate[] };
   private lastRepresentativeRefreshMonth = -Infinity;
   private lastSubjectId = '';
   private crossRunContext?: CrossRunContext;
   private knownIdsMonth = -1;
+  private knownIdsHistoryRevision = -1;
   private knownIds = new Set<string>();
 
   constructor(private readonly config: GodboxConfig, options: HistorianOptions = {}) {
@@ -105,6 +101,8 @@ export class Historian {
     this.documentaryMemory.observe(state);
   }
 
+  hasNarratedEvent(id: string): boolean { return this.documentaryMemory.hasNarratedEvent(id); }
+
   chooseScene(state: SimulationState, focusEventId?: string): ObservationCandidate {
     this.refreshRepresentatives(state);
     this.resolvePredictions(state);
@@ -112,12 +110,12 @@ export class Historian {
 
     const candidates = this.candidates(state);
     const focusEvent = focusEventId
-      ? state.history.find(event => event.id === focusEventId && event.month <= state.month)
+      ? this.historyEvidence.read(state.history, state.month).event(focusEventId)
       : undefined;
     const focusCandidate = focusEvent
       ? this.ensureEditorial(state, this.eventCandidate(state, focusEvent))
       : undefined;
-    const focused = focusCandidate && this.validateStatement(focusCandidate.statement, state)
+    const focused = focusCandidate && focusEvent!.month <= state.month && this.validateStatement(focusCandidate.statement, state)
       ? focusCandidate
       : undefined;
 
@@ -137,7 +135,20 @@ export class Historian {
 
     this.documentaryMemory.decorate(choice, state);
     this.ageDeferredSubjects();
+    this.planningSnapshot = { scene: choice, state, month: state.month, history: state.history,
+      length: state.history.length, last: state.history[state.history.length - 1], candidates };
     return choice;
+  }
+
+  /** A camera sequence uses the same editorial pass that picked its anchor. Consume once;
+   * changed months/history or an authored replacement must generate fresh evidence. */
+  planningCandidates(state: SimulationState, scene: ObservationCandidate): ObservationCandidate[] {
+    const snapshot = this.planningSnapshot;
+    this.planningSnapshot = undefined;
+    return snapshot && snapshot.scene === scene && snapshot.state === state && snapshot.month === state.month
+      && snapshot.history === state.history && snapshot.length === state.history.length
+      && snapshot.last === state.history[state.history.length - 1]
+      ? snapshot.candidates : this.candidates(state);
   }
 
   /** A flight is editorial intent, not remote observation. Only names and already acquired
@@ -161,7 +172,7 @@ export class Historian {
     // An immutable historical callback has no stale current population/activity claim. The
     // place memory contains only physical acquisitions; proposals never enter it.
     const remembered = this.documentaryMemory.lastWitnessedAt(place?.id ?? destination.id, state.month);
-    const text = `${opening} ${destination.name}.${remembered ? ` Here, in month ${remembered.month}, the record noted: ${remembered.summary}` : ''}`;
+    const text = `${opening} ${destination.name}.${remembered ? ` ${historicalDate(remembered.month)}: ${remembered.summary}` : ''}`;
     const statement = this.statement({ month: state.month, text, epistemicStatus: 'recorded-fact',
       sourceEntityIds: [destination.id], sourceEventIds: remembered ? [remembered.id] : [], claims: {} });
     return this.validateStatement(statement, state) ? statement : undefined;
@@ -171,8 +182,15 @@ export class Historian {
   refreshScene(scene: ObservationCandidate, state: SimulationState): ObservationCandidate | undefined {
     const person = state.people.find(p => p.id === scene.subjectId);
     if (person && !person.alive && ['worker-follow', 'traveler-follow', 'discovery-scene', 'street-observation'].includes(scene.kind)) return undefined;
-    if (scene.event || scene.id.startsWith('founding') || scene.id.startsWith('scenic:')) {
+    if (scene.id.startsWith('founding') || scene.id.startsWith('scenic:')) {
       return this.validateStatement(scene.statement, state) ? scene : undefined;
+    }
+    if (scene.event) {
+      if (!this.validateStatement(scene.statement, state)) return undefined;
+      // Custom/authored event statements own their frozen evidence and identity.
+      if (scene.statement.month === state.month || !/^historian-\d+$/.test(scene.statement.id)) return scene;
+      const fresh = this.ensureEditorial(state, this.eventCandidate(state, scene.event));
+      return this.documentaryMemory.decorate({ ...scene, statement: fresh.statement, editorial: fresh.editorial }, state);
     }
     if (scene.id.startsWith('human:')) {
       return this.validateStatement(scene.statement, state)
@@ -218,10 +236,15 @@ export class Historian {
 
   /** Selection is a proposal. Only the physical camera can acknowledge an observation. */
   acquireScene(choice: ObservationCandidate, state: SimulationState, narrationVisible?: boolean): void {
+    this.planningSnapshot = undefined;
     this.acquiredCount += 1;
     const narrated = narrationVisible ?? (choice.editorial?.narration === 'required'
       || choice.editorial?.narration === 'selective' && (Boolean(choice.event) || choice.interest >= 0.66));
     if (narrated) this.lastNarratedCount = this.acquiredCount;
+    if (narrated && choice.id.startsWith('person:')) {
+      this.introducedPeople.add(choice.subjectId);
+      if (this.introducedPeople.size > 2048) this.introducedPeople.delete(this.introducedPeople.values().next().value!);
+    }
     if (choice.id.startsWith('settlement:') && narrated) {
       const settlement = state.settlements.find(s => s.id === choice.subjectId);
       if (settlement) this.settlementReadouts.set(settlement.id, { month: state.month,
@@ -232,7 +255,8 @@ export class Historian {
     this.unavailableCallbacks.delete(choice.id);
     this.shownSubjects.set(choice.subjectId, (this.shownSubjects.get(choice.subjectId) ?? 0) + 1);
     if (choice.event) this.shownEventTypes.set(choice.event.type, (this.shownEventTypes.get(choice.event.type) ?? 0) + 1);
-    if (choice.id.startsWith('century:')) this.shownCenturies.add(Number(choice.id.replace('century:', '')));
+    if (choice.id.startsWith('century:') && narrated) this.shownCenturies.add(Number(choice.id.replace('century:', '')));
+    if (choice.id.startsWith('chapter:') && narrated) this.lastChapterMonth = state.month;
     this.lastSubjectId = choice.subjectId;
     this.rememberEditorialSelection(choice);
     this.documentaryMemory.remember(choice, state.month, narrated);
@@ -247,17 +271,22 @@ export class Historian {
   candidates(state: SimulationState): ObservationCandidate[] {
     this.documentaryMemory.observe(state);
     const candidates: ObservationCandidate[] = [];
-    // Arrival Day is owned by the authored founding chapter. Once normal history is running,
-    // it must not re-enter the generic 24-month event window and compete with what is happening now.
+    // News expires; the archive does not. Milestones earn attention, never perpetual eligibility.
     const milestones = new Set(this.milestoneIndex.read(state.history).map(event => event.id));
     const recentEvents = state.history.filter((event) => event.type !== 'ARRIVAL_DAY'
-      && (milestones.has(event.id) || SIGNIFICANT_EVENT_TYPES.has(event.type) || event.significance >= 0.65)
-      && event.month <= state.month && (milestones.has(event.id) || state.month - event.month <= 24));
+      && (milestones.has(event.id) || isChronicleEvent(event))
+      && event.month <= state.month && state.month - event.month <= eventNewsWindow(event)
+      && !this.documentaryMemory.hasNarratedEvent(event.id))
+      .sort((a, b) => this.newsPriority(b, state.month) - this.newsPriority(a, state.month) || b.month - a.month || a.id.localeCompare(b.id))
+      .slice(0, 48);
     candidates.push(...this.documentaryMemory.candidates(state));
     const latestCampaignEvents = new Map<string, HistoricalEvent>();
     for (const event of recentEvents) {
       const war = warForEvent(state, event);
-      if (war) latestCampaignEvents.set(war.id, event);
+      if (war) {
+        const previous = latestCampaignEvents.get(war.id);
+        if (!previous || event.month > previous.month || event.month === previous.month && (event.sequence ?? 0) > (previous.sequence ?? 0)) latestCampaignEvents.set(war.id, event);
+      }
       else candidates.push(this.eventCandidate(state, event));
     }
     for (const event of latestCampaignEvents.values()) candidates.push(this.eventCandidate(state, event));
@@ -266,6 +295,8 @@ export class Historian {
     candidates.push(...this.personCandidates(state));
     candidates.push(...this.routeCandidates(state));
     candidates.push(...this.polityCandidates(state));
+    const chapter = this.chapterCandidate(state);
+    if (chapter) candidates.push(chapter);
     const retrospective = this.retrospectiveCandidate(state);
     if (retrospective) candidates.push(retrospective);
     const prediction = this.inferenceCandidate(state);
@@ -279,9 +310,14 @@ export class Historian {
       .map((candidate) => this.documentaryMemory.decorate(this.ensureEditorial(state, candidate), state));
   }
 
+  private newsPriority(event: HistoricalEvent, month: number): number {
+    return event.significance + Math.max(0, 1 - (month - event.month) / 120) * 0.5;
+  }
+
   validateStatement(statement: HistorianStatement, state: SimulationState): boolean {
     if (statement.month > state.month || statement.month < 0 || statement.text.trim().length === 0) return false;
-    const events = statement.sourceEventIds.map((id) => state.history.find((event) => event.id === id));
+    const evidence = this.historyEvidence.read(state.history, state.month);
+    const events = statement.sourceEventIds.map((id) => evidence.event(id));
     if (events.some((event) => !event || event.month > statement.month)) return false;
     if (statement.epistemicStatus === 'recorded-fact' && statement.sourceEventIds.length === 0 && statement.sourceEntityIds.length === 0) return false;
     const knownEntityIds = this.knownEntityIds(state, statement.month);
@@ -350,7 +386,7 @@ export class Historian {
       : '';
     const statement = this.statement({
       month: state.month,
-      text: `${memory ? `${memory.text} ` : ''}${warEventStory(state, event) ?? this.eventText(event)}${atomicComparison}`,
+      text: `${memory ? `${memory.text} ` : ''}${warEventStory(state, event) ?? recordedEventText(event, state.month)}${atomicComparison}`,
       epistemicStatus: 'recorded-fact',
       sourceEventIds: [event.id, ...(memory ? [memory.event.id] : [])],
       sourceEntityIds: event.actors.filter((id) => this.knownEntityIds(state, state.month).has(id)),
@@ -439,8 +475,8 @@ export class Historian {
           buildingChange ? `the recorded building count ${buildingChange > 0 ? 'rose' : 'fell'} by ${Math.abs(buildingChange)}` : ''].filter(Boolean);
 
         statement.text += deltas.length
-          ? ` Since the last narrated view in month ${previous.month}, ${deltas.join('; ')}.`
-          : ' Population, food security and buildings are unchanged since our last narrated view.';
+          ? ` Since our last narrated view ${elapsedTime(state.month - previous.month)} ago, ${deltas.join('; ')}.`
+          : ` Population, food security and buildings match our previous view ${elapsedTime(state.month - previous.month)} ago.`;
       } else {
         statement.text += inventory;
       }
@@ -471,17 +507,11 @@ export class Historian {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === id);
       if (!person) continue;
       const home = state.settlements.find((settlement) => settlement.id === person.homeId);
-      const age = Math.floor(person.ageMonths / 12);
       const isTraveler = person.activity === 'migrate' || person.activity === 'travel' || person.activity === 'transport';
       const kind: ObservationKind = isTraveler ? 'traveler-follow' : 'worker-follow';
-      const work = person.activity === 'socialize' ? 'spending time with others' : person.activity === 'rest' ? 'resting' : person.activity;
-      const expert = [...(person.expertise ?? [])].sort((a, b) => b.competence - a.competence)[0];
-      const careerYears = person.career ? Math.floor((state.month - person.career.startedMonth) / 12) : 0;
-      const capability = expert ? ` ${expert.competence >= 0.7 ? 'Highly experienced' : expert.competence >= 0.35 ? 'Practised' : 'Still learning'} in ${expert.domain}.` : '';
-      const continuity = careerYears >= 2 ? ` A ${person.occupation} for ${careerYears} years.` : '';
-      const teacher = expert?.teacherId ? state.people.find(p => p.id === expert.teacherId)?.name : undefined;
-      const lineage = expert?.teacherId ? ` Trained in ${expert.domain} by ${teacher ?? expert.teacherId}.` : '';
-      const statement = this.statement({ month: state.month, text: `${person.name}, age ${age}, is ${work}${home ? ` near ${home.name}` : ''}.${capability}${continuity}${lineage}`, epistemicStatus: 'recorded-fact', sourceEntityIds: [person.id, ...(home ? [home.id] : [])], claims: { entityIds: [person.id, ...(home ? [home.id] : [])] } });
+      const story = personStory(person, home, state.people, this.introducedPeople.has(person.id), state.month);
+      const statement = this.statement({ month: state.month, text: story.text, epistemicStatus: 'recorded-fact',
+        sourceEntityIds: story.sourceIds, claims: { entityIds: story.sourceIds } });
       const unusual = person.occupation === 'keeper' || person.occupation === 'carrier' ? 0.08 : 0;
       const ordinary = person.prestige < 0.42 ? 0.07 : 0;
       result.push(this.candidate(`person:${person.id}`, person.id, kind, person.position, person.name, statement, 0.44 + unusual + ordinary + person.prestige * 0.08 - Math.min(3, this.shownSubjects.get(person.id) ?? 0) * 0.065, 0.3, isTraveler ? 'ambient-wilderness' : 'settlement'));
@@ -508,12 +538,17 @@ export class Historian {
       const latestWar = [...state.wars].filter((war) => polity.settlementIds.some((id) => war.attacker === id || war.defender === id) && war.resolvedMonth !== undefined).sort((a, b) => (b.resolvedMonth ?? 0) - (a.resolvedMonth ?? 0))[0];
       const peaceMonths = activeWar ? 0 : state.month - (latestWar?.resolvedMonth ?? polity.formedMonth);
       const dynastyMonths = polity.dynastyStartedMonth === undefined ? 0 : state.month - polity.dynastyStartedMonth;
+      const phaseText = { formation: 'is still taking shape', consolidation: 'is consolidating its rule',
+        mature: 'has reached a mature political order', stressed: 'is under political strain', declining: 'is in political decline' }[polity.phase];
+      const leader = state.people.find(person => person.id === polity.leadingPersonId && person.alive);
       const persistence = peaceMonths >= 50 * 12
         ? `${polity.name} has known peace for ${this.durationPhrase(peaceMonths)}.`
         : dynastyMonths >= this.config.historicalPace.generationYears * 24 && polity.dynastyName
           ? `${polity.dynastyName} has led ${polity.name} for ${this.durationPhrase(dynastyMonths)} through ${polity.successionCount} recorded successions.`
-          : `${polity.name} has persisted for ${this.durationPhrase(state.month - polity.formedMonth)} and is in a ${polity.phase} phase.`;
-      const statement = this.statement({ month: state.month, text: persistence, epistemicStatus: 'derived-statistic', sourceEntityIds: [polity.id, capital.id], claims: { entityIds: [polity.id, capital.id] } });
+          : `${polity.name}, founded ${this.durationPhrase(state.month - polity.formedMonth)} ago, ${phaseText}.`;
+      const statement = this.statement({ month: state.month,
+        text: `${persistence} ${capital.name} is its capital.${leader ? ` ${leader.name} leads it today.` : ''}`,
+        epistemicStatus: 'derived-statistic', sourceEntityIds: [polity.id, capital.id, ...(leader ? [leader.id] : [])], claims: { entityIds: [polity.id, capital.id] } });
       const score = 0.42 + Math.min(0.2, (state.month - polity.formedMonth) / 6000) + Math.min(0.12, peaceMonths / 3600) - Math.min(4, this.shownSubjects.get(polity.id) ?? 0) * 0.05;
       return this.candidate(`polity:${polity.id}`, polity.id, 'historian-context', capital.position, polity.name, statement, score, activeWar ? 0.62 : 0.3, 'historian');
     }).filter((candidate): candidate is ObservationCandidate => Boolean(candidate));
@@ -521,18 +556,48 @@ export class Historian {
 
   private retrospectiveCandidate(state: SimulationState): ObservationCandidate | undefined {
     const century = Math.floor(state.month / 1200);
-    if (century < 1 || this.shownCenturies.has(century) || state.month % 1200 > 36) return undefined;
+    if (century < 1 || this.shownCenturies.has(century)) return undefined;
     const start = century * 1200 - 1200;
-    const events = state.history.filter((event) => event.month >= start && event.month <= state.month && event.significance >= 0.5);
+    const events = state.history.filter((event) => event.month >= start && event.month < century * 1200 && isChronicleEvent(event));
     if (events.length === 0) return undefined;
-    const discoveries = events.filter((event) => event.type === 'discovery').length;
-    const wars = events.filter((event) => event.type === 'war-declared').length;
-    const migrations = events.filter((event) => event.type === 'major-migration').length;
-    const sourceEvents = events
-      .filter((event) => event.type === 'discovery' || event.type === 'war-declared' || event.type === 'major-migration')
-      .map((event) => event.id);
-    const statement = this.statement({ month: state.month, text: `In the previous century, the record contains ${discoveries} discoveries, ${wars} wars, and ${migrations} major migrations.`, epistemicStatus: 'derived-statistic', sourceEventIds: sourceEvents, sourceEntityIds: ['world'] });
+    const highlights = this.chapterHighlights(events, 3).sort((a, b) => a.month - b.month);
+    const statement = this.statement({ month: state.month,
+      text: `Years ${(start / 12).toLocaleString()}–${(century * 100).toLocaleString()}: a century in the surviving record. ${highlights.map(event => `${historicalDate(event.month)}: ${sentence(event.summary)}`).join(' ')}`,
+      epistemicStatus: 'recorded-fact', sourceEventIds: highlights.map(event => event.id), sourceEntityIds: ['world'] });
     return this.candidate(`century:${century}`, `century:${century}`, 'historian-context', this.populationCenter(state), `The ${century}${this.ordinalSuffix(century)} century`, statement, 0.68, 0.58, 'historian');
+  }
+
+  /** A rolling chapter bridges fast-forwarded years without replaying every old scene. */
+  private chapterCandidate(state: SimulationState): ObservationCandidate | undefined {
+    if (state.month < 120 || state.month - this.lastChapterMonth < 120) return undefined;
+    const events = state.history.filter(event => event.month <= state.month && state.month - event.month <= 240
+      && state.month - event.month > 24 && isChronicleEvent(event) && event.significance >= 0.42
+      && !this.documentaryMemory.hasNarratedEvent(event.id));
+    if (events.length < 2) return undefined;
+    const highlights = this.chapterHighlights(events, 3).sort((a, b) => a.month - b.month);
+    const latest = highlights[highlights.length - 1]!;
+    const place = state.settlements.find(s => s.id === latest.locationId);
+    const statement = this.statement({ month: state.month,
+      text: `While the years passed, the world changed. ${highlights.map(event => `${historicalDate(event.month)}: ${sentence(event.summary)}`).join(' ')}`,
+      epistemicStatus: 'recorded-fact', sourceEventIds: highlights.map(event => event.id), sourceEntityIds: ['world'] });
+    const candidate = this.candidate(`chapter:${state.month}`, 'historian:chapter', 'historian-context',
+      latest.location ?? place?.position ?? this.populationCenter(state), 'The changing world', statement, 0.96, 0.8, 'historian');
+    return { ...candidate, editorial: { subjectId: 'world', importance: 0.8, threadId: 'world:chronicle',
+      why: 'Bring unwitnessed developments into a dated chapter', activityMeaning: 0.65,
+      preferredScale: 'wide', shotPurpose: 'context', narration: 'required', completion: 'sequence-beat',
+      completionCondition: 'Establish the setting of the latest recorded development' } };
+  }
+
+  private chapterHighlights(events: HistoricalEvent[], count: number): HistoricalEvent[] {
+    const ranked = [...events].sort((a, b) => b.significance - a.significance || b.month - a.month || a.id.localeCompare(b.id));
+    const chosen: HistoricalEvent[] = [];
+    const types = new Set<HistoricalEvent['type']>();
+    for (const event of ranked) {
+      if (types.has(event.type)) continue;
+      chosen.push(event); types.add(event.type);
+      if (chosen.length === count) break;
+    }
+    return chosen;
   }
 
   private inferenceCandidate(state: SimulationState): ObservationCandidate | undefined {
@@ -636,7 +701,9 @@ export class Historian {
               ? 0.08
               : 0.28;
     const preferredScale = this.documentaryScale(candidate.kind);
-    const narration: DocumentaryEditorialIntent['narration'] = settlement && this.needsSettlementReadout(settlement.id, state.month)
+    const narration: DocumentaryEditorialIntent['narration'] = candidate.id.startsWith('century:')
+      ? 'required'
+      : settlement && this.needsSettlementReadout(settlement.id, state.month)
       ? 'required'
       : event && (event.significance >= 0.78 || event.type === 'first-fire')
       ? 'required'
@@ -785,10 +852,10 @@ export class Historian {
   }
 
   private scoreEvent(state: SimulationState, event: HistoricalEvent): CandidateScoreBreakdown {
-    const sameType = state.history.filter((candidate) => candidate.type === event.type && candidate.month <= state.month).length;
-    const shownSubject = this.shownSubjects.get(event.locationId ?? event.actors[0] ?? event.id) ?? 0;
+    const sameType = this.historyEvidence.read(state.history, state.month).count(event.type);
+    const shownSubject = this.recentEditorialSelections.filter(entry => entry.subjectId === (event.locationId ?? event.actors[0] ?? event.id)).length;
     return {
-      novelty: 1 / (1 + (this.shownEventTypes.get(event.type) ?? 0) * 0.7),
+      novelty: this.documentaryMemory.hasNarratedEvent(event.id) ? 0 : 1,
       magnitude: event.magnitude,
       populationAffected: clamp(event.affectedPopulation / Math.max(12, representedPopulation(state) * 0.45)),
       rarity: clamp(1 - Math.log2(1 + sameType) / 8),
@@ -832,22 +899,6 @@ export class Historian {
     return 'settlement';
   }
 
-  private eventText(event: HistoricalEvent): string {
-    if (event.type === 'first-fire') return `${event.summary} For the first time since landing, this camp has a communal hearth burning.`;
-    if (event.type === 'atomic-threshold') return 'This civilization has discovered an energy source vastly beyond chemical combustion.';
-    if (event.type === 'nuclear-weapons-developed') return `${event.summary} Its doctrine is recorded as ${String(event.context.doctrine ?? 'undetermined').replaceAll('-', ' ')}.`;
-    if (event.type === 'nuclear-use' || event.type === 'nuclear-exchange') return `${event.summary} The demographic loss is recorded as ${Math.round(Number(event.context.populationLossFraction ?? 0) * 100)}%.`;
-    if (event.type === 'first-orbit' || event.type === 'offworld-settlement' || event.type === 'interplanetary-transition') return event.summary;
-    if (event.type === 'observation-lost') return `${event.summary} Classification: UNKNOWN.`;
-    if (event.type === 'trade-route-established') return `${event.summary} This is recorded in year ${Math.floor(event.month / 12)}.`;
-    if (event.type === 'discovery' && typeof event.context.name === 'string') return `${event.context.name} is first recorded here in year ${Math.floor(event.month / 12)}.`;
-    if (event.type === 'knowledge-adopted' || event.type === 'technology-transformation' || event.type === 'industrialization-stage') return `${event.summary} ${event.outcome}`;
-    if (event.type === 'battle') return `${event.summary} The record attributes ${event.affectedPopulation} deaths to this clash.`;
-    if (event.type === 'major-migration') return `${event.affectedPopulation} people moved: ${event.outcome}`;
-    if (event.type === 'industrialization') return `${event.summary} ${event.outcome}`;
-    return event.summary;
-  }
-
   private titleForEvent(state: SimulationState, event: HistoricalEvent): string {
     if (event.type === 'first-fire') return 'FIRST FIRE';
     if (event.type === 'atomic-threshold') return 'ATOMIC THRESHOLD';
@@ -858,7 +909,23 @@ export class Historian {
     if (event.type === 'nuclear-exchange') return 'AFTER THE EXCHANGE';
     if (event.type === 'discovery') return typeof event.context.name === 'string' ? event.context.name : 'A new practical understanding';
     const settlement = event.locationId ? state.settlements.find((candidate) => candidate.id === event.locationId) : undefined;
-    return settlement?.name ?? event.type.replaceAll('-', ' ');
+    const titles: Partial<Record<HistoricalEvent['type'], string>> = {
+      'recipe-learned': 'A new craft', 'resource-deposit-discovered': 'New materials found',
+      'resource-site-established': 'A resource site opens', 'resource-site-abandoned': 'A resource site is abandoned',
+      'resource-depleted': 'A resource runs out', 'knowledge-adopted': 'Knowledge becomes practice',
+      'technology-transformation': 'A new way of working', 'technology-widespread': 'A technology spreads',
+      'knowledge-rediscovered': 'Knowledge recovered', 'knowledge-lost': 'Knowledge lost',
+      'knowledge-exchange': 'Knowledge crosses a border', 'trade-route-established': 'A new trade connection',
+      'institution-formed': 'An institution takes shape', 'leadership-succession': 'A change of leadership',
+      'political-transition': 'A changing political order', 'cultural-shift': 'Changing customs',
+      'harvest-crisis': 'Food under strain', recovery: 'A recovery', 'major-migration': 'People on the move',
+      'first-contact': 'Communities meet', 'settlement-founded': 'A new settlement',
+      'settlement-abandoned': 'A settlement is abandoned', 'infrastructure-built': 'Building for the future',
+      'archive-destroyed': 'An archive is destroyed', 'industrialization-stage': 'Industry takes shape',
+      industrialization: 'An industrial transformation', 'natural-catastrophe': 'A natural catastrophe',
+    };
+    const title = titles[event.type] ?? event.type.replaceAll('-', ' ');
+    return settlement ? `${title} · ${settlement.name}` : title;
   }
 
   private refreshRepresentatives(state: SimulationState): void {
@@ -910,7 +977,8 @@ export class Historian {
   }
 
   private knownEntityIds(state: SimulationState, month: number): Set<string> {
-    if (month === this.knownIdsMonth) return this.knownIds;
+    const revision = this.historyEvidence.read(state.history, state.month).revision;
+    if (month === this.knownIdsMonth && revision === this.knownIdsHistoryRevision) return this.knownIds;
     const ids = new Set<string>(['world']);
     for (const collection of [state.people, state.settlements, state.cultures, state.institutions, state.relations, state.tradeRoutes, state.wars, state.polities, state.advanced.institutions]) for (const entity of collection) ids.add(entity.id);
     for (const event of state.history) if (event.month <= month) for (const id of event.actors) ids.add(id);
@@ -918,6 +986,7 @@ export class Historian {
     for (const landmark of state.world.landmarks) ids.add(landmark.id);
     for (const settlement of state.settlements) for (const plot of settlement.structurePlots ?? []) if (plot.foundedMonth <= month && plot.development) ids.add(plot.id);
     this.knownIdsMonth = month;
+    this.knownIdsHistoryRevision = revision;
     this.knownIds = ids;
     return ids;
   }

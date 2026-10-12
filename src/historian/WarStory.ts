@@ -19,7 +19,7 @@ export const WAR_CHAPTERS: Record<War['phase'], { number: string; title: string 
 };
 
 const SIGNATURE_PRIORITY: MilitaryEquipment[] = [
-  'guided-missiles', 'aircraft', 'automatic-weapons', 'artillery', 'rifles', 'cannon',
+  'hydrogen-weapons', 'atomic-weapons', 'biological-warfare', 'guided-missiles', 'drone-swarms', 'aircraft', 'automatic-weapons', 'artillery', 'rifles', 'cannon',
   'gunpowder-weapons', 'siege-engines', 'metal-armour', 'metal-weapons', 'bows', 'stone-spears', 'clubs',
 ];
 
@@ -41,9 +41,13 @@ const EQUIPMENT_LABEL: Record<MilitaryEquipment, string> = {
   'motor-transport': 'motor transport',
   aircraft: 'aircraft',
   'guided-missiles': 'guided missiles',
+  'drone-swarms': 'drone swarms',
+  'biological-warfare': 'biological warfare',
+  'atomic-weapons': 'atomic weapons',
+  'hydrogen-weapons': 'hydrogen weapons',
 };
 
-export const isWarEvent = (event: HistoricalEvent): boolean => ['war-declared', 'war-campaign', 'battle', 'war-ended'].includes(event.type);
+export const isWarEvent = (event: HistoricalEvent): boolean => ['war-declared', 'war-campaign', 'battle', 'war-ended', 'nuclear-use', 'nuclear-exchange'].includes(event.type);
 
 export function warForEvent(state: SimulationState, event: HistoricalEvent): War | undefined {
   return isWarEvent(event) ? state.wars.find(war => event.actors.includes(war.id)) : undefined;
@@ -69,6 +73,7 @@ function forceCharacter(profile: MilitaryCapabilityProfile | undefined): string 
   if (profile.equipment.includes('metal-armour') && main !== 'metal-armour') supporting.push('armour');
   if (profile.equipment.includes('motor-transport') && main !== 'motor-transport') supporting.push('motor transport');
   if (profile.equipment.includes('aircraft') && main !== 'aircraft') supporting.push('aircraft');
+  if (profile.equipment.includes('drone-swarms') && main !== 'drone-swarms') supporting.push('drone swarms');
   const support = supporting.length > 0 ? `, supported by ${supporting.join(' and ')}` : '';
   return `${regimeLabel(profile)} warfare built around ${EQUIPMENT_LABEL[main]}${support}`;
 }
@@ -98,6 +103,8 @@ function firstRecordedCapability(state: SimulationState, event: HistoricalEvent,
 }
 
 function engagementSentence(event: HistoricalEvent): string {
+  if (event.context.nuclearDeterrence === true) return 'Both sides hold nuclear arsenals. Mutual assured destruction restrains their use while conventional forces contest the ground.';
+  if (event.context.biologicalCrisis === true) return 'A biological warfare crisis has interrupted the campaign. Warning zones and medical response now dominate the field.';
   const mode = String(event.context.engagementMode ?? '');
   if (mode === 'stand-off') return 'The killing distance has become part of the weapon: some attacks arrive before opposing soldiers can answer in kind.';
   if (mode === 'combined-arms') return 'Machines, fire, movement and communication are acting as one battlefield system.';
@@ -137,6 +144,7 @@ export function warEventStory(state: SimulationState, event: HistoricalEvent): s
   if (!war) return undefined;
   const a = state.settlements.find(s => s.id === war.attacker)?.name ?? 'The attacking settlement';
   const b = state.settlements.find(s => s.id === war.defender)?.name ?? 'the defending settlement';
+  if (event.type === 'nuclear-use' || event.type === 'nuclear-exchange') return event.summary;
   if (event.type === 'war-declared') {
     const opening: Record<WarCause, string> = {
       'resource-pressure': 'I watch scarcity become a reason to march.',
@@ -170,7 +178,9 @@ export function warEventStory(state: SimulationState, event: HistoricalEvent): s
     const mismatch = mismatchSentence(state, event, war);
     const first = firstRecordedCapability(state, event, war);
     const cost = count === 0 ? 'This clash took no recorded lives.' : `${count.toLocaleString()} ${count === 1 ? 'life was' : 'lives were'} lost in this clash.`;
-    return `${opening}${engagement ? ` ${engagement}` : ''}${mismatch ? ` ${mismatch}` : ''}${first ? ` ${first}` : ''} ${event.outcome} ${cost}`;
+    const damaged = Number(event.context.damagedStructures ?? 0), destroyed = Number(event.context.destroyedStructures ?? 0);
+    const buildings = damaged > 0 ? ` ${damaged} ${damaged === 1 ? 'building was' : 'buildings were'} hit${destroyed ? `; ${destroyed} collapsed` : ''}.` : '';
+    return `${opening}${engagement ? ` ${engagement}` : ''}${mismatch ? ` ${mismatch}` : ''}${first ? ` ${first}` : ''} ${event.outcome} ${cost}${buildings}`;
   }
   const months = Number(event.context.months);
   const losses = Number(event.context.casualties);

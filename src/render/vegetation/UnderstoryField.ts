@@ -6,6 +6,7 @@ import { cellAt } from '../../sim/world';
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { TreePlacement } from './ForestPlanner';
 import { insideVegetationTerrain } from './VegetationPlacement';
+import { ZoneIndex } from './ZoneIndex';
 
 export type UnderstoryKind = 'fern' | 'shrub' | 'bush';
 
@@ -176,12 +177,13 @@ export class UnderstoryField {
   update(camera: THREE.Vector3, month: number, disturbance: readonly UnderstoryDisturbanceZone[]): void {
     const counts: Record<UnderstoryKind, number> = { fern: 0, shrub: 0, bush: 0 };
     let visible = 0;
+    const disturbed = new ZoneIndex(disturbance);
 
     for (const placement of this.placements) {
       const distance = Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z);
       const distanceScale = understoryDistanceScale(distance);
       if (distanceScale <= 0) continue;
-      if (disturbance.some((zone) => Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) < zone.radius)) continue;
+      if (disturbed.contains(placement.worldX, placement.worldZ)) continue;
 
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       if (!cell) continue;

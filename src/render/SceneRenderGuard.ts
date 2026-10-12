@@ -13,6 +13,9 @@ export class SceneRenderGuard {
 
   constructor(private readonly renderer: THREE.WebGLRenderer) {}
 
+  /** False once the full-screen composite has failed and the world is drawn straight to the canvas. */
+  get compositeHealthy(): boolean { return !this.compositeFailed; }
+
   render(scene: THREE.Scene, camera: THREE.Camera, composite?: () => void): void {
     const gl = this.renderer.getContext();
     if (gl.isContextLost()) throw new Error('Graphics connection lost.');

@@ -14,5 +14,15 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     maxWorkers: 2,
+    // A hang guard, not a performance budget: performance has its own explicit tests, and a
+    // 5 s default fails ordinary scenario tests whenever the machine is busy.
+    testTimeout: 60_000,
+    tags: [
+      {
+        name: 'soak',
+        description: 'Whole-simulation runs over decades or centuries. Excluded from `npm test`; run with `npm run test:soak`.',
+        timeout: 45 * 60_000,
+      },
+    ],
   },
 });

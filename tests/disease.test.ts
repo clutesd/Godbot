@@ -292,5 +292,5 @@ describe('causal infectious disease', () => {
     expect(sick.state.history).toEqual(replay.state.history);
     expect(sick.summary()).toEqual(replay.summary());
     expect(sick.state.history).not.toEqual(healthy.state.history);
-  }, 30000);
+  });
 });

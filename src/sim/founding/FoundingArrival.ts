@@ -88,17 +88,31 @@ export function createFoundingArrival(world: WorldState, seed: string): Founding
     && c.x >= margin && c.z >= margin && c.x < world.size - margin && c.z < world.size - margin)
     .map(c => ({ cell: c, tie: random.float(), point: { x: c.worldX, z: c.worldZ } }))
     .filter(c => validLandingSite(world, c.point, walk));
-  const separation = Math.max(8, world.size * world.cellSize * 0.17);
-  const selected: typeof candidates = [];
-  for (let i = 0; i < 5; i++) {
-    const ranked = candidates.filter(c => selected.every(s => Math.hypot(c.point.x - s.point.x, c.point.z - s.point.z) >= separation))
-      .map(c => ({ ...c, score: c.cell.habitability * 0.4 + c.cell.fertility * 0.18 + c.tie * 0.35
-        + (selected.some(s => s.cell.biome === c.cell.biome) ? 0 : 0.22)
-        + (selected.length ? Math.min(...selected.map(s => Math.hypot(c.point.x - s.point.x, c.point.z - s.point.z))) / (world.size * world.cellSize) : 0) }))
-      .sort((a, b) => b.score - a.score);
-    if (!ranked[0]) throw new Error('This world cannot support five safe, separated arrival sites. Try a larger world or a different seed.');
-    selected.push(ranked[0]);
+  const select = (separation: number): typeof candidates | undefined => {
+    const selected: typeof candidates = [];
+    for (let i = 0; i < 5; i++) {
+      const ranked = candidates.filter(c => selected.every(s => Math.hypot(c.point.x - s.point.x, c.point.z - s.point.z) >= separation))
+        .map(c => ({ ...c, score: c.cell.habitability * 0.4 + c.cell.fertility * 0.18 + c.tie * 0.35
+          + (selected.some(s => s.cell.biome === c.cell.biome) ? 0 : 0.22)
+          + (selected.length ? Math.min(...selected.map(s => Math.hypot(c.point.x - s.point.x, c.point.z - s.point.z))) / (world.size * world.cellSize) : 0) }))
+        .sort((a, b) => b.score - a.score);
+      if (!ranked[0]) return undefined;
+      selected.push(ranked[0]);
+    }
+    return selected;
+  };
+  // Pods prefer a wide spread, but a world whose safe ground is broken up by water, slopes or a
+  // volcano must still start: relax the spread in steps rather than refuse the seed. Worlds that
+  // fit the preferred spread take the first pass, so their arrival is unchanged.
+  const preferred = Math.max(8, world.size * world.cellSize * 0.17);
+  const floor = FOUNDING_LANDING_SAFE_RADIUS * 2;
+  let separation = preferred;
+  let selected = select(separation);
+  while (!selected && separation > floor) {
+    separation = Math.max(floor, separation * 0.85);
+    selected = select(separation);
   }
+  if (!selected) throw new Error('This world cannot support five safe, separated arrival sites. Try a larger world or a different seed.');
   return { phase: 'PRISTINE_WORLD', elapsedSeconds: 0, minimumSeparation: separation,
     pods: selected.map((site, i) => {
       const profile = FOUNDING_PROFILES[i]!;

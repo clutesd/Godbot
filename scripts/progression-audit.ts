@@ -1,14 +1,24 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname } from 'node:path';
+import { ProgressionMetrics } from './progression-metrics';
 import { Simulation } from '../src/sim/Simulation';
 import { knowledgeLifecycleStage } from '../src/sim/knowledge/CapabilityContract';
 import { materialEconomy } from '../src/sim/resources/Inventory';
+import { observeDiscoveryAttempts } from '../src/sim/knowledge/KnowledgeSystem';
 import type { Settlement, SimulationState } from '../src/sim/types';
 
-const seed = process.argv[2]!;
+const seed = process.argv[2] ?? 'alpha-river';
 const years = Number(process.argv[3] ?? 130);
-const out = process.argv[4]!;
+const out = process.argv[4] ?? `output/progression-repair/${seed}.json`;
+if (!Number.isInteger(years) || years <= 0) throw new Error('years must be a positive integer');
+const metrics = new ProgressionMetrics();
+const sourceFiles = readdirSync('src', { recursive: true }).map(String).filter(p => p.endsWith('.ts')).sort();
+const fingerprint = createHash('sha256');
+for (const path of sourceFiles) { fingerprint.update(path.replaceAll('\\', '/')); fingerprint.update(readFileSync(`src/${path}`)); }
+const provenance = { sourceSha256: fingerprint.digest('hex'), node: process.version, sourceFiles: sourceFiles.length };
 
-const TRACKED = ['irrigation', 'metal-smelting', 'durable-records', 'combustion-dynamics', 'counting-measure', 'material-testing', 'pottery-firing', 'iron-working', 'precision-tools'];
+const TRACKED = ['leverage', 'wheel-axle', 'simple-gearing', 'irrigation', 'metal-smelting', 'durable-records', 'combustion-dynamics', 'counting-measure', 'material-testing', 'pottery-firing', 'iron-working', 'precision-tools', 'rotary-machinery', 'mechanical-power', 'electromagnetism', 'electrical-generation', 'electric-grid'];
 
 interface Row {
   settlement: string; peakPeople: number; finalPeople: number;
@@ -26,6 +36,7 @@ const ks = (sim as never as {
   knowledgeSystem: {
     infrastructureDiagnostics: (s: SimulationState, x: Settlement) => Array<{ key: string; blocker: string }>;
     discoveryBlockers: (s: SimulationState, x: Settlement, id: string) => string[];
+    discoveryDiagnostics: (s: SimulationState, x: Settlement) => Record<string, string[]>;
   };
 }).knowledgeSystem;
 
@@ -33,9 +44,7 @@ const rows = new Map<string, Row>();
 // Observe the decision itself, before annual construction spends material. End-of-year
 // diagnostics alone can name a blocker which was not present at the discovery attempt.
 const decisions: unknown[] = [];
-const decisionSystem = ks as unknown as { attemptDiscoveries: (state: SimulationState, s: Settlement) => unknown[] };
-const attempt = decisionSystem.attemptDiscoveries.bind(decisionSystem);
-decisionSystem.attemptDiscoveries = (state, s) => {
+observeDiscoveryAttempts((state, s) => {
   if (!s.knowledge.records['metal-smelting']) decisions.push({ month: state.month, settlement: s.name,
     blockers: ks.discoveryBlockers(state, s, 'metal-smelting'), timber: s.localMaterials.timber ?? 0, wood: s.resources.wood,
     charcoal: s.localMaterials.charcoal ?? 0, copperOre: s.localMaterials['copper-ore'] ?? 0, ironOre: s.localMaterials['iron-ore'] ?? 0,
@@ -44,8 +53,7 @@ decisionSystem.attemptDiscoveries = (state, s) => {
     facilities: (s.processing?.facilities ?? []).map(f => ({ family: f.family, status: f.status, inputs: { ...f.inputs }, outputs: { ...f.outputs },
       consumed: { ...f.totals.consumed }, produced: { ...f.totals.produced }, lastActiveMonth: f.lastActiveMonth })),
   });
-  return attempt(state, s);
-};
+});
 // Blocker observations over the final third of the run decide what is "persistent".
 const tail = new Map<string, Map<string, string[]>>();
 const persistWindow = Math.floor(years * 0.66);
@@ -63,7 +71,13 @@ const row = (s: Settlement): Row => {
 };
 
 for (let y = 1; y <= years; y++) {
-  sim.step(12);
+  for (let m = 0; m < 12; m++) { sim.step(1); metrics.observe(sim.state); }
+  metrics.year(sim.state, ks);
+  if (y % 25 === 0) {
+    console.log(`${seed}: ${y}/${years} years, population ${sim.population}, discoveries ${sim.state.stats.discoveries}, exchanges ${sim.state.stats.knowledgeExchanges}, operations ${Object.values(metrics.milestones).flatMap(first => Object.keys(first).filter(key => key.startsWith('operating:'))).join(',')}`);
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(`${out}.checkpoint`, JSON.stringify({ seed, yearsCompleted: y, provenance, metrics }, null, 1));
+  }
   for (const s of sim.state.settlements.filter(c => c.alive)) {
     const r = row(s);
     const residents = sim.state.people.filter(p => p.alive && p.homeId === s.id);
@@ -113,7 +127,11 @@ for (const [id, r] of rows) {
   if (r.firstWorkshop === null) r.workshopBlocker = modal(perSettlement?.get('#workshop'));
 }
 
+mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify({
+  coverage: { months: sim.state.month, initialPopulation: 360, annualFrames: metrics.frames.length },
+  metrics,
+  provenance, config: sim.config,
   seed, years, decisions,
   settlements: [...rows.values()].sort((a, b) => b.peakPeople - a.peakPeople),
   aliveAtEnd: sim.state.settlements.filter(s => s.alive).length,

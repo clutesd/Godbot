@@ -49,6 +49,7 @@ function readinessMultiplier(profile: MilitaryCapabilityProfile, casualtyPressur
 function augmentWarEvent(event: HistoricalEvent, prepared: PreparedWar): void {
   Object.assign(event.context, militaryEventContext(prepared.war), {
     engagementMode: prepared.assessment.engagementMode,
+    nuclearDeterrence: prepared.assessment.nuclearDeterrence,
     militaryRangeA: Number(prepared.assessment.rangeA.toFixed(4)),
     militaryRangeB: Number(prepared.assessment.rangeB.toFixed(4)),
     militaryLethalityA: Number(prepared.assessment.lethalityA.toFixed(4)),
@@ -136,6 +137,8 @@ export function installMilitaryCombatRuntime(): void {
       for (const event of eventsAfter(this.state.history, item.historySequence)) {
         if (!event.actors.includes(item.war.id)) continue;
         augmentWarEvent(event, item);
+        const retained = this.state.aftermathEvents?.find(e => e.id === event.id);
+        if (retained) Object.assign(retained.context, event.context);
       }
 
       const mismatch = Math.max(item.assessment.mismatchA, item.assessment.mismatchB);

@@ -16,6 +16,8 @@ import { waterAt } from '../../sim/transport/TerrainTraversal';
 import * as THREE from 'three';
 
 const coastDistanceByWorld = new WeakMap<WorldState, Float64Array>();
+/** Steepest grade per cell, NaN until computed. Cell elevations are fixed after generation. */
+const maxSlopeByWorld = new WeakMap<WorldState, Float64Array>();
 
 /**
  * Terrain properties queried at a specific world position
@@ -81,6 +83,29 @@ export class TerrainQueries {
 
     this.propertiesCache.set(cacheKey, properties);
     return properties;
+  }
+
+  /**
+   * Hot-path standability used per person per frame: dry at the exact point and the cell's steepest
+   * grade within `maxSlopeDegrees`. Same predicate as reading `water`/`maxSlope` from
+   * queryTerrainAt, without building string cache keys or growing the unbounded properties cache.
+   */
+  standable(worldX: number, worldZ: number, maxSlopeDegrees: number): boolean {
+    const cell = cellAt(this.world, worldX, worldZ);
+    if (!cell) return false;
+    if (waterAt(this.world, { x: worldX, z: worldZ }, cell)) return false;
+    let memo = maxSlopeByWorld.get(this.world);
+    if (!memo) {
+      memo = new Float64Array(this.world.cells.length).fill(Number.NaN);
+      maxSlopeByWorld.set(this.world, memo);
+    }
+    const index = cell.z * this.world.size + cell.x;
+    let slope = memo[index]!;
+    if (Number.isNaN(slope)) {
+      slope = this.calculateMaxSlope(cell);
+      memo[index] = slope;
+    }
+    return slope <= maxSlopeDegrees;
   }
 
   /**

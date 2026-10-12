@@ -39,7 +39,10 @@ describe('Weather simulation', () => {
     expect(events[0]!.context['snowpack']).toBe(weather.snowpack);
     expect(events[0]!.context['travelPenalty']).toBe(weather.travelPenalty);
     expect(settlement.monthlyBalance.food).toBeLessThan(ordinary.state.settlements[0]!.monthlyBalance.food);
-    const harvested = (s: typeof settlement) => s.materialEconomy!.inTransit.filter(t => t.resourceId === 'timber').reduce((n, t) => n + t.quantity, 0);
+    // Outdoor extraction of whatever the settlement chose to work this month (it picks deposits by
+    // need, so not necessarily the timber stand added above) is what a blizzard exposes.
+    const harvested = (s: typeof settlement) => s.materialEconomy!.inTransit.reduce((n, t) => n + t.quantity, 0);
+    expect(harvested(ordinary.state.settlements[0]!)).toBeGreaterThan(0);
     expect(harvested(settlement)).toBeLessThan(harvested(ordinary.state.settlements[0]!));
     expect(ordinary.state.history.some((event) => event.tags.includes('snow'))).toBe(false);
     severe.step(2);
@@ -137,11 +140,12 @@ describe('Weather simulation', () => {
     const config = configWith({ seed: 'weather-flood', world: { size: 20 } });
     const world = generateWorld(config);
     const system = new WeatherSystem(world, config);
-    const cell = world.cells.find((entry) => !entry.water && entry.slope < 0.3)!;
+    // The lowest dry, gentle ground in the world, where runoff from the catchment actually collects.
+    // (The first gentle cell in scan order can be a hill, and a hill correctly never floods.)
+    const cell = world.cells.filter((entry) => !entry.water && entry.slope < 0.3).sort((a, b) => a.elevation - b.elevation)[0]!;
     const sample = nearestIndex(world.terrain, cell.worldX, cell.worldZ);
     const ground = world.terrain.height[sample]!;
-    world.terrain.waterLevel[sample - 1] = ground - 0.003;
-    world.terrain.height[sample - 1] = ground - 0.004;
+    expect(world.terrain.waterLevel[sample]).toBeLessThan(ground);
     const hydrology = new DynamicHydrology(world);
     const conditions = system.state.cells[cell.z * world.size + cell.x]!;
     for (const weather of system.state.cells) weather.runoff = 0.22;

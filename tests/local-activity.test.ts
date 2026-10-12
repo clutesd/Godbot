@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { conversationTurn, LocalActivityPresentation, LOCAL_ACTIVITY_ARRIVAL_HOLD_SECONDS, LOCAL_ACTIVITY_RADIUS, localSegmentSafe, activityStructureSignature, clearActivityStructure, type LocalActivityContext, type LocalActivityState } from '../src/render/people/LocalActivityPresentation';
-import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
+import { HUMAN_ACCELERATION, HUMAN_BRAKING, PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { AnimationController } from '../src/render/animation/AnimationController';
 import { buildSocialGroups, groupKeyFor, placeInGroup, travelAnimationFor } from '../src/render/people/PeoplePresentation';
 import type { Activity, DestinationKind, Person, SocialRelationship, SocialRelationshipKind, Vec2 } from '../src/sim/types';
@@ -333,13 +333,16 @@ describe('renderer-owned local activity', () => {
 
     // Once the wider local frontage approach/orientation is complete, no second arrival pause is
     // charged. Step 2 deliberately permits a meaningful short walk here; this is not a teleport.
+    // The arrival is only the physical walk plus the deliberate standing turn to face the bench
+    // (~1.9 s + ~1 s here); it must never accrue hold time of its own.
     let elapsed = 0;
-    while (h.local.get(p.id)?.action === 'arrive' && elapsed < 3) {
+    while (h.local.get(p.id)?.action === 'arrive' && elapsed < 4) {
       h.tick(1 / 60);
       elapsed += 1 / 60;
+      if (h.local.get(p.id)?.action === 'arrive') expect(h.local.get(p.id)!.hold).toBe(0);
     }
     expect(h.local.get(p.id)?.action).not.toBe('arrive');
-    expect(elapsed).toBeLessThan(2.8);
+    expect(elapsed).toBeLessThan(3.5);
   });
 
   it('samples different purposeful routine slices across documentary semantic hand-offs', () => {
@@ -768,17 +771,22 @@ describe('renderer-owned local activity', () => {
     expect(h.local.get('a')?.encounter?.relationshipKind).toBe('friend');
     expect(h.local.get('a')?.encounter?.tone).toBe('warm');
 
+    // Watch the whole encounter rather than a fixed window: the hug envelope and approach set its pace.
     const microgestures = new Set<string>();
-    for (let frame = 0; frame < 12 * 60; frame++) {
+    const beats: string[] = [];
+    for (let frame = 0; frame < 40 * 60 && h.local.get('a')?.partnerId === 'friend'; frame++) {
       h.tick(1 / 60);
       for (const id of ['a', 'friend']) {
         const state = h.local.get(id);
         if (state?.encounter) microgestures.add(state.animation);
       }
+      const action = h.local.get('a')?.action;
+      if (h.local.get('a')?.encounter && action && beats.at(-1) !== action) beats.push(action);
     }
-    // Close friends greet through the paired hug envelope, then resume conversation.
+    // Close friends greet through the paired hug envelope, talk, share a laugh, then linger.
     expect(microgestures).toContain('converse-quiet');
     expect(microgestures).toContain('social-laugh');
+    expect(beats).toEqual(['warm-greeting', 'warm-conversation', 'small-shared-laugh', 'linger-together']);
   });
 
   it('holds a mentor relationship through several readable guidance beats instead of one generic gesture', () => {
@@ -937,18 +945,24 @@ describe('renderer-owned local activity', () => {
     p.navigation!.destinationKind = 'patrol-route';
     p.navigation!.destinationId = 'watch-route';
     const h = harness([p]);
+    // A three-minute frozen shot: long enough for a dozen deliberate (turn-then-step) repositions.
     const targets = new Set<string>();
+    let repositions = 0;
     let lastAction = '';
-    for (let frame = 0; frame < 90 * 30; frame++) {
+    for (let frame = 0; frame < 180 * 30; frame++) {
       h.tick(1 / 30);
       const state = h.local.get(p.id);
       if (!state) continue;
       if (state.action !== lastAction && ['patrol-point', 'survey-route'].includes(state.action)) {
         targets.add(`${state.destination.x.toFixed(3)},${state.destination.z.toFixed(3)}`);
+        repositions++;
       }
       lastAction = state.action;
     }
-    expect(targets.size).toBeGreaterThanOrEqual(6);
+    expect(repositions).toBeGreaterThanOrEqual(10);
+    // More distinct spots than the seven fixed markers the old cycle revealed, and mostly fresh ones.
+    expect(targets.size).toBeGreaterThan(7);
+    expect(targets.size / repositions).toBeGreaterThan(0.6);
   });
 
   it('turns toward a real companion without ever aliasing their authority', () => {
@@ -1005,10 +1019,17 @@ describe('renderer-owned local activity', () => {
     expect(turn.speed).toBe(0); expect(turn.facing).toBeGreaterThan(0);
     const speeds: number[] = [];
     for (let i = 0; i < 180; i++) { const v = store.resolve('walker', target, 1 / 60, ground); if (v.speed > 0) speeds.push(v.speed); }
-    expect(speeds[0]).toBeLessThan(Math.max(...speeds) / 4);
-    expect(speeds.at(-1)).toBeLessThan(Math.max(...speeds) / 4);
+    const cruise = Math.max(...speeds);
+    expect(cruise).toBeLessThanOrEqual(0.3 + 1e-8);
+    // Eases in and out: starts and ends slow, and no frame changes speed faster than a body can
+    // accelerate or brake (the arriving frame may only cover the last sliver of distance).
+    expect(speeds[0]).toBeLessThan(cruise / 4);
+    expect(speeds.at(-1)).toBeLessThan(cruise / 3);
+    for (let i = 1; i < speeds.length - 1; i++) {
+      expect(speeds[i]! - speeds[i - 1]!).toBeLessThanOrEqual(HUMAN_ACCELERATION / 60 + 1e-6);
+      expect(speeds[i - 1]! - speeds[i]!).toBeLessThanOrEqual(HUMAN_BRAKING / 60 + 1e-6);
+    }
     expect(store.get('walker')!.x).toBeCloseTo(0.6);
-    expect(Math.max(...speeds)).toBeLessThanOrEqual(0.3 + 1e-8);
   });
 
   it('retries after the ground guard stops a journey instead of freezing in approach', () => {

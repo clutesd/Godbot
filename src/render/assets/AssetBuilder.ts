@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import type { CultureStyle } from '../../sim/types';
+import type { GeneratorKind } from '../../sim/energy/types';
 import { MaterialPalette, type Era } from '../materials/MaterialPalette';
 import { CultureStyleProfileFactory, SettlementStyleProfile } from '../style/CultureStyleProfile';
 import type { CultureStyleProfile } from '../style/CultureStyleProfile';
@@ -33,7 +34,7 @@ export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'inf
 
 export interface AssetConfig {
   /** Authoritative generator, when this building belongs to an energy plant. */
-  energyKind?: import('../../sim/energy/types').GeneratorKind;
+  energyKind?: GeneratorKind;
   development?: DevelopmentResponse;
   seed: string;
   culture: CultureStyle;

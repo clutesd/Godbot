@@ -1,5 +1,6 @@
 import { recordFootTrafficSegment } from '../people/FootTraffic';
-import { freightVehicle, FREIGHT_CAPACITY, FREIGHT_SPEED, railReady, tradeOpportunity } from './FreightEconomy';
+import { recordKnowledgeWork } from '../knowledge/WorkExperience';
+import { foodExportable, freightVehicle, FREIGHT_CAPACITY, FREIGHT_SPEED, railReady, tradeOpportunity } from './FreightEconomy';
 import { infrastructureLabourBudget } from '../people/HumanCapital';
 import { settlementRepresentedPopulation } from '../Population';
 import { capabilityPractice } from '../knowledge/CapabilityContract';
@@ -11,7 +12,7 @@ import {
   dispatchMaterialShipment,
 } from '../resources/MaterialLogistics';
 import type { MaterialKind } from '../resources/MaterialEconomy';
-import { addMaterial, materialEconomy, reconcileBulkStocks, storageRoom, takeMaterial } from '../resources/Inventory';
+import { addMaterial, materialEconomy, materialReserve, reconcileBulkStocks, storageRoom, takeMaterial } from '../resources/Inventory';
 import { consumeMaterial } from '../resources/MaterialUse';
 import { surfaceHeightAt, surfaceWaterAt } from '../terrain/SurfaceGeometry';
 import type { Settlement, SimulationState, TradeRoute } from '../types';
@@ -207,6 +208,12 @@ export class TransportationSystem {
       trip.status = 'arrived';
       const target = trip.destination === a.id ? a : b;
       const source = trip.origin === a.id ? a : b;
+      recordKnowledgeWork(source, 'transport', Math.log1p(trip.quantity) * Math.max(1, trip.path.length));
+      recordKnowledgeWork(target, 'transport', Math.log1p(trip.quantity));
+      if (trip.mode === 'water') {
+        recordKnowledgeWork(source, 'navigation', Math.log1p(trip.quantity) * Math.max(1, trip.path.length));
+        recordKnowledgeWork(target, 'navigation', Math.log1p(trip.quantity));
+      }
       if (trip.material) trip.deliveredQuantity = deliverMaterialShipment(source, target, trip.material, trip.quantity, 0.96, this.state.month);
       else if (trip.materialId) {
         trip.deliveredQuantity = addMaterial(target, trip.materialId, trip.quantity * 0.96);
@@ -267,9 +274,8 @@ export class TransportationSystem {
       for (const materialId of ids) {
         for (const [source, target] of [[a, b], [b, a]] as const) {
           if (source.materialUse?.criticalInputs.includes(materialId as MaterialKind) || (source.materialUse?.materials[materialId as MaterialKind]?.pressure ?? 0) > 0.28) continue;
-          const sourceDemand = materialEconomy(source).demand[materialId] ?? 0;
           const targetDemand = materialEconomy(target).demand[materialId] ?? 0;
-          const surplus = Math.max(0, (source.localMaterials[materialId] ?? 0) - Math.max(0.4, sourceDemand * 6));
+          const surplus = Math.max(0, (source.localMaterials[materialId] ?? 0) - materialReserve(source, materialId));
           const shortage = Math.max(0, targetDemand * 4 - (target.localMaterials[materialId] ?? 0));
           const quantity = Math.min(storageRoom(target), surplus * 0.32, shortage, FREIGHT_CAPACITY[freightVehicle(source, target, route, transport.path, shortage)]);
           if (quantity <= 0.08 || quantity <= (shipment?.quantity ?? 0)) continue;
@@ -284,7 +290,7 @@ export class TransportationSystem {
         const gap = a.resources[resource] / aPopulation - b.resources[resource] / bPopulation;
         const source = gap > 0 ? a : b;
         const target = gap > 0 ? b : a;
-        if (source.foodSecurity <= 1.1 || target.foodSecurity >= 0.9) continue;
+        if (!foodExportable(source, source.id === a.id ? aPopulation : bPopulation) || target.foodSecurity >= 0.9) continue;
         const quantity = Math.min(FREIGHT_CAPACITY[freightVehicle(source, target, route, transport.path, Math.abs(gap))], Math.abs(gap) * route.volume * 1.8, source.resources[resource] * 0.04, route.volume * 6);
         if (quantity > 0.08 && quantity > (shipment?.quantity ?? 0)) shipment = { source, target, resource, quantity, reason: 'trade' };
       }

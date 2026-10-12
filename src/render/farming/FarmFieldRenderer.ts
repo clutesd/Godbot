@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { irrigationChannels } from '../../sim/agriculture/IrrigationWorks';
 import { conformGroundGeometry, renderedGroundSampler } from '../terrain/ConformingGround';
 import { farmGeometries, farmGeometry, farmPoint, type FarmGeometry } from '../../shared/FarmGeometry';
 import type { SimulationState } from '../../sim/types';
@@ -167,16 +168,15 @@ export class FarmFieldRenderer {
           rowHalfWidth * 2, RIBBON_SEGMENTS, maintained ? 0.011 : 0.007, maintained ? 0.034 : 0.017, palette.ridge, heightAt,
         );
       }
-      for (let gap = 0; gap <= ROWS; gap++) {
-        if (visual.irrigation <= 0.08 || visual.stage === 'snow') break;
-        const localZ = (gap - ROWS / 2) * rowSpacing;
-        const start = farmPoint(field, -field.width * 0.45, localZ);
-        const end = farmPoint(field, field.width * 0.45, localZ);
-        const wetWidth = 0.016 + visual.irrigation * 0.02;
-        surfaces.moisture.addRibbon(
-          start.x, start.z, end.x, end.z,
-          wetWidth, RIBBON_SEGMENTS, 0.0065, 0.009, palette.wet, heightAt,
-        );
+      const crop = settlement.fields?.find(f => f.id === field.id);
+      for (const [start, end] of crop ? irrigationChannels(crop, field) : []) {
+        const dx = end.x - start.x, dz = end.z - start.z, length = Math.max(0.001, Math.hypot(dx, dz));
+        const nx = -dz / length * 0.035, nz = dx / length * 0.035;
+        // Persistent excavated banks survive a dry month; only delivered water wets the bed.
+        for (const side of [-1, 1]) surfaces.borders.addRibbon(start.x + nx * side, start.z + nz * side,
+          end.x + nx * side, end.z + nz * side, 0.045, RIBBON_SEGMENTS, 0.008, 0.035, palette.border, heightAt);
+        surfaces.moisture.addRibbon(start.x, start.z, end.x, end.z, 0.035, RIBBON_SEGMENTS,
+          0.005, 0.005, visual.irrigation > 0 && visual.stage !== 'snow' ? palette.wet : palette.soil, heightAt);
       }
 
       // The perimeter is an earthen berm, also draped vertex-by-vertex. A subtle crown gives the

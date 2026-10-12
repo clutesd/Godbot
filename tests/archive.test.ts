@@ -44,7 +44,7 @@ describe('Historian archive persistence', () => {
     expect((await reopened.list()).some((candidate) => candidate.identity.runId === identity.runId)).toBe(true);
     expect(reopened.persistent).toBe(true);
     reopened.close();
-  }, 20_000);
+  }, 300_000);
 
   it('falls back to memory when browser persistence is absent', async () => {
     const simulation = new Simulation({ seed: 'memory-archive', startingPopulation: 120 });
@@ -87,7 +87,7 @@ describe('Historian archive persistence', () => {
     expect(completed.events.some((event) => ongoing.events.some((prior) => prior.id === event.id))).toBe(true);
   });
 
-  it('replays an ongoing record to exactly the archived deterministic state', () => {
+  it('replays an ongoing record to exactly the archived deterministic state', { tags: ['soak'] }, () => {
     const original = new Simulation({ seed: 'reload-replay', startingPopulation: 180 });
     original.step(35 * 12);
     const identity = createRunIdentity(original.config, original.state, 1);
@@ -96,7 +96,7 @@ describe('Historian archive persistence', () => {
     replayed.step(ongoing.lastRecordedMonth);
     expect(replayed.summary()).toEqual(original.summary());
     expect(replayed.state.history).toEqual(original.state.history);
-  }, 45_000);
+  });
 
   it('suppresses unstable aggregate claims for small samples', () => {
     const simulation = new Simulation({ seed: 'aggregate-archive', startingPopulation: 120 });

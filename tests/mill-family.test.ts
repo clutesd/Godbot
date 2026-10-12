@@ -87,10 +87,13 @@ describe('the mill family', () => {
     for (const id of ['hand-mill', 'sawmill', 'wind-pump', 'smock-mill'] as const) {
       expect(ARCHETYPE_LIBRARY[id].status, id).toBe('planned');
     }
-    // Routing still answers with the archetypes it answered with before this family grew.
+    // Development routing never produces a planned subtype. An energy need's yard is a workshop:
+    // which prime mover (and so which mill) stands is the energy system's decision, not routing's.
     const dry = { role: 'energy' as const, period: 'medieval' as const, need: 'energy' as const, form: 'workshop' as const, level: 2 };
     for (let plot = 0; plot < 20; plot += 1) {
-      expect(['mill', 'windmill']).toContain(archetypeForContext({ ...dry, seed: `plot-${plot}` }));
+      const routed = archetypeForContext({ ...dry, seed: `plot-${plot}` });
+      expect(['hand-mill', 'sawmill', 'wind-pump', 'smock-mill']).not.toContain(routed);
+      expect(routed).toBe('workshop');
     }
   });
 
@@ -128,8 +131,13 @@ describe('moving parts are real rotors', () => {
   it('pivots a windmill sail cross about its hub on the entrance axis', () => {
     const { spec, group } = compose('windmill', 'preIndustrial', 'timber');
     expect(spec.equipment).toContain('windshaft');
-    const [sails] = rotorsIn(group);
+    // The cap turns the whole head into the wind (yaw about vertical); the sail cross is nested in
+    // it and spins about the horizontal windshaft, which is the entrance axis.
+    const cap = rotorsIn(group).find(object => object.name === 'Cap');
+    expect(cap?.userData['millRotor']).toMatchObject({ axis: 'y', motion: 'yaw' });
+    const sails = rotorsIn(group).find(object => object.name === 'Sails');
     expect(sails, 'the sail cross is a rotor').toBeDefined();
+    expect(sails!.parent).toBe(cap);
     const info = sails!.userData['millRotor'] as { axis: string; drive: string; pivot: THREE.Vector3Like };
     expect(info.axis).toBe('z');
     expect(info.drive).toBe('wind-sails');
@@ -144,8 +152,9 @@ describe('moving parts are real rotors', () => {
   it('turns a watermill wheel about its axle, which runs across the race', () => {
     const { spec, group } = compose('mill', 'preIndustrial', 'masonry');
     expect(spec.equipment).toContain('waterwheel');
-    const wheel = rotorsIn(group).find(object => object.name === 'Waterwheel');
-    expect(wheel).toBeDefined();
+    const wheel = rotorsIn(group).find(object => /wheel$/i.test(object.name) && object.userData['millRotor'].drive === 'water-wheel'
+      && (object.userData['millRotor'].motion ?? 'rotate') === 'rotate');
+    expect(wheel, 'the water wheel is a rotor').toBeDefined();
     expect(wheel!.userData['millRotor'].axis).toBe('x');
     expect(wheel!.userData['millRotor'].drive).toBe('water-wheel');
   });

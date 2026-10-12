@@ -177,6 +177,23 @@ export class CinematicSequencePlanner {
   ): CinematicPlannedShot {
     this.queue = [];
     const sequenceId = `sequence:${state.month}:${this.sequenceCounter++}:${anchor.id}`;
+    const campaign = anchor.statement.claims.warId
+      ? state.wars.find(w => w.id === anchor.statement.claims.warId) : undefined;
+    if (campaign && campaign.phase === 'battle' && campaign.resolvedMonth === undefined) {
+      // Photograph one evidenced action at several scales. Carry its source statement through
+      // the sequence, narrate it once, and keep other settlement stories outside this battle.
+      const roles: CinematicBeatRole[] = ['establish', 'observe', 'detail', 'release'];
+      const shots = roles.map((role, ordinal): CinematicPlannedShot => ({
+        scene: ordinal === 0 ? anchor : { ...anchor, id: `${anchor.id}:combat:${role}` },
+        role, scale: role === 'observe' ? 'human' : role === 'detail' ? 'detail' : 'wide',
+        narrate: ordinal === 0, threadId: campaign.id, sequenceId,
+        anchorEventId: anchor.event?.id, ordinal, total: roles.length,
+      }));
+      const first = shots.shift()!;
+      this.queue = shots;
+      this.remember(first);
+      return first;
+    }
     const eventThread = Boolean(anchor.event);
     const early = isEarlyDocumentary(state) && !anchor.event;
     const intimate = early && (isHumanObservation(anchor) || anchor.kind === 'settlement-approach');

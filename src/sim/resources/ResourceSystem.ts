@@ -4,7 +4,7 @@ import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem'
 import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
-import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageCapacity, storageRoom, storedVolume, takeMaterial } from './Inventory';
+import { addMaterial, beginMaterialFlowMonth, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageCapacity, storageRoom, storedVolume, takeMaterial } from './Inventory';
 import { processRecipes, useLabour, useLabourDetailed, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
 import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
@@ -13,6 +13,7 @@ import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
 import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import { drain, type Slices } from '../TimeSlicing';
+import { recordKnowledgeWork } from '../knowledge/WorkExperience';
 import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, modifyLand, wearExtractionPath } from '../environment/EnvironmentalModificationSystem';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
@@ -73,6 +74,7 @@ export class ResourceSystem {
     }
     for (const s of state.settlements.filter(s => s.alive)) {
       reconcileBulkStocks(s);
+      beginMaterialFlowMonth(s, state.month);
       const economy = materialEconomy(s);
       const people = peopleByHome.get(s.id) ?? [];
       const budget: LabourBudget = resourceLabourBudget(state, s, people);
@@ -293,6 +295,9 @@ export class ResourceSystem {
         accessPaths: access.accessPaths,
       });
       economy.experience[definition.id] = (economy.experience[definition.id] ?? 0) + amount;
+      recordKnowledgeWork(s, definition.researchDomain ?? 'materials', labourUse.total);
+      recordKnowledgeWork(s, 'transport', labourUse.total * 0.35);
+      if (definition.id === 'stone' || definition.id === 'timber') recordKnowledgeWork(s, 'mechanics', labourUse.total * 0.5);
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += amount * 0.006;
       if (!s.workedDeposits.includes(deposit.id)) {
         const first = deposit.establishedMonth === undefined;

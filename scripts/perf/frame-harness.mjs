@@ -13,7 +13,7 @@
  * Requires a Chromium-family browser; set GODBOX_BROWSER to override autodetection.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -63,8 +63,10 @@ const SCENARIOS = {
 };
 
 const argument = (name, fallback) => {
-  const raw = process.argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1];
-  return raw === undefined ? fallback : raw;
+  const raw = process.argv.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+  if (raw === undefined) return fallback;
+  // `--eval-before=@probe.js` reads the value from a file, avoiding shell quoting of expressions.
+  return raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw;
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -357,6 +359,9 @@ async function main() {
 
     await session.evaluate('window.__godboxResetPerformance && window.__godboxResetPerformance()');
     await session.evaluate(INSTALL_PROBE);
+    // --eval-before / --eval-after run ad-hoc diagnostic expressions around the sampling window.
+    const evalBefore = argument('eval-before', null);
+    if (evalBefore) log('eval-before:', JSON.stringify(await session.evaluate(evalBefore)));
     const heapBefore = await session.evaluate('performance.memory ? performance.memory.usedJSHeapSize : null');
 
     const cpuProfilePath = argument('cpu-profile', null);
@@ -375,6 +380,14 @@ async function main() {
       log(`wrote page cpu profile to ${cpuProfilePath}`);
     }
 
+    const screenshotPath = argument('screenshot', null);
+    if (screenshotPath) {
+      const { data } = await session.send('Page.captureScreenshot', { format: 'png' });
+      writeFileSync(screenshotPath, Buffer.from(data, 'base64'));
+      log(`wrote screenshot to ${screenshotPath}`);
+    }
+    const evalAfter = argument('eval-after', null);
+    if (evalAfter) log('eval-after:', JSON.stringify(await session.evaluate(evalAfter)));
     const intervals = await session.evaluate('window.__godboxFrameProbe.intervals.slice()');
     const longFrames = await session.evaluate('window.__godboxFrameProbe.longFrames.slice(-40)');
     const scene = await session.evaluate(SCENE_STATS);

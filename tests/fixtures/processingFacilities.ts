@@ -3,6 +3,7 @@ import { ResourceSystem } from '../../src/sim/resources/ResourceSystem';
 import { addMaterial, publishBulkStocks } from '../../src/sim/resources/Inventory';
 import type { ExtractionAccessibility } from '../../src/sim/resources/ExtractionAccessibility';
 import { advanceProcessingFacilities, ensureProcessingAuthority, establishFacility } from '../../src/sim/processing/FacilitySystem';
+import { bump } from '../../src/sim/processing/FacilityInventory';
 import type { FacilityFamilyId, ProcessingFacility } from '../../src/sim/processing/types';
 import type { LabourBudget } from '../../src/sim/resources/Processing';
 import type { Settlement, SimulationState } from '../../src/sim/types';
@@ -70,3 +71,23 @@ export function runFacilityMonth(
 }
 
 export const CREW: LabourBudget = { artisan: 20, builder: 20, carrier: 20, forager: 10 };
+
+/**
+ * Timber that keeps a tier-1 wood works capacity-bound for a whole month. Charcoal burns 4 timber
+ * per 0.4 work, so 3 work of capacity needs 30; less leaves the works input-limited, not crew- or
+ * condition-limited, and a throughput scenario would then measure the wrong constraint.
+ */
+export const SATURATING_TIMBER = 40;
+
+/**
+ * Lands stock on a works' input yard exactly as a completed haul would, so the facility's own
+ * conservation audit balances. Writing `f.inputs` directly creates material from nowhere, which
+ * facilityConservationError correctly reports.
+ */
+export function deliver(f: ProcessingFacility, materials: Record<string, number>): void {
+  for (const [id, amount] of Object.entries(materials)) {
+    bump(f.inputs, id, amount);
+    bump(f.totals.dispatchedIn, id, amount);
+    bump(f.totals.arrived, id, amount);
+  }
+}

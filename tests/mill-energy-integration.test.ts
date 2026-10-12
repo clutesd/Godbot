@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Object3D } from 'three';
 import { advanceEnergy } from '../src/sim/energy/EnergySystem';
 import { energyAt } from '../src/sim/energy/types';
 import { environmentFactor, siteGenerationFactor } from '../src/sim/energy/Generation';
@@ -42,7 +43,7 @@ describe('mill construction through production architecture', () => {
     for (let i = 0; i < 24 && plant.progress < 1; i++) tick();
     expect(plant.progress).toBe(1);
     expect(100 - s.localMaterials[material]!).toBeCloseTo(cost);
-    expect(plant.output).toBe(water ? expect.any(Number) : 0);
+    expect(plant.output).toEqual(water ? expect.any(Number) : 0);
     if (water) expect(plant.output).toBeGreaterThan(0);
     else {
       state.weather.cells[s.cellIndex]!.wind = 0.5;
@@ -53,7 +54,7 @@ describe('mill construction through production architecture', () => {
     renderer.update(state, 0, () => 0);
     const mill = renderer.group.getObjectByName(water ? 'Riverside watermill' : 'Windmill')!;
     expect(mill.userData['buildingSpec'].archetype).toBe(water ? 'mill' : 'windmill');
-    const parts: import('three').Object3D[] = [];
+    const parts: Object3D[] = [];
     mill.traverse(o => { if (o.userData['millRotor']) parts.push(o); });
     expect(parts.length).toBeGreaterThan(0);
     expect(parts.every(o => o.userData['millRotor'].drive === (water ? 'water-wheel' : 'wind-sails'))).toBe(true);
@@ -87,8 +88,11 @@ describe('mill construction through production architecture', () => {
     s.localMaterials.textile = 0.25;
     tick();
     const plant = energyAt(s).plants[0]!;
-    const progress = plant.progress;
     for (let i = 0; i < 8; i++) tick();
+    expect(plant.progress).toBeCloseTo(0.25);
+    expect(s.localMaterials.textile).toBeCloseTo(0);
+    const progress = plant.progress;
+    tick();
     expect(plant.progress).toBe(progress);
     s.localMaterials.textile = 0.75;
     for (let i = 0; i < 12; i++) tick();

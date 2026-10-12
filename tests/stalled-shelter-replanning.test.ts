@@ -75,6 +75,6 @@ describe('material-stalled founding shelter replanning', () => {
     expect(s.structurePlots!.some(plot => plot.development?.status === 'active'
       && plot.development.form === 'dwelling' && !plot.development.temporary)).toBe(true);
     expect(sim.state.history.some(e => e.locationId === s.id && e.causes?.includes('material-shortage-replanned'))).toBe(true);
-  }, 20000);
+  });
 });
 

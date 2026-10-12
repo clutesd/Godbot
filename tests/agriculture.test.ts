@@ -142,6 +142,8 @@ describe('persistent field ecology', () => {
       worldZ: x.s.position.z, width: 3, depth: 2, height: 0.1, radius: 2, condition: 1, foundedMonth: 0,
       development: { form: 'field', status: 'active' } as NonNullable<typeof x.s.structurePlots>[number]['development'] }));
     x.s.development!.water = { ...x.s.development!.water!, irrigation: 1, reliability: 1 };
+    for (const f of x.s.fields!) f.irrigationWorks = { progress: 1, condition: 1,
+      source: { ...x.s.position }, builtMonth: 0, timberSpent: 1, stoneSpent: 1, labourSpent: 3 };
     const reversed = structuredClone(x.state); reversed.settlements[0]!.fields!.reverse();
     advanceAgriculture(x.state, x.s, 20);
     advanceAgriculture(reversed, reversed.settlements[0]!, 20);

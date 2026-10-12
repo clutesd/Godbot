@@ -5,7 +5,7 @@ import { capabilityPractice, type KnowledgeUseRequirement } from '../knowledge/C
 import { recordHeatWork, recordMaterialWork } from '../knowledge/HeatExperience';
 import type { Person, Settlement, SimulationState } from '../types';
 import { craftValueAdded } from './catalog';
-import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks } from './Inventory';
+import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, recordMaterialProduction } from './Inventory';
 import { settlementLedger, type MaterialLedger } from './MaterialLedger';
 import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
 
@@ -290,6 +290,8 @@ export function applyRecipe(
   const consumed: Record<string, number> = {};
   for (const [kind, perBatch] of Object.entries(recipeDefinition.inputs)) if (perBatch) consumed[kind] = perBatch * batches;
   const crafted = craftValueAdded(accepted, consumed);
+  recordMaterialProduction(settlement, 'goods', crafted);
+  for (const [id, amount] of Object.entries(accepted)) recordMaterialProduction(settlement, id, amount);
   economy.craftedThisMonth = (economy.craftedThisMonth ?? 0) + crafted;
   economy.craftedTotal = (economy.craftedTotal ?? 0) + crafted;
   inventory.revision += 1;

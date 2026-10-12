@@ -21,6 +21,7 @@
  */
 
 import type { Era } from '../materials/MaterialPalette';
+import type { GeneratorKind } from '../../sim/energy/types';
 import type { BuildingRole } from '../assets/BuildingGrammar';
 import { BUILD_STAGE, type BuildStage } from '../assets/BuildingComposer';
 import type { DevelopmentProject, DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
@@ -302,7 +303,7 @@ export interface SpecCultureInput {
 }
 
 export interface BuildingSpecContext {
-  energyKind?: import('../../sim/energy/types').GeneratorKind;
+  energyKind?: GeneratorKind;
   /** Explicit archetype. When absent it is derived from the role and period. */
   archetype?: BuildingArchetype;
   role: BuildingRole;

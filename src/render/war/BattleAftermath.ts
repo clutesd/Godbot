@@ -4,6 +4,8 @@ import { campaignPoint } from '../../sim/war/Campaign';
 import type { MilitaryVisualStyle } from './MilitaryVisualLanguage';
 import { engagementGap } from './CombatChoreography';
 import { createCombatExchanges, exchangeFigurePose, exchangeImpactAt, formationCount, presentationHash, type CombatFigurePose } from './CombatExchanges';
+import { explosiveWeapon, conventionalWeapon, battleImpactAt } from '../../sim/war/BattleDestruction';
+import { militaryProfileForWar } from '../../sim/war/MilitaryCapability';
 
 export const MAX_BATTLE_BODIES = 32;
 export const AFTERMATH_MONTHS = 36;
@@ -21,12 +23,13 @@ export interface CasualtyReceipt {
   readonly yaw: number;
   readonly impactAt: number;
   readonly figure: CombatFigurePose;
+  readonly blast?: boolean;
 }
 
 /** Shared by the original company meshes from the instant of impact through permanent rest. */
-export function casualtyLifecycle(life: number, reducedMotion: boolean) {
+export function casualtyLifecycle(life: number, reducedMotion: boolean, blast = false) {
   const t = reducedMotion ? Infinity : Math.max(0, life);
-  const fall = Math.min(1, Math.max(0, (t - 0.38) / 1.25));
+  const fall = Math.min(1, Math.max(0, (t - (blast ? 0.04 : 0.38)) / (blast ? 0.95 : 1.25)));
   // A slow loss of balance accelerates into contact, then a small damped recoil settles.
   const eased = fall * fall * (3 - 2 * fall);
   const stagger = Math.min(1, t / 0.38);
@@ -40,6 +43,8 @@ export function casualtyLifecycle(life: number, reducedMotion: boolean) {
     retreat: stagger * 0.035,
     reaction: Math.sin(Math.min(1, t / 0.38) * Math.PI) * 0.18,
     settle: Math.min(1, t / 0.6),
+    lift: blast && Number.isFinite(t) && t < 0.99 ? Math.sin(Math.max(0, t) / 0.99 * Math.PI) * 0.32 : 0,
+    throw: blast ? eased * 0.38 : 0,
   } as const;
 }
 export interface CasualtyFrame {
@@ -85,13 +90,15 @@ export function casualtyReceipts(war: War, history: readonly HistoricalEvent[], 
       if (slot === undefined || receipts.length >= MAX_BATTLE_BODIES) continue;
       const exchange = plan.exchanges.find(item => item.slots[side] === slot);
       // Rear-rank aggregate losses do not invent a melee attacker reaching through other soldiers.
-      const impactAt = exchange ? exchangeImpactAt(plan, exchange, side) : 0.6 + presentationHash(`${event.id}:${side}:${slot}:impact`) % 2000 / 1000;
+      const weapon = conventionalWeapon(militaryProfileForWar(war, side ? 'attacker' : 'defender'));
+      const blast = explosiveWeapon(weapon);
+      const impactAt = blast ? battleImpactAt(weapon, 1 - side, sample) : exchange ? exchangeImpactAt(plan, exchange, side) : 0.6 + presentationHash(`${event.id}:${side}:${slot}:impact`) % 2000 / 1000;
       const opposite = (1 - side) as 0 | 1;
       const partnerFell = exchange && selected[opposite]!.includes(exchange.slots[opposite])
         && exchangeImpactAt(plan, exchange, opposite) < impactAt;
       const figure = exchangeFigurePose(plan, side, slot, impactAt, !partnerFell, false);
       receipts.push({ id: `${war.id}:${event.id}:${side}:${slot}`, warId: war.id, eventId: event.id,
-        month: event.month, side, slot, position: figure.position, impactAt, yaw: figure.yaw, figure });
+        month: event.month, side, slot, position: figure.position, impactAt, yaw: figure.yaw, figure, blast });
     }
   }
   return receipts;
@@ -167,7 +174,7 @@ export class BattleAftermath {
       const fade = 1 - Math.min(1, age / AFTERMATH_MONTHS) * 0.15;
       const life = reducedMotion ? 10 : elapsed - this.started.get(record.id)! - record.impactAt;
       if (life < 0) continue;
-      const motion = casualtyLifecycle(life, reducedMotion);
+      const motion = casualtyLifecycle(life, reducedMotion, record.blast);
       const eased = motion.fall;
       const p = record.position;
       // Fall backwards into the casualty's own half of the battlefield; protect the entire body.

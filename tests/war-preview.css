@@ -1,0 +1,50 @@
+.campaign-controls {
+  position: absolute;
+  z-index: 30;
+  top: 28px;
+  right: 32px;
+  width: min(540px, 46vw);
+  padding: 16px 18px;
+  border: 1px solid #b99b6045;
+  background: #141a20ed;
+  color: #efe4cd;
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+  font-family: system-ui, sans-serif;
+}
+.campaign-controls h2 { margin: 0 0 12px; font: 600 11px/1.3 system-ui, sans-serif; letter-spacing: .15em; color: #d1b16d; text-transform: uppercase; }
+.campaign-options { display: grid; grid-template-columns: 1.5fr 1fr; gap: 12px; }
+.campaign-options label:last-child { grid-column: 1 / -1; }
+.campaign-controls label { display: grid; gap: 6px; font-size: 11px; color: #c3bcae; }
+.campaign-controls select, .campaign-controls button {
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid #9f89544f;
+  border-radius: 3px;
+  background: #242d36;
+  color: #f3ead9;
+  font: 12px system-ui, sans-serif;
+}
+.campaign-controls select { width: 100%; }
+.campaign-controls button { cursor: pointer; }
+.campaign-controls button:hover { background: #3a4146; border-color: #d1b16d; }
+.campaign-controls :focus-visible { outline: 2px solid #e3bd70; outline-offset: 3px; }
+.campaign-controls p { margin: 10px 0 12px; font-size: 11px; line-height: 1.5; color: #bcb6aa; }
+.campaign-actions { display: flex; gap: 8px; }
+.campaign-actions button:last-child { margin-left: auto; }
+.campaign-escalation { margin-top: 10px; }
+.preview-loading { position: absolute; inset: 0; z-index: 10; display: grid; place-content: center; background: #141a20; color: #d1b16d; font: 13px system-ui, sans-serif; }
+.campaign-preview:has(.campaign-escalation) .campaign-controls p { font-size: 10px; }
+@media (max-width: 700px) {
+  .campaign-controls { top: 12px; left: 12px; right: 12px; width: auto; padding: 12px; }
+  .campaign-preview .identity { display: none; }
+  .campaign-controls h2 { margin-bottom: 8px; }
+  .campaign-controls p { margin: 8px 0; }
+  .campaign-controls select, .campaign-controls button { min-height: 40px; }
+  .campaign-preview .viewport { position: absolute; top: 282px; bottom: 170px; height: auto; }
+  .campaign-preview:has(.campaign-escalation) .viewport { top: 352px; }
+  .campaign-preview .war-chronicle { display: none; }
+  .campaign-preview .chronicle { bottom: 44px; }
+  .campaign-preview .chronicle .date, .campaign-preview .chronicle .population, .campaign-preview .chronicle .rule { display: none; }
+  .campaign-preview .chronicle .activity { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+}

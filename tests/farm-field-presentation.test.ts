@@ -6,6 +6,7 @@ import { FarmFieldRenderer } from '../src/render/farming/FarmFieldRenderer';
 import { farmGeometries, farmGeometry, farmPlotRotation } from '../src/shared/FarmGeometry';
 import type { Settlement, SimulationState } from '../src/sim/types';
 import type { StructureDevelopment } from '../src/sim/development/types';
+import { createField } from '../src/sim/agriculture/AgricultureSystem';
 
 function fixture(month = 6) {
   const f = vegetationFixture(`farm-field-polish:${month}`);
@@ -115,7 +116,7 @@ describe('farm field visual polish', () => {
     expect(mesh(renderer, 'Farm harvest sacks').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Farm row marker posts').count).toBeGreaterThan(0);
     expect(mesh(renderer, 'Farm harvest baskets').count).toBeGreaterThan(0);
-    expect(visibleCount(mesh(renderer, 'Farm irrigation and wet-soil cues'))).toBeGreaterThan(0);
+    expect(visibleCount(mesh(renderer, 'Farm irrigation and wet-soil cues'))).toBe(0);
   });
 
   it('drapes cultivated soil and rows over rolling terrain instead of using one flat center height', () => {
@@ -200,13 +201,25 @@ describe('farm field visual polish', () => {
     expect(farmGeometry(settlement)?.id).toBe('working-field');
   });
 
-  it('uses irrigation only as a visual cue and clears it when existing irrigation authority is absent', () => {
+  it('renders completed ditches in wet and dry months and removes unbuilt infrastructure', () => {
     const { state, settlement, surface } = fixture(5);
+    settlement.structurePlots = [{ id: 'paid-field', worldX: settlement.position.x, worldZ: settlement.position.z,
+      width: 3, depth: 2, height: 0.1, radius: 2, condition: 1, foundedMonth: 0,
+      development: fieldDevelopment(state, settlement, 'active') }];
+    const geometry = farmGeometry(settlement)!;
+    const crop = createField(geometry.id, state.world.cells[settlement.cellIndex]!, settlement.cellIndex, state.month);
+    crop.irrigationWorks = { progress: 1, condition: 1, source: { ...geometry.center },
+      builtMonth: 0, timberSpent: 1, stoneSpent: 1, labourSpent: 3 };
+    crop.evaluatedMonth = state.month; crop.irrigationReceived = 0.1; crop.stage = 'vegetative'; crop.biomass = 0.3;
+    settlement.fields = [crop];
     const renderer = new FarmFieldRenderer();
     renderer.update(state, (x, z) => surface.heightAt(x, z), () => true);
     expect(visibleCount(mesh(renderer, 'Farm irrigation and wet-soil cues'))).toBeGreaterThan(0);
 
-    settlement.agriculture!.irrigation = 0;
+    crop.irrigationReceived = 0;
+    renderer.update(state, (x, z) => surface.heightAt(x, z), () => true);
+    expect(visibleCount(mesh(renderer, 'Farm irrigation and wet-soil cues'))).toBeGreaterThan(0);
+    crop.irrigationWorks.progress = 0.5;
     renderer.update(state, (x, z) => surface.heightAt(x, z), () => true);
     expect(visibleCount(mesh(renderer, 'Farm irrigation and wet-soil cues'))).toBe(0);
   });

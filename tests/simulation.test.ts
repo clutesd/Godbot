@@ -2,7 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { Simulation } from '../src/sim/Simulation';
 
 describe('Simulation determinism', () => {
-  it('produces the same meaningful history from identical inputs', () => {
+  // The fast guard runs on every change; the decades-long versions below run in the soak suite.
+  it('replays the first five years exactly and lets a different seed diverge', () => {
+    const config = { seed: 'deterministic-terraces', startingPopulation: 180, settlementCount: [4, 4] as const };
+    const first = new Simulation(config);
+    const second = new Simulation(config);
+    const other = new Simulation({ ...config, seed: 'deterministic-other' });
+    for (const simulation of [first, second, other]) simulation.step(5 * 12);
+    expect(first.summary()).toEqual(second.summary());
+    expect(first.state.history).toEqual(second.state.history);
+    expect(first.state.settlements).toEqual(second.state.settlements);
+    expect(other.summary()).not.toEqual(first.summary());
+  });
+
+  it('produces the same meaningful history from identical inputs', { tags: ['soak'] }, () => {
     const config = { seed: 'deterministic-terraces', startingPopulation: 180, settlementCount: [4, 4] as const };
     const first = new Simulation(config);
     const second = new Simulation(config);
@@ -10,16 +23,16 @@ describe('Simulation determinism', () => {
     second.step(60 * 12);
     expect(first.summary()).toEqual(second.summary());
     expect(first.state.history.slice(-120)).toEqual(second.state.history.slice(-120));
-  }, 30_000);
+  });
 
-  it('allows seeds to produce structurally different histories', () => {
+  it('allows seeds to produce structurally different histories', { tags: ['soak'] }, () => {
     const first = new Simulation({ seed: 'indigo-rain', startingPopulation: 180 });
     const second = new Simulation({ seed: 'ochre-moon', startingPopulation: 180 });
     first.step(70 * 12);
     second.step(70 * 12);
     expect(first.summary()).not.toEqual(second.summary());
     expect(first.state.world.cells.map((cell) => cell.biome)).not.toEqual(second.state.world.cells.map((cell) => cell.biome));
-  }, 30_000);
+  });
 });
 
 describe('Population and resources', () => {
@@ -34,16 +47,16 @@ describe('Population and resources', () => {
     expect(simulation.state.settlements.reduce((sum, settlement) => sum + settlement.resources.food, 0)).not.toBe(initialFood);
   });
 
-  it('maintains generational continuity through births and deaths', () => {
+  it('maintains generational continuity through births and deaths', { tags: ['soak'] }, () => {
     const simulation = new Simulation({ seed: 'lineage-test', startingPopulation: 240 });
     simulation.step(80 * 12);
     expect(simulation.state.stats.births).toBeGreaterThan(100);
     expect(simulation.state.stats.deaths).toBeGreaterThan(100);
     expect(simulation.population).toBeGreaterThan(50);
     expect(simulation.state.people.some((person) => person.parents.length > 0)).toBe(true);
-  }, 30_000);
+  });
 
-  it('allows migration while geography can prevent early trade infrastructure', () => {
+  it('allows migration while geography can prevent early trade infrastructure', { tags: ['soak'] }, () => {
     const simulation = new Simulation({ seed: 'lineage-test', startingPopulation: 240 });
     simulation.step(80 * 12);
     expect(simulation.state.stats.migrations).toBeGreaterThan(0);
@@ -57,11 +70,11 @@ describe('Population and resources', () => {
       return path && path.lastMonth > path.firstMonth && path.ownerId !== undefined;
     })).toBe(true);
     expect(simulation.state.settlements.some((settlement) => Object.keys(settlement.cultureShares).length > 1)).toBe(true);
-  }, 30_000);
+  });
 });
 
 describe('Long-run stability', () => {
-  it('survives centuries without numerical or population divergence', () => {
+  it('survives centuries without numerical or population divergence', { tags: ['soak'] }, () => {
     const simulation = new Simulation({ seed: 'lineage-test', startingPopulation: 360 });
     simulation.step(300 * 12);
     const summary = simulation.summary();
@@ -75,5 +88,5 @@ describe('Long-run stability', () => {
     expect(Number.isFinite(summary.totalFood)).toBe(true);
     expect(Number.isFinite(summary.totalWealth)).toBe(true);
     expect(simulation.state.settlements.every((settlement) => Object.values(settlement.resources).every(Number.isFinite))).toBe(true);
-  }, 180_000);
+  });
 });

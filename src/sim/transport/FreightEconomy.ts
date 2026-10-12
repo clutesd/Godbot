@@ -1,18 +1,23 @@
 import { capabilityPractice } from '../knowledge/CapabilityContract';
-import { materialEconomy } from '../resources/Inventory';
+import { materialEconomy, materialReserve } from '../resources/Inventory';
 import { chooseMaterialShipment } from '../resources/MaterialLogistics';
 import type { Settlement, TradeRoute } from '../types';
 import type { FreightVehicle, TransportMode, TraversalPath } from './types';
+
+/** foodSecurity is normalized 0..1. Export reserves use months of real household need. */
+export function foodExportable(s: Settlement, population: number): boolean {
+  return s.foodSecurity >= 0.9 && s.resources.food > Math.max(1, s.survival?.food?.need ?? population * 0.31) * 4;
+}
 
 /** Shared by contact decisions and dispatch. Geography-driven production supplies the surplus. */
 export function tradeOpportunity(a: Settlement, b: Settlement): number {
   let score = chooseMaterialShipment(a, b, 1)?.score ?? 0;
   for (const [source, target] of [[a, b], [b, a]] as const) {
     for (const [id, demand] of Object.entries(materialEconomy(target).demand)) {
-      const reserve = Math.max(0.4, (materialEconomy(source).demand[id] ?? 0) * 6);
+      const reserve = materialReserve(source, id);
       score = Math.max(score, Math.min(Math.max(0, (source.localMaterials[id] ?? 0) - reserve), Math.max(0, demand * 4 - (target.localMaterials[id] ?? 0))));
     }
-    if (target.foodSecurity < 0.9 && source.foodSecurity > 1.1) score = Math.max(score, Math.min(4, source.resources.food * 0.02));
+    if (target.foodSecurity < 0.9 && foodExportable(source, source.survival?.food?.population ?? 0)) score = Math.max(score, Math.min(4, source.resources.food * 0.02));
   }
   return score / (1 + Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z) * 0.025);
 }

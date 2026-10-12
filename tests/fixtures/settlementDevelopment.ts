@@ -4,6 +4,7 @@ import { advanceSettlementDevelopment, initializeSettlementDevelopment } from '.
 import type { CultureDimensions, InstitutionKind, Settlement, SimulationState } from '../../src/sim/types';
 import { syncStructurePlots } from '../../src/shared/StructurePlots';
 import { cellAt } from '../../src/sim/world';
+import { publishBulkStocks } from '../../src/sim/resources/Inventory';
 
 export function learn(s: Settlement, ...ids: string[]) {
   for (const id of ids) s.knowledge.records[id] = { id, theory: 0.8, practice: 0.8, discoveredMonth: 0, adoptedMonth: 0, lastUsedMonth: 0,
@@ -58,13 +59,40 @@ export function connect(state: SimulationState, a: Settlement, b: Settlement) {
     caravanDirection: 1, knowledgeFlow: 0, cumulativeKnowledge: 2, transport: { projectIds: [segmentId], nextDispatchMonth: 0,
       path: { mode: 'road', points: [{ ...a.position, y: 1 }, { ...b.position, y: 1 }], segmentIds: [segmentId], length: 36 } } });
 }
-export function run(state: SimulationState, months: number, work = 0.08) {
+/**
+ * Advances development only. The flattened fixture world has no forests or quarries to work, so a
+ * settlement's fuel and repairs exhaust a fixed store within a few years; scenarios that span
+ * decades pass `harvest` to stand in for a steady local woodcutting and quarrying economy.
+ */
+export function run(state: SimulationState, months: number, work = 0.08, harvest?: Readonly<Record<string, number>>) {
   const events = [];
   for (let i = 0; i < months; i++) {
     state.month++;
-    for (const s of state.settlements) events.push(...advanceSettlementDevelopment(state, s, residents(state, s), work));
+    for (const s of state.settlements) {
+      if (harvest && s.alive) {
+        for (const [id, floor] of Object.entries(harvest)) s.localMaterials[id] = Math.max(s.localMaterials[id] ?? 0, floor);
+        publishBulkStocks(s);
+      }
+      events.push(...advanceSettlementDevelopment(state, s, residents(state, s), work));
+    }
   }
   return events;
+}
+
+/** The stock a steady local timber and stone economy keeps in a fixture settlement's store. */
+export const STEADY_HARVEST = { timber: 600, stone: 600 } as const;
+
+/**
+ * Fills every store with physical timber and stone. `resources.wood` and `resources.minerals` are
+ * published views of that stock (publishBulkStocks), so a construction scenario must stock the
+ * store itself; the bulk numbers alone are overwritten on the first inventory touch. Opt-in,
+ * because a full store leaves no room for gathering scenarios.
+ */
+export function stockStores(state: SimulationState, materials: Readonly<Record<string, number>> = STEADY_HARVEST): void {
+  for (const s of state.settlements) {
+    s.localMaterials = { ...s.localMaterials, ...materials };
+    publishBulkStocks(s);
+  }
 }
 
 export function contrastingSocieties() {

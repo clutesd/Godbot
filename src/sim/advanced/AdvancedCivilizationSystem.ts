@@ -1,5 +1,7 @@
 import { rememberMortality } from '../development/Remembrance';
 import { killPeople } from '../people/PersonLifecycle';
+import { resolveNuclearDestruction } from '../war/BattleDestruction';
+import { applyNuclearCasualties, nuclearExposure } from '../war/BattleCasualties';
 import { workforceProfile } from '../people/HumanCapital';
 import { survivalMortality } from '../pressures/Survival';
 import { captureDiseasePopulation } from '../pressures/Disease';
@@ -20,6 +22,7 @@ import type {
   Settlement,
   SimulationState,
   Vec2,
+  BattleImpact,
 } from '../types';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
@@ -41,6 +44,8 @@ export interface AdvancedEventDraft {
   significance?: number;
   tags?: string[];
   summary: string;
+  impacts?: BattleImpact[];
+  blastSites?: Vec2[];
 }
 
 const emptyRisk = (kind: ExistentialRiskKind): ExistentialRiskPressure => ({ kind, hazard: 0, vulnerability: 0, mitigation: 0, annualProbability: 0, active: false });
@@ -369,6 +374,9 @@ export class AdvancedCivilizationSystem {
       if (posture.weaponizedMonth !== undefined) {
         const growth = clamp(0.008 + rivalry * 0.018 + securityDilemma * 0.012 - advanced.governance.coordination * 0.014 - restraint * 0.01, -0.025, 0.035);
         posture.arsenalScale = clamp(posture.arsenalScale + growth);
+        // A broad game-era tier, not a weapon design or a physical yield model.
+        posture.weaponClass ??= 'atomic';
+        if (posture.programLevel > 0.85 && advanced.sectors.science > 0.7 && posture.arsenalScale > 0.65) posture.weaponClass = 'hydrogen';
       }
     }
     advanced.atomic.applications.weaponry = mean(advanced.atomic.postures.map((posture) => Math.max(posture.programLevel, posture.arsenalScale)));
@@ -585,20 +593,45 @@ export class AdvancedCivilizationSystem {
     const averageControl = mean(armed.map((posture) => posture.commandControlReliability));
     const major = armed.length >= 2 && a.strategic.crisisIntensity + averageArsenal - averageControl > 0.82 && this.random.chance(clamp(0.24 + a.strategic.crisisIntensity * 0.38 + averageArsenal * 0.2));
     const offworld = a.space.selfSustainingBodies >= 2;
-    const loss = major ? clamp(0.16 + averageArsenal * 0.34 + a.strategic.crisisIntensity * 0.18, 0.16, offworld ? 0.58 : 0.78) : clamp(0.008 + averageArsenal * 0.035, 0.008, 0.07);
     const populationBefore = representedPopulation(state);
-    const affected = this.applyShock(state, loss, major ? 0.48 : 0.08);
+    const targets = state.settlements.filter(s => s.alive).sort((x, y) =>
+      Number(x.polityId === armed[0]?.polityId) - Number(y.polityId === armed[0]?.polityId)
+      || settlementRepresentedPopulation(state, y.id) - settlementRepresentedPopulation(state, x.id));
+    const sites = targets.slice(0, major ? 2 : 1).map(s => ({ ...s.position }));
+    if (!sites.length) sites.push(this.populationCenter(state));
+    const previousBodies = new Set((state.bodies ?? []).map(body => body.id));
+    const hydrogen = armed.some(posture => posture.weaponClass === 'hydrogen');
+    const damageId = `nuclear:${state.month}:${a.atomic.nuclearUseCount + 1}`;
+    const casualties = applyNuclearCasualties(state, damageId, sites, hydrogen);
+    const affected = casualties.affectedPopulation;
+    // Infrastructure shares the same local exposure; distant and offworld populations stay outside it.
+    for (const settlement of state.settlements.filter(s => s.alive)) {
+      const damage = nuclearExposure(settlement.position, sites, hydrogen);
+      settlement.prosperity *= 1 - damage * 0.7;
+      settlement.foodSecurity *= 1 - damage * 0.6;
+      settlement.industry.intensity *= 1 - damage * 0.85;
+      settlement.infrastructure.power *= 1 - damage;
+      settlement.infrastructure.factories *= 1 - damage;
+      settlement.infrastructure.rail *= 1 - damage * 0.8;
+    }
     const realizedPopulationLossFraction = populationBefore === 0 ? 0 : affected / populationBefore;
     a.atomic.nuclearUseCount += 1;
     state.stats.nuclearUses += 1;
     if (major) { a.atomic.majorExchangeCount += 1; state.stats.nuclearWars += 1; }
     for (const posture of armed) posture.arsenalScale = clamp(posture.arsenalScale - (major ? 0.34 : 0.08));
     const type: HistoricalEventType = major ? 'nuclear-exchange' : 'nuclear-use';
-    return [this.event(state, type, major ? 'A major nuclear exchange destroys cities, infrastructure, and a large share of the planetary population.' : 'Nuclear weapons are used on a limited scale; wider exchange is avoided.', {
+    const event = this.event(state, type, major ? 'A major nuclear exchange destroys cities, infrastructure, and a large share of the planetary population.' : 'Nuclear weapons are used on a limited scale; wider exchange is avoided.', {
       causes: [a.strategic.phase === 'crisis' ? 'strategic-crisis' : 'accidental-escalation', averageControl < 0.45 ? 'unreliable-command-control' : 'deliberate-use'],
-      context: { populationLossFraction: realizedPopulationLossFraction, averageArsenal, commandControlReliability: averageControl, offworldResilience: offworld },
+      context: { populationLossFraction: realizedPopulationLossFraction, averageArsenal, commandControlReliability: averageControl, offworldResilience: offworld,
+        nuclearWeapon: hydrogen ? 'hydrogen' : 'atomic' },
       affectedPopulation: affected, magnitude: major ? 1 : 0.82, significance: major ? 1 : 0.94, tags: ['atomic', 'war', major ? 'major-exchange' : 'limited-use'],
-    })];
+    });
+    event.location = sites[0]; event.blastSites = sites;
+    event.locationId = targets[0]?.id;
+    // Draft IDs are stable causal keys until the chronicle assigns its sequence.
+    const victims = new Set((state.bodies ?? []).filter(body => !previousBodies.has(body.id)).map(body => body.id));
+    event.impacts = resolveNuclearDestruction(state, damageId, sites, hydrogen, victims);
+    return [event];
   }
 
   private updateOutcome(state: SimulationState): AdvancedEventDraft[] {
@@ -634,7 +667,7 @@ export class AdvancedCivilizationSystem {
     return events;
   }
 
-  private applyShock(state: SimulationState, populationLossFraction: number, infrastructureDamage: number): number {
+  private applyShock(state: SimulationState, populationLossFraction: number, infrastructureDamage: number, sites?: readonly Vec2[]): number {
     const advanced = state.advanced;
     const populationBefore = representedPopulation(state);
     const protection = advanced.space.selfSustainingBodies >= 2 ? 0.42 : advanced.space.offworldSettlements > 0 ? 0.1 : 0;
@@ -649,11 +682,13 @@ export class AdvancedCivilizationSystem {
       state.stats.deaths += Math.round(populationBefore - advanced.representedPopulation);
     }
     const living = state.people.filter((person) => person.alive);
+    if (sites) living.sort((x, y) => Math.min(...sites.map(p => Math.hypot(x.position.x - p.x, x.position.z - p.z)))
+      - Math.min(...sites.map(p => Math.hypot(y.position.x - p.x, y.position.z - p.z))) || x.id.localeCompare(y.id));
     const minimumRepresentatives = advanced.representedPopulation >= 1_000 ? Math.min(24, living.length) : 0;
     const killCount = Math.min(living.length - minimumRepresentatives, Math.floor(living.length * loss * (advanced.scale === 'modern-statistical' ? 0.62 : 1)));
     const victims: SimulationState['people'] = [];
     for (let index = 0; index < killCount; index += 1) {
-      const selected = living.splice(this.random.int(0, living.length), 1)[0];
+      const selected = living.splice(sites ? 0 : this.random.int(0, living.length), 1)[0];
       if (selected) victims.push(selected);
     }
     killPeople(state, victims, 'civilization-shock');
@@ -720,6 +755,7 @@ export class AdvancedCivilizationSystem {
       actors: details.actors ?? state.polities.map((polity) => polity.id), causes: details.causes ?? [], context: details.context ?? {},
       affectedPopulation: details.affectedPopulation ?? representedPopulation(state), magnitude: details.magnitude ?? 0.6,
       significance: details.significance ?? 0.7, tags: details.tags ?? [],
+      impacts: details.impacts, blastSites: details.blastSites,
     };
   }
 

@@ -114,6 +114,7 @@ describe('Military capability model', () => {
     expect(stranded.equipment).not.toContain('automatic-weapons');
     expect(stranded.equipment).not.toContain('aircraft');
     expect(stranded.equipment).not.toContain('guided-missiles');
+    expect(stranded.equipment).not.toContain('drone-swarms');
     expect(supplied.equipment).toContain('rifles');
     expect(supplied.equipment).toContain('grenades');
     expect(supplied.equipment).toContain('artillery');
@@ -121,6 +122,10 @@ describe('Military capability model', () => {
     expect(supplied.equipment).toContain('motor-transport');
     expect(supplied.equipment).toContain('aircraft');
     expect(supplied.equipment).toContain('guided-missiles');
+    expect(supplied.equipment).toContain('drone-swarms');
+    // Autonomous swarms require transformed computation and automation, beyond aviation alone.
+    delete b.knowledge.records['automation'];
+    expect(deriveMilitaryProfile(b).equipment).not.toContain('drone-swarms');
     expect(supplied.regime).toBe('modern');
     expect(supplied.energy).toBeGreaterThan(stranded.energy);
     expect(supplied.production).toBeGreaterThan(stranded.production);
@@ -142,6 +147,7 @@ describe('Military capability model', () => {
     const defender = militaryProfileForWar(war, 'defender');
     expect(attacker?.regime).toBe('modern');
     expect(attacker?.equipment).toContain('guided-missiles');
+    expect(attacker?.equipment).toContain('drone-swarms');
     expect(defender?.equipment).toContain('metal-weapons');
     expect(defender?.equipment).not.toContain('rifles');
 

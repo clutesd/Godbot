@@ -44,7 +44,7 @@ export const COSMIC_ROLES: Readonly<Record<RoleVisualFamily, CosmicRoleStyle>> =
   earth: { color: '#d8bd63', symbol: 'seed', shoulders: 0.85, mantle: 0, halo: 0 },
   water: { color: '#8ac8d6', symbol: 'crescent', shoulders: 0.85, mantle: 0, halo: 0 },
   labor: { color: '#edaa50', symbol: 'diamond', shoulders: 1.45, mantle: 0, halo: 0 },
-  trade: { color: '#f09a58', symbol: 'double-bar', shoulders: 1, mantle: 0.45, halo: 0 },
+  trade: { color: '#f28a6e', symbol: 'double-bar', shoulders: 1, mantle: 0.45, halo: 0 },
   guard: { color: '#ef7048', symbol: 'chevron', shoulders: 1.7, mantle: 0, halo: 0 },
   ritual: { color: '#d892c6', symbol: 'hourglass', shoulders: 0.75, mantle: 1, halo: 0 },
   civic: { color: '#f0d484', symbol: 'triangle', shoulders: 1.3, mantle: 0, halo: 0.8 },
@@ -52,7 +52,9 @@ export const COSMIC_ROLES: Readonly<Record<RoleVisualFamily, CosmicRoleStyle>> =
   industry: { color: '#8fabe2', symbol: 'square', shoulders: 1.25, mantle: 0, halo: 0 },
   healing: { color: '#9ce0c4', symbol: 'cross', shoulders: 1, mantle: 0.55, halo: 0 },
   elder: { color: '#f2e4c4', symbol: 'crown', shoulders: 0.95, mantle: 0.6, halo: 1 },
-  ordinary: { color: '#ffb45c', symbol: 'circle', shoulders: 0.65, mantle: 0, halo: 0 },
+  // Trade (coral) and ordinary (peach) stay inside the warm band but clear of labor's amber: the
+  // three neighbouring ambers they replaced were indistinguishable in display space.
+  ordinary: { color: '#f6b39a', symbol: 'circle', shoulders: 0.65, mantle: 0, halo: 0 },
 };
 export const COSMIC_FAMILIES = Object.keys(COSMIC_ROLES) as RoleVisualFamily[];
 const symbols = ['circle', 'diamond', 'bar', 'triangle', 'crescent', 'cross', 'chevron', 'double-bar', 'square', 'hourglass', 'crown', 'seed'];

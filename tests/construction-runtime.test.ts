@@ -71,7 +71,7 @@ describe('paid simulation construction runtime', () => {
     expect(completed.length).toBeGreaterThan(0);
     expect(completed.every(p => p.progress === 1 && p.workerIds!.length > 0)).toBe(true);
     expect(completed.every(p => p.labourSpent! > 0 && p.lastWorkMonth! > p.startedMonth)).toBe(true);
-  }, 15000);
+  });
 
   it('shows established archive buildings immediately and only replays newly paid/observed work', () => {
     const { sim } = replay(false);
@@ -114,5 +114,5 @@ describe('paid simulation construction runtime', () => {
       }
     }
     expect(captured).toBeGreaterThan(0);
-  }, 15000);
+  });
 });

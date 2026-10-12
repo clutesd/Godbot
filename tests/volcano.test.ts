@@ -91,7 +91,7 @@ describe('Volcano system', () => {
       expect(cell.fertility).toBeGreaterThanOrEqual(0); expect(cell.fertility).toBeLessThanOrEqual(1);
       expect(cell.habitability).toBeGreaterThanOrEqual(0); expect(cell.habitability).toBeLessThanOrEqual(1);
     }
-  }, 20_000);
+  });
 
   it('applies damage on the first eruption month, exactly once, and never on the cooling boundary', () => {
     const state = fixture();

@@ -1,4 +1,7 @@
 import { loseCombatArms } from './resources/ArmsDemand';
+import { applyStructureCasualties, combatLossFraction } from './war/BattleCasualties';
+import { attributeBattleDeaths, resolveBattleDestruction } from './war/BattleDestruction';
+import { militaryProfileForWar } from './war/MilitaryCapability';
 import { advanceBodies } from './people/BodyLifecycle';
 import { advanceAgriculture, ensureFields } from './agriculture/AgricultureSystem';
 import { advanceSettlementWater } from './development/WaterCivilization';
@@ -14,6 +17,7 @@ import { containment, planDisease, resolveDisease, seedInitialInfection } from '
 import { observeSocialPressures, pressureCauses } from './pressures/SocialPressures';
 import { assertPristine, createFoundingArrival, FoundingArrivalDirector, isArrivalFilmPhase, isFoundingOrientationPhase, type FoundingPod } from './founding/FoundingArrival';
 import { advanceHumanCapital, beginLabourMonth, invalidateLabour, reconsiderCareer, settlementLabour } from './people/HumanCapital';
+import { recordKnowledgeWork } from './knowledge/WorkExperience';
 import { killPeople, observeDeaths } from './people/PersonLifecycle';
 import { configWith, type GodboxConfig, type GodboxConfigInput } from '../config';
 import { SeededRandom } from './prng';
@@ -33,7 +37,7 @@ import { createTransportationState } from './transport/types';
 import { ResourceSystem, createMaterialState, type ResourceEventDraft } from './resources/ResourceSystem';
 import { discoverProvince } from './resources/ResourceDiscoverySystem';
 import { environmentalSuitability, knownResourceAttraction } from './resources/SettlementEnvironment';
-import { addMaterial, materialEconomy, reconcileBulkStocks, takeMaterial } from './resources/Inventory';
+import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, recordMaterialProduction, takeMaterial } from './resources/Inventory';
 import { campaignFront, campaignFocus, campaignSupply, createCampaign, TRUCE_MONTHS } from './war/Campaign';
 import type {
   Culture,
@@ -115,6 +119,8 @@ interface EventInput {
   significance?: number;
   tags?: string[];
   summary: string;
+  impacts?: HistoricalEvent['impacts'];
+  blastSites?: Vec2[];
 }
 
 export interface SimulationSummary {
@@ -342,7 +348,8 @@ export class Simulation {
       for (const id of pod.knowledge) {
         if (!KNOWLEDGE_BY_ID.has(id)) throw new Error(`Unknown founding knowledge: ${id}`);
         const inherited = camp.knowledge.records[id];
-        camp.knowledge.records[id] = { id, theory: Math.max(0.58, inherited?.theory ?? 0), practice: 0.02, discoveredMonth: 0, lastUsedMonth: 0,
+        // A pod specialty adds understanding; it never erases practical skill the camp already inherited.
+        camp.knowledge.records[id] = { id, theory: Math.max(0.58, inherited?.theory ?? 0), practice: Math.max(0.02, inherited?.practice ?? 0), discoveredMonth: 0, lastUsedMonth: 0,
           originSettlementId: camp.id, lineageId: `${pod.id}:${id}`, parentLineages: [], source: 'inheritance', dormant: false };
       }
       initializeSettlementDevelopment(this.state, camp, []);
@@ -1077,13 +1084,14 @@ export class Simulation {
       const production = (settlement.agriculture?.production ?? 0) + (foragers * foodFactor + idleFarmLabour) * forageYield;
       const extraProduction = settlement.survival?.response?.kind === 'cultivate' ? 0
         : (settlement.survival?.reassignedLabour ?? 0) * 0.7 * forageYield * foodFactor;
-      // The settlement must request actual raw-material extraction before it can consume finished stocks.
-      // Legacy `resources.wood/minerals` still model broad stockpiles; the positive monthlyBalance values
-      // are the physical-demand signal that activates world-resource extraction and typed material accounting.
+      // Demand requests extraction; it is never a temporary stock that annual construction
+      // can spend before the next physical inventory reconciliation.
       const woodDemand = Math.max(0, builders * 0.24 + foragers * 0.18 + settlement.buildings * 0.1 + settlement.institutionIds.length * 0.05 + (settlement.structurePlots?.length ?? 0) * 0.02);
       const mineralDemand = Math.max(0, artisans * 0.44 + builders * 0.16 + settlement.buildings * 0.08 + settlement.infrastructure.workshops * 0.35 + settlement.industry.intensity * 0.9);
       const woodUse = Math.min(settlement.resources.wood, settlement.buildings * 0.022 + builders * 0.01 + Math.max(0, settlement.infrastructure.rail - 0.1) * 0.22);
       const mineralUse = Math.min(settlement.resources.minerals, artisans * 0.03 + settlement.buildings * 0.012 + settlement.infrastructure.workshops * 0.12);
+      takeMaterial(settlement, 'timber', woodUse);
+      takeMaterial(settlement, 'stone', mineralUse);
       balance.wood = woodDemand - woodUse;
       balance.minerals = mineralDemand - mineralUse;
       // Goods are the value this settlement's own crafts added this month. Households wear out
@@ -1093,15 +1101,22 @@ export class Simulation {
       balance.goods = economy.craftedThisMonth ?? 0;
       economy.craftedThisMonth = 0;
       balance.wealth = Math.max(0, balance.goods) * 0.21 + carriers * 0.018 - settlement.institutionIds.length * 0.035;
-      for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) {
+      for (const key of ['goods', 'wealth'] as const) {
         settlement.resources[key] = Math.max(0, settlement.resources[key] + balance[key]);
       }
+      publishBulkStocks(settlement);
       // Manufactured stock wears out at roughly a decade of service, so the surplus a settlement can
       // hold is bounded by what its crafts keep replacing rather than by everything it ever made.
       settlement.resources.goods = Math.max(0, settlement.resources.goods * (1 - 0.008));
       balance.wood += materialEconomy(settlement).delivered.timber ?? 0;
       balance.minerals += materialEconomy(settlement).delivered.stone ?? 0;
       settlement.monthlyBalance = balance;
+      recordMaterialProduction(settlement, 'food', production);
+      recordKnowledgeWork(settlement, 'agriculture', farmers);
+      if (cell.coast || cell.river || cell.lake) recordKnowledgeWork(settlement, 'navigation', foragers * 0.4);
+      recordKnowledgeWork(settlement, 'mechanics', repaired / 0.015 + (settlement.development?.project ? Math.max(0, builders - repaired / 0.015) : 0));
+      recordKnowledgeWork(settlement, 'records', count('keeper') * Math.min(1, population / 30));
+      recordKnowledgeWork(settlement, 'medicine', count('keeper') * (settlement.survival?.disease?.prevalence ?? 0));
       beginFoodMonth(settlement, population, production, this.state.month, extraProduction);
       settlement.prosperity = clamp(settlement.foodSecurity * 0.38 + Math.min(1, settlement.resources.wealth / Math.max(18, population * 0.8)) * 0.3 + Math.min(1, settlement.resources.goods / Math.max(12, population * 0.35)) * 0.18 + settlement.institutionIds.length * 0.04);
       settlement.prosperity *= 1 - Math.min(0.3, materialEconomy(settlement).shortageMonths * 0.001);
@@ -1870,7 +1885,7 @@ export class Simulation {
       leadershipA: leaderA ? this.leadershipScore(leaderA, attacker) : 0.3,
       leadershipB: leaderB ? this.leadershipScore(leaderB, defender) : 0.3,
       technologyA: this.knowledgeSystem.militaryApplication(attacker), technologyB: this.knowledgeSystem.militaryApplication(defender),
-      campaign: createCampaign(this.state.world, this.peopleSystem.walkability, attacker, defender, this.state.month, this.militaryStrength(attacker), this.militaryStrength(defender)),
+      campaign: createCampaign(this.state.world, this.peopleSystem.walkability, attacker, defender, this.state.month, this.militaryStrength(attacker), this.militaryStrength(defender), this.state.advanced),
       ...(leaderA ? { leaderAId: leaderA.id } : {}), ...(leaderB ? { leaderBId: leaderB.id } : {}), active: true,
     };
     this.state.wars.push(war);
@@ -1943,12 +1958,25 @@ export class Simulation {
       this.provisionArmy(attacker, war.strengthA, 0.018);
       this.provisionArmy(defender, war.strengthB, 0.012);
       if ((this.state.month - campaign.battleStartedMonth) % 4 === 0) {
-        const requestedCasualtiesA = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthB * 0.018)));
-        const requestedCasualtiesB = Math.max(0, Math.floor(this.random.range(0, 1.8 + war.strengthA * 0.018)));
-        const casualtiesA = this.killCombatants(attacker.id, Math.min(Math.ceil(war.strengthA), requestedCasualtiesA), campaignFront(war, defender.position));
-        const casualtiesB = this.killCombatants(defender.id, Math.min(Math.ceil(war.strengthB), requestedCasualtiesB), campaignFront(war, defender.position));
-        loseCombatArms(attacker, casualtiesA);
-        loseCombatArms(defender, casualtiesB);
+        // Resolve physical damage and its occupants before publishing; death events retain emission order.
+        const destruction: HistoricalEvent = { id: `battle:${war.id}:${this.state.month}`, month: this.state.month,
+          type: 'battle', location: front, actors: [war.id], causes: [war.cause], context: {},
+          affectedPopulation: 0, magnitude: 0, significance: 0, tags: ['war'], summary: '', outcome: '' };
+        resolveBattleDestruction(this.state, war, destruction);
+        const structuralLosses = applyStructureCasualties(this.state, destruction.id, destruction.impacts ?? []);
+        const profileA = militaryProfileForWar(war, 'attacker'), profileB = militaryProfileForWar(war, 'defender');
+        const expectedA = Math.min(war.strengthA, war.strengthB) * combatLossFraction(profileB, profileA, supplyB) * this.random.range(0.75, 1.25);
+        const expectedB = Math.min(war.strengthB, war.strengthA) * combatLossFraction(profileA, profileB, supplyA) * this.random.range(0.75, 1.25);
+        // Unbiased rounding preserves occasional losses in small forces instead of rounding every battle to zero.
+        const requestedCasualtiesA = Math.floor(expectedA) + Number(this.random.chance(expectedA % 1));
+        const requestedCasualtiesB = Math.floor(expectedB) + Number(this.random.chance(expectedB % 1));
+        const combatDeathsA = this.killCombatants(attacker.id, Math.min(Math.ceil(war.strengthA), requestedCasualtiesA), front);
+        const combatDeathsB = this.killCombatants(defender.id, Math.min(Math.ceil(war.strengthB), requestedCasualtiesB), front);
+        const casualtiesA = combatDeathsA + (structuralLosses.losses[attacker.id] ?? 0);
+        const casualtiesB = combatDeathsB + (structuralLosses.losses[defender.id] ?? 0);
+        attributeBattleDeaths(this.state, war, destruction);
+        loseCombatArms(attacker, combatDeathsA);
+        loseCombatArms(defender, combatDeathsB);
         war.casualtiesA += casualtiesA;
         war.casualtiesB += casualtiesB;
         const lossA = casualtiesA / Math.max(1, campaign.initialStrengthA);
@@ -1962,7 +1990,7 @@ export class Simulation {
         this.state.stats.battles += 1;
         campaign.battleCount += 1;
         campaign.lastBattleMonth = this.state.month;
-        this.addEvent({ type: 'battle', locationId: defender.id, location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { explicitBodies: this.state.advanced.scale !== 'modern-statistical', casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
+        this.addEvent({ type: 'battle', impacts: destruction.impacts, locationId: defender.id, location: campaignFront(war, defender.position), actors: [war.id, attacker.id, defender.id, ...(war.leaderAId ? [war.leaderAId] : []), ...(war.leaderBId ? [war.leaderBId] : [])], causes: [war.cause, 'military-mobilization'], context: { ...destruction.context, structuralCasualties: structuralLosses.affectedPopulation, combatDeathsA, combatDeathsB, cumulativeCasualtiesA: war.casualtiesA, cumulativeCasualtiesB: war.casualtiesB, explicitBodies: this.state.advanced.scale !== 'modern-statistical', casualtiesA, casualtiesB, totalCasualties: war.casualtiesA + war.casualtiesB, battleNumber: campaign.battleCount, progress: war.progress, supplyA, supplyB, moraleA: war.moraleA, moraleB: war.moraleB, terrain: terrain?.biome ?? 'unknown', phase: war.phase }, outcome: war.progress > 0 ? `${attacker.name} gained ground.` : `${defender.name} held its approaches.`, affectedPopulation: casualtiesA + casualtiesB, magnitude: clamp((casualtiesA + casualtiesB) / 14 + 0.3), significance: 0.72, tags: ['war', 'battle'], summary: `${attacker.name} and ${defender.name} clash; ${casualtiesA + casualtiesB} are lost.` });
       }
       if (Math.min(supplyA, supplyB) < 0.25) this.campaignDispatch(war, attacker, defender, 'supply-crisis', `${supplyA <= supplyB ? attacker.name : defender.name}'s provisions are running dangerously low.`, ['supply-pressure']);
       const advantage = war.progress > 0.22 ? 1 : war.progress < -0.22 ? -1 : 0;
@@ -2199,6 +2227,8 @@ export class Simulation {
       actors: input.actors ?? [], causes: input.causes ?? [], context: input.context ?? {}, outcome: input.outcome,
       affectedPopulation: input.affectedPopulation ?? 0, magnitude: input.magnitude ?? 0.2, significance: input.significance ?? 0.2,
       tags: input.tags ?? [], summary: input.summary,
+      ...(input.impacts ? { impacts: input.impacts } : {}),
+      ...(input.blastSites ? { blastSites: input.blastSites } : {}),
     });
   }
 

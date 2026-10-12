@@ -39,4 +39,4 @@ const reports = runs.map(run => {
 });
 const out = `${dir}/../${dir.split(/[\\/]/).at(-1)}-summary.json`;
 writeFileSync(out, JSON.stringify(reports, null, 2));
-console.log(JSON.stringify(reports.map(({ settlements, ...r }) => ({ ...r, settlements: settlements.map(({sources, sinks, ...s}) => s) })), null, 2));
+console.log(JSON.stringify(reports.map(({ settlements, ...r }) => ({ ...r, settlements: settlements.map(s => Object.fromEntries(Object.entries(s).filter(([key]) => key !== 'sources' && key !== 'sinks'))) })), null, 2));

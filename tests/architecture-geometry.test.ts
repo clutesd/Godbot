@@ -354,11 +354,14 @@ describe('Structures that are not buildings', () => {
   it('gives a barn a wagon door, not a wide house window', () => {
     const barn = build({ archetype: 'barn', era: 'preIndustrial', material: 'timber' });
     const house = build({ archetype: 'house', era: 'preIndustrial', material: 'timber' });
-    // doorBay alone adds a flat x2.2 to opening width, comfortably past ordinary family-to-family
-    // variation, so this margin isolates it even though barn and house may resolve different
-    // structural families.
-    expect(barn.spec.openings.width).toBeGreaterThan(house.spec.openings.width * 1.3);
+    // A house resolves a glazed facade: a grid of portrait windows sized from the wall. A barn's
+    // door bay is never glazed: one wide, landscape opening per bay for a wagon or led animal.
+    expect(house.spec.openings.facade).toBeDefined();
+    expect(house.spec.openings.height).toBeGreaterThan(house.spec.openings.width);
+    expect(barn.spec.openings.facade).toBeUndefined();
     expect(barn.spec.openings.perBay).toBe(1);
+    expect(barn.spec.openings.width).toBeGreaterThan(barn.spec.openings.height);
+    expect(barn.spec.openings.width).toBeGreaterThan(house.spec.openings.width);
   });
 
   it('keeps every archetype inside a sane draw-call budget', () => {
@@ -400,6 +403,7 @@ interface SilhouetteProfile {
   /** Footprint against overall height, not against depth — a tower and a long shed can share a
    * width/depth ratio while standing nothing alike. */
   aspectBucket: 'narrow-tall' | 'square' | 'wide-low';
+  planBucket: 'square-plan' | 'oblong-plan';
   roof: string;
   crown: string;
   geometry: 'generic' | 'dedicated';
@@ -411,9 +415,13 @@ function silhouetteProfile(archetype: BuildingArchetype, era: Era, material: Str
   const built = build({ archetype, era, material });
   const overallHeight = built.spec.storeyHeight * built.spec.floors;
   const ratio = built.spec.width / Math.max(0.01, overallHeight);
+  const plan = Math.max(built.spec.width, built.spec.depth) / Math.max(0.01, Math.min(built.spec.width, built.spec.depth));
   return {
     archetype,
     aspectBucket: ratio < 1 ? 'narrow-tall' : ratio > 2.2 ? 'wide-low' : 'square',
+    // Plan shape reads from the documentary's high establishing shots even when two buildings
+    // share an elevation: a multi-storey watermill is tall like a tower mill, but it is a range.
+    planBucket: plan < 1.15 ? 'square-plan' : 'oblong-plan',
     roof: built.spec.roof.archetype,
     crown: String(built.group.userData['grammarCrown'] ?? 'none'),
     geometry: built.group.userData['dedicatedStructure'] ? 'dedicated' : 'generic',
@@ -426,6 +434,7 @@ function silhouetteProfile(archetype: BuildingArchetype, era: Era, material: Str
 function distinguishingAxes(a: SilhouetteProfile, b: SilhouetteProfile): number {
   let axes = 0;
   if (a.aspectBucket !== b.aspectBucket) axes += 1;
+  if (a.planBucket !== b.planBucket) axes += 1;
   if (a.roof !== b.roof) axes += 1;
   if (a.crown !== b.crown) axes += 1;
   if (a.geometry !== b.geometry) axes += 1;

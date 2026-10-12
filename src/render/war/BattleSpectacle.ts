@@ -1,8 +1,12 @@
 import * as THREE from 'three';
-import type { Settlement, War } from '../../sim/types';
+import type { BattleImpact, Settlement, War } from '../../sim/types';
 import type { MilitaryCapabilityProfile } from '../../sim/war/MilitaryCapability';
 import { campaignPoint } from '../../sim/war/Campaign';
 import { militaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
+import { battleAtmosphereMaterial } from './BattleAtmosphere';
+import { AdvancedBattleEffects } from './AdvancedBattleEffects';
+import { ResolvedImpactEffects } from './ResolvedImpactEffects';
+import { engagementGap } from './CombatChoreography';
 
 const MAX_SMOKE = 28;
 const MAX_FLASH = 16;
@@ -25,12 +29,6 @@ interface Airframe {
   index: number;
 }
 
-interface MissileVisual {
-  group: THREE.Group;
-  side: 0 | 1;
-  index: number;
-}
-
 /**
  * Purely documentary battle spectacle. Every effect is bounded, deterministic from elapsed time,
  * and incapable of changing simulation state. It makes Step-2 capability differences legible at a glance.
@@ -38,17 +36,20 @@ interface MissileVisual {
 export class BattleSpectacle {
   readonly group = new THREE.Group();
   private readonly matrix = new THREE.Object3D();
-  private readonly smokeGeometry = new THREE.IcosahedronGeometry(1, 1);
+  private readonly smokeGeometry = new THREE.PlaneGeometry(2, 2);
   private readonly flashGeometry = new THREE.IcosahedronGeometry(1, 0);
   private readonly tracerGeometry = new THREE.BoxGeometry(0.018, 0.018, 0.42);
-  private readonly smoke = new THREE.InstancedMesh(this.smokeGeometry, new THREE.MeshBasicMaterial({ color: '#756f68', transparent: true, opacity: 0.2, depthWrite: false }), MAX_SMOKE);
+  private readonly smoke = new THREE.InstancedMesh(this.smokeGeometry, battleAtmosphereMaterial('#79756c', 0.2), MAX_SMOKE);
   private readonly flashes = new THREE.InstancedMesh(this.flashGeometry, new THREE.MeshBasicMaterial({ color: '#ffd79a', transparent: true, opacity: 0.95, depthWrite: false }), MAX_FLASH);
   private readonly tracers = new THREE.InstancedMesh(this.tracerGeometry, new THREE.MeshBasicMaterial({ color: '#ffcf85', transparent: true, opacity: 0.8, depthWrite: false }), MAX_TRACERS);
+  private readonly arrows = new THREE.InstancedMesh(new THREE.BoxGeometry(0.003, 0.003, 0.085), new THREE.MeshStandardMaterial({ color: '#776652', roughness: 0.9 }), MAX_TRACERS);
   private readonly aircraft: Airframe[] = [];
-  private readonly missiles: MissileVisual[] = [];
+  private readonly advanced: AdvancedBattleEffects;
+  private readonly resolvedImpacts: ResolvedImpactEffects;
   private readonly structuralDebris = new THREE.InstancedMesh(this.flashGeometry, new THREE.MeshStandardMaterial({ color: '#65594a', roughness: 1 }), 24);
   private readonly structuralFire = new THREE.InstancedMesh(this.flashGeometry, new THREE.MeshBasicMaterial({ color: '#da792e' }), 12);
   private structuralEvidence: StructuralBattleEvidence[] = [];
+  private impacts: readonly BattleImpact[] = [];
   private disposed = false;
   private lastBattle = -1;
   private residueX = 0;
@@ -58,7 +59,11 @@ export class BattleSpectacle {
     this.group.name = 'Capability battle spectacle';
     this.structuralDebris.name = 'Authoritative structure debris';
     this.structuralFire.name = 'Authoritative structure fire';
-    for (const mesh of [this.smoke, this.flashes, this.tracers, this.structuralDebris, this.structuralFire]) {
+    this.advanced = new AdvancedBattleEffects(elevationAt);
+    this.resolvedImpacts = new ResolvedImpactEffects(elevationAt);
+    this.group.add(this.resolvedImpacts.group);
+    this.group.add(this.advanced.group);
+    for (const mesh of [this.smoke, this.flashes, this.tracers, this.arrows, this.structuralDebris, this.structuralFire]) {
       mesh.count = 0;
       mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -67,10 +72,8 @@ export class BattleSpectacle {
     for (let side = 0 as 0 | 1; side <= 1; side = (side + 1) as 0 | 1) {
       for (let i = 0; i < 2; i++) {
         const airframe = this.makeAircraft(side, i);
-        const missile = this.makeMissile(side, i);
         this.aircraft.push(airframe);
-        this.missiles.push(missile);
-        this.group.add(airframe.group, missile.group);
+        this.group.add(airframe.group);
       }
     }
   }
@@ -89,21 +92,24 @@ export class BattleSpectacle {
   }
 
   beginWeapons(): void {
-    this.flashes.count = this.tracers.count = 0;
+    this.flashes.count = this.tracers.count = this.arrows.count = 0;
   }
+
+  setImpacts(impacts: readonly BattleImpact[]): void { this.impacts = impacts.slice(0, 64); }
 
   /** The same cadence/pose supplies muzzle contact and the projectile; no free-floating flashes. */
   weaponAttack(x: number, y: number, z: number, yaw: number, distance: number, weapon: PrimaryWeaponVisual,
-    flash: boolean, flight: number, fade: number): void {
+    flash: boolean, flight: number, fade: number, muzzleOffset = 0.24): void {
     const dx = Math.sin(yaw), dz = Math.cos(yaw);
     if (flash && this.flashes.count < MAX_FLASH) this.part(this.flashes, this.flashes.count++,
-      x + dx * 0.24, y, z + dz * 0.24, yaw, 0, 0.045 * fade);
+      x + dx * muzzleOffset, y, z + dz * muzzleOffset, yaw, 0, 0.026 * fade);
     if (flight >= 0 && this.tracers.count < MAX_TRACERS) {
       const bow = weapon === 'bow';
-      const travel = 0.24 + Math.max(0, distance - 0.4) * flight;
-      const arc = bow ? Math.sin(flight * Math.PI) * 0.45 : 0;
-      this.part(this.tracers, this.tracers.count++, x + dx * travel, y + arc, z + dz * travel,
-        yaw, bow ? -Math.cos(flight * Math.PI) * 0.35 : 0, (bow ? 0.42 : 0.25) * fade);
+      const travel = muzzleOffset + Math.max(0, distance - 0.065) * flight;
+      const arc = bow ? Math.sin(flight * Math.PI) * 0.12 : 0;
+      const mesh = bow ? this.arrows : this.tracers;
+      if (mesh.count < MAX_TRACERS) this.part(mesh, mesh.count++, x + dx * travel, y + arc, z + dz * travel,
+        yaw, bow ? -Math.cos(flight * Math.PI) * 0.24 : 0, (bow ? 1 : 0.18) * fade);
     }
   }
 
@@ -116,10 +122,11 @@ export class BattleSpectacle {
     fade: number,
     reducedMotion: boolean,
     eventTime = -Infinity,
+    battlefield?: { front: Readonly<{ x: number; z: number }>; yaw: number; gap: number },
   ): void {
     if (this.disposed) return;
     const frontProgress = 0.76 + clamp(war.progress, -1, 1) * 0.08;
-    const front = campaignPoint(war.campaign.route, frontProgress, settlements[1].position);
+    const front = battlefield?.front ?? campaignPoint(war.campaign.route, frontProgress, settlements[1].position);
     const active = war.resolvedMonth === undefined && war.phase === 'battle' && war.campaign.blockedMonths === 0;
     if (this.lastBattle !== war.campaign.battleCount) {
       this.residueX = front.x; this.residueZ = front.z;
@@ -131,6 +138,8 @@ export class BattleSpectacle {
     const time = reducedMotion ? 0 : elapsed;
     this.structuralDebris.count = this.structuralFire.count = 0;
     for (const evidence of this.structuralEvidence) {
+      const hit = this.impacts.find(item => item.targetId === evidence.structureId);
+      if (hit && !reducedMotion && elapsed - eventTime < hit.impactAt) continue;
       const { x, z } = evidence.position;
       const y = this.elevationAt(x, z);
       for (let i = 0; i < 2; i++) this.part(this.structuralDebris, this.structuralDebris.count++,
@@ -140,24 +149,32 @@ export class BattleSpectacle {
     }
     this.structuralDebris.instanceMatrix.needsUpdate = this.structuralFire.instanceMatrix.needsUpdate = true;
     const styles = [militaryVisualStyle(profiles[0]), militaryVisualStyle(profiles[1])] as const;
+    const before = campaignPoint(war.campaign.route, frontProgress - 0.006, settlements[0].position);
+    const after = campaignPoint(war.campaign.route, frontProgress + 0.006, settlements[1].position);
+    this.advanced.update(front, battlefield?.yaw ?? Math.atan2(after.x - before.x, after.z - before.z),
+      battlefield?.gap ?? engagementGap(styles), styles, Number.isFinite(eventTime) ? Math.max(0, elapsed - eventTime) : 0,
+      firing, fade, reducedMotion, this.impacts);
+    this.resolvedImpacts.update(this.impacts, Number.isFinite(eventTime) ? elapsed - eventTime : Infinity, reducedMotion, front,
+      battlefield?.yaw ?? Math.atan2(after.x - before.x, after.z - before.z));
     const smokeBudget = Math.min(MAX_SMOKE, Math.round((styles[0].smoke + styles[1].smoke) * intensity * 0.65));
 
     this.smoke.count = smokeBudget;
-    this.smoke.material.opacity = 0.15 * intensity * fade;
+    this.smoke.material.uniforms.opacity!.value = 0.23 * intensity * fade;
     for (let i = 0; i < smokeBudget; i++) {
       const life = reducedMotion ? (i + 1) / Math.max(1, smokeBudget + 1) : (time * 0.13 + i * 0.173) % 1;
-      const angle = i * 2.399 + time * 0.05;
+      const angle = i * 2.399;
       const radius = 0.18 + life * (0.8 + (i % 4) * 0.17);
-      const x = this.residueX + Math.cos(angle) * radius;
-      const z = this.residueZ + Math.sin(angle) * radius;
+      const x = this.residueX + Math.cos(angle) * radius + life * 0.65;
+      const z = this.residueZ + Math.sin(angle) * radius + life * 0.18;
       const y = this.elevationAt(x, z) + 0.22 + life * 1.3;
-      const scale = (0.08 + life * 0.34) * Math.sin(Math.max(0.08, life) * Math.PI) * fade;
+      const scale = (0.1 + life * 0.5) * Math.sin(Math.max(0.08, life) * Math.PI) * fade;
       this.part(this.smoke, i, x, y, z, angle, 0, Math.max(0.01, scale));
     }
     this.smoke.instanceMatrix.needsUpdate = true;
 
     this.flashes.instanceMatrix.needsUpdate = true;
     this.tracers.instanceMatrix.needsUpdate = true;
+    this.arrows.instanceMatrix.needsUpdate = true;
 
     this.aircraft.forEach(airframe => {
       const count = styles[airframe.side].aircraft;
@@ -175,30 +192,6 @@ export class BattleSpectacle {
       airframe.group.scale.setScalar(0.75 + profiles[airframe.side].airPower * 0.2);
     });
 
-    this.missiles.forEach(missile => {
-      const count = styles[missile.side].missiles;
-      missile.group.visible = firing && missile.index < count && fade > 0.02;
-      if (!missile.group.visible) return;
-      const side = missile.side;
-      const launchProgress = frontProgress + (side === 0 ? -0.08 : 0.08);
-      const targetProgress = frontProgress + (side === 0 ? 0.018 : -0.018);
-      const start = campaignPoint(war.campaign.route, launchProgress, settlements[side].position);
-      const end = campaignPoint(war.campaign.route, targetProgress, settlements[side === 0 ? 1 : 0].position);
-      const phase = reducedMotion ? 0.55 : (time * 0.16 + missile.index * 0.43 + side * 0.21) % 1;
-      const x = THREE.MathUtils.lerp(start.x, end.x, phase);
-      const z = THREE.MathUtils.lerp(start.z, end.z, phase);
-      const ground = this.elevationAt(x, z);
-      const y = ground + 0.45 + Math.sin(phase * Math.PI) * (2.2 + profiles[side].missile * 1.2);
-      const dx = end.x - start.x;
-      const dz = end.z - start.z;
-      const yaw = Math.atan2(dx, dz);
-      const horizontal = Math.max(0.001, Math.hypot(dx, dz));
-      const dy = Math.cos(phase * Math.PI) * Math.PI * (2.2 + profiles[side].missile * 1.2);
-      const pitch = -Math.atan2(dy, horizontal);
-      missile.group.position.set(x, y, z);
-      missile.group.rotation.set(pitch, yaw, 0, 'YXZ');
-      missile.group.scale.setScalar(0.72 + profiles[side].missile * 0.2);
-    });
   }
 
   private part(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, yaw: number, pitch: number, scale: number): void {
@@ -228,27 +221,13 @@ export class BattleSpectacle {
     return { group, side, index };
   }
 
-  private makeMissile(side: 0 | 1, index: number): MissileVisual {
-    const group = new THREE.Group();
-    group.name = `missile-${side}-${index}`;
-    const bodyMaterial = new THREE.MeshStandardMaterial({ color: '#d9d5c7', roughness: 0.55, metalness: 0.16 });
-    const glowMaterial = new THREE.MeshBasicMaterial({ color: '#ffc477', transparent: true, opacity: 0.85, depthWrite: false });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 6), bodyMaterial);
-    body.rotation.x = Math.PI / 2;
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.12, 6), bodyMaterial);
-    nose.rotation.x = Math.PI / 2;
-    nose.position.z = 0.23;
-    const exhaust = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.22, 6), glowMaterial);
-    exhaust.rotation.x = -Math.PI / 2;
-    exhaust.position.z = -0.28;
-    group.add(body, nose, exhaust);
-    group.visible = false;
-    return { group, side, index };
-  }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.advanced.dispose();
+    this.group.remove(this.resolvedImpacts.group);
+    this.resolvedImpacts.dispose();
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     this.group.traverse(child => {

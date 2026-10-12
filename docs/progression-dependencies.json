@@ -1,0 +1,2757 @@
+{
+  "nodes": 139,
+  "graph": [
+    {
+      "id": "facility:ceramics:1",
+      "paths": [
+        [
+          "knowledge:pottery-firing",
+          "material:timber",
+          "material:clay"
+        ],
+        [
+          "knowledge:pottery-firing",
+          "material:lumber",
+          "material:clay"
+        ]
+      ]
+    },
+    {
+      "id": "facility:ceramics:2",
+      "paths": [
+        [
+          "knowledge:high-temperature-ceramics",
+          "material:brick",
+          "material:timber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "material:brick",
+          "material:lumber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "material:stone",
+          "material:timber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "material:stone",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:ceramics:3",
+      "paths": [
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:brick",
+          "material:iron",
+          "material:timber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:brick",
+          "material:iron",
+          "material:lumber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:brick",
+          "material:iron-tools",
+          "material:timber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:brick",
+          "material:iron-tools",
+          "material:lumber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "material:iron",
+          "material:timber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "material:iron",
+          "material:lumber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "material:iron-tools",
+          "material:timber"
+        ],
+        [
+          "knowledge:high-temperature-ceramics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "material:iron-tools",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:machinery:1",
+      "paths": [
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:iron"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:bronze"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:iron"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:bronze"
+        ]
+      ]
+    },
+    {
+      "id": "facility:machinery:2",
+      "paths": [
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:brick",
+          "material:iron",
+          "material:timber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:brick",
+          "material:iron",
+          "material:lumber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:brick",
+          "material:steel",
+          "material:timber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:brick",
+          "material:steel",
+          "material:lumber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:brick",
+          "material:iron-tools",
+          "material:timber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:brick",
+          "material:iron-tools",
+          "material:lumber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:stone",
+          "material:iron",
+          "material:timber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:stone",
+          "material:iron",
+          "material:lumber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:stone",
+          "material:steel",
+          "material:timber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:stone",
+          "material:steel",
+          "material:lumber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:stone",
+          "material:iron-tools",
+          "material:timber"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "knowledge:mechanical-power",
+          "material:stone",
+          "material:iron-tools",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:machinery:3",
+      "paths": [
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:steel",
+          "material:brick",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:steel",
+          "material:brick",
+          "material:copper",
+          "material:lumber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:steel",
+          "material:stone",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:steel",
+          "material:stone",
+          "material:copper",
+          "material:lumber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:iron",
+          "material:brick",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:iron",
+          "material:brick",
+          "material:copper",
+          "material:lumber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:iron",
+          "material:stone",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power",
+          "knowledge:standardized-parts",
+          "material:iron",
+          "material:stone",
+          "material:copper",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:metallurgy:1",
+      "paths": [
+        [
+          "knowledge:metal-smelting",
+          "material:stone",
+          "material:timber"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:stone",
+          "material:lumber"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:brick",
+          "material:timber"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:brick",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:metallurgy:2",
+      "paths": [
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:brick",
+          "material:iron",
+          "material:timber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:brick",
+          "material:iron",
+          "material:lumber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:brick",
+          "material:iron-tools",
+          "material:timber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:brick",
+          "material:iron-tools",
+          "material:lumber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:brick",
+          "material:bronze",
+          "material:timber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:brick",
+          "material:bronze",
+          "material:lumber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:stone",
+          "material:iron",
+          "material:timber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:stone",
+          "material:iron",
+          "material:lumber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:stone",
+          "material:iron-tools",
+          "material:timber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:stone",
+          "material:iron-tools",
+          "material:lumber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:stone",
+          "material:bronze",
+          "material:timber"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:rotary-machinery",
+          "material:stone",
+          "material:bronze",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:metallurgy:3",
+      "paths": [
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:brick",
+          "material:copper",
+          "material:timber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:brick",
+          "material:copper",
+          "material:lumber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:stone",
+          "material:copper",
+          "material:timber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:stone",
+          "material:copper",
+          "material:lumber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:brick",
+          "material:copper",
+          "material:timber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:brick",
+          "material:copper",
+          "material:lumber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:stone",
+          "material:copper",
+          "material:timber",
+          "power:electric"
+        ],
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:stone",
+          "material:copper",
+          "material:lumber",
+          "power:electric"
+        ]
+      ]
+    },
+    {
+      "id": "facility:wood:1",
+      "paths": [
+        [
+          "material:timber"
+        ],
+        [
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "facility:wood:2",
+      "paths": [
+        [
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:iron"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:bronze"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:timber",
+          "material:steel"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:iron"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:bronze"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "material:lumber",
+          "material:steel"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:timber",
+          "material:iron"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:timber",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:timber",
+          "material:bronze"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:timber",
+          "material:steel"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:lumber",
+          "material:iron"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:lumber",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:lumber",
+          "material:bronze"
+        ],
+        [
+          "knowledge:simple-gearing",
+          "knowledge:metal-smelting",
+          "material:lumber",
+          "material:steel"
+        ]
+      ]
+    },
+    {
+      "id": "facility:wood:3",
+      "paths": [
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:brick",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:brick",
+          "material:copper",
+          "material:lumber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:stone",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:stone",
+          "material:copper",
+          "material:lumber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:brick",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:brick",
+          "material:copper",
+          "material:lumber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:stone",
+          "material:copper",
+          "material:timber"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:iron",
+          "material:stone",
+          "material:copper",
+          "material:lumber"
+        ]
+      ]
+    },
+    {
+      "id": "food",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "fuel",
+      "paths": [
+        [
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "generator:animal",
+      "paths": [
+        [
+          "knowledge:wheel-axle",
+          "knowledge:animal-husbandry",
+          "material:timber",
+          "population",
+          "food"
+        ]
+      ]
+    },
+    {
+      "id": "generator:coal",
+      "paths": [
+        [
+          "knowledge:electric-grid",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:copper",
+          "material:stone",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:gas",
+      "paths": [
+        [
+          "knowledge:internal-combustion",
+          "knowledge:electric-grid",
+          "material:steel",
+          "material:copper",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:generator",
+      "paths": [
+        [
+          "knowledge:electrical-generation",
+          "knowledge:mechanical-power",
+          "material:iron",
+          "material:copper",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:hydro",
+      "paths": [
+        [
+          "knowledge:electrical-generation",
+          "knowledge:civic-administration",
+          "material:steel",
+          "material:copper",
+          "material:stone",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:nuclear",
+      "paths": [
+        [
+          "knowledge:nuclear-energy",
+          "knowledge:industrial-chemistry",
+          "knowledge:precision-manufacturing",
+          "knowledge:grid-management",
+          "material:steel",
+          "material:copper",
+          "material:stone",
+          "population",
+          "material:nuclear-fuel"
+        ]
+      ]
+    },
+    {
+      "id": "generator:solar",
+      "paths": [
+        [
+          "knowledge:photovoltaics",
+          "material:silicon",
+          "material:copper",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:steam",
+      "paths": [
+        [
+          "knowledge:mechanical-power",
+          "knowledge:iron-working",
+          "material:iron",
+          "material:stone",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:waterwheel",
+      "paths": [
+        [
+          "knowledge:wheel-axle",
+          "knowledge:simple-gearing",
+          "material:timber",
+          "material:stone",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:wind",
+      "paths": [
+        [
+          "knowledge:electric-grid",
+          "knowledge:precision-manufacturing",
+          "material:steel",
+          "material:copper",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "generator:windmill",
+      "paths": [
+        [
+          "knowledge:wheel-axle",
+          "knowledge:simple-gearing",
+          "material:timber",
+          "material:textile",
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "goods",
+      "paths": [
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:industrial-chemistry",
+          "knowledge:precision-manufacturing",
+          "material:uranium-ore",
+          "material:steel",
+          "infrastructure:factories",
+          "infrastructure:power"
+        ],
+        [
+          "knowledge:photovoltaics",
+          "material:stone",
+          "material:charcoal",
+          "infrastructure:factories",
+          "infrastructure:power"
+        ],
+        [
+          "knowledge:anatomical-observation",
+          "material:wild-herbs"
+        ],
+        [
+          "knowledge:fire-control",
+          "material:timber"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:copper-ore",
+          "material:tin-ore",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ],
+        [
+          "knowledge:iron-working",
+          "material:iron-ore",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ],
+        [
+          "knowledge:pottery-firing",
+          "material:clay",
+          "material:timber"
+        ],
+        [
+          "knowledge:stone-composites",
+          "material:timber"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:iron",
+          "material:timber",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:machine-parts",
+          "material:steel",
+          "material:copper",
+          "infrastructure:factories",
+          "infrastructure:workshops"
+        ],
+        [
+          "knowledge:leverage",
+          "knowledge:stone-composites",
+          "material:stone"
+        ],
+        [
+          "knowledge:stone-composites",
+          "material:timber"
+        ],
+        [
+          "knowledge:pottery-firing",
+          "material:clay",
+          "material:timber"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:copper-ore",
+          "material:charcoal"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "material:iron-ore",
+          "material:charcoal"
+        ],
+        [
+          "knowledge:iron-working",
+          "knowledge:industrial-chemistry",
+          "material:iron",
+          "material:coal"
+        ],
+        [
+          "knowledge:anatomical-observation",
+          "knowledge:fire-control",
+          "material:medicinal-flora"
+        ],
+        [
+          "knowledge:stone-composites",
+          "material:plant-fiber"
+        ]
+      ]
+    },
+    {
+      "id": "industry",
+      "paths": [
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "knowledge:iron-working",
+          "infrastructure:workshops",
+          "infrastructure:roads",
+          "productive-power",
+          "productive-facility"
+        ],
+        [
+          "knowledge:mechanical-power",
+          "knowledge:industrial-chemistry",
+          "infrastructure:workshops",
+          "infrastructure:roads",
+          "productive-power",
+          "productive-facility"
+        ],
+        [
+          "knowledge:electrical-generation",
+          "knowledge:precision-manufacturing",
+          "infrastructure:workshops",
+          "infrastructure:roads",
+          "productive-power",
+          "productive-facility"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:archives",
+      "paths": [
+        [
+          "knowledge:durable-records",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:bridges",
+      "paths": [
+        [
+          "knowledge:improved-roads",
+          "material:stone",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:factories",
+      "paths": [
+        [
+          "industry",
+          "material:stone",
+          "goods",
+          "wealth"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:ports",
+      "paths": [
+        [
+          "knowledge:buoyancy-currents",
+          "material:timber",
+          "goods",
+          "wealth"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:power",
+      "paths": [
+        [
+          "power:electric"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:rail",
+      "paths": [
+        [
+          "knowledge:rail-transport",
+          "material:iron",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:roads",
+      "paths": [
+        [
+          "population",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "infrastructure:workshops",
+      "paths": [
+        [
+          "knowledge:pottery-firing",
+          "material:timber",
+          "material:stone",
+          "goods",
+          "wealth"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:timber",
+          "material:stone",
+          "goods",
+          "wealth"
+        ]
+      ]
+    },
+    {
+      "id": "institutions",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:agrarian-surplus",
+      "paths": [
+        [
+          "knowledge:crop-selection"
+        ],
+        [
+          "knowledge:irrigation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:anatomical-observation",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "knowledge:animal-husbandry",
+      "paths": [
+        [
+          "knowledge:seasonal-observation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:atomic-theory",
+      "paths": [
+        [
+          "knowledge:scientific-method",
+          "knowledge:electromagnetism",
+          "knowledge:industrial-chemistry"
+        ],
+        [
+          "knowledge:scientific-method",
+          "knowledge:electromagnetism",
+          "knowledge:computation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:automation",
+      "paths": [
+        [
+          "knowledge:computation",
+          "knowledge:precision-manufacturing",
+          "industry",
+          "knowledge:electric-grid"
+        ],
+        [
+          "knowledge:computation",
+          "knowledge:precision-manufacturing",
+          "industry",
+          "knowledge:mass-communication"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:aviation",
+      "paths": [
+        [
+          "knowledge:flight-dynamics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:internal-combustion"
+        ],
+        [
+          "knowledge:flight-dynamics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:electric-grid"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:battery-storage",
+      "paths": [
+        [
+          "knowledge:electrical-generation",
+          "knowledge:industrial-chemistry",
+          "industry"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:biotechnology",
+      "paths": [
+        [
+          "knowledge:modern-medicine",
+          "knowledge:scientific-method",
+          "industry",
+          "knowledge:industrial-chemistry"
+        ],
+        [
+          "knowledge:modern-medicine",
+          "knowledge:scientific-method",
+          "industry",
+          "knowledge:computation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:buoyancy-currents",
+      "paths": [
+        [
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:celestial-navigation",
+      "paths": [
+        [
+          "knowledge:buoyancy-currents",
+          "knowledge:counting-measure"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:chemical-reactions",
+      "paths": [
+        [
+          "knowledge:material-testing",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:durable-records",
+          "material:ash"
+        ],
+        [
+          "knowledge:material-testing",
+          "knowledge:high-temperature-ceramics",
+          "knowledge:durable-records",
+          "material:copper-ore"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:civic-administration",
+      "paths": [
+        [
+          "knowledge:durable-records",
+          "knowledge:counting-measure"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:combustion-dynamics",
+      "paths": [
+        [
+          "knowledge:fire-control"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:computation",
+      "paths": [
+        [
+          "knowledge:counting-measure",
+          "knowledge:scientific-method",
+          "knowledge:precision-manufacturing",
+          "knowledge:mechanical-power"
+        ],
+        [
+          "knowledge:counting-measure",
+          "knowledge:scientific-method",
+          "knowledge:electromagnetism",
+          "knowledge:electric-grid"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:contagion-patterns",
+      "paths": [
+        [
+          "knowledge:anatomical-observation",
+          "knowledge:durable-records"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:counting-measure",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "knowledge:crop-selection",
+      "paths": [
+        [
+          "knowledge:seasonal-observation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:durable-records",
+      "paths": [
+        [
+          "knowledge:counting-measure"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:electric-grid",
+      "paths": [
+        [
+          "knowledge:electrical-generation",
+          "knowledge:precision-manufacturing",
+          "material:copper",
+          "goods",
+          "wealth",
+          "industry",
+          "infrastructure:workshops",
+          "knowledge:civic-administration"
+        ],
+        [
+          "knowledge:electrical-generation",
+          "knowledge:precision-manufacturing",
+          "material:copper",
+          "goods",
+          "wealth",
+          "industry",
+          "infrastructure:workshops",
+          "knowledge:improved-roads"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:electrical-generation",
+      "paths": [
+        [
+          "knowledge:electromagnetism",
+          "knowledge:rotary-machinery",
+          "material:copper",
+          "goods",
+          "wealth",
+          "knowledge:mechanical-power",
+          "material:iron"
+        ],
+        [
+          "knowledge:electromagnetism",
+          "knowledge:rotary-machinery",
+          "material:copper",
+          "goods",
+          "wealth",
+          "knowledge:mechanical-power",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:electromagnetism",
+          "knowledge:rotary-machinery",
+          "material:copper",
+          "goods",
+          "wealth",
+          "knowledge:mechanical-power",
+          "material:steel"
+        ],
+        [
+          "knowledge:electromagnetism",
+          "knowledge:rotary-machinery",
+          "material:copper",
+          "goods",
+          "wealth",
+          "knowledge:industrial-chemistry",
+          "material:iron"
+        ],
+        [
+          "knowledge:electromagnetism",
+          "knowledge:rotary-machinery",
+          "material:copper",
+          "goods",
+          "wealth",
+          "knowledge:industrial-chemistry",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:electromagnetism",
+          "knowledge:rotary-machinery",
+          "material:copper",
+          "goods",
+          "wealth",
+          "knowledge:industrial-chemistry",
+          "material:steel"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:electromagnetism",
+      "paths": [
+        [
+          "knowledge:precision-tools",
+          "knowledge:durable-records",
+          "knowledge:chemical-reactions",
+          "material:copper"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:durable-records",
+          "knowledge:chemical-reactions",
+          "material:iron"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:durable-records",
+          "knowledge:mechanical-power",
+          "material:copper"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:durable-records",
+          "knowledge:mechanical-power",
+          "material:iron"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:fire-control",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "knowledge:flight-dynamics",
+      "paths": [
+        [
+          "knowledge:scientific-method",
+          "knowledge:celestial-navigation",
+          "knowledge:thermodynamics"
+        ],
+        [
+          "knowledge:scientific-method",
+          "knowledge:celestial-navigation",
+          "knowledge:electromagnetism"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:general-machine-systems",
+      "paths": [
+        [
+          "knowledge:machine-intelligence",
+          "knowledge:automation",
+          "knowledge:computation",
+          "industry",
+          "knowledge:biotechnology"
+        ],
+        [
+          "knowledge:machine-intelligence",
+          "knowledge:automation",
+          "knowledge:computation",
+          "industry",
+          "knowledge:mass-communication"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:grid-management",
+      "paths": [
+        [
+          "knowledge:electric-grid",
+          "knowledge:computation",
+          "knowledge:civic-administration",
+          "industry"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:high-temperature-ceramics",
+      "paths": [
+        [
+          "knowledge:pottery-firing",
+          "knowledge:combustion-dynamics",
+          "material:clay"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:improved-roads",
+      "paths": [
+        [
+          "knowledge:wheel-axle",
+          "material:timber",
+          "wealth",
+          "knowledge:civic-administration"
+        ],
+        [
+          "knowledge:wheel-axle",
+          "material:timber",
+          "wealth",
+          "knowledge:counting-measure"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:industrial-chemistry",
+      "paths": [
+        [
+          "knowledge:chemical-reactions",
+          "knowledge:high-temperature-ceramics",
+          "goods",
+          "wealth",
+          "knowledge:mechanical-power",
+          "material:ash"
+        ],
+        [
+          "knowledge:chemical-reactions",
+          "knowledge:high-temperature-ceramics",
+          "goods",
+          "wealth",
+          "knowledge:mechanical-power",
+          "material:copper-ore"
+        ],
+        [
+          "knowledge:chemical-reactions",
+          "knowledge:high-temperature-ceramics",
+          "goods",
+          "wealth",
+          "knowledge:civic-administration",
+          "material:ash"
+        ],
+        [
+          "knowledge:chemical-reactions",
+          "knowledge:high-temperature-ceramics",
+          "goods",
+          "wealth",
+          "knowledge:civic-administration",
+          "material:copper-ore"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:internal-combustion",
+      "paths": [
+        [
+          "knowledge:thermodynamics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "goods",
+          "industry",
+          "infrastructure:roads",
+          "knowledge:industrial-chemistry"
+        ],
+        [
+          "knowledge:thermodynamics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "goods",
+          "industry",
+          "infrastructure:roads",
+          "knowledge:mechanical-power"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:interplanetary-capability",
+      "paths": [
+        [
+          "knowledge:orbital-capability",
+          "knowledge:automation",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:nuclear-propulsion"
+        ],
+        [
+          "knowledge:orbital-capability",
+          "knowledge:automation",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:rocketry",
+          "knowledge:electric-grid"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:iron-working",
+      "paths": [
+        [
+          "knowledge:metal-smelting",
+          "material:iron-ore",
+          "knowledge:high-temperature-ceramics"
+        ],
+        [
+          "knowledge:metal-smelting",
+          "material:iron-ore",
+          "knowledge:combustion-dynamics"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:irrigation",
+      "paths": [
+        [
+          "knowledge:seasonal-observation",
+          "knowledge:leverage"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:leverage",
+      "paths": [
+        [
+          "knowledge:stone-composites"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:machine-intelligence",
+      "paths": [
+        [
+          "knowledge:computation",
+          "knowledge:automation",
+          "industry",
+          "knowledge:mass-communication"
+        ],
+        [
+          "knowledge:computation",
+          "knowledge:automation",
+          "industry",
+          "knowledge:scientific-method"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:mass-communication",
+      "paths": [
+        [
+          "knowledge:electromagnetism",
+          "knowledge:printing",
+          "industry",
+          "knowledge:electric-grid"
+        ],
+        [
+          "knowledge:electromagnetism",
+          "knowledge:printing",
+          "industry",
+          "knowledge:electrical-generation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:material-testing",
+      "paths": [
+        [
+          "knowledge:stone-composites"
+        ],
+        [
+          "knowledge:pottery-firing"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:mechanical-power",
+      "paths": [
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:thermodynamics",
+          "material:iron"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:thermodynamics",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:thermodynamics",
+          "material:bronze"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:thermodynamics",
+          "material:steel"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:combustion-dynamics",
+          "material:iron"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:combustion-dynamics",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:combustion-dynamics",
+          "material:bronze"
+        ],
+        [
+          "knowledge:rotary-machinery",
+          "knowledge:pressure",
+          "goods",
+          "wealth",
+          "knowledge:combustion-dynamics",
+          "material:steel"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:metal-smelting",
+      "paths": [
+        [
+          "knowledge:combustion-dynamics",
+          "knowledge:material-testing",
+          "fuel",
+          "material:copper-ore"
+        ],
+        [
+          "knowledge:combustion-dynamics",
+          "knowledge:material-testing",
+          "fuel",
+          "material:iron-ore"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:modern-medicine",
+      "paths": [
+        [
+          "knowledge:contagion-patterns",
+          "knowledge:scientific-method",
+          "knowledge:vaccination"
+        ],
+        [
+          "knowledge:contagion-patterns",
+          "knowledge:scientific-method",
+          "knowledge:industrial-chemistry"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:nuclear-energy",
+      "paths": [
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:electric-grid",
+          "industry",
+          "knowledge:civic-administration"
+        ],
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:electric-grid",
+          "industry",
+          "knowledge:computation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:nuclear-fission",
+      "paths": [
+        [
+          "knowledge:atomic-theory",
+          "knowledge:scientific-method",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:industrial-chemistry",
+          "knowledge:precision-manufacturing"
+        ],
+        [
+          "knowledge:atomic-theory",
+          "knowledge:scientific-method",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:computation",
+          "knowledge:electric-grid"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:nuclear-medicine",
+      "paths": [
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:modern-medicine",
+          "knowledge:scientific-method"
+        ],
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:modern-medicine",
+          "knowledge:biotechnology"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:nuclear-propulsion",
+      "paths": [
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:rocketry",
+          "industry",
+          "knowledge:computation"
+        ],
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:rocketry",
+          "industry",
+          "knowledge:orbital-capability"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:ocean-navigation",
+      "paths": [
+        [
+          "knowledge:celestial-navigation",
+          "knowledge:buoyancy-currents",
+          "material:timber",
+          "goods"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:orbital-capability",
+      "paths": [
+        [
+          "knowledge:satellite-systems",
+          "knowledge:rocketry",
+          "knowledge:computation",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:photovoltaics",
+      "paths": [
+        [
+          "knowledge:electromagnetism",
+          "knowledge:industrial-chemistry",
+          "knowledge:precision-manufacturing",
+          "industry"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:pottery-firing",
+      "paths": [
+        [
+          "knowledge:fire-control"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:precision-manufacturing",
+      "paths": [
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "goods",
+          "wealth",
+          "material:iron"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "goods",
+          "wealth",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "goods",
+          "wealth",
+          "material:bronze"
+        ],
+        [
+          "knowledge:standardized-parts",
+          "knowledge:rotary-machinery",
+          "goods",
+          "wealth",
+          "material:steel"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:precision-tools",
+      "paths": [
+        [
+          "knowledge:material-testing",
+          "knowledge:counting-measure",
+          "knowledge:iron-working"
+        ],
+        [
+          "knowledge:material-testing",
+          "knowledge:counting-measure",
+          "knowledge:high-temperature-ceramics"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:pressure",
+      "paths": [
+        [
+          "knowledge:leverage",
+          "knowledge:pottery-firing"
+        ],
+        [
+          "knowledge:leverage",
+          "knowledge:metal-smelting"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:printing",
+      "paths": [
+        [
+          "knowledge:durable-records",
+          "goods",
+          "knowledge:precision-tools"
+        ],
+        [
+          "knowledge:durable-records",
+          "goods",
+          "knowledge:high-temperature-ceramics"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:rail-transport",
+      "paths": [
+        [
+          "knowledge:mechanical-power",
+          "knowledge:improved-roads",
+          "knowledge:iron-working",
+          "knowledge:precision-tools",
+          "material:stone",
+          "goods",
+          "wealth",
+          "infrastructure:roads",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:rocketry",
+      "paths": [
+        [
+          "knowledge:flight-dynamics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:internal-combustion",
+          "knowledge:industrial-chemistry"
+        ],
+        [
+          "knowledge:flight-dynamics",
+          "knowledge:precision-manufacturing",
+          "material:stone",
+          "goods",
+          "wealth",
+          "industry",
+          "knowledge:electric-grid",
+          "knowledge:computation"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:rotary-machinery",
+      "paths": [
+        [
+          "knowledge:wheel-axle",
+          "knowledge:precision-tools",
+          "goods",
+          "material:iron"
+        ],
+        [
+          "knowledge:wheel-axle",
+          "knowledge:precision-tools",
+          "goods",
+          "material:iron-tools"
+        ],
+        [
+          "knowledge:wheel-axle",
+          "knowledge:precision-tools",
+          "goods",
+          "material:bronze"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:satellite-systems",
+      "paths": [
+        [
+          "knowledge:rocketry",
+          "knowledge:computation",
+          "industry",
+          "knowledge:mass-communication"
+        ],
+        [
+          "knowledge:rocketry",
+          "knowledge:computation",
+          "industry",
+          "knowledge:scientific-method"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:scientific-method",
+      "paths": [
+        [
+          "knowledge:printing",
+          "knowledge:counting-measure",
+          "knowledge:anatomical-observation"
+        ],
+        [
+          "knowledge:printing",
+          "knowledge:counting-measure",
+          "knowledge:material-testing"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:seasonal-observation",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "knowledge:simple-gearing",
+      "paths": [
+        [
+          "knowledge:wheel-axle",
+          "knowledge:leverage",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:space-resource-industry",
+      "paths": [
+        [
+          "knowledge:interplanetary-capability",
+          "knowledge:automation",
+          "industry",
+          "knowledge:general-machine-systems"
+        ],
+        [
+          "knowledge:interplanetary-capability",
+          "knowledge:automation",
+          "industry",
+          "knowledge:nuclear-propulsion"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:standardized-parts",
+      "paths": [
+        [
+          "knowledge:precision-tools",
+          "knowledge:durable-records",
+          "goods"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:stone-composites",
+      "paths": [
+        [
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:thermodynamics",
+      "paths": [
+        [
+          "knowledge:pressure",
+          "knowledge:combustion-dynamics",
+          "knowledge:durable-records"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:vaccination",
+      "paths": [
+        [
+          "knowledge:contagion-patterns",
+          "knowledge:durable-records"
+        ]
+      ]
+    },
+    {
+      "id": "knowledge:wheel-axle",
+      "paths": [
+        [
+          "knowledge:leverage",
+          "knowledge:stone-composites",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:ash",
+      "paths": [
+        [
+          "knowledge:fire-control",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:brick",
+      "paths": [
+        [
+          "knowledge:pottery-firing",
+          "material:clay",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:bronze",
+      "paths": [
+        [
+          "knowledge:metal-smelting",
+          "material:copper-ore",
+          "material:tin-ore",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "material:charcoal",
+      "paths": [
+        [
+          "knowledge:fire-control",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:clay",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "material:coal",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "material:copper",
+      "paths": [
+        [
+          "knowledge:metal-smelting",
+          "material:copper-ore",
+          "material:charcoal"
+        ]
+      ]
+    },
+    {
+      "id": "material:copper-ore",
+      "paths": [
+        [
+          "knowledge:material-testing"
+        ]
+      ]
+    },
+    {
+      "id": "material:dressed-stone",
+      "paths": [
+        [
+          "knowledge:leverage",
+          "knowledge:stone-composites",
+          "material:stone"
+        ]
+      ]
+    },
+    {
+      "id": "material:engine",
+      "paths": [
+        [
+          "knowledge:mechanical-power",
+          "knowledge:precision-manufacturing",
+          "material:machine-parts",
+          "material:steel",
+          "material:copper",
+          "infrastructure:factories",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "material:herbal-remedy",
+      "paths": [
+        [
+          "knowledge:anatomical-observation",
+          "material:wild-herbs"
+        ]
+      ]
+    },
+    {
+      "id": "material:iron",
+      "paths": [
+        [
+          "knowledge:iron-working",
+          "knowledge:high-temperature-ceramics",
+          "material:iron-ore",
+          "material:charcoal"
+        ]
+      ]
+    },
+    {
+      "id": "material:iron-ore",
+      "paths": [
+        [
+          "knowledge:material-testing"
+        ]
+      ]
+    },
+    {
+      "id": "material:iron-tools",
+      "paths": [
+        [
+          "knowledge:iron-working",
+          "material:iron-ore",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "material:lumber",
+      "paths": [
+        [
+          "knowledge:stone-composites",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:machine-parts",
+      "paths": [
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:iron",
+          "material:timber",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "material:medicinal-flora",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "material:medicine",
+      "paths": [
+        [
+          "knowledge:anatomical-observation",
+          "knowledge:fire-control",
+          "material:medicinal-flora"
+        ]
+      ]
+    },
+    {
+      "id": "material:natural-gas",
+      "paths": [
+        [
+          "knowledge:industrial-chemistry",
+          "knowledge:internal-combustion"
+        ]
+      ]
+    },
+    {
+      "id": "material:nuclear-fuel",
+      "paths": [
+        [
+          "knowledge:nuclear-fission",
+          "knowledge:industrial-chemistry",
+          "knowledge:precision-manufacturing",
+          "material:uranium-ore",
+          "material:steel",
+          "infrastructure:factories",
+          "infrastructure:power"
+        ]
+      ]
+    },
+    {
+      "id": "material:plant-fiber",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "material:pottery",
+      "paths": [
+        [
+          "knowledge:pottery-firing",
+          "material:clay",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:silicon",
+      "paths": [
+        [
+          "knowledge:photovoltaics",
+          "material:stone",
+          "material:charcoal",
+          "infrastructure:factories",
+          "infrastructure:power"
+        ]
+      ]
+    },
+    {
+      "id": "material:slag",
+      "paths": [
+        [
+          "knowledge:metal-smelting",
+          "material:copper-ore",
+          "material:tin-ore",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ],
+        [
+          "knowledge:iron-working",
+          "material:iron-ore",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ],
+        [
+          "knowledge:precision-tools",
+          "knowledge:rotary-machinery",
+          "material:iron",
+          "material:timber",
+          "material:charcoal",
+          "infrastructure:workshops"
+        ]
+      ]
+    },
+    {
+      "id": "material:spent-nuclear-fuel",
+      "paths": [
+        [
+          "generator:nuclear",
+          "material:nuclear-fuel"
+        ]
+      ]
+    },
+    {
+      "id": "material:steel",
+      "paths": [
+        [
+          "knowledge:iron-working",
+          "knowledge:industrial-chemistry",
+          "material:iron",
+          "material:coal"
+        ]
+      ]
+    },
+    {
+      "id": "material:stone",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "material:textile",
+      "paths": [
+        [
+          "knowledge:stone-composites",
+          "material:plant-fiber"
+        ]
+      ]
+    },
+    {
+      "id": "material:timber",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "material:timber-frame",
+      "paths": [
+        [
+          "knowledge:stone-composites",
+          "material:timber"
+        ]
+      ]
+    },
+    {
+      "id": "material:tin-ore",
+      "paths": [
+        [
+          "knowledge:material-testing"
+        ]
+      ]
+    },
+    {
+      "id": "material:uranium-ore",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    },
+    {
+      "id": "material:wild-herbs",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "population",
+      "paths": [
+        []
+      ]
+    },
+    {
+      "id": "power:electric",
+      "paths": [
+        [
+          "generator:generator"
+        ],
+        [
+          "generator:coal"
+        ],
+        [
+          "generator:hydro"
+        ],
+        [
+          "generator:wind"
+        ],
+        [
+          "generator:solar"
+        ],
+        [
+          "generator:gas"
+        ],
+        [
+          "generator:nuclear"
+        ]
+      ]
+    },
+    {
+      "id": "power:mechanical",
+      "paths": [
+        [
+          "generator:animal"
+        ],
+        [
+          "generator:waterwheel"
+        ],
+        [
+          "generator:windmill"
+        ],
+        [
+          "generator:steam"
+        ]
+      ]
+    },
+    {
+      "id": "productive-facility",
+      "paths": [
+        [
+          "facility:wood:1"
+        ],
+        [
+          "facility:wood:2"
+        ],
+        [
+          "facility:wood:3"
+        ],
+        [
+          "facility:metallurgy:1"
+        ],
+        [
+          "facility:metallurgy:2"
+        ],
+        [
+          "facility:metallurgy:3"
+        ],
+        [
+          "facility:machinery:1"
+        ],
+        [
+          "facility:machinery:2"
+        ],
+        [
+          "facility:machinery:3"
+        ],
+        [
+          "facility:ceramics:1"
+        ],
+        [
+          "facility:ceramics:2"
+        ],
+        [
+          "facility:ceramics:3"
+        ]
+      ]
+    },
+    {
+      "id": "productive-power",
+      "paths": [
+        [
+          "power:mechanical"
+        ],
+        [
+          "power:electric"
+        ]
+      ]
+    },
+    {
+      "id": "wealth",
+      "paths": [
+        [
+          "population"
+        ]
+      ]
+    }
+  ],
+  "reachable": [
+    "facility:ceramics:1",
+    "facility:ceramics:2",
+    "facility:ceramics:3",
+    "facility:machinery:1",
+    "facility:machinery:2",
+    "facility:machinery:3",
+    "facility:metallurgy:1",
+    "facility:metallurgy:2",
+    "facility:metallurgy:3",
+    "facility:wood:1",
+    "facility:wood:2",
+    "facility:wood:3",
+    "food",
+    "fuel",
+    "generator:animal",
+    "generator:coal",
+    "generator:gas",
+    "generator:generator",
+    "generator:hydro",
+    "generator:nuclear",
+    "generator:solar",
+    "generator:steam",
+    "generator:waterwheel",
+    "generator:wind",
+    "generator:windmill",
+    "goods",
+    "industry",
+    "infrastructure:archives",
+    "infrastructure:bridges",
+    "infrastructure:factories",
+    "infrastructure:ports",
+    "infrastructure:power",
+    "infrastructure:rail",
+    "infrastructure:roads",
+    "infrastructure:workshops",
+    "institutions",
+    "knowledge:agrarian-surplus",
+    "knowledge:anatomical-observation",
+    "knowledge:animal-husbandry",
+    "knowledge:atomic-theory",
+    "knowledge:automation",
+    "knowledge:aviation",
+    "knowledge:battery-storage",
+    "knowledge:biotechnology",
+    "knowledge:buoyancy-currents",
+    "knowledge:celestial-navigation",
+    "knowledge:chemical-reactions",
+    "knowledge:civic-administration",
+    "knowledge:combustion-dynamics",
+    "knowledge:computation",
+    "knowledge:contagion-patterns",
+    "knowledge:counting-measure",
+    "knowledge:crop-selection",
+    "knowledge:durable-records",
+    "knowledge:electric-grid",
+    "knowledge:electrical-generation",
+    "knowledge:electromagnetism",
+    "knowledge:fire-control",
+    "knowledge:flight-dynamics",
+    "knowledge:general-machine-systems",
+    "knowledge:grid-management",
+    "knowledge:high-temperature-ceramics",
+    "knowledge:improved-roads",
+    "knowledge:industrial-chemistry",
+    "knowledge:internal-combustion",
+    "knowledge:interplanetary-capability",
+    "knowledge:iron-working",
+    "knowledge:irrigation",
+    "knowledge:leverage",
+    "knowledge:machine-intelligence",
+    "knowledge:mass-communication",
+    "knowledge:material-testing",
+    "knowledge:mechanical-power",
+    "knowledge:metal-smelting",
+    "knowledge:modern-medicine",
+    "knowledge:nuclear-energy",
+    "knowledge:nuclear-fission",
+    "knowledge:nuclear-medicine",
+    "knowledge:nuclear-propulsion",
+    "knowledge:ocean-navigation",
+    "knowledge:orbital-capability",
+    "knowledge:photovoltaics",
+    "knowledge:pottery-firing",
+    "knowledge:precision-manufacturing",
+    "knowledge:precision-tools",
+    "knowledge:pressure",
+    "knowledge:printing",
+    "knowledge:rail-transport",
+    "knowledge:rocketry",
+    "knowledge:rotary-machinery",
+    "knowledge:satellite-systems",
+    "knowledge:scientific-method",
+    "knowledge:seasonal-observation",
+    "knowledge:simple-gearing",
+    "knowledge:space-resource-industry",
+    "knowledge:standardized-parts",
+    "knowledge:stone-composites",
+    "knowledge:thermodynamics",
+    "knowledge:vaccination",
+    "knowledge:wheel-axle",
+    "material:ash",
+    "material:brick",
+    "material:bronze",
+    "material:charcoal",
+    "material:clay",
+    "material:coal",
+    "material:copper",
+    "material:copper-ore",
+    "material:dressed-stone",
+    "material:engine",
+    "material:herbal-remedy",
+    "material:iron",
+    "material:iron-ore",
+    "material:iron-tools",
+    "material:lumber",
+    "material:machine-parts",
+    "material:medicinal-flora",
+    "material:medicine",
+    "material:natural-gas",
+    "material:nuclear-fuel",
+    "material:plant-fiber",
+    "material:pottery",
+    "material:silicon",
+    "material:slag",
+    "material:spent-nuclear-fuel",
+    "material:steel",
+    "material:stone",
+    "material:textile",
+    "material:timber",
+    "material:timber-frame",
+    "material:tin-ore",
+    "material:uranium-ore",
+    "material:wild-herbs",
+    "population",
+    "power:electric",
+    "power:mechanical",
+    "productive-facility",
+    "productive-power",
+    "wealth"
+  ],
+  "unresolved": [],
+  "missingReferences": [],
+  "cycles": [
+    [
+      "facility:ceramics:3",
+      "facility:machinery:1",
+      "facility:machinery:2",
+      "facility:machinery:3",
+      "facility:metallurgy:2",
+      "facility:metallurgy:3",
+      "facility:wood:2",
+      "facility:wood:3",
+      "generator:coal",
+      "generator:gas",
+      "generator:generator",
+      "generator:hydro",
+      "generator:nuclear",
+      "generator:solar",
+      "generator:steam",
+      "generator:wind",
+      "goods",
+      "industry",
+      "infrastructure:factories",
+      "infrastructure:power",
+      "infrastructure:workshops",
+      "knowledge:atomic-theory",
+      "knowledge:computation",
+      "knowledge:electric-grid",
+      "knowledge:electrical-generation",
+      "knowledge:electromagnetism",
+      "knowledge:grid-management",
+      "knowledge:industrial-chemistry",
+      "knowledge:internal-combustion",
+      "knowledge:mechanical-power",
+      "knowledge:nuclear-energy",
+      "knowledge:nuclear-fission",
+      "knowledge:photovoltaics",
+      "knowledge:precision-manufacturing",
+      "knowledge:printing",
+      "knowledge:rotary-machinery",
+      "knowledge:scientific-method",
+      "knowledge:standardized-parts",
+      "material:bronze",
+      "material:iron-tools",
+      "material:machine-parts",
+      "material:nuclear-fuel",
+      "material:silicon",
+      "material:steel",
+      "power:electric",
+      "power:mechanical",
+      "productive-facility",
+      "productive-power"
+    ]
+  ],
+  "unresolvedCycles": []
+}

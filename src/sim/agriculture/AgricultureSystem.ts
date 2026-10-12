@@ -7,6 +7,7 @@ import { clamp01 } from '../terrain/noise';
 import { modifyLand, disturbForest, forestRecoveryTarget } from '../environment/EnvironmentalModificationSystem';
 import { FREEZING } from '../weather/Precipitation';
 import { resourceVisualUnit } from '../resources/ResourceWorkPresentation';
+import { advanceIrrigationWorks } from './IrrigationWorks';
 
 /** Coarse archetypes, normalized temperature/moisture units, monthly phenology; no plant agents. */
 export const CROPS: Record<CropArchetype, { thermal: number; moisture: number; frost: number; heat: number; drought: number; waterlogging: number }> = {
@@ -135,8 +136,16 @@ export function advanceField(f: AgriculturalField, cell: WorldCell, weather: Wea
     f.action = fieldHarvestable(f) ? 'harvest' : f.irrigationDemand > 0.03 && practical(s, 'irrigation') > 0.1 ? 'irrigate' : 'tend';
     if (wasMature) f.harvestRemaining *= Math.max(0, 1 - damage);
     if (wasMature && safe && fieldHarvestable(f)) {
-      const machinery = practical(s, 'mechanical-power') * Math.min(1, s.materialEconomy?.energySupplied ?? 0);
-      const capacity = labour * (12 + machinery * 8 + practical(s, 'animal-husbandry') * 2);
+      const shaft = s.energy?.ledgers.mechanical;
+      const shaftCoverage = shaft && shaft.demand > 0 ? Math.min(1, shaft.supplied / shaft.demand) : 0;
+      const electric = s.energy?.service;
+      const electricCoverage = electric && electric.demand.productive > 0
+        ? Math.min(1, electric.supplied.productive / electric.demand.productive) : 0;
+      // Grain handling/milling can use simple shafts before steam or electricity. Power
+      // speeds collection of an existing harvest; it never multiplies the standing crop.
+      const milling = f.crop === 'cereal' || f.crop === 'dryland' ? shaftCoverage : 0;
+      const machinery = practical(s, 'mechanical-power') * Math.max(shaftCoverage, electricCoverage);
+      const capacity = labour * (12 + milling * 4 + machinery * 8 + practical(s, 'animal-husbandry') * 2);
       const collected = Math.min(f.harvestRemaining, capacity);
       f.harvestRemaining -= collected;
       // Coordination protects collected crops in transit to the existing storage system.
@@ -186,7 +195,9 @@ export function advanceAgriculture(state: SimulationState, s: Settlement, labour
     const weather = state.weather.cells[f.cellIndex];
     const plotFlood = s.structurePlots?.find(p => p.id === f.id)?.floodDepth ?? 0;
     const conditions = weather && plotFlood > weather.floodDepth ? { ...weather, floodDepth: plotFlood } : weather;
-    advanceField(f, cell, conditions, s, state.month, workers, area, budget, active);
+    if (geometry) advanceIrrigationWorks(state, s, f, geometry);
+    const deliveredWater = f.irrigationWorks?.progress === 1 ? budget * f.irrigationWorks.condition : 0;
+    advanceField(f, cell, conditions, s, state.month, workers, area, deliveredWater, active);
     budget = Math.max(0, budget - f.irrigationReceived);
   }
   // Fields sharing a soil cell all expose the final authoritative fertility.

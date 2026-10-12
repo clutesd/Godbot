@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { StrategicBattleEffects } from './StrategicBattleEffects';
 import type { HistoricalEvent, SimulationState, War } from '../../sim/types';
 import { campaignPoint } from '../../sim/war/Campaign';
 import { committedMonth } from '../../sim/MonthAuthority';
@@ -9,8 +10,11 @@ import { BattleAftermath, MAX_BATTLE_BODIES } from './BattleAftermath';
 import { combatPose, engagementGap, figurePosition } from './CombatChoreography';
 import { createCombatExchanges, exchangeFigurePose, formationCount, MAX_FORMATION_FIGURES, type CombatExchangePlan, type WeaponPose } from './CombatExchanges';
 import { BattleSpectacle, type StructuralBattleEvidence } from './BattleSpectacle';
-import { militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
-import { CosmicRoleAccents, COSMIC_HEIGHT_MULTIPLIER, bindCosmicBodySurface, cosmicRoleFor, createCosmicBodyGeometry, createCosmicHeadGeometry, createCosmicBodyMaterial, updateCosmicBodyMaterial } from '../people/CosmicPeople';
+import { isFirearmWeapon, militaryVisualStyle, type MilitaryVisualStyle, type PrimaryWeaponVisual } from './MilitaryVisualLanguage';
+import { CampaignHuman } from './CampaignHuman';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { battleAtmosphereMaterial } from './BattleAtmosphere';
+import { stableHash } from '../../sim/prng';
 
 interface Standard {
   pole: THREE.Mesh;
@@ -19,18 +23,17 @@ interface Standard {
 }
 
 interface SupportVisual {
-  kind: 'artillery' | 'vehicle';
+  kind: 'artillery' | 'vehicle' | 'siege';
   group: THREE.Group;
   barrel?: THREE.Object3D;
+  throwArm?: THREE.Object3D;
   index: number;
 }
 
 interface Company {
-  accents: CosmicRoleAccents;
+  human: CampaignHuman;
   body: THREE.InstancedMesh;
   head: THREE.InstancedMesh;
-  legs: THREE.InstancedMesh;
-  arms: THREE.InstancedMesh;
   shield: THREE.InstancedMesh;
   helmet: THREE.InstancedMesh;
   weapon: THREE.InstancedMesh;
@@ -48,7 +51,7 @@ interface CampaignVisual {
   war: War;
   companies: [Company, Company];
   profiles: [MilitaryCapabilityProfile, MilitaryCapabilityProfile];
-  dust: THREE.InstancedMesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
+  dust: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   spectacle: BattleSpectacle;
   aftermath: BattleAftermath;
   eventId?: string;
@@ -64,7 +67,6 @@ interface CampaignVisual {
 const MAX_CAMPAIGNS = 4;
 const MAX_FIGURES = MAX_FORMATION_FIGURES;
 const COMPANY_CAPACITY = MAX_FIGURES + MAX_BATTLE_BODIES;
-const COMPANY_BODY_SCALE = 0.28 * COSMIC_HEIGHT_MULTIPLIER;
 const clamp = THREE.MathUtils.clamp;
 
 /**
@@ -76,31 +78,39 @@ export class WarRenderer {
   readonly group = new THREE.Group();
   private readonly visuals = new Map<string, CampaignVisual>();
   private readonly walking: WalkabilityLayer;
-  private readonly bodyGeometry = createCosmicBodyGeometry();
-  private readonly headGeometry = createCosmicHeadGeometry();
-  private readonly legGeometry = new THREE.BoxGeometry(0.035, 0.095, 0.035);
-  private readonly shieldGeometry = new THREE.CylinderGeometry(0.065, 0.065, 0.018, 6);
-  private readonly helmetGeometry = new THREE.SphereGeometry(0.052, 6, 4, 0, Math.PI * 2, 0, Math.PI * 0.58);
-  private readonly poleGeometry = new THREE.CylinderGeometry(0.013, 0.018, 1.5, 5);
+  private readonly shieldGeometry = new THREE.CylinderGeometry(0.065, 0.061, 0.012, 24);
+  private readonly helmetGeometry = new THREE.SphereGeometry(0.021, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.58);
+  private readonly poleGeometry = new THREE.CylinderGeometry(0.006, 0.009, 0.68, 10);
   private readonly tentGeometry = new THREE.ConeGeometry(0.48, 0.65, 4);
-  private readonly dustGeometry = new THREE.IcosahedronGeometry(1, 0);
-  private readonly wheelGeometry = new THREE.CylinderGeometry(0.09, 0.09, 0.045, 8);
+  private readonly dustGeometry = new THREE.PlaneGeometry(2, 2);
+  private readonly wheelGeometry = new THREE.CylinderGeometry(0.09, 0.09, 0.045, 20);
   private readonly artilleryCarriageGeometry = new THREE.BoxGeometry(0.3, 0.1, 0.4);
-  private readonly artilleryBarrelGeometry = new THREE.CylinderGeometry(0.025, 0.038, 0.58, 6);
+  private readonly artilleryBarrelGeometry = new THREE.CylinderGeometry(0.019, 0.03, 0.52, 16);
+  private readonly hubGeometry = new THREE.CylinderGeometry(0.035, 0.035, 0.052, 12);
+  private readonly axleGeometry = new THREE.CylinderGeometry(0.012, 0.012, 0.4, 8);
+  private readonly vehicleBedGeometry = new THREE.BoxGeometry(0.018, 0.09, 0.37);
+  private readonly vehicleGlassGeometry = new THREE.BoxGeometry(0.25, 0.08, 0.006);
+  private readonly lampGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.01, 10);
+  private readonly trailGeometry = new THREE.BoxGeometry(0.025, 0.025, 0.42);
   private readonly vehicleBodyGeometry = new THREE.BoxGeometry(0.44, 0.15, 0.64);
   private readonly vehicleCabGeometry = new THREE.BoxGeometry(0.3, 0.15, 0.26);
   private readonly matrix = new THREE.Object3D();
   private readonly figureRoot = new THREE.Matrix4();
   private readonly figureInverse = new THREE.Matrix4();
+  private readonly weaponFrame = new THREE.Matrix4();
+  private readonly shieldFrame = new THREE.Matrix4();
+  private readonly muzzle = new THREE.Vector3();
   private falling = false;
   private readonly color = new THREE.Color();
   private lastMonth = -1;
   private lastFocus?: string;
   private disposed = false;
+  private readonly strategic: StrategicBattleEffects;
 
   constructor(private readonly state: SimulationState, private readonly elevationAt: (x: number, z: number) => number) {
     this.walking = new WalkabilityLayer(state.world);
     this.group.name = 'Witnessed campaigns';
+    this.strategic = new StrategicBattleEffects(elevationAt);
   }
 
   get report(): { campaigns: number; figures: number; budget: number } {
@@ -116,13 +126,15 @@ export class WarRenderer {
 
   updateDaylight(daylight: number): void {
     for (const visual of this.visuals.values()) for (const company of visual.companies) {
-      updateCosmicBodyMaterial(company.body.material as THREE.MeshStandardMaterial, daylight);
-      company.accents.updateDaylight(daylight);
+      company.human.daylight(daylight);
     }
   }
 
   update(delta: number, elapsed: number, focusId?: string, reducedMotion = false): void {
     if (this.disposed) return;
+    this.strategic.update(this.state, elapsed, reducedMotion, focusId);
+    if (this.strategic.group.visible) this.group.add(this.strategic.group);
+    else this.group.remove(this.strategic.group);
     // Keyed on the committed month so a time-sliced month is synced after its wars phase, not before.
     const month = committedMonth(this.state);
     if (this.lastMonth !== month || this.lastFocus !== focusId) {
@@ -145,6 +157,12 @@ export class WarRenderer {
           if (candidate.type === 'battle' && candidate.actors.includes(war.id) && candidate.month <= this.state.month) { event = candidate; break; }
         }
         visual.event = event;
+        visual.spectacle.setImpacts(event?.impacts ?? []);
+        visual.spectacle.setStructuralEvidence((event?.impacts ?? []).filter(hit => hit.targetKind === 'structure').flatMap(hit => {
+          const plot = this.state.settlements.flatMap(s => s.structurePlots ?? []).find(p => p.id === hit.targetId);
+          return plot && plot.condition < 0.85 ? [{ eventId: event!.id, structureId: plot.id, position: hit.position,
+            damage: 1 - plot.condition, burning: Boolean(plot.fire) }] : [];
+        }));
         visual.eventId = event?.id;
         visual.eventMode = event?.context['engagementMode'];
         if (event?.location) {
@@ -178,7 +196,7 @@ export class WarRenderer {
         visual.lastBattleCount = war.campaign.battleCount;
       }
       const battlePulse = !resolved && visual.event?.month === this.state.month && war.phase === 'battle' && war.campaign.blockedMonths === 0
-        ? clamp(1 - (elapsed - visual.battleTime) / 7, 0, 1)
+        ? clamp(1 - (elapsed - visual.battleTime) / 45, 0, 1)
         : 0;
 
       visual.aftermath.update(this.state.month, elapsed, reducedMotion, (start, end) => this.walking.isSegmentWalkable(start, end));
@@ -194,9 +212,22 @@ export class WarRenderer {
         const approach = engaged && !visual.event ? Math.max(0, (side === 0 ? -1 : 1) * ((center.x - frontPoint.x) * Math.sin(frontYaw) + (center.z - frontPoint.z) * Math.cos(frontYaw)) - gap / 2) : 0;
         const strength = side === 0 ? war.strengthA : war.strengthB;
         const count = engaged && visual.exchanges ? visual.exchanges.counts[side]! : formationCount(strength);
+        const casualties = Number(visual.event?.context[side ? 'casualtiesB' : 'casualtiesA']) || 0;
+        const currentCombatDeaths = Number(visual.event?.context[side ? 'combatDeathsB' : 'combatDeathsA'] ?? casualties) || 0;
+        const cumulative = Number(visual.event?.context[side ? 'cumulativeCasualtiesB' : 'cumulativeCasualtiesA'] ?? (side ? war.casualtiesB : war.casualtiesA));
+        const initial = side ? war.campaign.initialStrengthB : war.campaign.initialStrengthA;
+        const impactAt = Math.min(...(visual.event?.impacts ?? []).filter(hit => hit.targetKind === 'person' && hit.side === 1 - side).map(hit => hit.impactAt), 6);
+        const losses = Math.max(0, cumulative - casualties) + (reducedMotion || eventTime >= impactAt ? currentCombatDeaths : 0);
+        const survivorCount = Math.round(count * clamp(1 - losses / Math.max(1, initial), 0, 1));
+        // Preserve the sampled falling soldiers; distribute additional losses through every rank.
+        const receiptSlots = visual.aftermath.records.filter(record => record.eventId === visual.eventId && record.side === side).map(record => record.slot);
+        const lossSlots = new Set([...receiptSlots, ...Array.from({ length: count }, (_, slot) => slot).filter(slot => !receiptSlots.includes(slot))
+          .sort((a, b) => stableHash(`${war.id}:${side}:${a}:loss`) - stableHash(`${war.id}:${side}:${b}:loss`))]
+          .slice(0, count - survivorCount));
         const moving = !reducedMotion && (Math.abs(target - company.progress) > 0.002 || war.phase === 'marching') && war.campaign.blockedMonths === 0;
         let visible = 0;
         for (let i = 0; i < count; i++) {
+          if (engaged && lossSlots.has(i)) continue;
           if (engaged && visual.aftermath.suppress(visual.eventId, side, i, elapsed, reducedMotion)) continue;
           const rank = Math.floor(i / company.style.rankWidth);
           const slot = i % company.style.rankWidth;
@@ -227,11 +258,17 @@ export class WarRenderer {
           const tip = { x: poseX + Math.sin(figureYaw) * weaponExtent, z: poseZ + Math.cos(figureYaw) * weaponExtent };
           if (!this.walking.isSegmentWalkable(p, tip)) continue;
           p.x = poseX; p.z = poseZ;
+          if (this.strategic.casualtyAt(p, elapsed, reducedMotion, `${war.id}:${side}:${i}`, visual.event?.month ?? war.startMonth)) continue;
           if (!this.walking.isWalkable(p) || visual.aftermath.occupies(p, visual.eventId, elapsed, reducedMotion)) continue;
           const step = reducedMotion ? 0 : Math.sin(time * 8 + i * 1.9 + side) * (moving && !engaged ? 1 : 0);
           const ground = this.elevationAt(p.x, p.z);
-          this.soldier(company, visible, p, ground, figureYaw, pose, step, fade, engaged);
-          if (engaged && pose.ranged) visual.spectacle.weaponAttack(p.x, ground + 0.205, p.z, figureYaw, targetDistance, company.style.weapon, pose.flash, pose.flight, fade);
+          this.soldier(company, visible, p, ground, figureYaw, pose, step, fade, engaged, 0, i);
+          if (engaged && pose.ranged) {
+            this.muzzle.set(0, 0.004, company.style.weapon === 'bow' ? 0 : 0.155).applyMatrix4(this.weaponFrame);
+            const muzzleLead = Math.hypot(this.muzzle.x - p.x, this.muzzle.z - p.z);
+            visual.spectacle.weaponAttack(this.muzzle.x, this.muzzle.y, this.muzzle.z, figureYaw,
+              Math.max(0, targetDistance - muzzleLead), company.style.weapon, pose.flash, pose.flight, fade, 0);
+          }
           visible++;
         }
         const living = visible;
@@ -240,31 +277,30 @@ export class WarRenderer {
           if (record.side !== side) continue;
           const yaw = record.yaw;
           const p = record.position;
+          if (this.strategic.casualtyAt(p, elapsed, reducedMotion, record.id, record.month)) continue;
           // Pivot the original articulated soldier around its feet. At life=0 this is identity,
           // including equipment, appearance, body lean and arm pose from the analytic hit frame.
           this.matrix.position.set(p.x, frame.ground, p.z);
           this.matrix.rotation.set(0, yaw, 0); this.matrix.scale.setScalar(1); this.matrix.updateMatrix();
           this.figureInverse.copy(this.matrix.matrix).invert();
-          this.matrix.position.x -= Math.sin(yaw) * motion.retreat;
-          this.matrix.position.z -= Math.cos(yaw) * motion.retreat;
-          this.matrix.position.y += motion.fall * 0.025;
+          this.matrix.position.x -= Math.sin(yaw) * (motion.retreat + motion.throw);
+          this.matrix.position.z -= Math.cos(yaw) * (motion.retreat + motion.throw);
+          this.matrix.position.y += motion.fall * 0.025 + motion.lift;
           this.matrix.rotation.set(motion.pitch, yaw, 0, 'YXZ'); this.matrix.updateMatrix();
           this.figureRoot.multiplyMatrices(this.matrix.matrix, this.figureInverse);
           this.falling = true;
           const pose = { ...record.figure.pose, lean: record.figure.pose.lean * (1 - motion.settle) - motion.reaction,
             attack: record.figure.pose.attack * (1 - motion.settle), brace: record.figure.pose.brace * (1 - motion.settle),
             reach: THREE.MathUtils.lerp(record.figure.pose.reach, 0.03, motion.settle),
-            pitch: THREE.MathUtils.lerp(record.figure.pose.pitch, ['rifle', 'automatic'].includes(company.style.weapon) ? Math.PI / 2 : 0, motion.settle), recoil: record.figure.pose.recoil * (1 - motion.settle) };
-          this.soldier(company, visible++, p, frame.ground, yaw, pose, 0, frame.fade, true, motion.settle);
+            pitch: THREE.MathUtils.lerp(record.figure.pose.pitch, isFirearmWeapon(company.style.weapon) ? Math.PI / 2 : 0, motion.settle), recoil: record.figure.pose.recoil * (1 - motion.settle) };
+          this.soldier(company, visible++, p, frame.ground, yaw, pose, 0, frame.fade, true, motion.settle, record.slot);
           this.falling = false;
         }
         company.body.count = company.head.count = company.weapon.count = visible;
-        company.accents.mesh.count = visible;
-        company.accents.endFrame();
-        company.legs.count = company.arms.count = visible * 2;
+        company.human.endFrame(visible);
         company.shield.count = company.style.shields ? visible : 0;
         company.helmet.count = company.style.armour ? visible : 0;
-        for (const mesh of [company.body, company.head, company.legs, company.arms, company.shield, company.helmet, company.weapon]) mesh.instanceMatrix.needsUpdate = true;
+        for (const mesh of [company.body, company.head, company.shield, company.helmet, company.weapon]) mesh.instanceMatrix.needsUpdate = true;
 
         const bannerPoint = campaignPoint(war.campaign.route, company.progress, fallback);
         bannerPoint.x += -Math.sin(yaw) * 0.8 + Math.cos(yaw) * 1.05;
@@ -272,8 +308,8 @@ export class WarRenderer {
         const safeBanner = this.walking.isWalkable(bannerPoint) && living > 0;
         company.standard.pole.visible = company.standard.cloth.visible = safeBanner;
         const bannerGround = this.elevationAt(bannerPoint.x, bannerPoint.z);
-        company.standard.pole.position.set(bannerPoint.x, bannerGround + 0.75, bannerPoint.z);
-        company.standard.cloth.position.set(bannerPoint.x, bannerGround + 1.27, bannerPoint.z);
+        company.standard.pole.position.set(bannerPoint.x, bannerGround + 0.34, bannerPoint.z);
+        company.standard.cloth.position.set(bannerPoint.x, bannerGround + 0.56, bannerPoint.z);
         company.standard.cloth.rotation.y = yaw;
         company.standard.cloth.material.opacity = fade;
         const position = company.standard.cloth.geometry.getAttribute('position');
@@ -285,54 +321,57 @@ export class WarRenderer {
         company.standard.cloth.geometry.computeVertexNormals();
         company.camp.visible = !resolved && (war.phase === 'mobilizing' || war.phase === 'marching') && war.campaign.route.length > 1;
         this.updateSupport(company, center, yaw, living, moving, reducedMotion ? 0 : battlePulse, time, fade);
+        for (const support of company.support) if (this.strategic.casualtyAt({ x: support.group.position.x, z: support.group.position.z }, elapsed, reducedMotion, `${war.id}:${side}:support:${support.index}`, visual.event?.month ?? war.startMonth)) support.group.visible = false;
       });
 
-      visual.route.visible = focusId === war.id && war.campaign.route.length > 1;
+      visual.route.visible = focusId === war.id && war.phase !== 'battle' && war.campaign.route.length > 1;
       const dustCenter = campaignPoint(war.campaign.route, front, b.position);
       const dustBudget = Math.min(14, Math.round((visual.companies[0].style.dust + visual.companies[1].style.dust) * 0.5));
       visual.dust.count = !reducedMotion && battlePulse > 0 ? dustBudget : 0;
-      visual.dust.material.opacity = battlePulse * 0.065;
+      visual.dust.material.uniforms.opacity!.value = battlePulse * 0.18;
       for (let i = 0; i < visual.dust.count; i++) {
         const life = ((elapsed - visual.battleTime) * 0.3 + i / Math.max(1, dustBudget)) % 1;
         const angle = i * 2.399;
         const p = { x: dustCenter.x + Math.cos(angle) * life * 1.5, z: dustCenter.z + Math.sin(angle) * life * 1.5 };
         const size = (0.08 + life * 0.25) * Math.sin(life * Math.PI);
-        this.part(visual.dust, i, p.x, this.elevationAt(p.x, p.z) + life * 0.7 + 0.15, p.z, angle, life, size);
+        this.part(visual.dust, i, p.x, this.elevationAt(p.x, p.z) + life * 0.18 + 0.05, p.z, angle, life, size);
       }
       visual.dust.instanceMatrix.needsUpdate = true;
-      visual.spectacle.update(war, [a, b], visual.profiles, elapsed, battlePulse, fade, reducedMotion, visual.battleTime);
+      visual.spectacle.update(war, [a, b], visual.profiles, elapsed, battlePulse, fade, reducedMotion, visual.battleTime,
+        { front: frontPoint, yaw: frontYaw, gap });
     }
   }
 
   private soldier(company: Company, index: number, p: { x: number; z: number }, ground: number, yaw: number,
-    pose: WeaponPose, step: number, fade: number, engaged: boolean, settle = 0): void {
-    this.part(company.body, index, p.x, ground + 0.16 + Math.abs(step) * 0.012, p.z, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
-    company.accents.set(index, 'soldier', this.matrix.matrix, 1);
-    this.part(company.head, index, p.x + Math.sin(yaw) * pose.lean * 0.12, ground + 0.285 + Math.abs(step) * 0.012, p.z + Math.cos(yaw) * pose.lean * 0.12, yaw, pose.lean, fade * COMPANY_BODY_SCALE);
-    for (let leg = 0; leg < 2; leg++) {
-      const offset = (leg === 0 ? -1 : 1) * 0.03;
-      this.part(company.legs, index * 2 + leg, p.x + Math.cos(yaw) * offset, ground + 0.052, p.z - Math.sin(yaw) * offset, yaw, step * (leg === 0 ? 0.6 : -0.6), fade);
-    }
-    for (let arm = 0; arm < 2; arm++) {
-      const lateralArm = arm === 0 ? -0.05 : 0.05;
-      const armForward = 0.025 * (1 - settle);
-      const armPitch = engaged ? (arm === 0 && company.style.shields ? 0.8 + pose.brace * 0.35 : 0.9 + pose.attack * 0.55) : -step * 0.4;
-      this.part(company.arms, index * 2 + arm, p.x + Math.cos(yaw) * lateralArm + Math.sin(yaw) * armForward,
-        ground + 0.195, p.z - Math.sin(yaw) * lateralArm + Math.cos(yaw) * armForward, yaw, armPitch * (1 - settle), fade);
-    }
-    const combatReady = engaged;
+    pose: WeaponPose, step: number, fade: number, engaged: boolean, settle = 0, slot = index): void {
+    const combatReady = engaged && (pose.ranged || slot < company.style.rankWidth);
     if (company.style.shields) {
-      const shieldForward = combatReady && (company.style.weapon === 'spear' || company.style.weapon === 'club' || company.style.weapon === 'bow') ? 0.08 : 0.045;
+      const readyForward = combatReady && (company.style.weapon === 'spear' || company.style.weapon === 'club' || company.style.weapon === 'sword' || company.style.weapon === 'bow') ? 0.08 : 0.045;
+      const shieldForward = this.falling ? THREE.MathUtils.lerp(readyForward, -0.008, settle) : readyForward;
       this.part(company.shield, index, p.x + Math.sin(yaw) * shieldForward, ground + 0.18, p.z + Math.cos(yaw) * shieldForward, yaw, Math.PI / 2 - pose.brace * 0.22, fade);
     }
-    if (company.style.armour) this.part(company.helmet, index, p.x, ground + 0.305 + Math.abs(step) * 0.012, p.z, yaw, 0, fade);
-    const weaponForward = combatReady ? pose.reach - pose.recoil * 0.03 : 0.045;
-    const weaponPitch = combatReady ? pose.pitch : this.weaponPitch(company.style.weapon, false, step);
-    this.part(company.weapon, index, p.x + Math.sin(yaw) * weaponForward, ground + 0.205, p.z + Math.cos(yaw) * weaponForward, yaw, weaponPitch, fade);
+    const shieldFrame = this.shieldFrame.copy(this.matrix.matrix);
+    if (company.style.armour) this.part(company.helmet, index, p.x + Math.sin(yaw) * pose.lean * 0.12, ground + 0.282, p.z + Math.cos(yaw) * pose.lean * 0.12, yaw, pose.lean, fade);
+    const weaponForward = combatReady ? pose.reach - pose.recoil * 0.03
+      : this.falling ? THREE.MathUtils.lerp(0.045, 0.018, settle) : 0.045;
+    const reservePitch = this.weaponPitch(company.style.weapon, false, step);
+    const weaponPitch = combatReady ? pose.pitch
+      : this.falling ? THREE.MathUtils.lerp(reservePitch, 0, settle) : reservePitch;
+    // Compose grips in the original standing frame; the complete rig then shares one fall pivot.
+    const falling = this.falling;
+    this.falling = false;
+    const weaponHeight = company.style.weapon === 'spear' && !combatReady ? 0.265 : 0.205;
+    this.part(company.weapon, index, p.x + Math.sin(yaw) * weaponForward, ground + weaponHeight, p.z + Math.cos(yaw) * weaponForward, yaw, weaponPitch, fade);
+    const weaponFrame = this.weaponFrame.copy(this.matrix.matrix);
+    if (falling) shieldFrame.premultiply(this.figureInverse.copy(this.figureRoot).invert());
+    company.human.draw(index, slot, p.x, ground, p.z, yaw, pose, step, fade, company.style,
+      weaponFrame, shieldFrame, falling ? this.figureRoot : undefined, settle);
+    this.falling = falling;
+    if (falling) { weaponFrame.premultiply(this.figureRoot); company.weapon.setMatrixAt(index, weaponFrame); }
   }
 
   private weaponPitch(weapon: PrimaryWeaponVisual, combatReady: boolean, step: number): number {
-    if (weapon === 'rifle' || weapon === 'automatic') return combatReady ? 0 : -0.42 + step * 0.03;
+    if (isFirearmWeapon(weapon)) return combatReady ? 0 : -0.42 + step * 0.03;
     if (weapon === 'bow') return combatReady ? 0.2 : 0.05;
     if (weapon === 'spear') return combatReady ? 0.52 : 0.08 + step * 0.06;
     return combatReady ? 0.35 : 0.08 + step * 0.04;
@@ -359,6 +398,7 @@ export class WarRenderer {
         const recoil = battlePulse * Math.max(0, Math.sin(time * 8 + support.index * 2.4)) * 0.08;
         support.barrel.position.z = 0.23 - recoil;
       }
+      if (support.throwArm) support.throwArm.rotation.x = -0.65 + battlePulse * Math.max(0, Math.sin(time * 1.5 + support.index)) * 1.05;
     });
   }
 
@@ -398,7 +438,7 @@ export class WarRenderer {
         this.company(war, war.attacker, 0, group, profiles[0]),
         this.company(war, war.defender, 1, group, profiles[1]),
       ] as [Company, Company];
-      const dust = new THREE.InstancedMesh(this.dustGeometry, new THREE.MeshBasicMaterial({ color: '#c6ad85', transparent: true, opacity: 0.15, depthWrite: false }), 14);
+      const dust = new THREE.InstancedMesh(this.dustGeometry, battleAtmosphereMaterial('#a89477', 0.15), 14);
       dust.frustumCulled = false;
       const points = war.campaign.route.map(p => new THREE.Vector3(p.x, this.elevationAt(p.x, p.z) + 0.065, p.z));
       const route = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineDashedMaterial({ color: '#e6c78b', transparent: true, opacity: 0.22, dashSize: 0.3, gapSize: 0.42, depthWrite: false }));
@@ -419,40 +459,32 @@ export class WarRenderer {
     const accent = culture?.style.accent ?? '#ddba76';
     const style = militaryVisualStyle(profile);
     const material = new THREE.MeshStandardMaterial({ color: primary, roughness: style.doctrine === 'combined-arms' ? 0.72 : 0.9, metalness: style.armour ? 0.08 : 0 });
-    const cosmic = createCosmicBodyMaterial(false);
-    const trim = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.75, metalness: style.armour ? 0.12 : 0 });
+    const trim = new THREE.MeshStandardMaterial({ color: this.color.set(accent).lerp(new THREE.Color('#574735'), 0.7), roughness: 0.85, metalness: style.armour ? 0.12 : 0 });
     const dark = new THREE.MeshStandardMaterial({ color: '#433b35', roughness: 1 });
     const metal = new THREE.MeshStandardMaterial({ color: '#5b5e5b', roughness: 0.66, metalness: 0.18 });
-    const body = new THREE.InstancedMesh(this.bodyGeometry, cosmic, COMPANY_CAPACITY);
-    body.name = `Campaign soldiers ${side}`;
-    const head = new THREE.InstancedMesh(this.headGeometry, cosmic, COMPANY_CAPACITY);
-    const legs = new THREE.InstancedMesh(this.legGeometry, cosmic, COMPANY_CAPACITY * 2);
-    const arms = new THREE.InstancedMesh(this.legGeometry, cosmic, COMPANY_CAPACITY * 2);
-    const accents = new CosmicRoleAccents(COMPANY_CAPACITY);
-    this.color.set(cosmicRoleFor('soldier').color);
-    // Soldiers are the same obsidian species as the settlement they came from, so their meshes
-    // need the same per-instance material channels; the seeded defaults are a valid inhabitant.
-    for (const mesh of [body, head, legs, arms]) bindCosmicBodySurface(mesh);
-    for (const mesh of [body, head, legs, arms]) for (let i = 0; i < mesh.instanceMatrix.count; i++) mesh.setColorAt(i, this.color);
+    const localPeople = this.state.people.filter(person => person.homeId === settlementId && person.ageMonths >= 16 * 12);
+    const people = localPeople.length ? localPeople : this.state.people.filter(person => person.ageMonths >= 16 * 12);
+    const human = new CampaignHuman(COMPANY_CAPACITY, people, culture, style, side, this.elevationAt);
+    const body = human.meshes.torso, head = human.meshes.head;
     const shield = new THREE.InstancedMesh(this.shieldGeometry, trim, COMPANY_CAPACITY);
     const helmet = new THREE.InstancedMesh(this.helmetGeometry, metal, COMPANY_CAPACITY);
     const weaponGeometry = this.makeWeaponGeometry(style.weapon);
     const weapon = new THREE.InstancedMesh(weaponGeometry, style.weapon === 'rifle' || style.weapon === 'automatic' ? metal : dark, COMPANY_CAPACITY);
     weapon.name = `Campaign weapons ${side}`;
-    for (const mesh of [body, head, legs, arms, shield, helmet, weapon]) {
+    for (const mesh of [body, head, shield, helmet, weapon]) {
       mesh.frustumCulled = false;
       mesh.castShadow = true;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     }
 
     const pole = new THREE.Mesh(this.poleGeometry, dark);
-    const clothGeometry = new THREE.PlaneGeometry(0.58, 0.38, 8, 3).translate(0.29, 0, 0);
+    const clothGeometry = new THREE.PlaneGeometry(0.3, 0.18, 12, 5).translate(0.15, 0, 0);
     const cloth = new THREE.Mesh(clothGeometry, new THREE.MeshStandardMaterial({ color: accent, side: THREE.DoubleSide, roughness: 0.85, transparent: true }));
     const pos = clothGeometry.getAttribute('position');
     const rest = new Float32Array(pos.array as ArrayLike<number>);
     const colors = new Float32Array(pos.count * 3);
     for (let i = 0; i < pos.count; i++) {
-      this.color.set(Math.abs(pos.getY(i)) < 0.065 || pos.getX(i) > 0.47 ? primary : accent);
+      this.color.set(Math.abs(pos.getY(i)) < 0.03 || pos.getX(i) > 0.24 ? primary : accent);
       this.color.toArray(colors, i * 3);
     }
     clothGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -471,40 +503,118 @@ export class WarRenderer {
     }
 
     const support: SupportVisual[] = [];
-    for (let i = 0; i < style.artillery; i++) support.push(this.makeArtillery(i, material, dark, metal));
+    for (let i = 0; i < style.artillery; i++) support.push(profile.equipment.includes('siege-engines')
+      && !profile.equipment.includes('cannon') && !profile.equipment.includes('artillery')
+      ? this.makeSiegeEngine(i, material, dark, metal) : this.makeArtillery(i, material, dark, metal,
+        profile.equipment.includes('cannon') && !profile.equipment.includes('artillery')));
     for (let i = 0; i < style.vehicles; i++) support.push(this.makeVehicle(i, material, dark, metal));
-    group.add(body, head, legs, arms, accents.mesh, shield, helmet, weapon, pole, cloth, camp, ...support.map(item => item.group));
+    group.add(...Object.values(human.meshes), shield, helmet, weapon, pole, cloth, camp, ...support.map(item => item.group));
     const initial = war.phase === 'mobilizing' ? (side === 0 ? 0.12 : 0.84)
       : war.phase === 'marching' ? (side === 0 ? 0.12 + war.marchProgress * 0.62 : 0.84)
         : 0.76 + clamp(war.progress, -1, 1) * 0.08 + (side === 0 ? -0.015 : 0.015);
-    return { body, head, legs, arms, accents, shield, helmet, weapon, weaponGeometry, standard: { pole, cloth, rest }, camp, support, profile, style, progress: initial };
+    return { body, head, human, shield, helmet, weapon, weaponGeometry, standard: { pole, cloth, rest }, camp, support, profile, style, progress: initial };
   }
 
   private makeWeaponGeometry(weapon: PrimaryWeaponVisual): THREE.BufferGeometry {
-    if (weapon === 'spear') return new THREE.CylinderGeometry(0.009, 0.012, 0.5, 5);
-    if (weapon === 'bow') return new THREE.TorusGeometry(0.11, 0.008, 4, 8, Math.PI);
-    if (weapon === 'rifle') return new THREE.BoxGeometry(0.026, 0.03, 0.3);
-    if (weapon === 'automatic') return new THREE.BoxGeometry(0.034, 0.036, 0.32);
-    return new THREE.BoxGeometry(0.035, 0.24, 0.035);
+    const parts: THREE.BufferGeometry[] = [];
+    if (weapon === 'spear') parts.push(
+      new THREE.CylinderGeometry(0.005, 0.007, 0.44, 10).translate(0, -0.03, 0),
+      new THREE.ConeGeometry(0.018, 0.065, 4).scale(1, 1, 0.4).translate(0, 0.218, 0));
+    else if (weapon === 'bow') parts.push(
+      new THREE.TorusGeometry(0.105, 0.005, 6, 24, Math.PI).rotateZ(-Math.PI / 2),
+      new THREE.CylinderGeometry(0.001, 0.001, 0.21, 4));
+    else if (weapon === 'sword') parts.push(
+      new THREE.BoxGeometry(0.018, 0.17, 0.004).translate(0, 0.018, 0),
+      new THREE.ConeGeometry(0.009, 0.018, 4).scale(1, 1, 0.25).translate(0, 0.111, 0),
+      new THREE.BoxGeometry(0.06, 0.008, 0.008).translate(0, -0.064, 0),
+      new THREE.CylinderGeometry(0.006, 0.008, 0.045, 8).translate(0, -0.09, 0),
+      new THREE.SphereGeometry(0.009, 8, 6).translate(0, -0.116, 0));
+    else if (weapon === 'musket') parts.push(
+      new THREE.BoxGeometry(0.016, 0.022, 0.22).translate(0, -0.006, -0.025),
+      new THREE.CylinderGeometry(0.004, 0.005, 0.23, 10).rotateX(Math.PI / 2).translate(0, 0.006, 0.04),
+      new THREE.BoxGeometry(0.008, 0.014, 0.009).translate(0.009, 0.009, -0.04),
+      new THREE.TorusGeometry(0.009, 0.002, 4, 8).rotateY(Math.PI / 2).translate(0, -0.018, -0.055));
+    else if (isFirearmWeapon(weapon)) parts.push(
+      new THREE.BoxGeometry(0.018, 0.026, 0.11).translate(0, -0.004, -0.084),
+      new THREE.BoxGeometry(0.018, 0.022, 0.095),
+      new THREE.CylinderGeometry(0.004, 0.0055, 0.11, 10).rotateX(Math.PI / 2).translate(0, 0.004, 0.1),
+      new THREE.BoxGeometry(0.007, 0.02, 0.01).translate(0, -0.017, -0.025),
+      new THREE.BoxGeometry(0.008, 0.006, 0.015).translate(0, 0.018, 0.045));
+    else parts.push(new THREE.CylinderGeometry(0.009, 0.012, 0.21, 10),
+      new THREE.IcosahedronGeometry(0.027, 1).scale(0.8, 1.2, 0.8).translate(0, 0.087, 0));
+    if (weapon === 'automatic') parts.push(
+      new THREE.BoxGeometry(0.012, 0.037, 0.024).translate(0, -0.033, 0.004),
+      new THREE.BoxGeometry(0.012, 0.03, 0.018).rotateX(-0.18).translate(0, -0.028, -0.045));
+    const triangles = parts.map(part => part.toNonIndexed());
+    const merged = mergeGeometries(triangles)!;
+    [...parts, ...triangles].forEach(part => part.dispose());
+    return merged;
   }
 
-  private makeArtillery(index: number, material: THREE.Material, dark: THREE.Material, metal: THREE.Material): SupportVisual {
+  private makeArtillery(index: number, material: THREE.Material, dark: THREE.Material, metal: THREE.Material, cannon = false): SupportVisual {
     const group = new THREE.Group();
-    group.name = `artillery-${index}`;
+    group.name = `${cannon ? 'cannon' : 'artillery'}-${index}`;
     const carriage = new THREE.Mesh(this.artilleryCarriageGeometry, material);
     carriage.position.y = 0.08;
     const barrel = new THREE.Mesh(this.artilleryBarrelGeometry, metal);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.2, 0.23);
+    if (cannon) barrel.scale.set(1.6, 0.85, 1.6);
+    else {
+      const shield = new THREE.Mesh(this.artilleryCarriageGeometry, metal);
+      shield.scale.set(1.4, 2.5, 0.08); shield.position.set(0, 0.21, 0.06);
+      group.add(shield);
+    }
     for (const side of [-1, 1]) {
       const wheel = new THREE.Mesh(this.wheelGeometry, dark);
       wheel.rotation.z = Math.PI / 2;
       wheel.position.set(side * 0.18, 0.08, 0);
       group.add(wheel);
     }
-    group.add(carriage, barrel);
+    for (const side of [-1, 1]) {
+      const hub = new THREE.Mesh(this.hubGeometry, metal);
+      hub.rotation.z = Math.PI / 2;
+      hub.position.set(side * 0.18, 0.08, 0);
+      const trail = new THREE.Mesh(this.trailGeometry, dark);
+      trail.position.set(side * 0.07, 0.04, -0.29);
+      trail.rotation.y = side * 0.18;
+      group.add(hub, trail);
+    }
+    const axle = new THREE.Mesh(this.axleGeometry, metal);
+    axle.rotation.z = Math.PI / 2; axle.position.y = 0.08;
+    group.add(carriage, barrel, axle);
     group.traverse(object => { if (object instanceof THREE.Mesh) object.castShadow = true; });
     return { kind: 'artillery', group, barrel, index };
+  }
+
+  private makeSiegeEngine(index: number, material: THREE.Material, dark: THREE.Material, metal: THREE.Material): SupportVisual {
+    const group = new THREE.Group();
+    group.name = `siege-engine-${index}`;
+    const deck = new THREE.Mesh(this.artilleryCarriageGeometry, dark);
+    deck.scale.set(1.25, 0.75, 1.2); deck.position.y = 0.07;
+    for (const side of [-1, 1]) {
+      const frame = new THREE.Mesh(this.trailGeometry, dark);
+      frame.rotation.z = side * 0.25; frame.rotation.x = Math.PI / 2;
+      frame.position.set(side * 0.09, 0.24, -0.04);
+      for (const z of [-0.16, 0.16]) {
+        const wheel = new THREE.Mesh(this.wheelGeometry, material);
+        wheel.rotation.z = Math.PI / 2; wheel.position.set(side * 0.19, 0.07, z);
+        group.add(wheel);
+      }
+      group.add(frame);
+    }
+    const axle = new THREE.Mesh(this.axleGeometry, metal);
+    axle.rotation.z = Math.PI / 2; axle.position.set(0, 0.29, -0.04);
+    const throwArm = new THREE.Group();
+    throwArm.position.set(0, 0.29, -0.04);
+    const beam = new THREE.Mesh(this.trailGeometry, dark);
+    beam.position.z = 0.1;
+    const basket = new THREE.Mesh(this.hubGeometry, dark);
+    basket.position.set(0, 0.015, 0.3);
+    throwArm.add(beam, basket);
+    group.add(deck, axle, throwArm);
+    group.traverse(object => { if (object instanceof THREE.Mesh) object.castShadow = true; });
+    return { kind: 'siege', group, throwArm, index };
   }
 
   private makeVehicle(index: number, material: THREE.Material, dark: THREE.Material, metal: THREE.Material): SupportVisual {
@@ -513,7 +623,7 @@ export class WarRenderer {
     const body = new THREE.Mesh(this.vehicleBodyGeometry, material);
     body.position.y = 0.14;
     const cab = new THREE.Mesh(this.vehicleCabGeometry, metal);
-    cab.position.set(0, 0.26, -0.08);
+    cab.position.set(0, 0.26, 0.17);
     for (const x of [-0.19, 0.19]) {
       for (const z of [-0.22, 0.22]) {
         const wheel = new THREE.Mesh(this.wheelGeometry, dark);
@@ -522,7 +632,23 @@ export class WarRenderer {
         group.add(wheel);
       }
     }
-    group.add(body, cab);
+    for (const side of [-1, 1]) {
+      const bed = new THREE.Mesh(this.vehicleBedGeometry, material);
+      bed.position.set(side * 0.21, 0.24, -0.12);
+      group.add(bed);
+      const lamp = new THREE.Mesh(this.lampGeometry, metal);
+      lamp.rotation.x = Math.PI / 2;
+      lamp.position.set(side * 0.12, 0.16, 0.325);
+      group.add(lamp);
+    }
+    for (const z of [-0.22, 0.22]) {
+      const axle = new THREE.Mesh(this.axleGeometry, metal);
+      axle.rotation.z = Math.PI / 2; axle.position.set(0, 0.08, z);
+      group.add(axle);
+    }
+    const glass = new THREE.Mesh(this.vehicleGlassGeometry, dark);
+    glass.position.set(0, 0.28, 0.304);
+    group.add(body, cab, glass);
     group.traverse(object => { if (object instanceof THREE.Mesh) object.castShadow = true; });
     return { kind: 'vehicle', group, index };
   }
@@ -542,7 +668,7 @@ export class WarRenderer {
     });
     materials.forEach(material => material.dispose());
     visual.companies.forEach(company => {
-      company.accents.mesh.geometry.dispose();
+      company.human.dispose();
       company.standard.cloth.geometry.dispose();
       company.weaponGeometry.dispose();
     });
@@ -553,12 +679,16 @@ export class WarRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.strategic.dispose();
+    this.group.remove(this.strategic.group);
     for (const visual of this.visuals.values()) this.release(visual);
     this.visuals.clear();
     for (const geometry of [
-      this.bodyGeometry, this.headGeometry, this.legGeometry, this.shieldGeometry, this.helmetGeometry,
+      this.shieldGeometry, this.helmetGeometry,
       this.poleGeometry, this.tentGeometry, this.dustGeometry, this.wheelGeometry, this.artilleryCarriageGeometry,
       this.artilleryBarrelGeometry, this.vehicleBodyGeometry, this.vehicleCabGeometry,
+      this.hubGeometry, this.axleGeometry, this.vehicleBedGeometry, this.vehicleGlassGeometry,
+      this.lampGeometry, this.trailGeometry,
     ]) geometry.dispose();
   }
 }

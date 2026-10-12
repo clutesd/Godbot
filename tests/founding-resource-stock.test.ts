@@ -24,5 +24,5 @@ describe('earned founding stock', () => {
         expect(allocation.amount).toBeLessThanOrEqual(camp.localMaterials[allocation.materialId]!);
       }
     }
-  }, 20000);
+  });
 });

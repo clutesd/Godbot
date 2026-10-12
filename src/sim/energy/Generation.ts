@@ -2,6 +2,26 @@ import { hasKnowledgeCapability as knows } from '../knowledge/CapabilityContract
 import type { Settlement, SimulationState, WeatherKind } from '../types';
 import { FREEZING } from '../weather/Precipitation';
 import type { EnergyCarrier, GeneratorKind } from './types';
+import { planHydraulicSite } from '../../shared/HydraulicSite';
+
+const riverAccess = new WeakMap<SimulationState['world'], { month: number; flows: Map<number, number> }>();
+/** A short race can connect a dry-bank settlement to canonical freshwater. */
+export function accessibleRiverFlow(state: SimulationState, s: Settlement): number {
+  const cell = state.world.cells[s.cellIndex];
+  if (!cell) return 0;
+  if (cell.river) return cell.flow;
+  let cache = riverAccess.get(state.world);
+  if (!cache || cache.month !== state.month) {
+    cache = { month: state.month, flows: new Map() }; riverAccess.set(state.world, cache);
+  }
+  const prior = cache.flows.get(s.cellIndex);
+  if (prior !== undefined) return prior;
+  const site = planHydraulicSite(state.world, s.position, state.world.cellSize * 2);
+  // A distant stream behind a high bank requires engineering beyond this short mill race.
+  const flow = site && Math.abs(cell.elevation - state.world.terrain.height[site.index]!) <= 0.08 ? site.flow : 0;
+  cache.flows.set(s.cellIndex, flow);
+  return flow;
+}
 
 export interface GeneratorDefinition {
   kind: GeneratorKind;
@@ -17,8 +37,8 @@ export interface GeneratorDefinition {
 
 export const GENERATORS: readonly GeneratorDefinition[] = [
   { kind: 'animal', carrier: 'mechanical', capacity: 2, knowledge: ['wheel-axle', 'animal-husbandry'], cost: { timber: 3 }, work: 2, fuel: 'food', efficiency: 2 },
-  { kind: 'waterwheel', carrier: 'mechanical', capacity: 8, knowledge: ['rotary-machinery'], cost: { timber: 6, stone: 2 }, work: 4 },
-  { kind: 'windmill', carrier: 'mechanical', capacity: 7, knowledge: ['rotary-machinery'], cost: { timber: 7, textile: 1 }, work: 4 },
+  { kind: 'waterwheel', carrier: 'mechanical', capacity: 8, knowledge: ['wheel-axle', 'simple-gearing'], cost: { timber: 6, stone: 2 }, work: 4 },
+  { kind: 'windmill', carrier: 'mechanical', capacity: 7, knowledge: ['wheel-axle', 'simple-gearing'], cost: { timber: 7, textile: 1 }, work: 4 },
   { kind: 'steam', carrier: 'mechanical', capacity: 16, knowledge: ['mechanical-power', 'iron-working'], cost: { iron: 5, stone: 3 }, work: 8, cooling: true },
   { kind: 'generator', carrier: 'electric', capacity: 14, knowledge: ['electrical-generation', 'mechanical-power'], cost: { iron: 4, copper: 3 }, work: 8, cooling: true },
   { kind: 'coal', carrier: 'electric', capacity: 55, knowledge: ['electric-grid', 'precision-manufacturing'], cost: { steel: 8, copper: 5, stone: 10 }, work: 18, cooling: true },
@@ -39,10 +59,11 @@ const smooth01 = (value: number): number => {
 
 function hydroFactor(state: SimulationState, settlement: Settlement, kind: 'waterwheel' | 'hydro'): number {
   const cell = state.world.cells[settlement.cellIndex];
-  if (!cell?.river) return 0;
+  if (!cell) return 0;
   const weather = state.weather.cells[settlement.cellIndex];
   const runoff = clamp01((weather?.runoff ?? 0) * 3);
-  const baseFlow = clamp01(cell.flow);
+  const baseFlow = clamp01(accessibleRiverFlow(state, settlement));
+  if (baseFlow <= 0) return 0;
   const temperature = weather?.temperature ?? cell.temperature;
   const snowCover = clamp01((weather?.snowpack ?? 0) / 1.2);
   const freezeStress = clamp01((FREEZING - temperature) / 0.14) * snowCover;
@@ -127,17 +148,18 @@ export function siteGenerationFactor(state: SimulationState, s: Settlement, kind
     for (let i = 0; i < 20; i++) total += windFactor(kind, 0.12 + (i + 0.5) * 0.2 / 20);
     return total / 20;
   }
-  if (kind === 'waterwheel' || kind === 'hydro') return cell.river ? clamp01(cell.flow * (kind === 'waterwheel' ? 0.78 : 0.96)) : 0;
+  if (kind === 'waterwheel' || kind === 'hydro') return clamp01(accessibleRiverFlow(state, s) * (kind === 'waterwheel' ? 0.78 : 0.96));
   return environmentFactor(state, s, kind);
 }
 
 export function eligibleGenerator(state: SimulationState, s: Settlement, g: GeneratorDefinition): boolean {
-  if (!g.knowledge.every(k => knows(s, k))) return false;
+  const legacyMill = (g.kind === 'waterwheel' || g.kind === 'windmill') && knows(s, 'rotary-machinery');
+  if (!legacyMill && !g.knowledge.every(k => knows(s, k))) return false;
   const cell = state.world.cells[s.cellIndex];
   if (!cell) return false;
   const managedWater = Math.max(s.development?.water?.availability ?? 0, cell.lake ? 1 : 0, cell.river ? cell.flow : 0);
   if (g.cooling && managedWater <= 0.04) return false;
-  if (g.kind === 'hydro' || g.kind === 'waterwheel') return cell.river && cell.flow > 0.08;
+  if (g.kind === 'hydro' || g.kind === 'waterwheel') return accessibleRiverFlow(state, s) > 0.08;
   if (g.kind === 'nuclear') {
     return s.industry.active
       && s.industry.intensity >= 0.32

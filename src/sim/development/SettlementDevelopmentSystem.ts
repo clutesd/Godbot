@@ -132,7 +132,8 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
     healthcare: scale * ((1 - c.health) * 2 + s.pollution * 0.5 + d.cooperation * 0.2 + (waterState ? (1 - waterState.quality) * 0.8 : 0)),
     manufacturing: scale * (Math.min(1, c.artisans / 8) * 0.6 + s.industry.intensity * 2) + backing('craft-circle'),
     transport: c.routes ? scale * (0.3 + c.routes * 0.35 + clamp(c.movement / 5) * 0.3) * tradeAmplify : 0,
-    energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power),
+    energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power)
+      + (practical(s, 'simple-gearing') > 0 ? Math.min(scale, (s.energy?.ledgers.mechanical.demand ?? 0) * 0.3) : 0),
     water: scale * (s.urbanization * 1.3 + s.pollution + (c.water ? 0.1 : 0.55) + s.climateStress * 0.5
       + (waterState ? waterState.droughtStress * 1.8 + (1 - waterState.quality) * 0.8 + waterState.floodContamination * 0.7 : 0)),
     memory: pendingRemembrance(s) ? scale * 0.2 + 1.4 : c.memory > 0.3 ? scale * Math.min(1.8, c.memory) * d.longTermOrientation : 0,
@@ -149,7 +150,7 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
   const informal: ServiceSupply = { government: decentralized ? scale * 0.85 : scale * 0.2,
     security: scale * (decentralized ? 0.8 : 0.3) * (1 - s.conflictPressure),
     religion: scale * 0.25, healthcare: scale * 0.5, knowledge: scale * 0.2, water: informalWater,
-    manufacturing: scale * 0.3, food: scale * 0.2, energy: scale * 0.35, transport: scale * 0.25, memory: scale * 0.2 };
+    manufacturing: scale * 0.3, food: scale * 0.2, energy: practical(s, 'simple-gearing') > 0 || practical(s, 'electrical-generation') > 0 ? 0 : scale * 0.35, transport: scale * 0.25, memory: scale * 0.2 };
   return { pressures, informal };
 }
 
@@ -269,7 +270,8 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     case 'energy':
       if (c.artisans < 3) return undefined;
       form = 'workshop'; names = ['fuel yard', 'power workshop', 'generation station'];
-      if (!knows('fire-control', 0.2) || s.resources.wood <= 12) return undefined;
+      if (knows('simple-gearing', 0.25)) names[0] = 'millwright power yard';
+      if (!knows('fire-control', 0.2)) return undefined;
       if (knows('mechanical-power', 0.4)) maxLevel = 2;
       if (knows('electrical-generation', 0.45) && knows('precision-tools', 0.4) && c.artisans >= 6) maxLevel = 3;
       break;
@@ -378,14 +380,15 @@ function scaleRequirements(requirements: FlexibleMaterialRequirement[], factor: 
   return requirements.map(requirement => ({ ...requirement, amount: requirement.amount * factor }));
 }
 
-function resourceBlockers(settlement: Settlement, response: DevelopmentResponse, fuelReserve: number): DevelopmentBlocker[] {
+function resourceBlockers(settlement: Settlement, response: DevelopmentResponse): DevelopmentBlocker[] {
   const blockers: DevelopmentBlocker[] = [];
   for (const key of STOCK_KEYS) {
-    const required = response.cost[key] + (key === 'wood' ? fuelReserve : 0);
+    // The existing project authority pays every installment as work advances. Require the
+    // same initial delivery fraction as structural materials, not an idle full-building bill.
+    const required = response.cost[key] * 0.08;
     const available = settlement.resources[key];
     if (available >= required) continue;
-    const fuelOnly = key === 'wood' && fuelReserve > 0 && available >= response.cost.wood;
-    blockers.push({ code: fuelOnly ? 'fuel-reserve' : RESOURCE_BLOCK_CODE[key], resource: key, available, required });
+    blockers.push({ code: RESOURCE_BLOCK_CODE[key], resource: key, available, required });
   }
   return blockers;
 }
@@ -651,8 +654,10 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         candidate.responseLevel = response.level;
         candidate.action = action;
         if (plot) candidate.plotId = plot.id;
-        const fuelReserve = response.need === 'energy' || response.level === 3 && ['food', 'manufacturing'].includes(response.need) ? 12 : 0;
-        candidate.blockers.push(...resourceBlockers(settlement, response, fuelReserve));
+        // Construction pays its declared bill. An idle timber reserve is not a prerequisite
+        // for a wind/water site, and a fuel yard must be buildable in response to scarcity.
+        // The plant authority separately charges fuel when the completed plant operates.
+        candidate.blockers.push(...resourceBlockers(settlement, response));
         if (c.builders === 0 && !(response.form === 'field' && c.farmers > 0)) candidate.blockers.push({ code: 'no-builders', available: 0, required: 1 });
         if (candidate.blockers.length > 0) {
           candidates.push(candidate);

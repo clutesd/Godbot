@@ -47,7 +47,7 @@ describe('watcher narrative grounding', () => {
     sim.state.history.push(event(100, 'turning-point'));
     const scene = historian.chooseScene(sim.state, 'turning-point');
     historian.acquireScene(scene, sim.state, true);
-    expect(scene.statement.text).toContain('The recorded outcome: A recorded change');
+    expect(scene.statement.text).toContain('A recorded change.');
     expect(scene.statement.text).not.toContain('An earlier warning');
     expect(historian.validateStatement(scene.statement, sim.state)).toBe(true);
   });
@@ -72,6 +72,10 @@ describe('watcher narrative grounding', () => {
     expect(refreshed.statement.text).toContain(`I first observed ${settlement.name} 10 years ago.`);
     expect(refreshed.statement.text.match(/I first observed/g)).toHaveLength(1);
     expect(historian.validateStatement(refreshed.statement, sim.state)).toBe(true);
+    for (let i = 0; i < 4; i++) historian.acquireScene(scene(), sim.state, false);
+    const returning = historian.refreshScene(scene(), sim.state)!;
+    historian.acquireScene(returning, sim.state, true);
+    expect(returning.statement.text).not.toContain('I first observed');
   });
 
   it('shows grounded watcher text in the actual camera caption at physical arrival', () => {
@@ -86,7 +90,7 @@ describe('watcher narrative grounding', () => {
       director.update(0.1, frame / 10, sim.state, () => 0);
       if (director.observation.narrationVisible && director.observation.eventType === 'atomic-threshold') caption = director.observation.detail;
     }
-    expect(caption).toContain('The recorded outcome: A recorded change');
+    expect(caption).toContain('A recorded change.');
     expect(caption).not.toContain('For generations');
     expect(caption).not.toContain('earliest surviving record');
   });

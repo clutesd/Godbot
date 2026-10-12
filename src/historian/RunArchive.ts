@@ -4,6 +4,7 @@ import { SeededRandom } from '../sim/prng';
 import { representedPopulation } from '../sim/advanced/AdvancedCivilizationSystem';
 import type { Culture, HistoricalEvent, Institution, Person, Polity, Settlement, SimulationState, War } from '../sim/types';
 import type { CrossRunContext, HistorianPrediction, HistorianStatement } from './types';
+import { isChronicleEvent } from './EventCoverage';
 
 export const HISTORIAN_ARCHIVE_SCHEMA_VERSION = 3;
 const DATABASE_NAME = 'godbox-historian';
@@ -98,19 +99,8 @@ export interface RunArchiveRecord {
   updatedAt: string;
 }
 
-const IMPORTANT_EVENT_TYPES = new Set<HistoricalEvent['type']>([
-  'pressure-detected', 'response-attempted', 'response-resolved', 'adaptation-established',
-  'ARRIVAL_DAY',
-  'resource-deposit-discovered', 'resource-site-established', 'resource-site-abandoned', 'resource-depleted', 'recipe-learned', 'resource-trade',
-  'settlement-founded', 'settlement-abandoned', 'major-migration', 'first-contact', 'trade-route-established',
-  'discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization',
-  'institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'war-campaign', 'battle', 'war-ended', 'political-transition', 'cultural-shift', 'harvest-crisis', 'recovery',
-  'statistical-transition', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'nuclear-restraint', 'nuclear-disarmament', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange',
-  'pandemic', 'ecological-crisis', 'climate-crisis', 'resource-crisis', 'autonomous-weapons-crisis', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition',
-  'fermi-question', 'fermi-hypothesis', 'natural-catastrophe', 'civilization-collapse', 'civilization-recovery', 'planetary-stability', 'post-biological-transition', 'observation-lost', 'outcome-classified',
-]);
 const POLITICAL_TYPES = new Set<HistoricalEvent['type']>(['institution-formed', 'alliance-formed', 'alliance-ended', 'leadership-succession', 'war-declared', 'war-ended', 'political-transition', 'nuclear-restraint', 'nuclear-disarmament', 'nuclear-crisis', 'civilization-collapse', 'planetary-stability']);
-const TECHNOLOGY_TYPES = new Set<HistoricalEvent['type']>(['discovery', 'knowledge-adopted', 'technology-transformation', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'post-biological-transition']);
+const TECHNOLOGY_TYPES = new Set<HistoricalEvent['type']>(['discovery', 'knowledge-adopted', 'technology-transformation', 'technology-widespread', 'knowledge-lost', 'knowledge-rediscovered', 'infrastructure-built', 'archive-destroyed', 'industrialization-stage', 'industrialization', 'atomic-threshold', 'nuclear-energy', 'nuclear-medicine', 'nuclear-weapons-developed', 'machine-intelligence-transition', 'first-orbit', 'offworld-settlement', 'interplanetary-transition', 'post-biological-transition']);
 const CONFLICT_TYPES = new Set<HistoricalEvent['type']>(['war-declared', 'war-campaign', 'battle', 'war-ended', 'nuclear-crisis', 'nuclear-use', 'nuclear-exchange', 'autonomous-weapons-crisis']);
 
 export function configurationFingerprint(config: GodboxConfig): string {
@@ -175,7 +165,7 @@ export class RunRecordBuilder {
 
   constructor(readonly identity: RunIdentity, private readonly config: GodboxConfig, initialState: SimulationState, prior?: RunArchiveRecord) {
     observeHistory(initialState, event => {
-      if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
+      if (isChronicleEvent(event)) this.events.set(event.id, structuredClone(event));
       if (event.type === 'death') this.captureRecordedDeaths([event], this.representativeIds);
     });
     const population = representedPopulation(initialState);
@@ -197,7 +187,7 @@ export class RunRecordBuilder {
     this.representativeIds = representativeIds;
     const newEvents = eventsAfter(state.history, this.processedSequence);
     if (newEvents.length) this.processedSequence = eventSequence(newEvents[newEvents.length - 1]!);
-    for (const event of newEvents) if (IMPORTANT_EVENT_TYPES.has(event.type) && (event.significance >= 0.42 || event.type !== 'battle')) this.events.set(event.id, structuredClone(event));
+    for (const event of newEvents) if (isChronicleEvent(event)) this.events.set(event.id, structuredClone(event));
     const population = representedPopulation(state);
     const beforeHistory = Boolean(state.arrival && state.arrival.phase !== 'HISTORY_RUNNING');
     if (population >= Math.max(this.lastPeakMilestone + 50, this.lastPeakMilestone * 1.25)) {

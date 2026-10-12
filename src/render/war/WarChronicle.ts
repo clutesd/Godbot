@@ -39,7 +39,7 @@ export class WarChronicle {
   update(state: SimulationState, warId?: string): void {
     // War authority changes on simulation months, while the renderer calls this every RAF. Avoid
     // repeated array scans and DOM/class writes when neither the month nor observed war changed.
-    const requestKey = `${warId ?? ''}:${state.month}:${state.wars.length}:${state.settlements.length}`;
+    const requestKey = `${warId ?? ''}:${state.month}:${state.eventSequence ?? state.history.length}:${state.wars.length}:${state.settlements.length}`;
     if (requestKey === this.lastRequestKey) return;
     this.lastRequestKey = requestKey;
     const war = warId ? state.wars.find(w => w.id === warId) : undefined;
@@ -49,7 +49,7 @@ export class WarChronicle {
     this.root.hidden = !visible;
     this.root.parentElement?.classList.toggle('witnessing-war', visible);
     if (!visible || !war || !a || !b) { this.lastSignature = ''; return; }
-    const signature = `${war.id}:${state.month}:${war.phase}`;
+    const signature = `${war.id}:${state.month}:${war.phase}:${war.casualtiesA}:${war.casualtiesB}`;
     if (signature === this.lastSignature) return;
     this.lastSignature = signature;
     const chapter = WAR_CHAPTERS[war.phase];

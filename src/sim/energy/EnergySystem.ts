@@ -25,6 +25,7 @@ import { buildWork, constructGrid, deliver, dispatchInputCapacity, powerPath } f
 import { prepareElectricDemand, type ElectricConsumer } from './Demand';
 import { applyMechanicalCoverage, facilityMechanicalDemand } from '../processing/FacilityPower';
 import { POWER_PRIORITIES, energyAt, energyWorld, ledger, powerServiceCoverage, type EnergyPlant, type GeneratorKind } from './types';
+import { recordKnowledgeWork } from '../knowledge/WorkExperience';
 
 function milestone(state: SimulationState, s: Settlement, key: string, description: string, plant?: EnergyPlant): void {
   const world = energyWorld(state);
@@ -37,12 +38,12 @@ function milestone(state: SimulationState, s: Settlement, key: string, descripti
 }
 function constructPlants(state: SimulationState, s: Settlement): void {
   const e = energyAt(s);
-  const sites = (s.structurePlots ?? []).filter(p => p.development?.status === 'active' && !p.accessRestricted && (p.development.need === 'energy' || p.development.need === 'manufacturing'));
+  const sites = (s.structurePlots ?? []).filter(p => p.development?.status === 'active' && !p.accessRestricted && (p.development.need === 'energy' || p.development.need === 'manufacturing' || p.development.need === 'food' && p.development.form !== 'field'));
   // Retrofit existing, terrain-validated industrial plots. One machine per physical site.
   for (const site of sites) {
     let plant = e.plants.find(p => p.plotId === site.id);
     if (!plant) {
-      const choices = GENERATORS.filter(g => eligibleGenerator(state, s, g) && e.ledgers[g.carrier].demand > e.plants.filter(p => p.progress >= 1 && generatorDefinition(p.kind).carrier === g.carrier).reduce((n, p) => n + p.output, 0) * 1.15);
+      const choices = GENERATORS.filter(g => (site.development?.need !== 'food' || g.carrier === 'mechanical') && eligibleGenerator(state, s, g) && e.ledgers[g.carrier].demand > e.plants.filter(p => generatorDefinition(p.kind).carrier === g.carrier).reduce((n, p) => n + generatorDefinition(p.kind).capacity * siteGenerationFactor(state, s, p.kind), 0) * 0.85);
       choices.sort((a, b) => score(b) - score(a));
       function score(g: typeof GENERATORS[number]): number {
         if (g.kind === 'nuclear' && !nuclearBuildJustified(state, s)) return 0;
@@ -123,6 +124,14 @@ function operate(state: SimulationState, s: Settlement, p: EnergyPlant, need: nu
   }
   p.output = Math.max(0, output); p.status = output > 0 ? 'running' : 'idle';
   if (output > 0) {
+    recordKnowledgeWork(s, 'energy', Math.log1p(output));
+    if (g.carrier === 'mechanical') {
+      recordKnowledgeWork(s, 'mechanics', Math.log1p(output));
+      for (const id of ['wheel-axle', 'simple-gearing', 'leverage']) {
+        const record = s.knowledge.records[id];
+        if (record && !record.dormant) { record.practice = Math.min(1, record.practice + Math.log1p(output) * 0.001); record.lastUsedMonth = state.month; }
+      }
+    }
     milestone(state, s, g.carrier === 'mechanical' ? 'first-mechanical-power' : 'first-electricity', g.carrier === 'mechanical' ? 'Machinery performs sustained useful work.' : 'A working generator produces electricity.', p);
     if (p.kind === 'steam') milestone(state, s, 'first-steam-engine', 'A fuel-fed steam engine enters service.', p);
     if (p.kind === 'nuclear') milestone(state, s, 'first-nuclear-station', 'A cooled and maintained nuclear station supplies electricity.', p);
@@ -147,7 +156,9 @@ export function advanceEnergy(state: SimulationState): void {
     thermal.demand = s.survival?.cold.fuelNeed ?? 0;
     thermal.generated = thermal.supplied = s.survival?.cold.fuelUsed ?? 0;
     // Aggregate workshop demand plus the shaft load of every mechanically driven processing facility.
-    e.ledgers.mechanical.demand = (knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 : 0) + facilityMechanicalDemand(s);
+    const grainWork = (s.fields ?? []).some(f => (f.crop === 'cereal' || f.crop === 'dryland') && f.stage === 'mature' && f.harvestRemaining > 0)
+      ? Math.min(3, population * 0.02) : 0;
+    e.ledgers.mechanical.demand = (knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 + grainWork : 0) + facilityMechanicalDemand(s);
     consumers.set(s.id, knows(s, 'electrical-generation') ? prepareElectricDemand(s, population) : prepareElectricDemand(s, 0));
     if (!knows(s, 'electrical-generation')) {
       const service = e.service;
