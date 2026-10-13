@@ -8,6 +8,7 @@ import { BIOME_LIFE, ECOLOGY_GLSL, ecologyUniforms, type EcologyField, type Ecol
 import type { TerrainSurface } from '../terrain/TerrainSurface';
 import { resolveTreeLifecycle, type TreePlacement } from './ForestPlanner';
 import { insideVegetationTerrain } from './VegetationPlacement';
+import { ZoneIndex } from './ZoneIndex';
 
 type Kind = 'fungus' | 'flower' | 'lichen';
 interface Colony { x: number; z: number; rotation: number; scale: number; colour: THREE.Color; kind: Kind; tree: TreePlacement }
@@ -110,11 +111,12 @@ export class BioluminescentFlora {
     const colours = this.particles.geometry.getAttribute('color');
     let flora = 0;
     let motes = 0;
+    const cleared = new ZoneIndex(clearings);
     for (const colony of this.colonies) {
       const distance = Math.hypot(colony.x - camera.x, colony.z - camera.z);
       const fade = 1 - smoothstep(55, 100, distance);
       if (fade <= 0 || this.ecology.vitalityAt(colony.x, colony.z) < 0.012) continue;
-      if (clearings.some(zone => Math.hypot(colony.x - zone.x, colony.z - zone.z) < zone.radius)) continue;
+      if (cleared.contains(colony.x, colony.z)) continue;
       const lifecycle = resolveTreeLifecycle(colony.tree, month / 12);
       if (!lifecycle.foliageVisible || lifecycle.fallen) continue;
       const ground = this.surface.heightAt(colony.x, colony.z);

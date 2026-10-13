@@ -52,6 +52,7 @@ export interface FacilityHeatSpec {
 export interface FacilityKnowledgeNeed { id: string; minPractice: number }
 
 export interface FacilityTierSpec {
+  knowledgeAny?: readonly (readonly FacilityKnowledgeNeed[])[];
   tier: number;
   /** Stable kind id for the tier (`saw-pit`, `sawmill`, ...). */
   kind: string;

@@ -1,14 +1,16 @@
 import { FIRST_FIRE_DURATION_SECONDS } from './founding/FoundingFirstFirePresentation';
 import { MilestoneIndex } from '../historian/Milestones';
+import { eventNewsWindow } from '../historian/EventCoverage';
 import { isEarlyDocumentary } from '../historian/EarlyDocumentary';
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
+import { ActionWitness } from './ActionWitness';
 import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
 import { CinematicSequencePlanner, type CinematicBeatRole, type CinematicPlannedShot } from './CinematicSequencePlanner';
 import { easeCameraFov, screenSpaceComposition } from './ScreenSpaceComposition';
 import { planTerrainAwareCameraRoute, smoothCameraRoute } from './CameraRoutePlanner';
 import { arrivalSequenceFocus } from './founding/ArrivalPresentation';
-import { campaignFocus } from '../sim/war/Campaign';
+import { warCameraFrame } from './war/WarCamera';
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import type { AudioCategory, DocumentaryCompletionMode, DocumentaryShotScale, HistorianStatement, ObservationCandidate, ObservationKind } from '../historian/types';
@@ -130,6 +132,7 @@ export interface DocumentaryCompletionInput {
   readonly actionProgress?: number;
   readonly contactStrength?: number;
   readonly partnerPresent?: boolean;
+  readonly payoffWitnessed?: boolean;
 }
 
 export function documentaryMinimumHoldSeconds(role: CinematicBeatRole | undefined, kind: ObservationKind | undefined): number {
@@ -151,8 +154,9 @@ export function documentaryShotShouldComplete(input: DocumentaryCompletionInput)
     return input.settled && input.ageSeconds >= Math.max(minimum, input.durationSeconds * 0.55);
   }
   if (input.subjectPresent === false) return true;
+  if (input.payoffWitnessed !== undefined) return input.payoffWitnessed;
   if (input.actionProgress !== undefined || input.contactStrength !== undefined) {
-    return (input.actionProgress ?? 0) >= 0.86 || (input.contactStrength ?? 0) >= 0.7;
+    return false;
   }
   if (input.partnerPresent === false) return true;
   return input.settled && input.ageSeconds >= Math.max(minimum, input.durationSeconds * 0.72);
@@ -169,7 +173,7 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
   'traveler-follow': { radius: [2.2, 3.2], height: [0.75, 1.15], targetHeight: 0.16, durationScale: 1.18 },
   'institution-exterior': { radius: [6, 10], height: [2.6, 4.5], targetHeight: 0.65, durationScale: 1.24 },
   'discovery-scene': { radius: [1.55, 2.35], height: [0.45, 0.72], targetHeight: 0.12, durationScale: 1.42 },
-  'battle-overview': { radius: [24, 34], height: [21, 31], targetHeight: 1, durationScale: 1.3 },
+  'battle-overview': { radius: [3.5, 5.5], height: [0.85, 1.35], targetHeight: 0.16, durationScale: 1.3 },
   'aftermath-pullback': { radius: [30, 42], height: [27, 39], targetHeight: 0.7, durationScale: 1.4 },
   'city-growth-timelapse': { radius: [20, 29], height: [17, 25], targetHeight: 1.4, durationScale: 1.35 },
   'night-transition': { radius: [27, 38], height: [24, 34], targetHeight: 0.8, durationScale: 1.18 },
@@ -180,6 +184,16 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
   'civilization-ending': { radius: [46, 64], height: [42, 60], targetHeight: 0.7, durationScale: 1.7 },
   'historian-context': { radius: [32, 45], height: [30, 43], targetHeight: 0.8, durationScale: 1.3 },
 };
+
+/** Planned scale owns the distance, while kind continues to own the subject's behavior. */
+export function documentaryFramingFor(kind: ObservationKind, scale?: DocumentaryShotScale): CameraFraming {
+  const base = FRAMING[kind];
+  if (!['worker-follow', 'traveler-follow', 'discovery-scene', 'street-observation'].includes(kind) || !scale) return base;
+  if (scale === 'detail') return { ...base, radius: [1.45, 2.25], height: [0.42, 0.7] };
+  if (scale === 'human') return { ...base, radius: [2.6, 3.4], height: [0.8, 1.1] };
+  if (scale === 'medium') return { ...base, radius: [4.2, 5.4], height: [1.3, 1.8] };
+  return { ...base, radius: [9, 12], height: [4.5, 6] };
+}
 
 const DOCUMENTARY_BREAK_TYPES = new Set([
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
@@ -230,6 +244,8 @@ export function cameraFramingFor(kind: ObservationKind): CameraFraming {
 }
 
 export function cameraClearanceFor(kind: ObservationKind | undefined): CameraClearance {
+  if (kind === 'battle-overview') return { lens: 0.38, sightline: 0.06 };
+  if (kind === 'aftermath-pullback') return { lens: 0.7, sightline: 0.1 };
   if (kind === 'worker-follow' || kind === 'discovery-scene') return { lens: 0.42, sightline: 0.12 };
   if (kind === 'street-observation') return { lens: 0.72, sightline: 0.22 };
   if (kind === 'traveler-follow') return { lens: 1.1, sightline: 0.36 };
@@ -245,6 +261,7 @@ export function cameraClearanceForScene(kind: ObservationKind | undefined, scene
 }
 
 export function cameraTargetFloorFor(kind: ObservationKind | undefined): number {
+  if (kind === 'battle-overview' || kind === 'aftermath-pullback') return 0.12;
   if (kind === 'worker-follow' || kind === 'discovery-scene') return 0.08;
   if (kind === 'street-observation' || kind === 'traveler-follow') return 0.12;
   return 0.35;
@@ -1249,7 +1266,9 @@ export class CameraDirector {
   private observationState?: SimulationState;
   private readonly milestoneIndex = new MilestoneIndex();
   private mustWitnessEvents(state: SimulationState): SimulationState['history'] {
-    return this.milestoneIndex.read(state.history);
+    // Firsts remain in the historical record, but cannot drag a mature world back to its opening.
+    return this.milestoneIndex.read(state.history).filter(event => event.month <= state.month
+      && state.month - event.month <= Math.min(120, eventNewsWindow(event)));
   }
   readonly sceneLifecycle = new Map<string, 'proposed' | 'reserved' | 'traveling' | 'acquired' | 'performed' | 'released'>();
   readonly sceneTransitions: Array<{ sceneId: string; phase: 'proposed' | 'reserved' | 'traveling' | 'acquired' | 'performed' | 'released' }> = [];
@@ -1273,6 +1292,9 @@ export class CameraDirector {
   private recoveryBridgeSeconds = 0;
   private recoveryBridgeFov?: number;
   private shotAge = 0;
+  private readonly actionWitness = new ActionWitness();
+  private storyAzimuth?: number;
+  private storyActionTarget?: string;
   private lastHumanShot = false;
   private shotDuration = 12;
   private currentScene?: ObservationCandidate;
@@ -1293,6 +1315,8 @@ export class CameraDirector {
   private sequenceRevealed = false;
   private lastNarrationSeconds = 0;
   private readonly sequencePlanner = new CinematicSequencePlanner();
+  private photographedWarId?: string;
+  private warCameraAzimuth = 0;
   private activeSequence?: { id: string; ordinal: number; total: number; role: CinematicBeatRole; narrate: boolean; scale: DocumentaryShotScale; threadId: string; anchorEventId?: string };
   private externalPoseRecoveryPending = false;
   private interruptedFlightResumePending = false;
@@ -1961,6 +1985,11 @@ export class CameraDirector {
     focusEventId?: string,
     elapsedSeconds = 0,
   ): void {
+    if (this.currentScene?.editorial?.desiredActivity === 'construct'
+      && this.activeSequence?.role === 'detail' && !this.actionWitness.complete) {
+      // A timed-out detail does not earn a payoff beat. Yield to current history.
+      this.sequencePlanner.interrupt();
+    }
     if (this.acquiredScene && this.sceneLifecycle.get(this.acquiredScene.id) === 'acquired') {
       if (this.shotAge >= documentaryMinimumHoldSeconds(this.activeSequence?.role, this.acquiredScene.kind)) {
         this.transitionScene(this.acquiredScene.id, 'performed');
@@ -1975,7 +2004,7 @@ export class CameraDirector {
       this.sequencePlanner.interrupt();
       this.activeSequence = undefined;
       const anchor = this.historian.chooseScene(state, focusEventId);
-      const first = this.sequencePlanner.plan(state, anchor, this.historian.candidates(state)
+      const first = this.sequencePlanner.plan(state, anchor, this.historian.planningCandidates(state, anchor)
         .filter(candidate => !this.historian.isSubjectDeferred(candidate.subjectId)), this.acquiredScene);
       scene = first.scene;
       this.activeSequence = this.sequenceState(first);
@@ -1991,7 +2020,8 @@ export class CameraDirector {
       if (planned) {
         const fresh = this.historian.refreshScene(planned.scene, state);
         // A sequence is a proposal, not a frozen script. Changed/departed subjects yield to live history.
-        if (!fresh || this.isEventCoolingDown(fresh.event?.id)) {
+        if (!fresh || this.isEventCoolingDown(fresh.event?.id)
+          || planned.scene.editorial?.desiredActivity === 'construct' && fresh.editorial?.desiredActivity !== 'construct') {
           this.sequencePlanner.interrupt();
           planned = undefined;
         } else {
@@ -2009,6 +2039,7 @@ export class CameraDirector {
         // planner continuously claims ordinary anchors and this path can never run.
         let humanScene: ObservationCandidate | undefined;
         if (!isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id)
+          && anchor.editorial?.narration !== 'required'
           && !anchor.event && !anchor.id.startsWith('development:') && !anchor.id.startsWith('human:') && !this.lastHumanShot) {
           let best: { id: string; view: CameraSubjectPresentation; score: number } | undefined;
           for (const id of this.humanSubjects?.() ?? []) {
@@ -2049,9 +2080,9 @@ export class CameraDirector {
           scene = humanScene;
           this.activeSequence = undefined;
         } else {
-          const eligibleForSequence = anchor.kind !== 'landscape-pause' && anchor.kind !== 'night-transition' && !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:') && !anchor.id.startsWith('development:');
+          const eligibleForSequence = anchor.kind !== 'landscape-pause' && anchor.kind !== 'night-transition' && !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:') && (!anchor.id.startsWith('development:') || anchor.editorial?.desiredActivity === 'construct');
           if (eligibleForSequence) {
-            const candidates = this.historian.candidates(state).filter(candidate =>
+            const candidates = this.historian.planningCandidates(state, anchor).filter(candidate =>
               !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id)
               && !this.historian.isSubjectDeferred(candidate.subjectId));
             const first = this.sequencePlanner.plan(state, anchor, candidates, this.acquiredScene);
@@ -2142,7 +2173,7 @@ export class CameraDirector {
     this.reframeLift = 0;
     this.resetFrameWatch();
 
-    const framing = FRAMING[scene.kind];
+    const framing = documentaryFramingFor(scene.kind, this.activeSequence?.scale);
     const scenicProfile = scenicFlightProfileFor(scene.id);
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
@@ -2163,6 +2194,10 @@ export class CameraDirector {
     this.shotDuration = scenicProfile?.durationSeconds
       ?? editorialTiming?.durationSeconds
       ?? baseDuration * framing.durationScale * motionDurationScale;
+    if (scene.statement.claims.warId && this.activeSequence) {
+      this.shotDuration = this.activeSequence.role === 'establish' ? 5
+        : this.activeSequence.role === 'release' ? 7 : 6;
+    }
     // Authored opening beats own their timing. The longer documentary holds are for ordinary
     // human observation after Arrival; applying them to founding cast/release beats stretches a
     // deliberately paced 6–8 second sequence into 18–20 second stalls.
@@ -2201,8 +2236,19 @@ export class CameraDirector {
       : anchor ? anchor.azimuth + continuityVariation * 0.5 : inheritedAzimuth + continuityVariation)
       + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
 
+    const initialAction = this.subjectPresentation?.(scene.subjectId)?.action;
+    if (this.activeSequence?.ordinal === 0 && initialAction) {
+      const actor = this.subjectPresentation?.(scene.subjectId);
+      if (actor) baseAzimuth = interactionCameraComposition(actor, initialAction, baseAzimuth).azimuth;
+    }
+
     // Do not photograph the same place from the same side twice in a row.
-    const diversify = !anchor && !isFoundingCameraScene(scene.id) && !scenicProfile
+    const localContinuity = this.acquiredScene && (this.acquiredScene.subjectId === scene.subjectId
+      || Math.hypot(this.acquiredScene.position.x - scene.position.x, this.acquiredScene.position.z - scene.position.z) < 7);
+    if (this.activeSequence && this.activeSequence.ordinal > 0 && localContinuity && this.storyAzimuth !== undefined) {
+      baseAzimuth = this.storyAzimuth;
+    }
+    const diversify = (!this.activeSequence || this.activeSequence.ordinal === 0) && !anchor && !isFoundingCameraScene(scene.id) && !scenicProfile
       && scene.kind !== 'regional-travel' && scene.kind !== 'battle-overview' && scene.kind !== 'aftermath-pullback';
     if (diversify && this.recentAngles.some(entry => Math.hypot(entry.x - focusX, entry.z - focusZ) < 7
       && angularDistance(entry.azimuth, baseAzimuth) < 0.55)) {
@@ -2220,6 +2266,7 @@ export class CameraDirector {
 
     const clear = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
     this.shotAzimuth = clear.azimuth;
+    if (this.activeSequence?.ordinal === 0) this.storyAzimuth = this.shotAzimuth;
     radius *= clear.scale;
     if (!isFoundingCameraScene(scene.id) && !scenicProfile) {
       this.recentAngles.push({ x: focusX, z: focusZ, azimuth: this.shotAzimuth });
@@ -2256,7 +2303,7 @@ export class CameraDirector {
 
     // Acquire the rendered actor and interaction framing before planning the flight. Simulation
     // positions can differ from the visible worksite; arriving there first causes a second chase.
-    if (['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)) {
+    if (scene.statement.claims.warId || ['worker-follow', 'traveler-follow', 'discovery-scene'].includes(scene.kind)) {
       this.animateShot(0, 0, state, elevationAt);
       this.shotBaseTarget.copy(this.desiredTarget);
     }
@@ -2693,6 +2740,12 @@ export class CameraDirector {
       // Refresh evidence at the physical lens arrival, not at the start of a potentially long flight.
       this.currentScene = { ...this.currentScene, statement: fresh.statement, editorial: fresh.editorial };
     }
+    if (this.activeSequence && this.currentScene.editorial?.desiredActivity === 'construct') {
+      const target = this.subjectPresentation?.(this.currentScene.subjectId)?.action?.targetId;
+      if (target && this.storyActionTarget && target !== this.storyActionTarget) {
+        this.abandonCurrentFlight(); return;
+      }
+    }
     this.acquiredScene = this.currentScene;
     this.transitionScene(this.currentScene.id, 'acquired');
     if (this.currentScene.event) {
@@ -2707,6 +2760,10 @@ export class CameraDirector {
     if (this.observation.narrationVisible) this.lastNarrationSeconds = this.presentationSeconds;
     if (this.activeSequence?.role === 'reveal') this.sequenceRevealed = true;
     this.shotAge = 0;
+    this.actionWitness.reset();
+    if (this.activeSequence?.ordinal === 0 && this.currentScene.editorial?.desiredActivity === 'construct') {
+      this.storyActionTarget = this.subjectPresentation?.(this.currentScene.subjectId)?.action?.targetId;
+    }
     this.trackingInitialized = false;
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
@@ -2772,7 +2829,11 @@ export class CameraDirector {
     threadId: string;
     anchorEventId?: string;
   } {
-    if (this.activeSequence?.id !== shot.sequenceId) this.sequenceRevealed = false;
+    if (this.activeSequence?.id !== shot.sequenceId) {
+      this.sequenceRevealed = false;
+      this.storyAzimuth = undefined;
+      this.storyActionTarget = undefined;
+    }
     return {
       id: shot.sequenceId,
       ordinal: shot.ordinal,
@@ -2812,7 +2873,10 @@ export class CameraDirector {
     const desiredActivity = scene.editorial?.desiredActivity;
     if (desiredActivity && this.shotAge >= 6) {
       const person = state.people.find(p => p.id === scene.subjectId);
-      if (person && (!person.alive || person.activity !== desiredActivity)) return true;
+      if (person && (!person.alive || person.activity !== desiredActivity)) {
+        if (desiredActivity === 'construct') this.sequencePlanner.interrupt();
+        return true;
+      }
       if (!person && desiredActivity === 'construct' && scene.id.startsWith('development:')
         && !state.settlements.some(s => s.development?.project?.plotId === scene.subjectId)) return true;
     }
@@ -2821,6 +2885,16 @@ export class CameraDirector {
       && this.camera.position.distanceTo(this.desiredPosition) <= 0.45
       && this.lookTarget.distanceTo(this.desiredTarget) <= 0.6;
     const presentation = this.subjectPresentation?.(scene.subjectId);
+    const observedPayoff = this.actionWitness.observe(presentation?.action, this.shotAge);
+    const payoffWitnessed = presentation?.action ? observedPayoff : undefined;
+    if (this.activeSequence && scene.editorial?.desiredActivity === 'construct') {
+      const target = presentation?.action?.targetId;
+      if (target && this.storyActionTarget && target !== this.storyActionTarget) {
+        this.sequencePlanner.interrupt();
+        return true;
+      }
+      if (target) this.storyActionTarget = target;
+    }
     const partnerPresent = presentation?.partnerId
       ? Boolean(this.subjectPresentation?.(presentation.partnerId))
       : undefined;
@@ -2832,7 +2906,8 @@ export class CameraDirector {
       ? this.subjectPresentation ? Boolean(livingSubject && presentation) : livingSubject
       : undefined;
     return documentaryShotShouldComplete({
-      mode: scene.editorial?.completion,
+      mode: this.activeSequence && scene.editorial?.desiredActivity === 'construct' && this.activeSequence.role !== 'detail'
+        ? 'sequence-beat' : scene.editorial?.completion,
       role: this.activeSequence?.role,
       kind: scene.kind,
       ageSeconds: this.shotAge,
@@ -2842,6 +2917,7 @@ export class CameraDirector {
       actionProgress: presentation?.action?.phaseProgress,
       contactStrength: presentation?.action?.contactStrength,
       partnerPresent,
+      payoffWitnessed,
     });
   }
 
@@ -2954,23 +3030,20 @@ export class CameraDirector {
 
     const war = scene.statement.claims.warId ? state.wars.find(w => w.id === scene.statement.claims.warId) : undefined;
     if (war) {
-      const a = state.settlements.find(s => s.id === war.attacker);
-      const b = state.settlements.find(s => s.id === war.defender);
-      if (a && b) {
-        const focus = campaignFocus(war, a.position, b.position);
-        const ground = elevationAt(focus.x, focus.z);
-        this.smoothFocus(focus.x, ground + 0.5, focus.z, deltaSeconds, 1.6);
-        const aftermath = war.resolvedMonth !== undefined;
-        const baseRadius = aftermath ? 17 : war.phase === 'marching' ? 15 : 12;
-        const radius = baseRadius + (aftermath ? eased * 7 : 0);
-        const angle = this.shotAzimuth + (eased - 0.5) * (aftermath ? 0.16 : 0.26);
+      if (this.photographedWarId !== war.id) {
+        this.photographedWarId = war.id;
+        this.warCameraAzimuth = this.shotAzimuth;
+      }
+      const frame = warCameraFrame(state, war, this.warCameraAzimuth, eased, this.camera.aspect,
+        this.activeSequence?.role === 'detail' || this.activeSequence?.role === 'observe',
+        this.activeSequence?.role === 'observe');
+      if (frame) {
+        const ground = elevationAt(frame.focusX, frame.focusZ);
+        this.smoothFocus(frame.focusX, ground + frame.targetHeight, frame.focusZ, deltaSeconds, 1.6);
         this.desiredTarget.copy(this.trackedFocus);
-        this.desiredPosition.set(
-          this.trackedFocus.x + Math.cos(angle) * radius,
-          Math.max(this.trackedFocus.y + (aftermath ? 16 + eased * 3 : 10), elevationAt(this.trackedFocus.x + Math.cos(angle) * radius, this.trackedFocus.z + Math.sin(angle) * radius) + 3),
-          this.trackedFocus.z + Math.sin(angle) * radius,
-        );
-        this.camera.fov = easeCameraFov(this.camera.fov, aftermath ? 41 : 39, deltaSeconds);
+        this.desiredPosition.set(frame.x,
+          Math.max(ground + frame.height, elevationAt(frame.x, frame.z) + 0.38), frame.z);
+        this.camera.fov = easeCameraFov(this.camera.fov, frame.fov, deltaSeconds);
         this.camera.updateProjectionMatrix();
         this.raiseForTerrain(elevationAt);
         return;
@@ -2980,7 +3053,7 @@ export class CameraDirector {
     if (scene.kind === 'worker-follow' || scene.kind === 'traveler-follow' || scene.kind === 'discovery-scene') {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
       if (person) {
-        const framing = FRAMING[scene.kind];
+        const framing = documentaryFramingFor(scene.kind, this.activeSequence?.scale);
         const castProfile = foundingCastShotProfileFor(scene.id);
         const presentation = this.subjectPresentation?.(person.id);
         const actorX = presentation?.x ?? person.position.x;
@@ -2993,9 +3066,12 @@ export class CameraDirector {
         const interactionY = composition && action
           ? elevationAt(composition.targetX, composition.targetZ) + Math.max(0.06, action.contactHeight ?? framing.targetHeight)
           : actorFocusY;
-        const focusX = composition?.focusX ?? actorX;
-        const focusZ = composition?.focusZ ?? actorZ;
-        const focusY = composition ? THREE.MathUtils.lerp(actorFocusY, interactionY, composition.anchorWeight) : actorFocusY;
+        // Read the person first, the work contact in detail, then their relationship.
+        const anchorWeight = composition ? this.activeSequence?.role === 'observe' ? 0.25
+          : this.activeSequence?.role === 'detail' ? 0.62 : composition.anchorWeight : 0;
+        const focusX = composition ? THREE.MathUtils.lerp(actorX, composition.targetX, anchorWeight) : actorX;
+        const focusZ = composition ? THREE.MathUtils.lerp(actorZ, composition.targetZ, anchorWeight) : actorZ;
+        const focusY = composition ? THREE.MathUtils.lerp(actorFocusY, interactionY, anchorWeight) : actorFocusY;
         this.smoothFocus(focusX, focusY, focusZ, deltaSeconds, scene.kind === 'traveler-follow' ? 1.45 : 1.9);
 
         // Step 2: when the renderer has an authoritative presentation action, the camera photographs
@@ -3005,7 +3081,8 @@ export class CameraDirector {
         const followingDistance = ((castDistance ?? (isFoundingReleaseScene(scene.id) ? 2.55 : this.interpolate(framing.radius, framingVariation))) + (composition?.distanceBoost ?? 0)) * this.reframeScale;
         const cameraHeight = (castProfile?.height ?? (isFoundingReleaseScene(scene.id) ? 0.92 : this.interpolate(framing.height, framingVariation))) + this.reframeLift;
         const contactLock = composition?.contactLock ?? 0;
-        const baseAngle = composition?.azimuth ?? this.shotAzimuth;
+        const baseAngle = this.activeSequence && this.storyAzimuth !== undefined
+          ? this.shotAzimuth : composition?.azimuth ?? this.shotAzimuth;
         const authoredOrbit = castProfile ? (eased - 0.5) * castProfile.orbitSpan : 0;
         // Human scenes should feel observed, not continuously operated. Keep the lens mostly
         // planted and reserve only a tiny breathing correction during the motion window.
@@ -3233,16 +3310,23 @@ export class CameraDirector {
   }
 
   private findMajorEvent(state: SimulationState): SimulationState['history'][number] | undefined {
-    const pendingMilestone = this.mustWitnessEvents(state).find(event => event.month <= state.month
-      && !this.acknowledgedMajorEventIds.has(event.id) && !this.isEventCoolingDown(event.id));
-    if (pendingMilestone) return pendingMilestone;
+    const memoryMonths = Math.max(6, this.config.presentation.eventMemoryMonths);
+    const available = (event: SimulationState['history'][number]): boolean => event.month <= state.month
+      && !this.historian.hasNarratedEvent(event.id)
+      && !this.acknowledgedMajorEventIds.has(event.id) && !this.isEventCoolingDown(event.id);
+    const priority = (event: SimulationState['history'][number]): number => event.significance * 1.6
+      + Math.max(0, 1 - (state.month - event.month) / memoryMonths) * 0.28;
+    const pendingMilestone = this.mustWitnessEvents(state).filter(available)
+      .sort((a, b) => priority(b) - priority(a) || a.id.localeCompare(b.id))[0];
+    const select = () => this.latestMajorEvent && available(this.latestMajorEvent)
+      && (!pendingMilestone || priority(this.latestMajorEvent) > priority(pendingMilestone))
+      ? this.latestMajorEvent : pendingMilestone;
     if (this.lastScannedHistoryLength === state.history.length && this.lastScannedMonth === state.month) {
-      return this.latestMajorEvent && !this.acknowledgedMajorEventIds.has(this.latestMajorEvent.id) && !this.isEventCoolingDown(this.latestMajorEvent.id) ? this.latestMajorEvent : undefined;
+      return select();
     }
 
     this.latestMajorEvent = undefined;
     let bestScore = Number.NEGATIVE_INFINITY;
-    const memoryMonths = Math.max(6, this.config.presentation.eventMemoryMonths);
 
     // Scan the whole presentation memory window. At high tick rates multiple authoritative months
     // can pass between rendered frames; a three-month window could otherwise skip a major event.
@@ -3251,9 +3335,9 @@ export class CameraDirector {
       if (!event) continue;
       const age = state.month - event.month;
       if (age > memoryMonths) break;
-      if (event.month > state.month || event.significance < 0.72 || !DOCUMENTARY_BREAK_TYPES.has(event.type) || this.acknowledgedMajorEventIds.has(event.id) || this.isEventCoolingDown(event.id)) continue;
-      const recency = 1 - age / Math.max(1, memoryMonths);
-      const score = event.significance * 1.6 + recency * 0.28;
+      if (event.month > state.month || event.significance < 0.72 || !DOCUMENTARY_BREAK_TYPES.has(event.type)
+        || this.historian.hasNarratedEvent(event.id) || this.acknowledgedMajorEventIds.has(event.id) || this.isEventCoolingDown(event.id)) continue;
+      const score = priority(event);
       if (score > bestScore) {
         bestScore = score;
         this.latestMajorEvent = event;
@@ -3262,7 +3346,7 @@ export class CameraDirector {
 
     this.lastScannedHistoryLength = state.history.length;
     this.lastScannedMonth = state.month;
-    return this.latestMajorEvent;
+    return select();
   }
 
   private smoothstep(value: number): number {

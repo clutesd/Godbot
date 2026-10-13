@@ -2,6 +2,7 @@ import type { HistoricalEvent, Person, SimulationState } from '../sim/types';
 import { foundingDocumentaryCast, type FoundingCastMember } from './FoundingCast';
 import { foundingChapterBaseline } from './FoundingChapter';
 import { Historian } from './Historian';
+import { activityText, historicalDate, sentence, skillText } from './Narrative';
 import type {
   CandidateScoreBreakdown,
   FoundingCharacterObserverMemory,
@@ -70,10 +71,8 @@ function roleLabel(person: Person): string {
   return readable(person.role ?? person.occupation);
 }
 
-function activityLabel(activity: string): string {
-  if (activity === 'socialize') return 'spending time with others';
-  if (activity === 'rest') return 'resting';
-  return readable(activity);
+function activityLabel(activity: Person['activity']): string {
+  return activityText({ activity });
 }
 
 function elapsedPhrase(months: number): string {
@@ -169,11 +168,11 @@ function changeFacts(
   });
   if (current.role !== previous.role) facts.push({
     weight: 0.92,
-    text: `${words.possessive} recorded role has changed from ${previous.role} to ${current.role}.`,
+    text: `${words.subject} was ${article(previous.role)} ${previous.role}; now ${words.subjectLower} is ${article(current.role)} ${current.role}.`,
   });
   if (current.occupation !== previous.occupation && current.role === previous.role) facts.push({
     weight: 0.78,
-    text: `${words.possessive} recorded occupation has changed from ${readable(previous.occupation)} to ${readable(current.occupation)}.`,
+    text: `${words.subject} has changed work, from ${readable(previous.occupation)} to ${readable(current.occupation)}.`,
   });
   if (current.partnerId !== previous.partnerId) {
     const text = !previous.partnerId && current.partnerId
@@ -185,16 +184,16 @@ function changeFacts(
   }
   if (current.childrenCount > previous.childrenCount) facts.push({
     weight: 0.82,
-    text: `${words.possessive} recorded family has grown from ${previous.childrenCount.toLocaleString()} to ${current.childrenCount.toLocaleString()} ${current.childrenCount === 1 ? 'child' : 'children'}.`,
+    text: `${words.subject} now has ${current.childrenCount.toLocaleString()} ${current.childrenCount === 1 ? 'child' : 'children'}, compared with ${previous.childrenCount.toLocaleString()} when I last visited.`,
   });
   if (current.strongestExpertise && previous.strongestExpertise) {
     if (current.strongestExpertise.domain !== previous.strongestExpertise.domain) facts.push({
       weight: 0.76,
-      text: `${words.possessive} strongest recorded expertise has shifted from ${readable(previous.strongestExpertise.domain)} to ${readable(current.strongestExpertise.domain)}.`,
+      text: `${words.possessive} strongest skill has shifted from ${skillText(previous.strongestExpertise.domain)} to ${skillText(current.strongestExpertise.domain)}.`,
     });
     else if (current.strongestExpertise.competence - previous.strongestExpertise.competence >= 0.12) facts.push({
       weight: 0.68,
-      text: `${words.possessive} recorded competence in ${readable(current.strongestExpertise.domain)} has deepened noticeably since then.`,
+      text: `${words.subject} has become more skilled in ${skillText(current.strongestExpertise.domain)} since then.`,
     });
   }
   if (statusRank(current.historicalStatus) > statusRank(previous.historicalStatus)) facts.push({
@@ -205,7 +204,7 @@ function changeFacts(
   const event = personalEventBetween(state, member.personId, previous.observedMonth, current.observedMonth, excludedEventIds);
   if (event) facts.push({
     weight: 0.88 + event.significance * 0.08,
-    text: `The interval also records: ${event.summary}`,
+    text: `${historicalDate(event.month)}. ${sentence(event.summary)}`,
     eventId: event.id,
   });
 
@@ -231,7 +230,7 @@ export function foundingCharacterCallback(
   if (previous.homeId !== current.homeId && state.settlements.some(settlement => settlement.id === previous.homeId)) sourceEntityIds.push(previous.homeId);
 
   if (selected.length > 0) {
-    const opening = `When I last watched ${member.name} ${elapsedPhrase(elapsed)} ago, ${words.subjectLower} was recorded as ${article(previous.role)} ${previous.role} at ${previous.homeName}.`;
+    const opening = `When I last watched ${member.name} ${elapsedPhrase(elapsed)} ago, ${words.subjectLower} lived at ${previous.homeName}.`;
     return {
       text: `${opening} ${selected.map(fact => fact.text).join(' ')}`,
       eventIds: selected.flatMap(fact => fact.eventId ? [fact.eventId] : []),
@@ -243,7 +242,7 @@ export function foundingCharacterCallback(
   // do not duplicate it; otherwise a remembered founder may still receive a restrained long-gap recall.
   if (elapsed >= FOUNDING_CHARACTER_GENERIC_RECALL_MONTHS && !existingText.includes('I have returned to')) {
     return {
-      text: `I last watched ${member.name} ${elapsedPhrase(elapsed)} ago at ${previous.homeName}. ${words.subject} is still recorded as ${article(current.role)} ${current.role} at ${current.homeName}.`,
+      text: `I last watched ${member.name} ${elapsedPhrase(elapsed)} ago at ${previous.homeName}. ${words.subject} is still ${article(current.role)} ${current.role} at ${current.homeName}.`,
       eventIds: [],
       sourceEntityIds: unique(sourceEntityIds),
     };

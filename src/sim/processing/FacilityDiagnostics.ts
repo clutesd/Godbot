@@ -68,6 +68,8 @@ function tierName(family: FacilityFamilyId, tier: number): string {
 
 function readableBlocker(blocker: string | undefined): string | undefined {
   if (!blocker) return undefined;
+  if (blocker.startsWith('knowledge:any:')) return blocker.slice('knowledge:any:'.length)
+    .replace(/-/g, ' ').replace(/\|/g, ' or ').replace(/\+/g, ' with ');
   if (blocker.startsWith('knowledge:')) return blocker.slice('knowledge:'.length).replace(/-/g, ' ');
   return blocker.replace(/-/g, ' ');
 }

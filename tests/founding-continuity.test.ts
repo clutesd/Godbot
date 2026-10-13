@@ -130,18 +130,28 @@ describe('Founding Chapter 1b continuity', () => {
 
     const settlement = simulation.state.settlements.find(candidate => candidate.id === community.settlementId);
     if (!settlement) throw new Error('Expected founding settlement');
-    simulation.step(3);
-    // A counter or reserved plot is not a standing permanent structure.
-    const shelter = settlement.structurePlots?.find(p => p.development?.status === 'active');
+    // A counter or reserved plot is not a standing permanent structure. Pods land without a
+    // stockpile, so wait for the first paid shelter instead of assuming a fixed month.
+    const standing = () => settlement.structurePlots?.find(p => p.development?.status === 'active');
+    for (let month = 0; month < 12 && !standing(); month++) simulation.step(1);
+    const shelter = standing();
     if (!shelter?.development) throw new Error('Expected a physically completed founding shelter');
     shelter.development.temporary = false;
     settlement.resources.food = community.supplies.food * 0.55;
-    settlement.localMaterials['timber'] = community.supplies.timber * 2;
+    // A real rise over the landing baseline (pods may land carrying no timber at all).
+    settlement.localMaterials['timber'] = community.supplies.timber * 2 + 8;
 
     const scene = acquireProposal(historian, simulation.state, chooseFoundingContinuityScene(historian, simulation.state));
     expect(scene?.subjectId).toBe(community.settlementId);
-    expect(scene?.statement.text).toContain('permanent structure');
-    expect(scene?.statement.text).toMatch(/Food stores have fallen|Timber stores have risen/);
+    // The narration names the strongest authoritative changes, in order. The stock change made
+    // above is the largest, so it must lead; the new structure is reported only when it ranks among
+    // the three most significant changes (founder deaths and deposit work can outrank it).
+    const text = scene?.statement.text ?? '';
+    expect(text).toMatch(/Timber stores have risen from \d+ to \d+/);
+    expect(text.indexOf('Timber stores')).toBeLessThan(text.indexOf(';'));
+    const snapshot = foundingCommunitySnapshot(simulation.state, community, baseline)!;
+    expect(snapshot.buildings).toBeGreaterThanOrEqual(1);
+    if (snapshot.founderSurvivors === community.founderCount && snapshot.workedDeposits === 0) expect(text).toContain('permanent structure');
     expect(scene && historian.validateStatement(scene.statement, simulation.state)).toBe(true);
   });
 

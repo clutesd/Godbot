@@ -69,7 +69,7 @@ export function deliverDue(s: Settlement, f: ProcessingFacility): void {
       bump(f.totals.arrived, shipment.material, shipment.quantity);
     } else {
       reconcileBulkStocks(s);
-      const accepted = addMaterial(s, shipment.material, shipment.quantity, shipment.quality);
+      const accepted = addMaterial(s, shipment.material, shipment.quantity, shipment.quality, false);
       bump(f.totals.deliveredOut, shipment.material, accepted);
       const refused = shipment.quantity - accepted;
       if (refused > EPSILON) {
@@ -97,12 +97,16 @@ export function dispatchInbound(
   reconcileBulkStocks(s);
   const economy = materialEconomy(s);
   const protectedStock = (id: string) => s.survival?.establishment?.materialDemand[id] ?? 0;
-  const candidates = wanted.map(request => {
-    const yardRoom = inputRoom(f, spec);
+  const available = wanted.map(request => {
     const spare = Math.max(0, (s.localMaterials[request.material] ?? 0) - protectedStock(request.material));
     economy.demand[request.material] = Math.max(economy.demand[request.material] ?? 0, request.quantity * 2);
-    return { ...request, quantity: Math.min(request.quantity, spare, yardRoom) };
+    return { ...request, quantity: Math.min(request.quantity, spare) };
   }).filter(request => request.quantity > EPSILON);
+  // The yard is shared in proportion to the order, so one bulky input (a furnace's fuel) cannot fill
+  // it first and leave the works holding fuel it can never burn for want of ore.
+  const asked = available.reduce((sum, request) => sum + request.quantity, 0);
+  const fit = Math.min(1, inputRoom(f, spec) / Math.max(EPSILON, asked));
+  const candidates = available.map(request => ({ ...request, quantity: request.quantity * fit })).filter(request => request.quantity > EPSILON);
   const total = candidates.reduce((sum, request) => sum + request.quantity, 0);
   if (total <= EPSILON) return 0;
   const capacity = Math.min(total, haulCrewAvailable(budget) * f.access.unitsPerWorkerMonth);

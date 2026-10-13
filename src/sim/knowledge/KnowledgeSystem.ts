@@ -21,7 +21,8 @@ import type {
   WorldCell,
 } from '../types';
 import { capabilityPractice, hasKnowledgeCapability } from './CapabilityContract';
-import { combustibleAccess } from '../resources/Inventory';
+import { practicalActivity, recordKnowledgeWork } from './WorkExperience';
+import { combustibleAccess, materialAccess, resourceAccess, reconcileBulkStocks } from '../resources/Inventory';
 import { KNOWLEDGE_BY_ID, KNOWLEDGE_CATALOG, type DiscoveryConditions, type KnowledgeDefinition, type KnowledgeNeed } from './catalog';
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
@@ -99,15 +100,9 @@ export class KnowledgeSystem {
       settlement.urbanization += (urbanTarget - settlement.urbanization) * 0.012;
       settlement.pollution = clamp(settlement.pollution * 0.997 + settlement.industry.intensity * (0.0007 + settlement.infrastructure.factories * 0.00045));
       if (!settlement.industry.active) continue;
-      const industrialLabour = this.labourBySettlement.get(settlement.id)?.industry ?? 0;
-      const inputDemand = Math.min(population * settlement.industry.intensity * 0.0028, industrialLabour * 0.4);
-      const mineralInput = Math.min(settlement.resources.minerals, inputDemand);
-      const fuelInput = Math.min(settlement.resources.wood, inputDemand * 1.25);
-      settlement.resources.minerals -= mineralInput;
-      settlement.resources.wood -= fuelInput;
-      settlement.resources.goods += mineralInput * (1.4 + settlement.infrastructure.factories * 1.8);
-      settlement.resources.wealth += mineralInput * (0.3 + settlement.infrastructure.factories * 0.42);
-      const supplied = inputDemand <= 0 ? 1 : clamp((mineralInput + fuelInput * 0.5) / (inputDemand * 1.5));
+      // Physical recipe/facility authorities produce and price goods. Industrial status cannot
+      // separately turn quarry stone into manufactured inventory or duplicate their output.
+      const supplied = clamp((settlement.materialEconomy?.flows?.produced.goods ?? 0) / Math.max(1, population * 0.015));
       const institutionalSupport = mean(this.institutionsAt(state, settlement.id).map((institution) => institution.support));
       const target = clamp(supplied * 0.42 + settlement.infrastructure.factories * 0.32 + institutionalSupport * 0.16 + settlement.foodSecurity * 0.1);
       settlement.industry.intensity = clamp(settlement.industry.intensity + (target - settlement.industry.intensity) * 0.008 - (settlement.foodSecurity < 0.2 ? 0.004 : 0));
@@ -116,7 +111,7 @@ export class KnowledgeSystem {
 
   advanceYear(state: SimulationState): KnowledgeEventDraft[] {
     this.refreshIndexes(state);
-    const events: KnowledgeEventDraft[] = [];
+    const events: KnowledgeEventDraft[] = this.diffuseAdministration(state);
     for (const settlement of state.settlements.filter((candidate) => candidate.alive)) {
       this.accumulateExperimentation(state, settlement);
       events.push(...this.practiceAndForget(state, settlement));
@@ -134,13 +129,27 @@ export class KnowledgeSystem {
     const candidates = [
       ...this.transmissionCandidates(a, b).map((id) => ({ id, source: a, target: b })),
       ...this.transmissionCandidates(b, a).map((id) => ({ id, source: b, target: a })),
-    ].slice(0, 3);
+    ];
+    // Alternate directions and rotate through the curriculum. Strong inherited records must
+    // not monopolize all contact while unfamiliar useful knowledge waits forever.
+    const offset = candidates.length ? (route.knowledgeCursor ?? 0) % candidates.length : 0;
+    const selected = [...candidates.slice(offset), ...candidates.slice(0, offset)].slice(0, 6);
+    route.knowledgeCursor = offset + selected.length;
     let totalFlow = 0;
-    for (const candidate of candidates) {
+    for (const candidate of selected) {
       const sourceRecord = candidate.source.knowledge.records[candidate.id];
       if (!sourceRecord) continue;
       const communication = 1 + candidate.source.knowledge.literacy * 0.85 + candidate.target.knowledge.literacy * 0.55 + mastery(candidate.source, 'printing').practice * 0.75 + candidate.source.industry.intensity * 0.5;
-      const flow = (0.0012 + route.volume * 0.0018) * communication * this.config.knowledge.diffusionRate;
+      const distance = Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z) / state.world.cellSize;
+      const affiliation = a.polityId && a.polityId === b.polityId ? 1.35 : 1;
+      const openness = mean([this.dominantCulture(state, a)?.dimensions.outsiderOpenness ?? 0.5,
+        this.dominantCulture(state, b)?.dimensions.outsiderOpenness ?? 0.5]);
+      const disruption = Math.max(a.conflictPressure, b.conflictPressure,
+        a.survival?.disease?.prevalence ?? 0, b.survival?.disease?.prevalence ?? 0);
+      const access = 1 / (1 + distance / 30);
+      // This method is called on delivery/contact, not on every simulated month.
+      const flow = (0.012 + Math.log1p(Math.max(0, route.volume)) * 0.024) * communication
+        * affiliation * (0.5 + openness * 0.5) * access * (1 - clamp(disruption) * 0.8) * this.config.knowledge.diffusionRate;
       totalFlow += flow;
       const event = this.expose(state, candidate.target, candidate.source, sourceRecord, flow, 'persistent-trade');
       if (event) {
@@ -163,6 +172,34 @@ export class KnowledgeSystem {
       if (event) {
         events.push(event);
         state.stats.knowledgeExchanges += 1;
+      }
+    }
+    return events;
+  }
+
+  /** Paid literate administration carries accounts and teachers between nearby communities.
+   * Annual contact is weaker than a working monthly route and transfers awareness first. */
+  private diffuseAdministration(state: SimulationState): KnowledgeEventDraft[] {
+    const events: KnowledgeEventDraft[] = [];
+    const living = state.settlements.filter(s => s.alive).sort((a, b) => a.id.localeCompare(b.id));
+    for (const source of living) {
+      if (!source.polityId || source.knowledge.literacy < 0.15 || !hasKnowledgeCapability(source, 'civic-administration')) continue;
+      const sponsor = this.institutionsAt(state, source.id).find(i => ['council', 'knowledge-keepers'].includes(i.kind) && i.resources >= 2 && i.support >= 0.3);
+      if (!sponsor) continue;
+      for (const target of living) {
+        if (target.id === source.id || target.polityId !== source.polityId || Math.max(source.conflictPressure, target.conflictPressure) > 0.5) continue;
+        const distance = Math.hypot(source.position.x - target.position.x, source.position.z - target.position.z) / state.world.cellSize;
+        if (distance > 20) continue;
+        const ids = this.transmissionCandidates(source, target);
+        const offset = ids.length ? Math.floor(state.month / 12) % ids.length : 0;
+        const selected = [...ids.slice(offset), ...ids.slice(0, offset)].slice(0, 3);
+        if (!selected.length || sponsor.resources < 1) continue;
+        sponsor.resources -= 0.5;
+        for (const id of selected) {
+          const event = this.expose(state, target, source, source.knowledge.records[id]!,
+            0.035 * sponsor.support * (1 + source.knowledge.literacy) / (1 + distance / 10), 'administration');
+          if (event) { events.push(event); state.stats.knowledgeExchanges++; }
+        }
       }
     }
     return events;
@@ -255,7 +292,7 @@ export class KnowledgeSystem {
     return {
       food: 1
         + practical(settlement, 'crop-selection') * 0.2
-        + practical(settlement, 'irrigation') * 0.28
+        + (settlement.fields === undefined ? practical(settlement, 'irrigation') * 0.28 : 0)
         + capabilityPractice(settlement, 'agrarian-surplus', 'transformed') * 0.38,
       materials: 1
         + practical(settlement, 'metal-smelting') * 0.2
@@ -430,6 +467,11 @@ export class KnowledgeSystem {
       const institutionalSupport = institutions.filter((institution) => this.institutionSupportsDomain(institution, domain)).reduce((sum, institution) => sum + institution.support * institution.prestige, 0);
       const pressure = this.domainPressure(state, settlement, domain, people, routes);
       const gain = (specialists / Math.max(12, settlementRepresentedPopulation(state, settlement.id, people)) * 0.09 + institutionalSupport * 0.022 + (culture?.dimensions.curiosity ?? 0.5) * 0.012 + pressure * 0.018 + settlement.industry.intensity * 0.025) * (1 + settlement.knowledge.literacy * 0.55);
+      // Organized investigators' work is already represented by keepers/artisans' allocation.
+      // General curiosity creates questions; only supported investigation contributes practice.
+      if (institutionalSupport > 0 && settlement.knowledge.literacy > 0.1) {
+        recordKnowledgeWork(settlement, domain, specialists * Math.min(1, institutionalSupport) * settlement.knowledge.literacy * 12);
+      }
       settlement.knowledge.experimentation[domain] = Math.min(3, settlement.knowledge.experimentation[domain] * 0.985 + gain);
     }
   }
@@ -451,7 +493,12 @@ export class KnowledgeSystem {
         const labour = this.labourBySettlement.get(settlement.id);
         const practitioners = labour?.domains[definition.domain] ?? 0;
         const competence = (labour?.experts[definition.domain] ?? 0) / Math.max(1, practitioners);
-        record.practice = clamp(record.practice + practiceGain * Math.min(1.2, practitioners) * (0.65 + competence * 0.55));
+        // A few workers can preserve a craft; larger working teams exchange more experience
+        // with diminishing returns. Unsupported accounts may be taught, but cannot practise.
+        const supported = definition.kind === 'understanding' || this.eligible(state, settlement, definition);
+        const team = Math.log1p(Math.max(0, practitioners)) / Math.log(3);
+        const activity = practicalActivity(settlement, definition.domain, practitioners);
+        if (supported) record.practice = clamp(record.practice + practiceGain * team * activity * (0.65 + competence * 0.55));
         record.lastUsedMonth = state.month;
         if (record.dormant && record.practice >= 0.19) {
           record.dormant = false;
@@ -541,6 +588,18 @@ export class KnowledgeSystem {
    */
   discoveryBlockers(state: SimulationState, settlement: Settlement, id: string): string[] {
     this.refreshIndexes(state);
+    return this.discoveryBlockersWithIndexes(state, settlement, id);
+  }
+
+  /** Read one consistent diagnostic snapshot instead of rebuilding population indexes
+   * for every catalog entry. The public single-entry query still refreshes after edits. */
+  discoveryDiagnostics(state: SimulationState, settlement: Settlement): Record<string, string[]> {
+    this.refreshIndexes(state);
+    return Object.fromEntries(KNOWLEDGE_CATALOG.filter(d => !settlement.knowledge.records[d.id])
+      .map(d => [d.id, this.discoveryBlockersWithIndexes(state, settlement, d.id)]));
+  }
+
+  private discoveryBlockersWithIndexes(state: SimulationState, settlement: Settlement, id: string): string[] {
     const definition = KNOWLEDGE_BY_ID.get(id);
     if (!definition) return ['no-such-knowledge'];
     if (settlement.knowledge.records[id]) return [];
@@ -553,21 +612,22 @@ export class KnowledgeSystem {
     const short = (label: string, have: number, need: number): void => {
       if (have < need) blockers.push(`${label} ${have.toFixed(2)}/${need}`);
     };
-    for (const [material, amount] of Object.entries(conditions.materials ?? {})) short(`material:${material}`, settlement.localMaterials[material] ?? 0, amount);
-    if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([material, amount]) => (settlement.localMaterials[material] ?? 0) >= amount)) {
+    for (const [material, amount] of Object.entries(conditions.materials ?? {})) short(`material:${material}`, materialAccess(settlement, material), amount);
+    if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([material, amount]) => materialAccess(settlement, material) >= amount)) {
       blockers.push(`materialsAny:${Object.entries(conditions.materialsAny).map(([material, amount]) => `${material} ${(settlement.localMaterials[material] ?? 0).toFixed(1)}/${amount}`).join(',')}`);
     }
     short('population', population, conditions.minPopulation ?? 0);
     short('industrialIntensity', settlement.industry.intensity, conditions.minIndustrialIntensity ?? 0);
     short('literacy', settlement.knowledge.literacy, conditions.minLiteracy ?? 0);
     if (conditions.coastal && !cell?.coast) blockers.push('not-coastal');
+    if (conditions.waterfront && !(cell?.coast || cell?.river || cell?.lake)) blockers.push('not-waterfront');
     short('fertility', cell?.fertility ?? 0, conditions.minFertility ?? 0);
     short('foodSecurity', settlement.foodSecurity, conditions.minFoodSecurity ?? 0);
     short('prosperity', settlement.prosperity, conditions.minProsperity ?? 0);
     short('urbanization', settlement.urbanization, conditions.minUrbanization ?? 0);
     short('tradeRoutes', state.tradeRoutes.filter((route) => route.active && (route.a === settlement.id || route.b === settlement.id)).length, conditions.minTradeRoutes ?? 0);
     for (const [key, level] of Object.entries(conditions.minInfrastructure ?? {})) short(`infrastructure:${key}`, settlement.infrastructure[key as keyof InfrastructureState], level ?? 0);
-    for (const [resource, amount] of Object.entries(conditions.resources ?? {})) short(`resource:${resource}`, settlement.resources[resource as keyof Settlement['resources']], amount ?? 0);
+    for (const [resource, amount] of Object.entries(conditions.resources ?? {})) short(`resource:${resource}`, resourceAccess(settlement, resource as keyof Settlement['resources']), amount ?? 0);
     short('fuel', combustibleAccess(settlement), conditions.minFuel ?? 0);
     for (const [occupation, count] of Object.entries(conditions.occupations ?? {})) short(`occupation:${occupation}`, labour?.occupations[occupation as Occupation] ?? 0, count ?? 0);
     if (!this.institutionRequirementMet(state, settlement, definition)) {
@@ -607,14 +667,15 @@ export class KnowledgeSystem {
   }
 
   private requirementsMet(state: SimulationState, settlement: Settlement, conditions: DiscoveryConditions): boolean {
-    if (Object.entries(conditions.materials ?? {}).some(([id, amount]) => (settlement.localMaterials[id] ?? 0) < amount)) return false;
-    if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([id, amount]) => (settlement.localMaterials[id] ?? 0) >= amount)) return false;
+    if (Object.entries(conditions.materials ?? {}).some(([id, amount]) => materialAccess(settlement, id) < amount)) return false;
+    if (conditions.materialsAny && !Object.entries(conditions.materialsAny).some(([id, amount]) => materialAccess(settlement, id) >= amount)) return false;
     const people = this.peopleAt(state, settlement.id);
     const cell = state.world.cells[settlement.cellIndex];
     if ((conditions.minPopulation ?? 0) > settlementRepresentedPopulation(state, settlement.id, people)) return false;
     if ((conditions.minIndustrialIntensity ?? 0) > settlement.industry.intensity) return false;
     if ((conditions.minLiteracy ?? 0) > settlement.knowledge.literacy) return false;
     if (conditions.coastal && !cell?.coast) return false;
+    if (conditions.waterfront && !(cell?.coast || cell?.river || cell?.lake)) return false;
     if ((conditions.minFertility ?? 0) > (cell?.fertility ?? 0)) return false;
     if ((conditions.minFoodSecurity ?? 0) > settlement.foodSecurity) return false;
     if ((conditions.minProsperity ?? 0) > settlement.prosperity) return false;
@@ -624,7 +685,7 @@ export class KnowledgeSystem {
       if (settlement.infrastructure[key as keyof InfrastructureState] < (level ?? 0)) return false;
     }
     for (const [resource, amount] of Object.entries(conditions.resources ?? {})) {
-      if (settlement.resources[resource as keyof Settlement['resources']] < (amount ?? 0)) return false;
+      if (resourceAccess(settlement, resource as keyof Settlement['resources']) < (amount ?? 0)) return false;
     }
     if ((conditions.minFuel ?? 0) > combustibleAccess(settlement)) return false;
     for (const [occupation, count] of Object.entries(conditions.occupations ?? {})) {
@@ -707,10 +768,10 @@ export class KnowledgeSystem {
       { key: 'workshops', enabled: practical(settlement, 'pottery-firing') > 0.22 || practical(settlement, 'metal-smelting') > 0.18, target: 0.35 + transformed('precision-manufacturing') * 0.65, wood: 5, minerals: 2, goods: 1, wealth: 2, cause: 'specialized-craft' },
       { key: 'archives', enabled: practical(settlement, 'durable-records') > 0.28 && (hasInstitution('knowledge-keepers') || hasInstitution('council')), target: 0.25 + practical(settlement, 'printing') * 0.7, wood: 6, minerals: 1, goods: 3, wealth: 4, cause: 'durable-records' },
       { key: 'roads', enabled: routeCount > 0 && practical(settlement, 'wheel-axle') > 0.22, target: 0.28 + transformed('improved-roads') * 0.72, wood: 8, minerals: 3, goods: 2, wealth: 3, cause: 'trade-volume' },
-      { key: 'ports', enabled: Boolean(cell?.coast) && practical(settlement, 'buoyancy-currents') > 0.25, target: 0.2 + transformed('ocean-navigation') * 0.8, wood: 10, minerals: 2, goods: 2, wealth: 4, cause: 'maritime-trade' },
+      { key: 'ports', enabled: Boolean(cell?.coast || cell?.river || cell?.lake) && routeCount > 0 && practical(settlement, 'buoyancy-currents') > 0.25, target: 0.2 + transformed('ocean-navigation') * 0.8, wood: 10, minerals: 2, goods: 2, wealth: 4, cause: 'maritime-trade' },
       { key: 'bridges', enabled: hasKnowledgeCapability(settlement, 'improved-roads', 'transformed') && routeCount > 1, target: 0.18 + transformed('improved-roads') * 0.62, wood: 9, minerals: 5, goods: 2, wealth: 4, cause: 'route-continuity' },
       { key: 'rail', enabled: hasKnowledgeCapability(settlement, 'rail-transport', 'transformed'), target: transformed('rail-transport'), wood: 8, minerals: 15, goods: 8, wealth: 10, cause: 'guided-powered-transport' },
-      { key: 'factories', enabled: settlement.industry.active, target: 0.2 + settlement.industry.intensity * 0.8, wood: 9, minerals: 12, goods: 8, wealth: 11, cause: 'industrial-production' },
+      { key: 'factories', enabled: ['commercial-machinery', 'transport-integration', 'industrial-transformation'].includes(settlement.industry.stage), target: 0.2 + settlement.industry.intensity * 0.8, wood: 9, minerals: 12, goods: 8, wealth: 11, cause: 'industrial-production' },
     ];
   }
 
@@ -753,6 +814,7 @@ export class KnowledgeSystem {
     settlement.resources.minerals -= candidate.minerals * share;
     settlement.resources.goods -= candidate.goods * share;
     settlement.resources.wealth -= candidate.wealth * share;
+    reconcileBulkStocks(settlement);
     settlement.infrastructure[candidate.key] = clamp(previous + this.config.historicalPace.infrastructureStep * this.random.range(0.88, 1.12) * share);
     if (previous < 0.08 && settlement.infrastructure[candidate.key] >= 0.08) {
       events.push({
@@ -811,12 +873,15 @@ export class KnowledgeSystem {
     const sequence: IndustrialState['stage'][] = ['experimental-engines', 'specialist-workshops', 'commercial-machinery', 'transport-integration', 'industrial-transformation'];
     const next = sequence[sequence.indexOf(settlement.industry.stage) + 1];
     if (!next) return [];
+    const workingFacilities = (settlement.processing?.facilities ?? []).filter(f => f.progress >= 1 && f.condition > 0.25 && (f.lastActiveMonth ?? -Infinity) >= state.month - 12);
+    const powered = (settlement.energy?.ledgers.mechanical.supplied ?? 0) + (settlement.energy?.ledgers.electric.supplied ?? 0) > 0;
+    if (['commercial-machinery', 'transport-integration', 'industrial-transformation'].includes(next) && (!powered || workingFacilities.length === 0)) {
+      settlement.industry.stageProgress = 1;
+      return [];
+    }
     settlement.industry.stage = next;
     settlement.industry.stageStartedMonth = state.month;
     settlement.industry.stageProgress = 0;
-    if (next === 'specialist-workshops') settlement.infrastructure.workshops = Math.max(settlement.infrastructure.workshops, 0.36);
-    if (next === 'commercial-machinery') settlement.infrastructure.factories = Math.max(settlement.infrastructure.factories, 0.04);
-    if (next === 'transport-integration') settlement.infrastructure.factories = Math.max(settlement.infrastructure.factories, 0.08);
     if (next === 'industrial-transformation') {
       settlement.industry.active = true;
       settlement.industry.intensity = Math.max(0.12, settlement.industry.intensity);
@@ -851,7 +916,7 @@ export class KnowledgeSystem {
       .map((record) => record.id);
   }
 
-  private expose(state: SimulationState, target: Settlement, source: Settlement, sourceRecord: KnowledgeRecord, amount: number, channel: 'persistent-trade' | 'migration' | 'conquest'): KnowledgeEventDraft | undefined {
+  private expose(state: SimulationState, target: Settlement, source: Settlement, sourceRecord: KnowledgeRecord, amount: number, channel: 'persistent-trade' | 'migration' | 'conquest' | 'administration'): KnowledgeEventDraft | undefined {
     const definition = KNOWLEDGE_BY_ID.get(sourceRecord.id);
     if (!definition) return undefined;
     const existing = target.knowledge.records[sourceRecord.id];

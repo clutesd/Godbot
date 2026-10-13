@@ -1,5 +1,8 @@
+import { BodyRecoveryPresentation } from './people/BodyRecoveryPresentation';
 import { IllnessBreath } from './people/IllnessBreath';
 import { bodyWeathering } from '../sim/people/BodyLifecycle';
+import { committedMonth, monthInFlight } from '../sim/MonthAuthority';
+import { ShaderReadinessGate } from './ShaderReadinessGate';
 import { casualtyLifecycle } from './war/BattleAftermath';
 import { physicalCondition, applyPhysicalCondition } from './animation/PhysicalCondition';
 import { productionBuildingShell } from './assets/ProductionBuildingShell';
@@ -25,7 +28,7 @@ import { gradeViolations, positionAlongPath } from '../sim/transport/TransportNe
 import type { GodboxConfig } from '../config';
 import type { Historian } from '../historian/Historian';
 import { SeededRandom } from '../sim/prng';
-import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, Vec2, WeatherCellState } from '../sim/types';
+import type { Activity, Culture, DestinationKind, Person, PersonRole, Settlement, SimulationState, SocialRelationship, StructurePlot, Vec2, WeatherCellState } from '../sim/types';
 import { CameraDirector, type CameraSubjectPresentation, type CurrentObservation } from './CameraDirector';
 import { CameraObstacleField, type CameraObstacleBox } from './CameraObstacleField';
 import { setAutonomousCameraMode } from './CameraControlMode';
@@ -66,6 +69,7 @@ import { structureFit } from './assets/StructureFit';
 const LANDMARK_FOOTPRINT_RADIUS = 1.7;
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
 import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingGrammarContext, type BuildingRole } from './assets/BuildingGrammar';
+import { settlementPresentationEra } from './assets/SettlementEra';
 import type { DevelopmentProject, DevelopmentResponse } from '../sim/development/types';
 import { districtForResponse } from '../shared/SettlementLayoutPlan';
 import { MaterialPalette, type Era } from './materials/MaterialPalette';
@@ -83,7 +87,10 @@ import { TerrainDecor } from './terrain/TerrainDecor';
 import { TerrainSurface } from './terrain/TerrainSurface';
 import { WaterSystem } from './terrain/WaterSystem';
 import { WeatherRenderer } from './atmosphere/WeatherRenderer';
+import { VolcanoRenderer } from './geology/VolcanoRenderer';
 import { WarRenderer } from './war/WarRenderer';
+import { createStructureRuin, StructureDestruction } from './war/StructureDestruction';
+import { StructureFireRenderer } from './fire/StructureFireRenderer';
 import { VegetationRenderer, type VegetationReport } from './vegetation/VegetationRenderer';
 import { ResourceSiteRenderer } from './resources/ResourceSiteRenderer';
 import { ResourceWorkScene, resourceWorkerCanPresent } from './resources/ResourceWorkScene';
@@ -261,6 +268,8 @@ export class GodboxRenderer {
   private readonly sleepGlyphs = new SleepGlyphRenderer();
   readonly observation: CurrentObservation;
   private readonly renderer: THREE.WebGLRenderer;
+  /** Defers objects whose shaders are still linking, so no live frame blocks on a first-use compile. */
+  private readonly shaderGate: ShaderReadinessGate;
   private readonly energyRenderer: EnergyRenderer;
   /** Turns mill sails and waterwheels from the simulation's wind and river flow. */
   private readonly millMotion: MillMotionSystem;
@@ -310,6 +319,15 @@ export class GodboxRenderer {
   private readonly humanAppearance: HumanFigureAppearance;
   /** Resolved looks are cached: a person's palette and wardrobe only change with age, role or era. */
   private readonly humanLooks = new Map<string, { key: string; look: HumanLook }>();
+  /**
+   * Last look per person with the inputs that can change it inside a committed month. Everything
+   * else in the look key is simulation state that only changes when a month commits.
+   */
+  private readonly humanLookMemo = new Map<string, {
+    month: number; settlementId: string | undefined; era: Era; weather: WeatherCellState | undefined; look: HumanLook;
+  }>();
+  /** Settlement era for the current people pass; plots cannot change inside one frame. */
+  private readonly frameSettlementEras = new Map<string, Era>();
   private readonly cosmicVariations: THREE.InstancedBufferAttribute[];
   private readonly humanNavigation = new StructureNavigation();
   private readonly humanStructureSources = new Map<string, readonly ActivityStructure[]>();
@@ -379,6 +397,7 @@ export class GodboxRenderer {
   private readonly settlementBuildingPlacements = new Map<string, BuildingPlacement[]>();
   private readonly settlementSolidObstacles = new Map<string, PedestrianFootprint[]>();
   private readonly lastBodyPose = new Map<string, Map<string, THREE.Matrix4[]>>();
+  private readonly bodyRecovery = new BodyRecoveryPresentation();
   private readonly bodyStarted = new Map<string, number>();
   private readonly bodyAnchors = new Map<string, { x: number; z: number; facing: number }>();
   private readonly landmarkPlacements = new Map<string, { worldX: number; worldZ: number; role: BuildingRole; rotationY: number; width?: number; depth?: number }>();
@@ -387,6 +406,7 @@ export class GodboxRenderer {
   private readonly terrainSurface: TerrainSurface;
   private readonly waterSystem: WaterSystem;
   private readonly weatherRenderer: WeatherRenderer;
+  private readonly volcanoRenderer?: VolcanoRenderer;
   private readonly terrainDecor: TerrainDecor;
   private readonly vegetation: VegetationRenderer;
   private readonly resourceSites: ResourceSiteRenderer;
@@ -463,12 +483,19 @@ export class GodboxRenderer {
   private readonly routeGroup = new THREE.Group();
   private readonly caravanGroup = new THREE.Group();
   private readonly warRenderer: WarRenderer;
+  private readonly structureDestruction = new StructureDestruction();
+  private readonly structureFires: StructureFireRenderer;
+  private battlePresentationElapsed = 0;
+  private readonly combatStarted = new Map<string, number>();
+  private combatEvidenceSequence = -1;
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly smoke: THREE.InstancedMesh;
   private readonly activeSmokeSources: SmokeSource[] = [];
   private visiblePeople: Person[] = [];
   private visiblePeopleSubject: string | undefined;
   private visiblePeopleMonth = -1;
+  /** Per-frame sleeping-structure view per settlement; rebuilt every frame from the current plots. */
+  private readonly frameSleepStructures = new Map<string, readonly ActivityStructure[]>();
   private visiblePeoplePopulation = -1;
   private readonly lastPersonGroundPosition = new Map<string, Vec2>();
   private readonly smokeMatrix = new THREE.Matrix4();
@@ -483,6 +510,7 @@ export class GodboxRenderer {
   private latestCatastrophe?: SimulationState['history'][number];
   private lastCatastropheHistoryLength = -1;
   private lastCatastropheMonth = -1;
+  private catastropheStartedAt = -Infinity;
   private width = 1;
   private readonly adaptiveResolution = new AdaptiveResolution();
   private height = 1;
@@ -506,6 +534,7 @@ export class GodboxRenderer {
       this.accentByCulture.set(culture.id, new THREE.Color(culture.style.accent));
     }
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    this.shaderGate = new ShaderReadinessGate(this.renderer);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.config.render.maxPixelRatio));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -570,7 +599,18 @@ export class GodboxRenderer {
     this.scene.add(this.resourceSites.group);
     this.skyAtmosphere = new SkyAtmosphere(state.world, this.terrainSurface, config.seed);
     this.scene.add(this.skyAtmosphere.group);
+    if (state.volcano) {
+      try {
+        this.volcanoRenderer = new VolcanoRenderer(state, this.terrainSurface);
+        this.scene.add(this.volcanoRenderer.group);
+      } catch (error) {
+        console.error('GODBOX volcano presentation could not be built; the world continues without it.', error);
+      }
+    }
     this.warRenderer = new WarRenderer(state, (x, z) => this.elevationAt(x, z));
+    this.structureFires = new StructureFireRenderer(state, this.terrainSurface,
+      plot => this.structureDestruction.hitOccurred(plot, this.state.month, this.reducedMotion.matches));
+    this.scene.add(this.structureFires.group);
     this.scene.add(this.routeGroup, this.caravanGroup, this.warRenderer.group);
     this.smoke = this.createSmokePool();
     this.scene.add(this.smoke);
@@ -700,6 +740,7 @@ export class GodboxRenderer {
     this.skyAtmosphere.update(0, 0);
     this.vegetation.updateLeaves(0);
     this.weatherRenderer.update(0, 0, this.camera);
+    this.volcanoRenderer?.update(0, 0, this.camera);
     this.postProcessing.render(this.ecology.night.value);
   }
 
@@ -709,6 +750,15 @@ export class GodboxRenderer {
 
   get autonomousCamera(): boolean {
     return !this.manualCamera.active;
+  }
+
+  /**
+   * The latest month whose consequences are complete. Once-per-month presentation caches key on
+   * this, not `state.month`, so a time-sliced month in flight is picked up after it commits rather
+   * than captured half-advanced and then held for the whole month.
+   */
+  private get authorityMonth(): number {
+    return committedMonth(this.state);
   }
 
   /** Diagnostic long-frame attribution. Disabled by default; the hot path costs one branch. */
@@ -724,6 +774,15 @@ export class GodboxRenderer {
   }
 
   update(deltaSeconds: number, elapsedSeconds: number): void {
+    this.battlePresentationElapsed = elapsedSeconds;
+    const combatSequence = this.state.eventSequence ?? this.state.history.length;
+    if (combatSequence !== this.combatEvidenceSequence) {
+      this.combatEvidenceSequence = combatSequence;
+      // Off-camera casualties share the original hit clock when they enter the visible budget.
+      for (const body of this.state.bodies ?? []) if (body.combatImpact && !this.combatStarted.has(body.combatImpact.eventId)) {
+        this.combatStarted.set(body.combatImpact.eventId, body.month === this.state.month ? elapsedSeconds : -Infinity);
+      }
+    }
     const profiling = this.frameSections.active;
     const frameStartedAt = profiling ? performance.now() : 0;
     this.frameSections.begin(frameStartedAt);
@@ -800,7 +859,7 @@ export class GodboxRenderer {
     if (renderPolicy.refreshWorldPresentation) {
       this.updateSettlementBanners(elapsedSeconds);
       this.updateAdvancedAtmosphere(elapsedSeconds);
-      if (this.state.month !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
+      if (this.authorityMonth !== this.lastVisualSeason) this.maintenance.request('seasonal', true);
       this.mark('settlement-presentation');
       for (const [key, entry] of this.constructionAssemblies) {
         const authoritativeSettlement = this.state.settlements.find(s => s.id === entry.settlement.id);
@@ -867,13 +926,17 @@ export class GodboxRenderer {
       this.warRenderer.update(deltaSeconds, elapsedSeconds, this.observation.statement?.claims.warId, this.reducedMotion.matches);
     }
     this.mark('war');
+    this.structureDestruction.update(elapsedSeconds, this.state.month, this.reducedMotion.matches);
+    this.structureFires.update(deltaSeconds, elapsedSeconds, this.camera, this.ecology.night.value, this.reducedMotion.matches);
     this.weatherRenderer.update(deltaSeconds, elapsedSeconds, this.camera);
+    this.volcanoRenderer?.update(deltaSeconds, elapsedSeconds, this.camera);
     const blizzard = this.weatherRenderer.report.blizzard;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.density += blizzard * 0.035;
       this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
     }
     this.mark('weather');
+    this.shaderGate.gate(this.scene, this.camera, this.postProcessing.sceneTarget());
     this.postProcessing.render(this.ecology.night.value);
     if (profiling) {
       const completed = performance.now();
@@ -955,10 +1018,11 @@ export class GodboxRenderer {
   }
 
   private updateSeasonalPresentation(force = false): void {
-    const season = this.state.month % 12;
-    if (!force && this.state.month === this.lastVisualSeason) return;
-    this.lastVisualSeason = this.state.month;
-    this.vegetation.setSeason(this.state.month);
+    const month = this.authorityMonth;
+    const season = month % 12;
+    if (!force && month === this.lastVisualSeason) return;
+    this.lastVisualSeason = month;
+    this.vegetation.setSeason(month);
     this.resourceSites.update();
     this.farmFields.update(this.state, (x, z) => this.elevationAt(x, z), (x, z) => this.personStandable(x, z));
     this.workSettlements.clear();
@@ -1181,8 +1245,8 @@ export class GodboxRenderer {
     this.refreshVisiblePeople();
     this.refreshSocialRelationshipIndex();
     this.refreshHumanNavigation();
-    if (this.resourceWorkersMonth !== this.state.month || this.resourceWorkersRevision !== this.resourceWork.revision) {
-      this.resourceWorkersMonth = this.state.month;
+    if (this.resourceWorkersMonth !== this.authorityMonth || this.resourceWorkersRevision !== this.resourceWork.revision) {
+      this.resourceWorkersMonth = this.authorityMonth;
       this.resourceWorkersRevision = this.resourceWork.revision;
       this.resourceWork.bindWorkers(this.visiblePeople);
     }
@@ -1203,12 +1267,25 @@ export class GodboxRenderer {
     this.reactionGlyphs.beginFrame(elapsedSeconds, this.camera.position, this.cameraDirector.current()?.subjectId,
       reactionSeriousShot, this.reducedMotion.matches);
     this.localPeers.clear();
+    this.frameSleepStructures.clear();
+    this.frameSettlementEras.clear();
     for (const person of this.visiblePeople) if (person.alive) {
       this.localPeers.set(person.id, person);
       const previous = this.peopleVisuals.get(person.id) ?? person.position;
       const snapshot = this.localPeerPositions.get(person.id);
       if (snapshot) { snapshot.x = previous.x; snapshot.z = previous.z; }
       else this.localPeerPositions.set(person.id, { x: previous.x, z: previous.z });
+    }
+    this.bodyRecovery.prune(this.state.bodies ?? [], this.state.people, elapsedSeconds);
+    for (const body of this.state.bodies ?? []) {
+      if (!body.recovery || body.removed) continue;
+      const helper = this.visiblePeople.find(p => p.id === body.recovery!.helperId && p.alive);
+      const anchor = this.bodyAnchors.get(body.id);
+      const started = this.bodyStarted.get(`body:${body.id}`);
+      if (!helper || !this.visiblePeople.some(p => p.id === body.id) || !anchor || started === undefined || elapsedSeconds - started < 2.4) continue;
+      this.bodyRecovery.start(body, helper, anchor, this.peopleVisuals.get(helper.id) ?? helper.position,
+        anchor.facing, elapsedSeconds, (a, b) => this.humanNavigation.clear(a, b)
+          && this.personGround.isStandable(a.x, a.z) && this.personGround.isStandable(b.x, b.z));
     }
     const count = Math.min(this.people.instanceMatrix.count, this.visiblePeople.length);
     this.people.count = count;
@@ -1229,44 +1306,68 @@ export class GodboxRenderer {
       const person = this.visiblePeople[index];
       if (!person) continue;
       if (!person.alive) {
-        const body = this.state.bodies?.find(b => b.id === person.id && !b.removed);
+        const body = this.state.bodies?.find(b => b.id === person.id);
         if (body) {
           const look = this.humanLookFor(person, this.workSettlements.get(person.homeId), undefined);
           this.humanAppearance.apply(index, look, this.cultureById.get(person.cultureId)?.style.pattern, false);
           const prior = this.peopleVisuals.get(person.id);
-          if (!this.bodyAnchors.has(person.id)) this.bodyAnchors.set(person.id, { x: prior?.x ?? person.position.x, z: prior?.z ?? person.position.z, facing: prior?.facing ?? body.yaw });
+          if (!this.bodyAnchors.has(person.id)) this.bodyAnchors.set(person.id, { x: body.combatImpact ? person.position.x : prior?.x ?? person.position.x,
+            z: body.combatImpact ? person.position.z : prior?.z ?? person.position.z, facing: prior?.facing ?? body.yaw });
           const anchor = this.bodyAnchors.get(person.id)!;
-          const x = anchor.x, z = anchor.z;
+          const recovery = this.bodyRecovery.pose(body.id, elapsedSeconds, this.reducedMotion.matches);
+          if (body.removed && !(body.combatImpact?.vaporized && body.month === this.state.month) && (!recovery || recovery.done)) {
+            for (const mesh of [this.people, this.peopleHeads, this.peopleHeadwear, this.peopleTools]) this.setInstanceTransform(mesh, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+            for (const mesh of [this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins]) for (let side = 0; side < 2; side++) this.setInstanceTransform(mesh, index * 2 + side, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+            continue;
+          }
+          const x = recovery?.body.x ?? anchor.x, z = recovery?.body.z ?? anchor.z;
+          if (recovery) { anchor.x = x; anchor.z = z; }
           const y = this.personGround.heightAt(x, z);
           const yaw = anchor.facing;
           const key = `body:${person.id}`;
           let started = this.bodyStarted.get(key);
-          if (started === undefined) { started = body.month === this.state.month && prior ? elapsedSeconds : -Infinity; this.bodyStarted.set(key, started); }
-          const motion = casualtyLifecycle(elapsedSeconds - started, this.reducedMotion.matches);
+          if (started === undefined) { started = body.month === this.state.month && (prior || body.combatImpact) ? elapsedSeconds : -Infinity; this.bodyStarted.set(key, started); }
+          const impact = body.combatImpact;
+          if (impact && !this.combatStarted.has(impact.eventId)) this.combatStarted.set(impact.eventId,
+            body.month === this.state.month ? this.battlePresentationElapsed : -Infinity);
+          const life = impact ? this.battlePresentationElapsed - this.combatStarted.get(impact.eventId)! - impact.impactAt : elapsedSeconds - started;
+          const blast = body.combatImpact && ['shell', 'missile', 'drone', 'nuclear'].includes(body.combatImpact.weapon);
+          const motion = casualtyLifecycle(life, this.reducedMotion.matches, Boolean(blast));
           const scale = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * (person.appearance?.heightScale ?? 1)
             * (person.ageMonths < 168 ? 0.7 : 1) * cosmicAppearanceFor(person.id).height;
           const root = new THREE.Matrix4().makeRotationY(yaw);
           root.multiply(new THREE.Matrix4().makeRotationX(motion.pitch));
-          root.setPosition(x, y + motion.fall * scale * 0.10, z);
+          root.multiply(new THREE.Matrix4().makeRotationZ(motion.roll));
+          if (body.combatImpact?.vaporized) {
+            const dissolve = this.reducedMotion.matches ? 1 : THREE.MathUtils.clamp(life / 0.25, 0, 1);
+            root.scale(new THREE.Vector3(1 - dissolve, 1 - dissolve, 1 - dissolve));
+          }
+          const thrownX = x - Math.sin(yaw) * motion.throw, thrownZ = z - Math.cos(yaw) * motion.throw;
+          const impactGround = motion.throw ? this.personGround.heightAt(thrownX, thrownZ) : y;
+          root.setPosition(thrownX, impactGround + motion.fall * scale * 0.10 + motion.lift, thrownZ);
           const part = (mesh: THREE.InstancedMesh, slot: number, px: number, py: number, pz: number, pitch = 0) => {
             this.setInstanceTransform(mesh, slot, px * scale, py * scale, pz * scale,
               scale, scale, scale, pitch, 0, 0);
             const held = this.lastBodyPose.get(person.id)?.get(mesh.uuid);
             const previous = held?.[held.length === 2 ? slot % 2 : 0];
             if (previous && motion.fall < 1) {
-              for (let k = 0; k < 16; k++) this.personMatrix.elements[k] = previous.elements[k]! * (1 - motion.fall) + this.personMatrix.elements[k]! * motion.fall;
+              const oldPosition = new THREE.Vector3(), oldRotation = new THREE.Quaternion(), oldScale = new THREE.Vector3();
+              const newPosition = new THREE.Vector3(), newRotation = new THREE.Quaternion(), newScale = new THREE.Vector3();
+              previous.decompose(oldPosition, oldRotation, oldScale);
+              this.personMatrix.decompose(newPosition, newRotation, newScale);
+              this.personMatrix.compose(oldPosition.lerp(newPosition, motion.fall), oldRotation.slerp(newRotation, motion.fall), oldScale.lerp(newScale, motion.fall));
             }
             this.personMatrix.premultiply(root); mesh.setMatrixAt(slot, this.personMatrix);
           };
           part(this.people, index, 0, 0.44, 0, motion.reaction);
-          part(this.peopleHeads, index, 0, 0.85, 0);
+          part(this.peopleHeads, index, 0, 0.85 - motion.buckle * 0.3, 0, motion.reaction * 0.6);
           part(this.peopleHeadwear, index, 0, 0.85, 0);
           part(this.peopleRoleAccents, index, 0, 0.58, 0);
           for (let side = 0; side < 2; side++) {
             const sign = side ? 1 : -1;
-            part(this.peopleArms, index * 2 + side, sign * 0.16, 0.67, 0, 0.12 * motion.fall);
+            part(this.peopleArms, index * 2 + side, sign * (0.16 + motion.fall * 0.045), 0.67, 0, (side ? 0.22 : -0.12) * motion.fall);
             part(this.peopleForearms, index * 2 + side, sign * 0.17, 0.48, 0.02, -0.2 * motion.fall);
-            part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44, 0, 0.08 * motion.fall);
+            part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44, 0, 0.08 * motion.fall + motion.buckle * 2);
             part(this.peopleShins, index * 2 + side, sign * 0.065, 0.225, 0.02, -0.1 * motion.fall);
           }
           this.setInstanceTransform(this.peopleTools, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
@@ -1274,6 +1375,37 @@ export class GodboxRenderer {
           for (const mesh of [this.people, this.peopleHeads, this.peopleRoleAccents, this.peopleHeadwear]) mesh.setColorAt(index, this.personColor);
           for (const mesh of [this.peopleArms, this.peopleForearms, this.peopleLegs, this.peopleShins]) for (let side = 0; side < 2; side++) mesh.setColorAt(index * 2 + side, this.personColor);
         }
+        continue;
+      }
+      const recoveringBody = this.bodyRecovery.bodyForHelper(person.id, elapsedSeconds);
+      const recoveryPose = recoveringBody ? this.bodyRecovery.pose(recoveringBody, elapsedSeconds, this.reducedMotion.matches) : undefined;
+      if (recoveryPose && !recoveryPose.done) {
+        const look = this.humanLookFor(person, this.workSettlements.get(person.homeId), undefined);
+        this.humanAppearance.apply(index, look, this.cultureById.get(person.cultureId)?.style.pattern, false);
+        const scale = HUMAN_WORLD_SCALE * COSMIC_HEIGHT_MULTIPLIER * (person.appearance?.heightScale ?? 1) * cosmicAppearanceFor(person.id).height;
+        const y = this.personGround.heightAt(recoveryPose.helper.x, recoveryPose.helper.z);
+        const root = new THREE.Matrix4().makeRotationY(recoveryPose.yaw);
+        root.setPosition(recoveryPose.helper.x, y, recoveryPose.helper.z);
+        const bend = recoveryPose.bend;
+        const part = (mesh: THREE.InstancedMesh, slot: number, x: number, h: number, z: number, pitch = 0) => {
+          this.setInstanceTransform(mesh, slot, x * scale, h * scale, z * scale, scale, scale, scale, pitch, 0, 0);
+          this.personMatrix.premultiply(root); mesh.setMatrixAt(slot, this.personMatrix);
+          mesh.setColorAt(slot, this.personColor);
+        };
+        this.personColor.set(look.palette.luminous);
+        part(this.people, index, 0, 0.44 - bend * 0.12, 0, bend * 0.75);
+        part(this.peopleHeads, index, 0, 0.85 - bend * 0.23, bend * 0.23, bend * 0.3);
+        part(this.peopleHeadwear, index, 0, 0.85 - bend * 0.23, bend * 0.23, bend * 0.3);
+        for (let side = 0; side < 2; side++) {
+          const sign = side ? 1 : -1;
+          part(this.peopleArms, index * 2 + side, sign * 0.16, 0.67 - bend * 0.21, bend * 0.16, -bend * 0.25);
+          part(this.peopleForearms, index * 2 + side, sign * 0.16, 0.48 - bend * 0.21, bend * 0.21, -bend * 0.3);
+          part(this.peopleLegs, index * 2 + side, sign * 0.065, 0.44 - bend * 0.10, 0, sign * recoveryPose.stride - bend * 0.35);
+          part(this.peopleShins, index * 2 + side, sign * 0.065, 0.225, bend * 0.05, -sign * recoveryPose.stride + bend * 0.25);
+        }
+        this.setInstanceTransform(this.peopleTools, index, 0, -100, 0, 0, 0, 0, 0, 0, 0);
+        const visual = this.peopleVisuals.resolve(person.id, { destination: recoveryPose.helper, restFacing: recoveryPose.yaw }, 0, this.personGround);
+        if (visual) { visual.x = recoveryPose.helper.x; visual.z = recoveryPose.helper.z; visual.footY = y; visual.facing = recoveryPose.yaw; }
         continue;
       }
       const group = this.socialGroups.get(groupKeyFor(person) ?? '');
@@ -1341,10 +1473,18 @@ export class GodboxRenderer {
         }
       }
       const structures = this.settlementBuildingPlacements.get(person.homeId) ?? NO_ACTIVITY_STRUCTURES;
-      const sleepStructures = structures.map(structure => {
-        const plot = settlement?.structurePlots?.find(p => p.id === structure.key);
-        return plot && !usableStructure(plot) ? { ...structure, sleepingArea: undefined } : structure;
-      });
+      // Plots cannot change within a frame, so every resident of a settlement shares one derivation
+      // instead of rescanning structures x plots per person.
+      let sleepStructures = this.frameSleepStructures.get(person.homeId);
+      if (!sleepStructures) {
+        const plots = new Map<string, StructurePlot>();
+        for (const plot of settlement?.structurePlots ?? []) if (!plots.has(plot.id)) plots.set(plot.id, plot);
+        sleepStructures = structures.map(structure => {
+          const plot = plots.get(structure.key);
+          return plot && !usableStructure(plot) ? { ...structure, sleepingArea: undefined } : structure;
+        });
+        this.frameSleepStructures.set(person.homeId, sleepStructures);
+      }
       const sleepRoutine = sleepSchedule(person, this.visibleSolarHour);
       const sleepDue = Boolean(settlement && sleepRoutine.returningHome
         && !constructionOwnsBody
@@ -1897,6 +2037,7 @@ export class GodboxRenderer {
     this.peopleVisuals.prune((personId) => {
       this.animationController.release(personId);
       this.humanLooks.delete(personId);
+      this.humanLookMemo.delete(personId);
       this.groundedLocomotion.forget(personId);
       this.lastPersonGroundPosition.delete(personId);
       this.localPeerPositions.delete(personId);
@@ -1968,8 +2109,8 @@ export class GodboxRenderer {
   }
 
   private refreshSocialRelationshipIndex(): void {
-    if (this.socialRelationshipMonth === this.state.month) return;
-    this.socialRelationshipMonth = this.state.month;
+    if (this.socialRelationshipMonth === this.authorityMonth) return;
+    this.socialRelationshipMonth = this.authorityMonth;
     this.socialRelationshipByPair.clear();
     for (const relationship of this.state.socialRelationships ?? []) {
       this.socialRelationshipByPair.set(socialPairKey(relationship.a, relationship.b), relationship);
@@ -1978,10 +2119,13 @@ export class GodboxRenderer {
 
   private refreshVisiblePeople(): void {
     const subjectId = this.cameraDirector.current()?.subjectId;
-    if (this.visiblePeopleMonth === this.state.month && this.visiblePeoplePopulation === this.state.people.length
+    // Deaths and births land mid-month; a month in flight waits for its commit instead of re-sorting
+    // the whole population twice.
+    if (this.visiblePeopleMonth === this.authorityMonth
+      && (monthInFlight(this.state) || this.visiblePeoplePopulation === this.state.people.length)
       && this.visiblePeopleSubject === subjectId) return;
     this.visiblePeopleSubject = subjectId;
-    this.visiblePeopleMonth = this.state.month;
+    this.visiblePeopleMonth = this.authorityMonth;
     this.visiblePeoplePopulation = this.state.people.length;
     // Reconcile construction roles against the full authoritative workforce before any rendering
     // budget is applied. Visibility can choose representatives; it cannot define their jobs.
@@ -1999,10 +2143,12 @@ export class GodboxRenderer {
     );
     const protectedFoundingStandard = this.foundingStandardPresentation.participantIds();
     const protectedFirstFire = this.firstFirePresentation.participantIds();
+    const protectedRecovery = new Set((this.state.bodies ?? []).filter(b => b.recovery && (!b.removed || this.bodyRecovery.has(b.id))).map(b => b.recovery!.helperId));
     this.visiblePeople = alive
       // Notable/historical lives remain first. Then preserve live construction and one-time
       // founding-standard participants so a crowded settlement cannot hide the people doing the act.
       .sort((a, b) => Number(b.id === subjectId) - Number(a.id === subjectId)
+        || Number(protectedRecovery.has(b.id)) - Number(protectedRecovery.has(a.id))
         || Number(protectedFirstFire.has(b.id)) - Number(protectedFirstFire.has(a.id))
         || Number(protectedConstruction.has(b.id)) - Number(protectedConstruction.has(a.id))
         || tierRank(b) - tierRank(a)
@@ -2011,9 +2157,14 @@ export class GodboxRenderer {
           - Number(this.resourceWork.sites.has(`${a.homeId}\u0000${a.navigation?.destinationId ?? ''}`))
         || stableHash(`${this.config.seed}:${a.id}:visible`) - stableHash(`${this.config.seed}:${b.id}:visible`))
       .slice(0, capacity);
-    const activeBodies = new Set((this.state.bodies ?? []).filter(b => !b.removed).map(b => b.id));
+    const activeBodies = new Set((this.state.bodies ?? []).map(b => b.id));
+    if (this.combatStarted.size > 64) {
+      const activeEvents = new Set((this.state.bodies ?? []).map(b => b.combatImpact?.eventId));
+      for (const id of this.combatStarted.keys()) if (!activeEvents.has(id)) this.combatStarted.delete(id);
+    }
     for (const id of this.bodyAnchors.keys()) if (!activeBodies.has(id)) { this.bodyAnchors.delete(id); this.bodyStarted.delete(`body:${id}`); }
-    const remains = (this.state.bodies ?? []).filter(b => !b.removed)
+    const remains = (this.state.bodies ?? []).filter(b => !b.removed || this.bodyRecovery.has(b.id)
+      || b.combatImpact?.vaporized && b.month === this.state.month)
       .sort((a, b) => Math.hypot(a.person.position.x - this.camera.position.x, a.person.position.z - this.camera.position.z)
         - Math.hypot(b.person.position.x - this.camera.position.x, b.person.position.z - this.camera.position.z) || a.id.localeCompare(b.id))
       .slice(0, Math.min(64, Math.floor(capacity / 4))).map(b => b.person);
@@ -2028,13 +2179,11 @@ export class GodboxRenderer {
   }
 
   private personOnRenderableGround(person: Person): boolean {
-    const terrain = this.terrainQueries.queryTerrainAt(person.position.x, person.position.z);
-    return Boolean(terrain && !terrain.water && terrain.maxSlope <= 40);
+    return this.terrainQueries.standable(person.position.x, person.position.z, 40);
   }
 
   private personStandable(x: number, z: number): boolean {
-    const terrain = this.terrainQueries.queryTerrainAt(x, z);
-    return Boolean(terrain && !terrain.water && terrain.maxSlope <= 40);
+    return this.terrainQueries.standable(x, z, 40);
   }
 
   /**
@@ -2129,9 +2278,9 @@ export class GodboxRenderer {
 
   /** Station plans follow the authoritative month; the cast follows the plan. */
   private refreshFacilityCrews(): void {
-    const month = this.facilityCrewMonth !== this.state.month;
+    const month = this.facilityCrewMonth !== this.authorityMonth;
     if (month) {
-      this.facilityCrewMonth = this.state.month;
+      this.facilityCrewMonth = this.authorityMonth;
       this.facilityCrew.update(this.state);
     }
     if (month || this.facilityCrewRevision !== this.facilityCrew.revision) {
@@ -2143,9 +2292,9 @@ export class GodboxRenderer {
   private refreshMarketStalls(): void {
     const stalls = [...this.settlementMarketStalls.values()].flat();
     const plan = marketStallSignature(stalls);
-    if (plan === this.marketStallPlan && this.marketStallMonth === this.state.month) return;
+    if (plan === this.marketStallPlan && this.marketStallMonth === this.authorityMonth) return;
     this.marketStallPlan = plan;
-    this.marketStallMonth = this.state.month;
+    this.marketStallMonth = this.authorityMonth;
     if (stalls.length === 0) { this.marketStalls = new Map(); return; }
     const attending = this.visiblePeople.filter((person) => person.alive && !person.navigation?.traveling
       && person.navigation?.destinationKind === 'market');
@@ -2174,7 +2323,15 @@ export class GodboxRenderer {
    */
   private humanLookFor(person: Person, settlement: Settlement | undefined,
     weather: WeatherCellState | undefined): HumanLook {
-    const era = settlement ? this.eraForSettlement(settlement) : 'village';
+    let era: Era = 'village';
+    if (settlement) {
+      const known = this.frameSettlementEras.get(settlement.id);
+      era = known ?? this.eraForSettlement(settlement);
+      if (known === undefined) this.frameSettlementEras.set(settlement.id, era);
+    }
+    const month = this.authorityMonth;
+    const memo = this.humanLookMemo.get(person.id);
+    if (memo && memo.month === month && memo.settlementId === settlement?.id && memo.era === era && memo.weather === weather) return memo.look;
     const tier = visualTierFor(person);
     const cold = coldPressure(weather);
     const key = `${era}|${tier}|${Math.floor(person.ageMonths / 12)}|${person.role ?? ''}|${person.sex}`
@@ -2182,7 +2339,10 @@ export class GodboxRenderer {
       + `|${Math.round((person.appearance?.materialQuality ?? 0) * 8)}`
       + `|${Math.round((settlement?.prosperity ?? 0.4) * 8)}|${Math.round(cold * 8)}`;
     const cached = this.humanLooks.get(person.id);
-    if (cached && cached.key === key) return cached.look;
+    if (cached && cached.key === key) {
+      this.humanLookMemo.set(person.id, { month, settlementId: settlement?.id, era, weather, look: cached.look });
+      return cached.look;
+    }
     const look = resolveHumanLook(person, {
       culture: this.cultureById.get(person.cultureId),
       era,
@@ -2192,6 +2352,7 @@ export class GodboxRenderer {
     // A notable or historical life must never read as unadorned at documentary distance.
     if (tier !== 'population' && look.wardrobe.head === 'none') look.wardrobe.head = notableHeadPiece(person);
     this.humanLooks.set(person.id, { key, look });
+    this.humanLookMemo.set(person.id, { month, settlementId: settlement?.id, era, weather, look });
     return look;
   }
 
@@ -2287,12 +2448,24 @@ export class GodboxRenderer {
       const buildingEra = placement.development ? developmentPresentationEra(placement.development) : this.eraForBuilding(placement, era);
       // Stage tracks this plot's own era, so each structure is upgraded in place on its own
       // schedule rather than the whole settlement being reskinned at once.
-      const condition = settlement.structurePlots?.find((plot) => plot.id === placement.key)?.condition ?? 1;
+      const damagedPlot = settlement.structurePlots?.find((plot) => plot.id === placement.key);
+      const condition = damagedPlot?.condition ?? 1;
       const event = this.visualStateResolver.trackEntity(placement.key, 'building', { stage: eraRank(buildingEra) + 1, damaged: condition < 0.85, ruined: condition === 0 }, this.state.month);
       if (event?.kind === 'building-founded') this.transitionTimeline.createBuildingConstruction(placement.key, { settlementId: settlement.id });
       if (event?.kind === 'building-upgraded') this.transitionTimeline.createBuildingUpgrade(placement.key, Number(event.associatedData['fromStage'] ?? 0), Number(event.associatedData['toStage'] ?? 1), { settlementId: settlement.id });
-      const structure = this.createPlacedBuilding(placement, placement.development?.style ?? cultureStyle, buildingEra, terrainY, settlement);
-      if (condition < 1) {
+      // Keep the pre-hit shell available for the collapse; ruins are rendered separately.
+      const shellPlacement = damagedPlot?.destruction && damagedPlot.development?.status === 'ruin' && placement.development
+        ? { ...placement, development: { ...placement.development, status: 'active' as const } } : placement;
+      const structure = this.createPlacedBuilding(shellPlacement, placement.development?.style ?? cultureStyle, buildingEra, terrainY, settlement);
+      if (damagedPlot?.destruction && condition < 1) {
+        let ruins: THREE.Group | undefined;
+        if (condition === 0) {
+          ruins = createStructureRuin(damagedPlot, terrainY);
+          ruins.position.x -= settlement.position.x; ruins.position.z -= settlement.position.z;
+          group.add(ruins);
+        }
+        this.structureDestruction.bind(damagedPlot, structure, ruins);
+      } else if (condition < 1) {
         structure.scale.y *= 0.12 + condition * 0.88;
         structure.rotation.z += (1 - condition) * 0.12;
       }
@@ -3111,16 +3284,7 @@ export class GodboxRenderer {
   }
 
   private eraForSettlement(settlement: Settlement): Era {
-    if (settlement.development) {
-      const structures = (settlement.structurePlots ?? []).flatMap(p => p.development?.status === 'active' ? [p.development] : []);
-      return structures.reduce<Era>((era, response) => eraRank(developmentPresentationEra(response)) > eraRank(era) ? developmentPresentationEra(response) : era, 'primitive');
-    }
-    if (this.state.advanced.machine.capability > 0.55 || this.state.advanced.space.orbitalInfrastructure > 0.15) return 'advanced';
-    if (settlement.industry.active || settlement.infrastructure.factories > 0.12 || settlement.infrastructure.power > 0.12) return 'industrial';
-    if (settlement.infrastructure.archives > 0.2 || settlement.infrastructure.workshops > 0.28) return 'preIndustrial';
-    if (settlement.urbanization > 0.2 || settlement.infrastructure.roads > 0.2) return 'village';
-    if (settlement.buildings > 8) return 'early';
-    return 'primitive';
+    return settlementPresentationEra(settlement);
   }
 
   /**
@@ -5048,6 +5212,7 @@ export class GodboxRenderer {
 
   private updateAdvancedAtmosphere(elapsedSeconds: number): void {
     if (this.lastCatastropheHistoryLength !== this.state.history.length || this.lastCatastropheMonth !== this.state.month) {
+      const previousEventId = this.latestCatastrophe?.id;
       this.latestCatastrophe = undefined;
       for (let index = this.state.history.length - 1; index >= 0; index -= 1) {
         const candidate = this.state.history[index];
@@ -5059,6 +5224,7 @@ export class GodboxRenderer {
       }
       this.lastCatastropheHistoryLength = this.state.history.length;
       this.lastCatastropheMonth = this.state.month;
+      if (previousEventId !== this.latestCatastrophe?.id) this.catastropheStartedAt = elapsedSeconds;
     }
     const event = this.latestCatastrophe;
     const age = event ? Math.max(0, this.state.month - event.month) : Number.POSITIVE_INFINITY;
@@ -5073,8 +5239,9 @@ export class GodboxRenderer {
     if (event?.location) {
       this.catastropheLight.position.set(event.location.x, this.elevationAt(event.location.x, event.location.z) + 7, event.location.z);
     }
-    const flashWindow = age <= 2 && severity > 0 ? 1 : 0;
-    this.catastropheLight.intensity = flashWindow * severity * Math.max(0, Math.sin(elapsedSeconds * 2.7) ** 18) * 46;
+    const flashAge = Math.max(0, elapsedSeconds - this.catastropheStartedAt);
+    const flash = age === 0 && flashAge < 1.4 && !this.reducedMotion.matches ? Math.sin(flashAge / 1.4 * Math.PI) ** 2 : 0;
+    this.catastropheLight.intensity = flash * severity * 46;
   }
 
   private dominantCulture(settlement: Settlement): Culture | undefined {
@@ -5228,6 +5395,7 @@ export class GodboxRenderer {
   }
 
   dispose(): void {
+    this.shaderGate.releaseAll();
     this.energyRenderer.dispose();
     this.industryRenderer.dispose();
     this.manualCamera.dispose();
@@ -5236,7 +5404,9 @@ export class GodboxRenderer {
     this.ecology.dispose();
     this.waterSystem.dispose();
     this.warRenderer.dispose();
+    this.structureFires.dispose();
     this.weatherRenderer.dispose();
+    this.volcanoRenderer?.dispose();
     this.peopleVisuals.clear();
     this.groundedLocomotion.clear();
     this.arrivalGrounds.clear();

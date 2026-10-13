@@ -22,6 +22,7 @@
  */
 
 import type { SettlementNeed, StructureForm } from '../../sim/development/types';
+import type { GeneratorKind } from '../../sim/energy/types';
 import type { BuildingRole } from '../assets/BuildingGrammar';
 import { SeededRandom } from '../../sim/prng';
 import type { ArchitecturalPeriod } from './ArchitecturalPeriod';
@@ -32,7 +33,7 @@ import { ARCHETYPE_LIBRARY, BUILDING_ARCHETYPES, archetypeStageFor } from './Bui
 export type SettlementSpecialization = 'agriculture' | 'forestry' | 'mining' | 'craft' | 'exchange';
 
 export interface ArchetypeRoutingContext {
-  energyKind?: import('../../sim/energy/types').GeneratorKind;
+  energyKind?: GeneratorKind;
   /** The renderer role, which stays authoritative for placement and LOD. */
   role: BuildingRole;
   period: ArchitecturalPeriod;

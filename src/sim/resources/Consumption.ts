@@ -5,6 +5,7 @@ import { materialEconomy, takeMaterial } from './Inventory';
 import { useLabour, type LabourBudget } from './Processing';
 import type { ResourceEventDraft } from './ResourceSystem';
 import { armsDemand, recordArmsDemand } from './ArmsDemand';
+import { recordHeatWork } from '../knowledge/HeatExperience';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 
@@ -12,6 +13,30 @@ export function consumeMaterials(state: SimulationState, s: Settlement, people: 
   const economy = materialEconomy(s);
   const city = state.advanced.scale === 'modern-statistical' ? state.advanced.cities.find(c => c.settlementId === s.id) : undefined;
   const population = city?.population ?? people.length;
+  // Cooking keeps fire in use in warm climates too. Food and knowledge alone supply
+  // neither a hearth nor fuel: households spend the same handling labour and real timber.
+  const fire = mastery(s, 'fire-control');
+  if (s.resources.food > 0 && fire.theory >= 0.12) {
+    const need = population * 0.006;
+    const requested = Math.min(need, ((budget.carrier ?? 0) + (budget.keeper ?? 0) + (budget.artisan ?? 0)) * 5);
+    const fuel = takeMaterial(s, 'timber', requested);
+    economy.labourUsed += useLabour(budget, ['carrier', 'keeper', 'artisan'], fuel * 0.2);
+    economy.energyDemand += need; economy.energySupplied += fuel;
+    economy.demand.timber = Math.max(economy.demand.timber ?? 0, need * 3);
+    const vessels = economy.householdEquipment?.pottery ?? 0;
+    recordHeatWork(s, fuel * 4, state.month, 0.08 + 0.32 * Math.min(1, vessels / Math.max(1, population * 0.25)));
+  }
+  const equipment = economy.householdEquipment ??= {};
+  for (const [id, perPerson, wear] of [['pottery', 0.25, 0.003], ['textile', 0.5, 0.007]] as const) {
+    equipment[id] = Math.max(0, (equipment[id] ?? 0) * (1 - wear));
+    const deficit = Math.max(0, population * perPerson - equipment[id]!);
+    const requested = Math.min(deficit, (budget.carrier ?? 0) * 10 + (budget.keeper ?? 0) * 10);
+    const delivered = takeMaterial(s, id, requested);
+    economy.labourUsed += useLabour(budget, ['carrier', 'keeper'], delivered * 0.1);
+    equipment[id] += delivered;
+    // Demand is a stock target here, matching extraction and manufacturing target semantics.
+    economy.demand[id] = Math.max(economy.demand[id] ?? 0, Math.min(deficit, population * perPerson * wear * 6 + 2));
+  }
   const need = Math.max(0.1, population * 0.02);
   economy.medicineCoverage = clamp(takeMaterial(s, 'herbal-remedy', need) / need);
   for (const person of people) person.health = clamp(person.health + economy.medicineCoverage * 0.008);

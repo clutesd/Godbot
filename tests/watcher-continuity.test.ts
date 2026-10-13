@@ -71,10 +71,9 @@ describe('ongoing documentary observation', () => {
     settlement.buildings++;
     expect(current().statement.text).not.toContain('last narrated view');
     historian.acquireScene(current(), sim.state, true);
-    const narratedMonth = sim.state.month;
     sim.state.month++;
     settlement.buildings += 2;
-    expect(current().statement.text).toContain(`last narrated view in month ${narratedMonth}`);
+    expect(current().statement.text).toContain('last narrated view 1 month ago');
     expect(current().statement.text).toContain('building count rose by 2');
   });
 

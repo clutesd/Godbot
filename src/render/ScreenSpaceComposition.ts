@@ -89,8 +89,9 @@ export function screenSpaceComposition(
     targetX = THREE.MathUtils.clamp(-screenLead * 0.2, -0.22, 0.22);
   }
   const projected = subject.clone().project(camera);
-  const xError = targetX - projected.x;
-  const yError = target.y - projected.y;
+  // Moving the look target right/up moves the photographed subject left/down.
+  const xError = projected.x - targetX;
+  const yError = projected.y - target.y;
   const correctedX = deadZoneCorrection(xError, target.deadZoneX);
   const correctedY = deadZoneCorrection(yError, target.deadZoneY);
 

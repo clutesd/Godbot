@@ -6,6 +6,7 @@ const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.mi
 export type EngagementMode = 'close' | 'ranged' | 'bombardment' | 'combined-arms' | 'stand-off';
 
 export interface MilitaryCombatAssessment {
+  nuclearDeterrence: boolean;
   engagementMode: EngagementMode;
   effectivenessA: number;
   effectivenessB: number;
@@ -48,7 +49,8 @@ export function militaryRange(profile: MilitaryCapabilityProfile): number {
     + profile.firearms * 0.2
     + profile.artillery * 0.26
     + profile.airPower * 0.16
-    + profile.missile * 0.28,
+    + profile.missile * 0.28
+    + (profile.dronePower ?? 0) * 0.12,
   );
 }
 
@@ -60,7 +62,8 @@ export function militaryLethality(profile: MilitaryCapabilityProfile): number {
     + profile.firearms * 0.25
     + profile.artillery * 0.28
     + profile.airPower * 0.2
-    + profile.missile * 0.18,
+    + profile.missile * 0.18
+    + (profile.dronePower ?? 0) * 0.12,
     0.22,
     1.35,
   );
@@ -77,7 +80,8 @@ export function militaryLogisticsBurden(profile: MilitaryCapabilityProfile): num
     + profile.artillery * 0.18
     + profile.mobility * 0.12
     + profile.airPower * 0.24
-    + profile.missile * 0.26,
+    + profile.missile * 0.26
+    + (profile.dronePower ?? 0) * 0.18,
   );
 }
 
@@ -116,7 +120,8 @@ export function militarySupplyCosts(profile: MilitaryCapabilityProfile): Militar
     + profile.artillery * 0.28
     + profile.mobility * 0.18
     + profile.airPower * 0.34
-    + profile.missile * 0.38,
+    + profile.missile * 0.38
+    + (profile.dronePower ?? 0) * 0.24,
   );
   return {
     food: 1,
@@ -137,6 +142,7 @@ function militaryIndex(profile: MilitaryCapabilityProfile): number {
     + profile.communications * 0.1
     + profile.airPower * 0.1
     + profile.missile * 0.08
+    + (profile.dronePower ?? 0) * 0.04
     + profile.sustainment * 0.07,
   );
 }
@@ -148,6 +154,7 @@ function engagementMode(a: MilitaryCapabilityProfile, b: MilitaryCapabilityProfi
   const firearms = Math.max(a.firearms, b.firearms);
   const ranged = Math.max(a.ranged, b.ranged);
   if (missile > 0.48) return 'stand-off';
+  if (Math.max(a.dronePower ?? 0, b.dronePower ?? 0) > 0.48) return 'combined-arms';
   if (air > 0.44 && (artillery > 0.3 || firearms > 0.4)) return 'combined-arms';
   if (artillery > 0.4) return 'bombardment';
   if (firearms > 0.32 || ranged > 0.34) return 'ranged';
@@ -218,6 +225,8 @@ export function assessMilitaryCombat(
   );
 
   return {
+    nuclearDeterrence: a.equipment.some(equipment => equipment === 'atomic-weapons' || equipment === 'hydrogen-weapons')
+      && b.equipment.some(equipment => equipment === 'atomic-weapons' || equipment === 'hydrogen-weapons'),
     engagementMode: engagementMode(a, b),
     effectivenessA,
     effectivenessB,

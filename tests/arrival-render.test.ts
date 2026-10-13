@@ -195,7 +195,7 @@ describe('Arrival presentation contracts', () => {
     view.dispose();
     expect(scene.children).toHaveLength(0);
     expect(view.root.children).toHaveLength(0);
-  }, 15000);
+  });
 
   it('skins every founding vessel with a readable ceramic-bronze hull and site-colored luminous runes', () => {
     const s = new Simulation({ seed: 'arrival-bronze-runes', startMode: 'arrival' });

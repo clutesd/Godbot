@@ -54,7 +54,7 @@ export function competence(person: Person, domain: KnowledgeDomain): number {
   return clamp(person.expertise?.find(e => e.domain === domain)?.competence ?? 0);
 }
 export function workAvailability(person: Person): number {
-  return !person.alive || person.occupation === 'child' || person.displacedSinceMonth !== undefined || person.activity === 'migrate'
+  return !person.alive || person.ageMonths < 15 * 12 || person.occupation === 'child' || person.displacedSinceMonth !== undefined || person.activity === 'migrate'
     ? 0 : clamp(person.health) * illnessAvailability(person) * (person.occupation === 'elder' ? 0.25 : 1);
 }
 export function expertiseEntry(person: Person, domain: KnowledgeDomain, month: number): NonNullable<Person['expertise']>[number] {
@@ -168,8 +168,10 @@ function reserveCivilianLabour(state: SimulationState, settlement: Settlement, s
     allocate(summary);
   }
   if (settlement.industry.active) {
-    summary.industry = (summary.economy.artisan ?? 0) * 0.5;
-    summary.economy.artisan = (summary.economy.artisan ?? 0) * 0.5;
+    // Industrial artisans staff physical processing authorities on the shared resource ledger.
+    const industrial = (summary.economy.artisan ?? 0) * 0.5;
+    summary.resources.artisan = (summary.resources.artisan ?? 0) + industrial;
+    summary.economy.artisan = (summary.economy.artisan ?? 0) - industrial;
   }
   const h = settlement.survival?.disease;
   summary.diseaseReserved = 0;
@@ -238,6 +240,7 @@ export function teach(state: SimulationState): void {
 }
 
 export function advanceHumanCapital(state: SimulationState): void {
+  if (state.month % 12 === 0) reinvestSurplusLabour(state);
   const homes = new Map(state.settlements.map(s => [s.id, s]));
   const constructionHomes = new Set(state.settlements.filter(s => s.development?.project || (s.structurePlots ?? []).some(plot => plot.condition < 0.95)).map(s => s.id));
   const tradeHomes = new Set(state.tradeRoutes.filter(r => r.active).flatMap(r => [r.a, r.b]));
@@ -258,6 +261,39 @@ export function advanceHumanCapital(state: SimulationState): void {
     for (const entry of p.expertise ?? []) if (entry.domain !== primary && state.month - entry.lastPractisedMonth > 120) entry.competence *= 0.999;
   }
   if (state.month % 3 === 0) teach(state);
+}
+
+/** A reserve lets households support apprentices, it does not conjure trained specialists.
+ * Careers change gradually; existing expertise follows the worker and new skills require work. */
+export function reinvestSurplusLabour(state: SimulationState): void {
+  if (isStatistical(state)) return;
+  for (const s of state.settlements.filter(s => s.alive)) {
+    const food = s.survival?.food;
+    if (!food || s.foodSecurity < 0.85 || (s.survival?.deprivation ?? 0) > 0.1
+      || s.resources.food < food.need * 3 || s.conflictPressure > 0.4) continue;
+    const residents = state.people.filter(p => p.alive && p.homeId === s.id);
+    const adults = residents.filter(p => p.ageMonths >= 18 * 12 && p.ageMonths < 60 * 12);
+    const farmers = adults.filter(p => p.occupation === 'farmer');
+    // Preserve a working agricultural base and defer if the observed harvest cannot feed it.
+    const sustainable = s.materialEconomy?.flows?.produced.food ?? 0;
+    if (farmers.length <= Math.max(4, adults.length * 0.25) || sustainable < food.need * 1.1) continue;
+    const counts = (o: Occupation) => adults.filter(p => p.occupation === o).length;
+    const targets: Array<{ occupation: Occupation; need: number }> = [
+      { occupation: 'forager', need: (s.materialEconomy?.shortageMonths ?? 0) > 3 ? adults.length * 0.15 : 0 },
+      { occupation: 'artisan', need: adults.length * (0.14 + s.infrastructure.workshops * 0.1) },
+      { occupation: 'builder', need: adults.length * (s.development?.project ? 0.13 : 0.08) },
+      { occupation: 'carrier', need: state.tradeRoutes.some(r => r.active && (r.a === s.id || r.b === s.id)) ? adults.length * 0.08 : 0 },
+      { occupation: 'keeper', need: adults.length * (s.institutionIds.length ? 0.05 : 0.025) },
+    ];
+    const target = targets.sort((a, b) => (b.need - counts(b.occupation)) - (a.need - counts(a.occupation)))[0]!;
+    if (target.need - counts(target.occupation) < 1) continue;
+    const apprentice = farmers.filter(p => workAvailability(p) > 0.7 && state.month - (p.career?.startedMonth ?? 0) >= 36)
+      .sort((a, b) => b.traits.curiosity - a.traits.curiosity || a.id.localeCompare(b.id))[0];
+    if (!apprentice) continue;
+    apprentice.occupation = target.occupation;
+    apprentice.career = { startedMonth: state.month, lastReconsideredMonth: state.month, reason: 'surplus-apprenticeship', inactiveMonths: 0 };
+    apprentice.workplaceId = undefined;
+  }
 }
 
 // The province and legacy catchment/material systems spend this SAME monthly allocation.

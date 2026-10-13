@@ -1,0 +1,28 @@
+name: CI
+# The whole-repository gate. Subsystem workflows stay as fast, path-filtered signals; this one
+# answers "does the branch build on Cloudflare Pages and pass the full unit suite?"
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The minimum Cloudflare Pages is configured for (README, package.json engines).
+          node-version: 22.13
+          cache: npm
+      - run: npm ci
+      # Exactly the Cloudflare Pages build command. Runs from a clean checkout, so a file that is
+      # imported but was never committed fails here instead of on the deploy.
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test -- --maxWorkers=4

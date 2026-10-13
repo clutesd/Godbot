@@ -70,8 +70,10 @@ describe('Visual continuity for represented people', () => {
     expect(started.snapped).toBe(false);
     expect(Math.hypot(started.x - 4, started.z)).toBeGreaterThan(3);
 
+    // A standing person turns to face the target before stepping off (~0.7 s for this quarter turn),
+    // so give the walk 1.5 s to be visibly under way, still far short of arrival.
     let travelled = started;
-    for (let frame = 0; frame < 8; frame += 1) travelled = step(store, 'person-1', { x: 4, z: 0 }, 0.05);
+    for (let frame = 0; frame < 30; frame += 1) travelled = step(store, 'person-1', { x: 4, z: 0 }, 0.05);
     expect(travelled.x).toBeGreaterThan(0.001);
     expect(travelled.x).toBeLessThan(4);
     expect(travelled.snapped).toBe(false);
@@ -85,7 +87,8 @@ describe('Visual continuity for represented people', () => {
     const store = new PeopleVisualStateStore();
     step(store, 'person-1', { x: 0, z: 0 }, 0.016);
     step(store, 'person-1', { x: 6, z: 0 }, 0.4);
-    for (let frame = 0; frame < 6; frame += 1) step(store, 'person-1', { x: 6, z: 0 }, 0.1);
+    // Turn-then-step: well into the walk before the destination changes.
+    for (let frame = 0; frame < 20; frame += 1) step(store, 'person-1', { x: 6, z: 0 }, 0.1);
     const before = store.get('person-1')!;
     const midX = before.x;
     const midZ = before.z;
@@ -136,7 +139,14 @@ describe('Visual continuity for represented people', () => {
     state = step(store, 'person-1', { x: 0, z: -5 }, 0.05);
     const afterOneFrame = Math.abs(state.facing);
     expect(afterOneFrame).toBeLessThan(Math.PI * 0.5);
-    for (let frame = 0; frame < 30; frame += 1) state = step(store, 'person-1', { x: 0, z: -5 }, 0.05);
+    // Reversing means braking, then a deliberate standing half-turn (π at the standing turn rate,
+    // ~2.3 s): a body that spins round in a fraction of a second is the flip this test forbids.
+    for (let frame = 0; frame < 15; frame += 1) {
+      const previous = state.facing;
+      state = step(store, 'person-1', { x: 0, z: -5 }, 0.05);
+      expect(Math.abs(state.facing - previous)).toBeLessThan(0.2);
+    }
+    for (let frame = 0; frame < 60; frame += 1) state = step(store, 'person-1', { x: 0, z: -5 }, 0.05);
     expect(Math.abs(Math.abs(state.facing) - Math.PI)).toBeLessThan(0.2);
   });
 

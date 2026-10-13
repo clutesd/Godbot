@@ -3,6 +3,9 @@
  * It never skips or reorders simulation months: it only decides whether another atomic month
  * should begin in the current rendered frame or remain in the accumulator for a later frame.
  */
+/** Smallest per-frame share a sliced month receives, so progress never depends on headroom alone. */
+const MINIMUM_SLICE_MS = 1.5;
+
 export class InteractiveTickBudget {
   private estimateMs = 1;
   private frameEstimateMs = 0;
@@ -24,6 +27,22 @@ export class InteractiveTickBudget {
       ? Math.max(0.75, this.targetFrameMs - this.frameEstimateMs - this.frameGuardMs)
       : this.frameBudgetMs;
     return nowMs + Math.min(this.frameBudgetMs, available);
+  }
+
+  /**
+   * Deadline for time-sliced months. History gets the larger of the frame's spare headroom and the
+   * work its pacing actually needs this frame (expected month cost x months due per frame, doubled
+   * at most while backlog is being repaid), capped by `frameBudgetMs`. A renderer that already
+   * overruns its frame therefore cannot starve history, and history can never take a large stall:
+   * the month's cost is spread evenly over the frames it spans instead of landing on one.
+   */
+  sliceDeadline(nowMs: number, monthsPerSecond: number, frameSeconds: number, backlogMonths: number): number {
+    const headroom = this.frameEstimateMs > 0
+      ? this.targetFrameMs - this.frameEstimateMs - this.frameGuardMs
+      : this.frameBudgetMs;
+    const paced = this.estimateMs * Math.max(0, monthsPerSecond) * Math.max(0, frameSeconds)
+      * (1 + Math.min(1, Math.max(0, backlogMonths)));
+    return nowMs + Math.min(this.frameBudgetMs, Math.max(MINIMUM_SLICE_MS, headroom, paced));
   }
 
   canStart(nowMs: number, deadlineMs: number, completedTicks: number): boolean {

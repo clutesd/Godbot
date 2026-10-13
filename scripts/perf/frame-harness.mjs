@@ -13,7 +13,7 @@
  * Requires a Chromium-family browser; set GODBOX_BROWSER to override autodetection.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -56,11 +56,17 @@ const SCENARIOS = {
     description: 'Arrival film and founding presentation, no advance',
     advanceMonths: 0,
   },
+  'early-history': {
+    description: 'Year ~12: history ticking live under the documentary camera',
+    advanceMonths: 144,
+  },
 };
 
 const argument = (name, fallback) => {
-  const raw = process.argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1];
-  return raw === undefined ? fallback : raw;
+  const raw = process.argv.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+  if (raw === undefined) return fallback;
+  // `--eval-before=@probe.js` reads the value from a file, avoiding shell quoting of expressions.
+  return raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw;
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -108,6 +114,18 @@ class Session {
     }
     return result.result.value;
   }
+}
+
+async function closeBrowser() {
+  const version = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`).then(response => response.json());
+  const socket = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', () => reject(new Error('socket error')), { once: true });
+  });
+  socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+  await sleep(500);
+  try { socket.close(); } catch { /* closed by the browser */ }
 }
 
 async function connect() {
@@ -269,9 +287,16 @@ async function main() {
     '--ignore-gpu-blocklist', '--enable-gpu-rasterization',
   ];
   if (headless) flags.push('--headless=new');
-  flags.push(`http://localhost:${PORT}/`);
+  // --query=atomic-ticks (for example) is appended to the page URL for same-build A/B runs.
+  const query = argument('query', '');
+  flags.push(`http://localhost:${PORT}/${query ? `?${query}` : ''}`);
 
   log(`launching ${browserPath.split(/[/\\]/).pop()} (${headless ? 'headless' : 'headful'})...`);
+  // A browser still listening on the debug port (for example from an interrupted run) would be
+  // attached to silently, measuring the wrong page with stale flags and accumulated frames.
+  if (await cdpTargets().then(() => true, () => false)) {
+    throw new Error(`a browser is already listening on CDP port ${DEBUG_PORT}; close it or set GODBOX_CDP_PORT`);
+  }
   const browser = spawn(browserPath, flags, { stdio: 'ignore', detached: false });
 
   let session;
@@ -334,6 +359,9 @@ async function main() {
 
     await session.evaluate('window.__godboxResetPerformance && window.__godboxResetPerformance()');
     await session.evaluate(INSTALL_PROBE);
+    // --eval-before / --eval-after run ad-hoc diagnostic expressions around the sampling window.
+    const evalBefore = argument('eval-before', null);
+    if (evalBefore) log('eval-before:', JSON.stringify(await session.evaluate(evalBefore)));
     const heapBefore = await session.evaluate('performance.memory ? performance.memory.usedJSHeapSize : null');
 
     const cpuProfilePath = argument('cpu-profile', null);
@@ -352,6 +380,14 @@ async function main() {
       log(`wrote page cpu profile to ${cpuProfilePath}`);
     }
 
+    const screenshotPath = argument('screenshot', null);
+    if (screenshotPath) {
+      const { data } = await session.send('Page.captureScreenshot', { format: 'png' });
+      writeFileSync(screenshotPath, Buffer.from(data, 'base64'));
+      log(`wrote screenshot to ${screenshotPath}`);
+    }
+    const evalAfter = argument('eval-after', null);
+    if (evalAfter) log('eval-after:', JSON.stringify(await session.evaluate(evalAfter)));
     const intervals = await session.evaluate('window.__godboxFrameProbe.intervals.slice()');
     const longFrames = await session.evaluate('window.__godboxFrameProbe.longFrames.slice(-40)');
     const scene = await session.evaluate(SCENE_STATS);
@@ -438,6 +474,9 @@ async function main() {
     }
   } finally {
     try { session?.socket.close(); } catch { /* already closed */ }
+    // On Windows the spawned launcher is not the browser process, so kill() alone leaves the real
+    // browser running on the debug port. Close it through CDP first.
+    await closeBrowser().catch(() => undefined);
     browser.kill();
   }
 }

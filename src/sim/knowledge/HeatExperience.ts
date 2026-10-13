@@ -1,4 +1,5 @@
 import type { Settlement } from '../types';
+import { recordKnowledgeWork } from './WorkExperience';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
 
@@ -44,6 +45,7 @@ function exercise(s: Settlement, id: string, amount: number, month: number): voi
 export function recordHeatWork(s: Settlement, intensity: number, month: number, containment = 1): void {
   if (!(intensity > 0)) return;
   const contained = intensity * Math.max(0, containment);
+  recordKnowledgeWork(s, 'energy', intensity);
   exercise(s, 'fire-control', PRACTICE_PER_UNIT * intensity, month);
   exercise(s, 'combustion-dynamics', PRACTICE_PER_UNIT * contained, month);
   if (contained > 0) s.knowledge.experimentation.energy = Math.min(3, s.knowledge.experimentation.energy + INSIGHT_PER_UNIT * contained);
@@ -58,4 +60,6 @@ export function recordHeatWork(s: Settlement, intensity: number, month: number, 
 export function recordMaterialWork(s: Settlement, intensity: number, month: number): void {
   if (!(intensity > 0)) return;
   exercise(s, 'material-testing', PRACTICE_PER_UNIT * 0.7 * intensity, month);
+  recordKnowledgeWork(s, 'materials', intensity);
+  recordKnowledgeWork(s, 'manufacturing', intensity);
 }

@@ -8,6 +8,7 @@ import type { TerrainSurface } from '../terrain/TerrainSurface';
 import type { TreePlacement } from './ForestPlanner';
 import { UnderstoryField, type UnderstoryReport } from './UnderstoryField';
 import { insideVegetationTerrain } from './VegetationPlacement';
+import { ZoneIndex } from './ZoneIndex';
 
 export type FlowerStage = 'dormant' | 'sprout' | 'bud' | 'bloom' | 'seed' | 'senescent';
 
@@ -184,19 +185,20 @@ export class FlowerField {
     let count = 0;
     let blooms = 0;
     let heads = 0;
+    const disturbed = new ZoneIndex(disturbance);
     for (const placement of this.placements) {
       if (count >= this.stems.instanceMatrix.count) break;
       const distance = Math.hypot(placement.worldX - camera.x, placement.worldZ - camera.z);
       const distanceScale = flowerDistanceScale(distance);
       if (distanceScale <= 0) continue;
-      if (disturbance.some((zone) => Math.hypot(placement.worldX - zone.x, placement.worldZ - zone.z) < zone.radius)) continue;
-
+      // Pure filters, cheapest first; the disturbance test is the only one that scales with towns.
       const growth = resolveFlowerGrowth(month, placement.phase);
       if (!growth.visible) continue;
       const cell = cellAt(this.world, placement.worldX, placement.worldZ);
       const weather = cell ? this.world.weather?.cells[cell.z * this.world.size + cell.x] : undefined;
       if (weather && weather.snowpack > 0.08) continue;
       if (weather && weather.temperature < 0.2) continue;
+      if (disturbed.contains(placement.worldX, placement.worldZ)) continue;
       const waterY = this.surface.waterYAt(placement.worldX, placement.worldZ);
       const groundY = this.surface.heightAt(placement.worldX, placement.worldZ);
       if (Number.isFinite(waterY) && waterY > groundY - 0.025) continue;

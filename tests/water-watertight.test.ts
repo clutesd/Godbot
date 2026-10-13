@@ -180,7 +180,7 @@ describe('inland water is closed against the terrain', () => {
 
   /**
    * A cone of water reads instantly, and comparing against hydrology cannot see one: the sample
-   * lending the height may legitimately sit that high. Judge the water against itself instead —
+   * lending the height may legitimately sit that high. Judge the water against itself instead â€”
    * nothing may stand above the water in every direction around it. A steep stream is high only
    * against its downhill side, so it passes; a spike is high against all of them.
    */

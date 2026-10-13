@@ -6,6 +6,38 @@ import type { TerrainSurface } from '../terrain/TerrainSurface';
 
 export const FIRE_BUDGET = { fires: 12, tongues: 12 * 10 * 2, smoke: 12 * 36, embers: 12 * 8, lights: 3, scars: 192 } as const;
 const fract = (v: number) => v - Math.floor(v);
+const flameMaterial = () => new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, fog: true, toneMapped: false, blending: THREE.AdditiveBlending,
+  uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { flameTime: { value: 0 } }]),
+  vertexShader: `varying vec2 vUv; varying vec3 vColor; varying float vSeed;
+    #include <fog_pars_vertex>
+    void main() {
+      vUv = uv; vColor = instanceColor; vSeed = instanceMatrix[3].x * 4.7 + instanceMatrix[3].z * 3.1;
+      vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+      vec2 extent = vec2(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz));
+      mvPosition.xy += position.xy * extent;
+      gl_Position = projectionMatrix * mvPosition;
+      #include <fog_vertex>
+    }`,
+  fragmentShader: `uniform float flameTime; varying vec2 vUv; varying vec3 vColor; varying float vSeed;
+    #include <fog_pars_fragment>
+    void main() {
+      float y = vUv.y; float t = flameTime * 3.4 + vSeed;
+      float flicker = sin(y * 18.0 - t * 4.0) * 0.055 + sin(y * 31.0 - t * 2.7) * 0.028;
+      float sway = sin(y * 8.0 - t) * y * 0.18;
+      float x = abs((vUv.x - 0.5) * 2.0 + sway);
+      float width = pow(max(0.0, 1.0 - y), 0.75) * 0.72 + flicker * y;
+      float edge = 1.0 - smoothstep(max(0.0, width * 0.25), max(0.015, width), x);
+      float alpha = edge * smoothstep(0.0, 0.1, y) * (1.0 - smoothstep(0.65, 1.0, y));
+      alpha *= 0.68 + 0.24 * sin(y * 23.0 - t * 3.0 + x * 9.0);
+      if (alpha < 0.012) discard;
+      float hot = clamp(edge * (1.0 - y * 1.3), 0.0, 1.0);
+      vec3 colour = mix(vec3(1.0, 0.12, 0.018), vec3(1.0, 0.8, 0.3), hot);
+      gl_FragColor = vec4(mix(colour, vColor, 0.12), alpha * 0.8);
+      #include <fog_fragment>
+      #include <colorspace_fragment>
+    }`,
+});
 const smokeMaterial = () => new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, fog: true,
   uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog]),
@@ -46,13 +78,11 @@ export class StructureFireRenderer {
   private scarSites: StructurePlot[] = [];
   private accumulator = 1;
   private count = 0;
-  constructor(private readonly state: SimulationState, private readonly surface: TerrainSurface) {
+  constructor(private readonly state: SimulationState, private readonly surface: TerrainSurface,
+    private readonly impactVisible: (plot: StructurePlot) => boolean = () => true) {
     this.group.name = 'structure-fires';
-    const tongue = new THREE.CylinderGeometry(0.015, 0.3, 1, 5, 3).translate(0, 0.5, 0);
-    const p = tongue.getAttribute('position');
-    for (let i = 0; i < p.count; i++) p.setX(i, p.getX(i) + p.getY(i) ** 2 * 0.18);
-    tongue.computeVertexNormals();
-    this.flames = new THREE.InstancedMesh(tongue, new THREE.MeshBasicMaterial({ toneMapped: false }), FIRE_BUDGET.tongues);
+    const tongue = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);
+    this.flames = new THREE.InstancedMesh(tongue, flameMaterial(), FIRE_BUDGET.tongues);
     const smokeGeometry = new THREE.PlaneGeometry(1, 1);
     this.alpha = new THREE.InstancedBufferAttribute(new Float32Array(FIRE_BUDGET.smoke), 1).setUsage(THREE.DynamicDrawUsage);
     smokeGeometry.setAttribute('instanceAlpha', this.alpha);
@@ -61,12 +91,16 @@ export class StructureFireRenderer {
     this.scars = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 11).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: '#211d1b', transparent: true, opacity: 0.65, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }), FIRE_BUDGET.scars);
     for (const mesh of [this.flames, this.smoke, this.embers, this.scars]) {
+      // Declare instance colours before warm-up, even when the first hit is still in flight.
+      mesh.setColorAt(0, this.color);
       mesh.count = 0; mesh.frustumCulled = false; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.group.add(mesh);
     }
     this.smoke.renderOrder = 4;
     this.group.add(...this.lights);
   }
-  update(delta: number, elapsed: number, camera: THREE.Camera, night: number): void {
+  update(delta: number, elapsed: number, camera: THREE.Camera, night: number, reducedMotion = false): void {
+    elapsed = reducedMotion ? 0 : elapsed;
+    (this.flames.material as THREE.ShaderMaterial).uniforms.flameTime!.value = elapsed;
     this.accumulator += delta;
     if (this.accumulator >= 0.25) {
       this.accumulator = 0;
@@ -79,7 +113,7 @@ export class StructureFireRenderer {
     const t = this.transform;
     for (const plot of this.sites) {
       const fire = plot.fire;
-      if (!fire) continue;
+      if (!fire || !this.impactVisible(plot)) continue;
       const phase = stableHash(plot.id) * 50;
       const cell = cellAt(this.state.world, plot.worldX, plot.worldZ);
       const weather = cell && this.state.world.weather?.cells[cell.z * this.state.world.size + cell.x];
@@ -136,6 +170,7 @@ export class StructureFireRenderer {
     for (let i = lightCount; i < this.lights.length; i++) this.lights[i]!.intensity = 0;
     let scars = 0;
     for (const plot of this.scarSites) {
+      if (!this.impactVisible(plot)) continue;
       const x = plot.worldX, z = plot.worldZ;
       t.position.set(x, this.surface.heightAt(x, z) + 0.035, z);
       t.rotation.set(Math.atan2(this.surface.heightAt(x, z + 0.3) - this.surface.heightAt(x, z - 0.3), 0.6), stableHash(plot.id) * 6.28,
@@ -143,7 +178,7 @@ export class StructureFireRenderer {
       t.scale.set(plot.width * 0.85, 1, plot.depth * 0.85); t.updateMatrix(); this.scars.setMatrixAt(scars, t.matrix);
       this.scars.setColorAt(scars++, this.color.setScalar(0.4 + (1 - (plot.scorch ?? 0)) * 0.6));
     }
-    this.count = this.sites.filter(p => p.fire).length;
+    this.count = this.sites.filter(p => p.fire && this.impactVisible(p)).length;
     this.flames.count = flameCount; this.smoke.count = smokeCount; this.embers.count = emberCount; this.scars.count = scars;
     for (const mesh of [this.flames, this.smoke, this.embers, this.scars]) { mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; }
     this.alpha.needsUpdate = true;

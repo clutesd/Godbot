@@ -10,6 +10,19 @@ export const HUMAN_RADIUS = 0.075;
 const TURN_RATE = 2.6;
 const STANDING_TURN_RATE = 1.35;
 const RETARGET_EPSILON = 0.02;
+/**
+ * Re-validation cadence for checks whose inputs barely change between frames. A clear 3-unit
+ * corridor ahead of a walker (who covers ~0.06 units in this time) and an unchanged destination are
+ * re-sampled on this cadence instead of every frame; a new waypoint, new destination, retarget or
+ * recovery re-checks immediately. The walker's own footing is still validated every frame.
+ */
+const CORRIDOR_RECHECK_SECONDS = 0.15;
+const DESTINATION_RECHECK_SECONDS = 0.25;
+/** A blocked destination's nearest safe point is a costly ring search whose answer rarely moves. */
+const BLOCKED_DESTINATION_RECHECK_SECONDS = 2;
+
+/** Cached outcome of a validation, valid for one ground authority until `until` on the state clock. */
+interface ValidationMemo<T> { readonly ground: PersonVisualGround; readonly until: number; readonly key: T }
 export const WALK_SPEED_THRESHOLD = 0.05;
 export const RUN_SPEED_THRESHOLD = 0.65;
 
@@ -92,6 +105,12 @@ export interface PersonVisualState {
   focalHeadPitch?: number;
   passingPeer?: string;
   passingSeconds?: number;
+  /** Accumulated presentation time for this mover; clock for the validation memos below. */
+  validationSeconds?: number;
+  /** The corridor toward this exact waypoint was clear when last sampled. */
+  corridorMemo?: ValidationMemo<Vec2>;
+  /** Safe resolution of an unchanged destination. */
+  destinationMemo?: ValidationMemo<Vec2> & { readonly safe: Vec2 | undefined };
   passingCooldown?: number;
   passingHeadYaw?: number;
   passingTorsoYaw?: number;
@@ -101,7 +120,7 @@ export class PeopleVisualStateStore {
   private readonly states = new Map<string, PersonVisualState>();
   private frame = 0;
   private readonly snapshots = new Map<string, PersonVisualState>();
-  private readonly buckets = new Map<string, PersonVisualState[]>();
+  private readonly buckets = new Map<number, PersonVisualState[]>();
 
   get size(): number {
     return this.states.size;
@@ -120,7 +139,7 @@ export class PeopleVisualStateStore {
     this.buckets.clear();
     this.snapshots.clear();
     for (const state of this.states.values()) {
-      const key = `${Math.floor(state.x)}:${Math.floor(state.z)}`;
+      const key = bucketKey(Math.floor(state.x), Math.floor(state.z));
       const bucket = this.buckets.get(key) ?? [];
       const snapshot = { ...state };
       this.snapshots.set(state.id, snapshot);
@@ -134,7 +153,7 @@ export class PeopleVisualStateStore {
     const ids: string[] = [];
     for (let x = Math.floor(at.x - radius); x <= Math.floor(at.x + radius); x++) {
       for (let z = Math.floor(at.z - radius); z <= Math.floor(at.z + radius); z++) {
-        for (const peer of this.buckets.get(`${x}:${z}`) ?? []) {
+        for (const peer of this.buckets.get(bucketKey(x, z)) ?? []) {
           if (Math.hypot(peer.x - at.x, peer.z - at.z) > radius) continue;
           ids.push(peer.id);
           if (ids.length >= limit) return ids;
@@ -196,8 +215,9 @@ export class PeopleVisualStateStore {
 
   resolve(personId: string, target: PersonVisualTarget, deltaSeconds: number, ground: PersonVisualGround): PersonVisualState {
     const existing = this.states.get(personId);
+    if (existing) existing.validationSeconds = (existing.validationSeconds ?? 0) + boundedDelta(deltaSeconds);
     const recovered = existing ? this.depenetrate(existing, personId, ground) : false;
-    const safeDestination = nearestSafeVisualPoint(target.destination, `${personId}:destination`, ground)
+    const safeDestination = this.safeDestination(existing, personId, target.destination, ground, recovered)
       ?? (existing && safeGroundSegment(existing, existing, ground) ? { x: existing.x, z: existing.z } : target.destination);
     const resolvedTarget = safeDestination.x === target.destination.x && safeDestination.z === target.destination.z
       ? target : { ...target, destination: safeDestination };
@@ -221,6 +241,31 @@ export class PeopleVisualStateStore {
 
     this.advance(state, deltaSeconds, resolvedTarget.restFacing, ground);
     return state;
+  }
+
+  /** nearestSafeVisualPoint for the destination, reused while the destination and ground are unchanged. */
+  private safeDestination(state: PersonVisualState | undefined, personId: string, destination: Vec2,
+    ground: PersonVisualGround, recovered: boolean): Vec2 | undefined {
+    const memo = state?.destinationMemo;
+    const clock = state?.validationSeconds ?? 0;
+    if (memo && !recovered && memo.ground === ground && clock < memo.until
+      && memo.key.x === destination.x && memo.key.z === destination.z) return memo.safe && { ...memo.safe };
+    const safe = nearestSafeVisualPoint(destination, `${personId}:destination`, ground);
+    const blocked = !safe || safe.x !== destination.x || safe.z !== destination.z;
+    if (state) state.destinationMemo = { ground,
+      until: clock + (blocked ? BLOCKED_DESTINATION_RECHECK_SECONDS : DESTINATION_RECHECK_SECONDS),
+      key: { x: destination.x, z: destination.z }, safe: safe && { ...safe } };
+    return safe;
+  }
+
+  /** Corridor validation toward `next`, re-sampled on a short cadence while it stays clear. */
+  private corridorClear(state: PersonVisualState, next: Vec2, corridorEnd: Vec2, ground: PersonVisualGround): boolean {
+    const memo = state.corridorMemo;
+    const clock = state.validationSeconds ?? 0;
+    if (memo && memo.key === next && memo.ground === ground && clock < memo.until) return true;
+    const clear = safeGroundSegment(state, corridorEnd, ground);
+    state.corridorMemo = clear ? { ground, until: clock + CORRIDOR_RECHECK_SECONDS, key: next } : undefined;
+    return clear;
   }
 
   /** An authored physical egress path may stand on the vessel ramp instead of terrain. */
@@ -257,6 +302,7 @@ export class PeopleVisualStateStore {
     state.waypoint = 1; state.progress = 1; state.traveling = false; state.blocked = false; state.retrySeconds = 0;
     state.velocityX = 0; state.velocityZ = 0; state.speed = 0;
     state.lastGroundX = recovered.x; state.lastGroundZ = recovered.z;
+    state.corridorMemo = undefined; state.destinationMemo = undefined;
     return true;
   }
 
@@ -301,6 +347,7 @@ export class PeopleVisualStateStore {
     state.duration = polylineLength(state.path) / state.maxPhysicalSpeed;
     state.progress = 0; state.waypoint = 1;
     state.traveling = true; state.blocked = false; state.retrySeconds = 0;
+    state.corridorMemo = undefined;
   }
 
   private advance(state: PersonVisualState, deltaSeconds: number, restFacing: number | undefined, ground: PersonVisualGround): void {
@@ -318,7 +365,9 @@ export class PeopleVisualStateStore {
     const distanceToNext = next ? Math.hypot(next.x - state.x, next.z - state.z) : 0;
     const corridorEnd = next && distanceToNext > 3 ? { x: state.x + (next.x - state.x) * 3 / distanceToNext,
       z: state.z + (next.z - state.z) * 3 / distanceToNext } : next;
-    if (corridorEnd && state.retrySeconds === 0 && !safeGroundSegment(state, corridorEnd, ground)) {
+    // Keyed before any detour splice below, so the follow-up check reuses the same memo.
+    const corridorTarget = next;
+    if (corridorEnd && next && state.retrySeconds === 0 && !this.corridorClear(state, next, corridorEnd, ground)) {
       // Work planners validate the complete reachable station. A truncated endpoint can be inside
       // a large plot even though the real pickup/workface is safely outside on its far side.
       const detourEnd = state.arrivalEase && next ? next : corridorEnd;
@@ -336,7 +385,7 @@ export class PeopleVisualStateStore {
         }
       }
     }
-    if (corridorEnd && state.retrySeconds === 0 && safeGroundSegment(state, corridorEnd, ground)) state.blocked = false;
+    if (corridorEnd && corridorTarget && state.retrySeconds === 0 && this.corridorClear(state, corridorTarget, corridorEnd, ground)) state.blocked = false;
     if (next && !state.blocked) {
       const dx = next.x - state.x, dz = next.z - state.z, distance = Math.hypot(dx, dz);
       state.desiredFacing = Math.atan2(dx, dz);
@@ -432,7 +481,7 @@ export class PeopleVisualStateStore {
     const peers: PersonVisualState[] = [];
     const bx = Math.floor(state.x), bz = Math.floor(state.z);
     for (let x = bx - 1; x <= bx + 1; x++) for (let z = bz - 1; z <= bz + 1; z++) {
-      for (const peer of this.buckets.get(`${x}:${z}`) ?? []) if (peer.id !== state.id) { peers.push(peer); if (peers.length >= limit) return peers; }
+      for (const peer of this.buckets.get(bucketKey(x, z)) ?? []) if (peer.id !== state.id) { peers.push(peer); if (peers.length >= limit) return peers; }
     }
     return peers;
   }
@@ -562,6 +611,15 @@ export function safeGroundSegment(a: Vec2, b: Vec2, ground: PersonVisualGround):
 export function visualRouteClear(a: Vec2, b: Vec2, ground: PersonVisualGround): boolean {
   if (!ground.safeSegment || ground.safeSegment(a, b)) return true;
   return (ground.detour?.(a, b).length ?? 0) > 0;
+}
+
+/** Integer metre cell -> numeric key; injective for |x|, |z| < 32768, with no string allocation. */
+function bucketKey(x: number, z: number): number {
+  return (x + 32768) * 65536 + (z + 32768);
+}
+
+function boundedDelta(deltaSeconds: number): number {
+  return Number.isFinite(deltaSeconds) ? Math.min(0.1, Math.max(0, deltaSeconds)) : 0;
 }
 
 function stableVisualHash(value: string): number {

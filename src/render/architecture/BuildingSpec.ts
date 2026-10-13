@@ -21,6 +21,7 @@
  */
 
 import type { Era } from '../materials/MaterialPalette';
+import type { GeneratorKind } from '../../sim/energy/types';
 import type { BuildingRole } from '../assets/BuildingGrammar';
 import { BUILD_STAGE, type BuildStage } from '../assets/BuildingComposer';
 import type { DevelopmentProject, DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
@@ -302,7 +303,7 @@ export interface SpecCultureInput {
 }
 
 export interface BuildingSpecContext {
-  energyKind?: import('../../sim/energy/types').GeneratorKind;
+  energyKind?: GeneratorKind;
   /** Explicit archetype. When absent it is derived from the role and period. */
   archetype?: BuildingArchetype;
   role: BuildingRole;
@@ -927,7 +928,10 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     pitch,
     overhang: 0.06 + ornament * 0.1 * climate.eaveOverhang + climate.eaveOverhang * 0.08,
     span,
-    tiers: roofArchetype === 'layered' ? Math.max(2, Math.min(4, 1 + floors)) : roofArchetype === 'stepped' ? 3 : 1,
+    // Stacked ceremonial crowns belong to civic and sacred functions. Domestic/work roofs
+    // keep the culture's covering and eave language without acquiring a temple silhouette.
+    tiers: roofArchetype === 'layered' && ['shrine', 'civic-hall', 'gatehouse'].includes(archetypeId)
+      ? Math.max(2, Math.min(3, 1 + floors)) : roofArchetype === 'stepped' ? 3 : 1,
     intermediateSupport: span > maxSpan,
   };
 

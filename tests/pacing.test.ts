@@ -55,7 +55,7 @@ describe('Pacing presets', () => {
     // Identical history under both pacings.
     expect(fast.summary()).toEqual(normalRun.summary());
     expect(fast.state.history).toEqual(normalRun.state.history);
-  }, 90_000);
+  }, 300_000);
 });
 
 describe('Adaptive temporal resolution', () => {

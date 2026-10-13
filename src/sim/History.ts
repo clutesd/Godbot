@@ -1,4 +1,5 @@
 import { rememberHistoricalEvent } from './development/Remembrance';
+import { resolveBattleDestruction } from './war/BattleDestruction';
 import type { HistoricalEvent, SimulationState } from './types';
 
 const observers = new WeakMap<SimulationState, Set<(event: HistoricalEvent) => void>>();
@@ -18,6 +19,20 @@ export function emitEvent(state: SimulationState, draft: Omit<HistoricalEvent, '
   const sequence = (state.eventSequence ?? state.history.reduce((n, e) => Math.max(n, eventSequence(e)), 0)) + 1;
   state.eventSequence = sequence;
   const event = { ...draft, id: `event-${sequence}`, sequence, month: state.month };
+  if (event.type === 'battle') {
+    const war = state.wars.find(candidate => event.actors.includes(candidate.id));
+    if (war) resolveBattleDestruction(state, war, event);
+  }
+  if (event.impacts?.length) {
+    const targets = new Set((event.impacts ?? []).map(hit => hit.targetId));
+    for (const settlement of state.settlements) for (const plot of settlement.structurePlots ?? []) {
+      if (targets.has(plot.id) && plot.destruction?.month === state.month) plot.destruction.eventId = event.id;
+    }
+    for (const body of state.bodies ?? []) if (targets.has(body.id) && body.combatImpact) {
+      body.combatImpact.eventId = event.id;
+      if (body.removed?.reason === 'destruction') body.removed.eventId = event.id;
+    }
+  }
   state.history.push(event);
   if (event.type === 'battle' && event.affectedPopulation > 0) (state.aftermathEvents ??= []).push(structuredClone(event));
   rememberHistoricalEvent(state, event);

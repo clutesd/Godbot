@@ -4,6 +4,7 @@ export type FieldAction = 'prepare' | 'sow' | 'tend' | 'irrigate' | 'harvest' | 
 /** Bounded, serializable state per physical plot. Soil fertility is a read-through snapshot of
  * WorldCell.fertility; soil depth/erosion/land-use are owned by the environmental systems. */
 export interface AgriculturalField {
+  irrigationWorks?: { progress: number; condition: number; source: { x: number; z: number }; builtMonth?: number; timberSpent: number; stoneSpent: number; labourSpent: number };
   id: string;
   cellIndex: number;
   crop: CropArchetype;

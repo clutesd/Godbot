@@ -4,7 +4,7 @@ import { mastery } from '../knowledge/KnowledgeSystem';
 import { recordHeatWork, recordMaterialWork } from '../knowledge/HeatExperience';
 import type { Occupation, Settlement, SimulationState } from '../types';
 import { craftValueAdded, MATERIAL_BY_ID, RECIPE_CATALOG, type RecipeDefinition } from './catalog';
-import { materialEconomy, storageRoom } from './Inventory';
+import { materialEconomy, recordMaterialProduction, storageRoom } from './Inventory';
 import { settlementLedger, type MaterialLedger } from './MaterialLedger';
 import type { ResourceEventDraft } from './ResourceSystem';
 import { recordResourceProcessing } from './ResourceWorkAssignments';
@@ -103,6 +103,8 @@ export function runCatalogCycle(
   for (const [id, quantity] of Object.entries(recipe.outputs)) accepted[id] = ledger.add(id, quantity * efficiency, quality * 0.6 + practiced * 0.4);
   // Only output a store actually took in is worth anything: a full warehouse ends the value, not just the stock.
   const crafted = craftValueAdded(accepted, inputs);
+  recordMaterialProduction(s, 'goods', crafted);
+  for (const [id, amount] of Object.entries(accepted)) recordMaterialProduction(s, id, amount);
   economy.craftedThisMonth = (economy.craftedThisMonth ?? 0) + crafted;
   economy.craftedTotal = (economy.craftedTotal ?? 0) + crafted;
   for (const [id, quantity] of Object.entries(recipe.byproducts ?? {})) ledger.add(id, quantity, quality);

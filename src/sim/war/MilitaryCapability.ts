@@ -3,7 +3,7 @@ import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { materialAmount } from '../resources/MaterialEconomy';
 import { materialReadiness } from '../resources/MaterialUse';
 import { materialEconomy } from '../resources/Inventory';
-import type { Settlement, War } from '../types';
+import type { NuclearPosture, Settlement, War } from '../types';
 
 export type MilitaryRegime =
   | 'improvised'
@@ -32,7 +32,11 @@ export type MilitaryEquipment =
   | 'automatic-weapons'
   | 'motor-transport'
   | 'aircraft'
-  | 'guided-missiles';
+  | 'guided-missiles'
+  | 'drone-swarms'
+  | 'biological-warfare'
+  | 'atomic-weapons'
+  | 'hydrogen-weapons';
 
 /**
  * A mobilization-time snapshot of what a settlement can actually field and sustain.
@@ -53,6 +57,8 @@ export interface MilitaryCapabilityProfile {
   communications: number;
   airPower: number;
   missile: number;
+  /** Optional so older mobilization snapshots remain readable. */
+  dronePower?: number;
   production: number;
   energy: number;
   sustainment: number;
@@ -80,7 +86,7 @@ function equipmentThreshold(equipment: MilitaryEquipment, score: number, thresho
  * wood and workshop heat; mechanized forces become progressively dependent on concentrated power,
  * fuel, factories and grids. This makes advanced capability strong but materially conditional.
  */
-export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilityProfile {
+export function deriveMilitaryProfile(settlement: Settlement, nuclearPosture?: NuclearPosture): MilitaryCapabilityProfile {
   // Small-scale craft can matter while still experimental; repeatable equipment requires local
   // adoption; networked/industrial military effects require society-level transformation.
   const experimental = (id: string): number => capabilityPractice(settlement, id, 'experimental');
@@ -260,6 +266,12 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     typed ? militarySupply : 1,
   );
 
+  const dronePower = gate(
+    aviation, computation, automation, precisionManufacturing,
+    Math.max(electricalPower, advancedGridPower), communications, production,
+    typed ? industrialMetal : 1, typed ? militarySupply : 1,
+  );
+
   const equipment: MilitaryEquipment[] = ['clubs'];
   equipmentThreshold('stone-spears', gate(stone, Math.max(typed ? timberMaterial : wood, 0.18)), 0.15, equipment);
   equipmentThreshold('torches', gate(fire, Math.max(typed ? timberMaterial : wood, 0.1)), 0.16, equipment);
@@ -277,8 +289,14 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
   equipmentThreshold('motor-transport', motorMobility, 0.38, equipment);
   equipmentThreshold('aircraft', airPower, 0.42, equipment);
   equipmentThreshold('guided-missiles', missile, 0.42, equipment);
+  equipmentThreshold('drone-swarms', dronePower, 0.46, equipment);
+  // Civil nuclear knowledge does not imply a weapon. Only the strategic system's recorded,
+  // operational arsenal may add this late-era equipment to a mobilization snapshot.
+  if (nuclearPosture?.weaponizedMonth !== undefined && nuclearPosture.arsenalScale > 0.015) {
+    equipment.push(nuclearPosture.weaponClass === 'hydrogen' ? 'hydrogen-weapons' : 'atomic-weapons');
+  }
 
-  const regime: MilitaryRegime = equipment.includes('guided-missiles') || equipment.includes('aircraft') ? 'modern'
+  const regime: MilitaryRegime = equipment.includes('atomic-weapons') || equipment.includes('hydrogen-weapons') || equipment.includes('guided-missiles') || equipment.includes('aircraft') || equipment.includes('drone-swarms') ? 'modern'
     : equipment.includes('automatic-weapons') || equipment.includes('rifles') || equipment.includes('artillery') ? 'industrial'
       : equipment.includes('gunpowder-weapons') || equipment.includes('cannon') ? 'gunpowder'
         : equipment.includes('siege-engines') ? 'siege'
@@ -301,6 +319,7 @@ export function deriveMilitaryProfile(settlement: Settlement): MilitaryCapabilit
     communications,
     airPower,
     missile,
+    dronePower,
     production,
     energy,
     sustainment,

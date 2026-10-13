@@ -132,7 +132,8 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
     healthcare: scale * ((1 - c.health) * 2 + s.pollution * 0.5 + d.cooperation * 0.2 + (waterState ? (1 - waterState.quality) * 0.8 : 0)),
     manufacturing: scale * (Math.min(1, c.artisans / 8) * 0.6 + s.industry.intensity * 2) + backing('craft-circle'),
     transport: c.routes ? scale * (0.3 + c.routes * 0.35 + clamp(c.movement / 5) * 0.3) * tradeAmplify : 0,
-    energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power),
+    energy: scale * (s.industry.intensity * 2 + s.infrastructure.workshops * 0.7 + s.infrastructure.power)
+      + (practical(s, 'simple-gearing') > 0 ? Math.min(scale, (s.energy?.ledgers.mechanical.demand ?? 0) * 0.3) : 0),
     water: scale * (s.urbanization * 1.3 + s.pollution + (c.water ? 0.1 : 0.55) + s.climateStress * 0.5
       + (waterState ? waterState.droughtStress * 1.8 + (1 - waterState.quality) * 0.8 + waterState.floodContamination * 0.7 : 0)),
     memory: pendingRemembrance(s) ? scale * 0.2 + 1.4 : c.memory > 0.3 ? scale * Math.min(1.8, c.memory) * d.longTermOrientation : 0,
@@ -149,7 +150,7 @@ export function evaluatePressures(c: DevelopmentContext): { pressures: ServiceSu
   const informal: ServiceSupply = { government: decentralized ? scale * 0.85 : scale * 0.2,
     security: scale * (decentralized ? 0.8 : 0.3) * (1 - s.conflictPressure),
     religion: scale * 0.25, healthcare: scale * 0.5, knowledge: scale * 0.2, water: informalWater,
-    manufacturing: scale * 0.3, food: scale * 0.2, energy: scale * 0.35, transport: scale * 0.25, memory: scale * 0.2 };
+    manufacturing: scale * 0.3, food: scale * 0.2, energy: practical(s, 'simple-gearing') > 0 || practical(s, 'electrical-generation') > 0 ? 0 : scale * 0.35, transport: scale * 0.25, memory: scale * 0.2 };
   return { pressures, informal };
 }
 
@@ -269,7 +270,8 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     case 'energy':
       if (c.artisans < 3) return undefined;
       form = 'workshop'; names = ['fuel yard', 'power workshop', 'generation station'];
-      if (!knows('fire-control', 0.2) || s.resources.wood <= 12) return undefined;
+      if (knows('simple-gearing', 0.25)) names[0] = 'millwright power yard';
+      if (!knows('fire-control', 0.2)) return undefined;
       if (knows('mechanical-power', 0.4)) maxLevel = 2;
       if (knows('electrical-generation', 0.45) && knows('precision-tools', 0.4) && c.artisans >= 6) maxLevel = 3;
       break;
@@ -378,14 +380,15 @@ function scaleRequirements(requirements: FlexibleMaterialRequirement[], factor: 
   return requirements.map(requirement => ({ ...requirement, amount: requirement.amount * factor }));
 }
 
-function resourceBlockers(settlement: Settlement, response: DevelopmentResponse, fuelReserve: number): DevelopmentBlocker[] {
+function resourceBlockers(settlement: Settlement, response: DevelopmentResponse): DevelopmentBlocker[] {
   const blockers: DevelopmentBlocker[] = [];
   for (const key of STOCK_KEYS) {
-    const required = response.cost[key] + (key === 'wood' ? fuelReserve : 0);
+    // The existing project authority pays every installment as work advances. Require the
+    // same initial delivery fraction as structural materials, not an idle full-building bill.
+    const required = response.cost[key] * 0.08;
     const available = settlement.resources[key];
     if (available >= required) continue;
-    const fuelOnly = key === 'wood' && fuelReserve > 0 && available >= response.cost.wood;
-    blockers.push({ code: fuelOnly ? 'fuel-reserve' : RESOURCE_BLOCK_CODE[key], resource: key, available, required });
+    blockers.push({ code: RESOURCE_BLOCK_CODE[key], resource: key, available, required });
   }
   return blockers;
 }
@@ -410,13 +413,57 @@ function processedMaterialBlockers(settlement: Settlement, response: Development
       available: settlement.localMaterials[id] ?? 0, required }));
 }
 
+/** Reconsider a stone-dependent founding design only after a sustained material stall.
+ * Keep the site and all paid work; the revised bill applies only to remaining progress.
+ */
+function replanStalledShelter(state: SimulationState, settlement: Settlement): KnowledgeEventDraft[] {
+  const dev = settlement.development!;
+  const project = dev.project;
+  if (!project || state.month - (project.lastWorkMonth ?? project.startedMonth) < 6) return [];
+  const adaptation = project.response.adaptation;
+  if (adaptation !== 'hut' && !(adaptation === 'earth-shelter' && project.progress === 0)) return [];
+  const requirements = project.materialRequirements;
+  const foundation = requirements?.find(r => r.id === 'foundation');
+  const frame = requirements?.find(r => r.id === 'frame');
+  if (!requirements || !foundation || !frame || foundation.options.some(id => (settlement.localMaterials[id] ?? 0) > 0.000001)) return [];
+  const plot = settlement.structurePlots?.find(p => p.id === project.plotId);
+  if (!plot || !usableStructure(plot)) return [];
+
+  // Combine timber uses in one requirement so the same stock cannot fund both twice.
+  const revised: FlexibleMaterialRequirement[] = requirements.filter(r => r.id !== 'foundation').map(r => r.id === 'frame'
+    ? { ...r, amount: adaptation === 'hut' ? r.amount + foundation.amount * 2 : 1.2,
+      reason: adaptation === 'hut' ? 'frame-roof-and-timber-footings' : 'frame-and-roof' }
+    : { ...r });
+  const remaining = 1 - project.progress;
+  const fuelReserve = settlement.survival?.establishment?.fuelTarget ?? 0;
+  const available = { ...settlement, localMaterials: { ...settlement.localMaterials,
+    timber: Math.max(0, (settlement.localMaterials.timber ?? 0) - fuelReserve) } };
+  if (maxMaterialProgressIncrement(available, revised) + 1e-8 < remaining) return [];
+
+  const previousName = project.response.name;
+  project.materialRequirements = revised;
+  project.response = { ...project.response,
+    name: adaptation === 'hut' ? 'timber-footed permanent hut' : 'communal lean-to',
+    reasons: [...project.response.reasons, 'material-shortage-replanned'],
+    ...(adaptation === 'earth-shelter' ? { adaptation: 'lean-to' as const, material: 'timber' as const, labor: 3, insulation: 0.5 } : {}),
+  };
+  project.blockedReasons = [];
+  dev.revision++;
+  return [{ type: 'response-attempted', locationId: settlement.id, location: { x: plot.worldX, z: plot.worldZ },
+    actors: [settlement.id, plot.id], causes: ['material-shortage-replanned'],
+    context: { project: plot.id, previousName, progress: project.progress, materials: JSON.stringify(revised) },
+    summary: `${settlement.name} revises its ${previousName} to use available timber.`,
+    outcome: 'The site and paid work are retained; remaining construction still requires materials and labour.',
+    significance: 0.4, tags: ['survival', 'settlement-development', 'construction'] }];
+}
+
 /** Uses the existing single project, placement, inventory and completion path. Called before labour freezes. */
 export function planEstablishment(state: SimulationState, settlement: Settlement, residents: Person[]): KnowledgeEventDraft[] {
   const e = settlement.survival?.establishment;
   if (!e || !settlement.alive) return [];
   initializeSettlementDevelopment(state, settlement, residents);
   const dev = settlement.development!;
-  const events: KnowledgeEventDraft[] = [];
+  const events: KnowledgeEventDraft[] = replanStalledShelter(state, settlement);
   // Temporary fabric deteriorates and is vulnerable to ordinary storms, even between major disasters.
   const weather = state.weather.cells[settlement.cellIndex];
   for (const p of settlement.structurePlots ?? []) if (p.development?.temporary && p.development.status === 'active') {
@@ -607,8 +654,10 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         candidate.responseLevel = response.level;
         candidate.action = action;
         if (plot) candidate.plotId = plot.id;
-        const fuelReserve = response.need === 'energy' || response.level === 3 && ['food', 'manufacturing'].includes(response.need) ? 12 : 0;
-        candidate.blockers.push(...resourceBlockers(settlement, response, fuelReserve));
+        // Construction pays its declared bill. An idle timber reserve is not a prerequisite
+        // for a wind/water site, and a fuel yard must be buildable in response to scarcity.
+        // The plant authority separately charges fuel when the completed plant operates.
+        candidate.blockers.push(...resourceBlockers(settlement, response));
         if (c.builders === 0 && !(response.form === 'field' && c.farmers > 0)) candidate.blockers.push({ code: 'no-builders', available: 0, required: 1 });
         if (candidate.blockers.length > 0) {
           candidates.push(candidate);

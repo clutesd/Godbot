@@ -5,6 +5,7 @@ import { generateResourceDeposits } from './resources/WorldResourceSystem';
 import { createCellResourceState } from './resources/WorldResources';
 import { computeRockiness, synthesizeHeightfield } from './terrain/Heightfield';
 import { carveChannels, computeHydrology, enforceChannelDescent, inciseChannelBeds, type Hydrology } from './terrain/Hydrology';
+import { sculptVolcano } from './terrain/VolcanicCone';
 import { detectLandmarks } from './terrain/Landmarks';
 import type { TerrainField } from './terrain/TerrainField';
 import { fbm } from './terrain/noise';
@@ -127,6 +128,7 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
   enforceChannelDescent(raw, computeHydrology(raw, hydrologyOptions));
   const hydrology = computeHydrology(raw, hydrologyOptions);
   inciseChannelBeds(raw, hydrology, seaLevel);
+  const volcanicVent = sculptVolcano(raw, hydrology, config.seed, seaLevel);
   const rock = computeRockiness(config.seed, raw, mountainLevel, TERRAIN_VERTICAL_SCALE);
 
   const terrain: TerrainField = {
@@ -227,7 +229,7 @@ export function generateWorld(config: GodboxConfig, random = new SeededRandom(`$
   }
 
   const landmarks = detectLandmarks(raw, hydrology, { seaLevel, mountainLevel, verticalScale: TERRAIN_VERTICAL_SCALE });
-  const world: WorldState = { size, cellSize, cells, terrain, landmarks, seaLevel, mountainLevel, resourceDeposits: [] };
+  const world: WorldState = { size, cellSize, cells, terrain, landmarks, seaLevel, mountainLevel, resourceDeposits: [], volcanicVent };
   initializeEnvironment(world, config.seed, resourceAbundance);
   for (const cell of cells) cell.biome = biomeFor(cell, mountainLevel);
   world.resourceDeposits = generateResourceDeposits(world, random.fork('resource-deposits'));

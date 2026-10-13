@@ -31,7 +31,11 @@ export function tierKnowledgeMet(s: Settlement, spec: FacilityTierSpec): boolean
 
 /** Capabilities this tier needs that the settlement does not practise far enough, in tier order. */
 export function missingTierKnowledge(s: Settlement, spec: FacilityTierSpec): readonly string[] {
-  return spec.knowledge.filter(need => capabilityPractice(s, need.id, 'adopted') < need.minPractice).map(need => need.id);
+  const missing = spec.knowledge.filter(need => capabilityPractice(s, need.id, 'adopted') < need.minPractice).map(need => need.id);
+  if (spec.knowledgeAny?.length && !spec.knowledgeAny.some(path => path.every(need => capabilityPractice(s, need.id, 'adopted') >= need.minPractice))) {
+    missing.push(`any:${spec.knowledgeAny.map(path => path.map(n => n.id).join('+')).join('|')}`);
+  }
+  return missing;
 }
 
 /**

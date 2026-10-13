@@ -20,7 +20,7 @@ import { assignMarketStalls, type MarketStall } from '../src/render/people/Marke
 import { LocalActivityPresentation, type LocalActivityContext, type LocalWorkstation } from '../src/render/people/LocalActivityPresentation';
 import { PeopleVisualStateStore } from '../src/render/people/PeopleVisualState';
 import { buildSocialGroups, groupKeyFor } from '../src/render/people/PeoplePresentation';
-import type { Person } from '../src/sim/types';
+import type { Person, Settlement } from '../src/sim/types';
 
 describe('machinery: the family that makes what the rest of industry wears out', () => {
   it('makes machine parts only in a machine works, out of real iron and forge heat', () => {
@@ -205,8 +205,8 @@ describe('industrial diagnostics', () => {
     delete w.s.knowledge.records['rotary-machinery'];
     f.saturationMonths = 6;
     const wood = settlementIndustryDiagnostic(w.state, w.s).families.find(entry => entry.family === 'wood')!;
-    expect(wood.blocker).toBe('knowledge:rotary-machinery');
-    expect(wood.summary).toContain('blocked from tier 2 by rotary machinery');
+    expect(wood.blocker).toBe('knowledge:any:rotary-machinery|simple-gearing+metal-smelting');
+    expect(wood.summary).toContain('blocked from tier 2 by rotary machinery or simple gearing with metal smelting');
   });
 
   it('reports a works that cannot be converted because nothing is saturated', () => {
@@ -266,9 +266,15 @@ describe('real people at real machines', () => {
     const simulation = new Simulation({ seed: 'facility-routing', startingPopulation: 300, settlementCount: [4, 4] });
     const state = simulation.state;
     const people = new PeopleSystem(state.world, state.seed);
-    const settlement = state.settlements[0]!;
-    learn(settlement, ...WOOD_KNOWLEDGE, ...METAL_KNOWLEDGE, ...INDUSTRIAL_KNOWLEDGE, ...MACHINE_KNOWLEDGE);
-    const facility = placeFacility(state, settlement, 'wood', 2);
+    // Open ground for a works depends on terrain (water, slope, map edge); this test is about
+    // routing, so it uses the first settlement whose terrain can host one.
+    let hosted: { settlement: Settlement; facility: ReturnType<typeof placeFacility> } | undefined;
+    for (const candidate of state.settlements) {
+      learn(candidate, ...WOOD_KNOWLEDGE, ...METAL_KNOWLEDGE, ...INDUSTRIAL_KNOWLEDGE, ...MACHINE_KNOWLEDGE);
+      try { hosted = { settlement: candidate, facility: placeFacility(state, candidate, 'wood', 2) }; break; } catch { /* no open ground here */ }
+    }
+    expect(hosted, 'no settlement in this world has ground for a works').toBeDefined();
+    const { settlement, facility } = hosted!;
     facility.inputs.timber = 60;
     facility.labour = { required: 5, available: 5, used: 3, haul: 1, byOccupation: { builder: 2, artisan: 1 } };
     facility.freight = { inbound: 2, outbound: 1 };

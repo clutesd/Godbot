@@ -119,17 +119,19 @@ function threadIdFor(scene: ObservationCandidate): string {
   return scene.editorial?.threadId ?? `subject:${scene.subjectId}`;
 }
 
-/** Related by authoritative identity, residence or explicit event provenance. Proximity
- * alone cannot make an unrelated historical event part of the same story. */
-function belongsToEvent(state: SimulationState, anchor: ObservationCandidate, scene: ObservationCandidate): boolean {
+/** Residence supplies orientation, not evidence that someone participated in an event. */
+function belongsToEvent(state: SimulationState, anchor: ObservationCandidate, scene: ObservationCandidate, role: CinematicBeatRole): boolean {
   const event = anchor.event!;
   if (scene.id === anchor.id || scene.event?.id === event.id) return true;
   if (scene.event) return event.causes.includes(scene.event.id) || scene.event.causes.includes(event.id);
   const person = state.people?.find(p => p.id === scene.subjectId);
   const institution = state.institutions?.find(i => i.id === scene.subjectId);
-  return event.actors.includes(scene.subjectId) || scene.subjectId === event.locationId
-    || Boolean(event.locationId && (person?.homeId === event.locationId || institution?.settlementId === event.locationId))
-    || threadIdFor(scene) === threadIdFor(anchor);
+  const context = role === 'establish' || role === 'approach' || role === 'release';
+  return event.actors.includes(scene.subjectId)
+    || scene.statement.sourceEventIds.includes(event.id)
+    || Boolean(context && (scene.subjectId === event.locationId
+      || event.locationId && (person?.homeId === event.locationId || institution?.settlementId === event.locationId)
+      || threadIdFor(scene) === threadIdFor(anchor)));
 }
 
 function narrationFor(scene: ObservationCandidate, role: CinematicBeatRole, isAnchor: boolean): boolean {
@@ -177,6 +179,37 @@ export class CinematicSequencePlanner {
   ): CinematicPlannedShot {
     this.queue = [];
     const sequenceId = `sequence:${state.month}:${this.sequenceCounter++}:${anchor.id}`;
+    if (!anchor.event && anchor.kind === 'worker-follow' && anchor.editorial?.desiredActivity === 'construct') {
+      // Revisit the same evidenced builder at three scales. The final view opens the
+      // actor/workface relationship; it never claims the building is already complete.
+      const roles = ['observe', 'detail', 'reveal'] as const;
+      const shots = roles.map((role, ordinal): CinematicPlannedShot => ({
+        scene: anchor, role, scale: role === 'observe' ? 'human' : role === 'detail' ? 'detail' : 'medium',
+        narrate: ordinal === 0 && anchor.editorial?.narration !== 'silent',
+        threadId: threadIdFor(anchor), sequenceId, ordinal, total: roles.length,
+      }));
+      const first = shots.shift()!;
+      this.queue = shots;
+      this.remember(first);
+      return first;
+    }
+    const campaign = anchor.statement.claims.warId
+      ? state.wars.find(w => w.id === anchor.statement.claims.warId) : undefined;
+    if (campaign && campaign.phase === 'battle' && campaign.resolvedMonth === undefined) {
+      // Photograph one evidenced action at several scales. Carry its source statement through
+      // the sequence, narrate it once, and keep other settlement stories outside this battle.
+      const roles: CinematicBeatRole[] = ['establish', 'observe', 'detail', 'release'];
+      const shots = roles.map((role, ordinal): CinematicPlannedShot => ({
+        scene: ordinal === 0 ? anchor : { ...anchor, id: `${anchor.id}:combat:${role}` },
+        role, scale: role === 'observe' ? 'human' : role === 'detail' ? 'detail' : 'wide',
+        narrate: ordinal === 0, threadId: campaign.id, sequenceId,
+        anchorEventId: anchor.event?.id, ordinal, total: roles.length,
+      }));
+      const first = shots.shift()!;
+      this.queue = shots;
+      this.remember(first);
+      return first;
+    }
     const eventThread = Boolean(anchor.event);
     const early = isEarlyDocumentary(state) && !anchor.event;
     const intimate = early && (isHumanObservation(anchor) || anchor.kind === 'settlement-approach');
@@ -186,6 +219,7 @@ export class CinematicSequencePlanner {
     const selected: SequenceScoredCandidate[] = [];
     const usedIds = new Set<string>();
     const anchorThread = threadIdFor(anchor);
+    const anchorPerson = state.people?.find(person => person.id === anchor.subjectId);
 
     const recentScale = this.recent[this.recent.length - 1]?.scale
       ?? (previous ? documentaryShotScaleFor(previous.kind) : undefined);
@@ -195,7 +229,15 @@ export class CinematicSequencePlanner {
       const previousScale = prior ? documentaryShotScaleFor(prior.kind) : recentScale;
       for (const scene of candidates) {
         if (usedIds.has(scene.id)) continue;
-        if (eventThread && !belongsToEvent(state, anchor, scene)) continue;
+        if (scene.id === anchor.id && role !== roleFor(anchor.kind)) continue;
+        if (eventThread && !belongsToEvent(state, anchor, scene, role)) continue;
+        if (!eventThread && threadIdFor(scene) !== anchorThread) continue;
+        if (['approach', 'observe', 'detail', 'reveal'].includes(role)
+          && distance(anchor, scene) > Math.max(12, state.world.size * 0.2)) continue;
+        if (!eventThread && anchorPerson && ['observe', 'detail', 'reveal'].includes(role)
+          && scene.subjectId !== anchor.subjectId && !scene.statement.sourceEntityIds.includes(anchor.subjectId)) continue;
+        // A missing beat is better than an unrelated or unreadable substitute.
+        if (rolePreference(role, scene.kind) < 0.6) continue;
         if (eventThread && scene.event && selected.filter(item => item.scene.event).length >= 2) continue;
         // An early sequence stays with the camp, and never pads scarce activity with aerials.
         if (intimate && (distance(anchor, scene) > 12
@@ -257,7 +299,7 @@ export class CinematicSequencePlanner {
     for (const role of roles) {
       if (eventThread && role === roles[0]) continue;
       let scene = intimate && selected.length === 0 ? anchor : chooseForRole(role, prior);
-      if (!scene && !usedIds.has(anchor.id)) scene = anchor;
+      if (!scene && !usedIds.has(anchor.id) && role === roleFor(anchor.kind)) scene = anchor;
       if (!scene) continue;
       usedIds.add(scene.id);
       selected.push({ scene, role, score: 0 });

@@ -5,6 +5,7 @@ import { foundingCharacterObservation } from './FoundingCharacterMemory';
 import { foundingChapterBaseline } from './FoundingChapter';
 import { Historian } from './Historian';
 import { PresentationDirector } from './PresentationDirector';
+import { elapsedTime, historicalDate, sentence, skillText } from './Narrative';
 import type { CandidateScoreBreakdown, FoundingCharacterObserverMemory, HistorianStatement, ObservationCandidate } from './types';
 
 export const FOUNDING_CHARACTER_ARC_MIN_MONTHS = 12;
@@ -150,7 +151,7 @@ function arcSignals(
     signals.push({
       key: `career:${first.role}->${current.role}`,
       score: 0.76,
-      text: `The role attached to ${record.member.name} has changed from ${first.role} to ${current.role}.`,
+      text: `${record.member.name} was ${/^[aeiou]/i.test(first.role) ? 'an' : 'a'} ${first.role} when we met; now ${person.sex === 'female' ? 'she' : 'he'} is ${/^[aeiou]/i.test(current.role) ? 'an' : 'a'} ${current.role}.`,
       eventIds: [],
       entityIds: [record.member.personId],
       kind: 'career',
@@ -159,7 +160,7 @@ function arcSignals(
     signals.push({
       key: `occupation:${first.occupation}->${current.occupation}`,
       score: 0.7,
-      text: `${record.member.name}'s economic work has shifted from ${readable(first.occupation)} to ${readable(current.occupation)}.`,
+      text: `${record.member.name} has changed work, from ${readable(first.occupation)} to ${readable(current.occupation)}.`,
       eventIds: [],
       entityIds: [record.member.personId],
       kind: 'career',
@@ -170,7 +171,7 @@ function arcSignals(
     signals.push({
       key: `family:${current.childrenCount}`,
       score: 0.62 + Math.min(0.12, current.childrenCount * 0.025),
-      text: `The family record now names ${current.childrenCount.toLocaleString()} ${current.childrenCount === 1 ? 'child' : 'children'} for ${record.member.name}; there were ${first.childrenCount.toLocaleString()} when I first watched this life.`,
+      text: `${record.member.name} now has ${current.childrenCount.toLocaleString()} ${current.childrenCount === 1 ? 'child' : 'children'}, compared with ${first.childrenCount.toLocaleString()} when we first met.`,
       eventIds: [],
       entityIds: [record.member.personId, ...person.children.slice(0, 4)],
       kind: 'family',
@@ -186,7 +187,7 @@ function arcSignals(
       signals.push({
         key: `expertise:${current.strongestExpertise.domain}:${Math.floor(current.strongestExpertise.competence * 5)}`,
         score: 0.68 + Math.min(0.12, Math.max(0, growth) * 0.35),
-        text: `${record.member.name}'s strongest recorded expertise is now ${readable(current.strongestExpertise.domain)}, at ${Math.round(current.strongestExpertise.competence * 100)}% competence.`,
+        text: `${record.member.name}'s strongest skill is now ${skillText(current.strongestExpertise.domain)}${firstSkill?.domain === current.strongestExpertise.domain && growth >= 0.18 ? '; it has grown since we first met' : ''}.`,
         eventIds: [],
         entityIds: [record.member.personId],
         kind: 'expertise',
@@ -200,7 +201,7 @@ function arcSignals(
     signals.push({
       key: `teaching:${successors.length}:${living.length}`,
       score: 0.88 + Math.min(0.08, successors.length * 0.015),
-      text: `${successors.length.toLocaleString()} ${successors.length === 1 ? 'person carries' : 'people carry'} expertise explicitly taught by ${record.member.name}${living.length !== successors.length ? `; ${living.length.toLocaleString()} remain alive` : ''}.`,
+      text: `${record.member.name} has taught ${successors.length.toLocaleString()} ${successors.length === 1 ? 'person' : 'people'}${living.length !== successors.length ? `; ${living.length.toLocaleString()} of them are still alive` : ''}.`,
       eventIds: [],
       entityIds: [record.member.personId, ...successors.slice(0, 4).map(successor => successor.id)],
       kind: 'teaching',
@@ -211,7 +212,7 @@ function arcSignals(
     signals.push({
       key: `historical:${current.historicalStatus}`,
       score: current.historicalStatus === 'historical' ? 0.97 : 0.88,
-      text: `The civilization's own historical-importance system now marks ${record.member.name} as ${current.historicalStatus}.`,
+      text: `${record.member.name} now has a place among the ${current.historicalStatus === 'historical' ? 'historical figures' : 'notable people'} of this world.`,
       eventIds: person.historical?.eventIds ?? [],
       entityIds: [record.member.personId],
       kind: 'historical',
@@ -227,7 +228,7 @@ function arcSignals(
     signals.push({
       key: `experience:${strongestMemory.id}`,
       score: 0.72 + strongestMemory.emotionalWeight * 0.12,
-      text: `${record.member.name}'s own bounded memory record now carries ${readableKind} from this period of life.`,
+      text: `${record.member.name} remembers ${readableKind} from this period of life.`,
       eventIds: strongestMemory.eventId ? [strongestMemory.eventId] : [],
       entityIds: [record.member.personId, ...(strongestMemory.subjectId ? [strongestMemory.subjectId] : [])],
       kind: 'experience',
@@ -240,7 +241,7 @@ function arcSignals(
     signals.push({
       key: `event:${event.id}`,
       score: 0.82 + event.significance * 0.12,
-      text: `The wider chronicle now links ${record.member.name} directly to ${event.summary.charAt(0).toLowerCase()}${event.summary.slice(1)}`,
+      text: `${historicalDate(event.month)}. ${sentence(event.summary)}`,
       eventIds: [event.id],
       entityIds: [record.member.personId],
       kind: 'event',
@@ -304,8 +305,8 @@ export function foundingCharacterArcCandidate(
     .filter(id => state.history.some(event => event.id === id));
   const sourceEntityIds = sourceEntitiesThatExist(state, [person.id, current.homeId, first.homeId, ...selected.flatMap(signal => signal.entityIds)]);
   const spanMonths = Math.max(0, state.month - first.observedMonth);
-  const opening = `I first watched ${record.member.name} at ${first.homeName}, recorded as ${/^([aeiou])/i.test(first.role) ? 'an' : 'a'} ${first.role}.`;
-  const text = `${opening} ${selected.map(signal => signal.text).join(' ')} Across ${Math.max(1, Math.floor(spanMonths / 12)).toLocaleString()} ${Math.floor(spanMonths / 12) === 1 ? 'year' : 'years'}, this is no longer a single appearance; it has become a life with continuity in the record.`;
+  const opening = `I first watched ${record.member.name} ${elapsedTime(spanMonths)} ago at ${first.homeName}, as ${/^([aeiou])/i.test(first.role) ? 'an' : 'a'} ${first.role}.`;
+  const text = `${opening} ${selected.map(signal => signal.text).join(' ')}`;
   const signalKey = encodeURIComponent(selected.map(signal => signal.key).join('|'));
   const id = `founding-character-arc:${person.id}:${state.month}:${signalKey}`;
   const statement: HistorianStatement = {
@@ -364,8 +365,8 @@ function endingArcFacts(state: SimulationState, record: ArcRecord, person: Perso
   const last = foundingCharacterObservation(state, record.member, `founding-character-ending-preview:${person.id}:${state.month}`);
   if (!last || record.observations.length === 0) return [];
   return arcSignals(state, record, last)
-    .filter(signal => signal.kind !== 'family')
-    .slice(0, 2);
+    .filter(signal => signal.kind === 'event' || signal.kind === 'teaching')
+    .slice(0, 1);
 }
 
 export function chooseFoundingCharacterEndingScene(
@@ -394,10 +395,9 @@ export function chooseFoundingCharacterEndingScene(
       ? `I had watched this life once before its ending.`
       : `I returned to this life ${record.observations.length.toLocaleString()} times across ${watchedYears.toLocaleString()} ${watchedYears === 1 ? 'year' : 'years'}.`;
     const continuation: string[] = [];
-    if (children > 0) continuation.push(`The family record names ${children.toLocaleString()} ${children === 1 ? 'child' : 'children'}.`);
-    if (successors.length > 0) continuation.push(`${successors.length.toLocaleString()} ${successors.length === 1 ? 'person carries' : 'people carry'} expertise taught by ${person.name}${livingSuccessors.length !== successors.length ? `, with ${livingSuccessors.length.toLocaleString()} still alive` : ''}.`);
-    if (person.historical?.status && person.historical.status !== 'ordinary') continuation.push(`By death, the civilization's own record marked ${person.name} as ${person.historical.status}.`);
-    const text = `I first watched ${person.name} as one of ${record.member.podName}'s founders, age ${record.member.arrivalAgeYears} on Arrival Day. ${deathSentence} ${watching} ${arcFacts.map(signal => signal.text).join(' ')} ${continuation.join(' ')} This life is complete in the record; what continues belongs to the people and places that remain.`.replace(/\s+/g, ' ').trim();
+    if (children > 0) continuation.push(`${person.name} had ${children.toLocaleString()} ${children === 1 ? 'child' : 'children'}.`);
+    if (livingSuccessors.length > 0 && !arcFacts.some(signal => signal.kind === 'teaching')) continuation.push(`${livingSuccessors.length.toLocaleString()} ${livingSuccessors.length === 1 ? 'person still carries' : 'people still carry'} skills taught by ${person.name}.`);
+    const text = `${sentence(deathSentence)} I first met ${person.name} among ${record.member.podName}'s founders. ${watching} ${arcFacts.map(signal => signal.text).join(' ')} ${continuation.join(' ')} This life is complete in the record.`.replace(/\s+/g, ' ').trim();
     const arrival = foundingChapterBaseline(state);
     const sourceEventIds = unique([
       ...(arrival ? [arrival.eventId] : []),

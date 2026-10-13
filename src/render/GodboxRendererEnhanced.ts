@@ -3,6 +3,7 @@ import type { AssetBuilder } from './assets/AssetBuilder';
 import type { Culture } from '../sim/types';
 import * as THREE from 'three';
 import { GodboxRenderer } from './GodboxRenderer';
+import { roadSurfaceMaterial } from './transport/RoadSurfaceMaterial';
 import { transportRibbon } from './transport/TransportGeometry';
 import { gradeViolations } from '../sim/transport/TransportNetwork';
 import { eraRank } from './assets/BuildingGrammar';
@@ -351,7 +352,9 @@ function enhancedSyncRoutes(this: GodboxRenderer, force = false): void {
     const width = transportPresentationWidth(segment);
     const bed = new THREE.Mesh(
       transportRibbon(self.state.world, segment, width),
-      new THREE.MeshStandardMaterial({ color: rail ? '#625f58' : bridge ? '#8c8170' : '#987b57', roughness: 0.94, side: THREE.DoubleSide }),
+      rail || bridge
+        ? new THREE.MeshStandardMaterial({ color: rail ? '#625f58' : '#8c8170', roughness: 0.94, side: THREE.DoubleSide })
+        : roadSurfaceMaterial(),
     );
     bed.userData['segmentId'] = segment.id;
     bed.receiveShadow = true;

@@ -1,4 +1,4 @@
-import type { Settlement, Vec2, War, WarCampaign, WorldState } from '../types';
+import type { AdvancedCivilizationState, Settlement, Vec2, War, WarCampaign, WorldState } from '../types';
 import type { WalkabilityLayer } from '../people/WalkabilityLayer';
 import { deriveMilitaryProfile, type MilitaryCampaignSnapshot, type MilitaryCapabilityProfile } from './MilitaryCapability';
 import { militaryMarchMultiplier, militaryOperationalSupply } from './MilitaryCombat';
@@ -39,7 +39,7 @@ export function campaignFocus(war: War, origin: Vec2, destination: Vec2): Vec2 {
   return campaignFront(war, destination);
 }
 
-export function createCampaign(world: WorldState, walking: WalkabilityLayer, attacker: Settlement, defender: Settlement, month: number, strengthA: number, strengthB: number): WarCampaign & MilitaryCampaignSnapshot {
+export function createCampaign(world: WorldState, walking: WalkabilityLayer, attacker: Settlement, defender: Settlement, month: number, strengthA: number, strengthB: number, advanced?: AdvancedCivilizationState): WarCampaign & MilitaryCampaignSnapshot {
   // The integration is installed lazily here, after Simulation's circular module graph has fully
   // initialized but before the first campaign can ever advance a month.
   installMilitaryCombatRuntime();
@@ -49,8 +49,8 @@ export function createCampaign(world: WorldState, walking: WalkabilityLayer, att
   const reachesDestination = waypoints.length > 0 && Math.hypot(waypoints.at(-1)!.x - end.x, waypoints.at(-1)!.z - end.z) < 0.1;
   const route = reachesDestination && walking.routeIsValid([start, ...waypoints]) ? [start, ...waypoints] : [];
   const distance = campaignDistance(route);
-  const militaryA = deriveMilitaryProfile(attacker);
-  const militaryB = deriveMilitaryProfile(defender);
+  const militaryA = deriveMilitaryProfile(attacker, advanced?.atomic.postures.find(posture => posture.polityId === attacker.polityId));
+  const militaryB = deriveMilitaryProfile(defender, advanced?.atomic.postures.find(posture => posture.polityId === defender.polityId));
   const difficulty = (transportFriction(world, route) - 1) / 0.28 * world.cellSize;
   const mobility = militaryMarchMultiplier(militaryA);
   return {

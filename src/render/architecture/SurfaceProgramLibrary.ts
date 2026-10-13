@@ -97,7 +97,7 @@ interface PlateCourseOptions {
   relief: number;
   wear: number;
   /**
-   * Roof shells are lofted rings, so courses follow height and plates follow arc length.
+   * Roof plates use a slope-local frame; wall cladding uses its ordinary face frame.
    * Wall cladding uses the ordinary face-local frame instead.
    */
   roofFrame?: boolean;
@@ -105,18 +105,18 @@ interface PlateCourseOptions {
 
 /** Overlapping plates: slate, wood shingle, clay tile, pantile. */
 function plateCourse(options: PlateCourseOptions): ProceduralSurfaceProgram {
-  const along = options.roofFrame ? 'vGbLocal.y' : 'gbUV.y';
-  const across = options.roofFrame ? 'gbArc' : 'gbUV.x';
+  const along = options.roofFrame ? 'gbRoofUV.y' : 'gbUV.y';
+  const across = options.roofFrame ? 'gbRoofUV.x' : 'gbUV.x';
   const barrel = options.barrel
     ? `float gbBarrel = 1.0 - gbSeam(gbPlate, 0.55);`
     : `float gbBarrel = 0.0;`;
   return {
     grain: false,
     wear: options.wear,
-    relief: options.relief,
+    relief: options.roofFrame ? Math.min(0.0015, options.relief) : options.relief,
     body: /* glsl */ `
   float gbCourse = (${along}) / ${m(options.course)};
-  float gbPlate = (${across}) / ${m(options.plate)};
+  float gbPlate = (${across}) / ${m(options.plate)} + mod(floor(gbCourse), 2.0) * 0.5;
   float gbLap = gbSeam(gbCourse, 0.36);
   ${barrel}
   float gbShade = gbHash(vec2(floor(gbPlate), floor(gbCourse))) - 0.5;
@@ -284,12 +284,12 @@ function seamedSheet(seam: number, lap: number, refined: number): ProceduralSurf
   return {
     grain: false,
     wear: 0.08,
-    relief: 0.007,
+    relief: 0.0015,
     body: /* glsl */ `
-  float gbStanding = gbSeam(gbArc / ${m(seam)}, 0.1);
-  float gbCrossLap = gbSeam(vGbLocal.y / ${m(lap)}, 0.05);
-  float gbOxide = gbFbm(vec2(gbArc * 9.0, vGbLocal.y * 9.0));
-  float gbSheet = gbHash(vec2(floor(gbArc / ${m(seam)}), floor(vGbLocal.y / ${m(lap)}))) - 0.5;
+  float gbStanding = gbSeam(gbRoofUV.x / ${m(seam)}, 0.1);
+  float gbCrossLap = gbSeam(gbRoofUV.y / ${m(lap)}, 0.05);
+  float gbOxide = gbFbm(vec2(gbRoofUV.x * 9.0, gbRoofUV.y * 9.0));
+  float gbSheet = gbHash(vec2(floor(gbRoofUV.x / ${m(seam)}), floor(gbRoofUV.y / ${m(lap)}))) - 0.5;
   gbTone = 1.0 + gbStanding * 0.08 + gbSheet * 0.035 - gbCrossLap * 0.16 - gbOxide * 0.11 * gbWear;
   gbRough = 1.0 + gbCrossLap * 0.12 + gbOxide * (0.25 + 0.5 * gbWear) * ${n(0.6 - refined * 0.3)};
   gbHeight = gbStanding * 1.1 - gbCrossLap * 0.55;

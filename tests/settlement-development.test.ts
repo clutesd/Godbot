@@ -1,4 +1,4 @@
-import { connect, contrastingSocieties, learn, residents, run, societyFixture, sponsor } from './fixtures/settlementDevelopment';
+import { STEADY_HARVEST, connect, stockStores, contrastingSocieties, learn, residents, run, societyFixture, sponsor } from './fixtures/settlementDevelopment';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { advanceSettlementDevelopment, developmentContext, evaluatePressures, responseForNeed, serviceSupply } from '../src/sim/development/SettlementDevelopmentSystem';
@@ -58,7 +58,8 @@ describe('Settlement development decisions', () => {
     s!.knowledge.records['mechanical-power']!.dormant = false;
     s!.resources.wood = 0;
     expect(responseForNeed(c, 'manufacturing', 3)?.level).toBe(2);
-    expect(responseForNeed(c, 'energy', 3)).toBeUndefined();
+    // Proposing a power yard creates demand; construction still has to pay its bill.
+    expect(responseForNeed(c, 'energy', 3)?.cost.wood).toBeGreaterThan(0);
     s!.resources = { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 };
     run(state, 36);
     expect(s!.development?.project).toBeUndefined();
@@ -84,33 +85,55 @@ describe('Settlement development decisions', () => {
 describe('Persistent society and construction', () => {
   it('pays the recorded construction cost exactly once and sends builders to the reserved site', () => {
     const { state, settlements: [s] } = societyFixture();
+    stockStores(state);
     sponsor(state, s!, 'temple');
     state.month++;
     advanceSettlementDevelopment(state, s!, residents(state, s!), 0);
-    const project = structuredClone(s!.development!.project!);
+    const project = s!.development!.project!;
     expect(project).toBeDefined();
     expect(structureDestination(s!, 'construction-site')?.id).toBe(project.plotId);
-    const before = { ...s!.resources };
-    const events = advanceSettlementDevelopment(state, s!, residents(state, s!), 10);
-    expect(events).toHaveLength(1);
-    for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) expect(s!.resources[key]).toBeCloseTo(before[key] - project.response.cost[key]);
-    expect(advanceSettlementDevelopment(state, s!, residents(state, s!), 10)).toEqual([]);
+    // Construction is paced over stages, so build until the structure stands.
+    const completions = [];
+    for (let month = 0; month < 12 && s!.development?.project; month++) {
+      state.month++;
+      completions.push(...advanceSettlementDevelopment(state, s!, residents(state, s!), 10)
+        .filter(event => event.type === 'infrastructure-built' && event.actors?.includes(project.plotId)));
+      if (s!.development?.project) expect(project.workerIds?.length ?? 0).toBeGreaterThan(0);
+    }
     expect(s!.development?.project).toBeUndefined();
+    expect(completions).toHaveLength(1);
+    // The project's own ledger shows the declared bill paid exactly once: stock and fabric.
+    for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) expect(project.spent[key]).toBeCloseTo(project.response.cost[key], 6);
+    const fabric: Record<string, number> = {};
+    for (const requirement of project.materialRequirements ?? []) fabric[requirement.id] = (fabric[requirement.id] ?? 0) + requirement.amount;
+    const paidFabric = Object.values(project.materialSpent ?? {}).reduce((sum, amount) => sum + amount, 0);
+    expect(paidFabric).toBeCloseTo(Object.values(fabric).reduce((sum, amount) => sum + amount, 0), 4);
+    const plot = s!.structurePlots!.find(p => p.id === project.plotId)!;
+    expect(plot.development?.status).toBe('active');
+    // Nothing more is charged once it stands.
+    const spent = structuredClone(project.spent);
+    state.month++;
+    advanceSettlementDevelopment(state, s!, residents(state, s!), 10);
+    expect(project.spent).toEqual(spent);
   });
 
   it('stops projects after the sponsor disappears and releases unfinished sites into decay', () => {
     const { state, settlements: [s] } = societyFixture();
+    stockStores(state);
     sponsor(state, s!, 'temple');
     run(state, 1, 0.001);
     const project = s!.development!.project!;
     const plotId = project.plotId;
     expect(project.response.institutionId).toContain('temple');
     s!.institutionIds = [];
-    const resources = { ...s!.resources };
+    // Work stops the moment the sponsor is gone: no further progress or payment on the project.
+    const progress = project.progress, spent = structuredClone(project.spent), fabric = structuredClone(project.materialSpent);
     run(state, 130);
     const site = s!.structurePlots!.find(p => p.id === plotId)!;
     expect(site.development?.status).toBe('abandoned');
-    for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) expect(s!.resources[key]).toBe(resources[key]);
+    expect(project.progress).toBe(progress);
+    expect(project.spent).toEqual(spent);
+    expect(project.materialSpent).toEqual(fabric);
     const condition = site.condition;
     repairWeatherDamage(s!, 20, state.month + 1);
     expect(site.condition).toBe(condition);
@@ -121,7 +144,7 @@ describe('Persistent society and construction', () => {
 
   it('develops contrasting agricultural sacred, civic trading, martial and decentralized places over decades', () => {
     const { state, settlements: [sacred, civic, martial, clan] } = contrastingSocieties();
-    const events = run(state, 600);
+    const events = run(state, 600, 0.08, STEADY_HARVEST);
     const active = (s: Settlement) => s.structurePlots!.filter(p => p.development?.status === 'active').map(p => p.development!);
     expect(active(sacred!).some(b => b.form === 'field')).toBe(true);
     expect(active(sacred!).some(b => b.name === 'temple')).toBe(true);
@@ -140,7 +163,7 @@ describe('Persistent society and construction', () => {
   it('retains a shrine identity through expansion, abandonment, ruin and institutional reuse', () => {
     const { state, settlements: [s] } = societyFixture();
     state.cultures[0]!.dimensions.religiousTendency = 0.95; sponsor(state, s!, 'temple');
-    run(state, 150);
+    run(state, 150, 0.08, STEADY_HARVEST);
     const shrine = s!.structurePlots!.find(p => p.development?.need === 'religion')!;
     expect(shrine.development?.level).toBe(2);
     const identity = { id: shrine.id, x: shrine.worldX, z: shrine.worldZ, founded: shrine.foundedMonth, origin: structuredClone(shrine.development!.origin) };
@@ -149,7 +172,7 @@ describe('Persistent society and construction', () => {
     expect(shrine.condition).toBe(0);
     s!.alive = true; s!.institutionIds = []; state.cultures[0]!.dimensions.religiousTendency = 0.1;
     sponsor(state, s!, 'knowledge-keepers'); learn(s!, 'durable-records');
-    run(state, 500);
+    run(state, 500, 0.08, STEADY_HARVEST);
     expect(s!.structurePlots!.some(p => p.development?.history.some(h => h.action === 'reused'))).toBe(true);
     expect({ id: shrine.id, x: shrine.worldX, z: shrine.worldZ, founded: shrine.foundedMonth, origin: shrine.development!.origin }).toEqual(identity);
     expect(shrine.development!.history.length).toBeLessThanOrEqual(12);
@@ -158,7 +181,7 @@ describe('Persistent society and construction', () => {
   it('uses regional surplus only across an operating connection', () => {
     const { state, settlements: [center, village] } = societyFixture();
     sponsor(state, center!, 'knowledge-keepers'); sponsor(state, village!, 'knowledge-keepers');
-    run(state, 150);
+    run(state, 150, 0.08, STEADY_HARVEST);
     const archive = center!.structurePlots!.find(p => p.development?.need === 'knowledge')!;
     archive.development!.services.knowledge = 10;
     connect(state, center!, village!);
@@ -173,10 +196,11 @@ describe('Persistent society and construction', () => {
     const { state, settlements: [s] } = societyFixture();
     sponsor(state, s!, 'temple'); state.cultures[0]!.dimensions.religiousTendency = 0.9;
     state.world.terrain.waterLevel.fill(2);
-    const resources = { ...s!.resources };
-    run(state, 48);
+    const events = run(state, 48, 0.08, STEADY_HARVEST);
+    // No site was ever reserved, so nothing could be charged to construction.
     expect(s!.development?.project).toBeUndefined();
-    for (const key of ['wood', 'minerals', 'goods', 'wealth'] as const) expect(s!.resources[key]).toBe(resources[key]);
+    expect(events.filter(e => e.type === 'response-attempted' && e.locationId === s!.id)).toEqual([]);
+    expect(s!.development?.lastAttempt?.candidates?.some(c => c.blockers.some(b => b.code === 'no-valid-plot'))).toBe(true);
     expect(s!.structurePlots).toHaveLength(4);
   });
 

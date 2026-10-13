@@ -1,5 +1,5 @@
 import type { Vec2 } from '../../sim/types';
-import type { MilitaryVisualStyle } from './MilitaryVisualLanguage';
+import { isRangedWeapon, type MilitaryVisualStyle } from './MilitaryVisualLanguage';
 import { attackPeriod, combatPose, figurePosition } from './CombatChoreography';
 
 export const MAX_FORMATION_FIGURES = 20;
@@ -36,7 +36,7 @@ export interface CombatFigurePose {
   targetDistance: number;
   exchangeId?: string;
 }
-const ranged = (style: MilitaryVisualStyle) => ['bow', 'rifle', 'automatic'].includes(style.weapon);
+const ranged = (style: MilitaryVisualStyle) => isRangedWeapon(style.weapon);
 
 /** Stable one-to-one nearest-lane partners. Melee reserves never strike through front ranks.
  * No per-frame assignment, RNG, simulation entities, or world mutations. */

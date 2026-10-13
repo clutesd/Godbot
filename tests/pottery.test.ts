@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { Simulation } from '../src/sim/Simulation';
 import { createPottery, MAX_POTTERY, planPottery, potteryStyle, potteryTier, type PotteryAnchor, type Vessel } from '../src/render/assets/Pottery';
 import { CANONICAL_ADULT_HEIGHT } from '../src/render/GodboxRenderer';

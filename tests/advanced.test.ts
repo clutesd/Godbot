@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { configWith } from '../src/config';
 import { AdvancedCivilizationSystem } from '../src/sim/advanced/AdvancedCivilizationSystem';
 import { Simulation } from '../src/sim/Simulation';
+import { energyAt } from '../src/sim/energy/types';
 import { SeededRandom } from '../src/sim/prng';
 import type { KnowledgeRecord, Settlement, SimulationState } from '../src/sim/types';
 
@@ -18,6 +19,18 @@ function harness(seed: string, riskRate = 0): { state: SimulationState; system: 
   const simulation = new Simulation(overrides);
   const system = new AdvancedCivilizationSystem(configWith(overrides), new SeededRandom(`${seed}:advanced-test`));
   return { state: simulation.state, system };
+}
+
+/**
+ * Atomic energy is measured from operating nuclear plants against electric demand, not inferred
+ * from knowledge, so scenarios about atomic power have to commission real reactors.
+ */
+function commissionReactors(state: SimulationState, share: number): void {
+  for (const settlement of state.settlements) {
+    const energy = energyAt(settlement);
+    energy.ledgers.electric.demand = 10;
+    energy.plants.push({ id: `${settlement.id}:reactor`, plotId: 'none', kind: 'nuclear', progress: 1, condition: 1, output: 10 * share, fuelUsed: 0, status: 'running' });
+  }
 }
 
 function grant(state: SimulationState, ids: string[]): void {
@@ -37,6 +50,9 @@ describe('Technological adolescence', () => {
     grant(state, ['scientific-method', 'nuclear-fission', 'nuclear-energy', 'nuclear-medicine']);
 
     const first = system.advanceYear(state);
+    // Knowing fission is not the same as running reactors: no plant, no atomic energy.
+    expect(state.advanced.atomic.applications.energy).toBe(0);
+    commissionReactors(state, 0.5);
     const second = system.advanceYear(state);
 
     expect(first.filter((event) => event.type === 'atomic-threshold')).toHaveLength(1);
@@ -92,6 +108,8 @@ describe('Technological adolescence', () => {
       relation.territorialTension = 0;
       relation.trust = 1;
     }
+    // A society that builds reactors to meet most of its demand, and no weapons.
+    commissionReactors(state, 0.8);
     for (let year = 0; year < 150; year += 1) {
       state.month += 12;
       system.advanceYear(state);

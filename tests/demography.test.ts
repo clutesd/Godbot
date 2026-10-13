@@ -84,7 +84,7 @@ describe('demographic foundation', () => {
     }
     expect(births.size).toBeGreaterThan(0); expect(replay.summary()).toEqual(sim.summary());
     expect(replay.state.people).toEqual(sim.state.people); expect(replay.state.history).toEqual(sim.state.history);
-  }, 30000);
+  });
 
   it('moves households within a workforce budget and permits larger catastrophe departures', () => {
     const sim = arrival(), people = sim.state.people.filter(p => p.homeId === sim.state.settlements[0]!.id);
@@ -123,7 +123,7 @@ describe('survival injury and recovery', () => {
     expect(residents().reduce((n, p) => n + p.health, 0) / residents().length).toBeGreaterThan(0.7);
     expect(s.survival!.food!.production).toBeGreaterThan(0);
     expect(sim.population).toBe(110 + sim.state.stats.births - sim.state.stats.deaths);
-  }, 15000);
+  });
 
   it('does not charge reserves as nutrition or duplicate health and starvation hazards', () => {
     const sim = arrival(), s = sim.state.settlements[0]!;
@@ -158,7 +158,7 @@ describe('survival injury and recovery', () => {
 });
 
 describe('multi-generation distribution (full deterministic simulation)', () => {
-  it('tracks 5/10/20/30/40-year replacement, mortality, founder retention and population accounting', () => {
+  it('tracks 5/10/20/30/40-year replacement, mortality, founder retention and population accounting', { tags: ['soak'] }, () => {
     const reports = DEMOGRAPHIC_SEEDS.map(seed => demographicSeed(seed));
     for (const r of reports) {
       expect(r.checkpoints.map(c => c.year)).toEqual([5, 10, 20, 30, 40]);
@@ -174,7 +174,7 @@ describe('multi-generation distribution (full deterministic simulation)', () => 
     expect(reports.filter(r => r.checkpoints.at(-1)!.population > r.initial).length).toBeGreaterThanOrEqual(2);
     expect(reports.flatMap(r => r.founding).filter(f => f.foundersYear5 >= 16 && f.residentsYear5 >= 14).length).toBeGreaterThanOrEqual(20);
     expect(new Set(reports.map(r => r.checkpoints.at(-1)!.population)).size).toBeGreaterThan(3);
-  }, 300000);
+  });
 
   it.each(['demography-barren-a', 'demography-barren-b'])('permits genuine extinction without food, fuel or shelter: %s', seed => {
     const report = demographicSeed(seed, 40, sim => {

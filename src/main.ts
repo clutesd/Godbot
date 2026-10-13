@@ -43,7 +43,7 @@ declare global {
       year: number;
       pacing: PresentationTelemetry;
       tick: ReturnType<Simulation['tickPerformance']>;
-      scheduler: { estimatedTickMs: number; estimatedFrameMs: number; pendingTicks: number; openingWarmupMs: number };
+      scheduler: { estimatedTickMs: number; estimatedFrameMs: number; pendingTicks: number; monthInFlight: boolean; openingWarmupMs: number };
       frame: ReturnType<FramePacingProfiler['snapshot']>;
       sections: ReturnType<GodboxRenderer['frameSections']['snapshot']>;
     };
@@ -525,6 +525,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
         estimatedTickMs: Number(interactiveTickBudget.estimatedTickMs.toFixed(3)),
         estimatedFrameMs: Number(interactiveTickBudget.estimatedFrameMs.toFixed(3)),
         pendingTicks: Number(pendingTickBacklog.toFixed(2)),
+        monthInFlight: simulation.monthInFlight,
         openingWarmupMs: Number(openingWarmupMs.toFixed(2)),
       },
       frame: framePacing.snapshot(),
@@ -545,7 +546,15 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let elapsedSeconds = 0;
   let accumulator = 0;
   let pendingTickBacklog = 0;
-  const interactiveTickBudget = new InteractiveTickBudget(4);
+  // Work spent so far on the month in flight, summed across the frames it spans.
+  let monthWorkMs = 0;
+  // Sliced months may use whatever frame headroom the renderer leaves (the deadline subtracts the
+  // measured render cost and a guard), up to this cap. Slices pause at safe boundaries, so the cap
+  // no longer has to cover an entire atomic month.
+  const interactiveTickBudget = new InteractiveTickBudget(10);
+  // Development A/B switch: `?atomic-ticks` runs each month to completion in one frame, as before
+  // time slicing, so frame pacing can be compared on the same build.
+  const atomicTicks = import.meta.env.DEV && new URLSearchParams(location.search).has('atomic-ticks');
   let displayPopulation = representedPopulation(simulation.state);
   let lastObservationRevision = -1;
   let cinematicDialogueRevision = -1;
@@ -561,6 +570,11 @@ async function beginObservation(seedOverride?: string): Promise<void> {
   let saveQueue = Promise.resolve();
 
   const persist = (completion?: Parameters<RunRecordBuilder['update']>[4]): Promise<void> => {
+    // Archives only ever record committed months; a half-advanced month would resume inconsistently.
+    if (simulation.monthInFlight) {
+      simulation.finishMonthInFlight();
+      monthWorkMs = 0;
+    }
     const record = archive.update(simulation.state, historian.representativePersonIds, historian.statements, historian.predictions, completion);
     lastArchivedMonth = simulation.state.month;
     saveQueue = saveQueue.then(() => archiveStore.save(record));
@@ -636,21 +650,26 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     if (simulation.config.autoRun && !runEnded && wasHistoryRunning && !bootstrapTickCommitted) {
       accumulator += deltaSeconds;
       let ticks = 0;
-      // Quiet deep time may have backlog, but another atomic month only starts when its recent
-      // cost is expected to fit the remaining main-thread budget. Backlog stays in the accumulator:
-      // history is never skipped or reordered merely to catch up with wall-clock time.
+      // Months are time-sliced: a month runs only until this frame's main-thread budget is spent,
+      // pauses at a safe boundary, and resumes next frame, so no single month can stall a frame.
+      // Its operations and random draws are identical to an atomic step(). A month in flight always
+      // continues; a new one begins only when wall-clock pacing calls for it. Backlog stays in the
+      // accumulator: history is never skipped or reordered merely to catch up with wall-clock time.
       const tickBudget = presentation.tickBudget(simulation.state);
-      const tickDeadline = interactiveTickBudget.deadline(performance.now());
-      while (accumulator >= tickDuration && ticks < tickBudget) {
-        const beforeTick = performance.now();
-        if (!interactiveTickBudget.canStart(beforeTick, tickDeadline, ticks)) break;
-        simulation.step();
-        const tickElapsedMs = performance.now() - beforeTick;
-        tickWorkMs += tickElapsedMs;
-        interactiveTickBudget.observe(tickElapsedMs);
-        accumulator -= tickDuration;
+      const tickDeadline = interactiveTickBudget.sliceDeadline(performance.now(), monthsPerSecond, deltaSeconds,
+        tickDuration > 0 ? accumulator / tickDuration : 0);
+      while (ticks < tickBudget && (simulation.monthInFlight || accumulator >= tickDuration)) {
+        const beforeSlice = performance.now();
+        if (ticks > 0 && beforeSlice >= tickDeadline) break;
+        if (!simulation.monthInFlight) accumulator -= tickDuration;
+        const committed = simulation.advanceMonthSliced(atomicTicks ? Infinity : tickDeadline);
+        const sliceElapsedMs = performance.now() - beforeSlice;
+        tickWorkMs += sliceElapsedMs;
+        monthWorkMs += sliceElapsedMs;
+        if (!committed) break;
+        interactiveTickBudget.observe(monthWorkMs);
+        monthWorkMs = 0;
         ticks += 1;
-        if (performance.now() >= tickDeadline) break;
       }
     }
     pendingTickBacklog = tickDuration > 0 ? accumulator / tickDuration : 0;
@@ -728,10 +747,12 @@ async function beginObservation(seedOverride?: string): Promise<void> {
     setTextIfChanged(populationElement, Math.round(displayPopulation).toLocaleString());
     setTextIfChanged(placeElement, view.observation.label);
     setTextIfChanged(activityElement, view.observation.narrationVisible ? view.observation.detail : '');
-    if (simulation.state.month - lastArchivedMonth >= 120) void persist();
+    // Checkpoints and the ending are judged only on committed months, never mid-month.
+    const monthCommitted = !simulation.monthInFlight;
+    if (monthCommitted && simulation.state.month - lastArchivedMonth >= 120) void persist();
     const extinct = observedPopulation === 0 || simulation.state.advanced.outcome.classification === 'EXTINCT';
     const atHorizon = simulation.state.month >= simulation.config.experiment.runYears * 12;
-    if (!runEnded && historyRunningNow && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
+    if (monthCommitted && !runEnded && historyRunningNow && (extinct || atHorizon)) void finishObservation(extinct ? 'extinction' : 'horizon');
     const completedFrameMs = performance.now() - frameStartedAt;
     framePacing.observe(completedFrameMs, beforeHistoryNow);
     interactiveTickBudget.observeFrame(Math.max(0, completedFrameMs - tickWorkMs));
@@ -779,6 +800,7 @@ async function beginObservation(seedOverride?: string): Promise<void> {
 
     let finalization: Promise<void>;
     try {
+      simulation.finishMonthInFlight();
       finalization = previouslyEnded
         ? Promise.resolve()
         : persist({ status: 'completed', classification: simulation.summary().outcomeClassification, reason });

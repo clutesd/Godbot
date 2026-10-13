@@ -31,7 +31,7 @@ describe('Arrival Day / authoritative restart', () => {
     expect(s.state.history).toHaveLength(0);
     expect(s.state.transportation.segments).toEqual({});
     expect(s.state.world.resourceDeposits.some(d => (d.extracted ?? 0) > 0)).toBe(false);
-  }, 20000);
+  });
   it('holds time and civilization through four seconds of pristine world', () => {
     const s = new Simulation(CONFIG);
     const weather = structuredClone(s.state.weather);
@@ -53,7 +53,7 @@ describe('Arrival Day / authoritative restart', () => {
         for (const q of a.pods.filter(q => q.id !== p.id)) expect(Math.hypot(p.position.x - q.position.x, p.position.z - q.position.z)).toBeGreaterThanOrEqual(a.minimumSeparation);
       }
       expect(new Simulation({ ...CONFIG, seed }).state.arrival).toEqual(a);
-    }, 15000);
+    });
   it('lands separately and opens a bare camp before the first person emerges', () => {
     const s = new Simulation(CONFIG); s.advanceArrival(podTouchdown(s.state.arrival!.pods[0]!));
     expect(s.state.arrival!.pods.filter(p => p.landed)).toHaveLength(1);
@@ -92,9 +92,14 @@ describe('Arrival Day / authoritative restart', () => {
       expect(camp.resources.food).toBe(pod.supplies.food);
       expect(camp.industry.active).toBe(false);
       expect(createSettlementLayoutPlan({ settlement: camp, settlements: s.state.settlements, routes: [], eraRank: 1, seed: s.state.seed }).streets).toHaveLength(0);
+      // A specialty is understanding the pod brings, not practice: it grants no practical skill
+      // beyond what every camp inherits in common (and never takes that common skill away).
+      const others = s.state.settlements.filter(c => c.foundingPodId && c.id !== camp.id);
       for (const id of pod.knowledge) {
+        const common = Math.min(...others.map(c => c.knowledge.records[id]?.practice ?? 0));
         expect(camp.knowledge.records[id]!.theory).toBeGreaterThan(0.5);
-        expect(camp.knowledge.records[id]!.practice).toBeLessThan(0.05);
+        expect(camp.knowledge.records[id]!.practice).toBeLessThan(Math.max(0.05, common + 1e-9));
+        expect(camp.knowledge.records[id]!.practice).toBeGreaterThanOrEqual(common);
         expect(camp.knowledge.records[id]!.adoptedMonth).toBeUndefined();
       }
       for (const person of people) {
@@ -128,7 +133,7 @@ describe('Arrival Day / authoritative restart', () => {
     expect(migrateArchiveRecord(record).foundingArrival).toEqual(record.foundingArrival);
     expect(s.state.month).toBe(120);
     expect(s.state.stats.births).toBeGreaterThan(0);
-  }, 15000);
+  });
   it('replays independently of animation frame cadence', () => {
     const a = new Simulation(CONFIG), b = new Simulation(CONFIG); complete(a);
     for (let i = 0; i < ARRIVAL_END_SECONDS * 10; i++) b.advanceArrival(0.1);
@@ -138,7 +143,7 @@ describe('Arrival Day / authoritative restart', () => {
     expect(a.state).toEqual(b.state);
     a.step(12); b.step(12);
     expect(a.state).toEqual(b.state);
-  }, 15000);
+  });
   it('restarts twice including mid-descent without duplication, retaining the current seed', () => {
     const s = new Simulation(CONFIG); s.advanceArrival(28); s.restart('another-world');
     expect(() => assertPristine(s.state)).not.toThrow();
@@ -150,7 +155,7 @@ describe('Arrival Day / authoritative restart', () => {
     expect(s.state).toEqual(fresh.state);
     expect(s.state.history).toHaveLength(1);
     expect(s.population).toBe(110);
-  }, 15000);
+  });
   it('rejects invalid animation deltas', () => {
     const s = new Simulation(CONFIG);
     s.advanceArrival(NaN); s.advanceArrival(Infinity); s.advanceArrival(-1);

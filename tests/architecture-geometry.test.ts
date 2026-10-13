@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 
+import type { FacadePlan } from '../src/render/architecture/FacadePlan';
 import type { CultureStyle } from '../src/sim/types';
 import type { DevelopmentResponse, StructureMaterial } from '../src/sim/development/types';
 import { MaterialPalette, type Era } from '../src/render/materials/MaterialPalette';
@@ -151,9 +152,10 @@ describe('Spec fields reach visible geometry', () => {
   });
 
   it('opens the plan as openness rises', () => {
-    const closed = build({ archetype: 'market', spec: { openness: 0 } });
-    const partly = build({ archetype: 'market', spec: { openness: 0.4 } });
-    const open = build({ archetype: 'market', spec: { openness: 0.9 } });
+    // Isolate the bay frame itself; roof-stage gable closure is a separate feature.
+    const closed = build({ archetype: 'market', spec: { openness: 0 }, stage: BUILD_STAGE.FRAME });
+    const partly = build({ archetype: 'market', spec: { openness: 0.4 }, stage: BUILD_STAGE.FRAME });
+    const open = build({ archetype: 'market', spec: { openness: 0.9 }, stage: BUILD_STAGE.FRAME });
     // Open bays are posts and lintels standing where a wall would be, so they add geometry.
     expect(partly.vertices).toBeGreaterThan(closed.vertices);
     expect(open.vertices).toBeGreaterThan(partly.vertices);
@@ -354,11 +356,14 @@ describe('Structures that are not buildings', () => {
   it('gives a barn a wagon door, not a wide house window', () => {
     const barn = build({ archetype: 'barn', era: 'preIndustrial', material: 'timber' });
     const house = build({ archetype: 'house', era: 'preIndustrial', material: 'timber' });
-    // doorBay alone adds a flat x2.2 to opening width, comfortably past ordinary family-to-family
-    // variation, so this margin isolates it even though barn and house may resolve different
-    // structural families.
-    expect(barn.spec.openings.width).toBeGreaterThan(house.spec.openings.width * 1.3);
+    // A house resolves a glazed facade: a grid of portrait windows sized from the wall. A barn's
+    // door bay is never glazed: one wide, landscape opening per bay for a wagon or led animal.
+    expect(house.spec.openings.facade).toBeDefined();
+    expect(house.spec.openings.height).toBeGreaterThan(house.spec.openings.width);
+    expect(barn.spec.openings.facade).toBeUndefined();
     expect(barn.spec.openings.perBay).toBe(1);
+    expect(barn.spec.openings.width).toBeGreaterThan(barn.spec.openings.height);
+    expect(barn.spec.openings.width).toBeGreaterThan(house.spec.openings.width);
   });
 
   it('keeps every archetype inside a sane draw-call budget', () => {
@@ -400,6 +405,7 @@ interface SilhouetteProfile {
   /** Footprint against overall height, not against depth — a tower and a long shed can share a
    * width/depth ratio while standing nothing alike. */
   aspectBucket: 'narrow-tall' | 'square' | 'wide-low';
+  planBucket: 'square-plan' | 'oblong-plan';
   roof: string;
   crown: string;
   geometry: 'generic' | 'dedicated';
@@ -411,9 +417,13 @@ function silhouetteProfile(archetype: BuildingArchetype, era: Era, material: Str
   const built = build({ archetype, era, material });
   const overallHeight = built.spec.storeyHeight * built.spec.floors;
   const ratio = built.spec.width / Math.max(0.01, overallHeight);
+  const plan = Math.max(built.spec.width, built.spec.depth) / Math.max(0.01, Math.min(built.spec.width, built.spec.depth));
   return {
     archetype,
     aspectBucket: ratio < 1 ? 'narrow-tall' : ratio > 2.2 ? 'wide-low' : 'square',
+    // Plan shape reads from the documentary's high establishing shots even when two buildings
+    // share an elevation: a multi-storey watermill is tall like a tower mill, but it is a range.
+    planBucket: plan < 1.15 ? 'square-plan' : 'oblong-plan',
     roof: built.spec.roof.archetype,
     crown: String(built.group.userData['grammarCrown'] ?? 'none'),
     geometry: built.group.userData['dedicatedStructure'] ? 'dedicated' : 'generic',
@@ -426,6 +436,7 @@ function silhouetteProfile(archetype: BuildingArchetype, era: Era, material: Str
 function distinguishingAxes(a: SilhouetteProfile, b: SilhouetteProfile): number {
   let axes = 0;
   if (a.aspectBucket !== b.aspectBucket) axes += 1;
+  if (a.planBucket !== b.planBucket) axes += 1;
   if (a.roof !== b.roof) axes += 1;
   if (a.crown !== b.crown) axes += 1;
   if (a.geometry !== b.geometry) axes += 1;
@@ -458,6 +469,41 @@ describe('Previously-confusable archetypes stay apart', () => {
       const serialize = (p: SilhouetteProfile) => ({ ...p, equipmentFamily: [...p.equipmentFamily] });
       expect(distinguishingAxes(a, b), JSON.stringify({ a: serialize(a), b: serialize(b) }))
         .toBeGreaterThanOrEqual(minimumAxes);
+    });
+  }
+});
+
+
+describe('resolved roof envelopes', () => {
+  const roof = (archetype: BuildingSpec['roof']['archetype'], pitch = 0.5): BuildingSpec['roof'] => ({
+    archetype, pitch, overhang: 0.08, span: 1, tiers: 1, intermediateSupport: false,
+  });
+  for (const archetype of ['flat', 'flat-parapet', 'gable', 'shed', 'sawtooth'] as const) {
+    it(`composes ${archetype} at its actual span without cultural shell inflation`, () => {
+      const result = build({ archetype: 'workshop', spec: { width: 1.6, depth: 1, floors: 1, storeyHeight: 0.4,
+        bays: 4, openness: 0.1, parapet: archetype === 'flat-parapet', roof: roof(archetype) },
+        grammar: { massing: 'single', crown: 'none', frontage: 'none', forecourt: false, gateway: false,
+          eaveUpturn: 0, roofConcavity: 0, rafterTails: 0, ridgeFinials: false } });
+      const plan = result.group.userData['facadePlan'] as FacadePlan;
+      const rise = plan.roof.top - plan.wallTop;
+      if (archetype === 'flat') expect(rise).toBeLessThan(0.025);
+      if (archetype === 'flat-parapet') expect(rise).toBeCloseTo(0.048);
+      if (archetype === 'gable') expect(rise).toBeCloseTo(0.25);
+      if (archetype === 'shed') expect(rise).toBeCloseTo(0.27);
+      if (archetype === 'sawtooth') expect(rise).toBeCloseTo(0.1875);
+      const endFaces = new Set<number>();
+      result.group.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const positions = object.geometry.getAttribute('position');
+        const normals = object.geometry.getAttribute('normal');
+        for (const value of positions.array) expect(Number.isFinite(value)).toBe(true);
+        for (let i = 0; i < positions.count; i++) {
+          if (positions.getY(i) <= plan.wallTop + 0.01 || Math.abs(Math.abs(positions.getX(i)) - 0.8) > 1e-5) continue;
+          const side = Math.sign(positions.getX(i));
+          if (normals.getX(i) * side > 0.99) endFaces.add(side);
+        }
+      });
+      if (['gable', 'shed', 'sawtooth'].includes(archetype)) expect([...endFaces].sort()).toEqual([-1, 1]);
     });
   }
 });

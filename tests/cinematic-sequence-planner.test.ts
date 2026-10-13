@@ -84,6 +84,40 @@ function drain(planner: CinematicSequencePlanner, first: ReturnType<CinematicSeq
 }
 
 describe('CinematicSequencePlanner', () => {
+  it('omits missing beats and refuses a nearby subject from another thread', () => {
+    const planner = new CinematicSequencePlanner();
+    const anchor = scene('worker', 'worker-follow', 10, 10, 0.8, editorial('work', 'detail'));
+    const shots = drain(planner, planner.plan(state, anchor, [anchor,
+      scene('unrelated', 'institution-exterior', 10, 10, 1, editorial('other', 'medium')),
+    ]));
+    expect(shots).toHaveLength(1);
+    expect(shots[0]!.scene.id).toBe(anchor.id);
+    expect(shots[0]!.role).toBe('detail');
+  });
+
+  it('follows one builder from observation to work detail to a wider relationship', () => {
+    const planner = new CinematicSequencePlanner();
+    const anchor = scene('builder', 'worker-follow', 10, 10, 0.8,
+      { ...editorial('project', 'human'), desiredActivity: 'construct' });
+    const shots = drain(planner, planner.plan(state, anchor, [anchor,
+      scene('unrelated', 'institution-exterior', 10, 10, 1, editorial('other', 'medium')),
+    ]));
+    expect(shots.map(s => s.role)).toEqual(['observe', 'detail', 'reveal']);
+    expect(shots.map(s => s.scale)).toEqual(['human', 'detail', 'medium']);
+    expect(shots.every(s => s.scene === anchor)).toBe(true);
+    expect(shots.slice(1).every(s => !s.narrate)).toBe(true);
+  });
+
+  it('does not mistake an event location resident for a participant or result', () => {
+    const planner = new CinematicSequencePlanner();
+    const anchor = scene('event', 'worker-follow', 10, 10, 0.9, editorial('camp', 'detail'));
+    anchor.event = { id: 'fire', type: 'first-fire', actors: ['builder'], locationId: 'camp', causes: [] } as unknown as HistoricalEvent;
+    const resident = scene('resident', 'infrastructure-scene', 10, 10, 1, editorial('camp', 'medium'));
+    const eventState = { ...state, people: [{ id: 'resident', homeId: 'camp' }], institutions: [] } as unknown as SimulationState;
+    const shots = drain(planner, planner.plan(eventState, anchor, [anchor, resident]));
+    expect(shots.some(s => s.role === 'reveal')).toBe(false);
+  });
+
   it('opens early camp sequences on the Historian subject and stays local without aerial padding', () => {
     const planner = new CinematicSequencePlanner();
     const early = { ...state, arrival: { phase: 'HISTORY_RUNNING' } } as SimulationState;
@@ -177,11 +211,13 @@ describe('CinematicSequencePlanner', () => {
       summary: 'The camp lights its first hearth.',
     } satisfies HistoricalEvent;
 
+    const reveal = scene('reveal', 'infrastructure-scene', 10, 10.2, 0.8, editorial(thread, 'medium', 0.7, 'required'));
+    reveal.statement.sourceEventIds = ['event:first-fire'];
     const shots = drain(planner, planner.plan(state, anchorScene, [
       scene('wide', 'world-establishing', 10, 11, 0.95, editorial(thread, 'wide', 0.1, 'silent')),
       scene('observe', 'street-observation', 10.2, 10, 0.78, editorial(thread, 'human', 0.65)),
       anchorScene,
-      scene('reveal', 'infrastructure-scene', 10, 10.2, 0.8, editorial(thread, 'medium', 0.7, 'required')),
+      reveal,
       scene('release', 'landscape-pause', 12, 11, 0.65, editorial(thread, 'wide', 0.05, 'silent')),
     ]));
 

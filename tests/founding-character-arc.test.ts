@@ -136,7 +136,7 @@ describe('Founding character life arcs 2c', () => {
     expect(candidate).toBeDefined();
     expect(candidate?.title).toContain('A LIFE IN MOTION');
     expect(candidate?.statement.text).toContain('no longer lives where I first met');
-    expect(candidate?.statement.text).toContain('role attached');
+    expect(candidate?.statement.text).toContain('when we met; now');
     expect(candidate && historian.validateStatement(candidate.statement, simulation.state)).toBe(true);
     expect(after).toEqual(before);
   });

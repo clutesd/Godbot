@@ -38,7 +38,7 @@ const REQUIRED_OUTPUTS = ['gbTone', 'gbRough', 'gbHeight'];
 const ALLOWED_IDENTIFIERS = new Set([
   // frame
   'gbN', 'gbAbsN', 'gbUpFace', 'gbGrain', 'gbProj', 'gbProjLen', 'gbEndGrain', 'gbTan', 'gbBit',
-  'gbUV', 'gbRadius', 'gbArc', 'gbWear',
+  'gbUV', 'gbRoofUV', 'gbRadius', 'gbArc', 'gbWear',
   // helpers
   'gbHash', 'gbValue', 'gbFbm', 'gbSeam', 'gbPerturbNormal',
   // outputs
@@ -110,6 +110,7 @@ describe('Procedural surface programs', () => {
       expect(balanced(fragmentShader, '{', '}'), `${program} braces`).toBe(true);
       expect(balanced(fragmentShader, '(', ')'), `${program} parens`).toBe(true);
       expect(fragmentShader).toContain('gbPerturbNormal');
+      expect(fragmentShader).toContain('vec2 gbRoofUV =');
       expect(vertexShader).toContain('aSurfaceDetail');
       // No unresolved template interpolation leaked into the shader source.
       expect(fragmentShader, `${program} has unresolved template`).not.toContain('${');

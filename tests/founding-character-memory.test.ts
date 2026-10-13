@@ -105,7 +105,7 @@ describe('Founding character memory 2b', () => {
     const scene = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:6`));
     expect(scene.statement.text).toContain('When I last watched');
     expect(scene.statement.text).toContain('now lives at');
-    expect(scene.statement.text).toContain('recorded role has changed');
+    expect(scene.statement.text).toContain(`now ${person.sex === 'female' ? 'she' : 'he'} is a scholar`);
     expect(scene.statement.observerMemory?.callbackApplied).toBe(true);
     expect(scene.statement.epistemicStatus).toBe('derived-statistic');
     expect(historian.validateStatement(scene.statement, simulation.state)).toBe(true);
@@ -124,7 +124,7 @@ describe('Founding character memory 2b', () => {
     simulation.state.month = 8;
     person.occupation = person.occupation === 'builder' ? 'artisan' : 'builder';
     const scene = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:8`));
-    expect(scene.statement.text).toContain('recorded occupation has changed');
+    expect(scene.statement.text).toContain('has changed work');
     expect(scene.statement.observerMemory?.callbackApplied).toBe(true);
   });
 
@@ -177,7 +177,7 @@ describe('Founding character memory 2b', () => {
     simulation.state.month = 7;
 
     const scene = observeFoundingCharacterScene(historian, simulation.state, sceneFor(simulation, member, `return:${member.personId}:7`));
-    expect(scene.statement.text).toContain('The interval also records');
+    expect(scene.statement.text).toContain('Year 0, month 5');
     expect(scene.statement.text).toContain('practical discovery');
     expect(scene.statement.sourceEventIds).toContain('memory-test-discovery');
     expect(scene.statement.observerMemory?.callbackApplied).toBe(true);

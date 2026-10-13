@@ -8,6 +8,8 @@ import type { RouteTransport, TransportationState, TraversalPath } from './trans
 import type { Remembrance, SettlementDevelopment, StructureDevelopment } from './development/types';
 import type { SettlementArchitecturalIdentity } from './development/SettlementIdentity';
 import type { ForestCommunity, Geology, LandModification, ModificationKind, Soil } from './environment/types';
+import type { VolcanoState } from './environment/VolcanoSystem';
+import type { VolcanicVent } from './terrain/VolcanicCone';
 
 export type { LandmarkKind, TerrainField, WorldLandmark } from './terrain/TerrainField';
 
@@ -81,6 +83,8 @@ export interface WorldState {
   environmentRevision?: number;
   /** Geographically sited raw-material deposits; see src/sim/resources. */
   resourceDeposits: ResourceDeposit[];
+  /** The summit sculpted into a volcano at world generation, if the world has land high enough. */
+  volcanicVent?: VolcanicVent;
 }
 
 /**
@@ -142,6 +146,10 @@ export interface MaterialShipment {
 
 /** Serialized material accounting; recipes and resource experience survive reload/replay. */
 export interface MaterialEconomy {
+  /** Durable vessels/clothing issued from physical stores to households, subject to wear. */
+  householdEquipment?: Record<string, number>;
+  /** Decaying monthly evidence of actual store receipts/spending, never spendable stock. */
+  flows?: { month: number; received: Record<string, number>; consumed: Record<string, number>; produced: Record<string, number>; work?: Partial<Record<KnowledgeDomain, number>> };
   quality: Record<string, number>;
   experience: Record<string, number>;
   recipeResearch: Record<string, number>;
@@ -680,6 +688,10 @@ export interface StructurePlot {
   /** Retained after extinction; repair removes char, ground scars weather slowly. */
   char?: number;
   scorch?: number;
+  /** 0..1 volcanic ash buildup from a nearby eruption; purely cosmetic, weathers slowly. */
+  ashDepth?: number;
+  /** Recorded attack damage survives chronicle retention; repair clears its presentation. */
+  destruction?: { eventId: string; month: number; weapon: BattleWeapon; beforeCondition: number; impactAt: number; vaporized: boolean };
 }
 
 export type FireCause = 'accident' | 'lightning' | 'attack' | 'spread' | 'sabotage' | 'wildfire' | 'developer';
@@ -765,6 +777,8 @@ export interface Relation {
 }
 
 export interface TradeRoute {
+  /** Curriculum advances per real contact, independent of shipment timing. */
+  knowledgeCursor?: number;
   id: string;
   transport?: RouteTransport;
   weatherBlocked?: boolean;
@@ -899,6 +913,8 @@ export interface AdvancedInstitution {
 }
 
 export interface NuclearPosture {
+  /** Abstract late-era presentation tier; omitted in legacy saves. */
+  weaponClass?: 'atomic' | 'hydrogen';
   polityId: string;
   programLevel: number;
   arsenalScale: number;
@@ -1089,6 +1105,22 @@ export interface HistoricalEvent {
   significance: number;
   tags: string[];
   summary: string;
+  impacts?: BattleImpact[];
+  blastSites?: Vec2[];
+}
+
+export type BattleWeapon = 'melee' | 'projectile' | 'siege' | 'shell' | 'missile' | 'drone' | 'nuclear';
+/** A resolved hit, not a request for the renderer to inflict damage. */
+export interface BattleImpact {
+  targetId: string;
+  targetKind: 'structure' | 'person';
+  position: Vec2;
+  side: 0 | 1;
+  weapon: BattleWeapon;
+  impactAt: number;
+  damage: number;
+  destroyed: boolean;
+  vaporized: boolean;
 }
 
 export interface SimulationStats {
@@ -1125,10 +1157,14 @@ export interface SimulationStats {
 
 export interface BodyRecord {
   id: string; person: Person; deathEventId: string; cause: string; month: number; yaw: number;
+  combatImpact?: BattleImpact & { eventId: string };
+  recovery?: { helperId: string; month: number };
   removed?: { month: number; reason: 'burial' | 'removal' | 'destruction' | 'decomposition'; eventId: string };
 }
 
 export interface SimulationState {
+  /** Bounded, persisted receipts prevent replaying damage from charging the same losses twice. */
+  damageCasualtyReceipts?: { id: string; month: number; losses: Record<string, number> }[];
   bodies?: BodyRecord[];
   /** Battle evidence retained independently of chronicle pruning until physical decomposition. */
   aftermathEvents?: HistoricalEvent[];
@@ -1139,6 +1175,8 @@ export interface SimulationState {
   month: number;
   world: WorldState;
   weather: WeatherState;
+  /** The world's one active volcano; absent only if world generation found no viable site. */
+  volcano?: VolcanoState;
   people: Person[];
   /** Living and deceased people the simulation considers historically significant. */
   notableFigures?: NotableFigure[];

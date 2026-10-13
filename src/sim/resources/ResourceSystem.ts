@@ -4,7 +4,7 @@ import { mastery, type KnowledgeEventDraft } from '../knowledge/KnowledgeSystem'
 import type { LocalMaterialInventory, ResourceDeposit, Settlement, SimulationState } from '../types';
 import { RESOURCE_BY_ID } from './catalog';
 import { advanceDeposits, harvestSeason } from './WorldResourceSystem';
-import { addMaterial, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageCapacity, storageRoom, storedVolume, takeMaterial } from './Inventory';
+import { addMaterial, beginMaterialFlowMonth, materialEconomy, publishBulkStocks, reconcileBulkStocks, storageCapacity, storageRoom, storedVolume, takeMaterial } from './Inventory';
 import { processRecipes, useLabour, useLabourDetailed, type LabourBudget } from './Processing';
 import { consumeMaterials } from './Consumption';
 import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
@@ -12,6 +12,8 @@ import { advanceProcessingFacilities } from '../processing/FacilitySystem';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
 import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
 import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
+import { drain, type Slices } from '../TimeSlicing';
+import { recordKnowledgeWork } from '../knowledge/WorkExperience';
 import { advanceEnvironment, disturbForest, forestRecoveryTarget, logProvince, modifyLand, wearExtractionPath } from '../environment/EnvironmentalModificationSystem';
 
 const clamp = (n: number): number => Math.max(0, Math.min(1, n));
@@ -53,6 +55,11 @@ export class ResourceSystem {
   private world?: SimulationState['world'];
   constructor(private readonly random: SeededRandom) {}
   advanceMonth(state: SimulationState): ResourceEventDraft[] {
+    return drain(this.advanceMonthSlices(state));
+  }
+
+  /** advanceMonth with a safe pause point after each settlement's stocks are published. */
+  *advanceMonthSlices(state: SimulationState): Slices<ResourceEventDraft[]> {
     if (this.world !== state.world) { this.world = state.world; this.access = new ExtractionAccessibility(state); }
     // Clear last month's documentary work before either extraction authority records this month.
     // This also guarantees a renderer cannot keep showing workers at a site when extraction drops to zero.
@@ -67,6 +74,7 @@ export class ResourceSystem {
     }
     for (const s of state.settlements.filter(s => s.alive)) {
       reconcileBulkStocks(s);
+      beginMaterialFlowMonth(s, state.month);
       const economy = materialEconomy(s);
       const people = peopleByHome.get(s.id) ?? [];
       const budget: LabourBudget = resourceLabourBudget(state, s, people);
@@ -89,6 +97,7 @@ export class ResourceSystem {
       consumeMaterials(state, s, people, budget, events);
       for (const [occupation, time] of Object.entries(fiberTime.byOccupation) as Array<[keyof LabourBudget, number]>) budget[occupation] = (budget[occupation] ?? 0) + time;
       publishBulkStocks(s);
+      yield;
     }
     for (const deposit of state.world.resourceDeposits) {
       if (!deposit.controlledBy || deposit.abandonedMonth !== undefined) continue;
@@ -286,6 +295,9 @@ export class ResourceSystem {
         accessPaths: access.accessPaths,
       });
       economy.experience[definition.id] = (economy.experience[definition.id] ?? 0) + amount;
+      recordKnowledgeWork(s, definition.researchDomain ?? 'materials', labourUse.total);
+      recordKnowledgeWork(s, 'transport', labourUse.total * 0.35);
+      if (definition.id === 'stone' || definition.id === 'timber') recordKnowledgeWork(s, 'mechanics', labourUse.total * 0.5);
       s.knowledge.experimentation[definition.researchDomain ?? 'materials'] += amount * 0.006;
       if (!s.workedDeposits.includes(deposit.id)) {
         const first = deposit.establishedMonth === undefined;

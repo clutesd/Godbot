@@ -3,6 +3,8 @@ import { configWith } from '../src/config';
 import { Simulation } from '../src/sim/Simulation';
 import { KnowledgeSystem } from '../src/sim/knowledge/KnowledgeSystem';
 import { SeededRandom } from '../src/sim/prng';
+import { beginMaterialFlowMonth } from '../src/sim/resources/Inventory';
+import { recordKnowledgeWork } from '../src/sim/knowledge/WorkExperience';
 import type { Institution, KnowledgeRecord, Settlement, SimulationState, TradeRoute } from '../src/sim/types';
 
 function record(id: string, settlement: Settlement, theory = 0.85, practice = 0.85): KnowledgeRecord {
@@ -55,6 +57,7 @@ describe('Causal knowledge', () => {
 
     for (const id of ['electromagnetism', 'rotary-machinery', 'mechanical-power']) settlement.knowledge.records[id] = record(id, settlement);
     settlement.resources.minerals = 100;
+    Object.assign(settlement.localMaterials, { copper: 10, iron: 10 });
     settlement.resources.goods = 100;
     settlement.resources.wealth = 100;
     addInstitution(state, settlement, 'knowledge-keepers');
@@ -120,7 +123,11 @@ describe('Causal knowledge', () => {
     survivingRecord.practice = 0.189;
     settlement.conflictPressure = 0;
     for (const person of state.people.filter((candidate) => candidate.homeId === settlement.id)) person.occupation = 'artisan';
+    for (const id of ['material-testing', 'counting-measure', 'iron-working']) settlement.knowledge.records[id] = record(id, settlement);
+    addInstitution(state, settlement, 'craft-circle');
     state.month += 12;
+    beginMaterialFlowMonth(settlement, state.month);
+    recordKnowledgeWork(settlement, 'manufacturing', 1000);
     const recoveryEvents = system.advanceYear(state);
 
     expect(survivingRecord.dormant).toBe(false);
@@ -131,7 +138,7 @@ describe('Causal knowledge', () => {
     ['metal-machine lineage', ['mechanical-power', 'precision-manufacturing', 'iron-working']],
     ['ceramic-chemical lineage', ['mechanical-power', 'industrial-chemistry', 'high-temperature-ceramics']],
     ['electrical workshop lineage', ['electrical-generation', 'precision-manufacturing', 'improved-roads']],
-  ])('permits industrialization through the %s', (routeName, knowledgeIds) => {
+  ])('starts industrialization through the %s but waits for working machinery', (routeName, knowledgeIds) => {
     const { system, state, settlement } = harness(`industry-${routeName}`, 0.05);
     for (const id of knowledgeIds) settlement.knowledge.records[id] = record(id, settlement);
     settlement.infrastructure.workshops = 0.85;
@@ -149,9 +156,10 @@ describe('Causal knowledge', () => {
       events = [...events, ...system.advanceYear(state)];
     }
 
-    expect(settlement.industry.active).toBe(true);
-    expect(events.some((event) => event.type === 'industrialization' && event.context?.route === routeName)).toBe(true);
-    expect(events.filter((event) => event.type === 'industrialization-stage').map((event) => event.context?.stage)).toEqual(['experimental-engines', 'specialist-workshops', 'commercial-machinery', 'transport-integration']);
+    expect(settlement.industry.active).toBe(false);
+    expect(events.some((event) => event.type === 'industrialization-stage' && event.context?.route === routeName)).toBe(true);
+    expect(events.filter((event) => event.type === 'industrialization-stage').map((event) => event.context?.stage)).toEqual(['experimental-engines', 'specialist-workshops']);
+    expect(settlement.infrastructure.factories).toBe(0);
   });
 
   it('separates major discovery from adoption and infrastructure-backed transformation', () => {
@@ -162,6 +170,12 @@ describe('Causal knowledge', () => {
     settlement.prosperity = 0.7;
     addInstitution(state, settlement, 'craft-circle');
     for (const person of state.people.filter((candidate) => candidate.homeId === settlement.id).slice(0, 14)) person.occupation = 'artisan';
+    for (const person of state.people.filter(candidate => candidate.homeId === settlement.id).slice(14, 18)) person.occupation = 'builder';
+    for (const id of ['rotary-machinery', 'pressure', 'combustion-dynamics']) settlement.knowledge.records[id] = record(id, settlement);
+    Object.assign(settlement.resources, { minerals: 100, goods: 100, wealth: 100 });
+    settlement.localMaterials.iron = 10;
+    beginMaterialFlowMonth(settlement, state.month);
+    recordKnowledgeWork(settlement, 'energy', 1000);
 
     const adoption = system.advanceYear(state);
     expect(adoption.some((event) => event.type === 'knowledge-adopted' && event.context?.knowledge === 'mechanical-power')).toBe(true);
@@ -267,7 +281,7 @@ describe('Causal knowledge', () => {
     expect(String(widespread[0]?.context.stage)).toBe('widespread-adoption');
   });
 
-  it('keeps discovery histories reproducible while allowing other seeds to diverge', () => {
+  it('keeps discovery histories reproducible while allowing other seeds to diverge', { tags: ['soak'] }, () => {
     const run = (seed: string): unknown[] => {
       // Keep the century-long history while bounding terrain and population cost on CI.
       const simulation = new Simulation({ seed, startingPopulation: 120, simulation: { populationSoftCap: 240 }, world: { size: 24 }, settlementCount: [3, 3] });
@@ -282,5 +296,5 @@ describe('Causal knowledge', () => {
     expect(different.length).toBeGreaterThan(0);
     expect(first).toEqual(replay);
     expect(first).not.toEqual(different);
-  }, 180_000);
+  });
 });

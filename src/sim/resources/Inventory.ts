@@ -9,6 +9,48 @@ export function materialEconomy(s: Settlement): MaterialEconomy {
   };
 }
 
+/** Twelve-month equivalent access, with old activity fading during isolation or depletion.
+ * All owned yards count as physical stock; receipts count only after delivery, never a promise
+ * from a trading partner. Construction and operation continue to use takeMaterial/real stock. */
+export function materialAccess(s: Settlement, id: string): number {
+  let stock = Math.max(0, s.localMaterials[id] ?? 0);
+  for (const f of s.processing?.facilities ?? []) stock += Math.max(0, f.inputs[id] ?? 0) + Math.max(0, f.outputs[id] ?? 0);
+  return stock + (s.materialEconomy?.flows?.received[id] ?? 0) * 12;
+}
+
+export function resourceAccess(s: Settlement, id: keyof Settlement['resources']): number {
+  if (id === 'wood') return Math.max(s.resources.wood, materialAccess(s, 'timber'));
+  if (id === 'minerals') return Math.max(s.resources.minerals, materialAccess(s, 'stone'));
+  if (id === 'goods') return s.resources.goods + (s.materialEconomy?.flows?.produced.goods ?? 0) * 12;
+  // Investment requires current purchasing power; wealth is never a historical receipt.
+  return s.resources[id];
+}
+
+export function beginMaterialFlowMonth(s: Settlement, month: number): void {
+  const economy = materialEconomy(s);
+  const flows = economy.flows ??= { month, received: {}, consumed: {}, produced: {} };
+  const elapsed = Math.max(0, month - flows.month);
+  if (!elapsed) return;
+  for (const bucket of [flows.received, flows.consumed, flows.produced, flows.work ?? {}]) {
+    const values = bucket as Record<string, number>;
+    for (const id of Object.keys(values)) values[id] = values[id]! * Math.pow(11 / 12, elapsed);
+  }
+  flows.month = month;
+}
+
+export function recordMaterialProduction(s: Settlement, id: string, amount: number): void {
+  const flows = s.materialEconomy?.flows;
+  if (flows && amount > 0) flows.produced[id] = (flows.produced[id] ?? 0) + amount / 12;
+}
+
+/** demand is a target stock, not six months of consumption. Keep the emergency bill,
+ * half the working target and three months of observed store withdrawals before exporting. */
+export function materialReserve(s: Settlement, id: string): number {
+  return Math.max(0.4, (s.materialEconomy?.demand[id] ?? 0) * 0.5,
+    (s.materialEconomy?.flows?.consumed[id] ?? 0) * 3,
+    s.survival?.establishment?.materialDemand[id] ?? 0);
+}
+
 /**
  * Fuel the settlement could actually put under a furnace now, weighted by how hot the material
  * burns, counting the store and its own works' yards alike. Charcoal is far denser fuel than raw
@@ -56,12 +98,15 @@ export function reconcileBulkStocks(s: Settlement): void {
   const previous = materialEconomy(s).bulkSnapshot;
   for (const [bulk, id] of [['wood', 'timber'], ['minerals', 'stone']] as const) {
     const spent = Math.max(0, previous[bulk] - s.resources[bulk]);
-    s.localMaterials[id] = Math.max(0, (s.localMaterials[id] ?? 0) - spent);
+    const charged = Math.min(Math.max(0, s.localMaterials[id] ?? 0), spent);
+    s.localMaterials[id] = Math.max(0, (s.localMaterials[id] ?? 0) - charged);
+    const flows = s.materialEconomy?.flows;
+    if (flows && charged > 0) flows.consumed[id] = (flows.consumed[id] ?? 0) + charged / 12;
   }
   publishBulkStocks(s);
 }
 
-export function addMaterial(s: Settlement, id: string, requested: number, quality = 0.5): number {
+export function addMaterial(s: Settlement, id: string, requested: number, quality = 0.5, receipt = true): number {
   reconcileBulkStocks(s);
   const quantity = Math.min(Math.max(0, requested), storageRoom(s));
   if (!quantity) return 0;
@@ -69,6 +114,8 @@ export function addMaterial(s: Settlement, id: string, requested: number, qualit
   const economy = materialEconomy(s);
   economy.quality[id] = ((economy.quality[id] ?? 0.5) * old + quality * quantity) / (old + quantity);
   s.localMaterials[id] = old + quantity;
+  const flows = economy.flows;
+  if (flows && receipt) flows.received[id] = (flows.received[id] ?? 0) + quantity / 12;
   publishBulkStocks(s);
   return quantity;
 }
@@ -77,6 +124,8 @@ export function takeMaterial(s: Settlement, id: string, requested: number): numb
   reconcileBulkStocks(s);
   const quantity = Math.min(Math.max(0, requested), Math.max(0, s.localMaterials[id] ?? 0));
   s.localMaterials[id] = Math.max(0, (s.localMaterials[id] ?? 0) - quantity);
+  const flows = s.materialEconomy?.flows;
+  if (flows) flows.consumed[id] = (flows.consumed[id] ?? 0) + quantity / 12;
   publishBulkStocks(s);
   return quantity;
 }

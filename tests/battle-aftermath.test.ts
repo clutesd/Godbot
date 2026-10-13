@@ -61,7 +61,9 @@ describe('casualty-backed battlefield presentation', () => {
     expect(bodies.count).toBe(3);
     aftermath.update(4, 20, false, () => false);
     expect(bodies.count).toBe(0);
-    aftermath.sync(war, [event], 13, 20, styles);
+    aftermath.sync(war, [event], event.month + AFTERMATH_MONTHS - 1, 20, styles);
+    expect(aftermath.records.length).toBeGreaterThan(0);
+    aftermath.sync(war, [event], event.month + AFTERMATH_MONTHS, 20, styles);
     expect(aftermath.records).toHaveLength(0);
     aftermath.dispose(); aftermath.dispose();
     expect(aftermath.group.children).toHaveLength(0);
@@ -166,9 +168,16 @@ describe('casualty-backed battlefield presentation', () => {
     for (const time of [0, 0.2, 0.8, 1.5, 9, 20]) renderer.update(0.016, time, f.war.id);
     renderer.update(0.1, 25, f.war.id, true);
     expect(JSON.stringify(f.state)).toBe(before);
-    expect((renderer.group.getObjectByName('Recorded blood traces') as THREE.InstancedMesh).count).toBeGreaterThan(0);
-    expect(renderer.group.getObjectByName('Recorded fallen soldiers')).toBeUndefined();
+    // The campaign is on screen, within budget.
+    expect(renderer.report.campaigns).toBe(1);
+    expect(renderer.report.figures).toBeGreaterThan(0);
     expect(renderer.report.figures).toBeLessThanOrEqual(renderer.report.budget);
+    // The resolver's battles kill real people whose bodies persist through the body lifecycle
+    // (`explicitBodies`), so the aftermath must not draw stand-in remains on top of them.
+    const battle = f.state.history.find(e => e.type === 'battle')!;
+    expect(battle.context.explicitBodies).toBe(true);
+    expect((renderer.group.getObjectByName('Recorded blood traces') as THREE.InstancedMesh).count).toBe(0);
+    expect(renderer.group.getObjectByName('Recorded fallen soldiers')).toBeUndefined();
     renderer.dispose(); renderer.dispose();
   });
 });

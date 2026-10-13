@@ -418,7 +418,7 @@ describe('local choice, adaptation and causal evidence', () => {
     expect(first.summary()).toEqual(second.summary());
     expect(first.state.history).toEqual(second.state.history);
     expect(first.state.settlements.every(s => s.survival?.food && s.survival.food.consumed <= s.survival.food.need)).toBe(true);
-  }, 30000);
+  });
 
   it('makes ignored starvation reduce health and kill people in the integrated demographic loop', () => {
     const config = { seed: 'ignored-starvation', startingPopulation: 80, settlementCount: [2, 2] as const, world: { size: 24 } };
@@ -436,5 +436,5 @@ describe('local choice, adaptation and causal evidence', () => {
     expect(health(hungry)).toBeLessThan(health(fed) - 0.25);
     expect(hungry.state.stats.deaths).toBeGreaterThan(fed.state.stats.deaths);
     expect(hungry.state.history.some(e => e.type === 'death' && e.causes.includes('scarcity'))).toBe(true);
-  }, 30000);
+  });
 });

@@ -39,7 +39,7 @@ describe('Arrival to physical establishment', () => {
       }
       expect(row.extractedTimber).toBeGreaterThan(0);
     }
-  }, 20000);
+  });
 
   it('uses real extraction, delivery and unfamiliar labour to build from zero materials without a professional builder', () => {
     const sim = arrival(), state = sim.state, s = state.settlements[1]!;
@@ -88,7 +88,7 @@ describe('Arrival to physical establishment', () => {
     measured.month++; applyCold(measured, camp, residents(measured, camp).length);
     expect(adaptedExposure).toBeLessThan(camp.survival!.cold.exposure * 0.8);
     expect(state.history.some(e => e.locationId === s.id && e.type === 'response-resolved' && e.tags.includes('shelter'))).toBe(true);
-  }, 15000);
+  });
 
   it('conserves the full monthly labour allocation when food and winter shelter compete', () => {
     const sim = arrival(), state = sim.state, s = state.settlements[1]!;
@@ -98,8 +98,11 @@ describe('Arrival to physical establishment', () => {
       sim.step(1);
       invalidateLabour(state);
       const labour = settlementLabour(state, s, residents(state, s));
+      // Every sink of the month's labour, including time held back to contain disease and to
+      // muster for war: unaccounted labour would be work silently created or destroyed.
       const spent = sum(labour.resources) + sum(labour.economy) + labour.infrastructure + labour.industry
-        + (labour.establishmentReserved ?? 0) + (labour.survivalReassigned ?? 0) * 0.3;
+        + (labour.establishmentReserved ?? 0) + (labour.survivalReassigned ?? 0) * 0.3
+        + (labour.diseaseReserved ?? 0) + labour.militaryReserved;
       expect(spent).toBeCloseTo(sum(labour.effective) * 0.98, 8);
       expect(sum(labour.economy)).toBeGreaterThan(0);
       expect(Object.values(s.localMaterials).every(n => Number.isFinite(n) && n >= 0)).toBe(true);
@@ -107,7 +110,7 @@ describe('Arrival to physical establishment', () => {
       // Recomputed post-health budget can differ slightly; original physical work remains bounded by adults.
       expect(resourceSpent).toBeLessThan(sum(explicitLabour(residents(state, s), state.month).effective) + 0.5);
     }
-  }, 15000);
+  });
 
   it('permits accumulated exposure, deteriorating health and mortality in a resource-starved cold founding', () => {
     const sim = arrival(), state = sim.state;
@@ -134,7 +137,7 @@ describe('Arrival to physical establishment', () => {
     expect(state.stats.deaths).toBeGreaterThan(0);
     expect(state.settlements.every(s => shelterCapacity(s, state).capacity < 1)).toBe(true);
     expect(state.settlements.some(s => s.survival!.establishment!.choice === 'migrate')).toBe(true);
-  }, 15000);
+  });
 
   it('changes decisions with terrain, seasons, food and usable physical capacity rather than a founding timer', () => {
     const sim = arrival(), state = sim.state, s = state.settlements[0]!, people = residents(state, s);
@@ -159,16 +162,22 @@ describe('Arrival to physical establishment', () => {
   });
 
   it('keeps recipe experiments from consuming the project and seasonal fuel reserve', () => {
+    // Pods land without a stockpile, so the first lean-to waits for gathered timber. Examine the
+    // first month in which construction is actually paid.
     const sim = arrival(), s = sim.state.settlements[0]!;
-    sim.step(1);
+    for (let month = 0; month < 12 && !(s.development?.project?.progress); month++) sim.step(1);
     expect(s.development!.project!.progress).toBeGreaterThan(0);
     expect(s.localMaterials.timber).toBeGreaterThan(0);
     expect(s.survival!.establishment!.materialDemand.timber).toBeGreaterThan(0);
   });
 
   it('rejects damaged, restricted and unfinished housing and never counts surplus roofs as extra insulation', () => {
-    const sim = arrival(); sim.step(3);
-    const s = sim.state.settlements[0]!, plot = s.structurePlots!.find(p => p.development?.status === 'active')!;
+    // These are shelter-capacity rules, not pacing: run until the camp has finished housing.
+    const sim = arrival(), s = sim.state.settlements[0]!;
+    const housing = () => s.structurePlots?.find(p => p.development?.status === 'active' && (p.development.services.housing ?? 0) > 0);
+    for (let month = 0; month < 18 && !housing(); month++) sim.step(1);
+    const plot = housing()!;
+    expect(plot, 'the camp finished housing within eighteen months').toBeDefined();
     const pod = shelterCapacity(s, sim.state).pod;
     plot.condition = 0.2;
     expect(shelterCapacity(s, sim.state).capacity).toBe(pod);

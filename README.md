@@ -38,6 +38,8 @@ npm run batch -- --runs 20 --years 1500 --config default --seed-prefix qa --form
 npm run pacing -- --runs 5 --years 1800 --view-years 300 --pace documentary
 ```
 
+Tests come in two tiers. `npm test` runs every test except whole-simulation runs over decades or centuries, which are tagged `soak` (`{ tags: ['soak'] }`). Run those with `npm run test:soak`; they run nightly in CI. `npm run test:all` runs both. `npm run verify` runs typecheck, lint, the default suite and the production bundle. CI (`.github/workflows/ci.yml`) runs the exact Cloudflare build command from a clean checkout on Node 22.13, so a file that is imported but not committed fails there before it reaches a deploy.
+
 `sim` and `batch` emit JSON by default. Add `--format human` for a compact audit. Both accept `--population` and `--pace`; `batch` also accepts `--runs` and `--seed-prefix`. The pacing audit reports historical intervals, lifecycle durations, headless throughput, and a deterministic viewing trace.
 
 ## Design philosophy
@@ -164,6 +166,12 @@ Conventional wars unfold as witnessed campaigns: gathering, terrain-aware marche
 [`src/historian/Historian.ts`](./src/historian/Historian.ts) selects ordinary life, travel, institutions, landscapes, discoveries, conflict, aftermath, and long-run context. A beat pattern and repetition penalties prevent magnitude-only editing. Camera shots have minimum interrupt ages, eased travel, terrain clearance, varied framing, and long transitions. A consequential event slows presentation only when the current observation is actually grounded in that event; unrelated activity elsewhere cannot hold every ordinary-life shot at crisis speed.
 
 Every statement is internally labeled `recorded-fact`, `derived-statistic`, or `probabilistic-inference`. It carries source event, entity, and archive IDs plus typed claims. Display validation rejects future evidence, missing entities, invented wars or discoveries, incorrect population scopes, and unsupported archive comparisons. Predictions are explicitly uncertain and later resolved. Cross-run wording remains descriptive and never turns correlation into causation.
+
+The chronicle follows the changing world. Founding firsts have a limited news window in both the Historian and camera queue; their permanent historical status never makes them perpetual breaking news. Ordinary developments remain eligible for ten years, unheard major events for fifty, and rolling chapters collect distinct unwitnessed developments from the last twenty years. Delayed narration names the event's date. A chapter acknowledges only the events it actually describes, and only when its caption is shown. Century reflections quote dated highlights from the surviving record rather than presenting selective retention as complete event counts.
+
+The Watcher leads with what happened and its authored outcome, then adds a concise connection when evidence supports it. Explicit causal links can reach into deep history; incidental callbacks require a recent, matching subject or knowledge chain. New discoveries retain their novelty even after many visits to the same town. Ordinary-life captions can introduce a recent local development, and shown callbacks are consumed so the same memory does not become a refrain. The archive captures all nonroutine event categories at emission, including knowledge transmission, widespread adoption, First Fire and resolved battles, before simulation retention can remove them.
+
+People's captions begin with visible action and add one grounded human connection, such as a named teacher or a skill that survives that teacher's death. Founder callbacks and endings focus on changes in a life. Fresh major events compete with unfinished firsts for camera attention. Historical evidence is indexed incrementally, and sequence planning reuses the selection pass before refreshing facts at arrival. See [`docs/NARRATION_REVIEW.md`](./docs/NARRATION_REVIEW.md) for integration details, limitations and CPU measurements; reproduce the editorial benchmark with `npm run profile:narration`.
 
 ## Archive and batch runner
 

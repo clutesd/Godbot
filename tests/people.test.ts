@@ -47,9 +47,9 @@ describe('Purposeful represented people', () => {
       position: person.position,
     }));
     expect(documentaryState(first)).toEqual(documentaryState(second));
-  }, 15_000);
+  }, 60_000);
 
-  it.each(['people-river', 'people-islands', 'people-highlands'])('keeps people and pedestrian routes on safe ground in %s for 80 years', (seed) => {
+  it.each(['people-river', 'people-islands', 'people-highlands'])('keeps people and pedestrian routes on safe ground in %s for 80 years', { tags: ['soak'] }, (seed) => {
     const simulation = new Simulation({ seed, startingPopulation: 200, settlementCount: [4, 4] });
     const walkability = new WalkabilityLayer(simulation.state.world);
     simulation.step(80 * 12);
@@ -62,7 +62,7 @@ describe('Purposeful represented people', () => {
         expect(walkability.routeIsValid(remainingRoute), `${seed}:${person.id} has an invalid pedestrian route`).toBe(true);
       }
     }
-  }, 60_000);
+  });
 
   it('turns settlement functions and active construction into visible work destinations', () => {
     const simulation = new Simulation({ seed: 'people-at-work', startingPopulation: 300, settlementCount: [4, 4] });

@@ -31,7 +31,8 @@ const WOOD: FacilityFamilySpec = {
     {
       tier: 2, kind: 'sawmill', name: 'powered sawmill', form: 'works', material: 'timber',
       capacity: 12, workers: 5, occupations: ['builder', 'artisan', 'carrier'], yard: 60,
-      knowledge: [{ id: 'rotary-machinery', minPractice: 0.3 }],
+      knowledge: [], knowledgeAny: [[{ id: 'rotary-machinery', minPractice: 0.3 }],
+        [{ id: 'simple-gearing', minPractice: 0.35 }, { id: 'metal-smelting', minPractice: 0.3 }]],
       power: { mode: 'either', demand: 6, fallback: 0.25, minimumCoverage: 0.35 }, yieldBonus: 0.05,
       recipes: WOOD_RECIPES,
       build: { lines: [{ options: ['timber', 'lumber'], amount: 8 }, { options: ['iron', 'iron-tools', 'bronze', 'steel'], amount: 2 }], work: 8 },
