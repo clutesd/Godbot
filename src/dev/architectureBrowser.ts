@@ -33,6 +33,7 @@ import { BUILDING_ROLES, archetypeForRole } from '../render/architecture/Archety
 import type { MaterialAssignment } from '../render/architecture/BuildingSpec';
 import { deriveMaterialEvidence } from '../render/architecture/MaterialSourcing';
 import type { BuildingSpec } from '../render/architecture/BuildingSpec';
+import { facadeArtwork } from '../render/architecture/FacadeSvg';
 import { BROWSER_CATALOGUE, FOUNDING_ADAPTATIONS, MATERIAL_SCENARIOS, validBrowserPeriods, validMaterialScenarios, scenarioEvidence } from './architectureBrowserModel';
 import { MillMotionSystem, type MillConditionWeather, type MillConditionWorld } from '../render/architecture/MillMotion';
 import { occlusionStrength, setOcclusionStrength } from '../render/materials/SurfaceDetail';
@@ -855,6 +856,7 @@ function refreshSelection(): void {
       <dt>Material bill</dt><dd>${Object.entries(instance.config.development?.materialCost ?? {}).map(([kind, amount]) => `${kind}: ${amount}`).join(', ') || 'none; production coarse-class fallback'}</dd>
       <dt>Capabilities</dt><dd>${instance.config.development?.capabilities.join(', ') || 'none supplied'}</dd>
       <dt>Equipment</dt><dd>${equipment.length ? equipment.join(', ') : 'none'}</dd>
+      <dt>Facade surface</dt><dd>${readString(data, 'facadeStatus') ?? 'production procedural surface'}</dd>
       <dt>LOD</dt><dd id="active-lod">${activeLevel(instance)}</dd>
     </dl>
     <dl>
@@ -938,8 +940,8 @@ function applyOcclusionStrength(): void {
 
 // --------------------------------------------------------------------------- wiring
 
-const stateControlIds = ['occlusion', 'archetype', 'category', 'period', 'material-scenario', 'program', 'culture', 'climate', 'specialization', 'stage', 'seed', 'prosperity', 'wind', 'wind-direction', 'flow', 'motion-time', 'yaw'] as const;
-const booleanControlIds = ['waterfront', 'full-detail', 'shadows', 'river', 'pivots', 'motion-play'] as const;
+const stateControlIds = ['lighting', 'occlusion', 'archetype', 'category', 'period', 'material-scenario', 'program', 'culture', 'climate', 'specialization', 'stage', 'seed', 'prosperity', 'wind', 'wind-direction', 'flow', 'motion-time', 'yaw'] as const;
+const booleanControlIds = ['hybrid-facades', 'waterfront', 'full-detail', 'shadows', 'river', 'pivots', 'motion-play'] as const;
 const viewModes: readonly ViewMode[] = ['gallery', 'timeline', 'street', 'production', 'era-matrix', 'material-matrix', 'catalogue', 'founding'];
 
 function persistState(): void {
@@ -1029,6 +1031,23 @@ waterfrontInput.onchange = rebuild;
 prosperityInput.oninput = () => { el('prosperity-out').textContent = Number(prosperityInput.value).toFixed(2); };
 prosperityInput.onchange = rebuild;
 fullDetailInput.onchange = () => { applyLodMode(); persistState(); refreshSelection(); };
+el<HTMLInputElement>('hybrid-facades').onchange = () => {
+  assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked); persistState();
+};
+function applyLighting(): void {
+  const mode = el<HTMLSelectElement>('lighting').value;
+  const ambient = scene.children.find(object => object instanceof THREE.HemisphereLight) as THREE.HemisphereLight;
+  sun.position.set(...(mode === 'raking' ? [18, 4, -12] : [14, 26, 18]) as [number, number, number]);
+  sun.intensity = mode === 'night' ? 0.3 : mode === 'overcast' ? 0.5 : 2.7;
+  sun.color.set(mode === 'night' ? '#a9c7ef' : mode === 'raking' ? '#ffcf9c' : '#fff1d5');
+  ambient.intensity = mode === 'night' ? 0.18 : mode === 'overcast' ? 2.6 : 2.2;
+  ambient.color.set(mode === 'night' ? '#9baed0' : '#f1f2df');
+  ambient.groundColor.set(mode === 'night' ? '#182323' : '#58614a');
+  scene.background = mode === 'night' ? new THREE.Color('#101829') : null;
+  assetBuilder.setNightFactor(mode === 'night' ? 1 : 0);
+  persistState();
+}
+el<HTMLSelectElement>('lighting').onchange = applyLighting;
 shadowsInput.onchange = () => { sun.castShadow = shadowsInput.checked; persistState(); };
 // Occlusion strength is a shared uniform, so this needs no rebuild and no recompile: the whole
 // built environment moves at once. It is the one setting in this file that has to be judged by
@@ -1074,5 +1093,123 @@ syncPreviewOutputs();
 playing = el<HTMLInputElement>('motion-play').checked;
 sun.castShadow = shadowsInput.checked;
 applyOcclusionStrength();
+applyLighting();
+assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked);
 setView(view);
 requestAnimationFrame(frame);
+
+// Development browser only: inspect production assets and measure real WebGL rendering.
+Object.assign(window, { godboxArchitectureQa: {
+  stats: () => ({ facade: assetBuilder.facadeTextures.stats(), render: { ...renderer.info.render },
+    memory: { ...renderer.info.memory }, subjects: instances.map(instance => ({
+      status: instance.root.userData['facadeStatus'], spec: instance.root.userData['buildingSpec'],
+      lod: activeLevel(instance),
+    })) }),
+  camera: (yaw: number, pitch: number) => {
+    const radius = camera.position.distanceTo(controls.target);
+    camera.position.set(radius * Math.sin(yaw) * Math.cos(pitch), radius * Math.sin(pitch), radius * Math.cos(yaw) * Math.cos(pitch)).add(controls.target);
+    camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
+  },
+  artwork: () => {
+    const plan = instances[0]?.root.userData['facadePlan'];
+    return plan ? facadeArtwork(plan) : undefined;
+  },
+  surfaces: () => {
+    const result: unknown[] = [];
+    stageRoot.traverse(object => {
+      if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+      const properties = renderer.properties.get(object.material) as { uniforms?: Record<string, { value: THREE.Texture | number }> };
+      const atlas = properties.uniforms?.gbFacadeAtlas?.value;
+      if (atlas instanceof THREE.Texture) result.push({ name: object.name, material: object.material.name, atlas: atlas.name,
+        night: properties.uniforms?.gbFacadeNight?.value,
+        pixels: atlas.image instanceof HTMLCanvasElement ? atlas.image.toDataURL() : undefined });
+    });
+    return result;
+  },
+  detail: (yaw = 0.35) => {
+    const instance = instances[0]; if (!instance) return;
+    const plan = instance.root.userData['facadePlan']; if (!plan) return;
+    const width = plan.elevations[0].length * WORLD_SCALE;
+    controls.target.set(0, (plan.floor + (plan.wallTop - plan.floor) * 0.5) * WORLD_SCALE, 0);
+    camera.position.set(Math.sin(yaw) * width * 1.35, controls.target.y + width * 0.08, Math.cos(yaw) * width * 1.35);
+    camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
+  },
+  /** Hides pins and both side panels so captures show only the WebGL canvas. */
+  labels: (show: boolean) => {
+    labelLayer.style.display = show ? '' : 'none';
+    document.querySelectorAll('aside').forEach(panel => { (panel as HTMLElement).style.display = show ? '' : 'none'; });
+    window.dispatchEvent(new Event('resize'));
+  },
+  /**
+   * One elevation from standing eye height. `distance` is in face spans, `offset` slides along the
+   * face (in spans), `height` picks the aim point up the wall, `swing` turns the view oblique.
+   */
+  face: (index = 0, distance = 2.2, offset = 0, height = 0.5, swing = 0) => {
+    const instance = instances[0]; if (!instance) return;
+    const plan = instance.root.userData['facadePlan']; if (!plan) return;
+    const face = plan.elevations[index];
+    const span = Math.max(face.length, plan.wallTop) * WORLD_SCALE;
+    controls.target.set(face.originX * WORLD_SCALE + face.tangentX * offset * span, (plan.floor + (plan.wallTop - plan.floor) * height) * WORLD_SCALE,
+      face.originZ * WORLD_SCALE + face.tangentZ * offset * span);
+    const nx = face.normalX * Math.cos(swing) + face.tangentX * Math.sin(swing);
+    const nz = face.normalZ * Math.cos(swing) + face.tangentZ * Math.sin(swing);
+    camera.position.set(controls.target.x + nx * span * distance, 0.11 * WORLD_SCALE + (controls.target.y - 0.11 * WORLD_SCALE) * 0.55,
+      controls.target.z + nz * span * distance);
+    camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
+  },
+  /**
+   * A street of independently seeded production assets, fronts facing a shared lane, so the
+   * settlement view shows real variation rather than one clone repeated.
+   */
+  street: (count = 8, subjects: readonly string[] = ['workshop'], yaw = 0.55, pitch = 0.32) => {
+    clear();
+    const base = seedInput.value;
+    const built: Instance[] = [];
+    for (let i = 0; i < count; i++) {
+      seedInput.value = `${base}-${i}`;
+      built.push(create(subjectRequest(subjects[i % subjects.length]!, periodSelect.value as ArchitecturalPeriod)));
+    }
+    seedInput.value = base;
+    instances = built;
+    const pitchX = Math.max(...built.map(instance => footprint(instance).width)) * 1.18;
+    const lane = Math.max(...built.map(instance => footprint(instance).depth)) * 0.95;
+    built.forEach((instance, i) => {
+      const side = i % 2 ? 1 : -1, slot = Math.floor(i / 2);
+      place(instance, (slot - (Math.ceil(count / 2) - 1) / 2) * pitchX, side * lane);
+      instance.root.rotation.y = side > 0 ? 0 : Math.PI;
+    });
+    labelLayer.style.display = 'none';
+    const span = pitchX * Math.ceil(count / 2);
+    controls.target.set(0, 0.2, 0);
+    camera.position.set(span * 0.62 * Math.sin(yaw), span * Math.sin(pitch), span * 0.62 * Math.cos(yaw)); controls.update();
+  },
+  crowd: (count = 64) => {
+    const source = instances[0]; if (!source) return;
+    const size = footprint(source), columns = Math.ceil(Math.sqrt(count));
+    for (let i = 1; i < count; i++) {
+      const clone = source.root.clone(true);
+      clone.position.set((i % columns - columns / 2) * size.width * 1.3, 0, (Math.floor(i / columns) - columns / 2) * size.depth * 1.3);
+      if (clone instanceof THREE.LOD) {
+        clone.autoUpdate = false; clone.levels.forEach((level, index) => { level.object.visible = index === 0; });
+      }
+      stageRoot.add(clone);
+    }
+    controls.target.set(0, size.height * 0.4, 0);
+    const span = Math.max(size.width, size.depth) * columns * 1.3;
+    camera.position.set(span * 0.5, span * 0.8, span); controls.update();
+  },
+  benchmark: (enabled: boolean, count = 90) => {
+    assetBuilder.facadeTextures.setEnabled(enabled);
+    const draw = () => {
+      const gl = renderer.getContext(); const samples: number[] = [];
+      for (let i = 0; i < count + 15; i++) {
+        const start = performance.now(); renderer.render(scene, camera); gl.finish();
+        if (i >= 15) samples.push(performance.now() - start);
+      }
+      samples.sort((a, b) => a - b);
+      return { medianMs: samples[Math.floor(samples.length / 2)], p95Ms: samples[Math.floor(samples.length * 0.95)],
+        calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, glError: gl.getError() };
+    };
+    return enabled ? draw() : assetBuilder.facadeTextures.withProceduralMaterials(scene, draw);
+  },
+} });

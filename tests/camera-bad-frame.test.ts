@@ -190,7 +190,9 @@ describe('camera bad-frame handling', () => {
       const angle = (index * Math.PI) / 2;
       return solid({
         id: `ring-${index}`, kind: 'prop', worldX: 10 + Math.cos(angle) * 1.6, worldZ: 10 + Math.sin(angle) * 1.6,
-        halfWidth: 1.9, halfDepth: 0.2, overhang: 0, eaveY: 3.5, topY: 3.6, rotationY: Math.atan2(Math.cos(angle), Math.sin(angle)), entrance: false,
+        // Taller than any local composition lift: the old 3.5-unit walls could be
+        // photographed from above, making the final subject depend on edit timing.
+        halfWidth: 1.9, halfDepth: 0.2, overhang: 0, eaveY: 12, topY: 12.2, rotationY: Math.atan2(Math.cos(angle), Math.sin(angle)), entrance: false,
       });
     });
     const h = harness({
@@ -209,6 +211,7 @@ describe('camera bad-frame handling', () => {
     h.propose(['enclosed', 'open-b']);
     h.run(90);
     expect(h.director.sceneLifecycle.get('enclosed')).not.toBe('acquired');
+    expect(h.director.sceneTransitions.some(t => t.sceneId === 'enclosed' && t.phase === 'acquired')).toBe(false);
     expect(h.director.current()?.id).toBe('open-b');
     expect(h.stats.insideFrames).toBe(0);
     expect(h.stats.maxStep).toBeLessThan(0.45);

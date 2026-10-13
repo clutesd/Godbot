@@ -24,11 +24,12 @@ import type { MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
 import { wallLayerForMaterial } from './StructureHeritage';
 import type { StructureMaterial } from '../../sim/development/types';
-import type { ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
+import { architecturalMaterial, type ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
 import { specSurfaceMaterials } from '../architecture/SpecGrammarBridge';
 import { emitSpecGeometry } from '../architecture/StructureGeometry';
 import { composeDedicated, composeMemorial, emitQuayWorks, hasDedicatedComposition, measuredHeight } from '../architecture/DedicatedStructures';
 import type { RotorSpec } from '../architecture/MillMotion';
+import { wallFrames, doorWidthFor, doorHeightFor, windowDimensions, facadeElevations, frameLayout, facadeMembers, patternBandLevels, hybridFacadeEligible, hybridGlazingEligible, glazingFrameWidth, facadeRevealDepth, type ElevationPlan, type FacadePlan } from '../architecture/FacadePlan';
 
 // The construction lifecycle lives in BuildStages so the geometry modules this file calls can
 // reference stages without importing the composer back. Re-exported for existing callers.
@@ -51,7 +52,7 @@ interface RotorEntry {
 }
 
 class BuildingCanvas {
-  private readonly surfaces = new Map<string, { surface: SurfaceKey; stage: number; builder: GeometryBuilder }>();
+  private readonly surfaces = new Map<string, { surface: SurfaceKey; stage: number; builder: GeometryBuilder; material?: ArchitecturalMaterialId }>();
   private readonly rotors: RotorEntry[] = [];
 
   constructor(
@@ -93,16 +94,16 @@ class BuildingCanvas {
   }
 
   /** Returns a builder only if the requested part belongs to a stage already built. */
-  at(surface: SurfaceKey, requiredStage: number): GeometryBuilder | undefined {
+  at(surface: SurfaceKey, requiredStage: number, material?: ArchitecturalMaterialId): GeometryBuilder | undefined {
     if (requiredStage > this.stage) return undefined;
-    const key = `${requiredStage}:${surface}`;
+    const key = `${requiredStage}:${surface}${material ? `:${material}` : ''}`;
     let entry = this.surfaces.get(key);
     if (!entry) {
       const builder = new GeometryBuilder();
       builder.setOrigin(this.originX, 0, this.originZ);
       builder.setWeathering(this.wear, this.tone);
       builder.setSectioning(this.span);
-      entry = { surface, stage: requiredStage, builder };
+      entry = { surface, stage: requiredStage, builder, material };
       this.surfaces.set(key, entry);
     }
     return entry.builder;
@@ -187,13 +188,13 @@ class BuildingCanvas {
     // that turn out to be the same construction material therefore merge into one draw call,
     // so a spec-driven building generally costs fewer batches than the legacy path, not more.
     const batches = new Map<string, { surface: SurfaceKey; geometries: THREE.BufferGeometry[] }>();
-    for (const { surface, stage, builder } of this.surfaces.values()) {
+    for (const { surface, stage, builder, material } of this.surfaces.values()) {
       if (builder.isEmpty) continue;
       const geometry = builder.build();
       for (const piece of geometry.userData['assemblyPieces'] as AssemblyPiece[]) piece.stage = stage;
       if (!geometry.hasAttribute('aSurfaceDetail')) geometry.setAttribute('aSurfaceDetail',
         new THREE.Int8BufferAttribute(new Int8Array(geometry.getAttribute('position').count * 4), 4, true));
-      const architectural = this.materials?.get(surface);
+      const architectural = material ?? this.materials?.get(surface);
       const key = architectural ? `arch:${architectural}` : `surface:${surface}`;
       const batch = batches.get(key) ?? { surface, geometries: [] };
       batch.geometries.push(geometry); batches.set(key, batch);
@@ -211,7 +212,7 @@ class BuildingCanvas {
       geometry.userData['assemblyPieces'] = pieces;
       for (const source of batch) source.dispose();
       geometry.userData['shared'] = true;
-      const architectural = this.materials?.get(surface);
+      const architectural = key.startsWith('arch:') ? key.slice(5) as ArchitecturalMaterialId : undefined;
       const material = architectural
         ? palette.getArchitecturalMaterial(architectural)
         : palette.getSurfaceMaterial(surface);
@@ -273,24 +274,7 @@ class BuildingCanvas {
   }
 }
 
-interface WallFrame {
-  originX: number;
-  originZ: number;
-  tangentX: number;
-  tangentZ: number;
-  normalX: number;
-  normalZ: number;
-  length: number;
-}
-
-function wallFrames(halfWidth: number, halfDepth: number): WallFrame[] {
-  return [
-    { originX: 0, originZ: halfDepth, tangentX: 1, tangentZ: 0, normalX: 0, normalZ: 1, length: halfWidth * 2 },
-    { originX: 0, originZ: -halfDepth, tangentX: -1, tangentZ: 0, normalX: 0, normalZ: -1, length: halfWidth * 2 },
-    { originX: halfWidth, originZ: 0, tangentX: 0, tangentZ: -1, normalX: 1, normalZ: 0, length: halfDepth * 2 },
-    { originX: -halfWidth, originZ: 0, tangentX: 0, tangentZ: 1, normalX: -1, normalZ: 0, length: halfDepth * 2 },
-  ];
-}
+type WallFrame = Omit<ElevationPlan, 'openings'>;
 
 function framePoint(frame: WallFrame, u: number, y: number, outward: number): Vec3 {
   return {
@@ -306,6 +290,9 @@ interface RoofShellOptions {
   baseY: number;
   height: number;
   overhang: number;
+  /** Resolved specs measure projection in canonical units, legacy shells use a ratio. */
+  projection?: number;
+  courseLip?: number;
   upturn: number;
   concavity: number;
   ridgeXRatio: number;
@@ -327,19 +314,20 @@ interface RoofShellOptions {
  */
 function emitRoofShell(builder: GeometryBuilder, soffit: GeometryBuilder | undefined, options: RoofShellOptions): void {
   const exponent = 1 / (1 + Math.max(-0.85, options.concavity));
-  const eaveScale = 1 + options.overhang;
+  const eaveX = options.halfWidth + (options.projection ?? options.halfWidth * options.overhang);
+  const eaveZ = options.halfDepth + (options.projection ?? options.halfDepth * options.overhang);
   const offsetX = options.centerX ?? 0;
   const offsetZ = options.centerZ ?? 0;
   const rings: ReturnType<typeof squareRing>[] = [];
   for (let index = 0; index < options.rings; index += 1) {
     const v = index / (options.rings - 1);
     const f = Math.pow(v, exponent);
-    const scaleX = eaveScale + (options.ridgeXRatio - eaveScale) * f;
-    const scaleZ = eaveScale + (options.ridgeZRatio - eaveScale) * f;
+    const width = THREE.MathUtils.lerp(eaveX, options.halfWidth * options.ridgeXRatio, f);
+    const depth = THREE.MathUtils.lerp(eaveZ, options.halfDepth * options.ridgeZRatio, f);
     const y = options.baseY - options.eaveDrop + (options.height + options.eaveDrop) * v;
     const ring = squareRing(
-      Math.max(0.004, options.halfWidth * scaleX),
-      Math.max(0.004, options.halfDepth * scaleZ),
+      Math.max(0.004, width),
+      Math.max(0.004, depth),
       y,
       options.segmentsPerSide,
     );
@@ -357,11 +345,12 @@ function emitRoofShell(builder: GeometryBuilder, soffit: GeometryBuilder | undef
   if (options.courses) {
     for (let index = 1; index < rings.length - 1; index += 1) {
       const ring = rings[index]!;
-      const lip = ring.map((point) => ({
-        x: offsetX + (point.x - offsetX) * 1.045,
-        y: point.y + 0.013,
-        z: offsetZ + (point.z - offsetZ) * 1.045,
-      }));
+      const lip = ring.map(point => {
+        const radialScale = options.courseLip !== undefined
+          ? 1 + options.courseLip / Math.max(0.004, Math.hypot(point.x - offsetX, point.z - offsetZ)) : 1.045;
+        return { x: offsetX + (point.x - offsetX) * radialScale,
+          y: point.y + (options.courseLip ?? 0.013), z: offsetZ + (point.z - offsetZ) * radialScale };
+      });
       builder.addLoft(ring, lip);
     }
   }
@@ -404,27 +393,6 @@ function roofSurfaceFor(grammar: BuildingGrammar): SurfaceKey {
   if (grammar.era === 'early') return 'roof-thatch';
   if (grammar.roofFamily === 'saw-tooth' || grammar.roofFamily === 'canopy-shell') return 'roof-metal';
   return 'roof-tile';
-}
-
-/**
- * Door width.
- *
- * A structural family's opening dare is the strongest functional cue a building has: a cart
- * entrance in a steel shed and a doorway in a rubble wall are not the same hole. Shared with the
- * `doorWidth` hint other systems use to walk people to an entrance, so the two never disagree.
- */
-function doorWidthFor(grammar: BuildingGrammar): number {
-  if (grammar.spec?.dwellingVariant) return Math.min(0.22, grammar.width * 0.25);
-  if (grammar.spec?.openings.facade) return Math.min(grammar.width * 0.3, grammar.spec.storeyHeight * grammar.width / grammar.spec.width * 0.65);
-  if (grammar.openingWidth === undefined) return Math.min(grammar.width * 0.3, 0.34);
-  return Math.min(grammar.width * 0.46, Math.max(0.16, grammar.openingWidth * 2.1));
-}
-
-function doorHeightFor(grammar: BuildingGrammar, bodyHeight: number): number {
-  if (grammar.spec?.openings.facade) return bodyHeight / grammar.windowRows * 0.82;
-  return grammar.openingHeight !== undefined
-    ? Math.min(bodyHeight * 0.82, Math.max(0.16, grammar.openingHeight * 2.4))
-    : Math.min(bodyHeight * 0.78, 0.6);
 }
 
 function wallSurfaceFor(layer: WallLayer): SurfaceKey {
@@ -503,14 +471,24 @@ function emitPatternBand(
   proud: number,
   density: number,
   backing?: GeometryBuilder,
+  openingExclusions?: readonly ElevationPlan[],
+  floor = 0,
 ): void {
   if (!builder) return;
   for (const frame of wallFrames(halfWidth, halfDepth)) {
     const isEnd = Math.abs(frame.normalX) > 0.5;
-    // A recessed dark course behind the figures makes the band read as carved relief.
+    const voids = openingExclusions?.find(face => face.name === frame.name)?.openings.filter(o =>
+      Math.abs(y - floor - o.y) < o.h / 2 + bandHeight * 0.6) ?? [];
+    // The recessed course and every motif stop at the authoritative clear openings.
     if (backing) {
-      const center = framePoint(frame, 0, y, proud * 0.18);
-      backing.addBox(center.x, center.y, center.z, isEnd ? proud * 0.3 : frame.length * 0.98, bandHeight * 1.2, isEnd ? frame.length * 0.98 : proud * 0.3);
+      const limit = frame.length * 0.49;
+      const cuts = [-limit, limit, ...voids.flatMap(o => [Math.max(-limit, o.u - o.w / 2), Math.min(limit, o.u + o.w / 2)])].sort((a, b) => a - b);
+      for (let i = 0; i < cuts.length - 1; i++) {
+        const a = cuts[i]!, b = cuts[i + 1]!, u = (a + b) / 2;
+        if (b - a < 0.0001 || voids.some(o => Math.abs(u - o.u) < o.w / 2)) continue;
+        const center = framePoint(frame, u, y, proud * 0.18);
+        backing.addBox(center.x, center.y, center.z, isEnd ? proud * 0.3 : b - a, bandHeight * 1.2, isEnd ? b - a : proud * 0.3);
+      }
     }
     const unit = Math.max(bandHeight * 0.85, bandHeight / Math.max(0.35, density));
     const count = Math.max(2, Math.round(frame.length / unit));
@@ -518,6 +496,7 @@ function emitPatternBand(
     const half = frame.length / 2;
     for (let index = 0; index < count; index += 1) {
       const u = -half + step * (index + 0.5);
+      if (voids.some(o => Math.abs(u - o.u) < o.w / 2 + step * 0.6)) continue;
       const p = (du: number, dv: number): Vec3 => framePoint(frame, u + du, y + dv, proud * 0.5);
       const w = step * 0.34;
       const h = bandHeight * 0.42;
@@ -737,6 +716,37 @@ function massWithin(group: THREE.Object3D, extentX: number, extentZ: number): { 
   };
 }
 
+/** Publish the contract from the exact grammar used to emit this shell, including scaled precincts. */
+function publishFacadePlan(group: THREE.Group, grammar: BuildingGrammar, plinthTop: number,
+  wallTop: number, roofTop: number, coreMaterial?: StructureMaterial): void {
+  if (!grammar.spec) return;
+  const roofSurface = roofSurfaceFor(grammar);
+  const inset = grammar.postThickness * 0.45;
+  const roofGeometry: FacadePlan['roof']['geometry'][number][] = [];
+  group.traverse(object => {
+    if (!(object instanceof THREE.Mesh) || object.userData['surface'] !== roofSurface) return;
+    object.geometry.computeBoundingBox();
+    const box = object.geometry.boundingBox!;
+    roofGeometry.push({ batchKey: String(object.userData['batchKey']), triangles: object.geometry.index!.count / 3,
+      bounds: [box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z] });
+  });
+  const plan: FacadePlan = {
+    version: 2, spec: grammar.spec,
+    members: facadeMembers(grammar, grammar.width / 2, grammar.depth / 2),
+    beams: frameLayout(grammar, grammar.width / 2, grammar.depth / 2).beamYs.map(y => ({ y, h: grammar.postThickness * 0.85 })),
+    bands: patternBandLevels(grammar, wallTop - plinthTop),
+    pattern: grammar.pattern, storeyHeight: grammar.wallHeight, storeys: grammar.storeys,
+    wallThickness: grammar.wallThickness ?? Math.max(0.035, grammar.postThickness * 1.1), revealDepth: facadeRevealDepth(grammar, coreMaterial),
+    elevations: facadeElevations(grammar, (grammar.width - inset) / 2, (grammar.depth - inset) / 2, wallTop - plinthTop),
+    floor: plinthTop, wallTop, materials: grammar.spec.materials,
+    roof: { top: roofTop, resolved: grammar.spec.roof, geometry: roofGeometry },
+    openingStyle: grammar.openings, postThickness: grammar.postThickness,
+  };
+  group.userData['facadePlan'] = plan;
+  group.userData['facadeEligible'] = hybridFacadeEligible(grammar, coreMaterial);
+  group.userData['facadeGlazingEligible'] = hybridGlazingEligible(grammar);
+}
+
 export function composeBuilding(
   grammar: BuildingGrammar,
   palette: MaterialPalette,
@@ -845,7 +855,7 @@ export function composeBuilding(
   if (grammar.development?.form === 'gathering' && grammar.development.level === 1) {
     canvas.at('ground', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.012, 0, 2.2, 0.024, 1.8);
     const precinct = shrinkGrammar({ ...grammar, forecourt: false, enclosure: 'none' }, 1.3);
-    emitStructure(canvas, precinct, new SeededRandom(`${seed}:precinct`), surfaces, `${seed}:precinct`);
+    const { roofTop } = emitStructure(canvas, precinct, new SeededRandom(`${seed}:precinct`), surfaces, `${seed}:precinct`);
     const group = canvas.build(palette);
     publishArchitecture(group, grammar);
     group.userData['bodyWidth'] = precinct.width;
@@ -853,6 +863,7 @@ export function composeBuilding(
     group.userData['floorHeight'] = precinct.plinthHeight;
     group.userData['doorWidth'] = doorWidthFor(precinct);
     group.userData['openPrecinct'] = true;
+    publishFacadePlan(group, precinct, precinct.plinthHeight, precinct.plinthHeight + precinct.wallHeight * precinct.storeys, roofTop, coreMaterial);
     const precinctBounds = new THREE.Box3().setFromObject(group);
     // The reserved plot extent is the precinct's, not the structure's, so placement is unchanged.
     return { group, height: Math.max(0.1, precinctBounds.max.y), extentX: 2.3, extentZ: 1.9,
@@ -873,6 +884,8 @@ export function composeBuilding(
   group.userData['floorHeight'] = plinthTop;
   group.userData['doorWidth'] = doorWidthFor(grammar);
   group.userData['wallTop'] = wallTop;
+  publishFacadePlan(group, grammar, plinthTop, wallTop, roofTop, coreMaterial);
+
   group.userData['vernacularFabric'] = (rank <= 1 || grammar.development?.level === 1)
     && (grammar.spec ? grammar.spec.archetype === 'house' : ['shelter', 'lean-to', 'hut', 'house', 'compound'].includes(grammar.role));
   const bounds = new THREE.Box3().setFromObject(group);
@@ -970,6 +983,13 @@ function emitGroundworks(
   }
 }
 
+/** Convert the spec's rise/half-span contract into the scaled composer's local frame. */
+function roofRiseForGrammar(grammar: BuildingGrammar, legacySpan = grammar.width): number {
+  return grammar.spec
+    ? grammar.depth * 0.5 * (grammar.spec.roof.span / grammar.spec.depth) * grammar.roofPitch
+    : legacySpan * grammar.roofPitch;
+}
+
 function emitFrame(
   canvas: BuildingCanvas,
   grammar: BuildingGrammar,
@@ -996,7 +1016,7 @@ function emitFrame(
   if (grammar.roofFamily === 'hide-cone') {
     // Conical shelters read as assembled pole structures rather than a smooth tent shell:
     // structural poles, a low perimeter lash and a bound crown all remain visible.
-    const apex = { x: 0, y: plinthTop + grammar.wallHeight + grammar.width * grammar.roofPitch, z: 0 };
+    const apex = { x: 0, y: plinthTop + grammar.wallHeight + roofRiseForGrammar(grammar), z: 0 };
     const poles = Math.max(8, grammar.bays * 6);
     const bases: Vec3[] = [];
     for (let index = 0; index < poles; index += 1) {
@@ -1017,7 +1037,7 @@ function emitFrame(
 
   if (grammar.roofFamily === 'lean-slope') {
     const front = plinthTop + grammar.wallHeight;
-    const back = plinthTop + grammar.wallHeight + grammar.depth * grammar.roofPitch;
+    const back = plinthTop + grammar.wallHeight + roofRiseForGrammar(grammar, grammar.depth);
     for (const side of [-1, 1]) {
       posts?.addBeam(
         { x: side * halfWidth, y: 0, z: halfDepth },
@@ -1049,10 +1069,8 @@ function emitFrame(
     return;
   }
 
-  const bayPositions: number[] = [];
-  for (let index = 0; index <= grammar.bays; index += 1) {
-    bayPositions.push(-halfWidth + (grammar.width * index) / grammar.bays);
-  }
+  const layout = frameLayout(grammar, halfWidth, halfDepth);
+  const bayPositions = layout.bayX;
 
   // Post rhythm on the long elevations, corner posts thickened.
   for (const z of [halfDepth, -halfDepth]) {
@@ -1063,11 +1081,8 @@ function emitFrame(
   }
   // Support density is a family property: a timber frame is a thicket of members, a steel portal
   // frame is four stanchions and a clear span.
-  const densityScale = grammar.supportDensity !== undefined ? 0.55 + grammar.supportDensity * 1.0 : 1;
-  const sidePosts = Math.max(1, Math.round(grammar.bays * (grammar.depth / grammar.width) * densityScale));
   for (const x of [halfWidth, -halfWidth]) {
-    for (let index = 1; index < sidePosts; index += 1) {
-      const z = -halfDepth + (grammar.depth * index) / sidePosts;
+    for (const z of layout.sideZ) {
       posts?.addBox(x, plinthTop + (wallTop - plinthTop) / 2, z, thickness, wallTop - plinthTop, thickness);
     }
   }
@@ -1085,8 +1100,7 @@ function emitFrame(
   }
 
   // Sill, mid-rail and head beams give the timber-framing rhythm its horizontals.
-  const beamLevels = [plinthTop + thickness * 0.6, wallTop - thickness * 0.6];
-  if (grammar.storeys > 1) beamLevels.splice(1, 0, plinthTop + grammar.wallHeight);
+  const beamLevels = layout.beamYs.map(y => plinthTop + y);
   for (const y of beamLevels) {
     posts?.addBox(0, y, halfDepth, grammar.width + thickness * 1.4, thickness * 0.85, thickness);
     posts?.addBox(0, y, -halfDepth, grammar.width + thickness * 1.4, thickness * 0.85, thickness);
@@ -1210,29 +1224,54 @@ function emitBody(
   const baseBandHeight = baseWall ? Math.min(bodyHeight * 0.55, grammar.wallHeight) : 0;
   if (wall) emitWallUnits(wall, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, bodyHeight, baseWall, baseBandHeight);
 
-  if (grammar.massing === 'wing') {
-    annexWall?.addBox(halfWidth * 0.72, plinthTop + bodyHeight * 0.36, -halfDepth * 0.95, grammar.width * 0.44, bodyHeight * 0.72, grammar.depth * 0.6);
-  } else if (grammar.massing === 'twin') {
-    annexWall?.addBox(-halfWidth * 0.86, plinthTop + bodyHeight * 0.42, halfDepth * 0.5, grammar.width * 0.34, bodyHeight * 0.84, grammar.depth * 0.38);
-    annexWall?.addBox(halfWidth * 0.86, plinthTop + bodyHeight * 0.42, halfDepth * 0.5, grammar.width * 0.34, bodyHeight * 0.84, grammar.depth * 0.38);
-  } else if (grammar.massing === 'court') {
-    for (const side of [-1, 1]) {
-      annexWall?.addBox(side * halfWidth * 1.02, plinthTop + bodyHeight * 0.3, halfDepth * 1.1, grammar.width * 0.26, bodyHeight * 0.6, grammar.depth * 0.75);
+  // Secondary masses share their footprint with their roof and footing. Previously these
+  // were unroofed wall boxes, so glass additions read as coarse transparent blocks.
+  const annex = (x: number, z: number, width: number, depth: number, height: number): void => {
+    annexWall?.addBox(x, plinthTop + height / 2, z, width, height, depth);
+    canvas.at(baseSurface ?? wallSurface, BUILD_STAGE.FOUNDATION)?.addBox(x, plinthTop / 2, z,
+      width + inset, Math.max(0.008, plinthTop), depth + inset);
+    const covering = canvas.at(roofSurfaceFor(grammar), BUILD_STAGE.ROOF);
+    const edge = Math.max(0.003, grammar.postThickness * 0.2);
+    const top = plinthTop + height;
+    if (covering) {
+      if (grammar.spec && ['flat', 'flat-parapet'].includes(grammar.spec.roof.archetype)) {
+        covering.addBox(x, top + edge, z, width + edge * 2, edge * 2, depth + edge * 2);
+      } else {
+        const rise = Math.min(height * 0.3, depth * 0.5 * grammar.roofPitch);
+        const projection = Math.min(depth * 0.12, grammar.spec?.roof.overhang ?? depth * grammar.eaveOverhang);
+        emitRoofShell(covering, canvas.at('shadow', BUILD_STAGE.ROOF), {
+          halfWidth: width / 2, halfDepth: depth / 2, baseY: top, height: rise,
+          overhang: 0, projection, courseLip: edge * 0.3, upturn: 0, concavity: 0,
+          ridgeXRatio: 0.28, ridgeZRatio: 0.02, segmentsPerSide: 2, rings: 2,
+          eaveDrop: rise * projection / (depth * 0.49), centerX: x, centerZ: z,
+        });
+      }
     }
+  };
+  if (grammar.massing === 'wing') {
+    annex(halfWidth * 0.72, -halfDepth * 0.95, grammar.width * 0.44, grammar.depth * 0.6, bodyHeight * 0.72);
+  } else if (grammar.massing === 'twin') {
+    for (const side of [-1, 1]) annex(side * halfWidth * 0.86, halfDepth * 0.5,
+      grammar.width * 0.34, grammar.depth * 0.38, bodyHeight * 0.84);
+  } else if (grammar.massing === 'court') {
+    for (const side of [-1, 1]) annex(side * halfWidth * 1.02, halfDepth * 1.1,
+      grammar.width * 0.26, grammar.depth * 0.75, bodyHeight * 0.6);
   }
 
-  for (let band = 0; band < grammar.patternBands; band += 1) {
-    const t = grammar.patternBands === 1 ? 0.72 : 0.3 + (band / Math.max(1, grammar.patternBands - 1)) * 0.55;
+  for (const band of patternBandLevels(grammar, bodyHeight)) {
+    if (hybridFacadeEligible(grammar)) continue;
     emitPatternBand(
       canvas.at('motif', BUILD_STAGE.WALLS),
       grammar.pattern,
       halfWidth - inset / 2,
       halfDepth - inset / 2,
-      plinthTop + bodyHeight * t,
-      Math.min(0.13, bodyHeight * 0.2),
-      grammar.postThickness * 0.55,
+      plinthTop + band.y,
+      band.h,
+      grammar.spec?.openings.facade ? Math.min(0.003, grammar.postThickness * 0.15) : grammar.postThickness * 0.55,
       grammar.patternDensity,
       canvas.at('shadow', BUILD_STAGE.WALLS),
+      grammar.spec?.openings.facade ? facadeElevations(grammar, halfWidth - inset / 2, halfDepth - inset / 2, bodyHeight) : undefined,
+      plinthTop,
     );
   }
 
@@ -1252,24 +1291,8 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
   const thickness = grammar.wallThickness !== undefined
     ? Math.max(0.012, grammar.wallThickness)
     : Math.max(0.035, grammar.postThickness * (earth ? 2.4 : 1.1));
-  const doorWidth = doorWidthFor(grammar);
-  const doorHeight = doorHeightFor(grammar, height);
-  const perRow = grammar.spec?.openings.columns ?? Math.max(1, grammar.bays - 1);
-  const windowRows = grammar.windowRows;
-  // Opening size follows what the wall can span over. A masonry wall keeps its holes small
-  // because every one of them needs something above it; a steel frame does not care.
-  const { width: ww, height: wh } = windowDimensions(grammar, height);
-  for (const [faceIndex, face] of wallFrames(halfW, halfD).entries()) {
-    const openings: { u: number; y: number; w: number; h: number }[] = [];
-    if (faceIndex === 0) openings.push({ u: 0, y: doorHeight / 2, w: doorWidth, h: doorHeight });
-    if (grammar.openings !== 'flap') {
-      const count = faceIndex >= 2 ? Math.max(1, Math.round(perRow * grammar.depth / grammar.width)) : perRow;
-      for (let row = 0; row < windowRows; row++) for (let i = 0; i < count; i++) {
-        const u = windowPosition(grammar, face.length, i, count);
-        if (faceIndex === 0 && row === 0 && Math.abs(u) < doorWidth) continue;
-        openings.push({ u, y: windowLevel(grammar, height, row, windowRows), w: ww, h: wh });
-      }
-    }
+  for (const [faceIndex, face] of facadeElevations(grammar, halfW, halfD, height).entries()) {
+    const openings = face.openings;
     const columns = Math.min(8, Math.max(3, Math.ceil(face.length / (metal ? 0.4 : timber ? 0.13 : earth ? 0.32 : 0.24))));
     const ys = [0, height, ...Array.from({ length: rows - 1 }, (_, i) => height * (i + 1) / rows),
       ...openings.flatMap(o => [o.y - o.h / 2, o.y + o.h / 2])].filter(y => y >= 0 && y <= height);
@@ -1285,37 +1308,13 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
         const u0 = edges[col]!, u1 = edges[col + 1]!, u = (u0 + u1) / 2, y = (y0 + y1) / 2;
         if (u1 - u0 < 0.001 || y1 - y0 < 0.001 || openings.some(o => Math.abs(u - o.u) < o.w / 2 && Math.abs(y - o.y) < o.h / 2)) continue;
         const p = framePoint(face, u, base + y, -thickness / 2);
-        const gap = earth ? 0 : 0.0015;
+        const gap = earth || hybridFacadeEligible(grammar) ? 0 : 0.0015;
         const target = baseWall && y1 <= baseBandHeight + 1e-6 ? baseWall : wall;
         target.addBox(p.x, p.y, p.z, faceIndex < 2 ? u1 - u0 - gap : thickness, y1 - y0 - gap,
           faceIndex < 2 ? thickness : u1 - u0 - gap);
       }
     }
   }
-}
-
-function windowPosition(grammar: BuildingGrammar, length: number, index: number, count: number): number {
-  return -length / 2 + length * (grammar.spec?.openings.facade ? (index + 0.5) / count : (index + 1) / (count + 1));
-}
-
-function windowLevel(grammar: BuildingGrammar, height: number, row: number, rows: number): number {
-  return grammar.spec?.openings.facade ? height * (row + 0.52) / rows
-    : height * ((row + 1) / (rows + 1) + 0.08);
-}
-
-function windowDimensions(grammar: BuildingGrammar, bodyHeight: number): { width: number; height: number } {
-  if (grammar.spec?.openings.facade) {
-    // The resolved pane span is consumed unchanged by both the void and the fit-out.
-    return { width: grammar.openingWidth!, height: Math.min(grammar.openingHeight!, bodyHeight / grammar.windowRows * 0.94) };
-  }
-  const perRow = grammar.spec?.openings.columns ?? Math.max(1, grammar.bays - 1);
-  const width = grammar.openingWidth !== undefined
-    ? Math.max(0.02, Math.min(grammar.openingWidth, (grammar.width / (perRow + 1)) * 0.8))
-    : Math.min(grammar.width / (perRow + 1) * 0.5, 0.2) * (grammar.openings === 'slit' ? 0.4 : 1);
-  const height = grammar.openingHeight !== undefined
-    ? Math.max(0.03, Math.min(grammar.openingHeight, bodyHeight * 0.62))
-    : grammar.openings === 'slit' ? Math.min(bodyHeight * 0.4, 0.26) : Math.min(bodyHeight * 0.3, 0.22);
-  return { width, height };
 }
 
 function emitOpenings(
@@ -1335,13 +1334,16 @@ function emitOpenings(
   const glazing = hasGlazing ? canvas.at('glazing', BUILD_STAGE.FITOUT) : undefined;
   const glow = glazing ? undefined : canvas.at('glow', BUILD_STAGE.FITOUT);
   const bodyHeight = wallTop - plinthTop;
-  const frames = wallFrames(halfWidth, halfDepth);
+  const frames = facadeElevations(grammar, halfWidth, halfDepth, bodyHeight);
   const proud = grammar.postThickness * 0.5;
+  const reveal = facadeRevealDepth(grammar);
+  const backingDepth = reveal ? -reveal : proud * 0.4;
+  const fittedDepth = reveal ? -reveal * 0.3 : proud * 1.2;
 
   // Entrance
   const doorWidth = doorWidthFor(grammar);
   const doorHeight = doorHeightFor(grammar, bodyHeight);
-  shadow?.addBox(0, plinthTop + doorHeight / 2, halfDepth + proud * 0.4, doorWidth, doorHeight, proud);
+  shadow?.addBox(0, plinthTop + doorHeight / 2, halfDepth + backingDepth, doorWidth, doorHeight, reveal ? reveal * 0.2 : proud);
   for (const side of [-1, 1]) {
     trim?.addBox(side * doorWidth * 0.58, plinthTop + doorHeight / 2, halfDepth + proud, grammar.postThickness * 0.8, doorHeight, proud * 1.4);
   }
@@ -1359,71 +1361,79 @@ function emitOpenings(
 
   // A hung timber door with a stone threshold; entrances stop reading as black holes.
   const door = canvas.at('timber', BUILD_STAGE.FITOUT);
-  door?.addBox(0, plinthTop + doorHeight / 2, halfDepth + proud * 0.55, doorWidth * 0.92, doorHeight * 0.96, proud * 0.5);
+  door?.addBox(0, plinthTop + doorHeight / 2, halfDepth + (reveal ? -reveal * 0.3 : proud * 0.55), doorWidth * 0.92, doorHeight * 0.96, reveal ? reveal * 0.2 : proud * 0.5);
   canvas.at('stone', BUILD_STAGE.FOUNDATION)?.addBox(0, 0.025, halfDepth + proud * 2.4, doorWidth * 1.4, 0.05, 0.14);
   if (grammar.ornament > 0.4) {
     canvas.at('motif', BUILD_STAGE.DETAIL)?.addBox(doorWidth * 0.3, plinthTop + doorHeight * 0.48, halfDepth + proud * 0.85, 0.02, 0.02, 0.02);
   }
 
-  const rows = grammar.windowRows;
-  const perRow = grammar.spec?.openings.columns ?? Math.max(1, grammar.bays - 1);
   const { width, height: windowHeight } = windowDimensions(grammar, bodyHeight);
-
+  const windowTrim = grammar.spec?.openings.facade
+    ? canvas.at(postSurface, BUILD_STAGE.WALLS, grammar.spec.materials.trim) : trim;
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
     const frame = frames[frameIndex]!;
     const isEnd = frameIndex >= 2;
-    const count = isEnd ? Math.max(1, Math.round(perRow * (grammar.depth / grammar.width))) : perRow;
-    for (let row = 0; row < rows; row += 1) {
-      const y = plinthTop + windowLevel(grammar, bodyHeight, row, rows);
-      for (let index = 0; index < count; index += 1) {
-        const u = windowPosition(grammar, frame.length, index, count);
-        if (frameIndex === 0 && row === 0 && Math.abs(u) < doorWidth) continue;
-        const opening = framePoint(frame, u, y, proud * 0.4);
-        shadow?.addBox(opening.x, opening.y, opening.z, isEnd ? proud : width, windowHeight, isEnd ? width : proud);
-        // Keep the pane's rear face ahead of the opaque recess backing (0.9 * proud).
-        const pane = framePoint(frame, u, y, proud * 1.2);
+    for (const planned of frame.openings) {
+      if (planned.kind !== 'window') continue;
+      const u = planned.u, y = plinthTop + planned.y;
+        const opening = framePoint(frame, u, y, backingDepth);
+        shadow?.addBox(opening.x, opening.y, opening.z, isEnd ? (reveal ? reveal * 0.2 : proud) : width, windowHeight, isEnd ? width : (reveal ? reveal * 0.2 : proud));
+        // The fitted pane sits ahead of its backing and inside the composed reveal.
+        const pane = framePoint(frame, u, y, fittedDepth);
         const paneShare = grammar.spec?.openings.facade ? 0.98 : 0.88;
         glazing?.addBox(pane.x, pane.y, pane.z, isEnd ? proud * 0.2 : width * paneShare,
           windowHeight * paneShare, isEnd ? width * paneShare : proud * 0.2);
-        const lit = framePoint(frame, u, y, proud * 1.2);
+        const lit = framePoint(frame, u, y, fittedDepth);
         glow?.addBox(lit.x, lit.y, lit.z, isEnd ? proud * 0.5 : width * 0.88, windowHeight * 0.88, isEnd ? width * 0.88 : proud * 0.5);
 
         if (grammar.spec?.openings.facade) {
           const divisions = grammar.spec.openings.divisions ?? 1;
+          const barWidth = glazingFrameWidth(planned, grammar.spec.openings.facade) * 0.6;
           // Divided sash and factory lights use real slender joinery; later grids keep broad panes.
           for (let division = 1; division < divisions; division++) {
             const bar = framePoint(frame, u, y + windowHeight * (division / divisions - 0.5), proud * 1.35);
-            trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.25 : width, 0.006, isEnd ? width : proud * 0.25);
+            windowTrim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.25 : width, barWidth, isEnd ? width : proud * 0.25);
           }
           if (divisions > 1) {
             const bar = framePoint(frame, u, y, proud * 1.35);
-            trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.25 : 0.006, windowHeight, isEnd ? 0.006 : proud * 0.25);
+            windowTrim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.25 : barWidth, windowHeight, isEnd ? barWidth : proud * 0.25);
           }
         } else if (grammar.openings === 'lattice') {
           // Shoji-style grid: two mullions and two transoms across the opening.
           for (const fraction of [-0.24, 0.24]) {
             const bar = framePoint(frame, u + width * fraction, y, proud * 0.9);
-            trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.6 : width * 0.07, windowHeight, isEnd ? width * 0.07 : proud * 0.6);
+            windowTrim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.6 : width * 0.07, windowHeight, isEnd ? width * 0.07 : proud * 0.6);
           }
           for (const fraction of [-0.26, 0.26]) {
             const bar = framePoint(frame, u, y + windowHeight * fraction, proud * 0.9);
-            trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.6 : width, windowHeight * 0.07, isEnd ? width : proud * 0.6);
+            windowTrim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.6 : width, windowHeight * 0.07, isEnd ? width : proud * 0.6);
           }
         } else if (grammar.openings === 'shutter') {
           for (const side of [-1, 1]) {
             const shutter = framePoint(frame, u + side * width * 0.72, y, proud * 1.1);
-            trim?.addBox(shutter.x, shutter.y, shutter.z, isEnd ? proud * 0.8 : width * 0.5, windowHeight * 1.06, isEnd ? width * 0.5 : proud * 0.8);
+            windowTrim?.addBox(shutter.x, shutter.y, shutter.z, isEnd ? proud * 0.8 : width * 0.5, windowHeight * 1.06, isEnd ? width * 0.5 : proud * 0.8);
           }
         } else if (grammar.openings === 'glazed' || grammar.openings === 'panel') {
           const bar = framePoint(frame, u, y, proud * 0.9);
-          trim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.6 : width * 0.07, windowHeight, isEnd ? width * 0.07 : proud * 0.6);
+          windowTrim?.addBox(bar.x, bar.y, bar.z, isEnd ? proud * 0.6 : width * 0.07, windowHeight, isEnd ? width * 0.07 : proud * 0.6);
         }
+        if (grammar.spec?.openings.facade) {
+          // Slender fitted casings follow the same clear opening as the atlas, rather than
+          // a heavy projecting medieval hood across broad later glass.
+          const casing = glazingFrameWidth(planned, grammar.spec.openings.facade);
+          for (const side of [-1, 1]) {
+            const stile = framePoint(frame, u + side * (width - casing) / 2, y, fittedDepth + proud * 0.12);
+            windowTrim?.addBox(stile.x, stile.y, stile.z, isEnd ? proud * 0.22 : casing, windowHeight, isEnd ? casing : proud * 0.22);
+            const rail = framePoint(frame, u, y + side * (windowHeight - casing) / 2, fittedDepth + proud * 0.12);
+            windowTrim?.addBox(rail.x, rail.y, rail.z, isEnd ? proud * 0.22 : width, casing, isEnd ? width : proud * 0.22);
+          }
+        } else {
         // Every opening gets a moulded head — the detail that stops walls reading as boxes.
         const head = framePoint(frame, u, y + windowHeight * 0.62, proud * 1.2);
-        trim?.addBox(head.x, head.y, head.z, isEnd ? proud * 1.1 : width * 1.35, grammar.postThickness * 0.45, isEnd ? width * 1.35 : proud * 1.1);
-      }
+        windowTrim?.addBox(head.x, head.y, head.z, isEnd ? proud * 1.1 : width * 1.35, grammar.postThickness * 0.45, isEnd ? width * 1.35 : proud * 1.1);
     }
   }
+        }
 }
 
 function emitRoof(
@@ -1439,72 +1449,117 @@ function emitRoof(
 ): number {
   const roof = canvas.at(roofSurface, BUILD_STAGE.ROOF);
   const soffit = canvas.at('shadow', BUILD_STAGE.ROOF);
-  const timber = canvas.at(postSurface, BUILD_STAGE.ROOF);
+  const timber = canvas.at(grammar.spec ? 'timber' : postSurface, BUILD_STAGE.ROOF, grammar.spec?.materials.roofStructure);
   const drum = canvas.at(wallSurface, BUILD_STAGE.ROOF);
   const motif = canvas.at('motif', BUILD_STAGE.DETAIL);
 
   if (!roof) return wallTop;
 
-  if (grammar.roofFamily === 'lean-slope') {
-    const front = wallTop;
-    const back = wallTop + grammar.depth * grammar.roofPitch;
-    const frontZ = halfDepth * (1 + grammar.eaveOverhang);
-    const backZ = -halfDepth * (1 + grammar.eaveOverhang);
-    const courses = 4;
-    for (let index = 0; index < courses; index += 1) {
-      const v0 = Math.max(0, index / courses - 0.035);
-      const v1 = Math.min(1, (index + 1) / courses + 0.055);
-      roof.addBeam(
-        { x: 0, y: THREE.MathUtils.lerp(front, back, v0), z: THREE.MathUtils.lerp(frontZ, backZ, v0) },
-        { x: 0, y: THREE.MathUtils.lerp(front, back, v1), z: THREE.MathUtils.lerp(frontZ, backZ, v1) },
-        grammar.width * (1 + grammar.eaveOverhang),
-        0.018 + index * 0.0015,
-      );
-      if (index < courses - 1) {
-        const v = (index + 1) / courses;
-        timber?.addBox(0, THREE.MathUtils.lerp(front, back, v) + 0.008, THREE.MathUtils.lerp(frontZ, backZ, v),
-          grammar.width * (1 + grammar.eaveOverhang * 0.72), grammar.postThickness * 0.34, grammar.postThickness * 0.42);
-      }
+  const spec = grammar.spec;
+  const projection = spec ? spec.roof.overhang * grammar.width / spec.width : halfDepth * grammar.eaveOverhang;
+  const xEdge = halfWidth + projection;
+  const zEdge = halfDepth + projection;
+  const section = Math.max(0.003, Math.min(0.009, grammar.postThickness * 0.25));
+  const flashing = canvas.at('metal', BUILD_STAGE.ROOF);
+  const flat = spec && ['flat', 'flat-parapet'].includes(spec.roof.archetype);
+  if (flat) {
+    // A real horizontal deck, with a recessed membrane behind continuous parapet coping.
+    const parapet = spec.parapet ? grammar.wallHeight * 0.12 : section * 2;
+    const edge = Math.max(section * 2, (grammar.wallThickness ?? 0.035) * 0.6);
+    roof.addBox(0, wallTop + section, 0, grammar.width, section * 2, grammar.depth);
+    for (const frame of wallFrames(halfWidth - edge / 2, halfDepth - edge / 2)) {
+      const mid = framePoint(frame, 0, wallTop + parapet / 2, 0);
+      drum?.addBox(mid.x, mid.y, mid.z, frame.normalX ? edge : grammar.width, parapet,
+        frame.normalZ ? edge : grammar.depth);
+      flashing?.addBox(mid.x, wallTop + parapet, mid.z,
+        frame.normalX ? edge + section * 2 : grammar.width + section * 2, section,
+        frame.normalZ ? edge + section * 2 : grammar.depth + section * 2);
     }
-    return back;
+    emitStacks(canvas, grammar, halfWidth, halfDepth, wallTop + parapet, postSurface, wallTop);
+    return wallTop + parapet;
+  }
+
+  if (grammar.roofFamily === 'lean-slope') {
+    const rise = roofRiseForGrammar(grammar, grammar.depth);
+    const slope = rise / grammar.depth;
+    const front = { x: 0, y: wallTop - projection * slope, z: zEdge };
+    const back = { x: 0, y: wallTop + rise + projection * slope, z: -zEdge };
+    roof.addBeam(front, back, xEdge * 2, section);
+    for (const side of [-1, 1]) {
+      const x = side * halfWidth;
+      const end = [{ x, y: wallTop, z: halfDepth }, { x, y: wallTop, z: -halfDepth }, { x, y: wallTop + rise, z: -halfDepth }];
+      if (side < 0) end.reverse();
+      drum?.addQuad(end[0]!, end[1]!, end[2]!, end[2]!);
+      flashing?.addBeam({ ...front, x: side * xEdge }, { ...back, x: side * xEdge }, section, section * 1.5);
+    }
+    drum?.addBox(0, wallTop + rise / 2, -halfDepth, grammar.width, rise, grammar.wallThickness ?? section);
+    return back.y;
   }
 
   if (grammar.roofFamily === 'saw-tooth') {
-    // Industrial north-light roof, but the front edge keeps the culture's flared eave band
-    // so the workshop still belongs to the same architectural family.
-    const teeth = Math.max(2, Math.round(grammar.bays * 0.6));
-    const pitchHeight = grammar.depth * grammar.roofPitch;
-    const glow = canvas.at(grammar.spec?.materials.glazing ? 'glazing' : 'glow', BUILD_STAGE.FITOUT);
+    // Each north-light bay is pitched over its own span, with vertical glazed lights.
+    const teeth = Math.max(2, Math.min(6, Math.round(grammar.bays * 0.6)));
+    const bay = grammar.depth / teeth;
+    const pitchHeight = bay * 0.75 * grammar.roofPitch;
+    const glow = canvas.at(spec?.materials.glazing ? 'glazing' : 'glow', BUILD_STAGE.FITOUT);
     for (let index = 0; index < teeth; index += 1) {
-      const z0 = halfDepth - (grammar.depth * index) / teeth;
-      const z1 = halfDepth - (grammar.depth * (index + 1)) / teeth;
-      roof.addBeam(
-        { x: 0, y: wallTop, z: z0 },
-        { x: 0, y: wallTop + pitchHeight, z: z1 + (z0 - z1) * 0.25 },
-        grammar.width * (1 + grammar.eaveOverhang * 0.4),
-        0.028,
-      );
-      const clerestory = { x: 0, y: wallTop + pitchHeight * 0.5, z: z1 + (z0 - z1) * 0.2 };
-      canvas.at('shadow', BUILD_STAGE.ROOF)?.addBox(clerestory.x, clerestory.y, clerestory.z, grammar.width * 0.96, pitchHeight, 0.02);
-      glow?.addBox(clerestory.x, clerestory.y, clerestory.z + 0.012, grammar.width * 0.9, pitchHeight * 0.82, 0.012);
+      const z0 = halfDepth - bay * index;
+      const z1 = z0 - bay;
+      roof.addBeam({ x: 0, y: wallTop, z: z0 }, { x: 0, y: wallTop + pitchHeight, z: z1 },
+        grammar.width + section * 2, section);
+      glow?.addBox(0, wallTop + pitchHeight / 2, z1, grammar.width - section * 2, pitchHeight - section * 2, section);
+      flashing?.addBox(0, wallTop + pitchHeight, z1, grammar.width + section * 2, section, section * 2);
+      flashing?.addBox(0, wallTop + section, z0, grammar.width + section * 2, section, section * 3);
+      const divisions = Math.max(2, grammar.bays);
+      for (let j = 0; j <= divisions; j++) timber?.addBox(-halfWidth + grammar.width * j / divisions,
+        wallTop + pitchHeight / 2, z1, section, pitchHeight, section * 1.5);
+      for (const side of [-1, 1]) {
+        const x = side * halfWidth;
+        const end = [{ x, y: wallTop, z: z0 }, { x, y: wallTop, z: z1 }, { x, y: wallTop + pitchHeight, z: z1 }];
+        if (side < 0) end.reverse();
+        drum?.addQuad(end[0]!, end[1]!, end[2]!, end[2]!);
+        flashing?.addBeam({ x, y: wallTop, z: z0 }, { x, y: wallTop + pitchHeight, z: z1 }, section, section);
+      }
     }
-    emitRoofShell(roof, soffit, {
-      halfWidth,
-      halfDepth: halfDepth * 0.14,
-      baseY: wallTop,
-      height: grammar.depth * 0.1,
-      overhang: grammar.eaveOverhang,
-      upturn: grammar.eaveUpturn * 0.7,
-      concavity: grammar.roofConcavity,
-      ridgeXRatio: 0.9,
-      ridgeZRatio: 0.3,
-      segmentsPerSide: 3,
-      rings: 3,
-      eaveDrop: grammar.depth * 0.03,
-    });
     const top = wallTop + pitchHeight;
-    emitStacks(canvas, grammar, halfWidth, halfDepth, top, postSurface);
+    emitStacks(canvas, grammar, halfWidth, halfDepth, top, postSurface, wallTop);
     return top;
+  }
+
+  if (spec && ['gable', 'steep-gable', 'low-gable'].includes(spec.roof.archetype)) {
+    // Straight, closed gables and continuous roof planes. The ridge runs along X.
+    const height = roofRiseForGrammar(grammar);
+    const slope = height / halfDepth;
+    const eaveY = wallTop - projection * slope;
+    const ridgeY = wallTop + height;
+    for (const side of [-1, 1]) {
+      roof.addBeam({ x: 0, y: eaveY, z: side * zEdge }, { x: 0, y: ridgeY, z: 0 }, xEdge * 2, section);
+      flashing?.addBox(0, eaveY, side * zEdge, xEdge * 2, section * 1.5, section * 2.5);
+      // Bargeboards follow the actual roof pitch, including the overhang.
+      for (const xSide of [-1, 1]) timber?.addBeam(
+        { x: xSide * xEdge, y: eaveY, z: side * zEdge }, { x: xSide * xEdge, y: ridgeY, z: 0 }, section * 2, section * 2);
+    }
+    if (spec.openness < 0.35) for (const side of [-1, 1]) {
+      const x = side * halfWidth;
+      const outer = [{ x, y: wallTop, z: halfDepth }, { x, y: wallTop, z: -halfDepth }, { x, y: ridgeY, z: 0 }];
+      if (side < 0) outer.reverse();
+      const inner = outer.map(p => ({ ...p, x: p.x - side * (grammar.wallThickness ?? section) }));
+      drum?.addQuad(outer[0]!, outer[1]!, outer[2]!, outer[2]!);
+      drum?.addQuad(inner[1]!, inner[0]!, inner[2]!, inner[2]!);
+      for (let i = 0; i < 3; i++) drum?.addQuad(outer[i]!, inner[i]!, inner[(i + 1) % 3]!, outer[(i + 1) % 3]!);
+    }
+    // Fine standing seams on sheet roofs; restrained courses on tiled roofs.
+    const sheet = spec.materials.roofCovering.includes('metal') || spec.materials.roofCovering.includes('steel');
+    if (sheet) {
+      const count = Math.max(4, Math.min(20, Math.round(grammar.width / 0.08)));
+      for (let i = 1; i < count; i++) for (const side of [-1, 1]) {
+        const x = -xEdge + xEdge * 2 * i / count;
+        roof.addBeam({ x, y: eaveY + section, z: side * zEdge }, { x, y: ridgeY + section, z: 0 }, section * 0.4, section * 0.5);
+      }
+    }
+    roof.addBox(0, ridgeY + section, 0, xEdge * 2, section * 1.5, section * 3);
+    emitStacks(canvas, grammar, halfWidth, halfDepth, ridgeY, postSurface, wallTop);
+    return ridgeY;
   }
 
   const shape = roofShellShape(grammar.roofFamily);
@@ -1515,40 +1570,69 @@ function emitRoof(
   let topY = wallTop;
   for (let tier = 0; tier < grammar.roofTiers; tier += 1) {
     const shrink = Math.pow(0.76, tier);
-    const height = grammar.width * grammar.roofPitch * Math.pow(0.86, tier);
+    // Spec pitch is rise over half the clear span; legacy grammars used full width.
+    const height = roofRiseForGrammar(grammar) * (grammar.spec ? shrink : Math.pow(0.86, tier));
     emitRoofShell(roof, tier === 0 ? soffit : undefined, {
-      halfWidth: halfWidth * shrink * random.range(0.995, 1.012),
-      halfDepth: halfDepth * shrink * random.range(0.995, 1.012),
+      halfWidth: halfWidth * shrink,
+      halfDepth: halfDepth * shrink,
       baseY,
       height,
       overhang: grammar.eaveOverhang,
-      upturn: grammar.eaveUpturn * shrink * random.range(0.9, 1.12),
+      projection: grammar.spec ? grammar.spec.roof.overhang * grammar.width / grammar.spec.width : undefined,
+      courseLip: grammar.spec ? Math.min(0.003, grammar.postThickness * 0.12) : undefined,
+      upturn: grammar.eaveUpturn * shrink,
       concavity: grammar.roofConcavity,
       ridgeXRatio: shape.ridgeXRatio,
       ridgeZRatio: shape.ridgeZRatio,
       segmentsPerSide: shape.segmentsPerSide,
-      rings: shape.rings,
-      eaveDrop: height * 0.16,
+      rings: grammar.spec && grammar.roofConcavity !== 0 ? 8 : shape.rings,
+      eaveDrop: grammar.spec ? height * projection / Math.max(0.04, halfDepth * shrink * (1 - shape.ridgeZRatio)) : height * 0.16,
       courses: laidCourses,
     });
 
+    if (tier === 0 && grammar.spec && grammar.spec.openness < 0.35
+      && ['gable', 'steep-gable', 'low-gable'].includes(grammar.spec.roof.archetype)) {
+      // Closed buildings need real gable end walls under the ridge, not black roof cavities.
+      const thickness = grammar.wallThickness ?? 0.035;
+      for (const side of [-1, 1]) {
+        const x = side * halfWidth * shape.ridgeXRatio;
+        const outer = [
+          { x, y: wallTop, z: side * halfDepth },
+          { x, y: wallTop, z: -side * halfDepth },
+          { x, y: wallTop + height, z: 0 },
+        ];
+        const inner = outer.map(p => ({ ...p, x: p.x - side * thickness }));
+        drum?.addQuad(outer[0]!, outer[1]!, outer[2]!, outer[2]!);
+        drum?.addQuad(inner[1]!, inner[0]!, inner[2]!, inner[2]!);
+        for (let edge = 0; edge < 3; edge++) {
+          const next = (edge + 1) % 3;
+          drum?.addQuad(outer[next]!, outer[edge]!, inner[edge]!, inner[next]!);
+        }
+        for (const z of [-halfDepth, halfDepth]) timber?.addBeam(
+          { x: x + side * thickness * 0.15, y: wallTop, z },
+          { x: x + side * thickness * 0.15, y: wallTop + height, z: 0 },
+          grammar.postThickness * 0.35, grammar.postThickness * 0.45);
+      }
+    }
+
     // Rafter tails under the eave: the detail that makes an overhang read as carpentry.
     if (grammar.rafterTails > 0 && tier === 0) {
-      const overhangDepth = halfDepth * grammar.eaveOverhang;
+      const overhangDepth = grammar.spec ? grammar.spec.roof.overhang * grammar.width / grammar.spec.width : halfDepth * grammar.eaveOverhang;
       for (const frame of wallFrames(halfWidth * shrink, halfDepth * shrink)) {
         const count = Math.max(2, Math.round((grammar.rafterTails * frame.length) / (grammar.width + grammar.depth)));
         for (let index = 0; index < count; index += 1) {
           const u = -frame.length / 2 + (frame.length * (index + 0.5)) / count;
           const reach = random.range(0.86, 1.0);
-          const inner = framePoint(frame, u, baseY - height * 0.05, -grammar.postThickness);
-          const outer = framePoint(frame, u, baseY - height * 0.16 - overhangDepth * 0.12, overhangDepth * reach);
+          const drop = grammar.spec ? height * overhangDepth / Math.max(0.04, halfDepth * shrink * (1 - shape.ridgeZRatio)) : height * 0.16;
+          const inner = framePoint(frame, u, baseY - grammar.postThickness, -grammar.postThickness);
+          const outer = framePoint(frame, u, baseY - drop - grammar.postThickness * 0.6, overhangDepth * reach);
           timber?.addBeam(inner, outer, grammar.postThickness * random.range(0.44, 0.58), grammar.postThickness * 0.5);
         }
       }
     }
 
     if (tier < grammar.roofTiers - 1) {
-      const drumHeight = height * 0.44;
+      const drumHeight = height * (grammar.spec ? 0.14 : 0.44);
       drum?.addBox(0, baseY + height + drumHeight / 2, 0, halfWidth * shrink * 1.42, drumHeight, halfDepth * shrink * 1.42);
       timber?.addBox(0, baseY + height + drumHeight, 0, halfWidth * shrink * 1.5, grammar.postThickness * 0.7, halfDepth * shrink * 1.5);
       baseY += height + drumHeight;
@@ -1578,10 +1662,12 @@ function emitRoof(
       }
     }
   }
-  timber?.addBox(0, topY + grammar.postThickness * 0.5, 0, Math.max(ridgeHalf * 2, grammar.width * 0.16), grammar.postThickness * 1.1, grammar.postThickness * 1.4);
+  roof.addBox(0, topY + section, 0, Math.max(ridgeHalf * 2, grammar.width * 0.08), section * 1.5, section * 3);
   if (grammar.ridgeFinials) {
     for (const side of [-1, 1]) {
-      const size = grammar.postThickness * 2.4 + grammar.ornament * 0.05;
+      const size = grammar.spec ? Math.min(grammar.postThickness * 1.2, roofRiseForGrammar(grammar) * 0.08)
+        : grammar.postThickness * 2.4 + grammar.ornament * 0.05;
+      roof.addBox(side * Math.max(ridgeHalf, grammar.width * 0.08), topY + size * 0.25, 0, size * 0.65, size * 0.5, size * 0.65);
       emitMotifIcon(
         motif,
         grammar.motif,
@@ -1593,7 +1679,7 @@ function emitRoof(
     }
   }
 
-  emitStacks(canvas, grammar, halfWidth, halfDepth, topY, postSurface);
+  emitStacks(canvas, grammar, halfWidth, halfDepth, topY, postSurface, wallTop);
   canvas.clean(roof);
   return topY;
 }
@@ -1606,6 +1692,7 @@ function emitStacks(
   halfDepth: number,
   topY: number,
   postSurface: SurfaceKey,
+  wallTop = topY,
 ): void {
   const brick = canvas.at(grammar.wallLayer === 'panel' ? 'panel' : 'brick', BUILD_STAGE.UTILITIES);
   const metal = canvas.at('metal', BUILD_STAGE.UTILITIES);
@@ -1620,13 +1707,15 @@ function emitStacks(
   for (let index = 0; index < chimneys; index += 1) {
     const x = (-halfWidth * 0.6 + (halfWidth * 1.2 * (index + 0.5)) / Math.max(1, chimneys)) * 1;
     const z = -halfDepth * 0.45;
-    const height = grammar.wallHeight * (2.1 + index * 0.35);
-    brick?.addBox(x, topY + height / 2, z, 0.09, height, 0.09);
-    brick?.addBox(x, topY + height * 0.42, z, 0.115, 0.035, 0.115);
-    motif?.addBox(x, topY + height * 0.74, z, 0.108, 0.05, 0.108);
-    motif?.addBox(x, topY + height * 0.74, z, 0.128, 0.018, 0.128);
-    trim?.addBox(x, topY + height + 0.02, z, 0.16, 0.02, 0.16);
-    trim?.addBox(x, topY + height + 0.045, z, 0.11, 0.03, 0.11);
+    const exposed = grammar.wallHeight * (grammar.spec ? 0.42 + index * 0.07 : 2.1 + index * 0.35);
+    const base = grammar.spec ? wallTop : topY;
+    const height = topY + exposed - base;
+    brick?.addBox(x, base + height / 2, z, 0.07, height, 0.07);
+    brick?.addBox(x, topY + exposed * 0.42, z, 0.082, 0.015, 0.082);
+    motif?.addBox(x, topY + exposed * 0.74, z, 0.077, 0.022, 0.077);
+    motif?.addBox(x, topY + exposed * 0.74, z, 0.088, 0.009, 0.088);
+    trim?.addBox(x, topY + exposed + 0.02, z, 0.095, 0.013, 0.095);
+    trim?.addBox(x, topY + exposed + 0.045, z, 0.066, 0.018, 0.066);
   }
 
   for (let index = 0; index < grammar.vents; index += 1) {
@@ -1728,7 +1817,9 @@ function emitFrontage(
         posts?.addBox(side * width * 0.5, plinthTop + columnHeight, z, thickness * 2.6, thickness, thickness * 2.6);
       }
       posts?.addBox(0, plinthTop + columnHeight + thickness * 1.4, z, width * 1.16, thickness * 1.9, projection * 1.2);
-      if (roof) {
+      if (roof && grammar.spec && ['flat', 'flat-parapet'].includes(grammar.spec.roof.archetype)) {
+        roof.addBox(0, plinthTop + columnHeight + thickness * 2.4, z, width * 1.16, thickness * 0.45, projection * 1.2);
+      } else if (roof) {
         emitRoofShell(roof, undefined, {
           halfWidth: width * 0.58,
           halfDepth: projection * 0.6,
@@ -2095,7 +2186,7 @@ function emitCrown(
       return roofTop + legHeight + tankHeight + 0.06;
     }
     case 'roof-monitor': {
-      const monitorHeight = grammar.wallHeight * 0.44;
+      const monitorHeight = grammar.wallHeight * (grammar.spec ? 0.22 : 0.44);
       const halfLength = halfWidth * 0.82;
       const halfSpan = Math.max(0.03, halfDepth * 0.2);
       wall?.addBox(0, roofTop + monitorHeight * 0.5, 0, halfLength * 2, monitorHeight, halfSpan * 2);
@@ -2375,19 +2466,30 @@ function emitDetails(
   }
 
   // Corner brackets under the eaves.
-  if (grammar.ornament > 0.3 && grammar.roofFamily !== 'hide-cone' && grammar.roofFamily !== 'lean-slope') {
+  if (grammar.ornament > 0.3 && grammar.roofFamily !== 'hide-cone' && grammar.roofFamily !== 'lean-slope'
+    && (!grammar.spec || grammar.rafterTails > 0)) {
     for (const corner of [
       [halfWidth, halfDepth],
       [-halfWidth, halfDepth],
       [-halfWidth, -halfDepth],
       [halfWidth, -halfDepth],
     ] as const) {
+      if (grammar.spec && ['stone', 'ceramic', 'binder'].includes(architecturalMaterial(grammar.spec.materials.frame).family)) {
+        // Masonry carries an eave on stepped corbels, rather than diagonal stone struts.
+        for (let step = 0; step < 3; step++) {
+          const reach = thickness * (0.6 + step * 0.3);
+          timber?.addBox(corner[0] + Math.sign(corner[0]) * reach * 0.3,
+            wallTop - thickness * (1.1 - step * 0.32), corner[1] + Math.sign(corner[1]) * reach * 0.3,
+            reach, thickness * 0.32, reach);
+        }
+      } else {
+      const reach = grammar.spec ? Math.min(grammar.spec.roof.overhang * grammar.width / grammar.spec.width * 0.55, thickness * 1.5) : thickness * 2;
       timber?.addBeam(
-        { x: corner[0] * 0.86, y: wallTop - grammar.wallHeight * 0.28, z: corner[1] * 0.86 },
-        { x: corner[0] * 1.16, y: wallTop + thickness, z: corner[1] * 1.16 },
-        thickness * 0.7,
-        thickness * 0.7,
+        { x: corner[0] - Math.sign(corner[0]) * thickness, y: wallTop - thickness * 2.5, z: corner[1] - Math.sign(corner[1]) * thickness },
+        { x: corner[0] + Math.sign(corner[0]) * reach, y: wallTop - thickness * 0.7, z: corner[1] + Math.sign(corner[1]) * reach },
+        thickness * 0.4, thickness * 0.4,
       );
+      }
     }
   }
 
@@ -2458,7 +2560,8 @@ function emitDetails(
   }
 
   // Forge / reactor heat
-  if (grammar.forgeGlow > 0) {
+  if (grammar.forgeGlow > 0 && !grammar.spec) {
+    // Resolved equipment emits its own actual hearth; legacy heat markers are redundant.
     forge?.addBox(halfWidth * 0.5, plinthTop + grammar.wallHeight * 0.32, halfDepth * 1.01, 0.13 * grammar.forgeGlow + 0.05, 0.11, 0.02);
     if (grammar.forgeGlow > 0.7) {
       forge?.addBox(0, roofTop * 0.5, 0, halfWidth * 0.3, roofTop * 0.06, halfDepth * 0.3);
@@ -2471,17 +2574,32 @@ function emitDetails(
     const radiusZ = halfDepth * (grammar.enclosure === 'court' ? 2.05 : 1.8);
     const wallHeight = grammar.enclosure === 'court' ? 0.2 : grammar.enclosure === 'yard' ? 0.12 : 0.16;
     const surface = canvas.at(grammar.enclosure === 'stakes' ? 'timber' : 'stone', BUILD_STAGE.DETAIL);
-    const posts = grammar.enclosure === 'stakes' ? 14 : 22;
-    for (let index = 0; index < posts; index += 1) {
-      const angleT = index / posts;
-      if (angleT > 0.42 && angleT < 0.58) continue; // entrance gap toward +Z
-      const angle = angleT * Math.PI * 2 + Math.PI * 0.25;
-      const x = Math.cos(angle) * radiusX;
-      const z = Math.sin(angle) * radiusZ;
-      if (grammar.enclosure === 'stakes') {
-        surface?.addBeam({ x, y: 0, z }, { x: x * 1.04, y: wallHeight * random.range(0.8, 1.25), z: z * 1.04 }, 0.018, 0.018);
-      } else {
-        surface?.addBox(x, wallHeight / 2, z, 0.09, wallHeight, 0.09, angle);
+    if (grammar.spec?.archetype === 'workshop' && grammar.enclosure === 'yard') {
+      const count = 28, height = Math.min(wallHeight, grammar.wallHeight * 0.18), section = 0.024;
+      const points = Array.from({ length: count }, (_, index) => {
+        const angle = index / count * Math.PI * 2;
+        return { x: Math.cos(angle) * radiusX, y: height / 2, z: Math.sin(angle) * radiusZ };
+      });
+      const entrance = (p: Vec3) => p.z > 0 && Math.abs(p.x) < doorWidthFor(grammar) * 0.95;
+      for (let index = 0; index < count; index++) {
+        const a = points[index]!, b = points[(index + 1) % count]!;
+        if (entrance(a) || entrance(b)) continue;
+        surface?.addBeam(a, b, section, height);
+        surface?.addBeam({ ...a, y: height + 0.004 }, { ...b, y: height + 0.004 }, section * 1.2, 0.008);
+      }
+    } else {
+      const posts = grammar.enclosure === 'stakes' ? 14 : 22;
+      for (let index = 0; index < posts; index += 1) {
+        const angleT = index / posts;
+        if (angleT > 0.42 && angleT < 0.58) continue; // entrance gap toward +Z
+        const angle = angleT * Math.PI * 2 + Math.PI * 0.25;
+        const x = Math.cos(angle) * radiusX;
+        const z = Math.sin(angle) * radiusZ;
+        if (grammar.enclosure === 'stakes') {
+          surface?.addBeam({ x, y: 0, z }, { x: x * 1.04, y: wallHeight * random.range(0.8, 1.25), z: z * 1.04 }, 0.018, 0.018);
+        } else {
+          surface?.addBox(x, wallHeight / 2, z, 0.09, wallHeight, 0.09, angle);
+        }
       }
     }
     if (grammar.enclosure === 'court') {

@@ -4,6 +4,7 @@ import { eventNewsWindow } from '../historian/EventCoverage';
 import { isEarlyDocumentary } from '../historian/EarlyDocumentary';
 import * as THREE from 'three';
 import { advanceCameraSpring } from './CameraSpring';
+import { ActionWitness } from './ActionWitness';
 import { advanceCameraFlight, cameraFlightSettled, type CameraFlightLimits } from './CameraFlight';
 import { CinematicSequencePlanner, type CinematicBeatRole, type CinematicPlannedShot } from './CinematicSequencePlanner';
 import { easeCameraFov, screenSpaceComposition } from './ScreenSpaceComposition';
@@ -131,6 +132,7 @@ export interface DocumentaryCompletionInput {
   readonly actionProgress?: number;
   readonly contactStrength?: number;
   readonly partnerPresent?: boolean;
+  readonly payoffWitnessed?: boolean;
 }
 
 export function documentaryMinimumHoldSeconds(role: CinematicBeatRole | undefined, kind: ObservationKind | undefined): number {
@@ -152,8 +154,9 @@ export function documentaryShotShouldComplete(input: DocumentaryCompletionInput)
     return input.settled && input.ageSeconds >= Math.max(minimum, input.durationSeconds * 0.55);
   }
   if (input.subjectPresent === false) return true;
+  if (input.payoffWitnessed !== undefined) return input.payoffWitnessed;
   if (input.actionProgress !== undefined || input.contactStrength !== undefined) {
-    return (input.actionProgress ?? 0) >= 0.86 || (input.contactStrength ?? 0) >= 0.7;
+    return false;
   }
   if (input.partnerPresent === false) return true;
   return input.settled && input.ageSeconds >= Math.max(minimum, input.durationSeconds * 0.72);
@@ -181,6 +184,16 @@ const FRAMING: Record<ObservationKind, CameraFraming> = {
   'civilization-ending': { radius: [46, 64], height: [42, 60], targetHeight: 0.7, durationScale: 1.7 },
   'historian-context': { radius: [32, 45], height: [30, 43], targetHeight: 0.8, durationScale: 1.3 },
 };
+
+/** Planned scale owns the distance, while kind continues to own the subject's behavior. */
+export function documentaryFramingFor(kind: ObservationKind, scale?: DocumentaryShotScale): CameraFraming {
+  const base = FRAMING[kind];
+  if (!['worker-follow', 'traveler-follow', 'discovery-scene', 'street-observation'].includes(kind) || !scale) return base;
+  if (scale === 'detail') return { ...base, radius: [1.45, 2.25], height: [0.42, 0.7] };
+  if (scale === 'human') return { ...base, radius: [2.6, 3.4], height: [0.8, 1.1] };
+  if (scale === 'medium') return { ...base, radius: [4.2, 5.4], height: [1.3, 1.8] };
+  return { ...base, radius: [9, 12], height: [4.5, 6] };
+}
 
 const DOCUMENTARY_BREAK_TYPES = new Set([
   'discovery', 'knowledge-lost', 'knowledge-rediscovered', 'knowledge-adopted', 'technology-transformation', 'industrialization-stage', 'industrialization', 'infrastructure-built', 'archive-destroyed',
@@ -1279,6 +1292,9 @@ export class CameraDirector {
   private recoveryBridgeSeconds = 0;
   private recoveryBridgeFov?: number;
   private shotAge = 0;
+  private readonly actionWitness = new ActionWitness();
+  private storyAzimuth?: number;
+  private storyActionTarget?: string;
   private lastHumanShot = false;
   private shotDuration = 12;
   private currentScene?: ObservationCandidate;
@@ -1969,6 +1985,11 @@ export class CameraDirector {
     focusEventId?: string,
     elapsedSeconds = 0,
   ): void {
+    if (this.currentScene?.editorial?.desiredActivity === 'construct'
+      && this.activeSequence?.role === 'detail' && !this.actionWitness.complete) {
+      // A timed-out detail does not earn a payoff beat. Yield to current history.
+      this.sequencePlanner.interrupt();
+    }
     if (this.acquiredScene && this.sceneLifecycle.get(this.acquiredScene.id) === 'acquired') {
       if (this.shotAge >= documentaryMinimumHoldSeconds(this.activeSequence?.role, this.acquiredScene.kind)) {
         this.transitionScene(this.acquiredScene.id, 'performed');
@@ -1999,7 +2020,8 @@ export class CameraDirector {
       if (planned) {
         const fresh = this.historian.refreshScene(planned.scene, state);
         // A sequence is a proposal, not a frozen script. Changed/departed subjects yield to live history.
-        if (!fresh || this.isEventCoolingDown(fresh.event?.id)) {
+        if (!fresh || this.isEventCoolingDown(fresh.event?.id)
+          || planned.scene.editorial?.desiredActivity === 'construct' && fresh.editorial?.desiredActivity !== 'construct') {
           this.sequencePlanner.interrupt();
           planned = undefined;
         } else {
@@ -2058,7 +2080,7 @@ export class CameraDirector {
           scene = humanScene;
           this.activeSequence = undefined;
         } else {
-          const eligibleForSequence = anchor.kind !== 'landscape-pause' && anchor.kind !== 'night-transition' && !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:') && !anchor.id.startsWith('development:');
+          const eligibleForSequence = anchor.kind !== 'landscape-pause' && anchor.kind !== 'night-transition' && !isFoundingCameraScene(anchor.id) && !isScenicFlightScene(anchor.id) && !anchor.id.startsWith('human:') && (!anchor.id.startsWith('development:') || anchor.editorial?.desiredActivity === 'construct');
           if (eligibleForSequence) {
             const candidates = this.historian.planningCandidates(state, anchor).filter(candidate =>
               !isFoundingCameraScene(candidate.id) && !isScenicFlightScene(candidate.id)
@@ -2151,7 +2173,7 @@ export class CameraDirector {
     this.reframeLift = 0;
     this.resetFrameWatch();
 
-    const framing = FRAMING[scene.kind];
+    const framing = documentaryFramingFor(scene.kind, this.activeSequence?.scale);
     const scenicProfile = scenicFlightProfileFor(scene.id);
     const foundingProfile = foundingLandingShotProfileFor(scene.id);
     const castProfile = foundingCastShotProfileFor(scene.id);
@@ -2214,8 +2236,19 @@ export class CameraDirector {
       : anchor ? anchor.azimuth + continuityVariation * 0.5 : inheritedAzimuth + continuityVariation)
       + (foundingProfile?.azimuthOffset ?? castProfile?.azimuthOffset ?? 0);
 
+    const initialAction = this.subjectPresentation?.(scene.subjectId)?.action;
+    if (this.activeSequence?.ordinal === 0 && initialAction) {
+      const actor = this.subjectPresentation?.(scene.subjectId);
+      if (actor) baseAzimuth = interactionCameraComposition(actor, initialAction, baseAzimuth).azimuth;
+    }
+
     // Do not photograph the same place from the same side twice in a row.
-    const diversify = !anchor && !isFoundingCameraScene(scene.id) && !scenicProfile
+    const localContinuity = this.acquiredScene && (this.acquiredScene.subjectId === scene.subjectId
+      || Math.hypot(this.acquiredScene.position.x - scene.position.x, this.acquiredScene.position.z - scene.position.z) < 7);
+    if (this.activeSequence && this.activeSequence.ordinal > 0 && localContinuity && this.storyAzimuth !== undefined) {
+      baseAzimuth = this.storyAzimuth;
+    }
+    const diversify = (!this.activeSequence || this.activeSequence.ordinal === 0) && !anchor && !isFoundingCameraScene(scene.id) && !scenicProfile
       && scene.kind !== 'regional-travel' && scene.kind !== 'battle-overview' && scene.kind !== 'aftermath-pullback';
     if (diversify && this.recentAngles.some(entry => Math.hypot(entry.x - focusX, entry.z - focusZ) < 7
       && angularDistance(entry.azimuth, baseAzimuth) < 0.55)) {
@@ -2233,6 +2266,7 @@ export class CameraDirector {
 
     const clear = this.chooseClearAzimuth(state, scene.kind, baseAzimuth, radius, height, ground, elevationAt);
     this.shotAzimuth = clear.azimuth;
+    if (this.activeSequence?.ordinal === 0) this.storyAzimuth = this.shotAzimuth;
     radius *= clear.scale;
     if (!isFoundingCameraScene(scene.id) && !scenicProfile) {
       this.recentAngles.push({ x: focusX, z: focusZ, azimuth: this.shotAzimuth });
@@ -2706,6 +2740,12 @@ export class CameraDirector {
       // Refresh evidence at the physical lens arrival, not at the start of a potentially long flight.
       this.currentScene = { ...this.currentScene, statement: fresh.statement, editorial: fresh.editorial };
     }
+    if (this.activeSequence && this.currentScene.editorial?.desiredActivity === 'construct') {
+      const target = this.subjectPresentation?.(this.currentScene.subjectId)?.action?.targetId;
+      if (target && this.storyActionTarget && target !== this.storyActionTarget) {
+        this.abandonCurrentFlight(); return;
+      }
+    }
     this.acquiredScene = this.currentScene;
     this.transitionScene(this.currentScene.id, 'acquired');
     if (this.currentScene.event) {
@@ -2720,6 +2760,10 @@ export class CameraDirector {
     if (this.observation.narrationVisible) this.lastNarrationSeconds = this.presentationSeconds;
     if (this.activeSequence?.role === 'reveal') this.sequenceRevealed = true;
     this.shotAge = 0;
+    this.actionWitness.reset();
+    if (this.activeSequence?.ordinal === 0 && this.currentScene.editorial?.desiredActivity === 'construct') {
+      this.storyActionTarget = this.subjectPresentation?.(this.currentScene.subjectId)?.action?.targetId;
+    }
     this.trackingInitialized = false;
     this.routeCheckSeconds = 0;
     this.recoveryOffset = undefined;
@@ -2785,7 +2829,11 @@ export class CameraDirector {
     threadId: string;
     anchorEventId?: string;
   } {
-    if (this.activeSequence?.id !== shot.sequenceId) this.sequenceRevealed = false;
+    if (this.activeSequence?.id !== shot.sequenceId) {
+      this.sequenceRevealed = false;
+      this.storyAzimuth = undefined;
+      this.storyActionTarget = undefined;
+    }
     return {
       id: shot.sequenceId,
       ordinal: shot.ordinal,
@@ -2825,7 +2873,10 @@ export class CameraDirector {
     const desiredActivity = scene.editorial?.desiredActivity;
     if (desiredActivity && this.shotAge >= 6) {
       const person = state.people.find(p => p.id === scene.subjectId);
-      if (person && (!person.alive || person.activity !== desiredActivity)) return true;
+      if (person && (!person.alive || person.activity !== desiredActivity)) {
+        if (desiredActivity === 'construct') this.sequencePlanner.interrupt();
+        return true;
+      }
       if (!person && desiredActivity === 'construct' && scene.id.startsWith('development:')
         && !state.settlements.some(s => s.development?.project?.plotId === scene.subjectId)) return true;
     }
@@ -2834,6 +2885,16 @@ export class CameraDirector {
       && this.camera.position.distanceTo(this.desiredPosition) <= 0.45
       && this.lookTarget.distanceTo(this.desiredTarget) <= 0.6;
     const presentation = this.subjectPresentation?.(scene.subjectId);
+    const observedPayoff = this.actionWitness.observe(presentation?.action, this.shotAge);
+    const payoffWitnessed = presentation?.action ? observedPayoff : undefined;
+    if (this.activeSequence && scene.editorial?.desiredActivity === 'construct') {
+      const target = presentation?.action?.targetId;
+      if (target && this.storyActionTarget && target !== this.storyActionTarget) {
+        this.sequencePlanner.interrupt();
+        return true;
+      }
+      if (target) this.storyActionTarget = target;
+    }
     const partnerPresent = presentation?.partnerId
       ? Boolean(this.subjectPresentation?.(presentation.partnerId))
       : undefined;
@@ -2845,7 +2906,8 @@ export class CameraDirector {
       ? this.subjectPresentation ? Boolean(livingSubject && presentation) : livingSubject
       : undefined;
     return documentaryShotShouldComplete({
-      mode: scene.editorial?.completion,
+      mode: this.activeSequence && scene.editorial?.desiredActivity === 'construct' && this.activeSequence.role !== 'detail'
+        ? 'sequence-beat' : scene.editorial?.completion,
       role: this.activeSequence?.role,
       kind: scene.kind,
       ageSeconds: this.shotAge,
@@ -2855,6 +2917,7 @@ export class CameraDirector {
       actionProgress: presentation?.action?.phaseProgress,
       contactStrength: presentation?.action?.contactStrength,
       partnerPresent,
+      payoffWitnessed,
     });
   }
 
@@ -2990,7 +3053,7 @@ export class CameraDirector {
     if (scene.kind === 'worker-follow' || scene.kind === 'traveler-follow' || scene.kind === 'discovery-scene') {
       const person = state.people.find((candidate) => candidate.alive && candidate.id === scene.subjectId);
       if (person) {
-        const framing = FRAMING[scene.kind];
+        const framing = documentaryFramingFor(scene.kind, this.activeSequence?.scale);
         const castProfile = foundingCastShotProfileFor(scene.id);
         const presentation = this.subjectPresentation?.(person.id);
         const actorX = presentation?.x ?? person.position.x;
@@ -3003,9 +3066,12 @@ export class CameraDirector {
         const interactionY = composition && action
           ? elevationAt(composition.targetX, composition.targetZ) + Math.max(0.06, action.contactHeight ?? framing.targetHeight)
           : actorFocusY;
-        const focusX = composition?.focusX ?? actorX;
-        const focusZ = composition?.focusZ ?? actorZ;
-        const focusY = composition ? THREE.MathUtils.lerp(actorFocusY, interactionY, composition.anchorWeight) : actorFocusY;
+        // Read the person first, the work contact in detail, then their relationship.
+        const anchorWeight = composition ? this.activeSequence?.role === 'observe' ? 0.25
+          : this.activeSequence?.role === 'detail' ? 0.62 : composition.anchorWeight : 0;
+        const focusX = composition ? THREE.MathUtils.lerp(actorX, composition.targetX, anchorWeight) : actorX;
+        const focusZ = composition ? THREE.MathUtils.lerp(actorZ, composition.targetZ, anchorWeight) : actorZ;
+        const focusY = composition ? THREE.MathUtils.lerp(actorFocusY, interactionY, anchorWeight) : actorFocusY;
         this.smoothFocus(focusX, focusY, focusZ, deltaSeconds, scene.kind === 'traveler-follow' ? 1.45 : 1.9);
 
         // Step 2: when the renderer has an authoritative presentation action, the camera photographs
@@ -3015,7 +3081,8 @@ export class CameraDirector {
         const followingDistance = ((castDistance ?? (isFoundingReleaseScene(scene.id) ? 2.55 : this.interpolate(framing.radius, framingVariation))) + (composition?.distanceBoost ?? 0)) * this.reframeScale;
         const cameraHeight = (castProfile?.height ?? (isFoundingReleaseScene(scene.id) ? 0.92 : this.interpolate(framing.height, framingVariation))) + this.reframeLift;
         const contactLock = composition?.contactLock ?? 0;
-        const baseAngle = composition?.azimuth ?? this.shotAzimuth;
+        const baseAngle = this.activeSequence && this.storyAzimuth !== undefined
+          ? this.shotAzimuth : composition?.azimuth ?? this.shotAzimuth;
         const authoredOrbit = castProfile ? (eased - 0.5) * castProfile.orbitSpan : 0;
         // Human scenes should feel observed, not continuously operated. Keep the lens mostly
         // planted and reserve only a tiny breathing correction during the motion window.

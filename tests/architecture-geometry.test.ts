@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 
+import type { FacadePlan } from '../src/render/architecture/FacadePlan';
 import type { CultureStyle } from '../src/sim/types';
 import type { DevelopmentResponse, StructureMaterial } from '../src/sim/development/types';
 import { MaterialPalette, type Era } from '../src/render/materials/MaterialPalette';
@@ -151,9 +152,10 @@ describe('Spec fields reach visible geometry', () => {
   });
 
   it('opens the plan as openness rises', () => {
-    const closed = build({ archetype: 'market', spec: { openness: 0 } });
-    const partly = build({ archetype: 'market', spec: { openness: 0.4 } });
-    const open = build({ archetype: 'market', spec: { openness: 0.9 } });
+    // Isolate the bay frame itself; roof-stage gable closure is a separate feature.
+    const closed = build({ archetype: 'market', spec: { openness: 0 }, stage: BUILD_STAGE.FRAME });
+    const partly = build({ archetype: 'market', spec: { openness: 0.4 }, stage: BUILD_STAGE.FRAME });
+    const open = build({ archetype: 'market', spec: { openness: 0.9 }, stage: BUILD_STAGE.FRAME });
     // Open bays are posts and lintels standing where a wall would be, so they add geometry.
     expect(partly.vertices).toBeGreaterThan(closed.vertices);
     expect(open.vertices).toBeGreaterThan(partly.vertices);
@@ -467,6 +469,41 @@ describe('Previously-confusable archetypes stay apart', () => {
       const serialize = (p: SilhouetteProfile) => ({ ...p, equipmentFamily: [...p.equipmentFamily] });
       expect(distinguishingAxes(a, b), JSON.stringify({ a: serialize(a), b: serialize(b) }))
         .toBeGreaterThanOrEqual(minimumAxes);
+    });
+  }
+});
+
+
+describe('resolved roof envelopes', () => {
+  const roof = (archetype: BuildingSpec['roof']['archetype'], pitch = 0.5): BuildingSpec['roof'] => ({
+    archetype, pitch, overhang: 0.08, span: 1, tiers: 1, intermediateSupport: false,
+  });
+  for (const archetype of ['flat', 'flat-parapet', 'gable', 'shed', 'sawtooth'] as const) {
+    it(`composes ${archetype} at its actual span without cultural shell inflation`, () => {
+      const result = build({ archetype: 'workshop', spec: { width: 1.6, depth: 1, floors: 1, storeyHeight: 0.4,
+        bays: 4, openness: 0.1, parapet: archetype === 'flat-parapet', roof: roof(archetype) },
+        grammar: { massing: 'single', crown: 'none', frontage: 'none', forecourt: false, gateway: false,
+          eaveUpturn: 0, roofConcavity: 0, rafterTails: 0, ridgeFinials: false } });
+      const plan = result.group.userData['facadePlan'] as FacadePlan;
+      const rise = plan.roof.top - plan.wallTop;
+      if (archetype === 'flat') expect(rise).toBeLessThan(0.025);
+      if (archetype === 'flat-parapet') expect(rise).toBeCloseTo(0.048);
+      if (archetype === 'gable') expect(rise).toBeCloseTo(0.25);
+      if (archetype === 'shed') expect(rise).toBeCloseTo(0.27);
+      if (archetype === 'sawtooth') expect(rise).toBeCloseTo(0.1875);
+      const endFaces = new Set<number>();
+      result.group.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const positions = object.geometry.getAttribute('position');
+        const normals = object.geometry.getAttribute('normal');
+        for (const value of positions.array) expect(Number.isFinite(value)).toBe(true);
+        for (let i = 0; i < positions.count; i++) {
+          if (positions.getY(i) <= plan.wallTop + 0.01 || Math.abs(Math.abs(positions.getX(i)) - 0.8) > 1e-5) continue;
+          const side = Math.sign(positions.getX(i));
+          if (normals.getX(i) * side > 0.99) endFaces.add(side);
+        }
+      });
+      if (['gable', 'shed', 'sawtooth'].includes(archetype)) expect([...endFaces].sort()).toEqual([-1, 1]);
     });
   }
 });

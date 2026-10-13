@@ -29,6 +29,7 @@ import { materialBillSignature } from '../architecture/MaterialSourcing';
 import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
 import { GeometryBuilder } from './GeometryBuilder';
 import type { SurfaceKey } from '../materials/MaterialPalette';
+import { FacadeTextureCache } from '../architecture/FacadeTextures';
 
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
@@ -280,6 +281,7 @@ function farCrownSilhouette(
  * Caches results to avoid redundant generation
  */
 export class AssetBuilder {
+  readonly facadeTextures = new FacadeTextureCache();
   private readonly cache: Map<string, CachedAsset>;
   private readonly materialPalettes: Map<string, MaterialPalette>;
   private readonly cultureProfiles: Map<string, CultureStyleProfile>;
@@ -548,6 +550,7 @@ export class AssetBuilder {
       : resolveBuildingGrammar(profile, config.era, role, config.seed, config.development, config.settlementIdentity, config.localSlopeDegrees, config.grammarContext);
     const coreMaterial = this.coreMaterialFor(grammar, config.development);
     const composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
+    this.facadeTextures.apply(composed.group);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
     // A machine building's silhouette is its machinery — sails, wheel, stack — which a massing box
     // would erase exactly at the distances where it should be recognised. Mills are few, so they keep
@@ -1052,6 +1055,7 @@ export class AssetBuilder {
    * Dispose resources
    */
   dispose(): void {
+    this.facadeTextures.dispose();
     this.cache.forEach(asset => {
       if ('dispose' in asset.mesh) {
         const disposable = asset.mesh as THREE.Object3D & { dispose?: () => void };

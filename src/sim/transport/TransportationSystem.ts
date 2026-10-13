@@ -56,12 +56,15 @@ function contributors(a: Settlement, b: Settlement): Settlement[] {
 
 function availableAcross(settlements: readonly Settlement[], options: readonly MaterialKind[]): number {
   return settlements.reduce((total, settlement) => total + options.reduce((sum, material) =>
-    sum + (settlement.materials?.stock[material] ?? 0), 0), 0);
+    sum + Math.max(0, settlement.localMaterials[material] ?? 0), 0), 0);
 }
 
 function maxCapitalWork(a: Settlement, b: Settlement, segment: TransportSegment): number {
   if (!materialAuthority(a, b)) return Number.POSITIVE_INFINITY;
   const settlements = contributors(a, b);
+  // takeMaterial reconciles earlier bulk consumers before withdrawing. Budget from the
+  // same reconciled physical stock so a legacy debit cannot invalidate this preflight.
+  for (const settlement of settlements) reconcileBulkStocks(settlement);
   return Math.max(0, Math.min(...capitalRequirements(segment).map((requirement) =>
     requirement.perWork <= EPSILON ? Number.POSITIVE_INFINITY : availableAcross(settlements, requirement.options) / requirement.perWork)));
 }

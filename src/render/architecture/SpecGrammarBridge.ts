@@ -160,8 +160,8 @@ export function roofFamilyFor(spec: BuildingSpec): RoofFamily {
       return 'tile-layered';
     case 'flat':
     case 'flat-parapet':
-      // A flat roof has no gable to read, so the hipped family's low shell is the closest
-      // existing form; the parapet flag and a near-zero pitch do the rest.
+      // Compatibility surface family only: the composer reads the resolved archetype
+      // and emits an actual deck/parapet before entering its pitched-shell path.
       return 'tile-hip';
     case 'hipped':
     case 'pediment':
@@ -517,7 +517,7 @@ export function grammarFromBuildingSpec(
     plinthInset: spec.foundation === 'masonry-plinth' || spec.foundation === 'brick-footing'
       || spec.foundation === 'concrete-pad' || spec.foundation === 'concrete-raft' ? -0.08 : -0.04,
     postStyle: postStyleFor(spec.materials.frame, primitive),
-    postThickness: Math.max(0.02, spec.wallThickness * 0.7),
+    postThickness: Math.max(0.018, Math.min(spec.storeyHeight * 0.12, spec.wallThickness * (spec.frameExposure > 0.45 ? 0.7 : 0.35))),
     wallLayer: wallLayerFor(spec.materials.wall),
     ...(foundationClass !== wallClass ? { baseMaterial: foundationClass } : {}),
     reinforced: spec.frameExposure > 0.45 && architecturalMaterial(spec.materials.frame).structure.span > 0.5,
@@ -586,6 +586,17 @@ export function grammarFromBuildingSpec(
     grammar.props = spec.adaptation === 'cache' ? 'storage' : 'domestic';
   }
 
+  // Curvature belongs to the resolved roof form, not to every building in a culture.
+  // Retain the traditional language on tiled pitched roofs; engineering roofs stay planar.
+  const traditional = ['hipped', 'gable', 'steep-gable', 'low-gable', 'layered', 'pediment'].includes(spec.roof.archetype)
+    && rank < periodRank('modern');
+  const rise = spec.roof.span * 0.5 * spec.roof.pitch;
+  grammar.eaveUpturn = traditional ? Math.min(profile.getEaveUpturn(ornament), rise * 0.1, spec.roof.overhang * 0.22) : 0;
+  grammar.roofConcavity = traditional ? Math.min(profile.getRoofCurvatureValue(), spec.roof.archetype === 'layered' ? 0.28 : 0.1)
+    : spec.roof.archetype === 'dome' || spec.roof.archetype === 'vault' ? -0.65 : 0;
+  grammar.rafterTails = traditional ? grammar.rafterTails : 0;
+  grammar.ridgeFinials = traditional && grammar.ridgeFinials && ['shrine', 'civic-hall', 'gatehouse'].includes(spec.archetype);
+  grammar.postThickness = Math.min(grammar.postThickness, spec.storeyHeight * 0.12);
   return grammar;
 }
 /**

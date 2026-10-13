@@ -108,7 +108,11 @@ export function surfaceFrameGlsl(useGrainAxis: boolean): string {
     : normalize(cross(gbN, gbAbsN.y > 0.7 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0)));
   vec3 gbBit = cross(gbN, gbTan);
   vec2 gbUV = vec2(dot(vGbLocal, gbTan), dot(vGbLocal, gbBit));
-  // Roof shells are lofted rings, so courses follow height and tiles follow arc length.
+  // A slope-local frame keeps tile courses and sheet seams straight on each roof face.
+  // Polar arc coordinates bent rectangular roof tiles into concentric waves.
+  vec3 gbRoofTan = length(gbN.xz) > 0.01 ? normalize(vec3(gbN.z, 0.0, -gbN.x)) : vec3(1.0, 0.0, 0.0);
+  vec2 gbRoofUV = vec2(dot(vGbLocal, gbRoofTan), dot(vGbLocal, cross(gbN, gbRoofTan)));
+  // Radial coordinates remain useful for organically bound thatch.
   float gbRadius = max(0.05, length(vGbLocal.xz));
   float gbArc = atan(vGbLocal.z, vGbLocal.x) * gbRadius;
 `;
@@ -245,14 +249,14 @@ function surfaceProgram(surface: SurfaceKey, rank: number): ProceduralSurfacePro
       return {
         grain: false,
         wear: 0.12,
-        relief: 0.008,
+        relief: 0.0015,
         body: /* glsl */ `
-  float gbCourse = vGbLocal.y / 0.032;
-  float gbCap = gbArc / 0.038;
+  float gbCourse = gbRoofUV.y / 0.032;
+  float gbCap = gbRoofUV.x / 0.038 + mod(floor(gbCourse), 2.0) * 0.5;
   float gbCourseLip = gbSeam(gbCourse, 0.36);
   float gbCapRidge = 1.0 - gbSeam(gbCap, 0.55);
   float gbTile = gbHash(vec2(floor(gbCap), floor(gbCourse))) - 0.5;
-  gbTone = 1.0 + gbTile * 0.12 - gbCourseLip * 0.16 + gbCapRidge * 0.07;
+  gbTone = 1.0 + gbTile * 0.16 - gbCourseLip * 0.1 + gbCapRidge * 0.04;
   gbRough = 1.0 + gbCourseLip * 0.1;
   gbHeight = gbCourseLip * 0.7 - gbCapRidge * 0.5;
 `,
@@ -296,9 +300,9 @@ function surfaceProgram(surface: SurfaceKey, rank: number): ProceduralSurfacePro
         relief: 0.006,
         body: /* glsl */ `
   // Standing seam: raised ribs running down the slope, lapped at each course.
-  float gbStanding = gbSeam(gbArc / 0.085, 0.12);
-  float gbLap = gbSeam(vGbLocal.y / 0.16, 0.06);
-  float gbOxide = gbFbm(vec2(gbArc * 9.0, vGbLocal.y * 9.0));
+  float gbStanding = gbSeam(gbRoofUV.x / 0.085, 0.055);
+  float gbLap = gbSeam(gbRoofUV.y / 0.32, 0.025);
+  float gbOxide = gbFbm(gbRoofUV * 9.0);
   gbTone = 1.0 + gbStanding * 0.07 - gbLap * 0.18 - gbOxide * 0.1 * gbWear;
   gbRough = 1.0 + gbLap * 0.12 + gbOxide * (0.25 + 0.5 * gbWear) * ${(0.6 - refined * 0.3).toFixed(3)};
   gbHeight = gbStanding * 0.9 - gbLap * 0.6;

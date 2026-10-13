@@ -928,7 +928,10 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     pitch,
     overhang: 0.06 + ornament * 0.1 * climate.eaveOverhang + climate.eaveOverhang * 0.08,
     span,
-    tiers: roofArchetype === 'layered' ? Math.max(2, Math.min(4, 1 + floors)) : roofArchetype === 'stepped' ? 3 : 1,
+    // Stacked ceremonial crowns belong to civic and sacred functions. Domestic/work roofs
+    // keep the culture's covering and eave language without acquiring a temple silhouette.
+    tiers: roofArchetype === 'layered' && ['shrine', 'civic-hall', 'gatehouse'].includes(archetypeId)
+      ? Math.max(2, Math.min(3, 1 + floors)) : roofArchetype === 'stepped' ? 3 : 1,
     intermediateSupport: span > maxSpan,
   };
 

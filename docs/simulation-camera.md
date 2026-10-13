@@ -2,6 +2,32 @@
 
 People are the protagonists; the world is what their lives leave behind.
 
+## Story-led camera beats
+
+Ordinary sequences stay on their anchor's editorial thread. Action and reveal beats stay local;
+an individual story requires evidence linking another subject to that person. Event participation
+requires an actor identity, the event itself, an explicit recorded causal link, or source-event
+provenance. Residence supplies context and release, not proof of participation. Missing shot roles
+are omitted instead of being filled with an unrelated subject, and the anchor keeps its actual role.
+
+Construction uses a three-view arc over the same current builder: human observation, work detail,
+then a medium view of the person/workface relationship. Those scales control real camera distances
+and heights, and focus shifts from the person toward the contact. The sequence keeps its opening
+axis; clearance and obstruction recovery remain authoritative. Queued evidence refreshes at departure
+and acquisition, and a changed project or activity discards the old arc. Narration belongs to the
+first view; wider workface views do not assert completion or occupancy.
+
+Action completion requires witnessed contact and follow-through, with at least 1.5 seconds to read
+the result. Construction pickup, travel and inspection do not qualify. Animation phase progress
+alone cannot finish a workflow. Evidence resets between acquired shots, missing or blocked actions,
+people and targets. A construction detail that reaches its duration ceiling without that evidence
+drops the queued reveal. Existing milestones and authored Arrival timing retain their hold rules.
+
+Screen-space trimming uses the inverse relationship between aim movement and subject movement.
+Regression checks apply the correction and reproject the subject on portrait, landscape and ultrawide
+viewports. A director integration test checks all three construction scales, continuous movement,
+axis continuity, project changes and unchanged simulation history.
+
 The path is Simulation history ? Historian proposal ? CinematicSequencePlanner / CameraDirector reservation ? physical camera flight ? acquisition ? renderer performance ? release. `Historian.chooseScene` has no authority to record a witnessed statement. `acquireScene` commits narrative memory and founding cursors only when the lens arrives. Headless editorial callers must explicitly acknowledge observations.
 
 First fire (per camp), first shelter, first permanent building, first resource/material discovery, first death and first burial bypass significance and recency limits. Completed infrastructure context distinguishes shelter, permanence and burial from proposed work. These records survive history trimming. The director retries unacquired milestones and holds acquired milestones before considering another story. First Fire's renderer performance starts on acquisition.

@@ -8,6 +8,8 @@ import { RoutePlanner, type PlannedEdge } from '../src/sim/transport/RoutePlanne
 import { edgeKey, fineSegmentDry, gradeLimit, navigableAt, pointKey, surveyEdge, waterAt } from '../src/sim/transport/TerrainTraversal';
 import { nearestIndex } from '../src/sim/terrain/TerrainField';
 import { gradeViolations, pathLength, positionAlongPath, TransportNetwork } from '../src/sim/transport/TransportNetwork';
+import { ensureMaterialInventory } from '../src/sim/resources/MaterialEconomy';
+import { publishBulkStocks } from '../src/sim/resources/Inventory';
 import { TransportationSystem } from '../src/sim/transport/TransportationSystem';
 import { transportRibbon } from '../src/render/transport/TransportGeometry';
 import { TerrainSurface } from '../src/render/terrain/TerrainSurface';
@@ -298,6 +300,43 @@ function grant(settlement: Settlement, id: string): void {
 }
 
 describe('Simulated construction and purposeful freight', () => {
+  it('reconciles earlier bulk spending before budgeting typed road construction', () => {
+    const { state, system, route, a, b } = freightFixture();
+    for (const town of [a, b]) {
+      ensureMaterialInventory(town);
+      publishBulkStocks(town);
+      // An earlier legacy consumer spent the projected mineral stock this month.
+      town.resources.minerals = 0;
+    }
+    route.transport!.deliveries = 2;
+    state.month = 1;
+    const wealth = a.resources.wealth;
+    expect(() => system.advanceMonth()).not.toThrow();
+    expect(a.resources.wealth).toBe(wealth);
+    expect([a, b].map(town => town.localMaterials.stone)).toEqual([0, 0]);
+    expect(Object.values(state.transportation.segments).every(segment => segment.work === 0)).toBe(true);
+  });
+
+  it('pays for road work with remaining substitutes after a bulk stone debit', () => {
+    const { state, system, route, a, b } = freightFixture();
+    for (const town of [a, b]) {
+      ensureMaterialInventory(town); publishBulkStocks(town); town.resources.minerals = 0;
+    }
+    b.localMaterials.brick = 0.06;
+    route.transport!.deliveries = 2;
+    state.month = 1;
+    const wealth = a.resources.wealth;
+    expect(() => system.advanceMonth()).not.toThrow();
+    const segments = Object.values(state.transportation.segments);
+    const work = segments.reduce((sum, segment) => sum + segment.work, 0);
+    const spent = segments.reduce((sum, segment) => sum + (segment.materialSpent?.brick ?? 0), 0);
+    expect(work).toBeGreaterThan(0);
+    expect(spent).toBeCloseTo(work * 0.12, 5);
+    expect(b.localMaterials.brick! + spent).toBeCloseTo(0.06, 5);
+    expect(a.resources.wealth + work).toBeCloseTo(wealth, 5);
+    expect([a, b].map(town => town.localMaterials.stone)).toEqual([0, 0]);
+  });
+
   it('requires bridge capability and funded bank-to-bank construction to connect river settlements', () => {
     const { state, route, a, b } = freightFixture();
     state.world = testWorld('river');

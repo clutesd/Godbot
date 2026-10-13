@@ -39,8 +39,9 @@ export const MATERIAL_SCENARIOS: readonly BrowserMaterialScenario[] = [
   { id: 'brick', label: 'Fired brick', material: 'ceramic', targets: ['fired-brick'], bill: { brick: 90, timber: 10 } },
   { id: 'mixed', label: 'Mixed masonry', material: 'masonry', targets: ['fieldstone', 'fired-brick'], bill: { stone: 50, brick: 40, timber: 10 } },
   { id: 'metal', label: 'Iron / steel', material: 'metal', targets: ['wrought-iron'], bill: { iron: 90, timber: 10 } },
+  { id: 'glazed-masonry', label: 'Glazed masonry / sash and factory lights', material: 'masonry', targets: ['fieldstone', 'glass'], bill: { stone: 70, brick: 20, clay: 10 } },
   { id: 'concrete', label: 'Concrete', material: 'masonry', targets: ['concrete'], bill: { stone: 90, iron: 10 } },
-  { id: 'composite', label: 'Modern composite', material: 'metal', targets: ['structural-steel', 'curtain-glass'], bill: { steel: 60, clay: 30, 'machine-parts': 10 } },
+  { id: 'composite', label: 'Modern composite', material: 'metal', targets: ['structural-steel', 'curtain-glass', 'glass'], bill: { steel: 60, clay: 30, 'machine-parts': 10 } },
 ];
 
 export function scenarioEvidence(scenario: BrowserMaterialScenario, period: ArchitecturalPeriod): {
@@ -61,6 +62,7 @@ export function scenarioEvidence(scenario: BrowserMaterialScenario, period: Arch
 }
 
 export function scenarioAvailable(scenario: BrowserMaterialScenario, period: ArchitecturalPeriod): boolean {
+  if (scenario.id === 'glazed-masonry' && periodRank(period) < periodRank('earlyModern')) return false;
   const { capabilities } = scenarioEvidence(scenario, period);
   return scenario.targets.every(id => materialAvailable(id, { period, capabilities }));
 }

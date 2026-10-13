@@ -47,8 +47,8 @@ describe('ScreenSpaceComposition', () => {
       distance: 5,
     });
 
-    expect(movingRight.offsetX).toBeLessThan(0);
-    expect(movingLeft.offsetX).toBeGreaterThan(0);
+    expect(movingRight.offsetX).toBeGreaterThan(0);
+    expect(movingLeft.offsetX).toBeLessThan(0);
     expect(Math.abs(movingRight.offsetX)).toBeCloseTo(Math.abs(movingLeft.offsetX), 6);
   });
 
@@ -62,7 +62,7 @@ describe('ScreenSpaceComposition', () => {
     const solo = screenSpaceComposition(camera, subject, 'worker-follow', { distance: 5 });
     const pair = screenSpaceComposition(camera, subject, 'worker-follow', { pair: true, distance: 5 });
 
-    expect(solo.offsetX).toBeLessThan(0);
+    expect(solo.offsetX).toBeGreaterThan(0);
     expect(pair.offsetX).toBe(0);
   });
 
@@ -83,6 +83,24 @@ describe('ScreenSpaceComposition', () => {
       expect(Number.isFinite(result.offsetY)).toBe(true);
       expect(Math.abs(result.offsetX)).toBeLessThanOrEqual(1.2);
       expect(Math.abs(result.offsetY)).toBeLessThanOrEqual(0.7);
+    }
+  });
+
+  it('moves the rendered subject toward the intended composition on both axes', () => {
+    for (const aspect of [9 / 16, 16 / 9, 32 / 9]) {
+      const camera = new THREE.PerspectiveCamera(36, aspect, 0.1, 100);
+      camera.position.set(0, 1.5, 5);
+      const aim = new THREE.Vector3(0, 1.2, 0);
+      camera.lookAt(aim); camera.updateMatrixWorld(true);
+      const subject = new THREE.Vector3(0.7, 1.7, 0);
+      const before = subject.clone().project(camera);
+      const trim = screenSpaceComposition(camera, subject, 'worker-follow');
+      const right = new THREE.Vector3().crossVectors(aim.clone().sub(camera.position).normalize(), camera.up).normalize();
+      aim.addScaledVector(right, trim.offsetX); aim.y += trim.offsetY;
+      camera.lookAt(aim); camera.updateMatrixWorld(true);
+      const after = subject.clone().project(camera);
+      expect(Math.abs(after.x + 0.12)).toBeLessThan(Math.abs(before.x + 0.12));
+      expect(Math.abs(after.y - 0.06)).toBeLessThan(Math.abs(before.y - 0.06));
     }
   });
 

@@ -92,6 +92,28 @@ export class ArchitecturalMaterialSet {
     const program = proceduralProgramFor(appearance.program, this.refinement);
     const cacheKey = surfaceProgramCacheKey(appearance.program, this.refinement);
     installProceduralSurface(material, program, cacheKey);
+    if (definition.family === 'glass') {
+      const compile = material.onBeforeCompile.bind(material);
+      const key = material.customProgramCacheKey();
+      material.onBeforeCompile = (shader, renderer) => {
+        compile(shader, renderer);
+        // A cheap environment approximation from the real, weather/day/night hemisphere light.
+        // Fresnel varies with the camera; direct highlights remain Three's physical BRDF.
+        shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+          #if NUM_HEMI_LIGHTS > 0
+            vec3 gbGlassView = normalize(vViewPosition);
+            vec3 gbGlassReflection = reflect(-gbGlassView, normal);
+            float gbGlassSkyAmount = clamp(dot(gbGlassReflection, hemisphereLights[0].direction)*0.5+0.5,0.0,1.0);
+            vec3 gbGlassSky = mix(hemisphereLights[0].groundColor, hemisphereLights[0].skyColor, gbGlassSkyAmount);
+            float gbGlassFresnel = 0.0426 + 0.9574*pow(1.0-clamp(dot(normal,gbGlassView),0.0,1.0),5.0);
+            float gbGlassReflectance = gbGlassFresnel*(1.0-roughnessFactor*0.65);
+            reflectedLight.indirectSpecular += gbGlassSky*gbGlassReflectance*0.7;
+            reflectedLight.directDiffuse *= 1.0-gbGlassReflectance;
+            reflectedLight.indirectDiffuse *= 1.0-gbGlassReflectance;
+          #endif`);
+      };
+      material.customProgramCacheKey = () => `${key}:glass-sky-v1`;
+    }
     this.programKeys.add(cacheKey);
 
     material.userData['shared'] = true;

@@ -19,7 +19,7 @@ describe('documentary shot completion', () => {
     })).toBe(false);
   });
 
-  it('ends a detail shot when the observed action actually reaches contact or completion', () => {
+  it('waits for witnessed follow-through instead of treating phase progress or contact as completion', () => {
     const base = {
       mode: 'subject-action' as const,
       role: 'detail' as const,
@@ -39,12 +39,13 @@ describe('documentary shot completion', () => {
       ...base,
       actionProgress: 0.87,
       contactStrength: 0.2,
-    })).toBe(true);
+    })).toBe(false);
     expect(documentaryShotShouldComplete({
       ...base,
       actionProgress: 0.4,
       contactStrength: 0.72,
-    })).toBe(true);
+    })).toBe(false);
+    expect(documentaryShotShouldComplete({ ...base, payoffWitnessed: true })).toBe(true);
   });
 
   it('lets an editorial beat finish once its composition has settled instead of waiting for an arbitrary timer', () => {
