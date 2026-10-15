@@ -534,7 +534,7 @@ export const MATERIAL_LIBRARY: Record<ArchitecturalMaterialId, ArchitecturalMate
     labour: 0.42, cost: 0.34,
     climate: { temperate: 0.9, arid: 0.86, wet: 0.74, cold: 0.72, snowy: 0.6, tropical: 0.8 },
     cultureAffinity: ['clay', 'mixed'],
-    appearance: { program: 'tile-course', color: 0x3c4450, roughness: 0.74, metalness: 0.04, transparency: 0, colorFamily: 'grey', textureScale: 0.19 },
+    appearance: { program: 'tile-course', color: 0x94503a, roughness: 0.74, metalness: 0.02, transparency: 0, colorFamily: 'red', textureScale: 0.19 },
   }),
   terracotta: define({
     id: 'terracotta', label: 'Terracotta', family: 'ceramic',

@@ -72,10 +72,11 @@ export class WeatherRenderer {
         if (!(material instanceof THREE.MeshStandardMaterial) || this.bound.has(material)) continue;
         this.bound.add(material);
         const foliage = object.name === 'weather-foliage';
-        // Tree foliage owns a seasonal deformation. Preserve it when adding the existing wind
-        // and snow pass; other weather surfaces retain their established binding behavior.
-        const previousCompile = foliage ? material.onBeforeCompile : undefined;
-        const previousKey = foliage ? `${material.customProgramCacheKey()}:` : '';
+        // Every bound material keeps the program it already had (foliage deformation, procedural
+        // surface detail, SVG facade artwork) and gains the wind, snow and flood pass on top.
+        // Replacing the hook would silently compile building surfaces as plain materials.
+        const previousCompile = material.onBeforeCompile;
+        const previousKey = `${material.customProgramCacheKey()}:`;
         material.onBeforeCompile = (shader, renderer) => {
           previousCompile?.call(material, shader, renderer);
           shader.uniforms.weatherMap = this.windTexture;

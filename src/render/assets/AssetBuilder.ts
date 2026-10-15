@@ -1,7 +1,4 @@
-import { shrinkGrammar } from './BuildingComposer';
-import type { GeometrySink } from '../architecture/StructureGeometry';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { emitFunctionalBuilding, functionalSilhouette } from '../architecture/FunctionalBuildings';
+import { deriveDetailTier, type TierOptions } from './DerivedLod';
 /**
  * AssetBuilder.ts
  * 
@@ -30,9 +27,6 @@ import type { BuildingArchetype } from '../architecture/BuildingArchetype';
 import { grammarFromBuildingSpec } from '../architecture/SpecGrammarBridge';
 import { dedicatedGeometryKind } from '../architecture/DedicatedStructures';
 import { materialBillSignature } from '../architecture/MaterialSourcing';
-import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
-import { GeometryBuilder } from './GeometryBuilder';
-import type { SurfaceKey } from '../materials/MaterialPalette';
 import { FacadeTextureCache } from '../architecture/FacadeTextures';
 
 /** Free a composition that was superseded before it was ever cached or shared. */
@@ -118,186 +112,14 @@ export interface AssetCacheStats {
   cultureProfiles: number;
 }
 
-/**
- * Shading the massing LODs stand in with, since they have no detail to measure.
- *
- * The full-detail composition measures its own ambient occlusion and bakes it per vertex (see
- * OcclusionField.ts). A massing LOD is a handful of boxes with none of the carpentry that occlusion
- * comes from, so left alone it would render at full ambient brightness and a building would
- * visibly flash lighter the moment it crossed the LOD boundary. These two numbers restate what the
- * detailed mesh averages over the distance the LOD is seen from: a constant for the crevices the
- * boxes do not have, and a contact gradient for the one cue a box can state honestly — the line
- * where the structure meets the ground.
- */
-const MASSING_OCCLUSION = 0.3;
-const MASSING_CONTACT = 0.45;
-/** Height over which the contact gradient fades out, as a share of the structure's height. */
-const MASSING_CONTACT_SHARE = 0.12;
+/** Switching distances (world units) for full detail, street, settlement and skyline tiers. */
+export const LOD_DISTANCES = [0, 20, 42, 96] as const;
+/** Fraction of each switching distance kept as a dead band, so a slow camera never flickers a tier. */
+const LOD_HYSTERESIS = 0.08;
+/** Narrowest solid (canonical units) kept in each derived tier: about 1.5 px at its switching distance. */
+export const LOD_TIERS: readonly TierOptions[] = [{ minFeature: 0.016 }, { minFeature: 0.04, merge: false }, { minFeature: 0.07, fillOpenings: true }];
 
-/**
- * Write the massing stand-in shading into a LOD tier's geometry.
- *
- * Only the occlusion channel is touched, so a tier built through `GeometryBuilder` keeps the
- * weathering and grain it already carries. Positions are read through each mesh's world matrix,
- * because a LOD tier places its parts with `mesh.position` rather than baking them into vertices,
- * and the tier root is still unparented here, so world space is the structure's own frame.
- */
-function shadeMassingLod(root: THREE.Object3D, height: number): void {
-  const fade = Math.max(1e-4, height * MASSING_CONTACT_SHARE);
-  const vertex = new THREE.Vector3();
-  root.updateMatrixWorld(true);
-  root.traverse(object => {
-    if (!(object instanceof THREE.Mesh)) return;
-    const geometry = object.geometry;
-    const position = geometry.getAttribute('position');
-    let detail = geometry.getAttribute('aSurfaceDetail') as THREE.BufferAttribute | undefined;
-    if (!detail) {
-      detail = new THREE.Int8BufferAttribute(new Int8Array(position.count * 4), 4, true);
-      geometry.setAttribute('aSurfaceDetail', detail);
-    }
-    for (let index = 0; index < position.count; index += 1) {
-      vertex.fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld);
-      const contact = Math.max(0, 1 - Math.max(0, vertex.y) / fade);
-      const occlusion = Math.min(1, MASSING_OCCLUSION + MASSING_CONTACT * contact * contact);
-      // A normalized Int8 attribute quantises on write, so this is the 0..1 share, not a byte.
-      detail.setW(index, occlusion);
-    }
-    detail.needsUpdate = true;
-  });
-}
 
-/** Share of the total structure height the crown occupies. Keeps LOD tiers the same height as full detail. */
-function crownHeightShare(crown: BuildingGrammar['crown']): number {
-  switch (crown) {
-    case 'spire': return 0.44;
-    case 'obelisk': return 0.4;
-    case 'cooling-mass': return 0.42;
-    case 'water-tank': return 0.36;
-    case 'watch-tower': return 0.3;
-    case 'observatory': return 0.22;
-    case 'lantern-cupola': return 0.18;
-    case 'roof-monitor': return 0.12;
-    case 'stack-cluster':
-    case 'none':
-      return 0;
-  }
-}
-
-/**
- * Mid-distance massing for the grammar's crown feature.
- * Approach views must still tell a spire from a watch tower from a cooling mass, so the crown
- * is the one piece of fine detail that is worth re-stating in simplified form.
- */
-function buildCrownLod(
-  grammar: BuildingGrammar,
-  width: number,
-  depth: number,
-  roofY: number,
-  crownHeight: number,
-  roofMaterial: THREE.Material,
-  stoneMaterial: THREE.Material,
-  metalMaterial: THREE.Material,
-): THREE.Object3D | undefined {
-  const unit = Math.min(width, depth);
-  switch (grammar.crown) {
-    case 'spire': {
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(unit * 0.24, crownHeight, 6), roofMaterial);
-      spire.position.y = roofY + crownHeight * 0.5;
-      return spire;
-    }
-    case 'obelisk': {
-      const shaft = new THREE.Mesh(new THREE.ConeGeometry(unit * 0.3, crownHeight, 4), stoneMaterial);
-      shaft.position.y = roofY + crownHeight * 0.5;
-      shaft.rotation.y = Math.PI / 4;
-      return shaft;
-    }
-    case 'lantern-cupola': {
-      const cupola = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.2, unit * 0.24, crownHeight, 6), roofMaterial);
-      cupola.position.y = roofY + crownHeight * 0.5;
-      return cupola;
-    }
-    case 'watch-tower': {
-      const height = roofY + crownHeight;
-      const tower = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.52, height, unit * 0.52), stoneMaterial);
-      tower.position.set(-width * 0.34, height * 0.5, -depth * 0.3);
-      return tower;
-    }
-    case 'observatory': {
-      const dome = new THREE.Mesh(
-        new THREE.SphereGeometry(crownHeight, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2),
-        roofMaterial,
-      );
-      dome.position.y = roofY;
-      return dome;
-    }
-    case 'stack-cluster':
-      // Chimney massing is already emitted above; a second cluster would only double the cost.
-      return undefined;
-    case 'cooling-mass': {
-      const group = new THREE.Group();
-      for (const side of [-1, 1]) {
-        const mass = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.3, unit * 0.42, crownHeight, 6), metalMaterial);
-        mass.position.set(side * width * 0.26, roofY + crownHeight * 0.5, -depth * 0.15);
-        group.add(mass);
-      }
-      return group;
-    }
-    case 'water-tank': {
-      const tank = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.34, unit * 0.34, crownHeight * 0.55, 6), metalMaterial);
-      tank.position.y = roofY + crownHeight * 0.72;
-      return tank;
-    }
-    case 'roof-monitor': {
-      const monitor = new THREE.Mesh(new THREE.BoxGeometry(width * 0.78, crownHeight, depth * 0.3), metalMaterial);
-      monitor.position.y = roofY + crownHeight * 0.5;
-      return monitor;
-    }
-    case 'none':
-      return undefined;
-  }
-}
-
-/** Skyline-only crown massing. One box at most, so the far tier stays a silhouette. */
-function farCrownSilhouette(
-  grammar: BuildingGrammar,
-  width: number,
-  depth: number,
-  bodyTop: number,
-  crownHeight: number,
-  material: THREE.Material,
-): THREE.Mesh | undefined {
-  const unit = Math.min(width, depth);
-  switch (grammar.crown) {
-    case 'spire':
-    case 'obelisk': {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.36, crownHeight, unit * 0.36), material);
-      mesh.position.y = bodyTop + crownHeight * 0.5;
-      return mesh;
-    }
-    case 'watch-tower': {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.55, bodyTop + crownHeight, unit * 0.55), material);
-      mesh.position.set(-width * 0.3, (bodyTop + crownHeight) * 0.5, -depth * 0.28);
-      return mesh;
-    }
-    case 'cooling-mass': {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width * 0.7, crownHeight, depth * 0.4), material);
-      mesh.position.set(0, bodyTop + crownHeight * 0.5, -depth * 0.15);
-      return mesh;
-    }
-    case 'water-tank': {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.7, crownHeight * 0.6, unit * 0.7), material);
-      mesh.position.y = bodyTop + crownHeight * 0.7;
-      return mesh;
-    }
-    case 'observatory': {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.64, crownHeight, unit * 0.64), material);
-      mesh.position.y = bodyTop + crownHeight * 0.5;
-      return mesh;
-    }
-    default:
-      return undefined;
-  }
-}
 
 /**
  * Central factory for creating procedural assets
@@ -616,9 +438,25 @@ export class AssetBuilder {
     // would erase exactly at the distances where it should be recognised. Mills are few, so they keep
     // their full geometry at range and let the motion system throttle their moving parts instead.
     const machine = grammar.spec ? dedicatedGeometryKind(grammar.spec.archetype) === 'machine' : false;
-    const lods = stage === BUILD_STAGE.DETAIL && !config.development?.memorial && !machine
-      ? this.generateBuildingLODs(grammar, composed.height, palette)
-      : [];
+    // Distance tiers are the full composition with sub-pixel solids removed, in the same decorated
+    // materials, so walls, openings, roofs, chimneys and towers keep their material and artwork.
+    // They are cut from an unsectioned recomposition: identical surfaces without the construction
+    // pieces, so a wall is a handful of triangles rather than a grid of build steps.
+    let lods: THREE.Group[] = [];
+    if (stage === BUILD_STAGE.DETAIL && !config.development?.memorial && !machine) {
+      const started = performance.now();
+      const coarse = composeBuilding(grammar, palette, config.seed, stage, coreMaterial, false);
+      this.facadeTextures.apply(coarse.group);
+      // Each tier is cut from the one before it, which is already merged and smaller.
+      let source: THREE.Object3D = coarse.group;
+      lods = LOD_TIERS.map(tier => {
+        const derived = deriveDetailTier(source, tier, undefined, (mesh, from) => this.facadeTextures.inherit(mesh, from));
+        source = derived;
+        return derived;
+      });
+      disposeComposed(coarse.group);
+      composed.group.userData['lodBuildMs'] = performance.now() - started;
+    }
 
     composed.group.name = 'building-full-detail';
     let root: THREE.Object3D = composed.group;
@@ -628,11 +466,13 @@ export class AssetBuilder {
       lod.autoUpdate = true;
       lod.addLevel(composed.group, 0);
       lods[0]!.name = 'building-mid-detail';
-      lods[1]!.name = 'building-far-silhouette';
-      // Documentary close/street shots remain full detail. Settlement approaches move to the
-      // semantic massing LOD, and regional/world views use the skyline silhouette.
-      lod.addLevel(lods[0]!, 20);
-      lod.addLevel(lods[1]!, 42);
+      lods[1]!.name = 'building-far-detail';
+      lods[2]!.name = 'building-skyline';
+      // Documentary close and street shots remain full detail. Each later tier is the same
+      // building with features below a pixel removed; the skyline tier also closes its openings.
+      lod.addLevel(lods[0]!, LOD_DISTANCES[1], LOD_HYSTERESIS);
+      lod.addLevel(lods[1]!, LOD_DISTANCES[2], LOD_HYSTERESIS);
+      lod.addLevel(lods[2]!, LOD_DISTANCES[3], LOD_HYSTERESIS);
       root = lod;
     }
 
@@ -646,211 +486,13 @@ export class AssetBuilder {
     root.userData['massDepth'] = composed.massZ;
     root.userData['structureComponents'] = componentManifest;
     root.userData['structureComponentSignature'] = componentManifest.visualSignature;
-    root.userData['buildingLodDistances'] = lods.length >= 2 ? [0, 20, 42] : [0];
+    root.userData['buildingLodDistances'] = lods.length >= 2 ? [...LOD_DISTANCES] : [0];
 
     return {
       mesh: root,
       lods,
       material: palette.getSurfaceMaterial('plaster'),
     };
-  }
-
-  private generateBuildingLODs(
-    grammar: BuildingGrammar,
-    height: number,
-    palette: MaterialPalette,
-  ): THREE.Object3D[] {
-    if (grammar.spec?.architecture && grammar.development?.form === 'field') {
-      const farm = shrinkGrammar({...grammar,development:undefined},.95);
-      const lods = this.generateBuildingLODs(farm,height,palette);
-      for(const lod of lods) lod.position.set(.72,0,.56);
-      return lods;
-    }
-    if (grammar.spec?.architecture) {
-      const builders = new Map<string, {surface: SurfaceKey; material?: Parameters<GeometrySink['at']>[2]; builder: GeometryBuilder}>();
-      emitFunctionalBuilding({at: (surface, _stage, material) => {
-        const resolved = material ?? (surface === 'plaster' ? grammar.spec!.materials.infill ?? grammar.spec!.materials.wall : surface === 'roof-thatch' ? grammar.spec!.materials.roofCovering : surface === 'timber' ? grammar.spec!.materials.frame : grammar.spec!.materials.foundation);
-        const key = resolved;
-        let entry = builders.get(key);
-        if (!entry) { const builder = new GeometryBuilder(); builder.setSectioning(100); entry = {surface,material:resolved,builder}; builders.set(key,entry); }
-        return entry.builder;
-      }, stain: () => {}, clean: () => {}}, grammar,
-      {wallSurface: 'plaster', roofSurface: 'roof-thatch', postSurface: 'timber'}, true);
-      const group = new THREE.Group();
-      for (const {surface,material: resolved,builder} of builders.values()) {
-        if (builder.isEmpty) continue;
-        const material = resolved ?? (surface === 'plaster' ? grammar.spec.materials.infill ?? grammar.spec.materials.wall : surface === 'roof-thatch' ? grammar.spec.materials.roofCovering
-          : surface === 'timber' ? grammar.spec.materials.frame : grammar.spec.materials.foundation);
-        const source = builder.build();
-        const geometry = mergeVertices(source); source.dispose();
-        group.add(new THREE.Mesh(geometry, palette.getArchitecturalMaterial(material)));
-      }
-      shadeMassingLod(group, grammar.plinthHeight + grammar.wallHeight * grammar.storeys);
-      const far = functionalSilhouette(grammar, palette.getArchitecturalMaterial(grammar.spec.materials.infill ?? grammar.spec.materials.wall), palette.getArchitecturalMaterial(grammar.spec.materials.roofCovering));
-      shadeMassingLod(far, grammar.plinthHeight + grammar.wallHeight * grammar.storeys);
-      return [group, far];
-    }
-    if (grammar.spec?.dwellingVariant) {
-      // Keep the plan, porch, additions and roof topology at range, with fewer cone facets
-      // and no individual rafters or interior equipment. Batch into four material surfaces.
-      const spec = grammar.spec;
-      const builders = new Map<SurfaceKey, GeometryBuilder>();
-      emitEarlyDwelling({
-        at: surface => {
-          let builder = builders.get(surface);
-          if (!builder) { builder = new GeometryBuilder(); builders.set(surface, builder); }
-          return builder;
-        }, stain: () => {}, clean: () => {},
-      }, spec, { wallSurface: 'daub', roofSurface: 'roof-thatch', postSurface: 'timber' },
-      grammar.plinthHeight, grammar.plinthHeight + grammar.wallHeight * grammar.storeys, true);
-      const group = new THREE.Group();
-      for (const [surface, builder] of builders) {
-        if (builder.isEmpty) continue;
-        const material = surface === 'daub' ? spec.materials.wall : surface === 'roof-thatch' ? spec.materials.roofCovering
-          : surface === 'timber' ? spec.materials.frame : surface === 'stone' ? spec.materials.foundation : undefined;
-        const mesh = new THREE.Mesh(builder.build(), material ? palette.getArchitecturalMaterial(material) : palette.getSurfaceMaterial(surface));
-        group.add(mesh);
-      }
-      shadeMassingLod(group, grammar.plinthHeight + grammar.wallHeight * grammar.storeys);
-      return [group, group.clone()];
-    }
-    const width = grammar.width;
-    const depth = grammar.depth;
-    const bodyMaterial = palette.getSurfaceMaterial('plaster');
-    const roofMaterial = palette.getRoofMaterial();
-    const stoneMaterial = palette.getSurfaceMaterial('stone');
-    const metalMaterial = palette.getSurfaceMaterial('metal');
-    const lod1 = new THREE.Group();
-
-    const bodyHeight = Math.max(height * 0.58, grammar.wallHeight * grammar.storeys * 0.72);
-    const addBody = (x: number, z: number, sx: number, sz: number, sy = bodyHeight, y = sy / 2): void => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), bodyMaterial);
-      mesh.position.set(x, y, z);
-      lod1.add(mesh);
-    };
-
-    // Main volume.
-    addBody(0, 0, width, depth);
-
-    // Preserve the biggest Step 1/2 identity cue at mid-distance instead of reducing every
-    // institution to one rectangular box.
-    const wingHeight = bodyHeight * 0.72;
-    if (grammar.massing === 'wing') {
-      addBody(width * 0.34, -depth * 0.42, width * 0.44, depth * 0.58, wingHeight, wingHeight / 2);
-    } else if (grammar.massing === 'twin') {
-      addBody(-width * 0.43, depth * 0.28, width * 0.3, depth * 0.42, wingHeight, wingHeight / 2);
-      addBody(width * 0.43, depth * 0.28, width * 0.3, depth * 0.42, wingHeight, wingHeight / 2);
-    } else if (grammar.massing === 'court') {
-      addBody(-width * 0.52, depth * 0.34, width * 0.24, depth * 0.7, wingHeight, wingHeight / 2);
-      addBody(width * 0.52, depth * 0.34, width * 0.24, depth * 0.7, wingHeight, wingHeight / 2);
-    }
-
-    // Simplified roof language keeps sacred/industrial/civic skylines distinct.
-    const crownHeight = height * crownHeightShare(grammar.crown);
-    const roofHeight = Math.max(0.14, height - bodyHeight - crownHeight);
-    let roof: THREE.Mesh;
-    if (grammar.roofFamily === 'shell-dome' || grammar.roofFamily === 'canopy-shell') {
-      roof = new THREE.Mesh(new THREE.SphereGeometry(Math.max(width, depth) * 0.48, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), roofMaterial);
-      roof.scale.z = depth / Math.max(0.001, width);
-      roof.position.y = bodyHeight;
-    } else {
-      const sides = grammar.roofFamily === 'hide-cone' ? 6 : 4;
-      roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(width, depth) * 0.72, roofHeight, sides), roofMaterial);
-      roof.position.y = bodyHeight + roofHeight * 0.5;
-      roof.rotation.y = sides === 4 ? Math.PI / 4 : 0;
-      roof.scale.z = Math.max(0.45, depth / Math.max(0.001, width));
-    }
-    lod1.add(roof);
-
-    if (grammar.forecourt) {
-      const forecourt = new THREE.Mesh(new THREE.BoxGeometry(width * 1.45, 0.025, depth * 0.7), stoneMaterial);
-      forecourt.position.set(0, 0.0125, depth * 0.82);
-      lod1.add(forecourt);
-    }
-    if (grammar.gateway) {
-      const gate = new THREE.Group();
-      const gateHeight = Math.max(0.34, bodyHeight * 0.6);
-      for (const side of [-1, 1]) {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(width * 0.045, gateHeight, width * 0.045), stoneMaterial);
-        post.position.set(side * width * 0.24, gateHeight / 2, depth * 0.78);
-        gate.add(post);
-      }
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(width * 0.56, width * 0.055, width * 0.055), stoneMaterial);
-      lintel.position.set(0, gateHeight, depth * 0.78);
-      gate.add(lintel);
-      lod1.add(gate);
-    }
-
-    if (grammar.chimneys > 0 || grammar.vents > 0) {
-      const count = Math.min(3, Math.max(grammar.chimneys, grammar.vents));
-      for (let index = 0; index < count; index++) {
-        const x = count === 1 ? 0 : -width * 0.28 + (width * 0.56 * index) / (count - 1);
-        const stackHeight = height * (grammar.chimneys > 0 ? 0.5 : 0.34);
-        const stack = new THREE.Mesh(new THREE.CylinderGeometry(width * 0.035, width * 0.045, stackHeight, 6), metalMaterial);
-        stack.position.set(x, bodyHeight + stackHeight * 0.38, -depth * 0.18);
-        lod1.add(stack);
-      }
-    }
-
-    // Frontage and crown are the two cues the mid LOD must not throw away: they are what makes
-    // a market, a council, a garrison and a foundry different shapes rather than different colours.
-    const roofY = bodyHeight + roofHeight;
-    switch (grammar.frontage) {
-      case 'market-stalls': {
-        const awning = new THREE.Mesh(new THREE.BoxGeometry(width * 1.05, height * 0.035, depth * 0.8), roofMaterial);
-        awning.position.set(0, bodyHeight * 0.86, depth * 0.86);
-        lod1.add(awning);
-        break;
-      }
-      case 'colonnade':
-      case 'ward-pavilion': {
-        const arcade = new THREE.Mesh(new THREE.BoxGeometry(width * 1.02, bodyHeight * 0.82, depth * 0.2), bodyMaterial);
-        arcade.position.set(0, bodyHeight * 0.41, depth * 0.62);
-        lod1.add(arcade);
-        break;
-      }
-      case 'portico': {
-        const block = new THREE.Mesh(new THREE.BoxGeometry(width * 0.62, bodyHeight * 1.12, depth * 0.44), stoneMaterial);
-        block.position.set(0, bodyHeight * 0.56, depth * 0.6);
-        lod1.add(block);
-        break;
-      }
-      case 'loading-dock': {
-        const dock = new THREE.Mesh(new THREE.BoxGeometry(width * 1.06, bodyHeight * 0.28, depth * 0.5), stoneMaterial);
-        dock.position.set(0, bodyHeight * 0.14, depth * 0.74);
-        lod1.add(dock);
-        break;
-      }
-      case 'work-yard': {
-        const shed = new THREE.Mesh(new THREE.BoxGeometry(width * 0.72, bodyHeight * 0.7, depth * 1.1), bodyMaterial);
-        shed.position.set(width * 0.71, bodyHeight * 0.35, 0);
-        lod1.add(shed);
-        break;
-      }
-      case 'guard-screen': {
-        const screen = new THREE.Mesh(new THREE.BoxGeometry(width * 1.12, bodyHeight * 0.9, depth * 0.14), stoneMaterial);
-        screen.position.set(0, bodyHeight * 0.45, depth * 0.75);
-        lod1.add(screen);
-        break;
-      }
-      case 'none':
-        break;
-    }
-
-    const crown = buildCrownLod(grammar, width, depth, roofY, crownHeight, roofMaterial, stoneMaterial, metalMaterial);
-    if (crown) lod1.add(crown);
-
-    const farBodyHeight = Math.max(0.1, (height - crownHeight) * 0.9);
-    const lod2 = new THREE.Mesh(
-      new THREE.BoxGeometry(width * 0.92, farBodyHeight, depth * 0.92),
-      bodyMaterial,
-    );
-    // BoxGeometry is centred; lift it so the distant silhouette remains grounded.
-    lod2.position.y = farBodyHeight * 0.5;
-    const farCrown = farCrownSilhouette(grammar, width, depth, farBodyHeight, crownHeight, bodyMaterial);
-    const far: THREE.Object3D = farCrown ? new THREE.Group().add(lod2, farCrown) : lod2;
-    for (const tier of [lod1, far]) shadeMassingLod(tier, height);
-    return [lod1, far];
   }
 
   /**

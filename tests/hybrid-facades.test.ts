@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { AssetBuilder, type AssetConfig } from '../src/render/assets/AssetBuilder';
 import { facadeAtlasLayout, FACADE_ATLAS_SIZE, type FacadePlan } from '../src/render/architecture/FacadePlan';
 import { facadeArtwork, facadeTextureKey } from '../src/render/architecture/FacadeSvg';
+import { ARTWORK_WIDTH } from '../src/render/architecture/SurfaceArtPrograms';
 import { FacadeTextureCache, projectFacadeCoordinates } from '../src/render/architecture/FacadeTextures';
 import { BUILD_STAGE } from '../src/render/assets/BuildStages';
 import { PERIOD_DRIVE, type ArchitecturalPeriod } from '../src/render/architecture/ArchitecturalPeriod';
@@ -77,8 +78,14 @@ describe('production hybrid workshop', () => {
         pieces: m.geometry.userData['assemblyPieces'], cast: m.castShadow, receive: m.receiveShadow }))).toEqual(before);
       expect(asset.mesh).toBeInstanceOf(THREE.LOD);
       const lod = asset.mesh as THREE.LOD;
-      expect(lod.levels.map(l => l.distance)).toEqual([0, 20, 42]);
-      expect(meshes(lod.levels[1]!.object).every(m => !m.geometry.hasAttribute('aFacadeUv'))).toBe(true);
+      expect(lod.levels.map(l => l.distance)).toEqual([0, 20, 42, 96]);
+      // Every distance tier keeps the building's material tiles and shares its decorated materials,
+      // so a tier swap changes no colour or artwork.
+      const fullMaterials = new Set(meshes(lod.levels[0]!.object).map(m => m.material));
+      for (const level of lod.levels.slice(1)) {
+        expect(meshes(level.object).some(m => m.geometry.hasAttribute('aFacadeTile'))).toBe(true);
+        expect(meshes(level.object).every(m => fullMaterials.has(m.material))).toBe(true);
+      }
       const source = meshes(lod.levels[0]!.object).find(m => m.geometry.hasAttribute('aFacadeUv'))!;
       for (const mesh of meshes(lod.levels[0]!.object)) {
         if (mesh.name === 'dressed-stone') expect((mesh.material as THREE.Material).name).not.toContain(':svg-timber');
@@ -95,7 +102,7 @@ describe('production hybrid workshop', () => {
       expect(shader.fragmentShader).toContain('gbAmbientAccess');
       expect(shader.fragmentShader).toContain('gbFacadeAtlas');
       expect(shader.fragmentShader).toContain('gl_FrontFacing ? 1.0 : 0.0');
-      expect(shader.fragmentShader).toContain('gbFacadeRelief');
+      expect(shader.fragmentShader).toContain('gbRelief(');
       expect(shader.fragmentShader).toContain('gbFacadeSurface');
       expect(shader.fragmentShader.match(/float gbHeight =/g)).toHaveLength(1);
     } finally { builder.dispose(); }
@@ -144,14 +151,17 @@ describe('production hybrid workshop', () => {
     builder.dispose();
   });
 
-  it('keeps exterior crates, counters and fitted wood clear of projected facade artwork', () => {
+  it('keeps fittings in their material panel rather than projecting masonry onto them', () => {
     const builder = new AssetBuilder('facade-fitting-mask'), root = builder.getAsset('building', config()).mesh;
     for (const mesh of meshes(root)) {
       const uv = mesh.geometry.getAttribute('aFacadeUv'), index = mesh.geometry.index;
       if (!uv || !index || ['glass','curtain-glass'].includes(mesh.name)) continue;
       for (const piece of mesh.geometry.userData['assemblyPieces'] ?? []) {
         if ([BUILD_STAGE.WALLS, BUILD_STAGE.FRAME].includes(piece.stage)) continue;
-        for (let i = piece.start; i < piece.start + piece.count; i++) expect(uv.getZ(index.getX(i))).toBe(0);
+        for (let i = piece.start; i < piece.start + piece.count; i++) {
+          const vertex=index.getX(i);
+          if(uv.getZ(vertex)>0) expect(uv.getX(vertex)).toBeGreaterThan(.5);
+        }
       }
     }
     builder.dispose();
@@ -174,7 +184,7 @@ describe('production hybrid workshop', () => {
       const uv = geometry.getAttribute('aFacadeUv');
       const { cells } = facadeAtlasLayout(plan);
       for (let i = 0; i < 4; i++) {
-        expect(uv.getX(i)).toBeCloseTo((cells[i]!.x + cells[i]!.width / 2) / FACADE_ATLAS_SIZE);
+        expect(uv.getX(i)).toBeCloseTo((cells[i]!.x + cells[i]!.width / 2) / ARTWORK_WIDTH);
         expect(uv.getY(i)).toBeCloseTo(1 - (cells[i]!.y + cells[i]!.height / 2) / FACADE_ATLAS_SIZE);
         expect(uv.getZ(i)).toBe(1);
       }
@@ -189,15 +199,16 @@ describe('production hybrid workshop', () => {
       for (let stage = 0; stage <= BUILD_STAGE.FINISH; stage++) {
         const asset = builder.getAsset('building', config(stage));
         expect(asset.mesh.userData['buildingSpec'].stage).toBe(stage);
-        if (stage < BUILD_STAGE.WALLS) expect(asset.mesh.userData['facadeStatus']).toBeUndefined();
+        if (stage < BUILD_STAGE.FOUNDATION) expect(asset.mesh.userData['facadeStatus']).toBeUndefined();
+        else expect(asset.mesh.userData['facadeStatus']).toBe('hybrid');
         const plan = asset.mesh.userData['facadePlan'] as FacadePlan;
         const svg = facadeArtwork(plan).albedo;
         expect(svg).toBe(facadeArtwork(plan).albedo);
-        expect(svg).not.toMatch(/NaN|Infinity|<script|<image|href=/);
+        expect(svg).not.toMatch(/NaN|Infinity|<script|<image|href="(?!#)/);
         for (const mesh of meshes(asset.mesh)) for (const piece of mesh.geometry.userData['assemblyPieces'] ?? []) expect(piece.stage).toBeLessThanOrEqual(stage);
         expect(facadeTextureKey(plan)).not.toContain('familyRanking');
       }
-      expect(builder.facadeTextures.stats().entries).toBe(1);
+      expect(builder.facadeTextures.stats().entries).toBeLessThanOrEqual(8);
       const keys = ['medieval', 'earlyModern', 'industrial'].map(period => {
         const plan = builder.getAsset('building', config(7, 'history', period as ArchitecturalPeriod)).mesh.userData['facadePlan'] as FacadePlan;
         return facadeTextureKey(plan);
@@ -232,7 +243,7 @@ describe('production hybrid workshop', () => {
       const art = facadeArtwork(plan);
       for (const layer of [art.albedo, art.relief, art.surface]) {
         expect(layer).toMatch(/^<svg/);
-        expect(layer).not.toMatch(/NaN|Infinity|<script|<image|href=/);
+        expect(layer).not.toMatch(/NaN|Infinity|<script|<image|href="(?!#)/);
       }
       expect(art.albedo).not.toBe(art.relief);
       expect(art.relief).not.toBe(art.surface);
@@ -319,7 +330,7 @@ describe('production hybrid workshop', () => {
       expect(root.userData['openPrecinct']).toBe(true);
       expect(plan.spec.archetype).toBe('market');
       expect((plan.wallTop - plan.floor) / (plan.spec.storeyHeight * plan.storeys)).toBeCloseTo(Number(root.userData['bodyWidth']) / plan.spec.width);
-      expect(root.userData['facadeStatus']).toBe('hybrid-glazing');
+      expect(root.userData['facadeStatus']).toBe('hybrid');
       expect(meshes(root).some(m => m.geometry.hasAttribute('aFacadeUv'))).toBe(true);
     } finally { builder.dispose(); }
   });

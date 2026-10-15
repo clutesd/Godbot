@@ -254,35 +254,33 @@ describe('Baked occlusion on built geometry', () => {
   });
 });
 
-describe('Massing LODs', () => {
-  it('shade their massing so a building does not flash lighter at the LOD boundary', () => {
+describe('Distance LODs', () => {
+  it('carry the full composition occlusion so a building does not flash lighter at a tier boundary', () => {
     const builder = new AssetBuilder();
-    for (const era of ['village', 'industrial'] as Era[]) {
-      const asset = builder.getAsset('building', {
-        era, culture: CULTURE, seed: `lod:${era}`, variant: 'house',
+    const meanOcclusion = (root: THREE.Object3D): { mean: number; grounded: number } => {
+      let total = 0, vertices = 0, grounded = 0;
+      root.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const detail = object.geometry.getAttribute('aSurfaceDetail');
+        expect(detail, `${root.name} carries no detail channel`).toBeDefined();
+        const position = object.geometry.getAttribute('position');
+        for (let index = 0; index < detail.count; index += 1) {
+          const occlusion = Math.max(0, detail.getW(index));
+          total += occlusion; vertices += 1;
+          if (position.getY(index) <= 0.001 && occlusion > 0.3) grounded += 1;
+        }
       });
-      const lod = asset.mesh;
-      expect(lod, `${era} produced no asset`).toBeDefined();
-      const tiers = lod.children.filter(child => child.name !== 'building-full-detail');
-      expect(tiers.length, `${era} built no massing tiers`).toBeGreaterThan(0);
-      for (const tier of tiers) {
-        let shaded = 0, vertices = 0, grounded = 0;
-        tier.traverse(object => {
-          if (!(object instanceof THREE.Mesh)) return;
-          const detail = object.geometry.getAttribute('aSurfaceDetail');
-          expect(detail, `${era} ${tier.name} carries no detail channel`).toBeDefined();
-          const position = object.geometry.getAttribute('position');
-          for (let index = 0; index < detail.count; index += 1) {
-            vertices += 1;
-            const occlusion = Math.max(0, detail.getW(index));
-            // Every massing vertex stands in for crevices the box does not have.
-            if (occlusion > 0.2) shaded += 1;
-            // …and the ones at the ground line carry the contact darkening as well.
-            if (position.getY(index) <= 0.001 && occlusion > 0.6) grounded += 1;
-          }
-        });
-        expect(shaded, `${era} ${tier.name} unshaded`).toBe(vertices);
-        expect(grounded, `${era} ${tier.name} has no contact shading`).toBeGreaterThan(0);
+      return { mean: total / Math.max(1, vertices), grounded };
+    };
+    for (const era of ['village', 'industrial'] as Era[]) {
+      const lod = builder.getAsset('building', { era, culture: CULTURE, seed: `lod:${era}`, variant: 'house' }).mesh as THREE.LOD;
+      expect(lod.levels.length, `${era} built no distance tiers`).toBeGreaterThan(1);
+      const full = meanOcclusion(lod.levels[0]!.object);
+      for (const level of lod.levels.slice(1)) {
+        const tier = meanOcclusion(level.object);
+        // Same baked occlusion, sampled on fewer vertices: the average shade barely moves.
+        expect(Math.abs(tier.mean - full.mean), `${era} ${level.object.name} shade`).toBeLessThan(0.12);
+        expect(tier.grounded, `${era} ${level.object.name} has no contact shading`).toBeGreaterThan(0);
       }
     }
     builder.dispose();

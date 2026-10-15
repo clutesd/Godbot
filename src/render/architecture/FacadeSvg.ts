@@ -14,6 +14,7 @@
  * elevations so quoins interlock at every corner. Every random choice derives from the spec seed.
  */
 import { SeededRandom } from '../../sim/prng';
+import { ARTWORK_WIDTH, ERA_CRAFT, STRUCTURE_ART, surfaceArtLayout, surfacePanel } from './SurfaceArtPrograms';
 import { architecturalMaterial, type ArchitecturalMaterialId } from './MaterialLibrary';
 import { FACADE_ATLAS_SIZE, FACADE_ATLAS_BLEED, facadeAtlasLayout, glazingFrameWidth, type AtlasCell, type ElevationPlan, type FacadeOpening, type FacadePlan } from './FacadePlan';
 
@@ -23,6 +24,10 @@ export interface FacadeArtwork {
   albedo: string;
   relief: string;
   surface: string;
+  /** Coverage of composed elements (black) over the material field (white). */
+  mask: string;
+  /** Where opening contents were painted (white); wall fabric ignores them. */
+  openings: string;
   /** Atlas pixels per canonical building unit. */
   density: number;
 }
@@ -37,14 +42,6 @@ const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] 
 const scale = (a: RGB, k: number): RGB => [a[0] * k, a[1] * k, a[2] * k];
 const grey = (v: number): string => css([v, v, v]);
 
-/** Real stone suites: a fieldstone wall is a geology lesson, an ashlar wall is one quarry bed. */
-const FIELD_SUITE: readonly { tone: RGB; weight: number }[] = [
-  { tone: [141, 138, 131], weight: 5 }, // grey granite / greywacke
-  { tone: [160, 142, 112], weight: 3 }, // buff sandstone
-  { tone: [112, 118, 122], weight: 3 }, // blue-grey whinstone
-  { tone: [146, 116, 90], weight: 1.4 }, // iron-stained
-  { tone: [172, 165, 150], weight: 1.6 }, // pale limestone
-];
 const LICHEN: readonly RGB[] = [[196, 168, 82], [160, 168, 132], [205, 196, 170]];
 
 // ------------------------------------------------------------------------------- drawing kit
@@ -52,22 +49,34 @@ const LICHEN: readonly RGB[] = [[196, 168, 82], [160, 168, 132], [205, 196, 170]
 const f = (v: number): string => String(Math.round(v * 10) / 10);
 type Paint = string | { fill?: string; opacity?: number; stroke?: string; width?: number; extra?: string } | undefined;
 
-/** Three SVG layers written in lock-step. */
+/** Three SVG layers written in lock-step, plus a coverage mask of the composed elements.
+ * Where the mask stays white the wall's own seamless material tile shows through, multiplied by
+ * whatever weathering this elevation painted there. */
 class LayerSet {
   readonly albedo: string[] = [];
   readonly relief: string[] = [];
   readonly surface: string[] = [];
+  readonly mask: string[] = [];
+  /** Opening contents (glass, doors, fittings): only real glazing geometry may show these. */
+  readonly openings: string[] = [];
 
   path(d: string, albedo: Paint, relief?: Paint, surface?: Paint): void {
     if (albedo) this.albedo.push(this.element(d, albedo));
     if (relief) this.relief.push(this.element(d, relief));
     if (surface) this.surface.push(this.element(d, surface));
+    if (composed(albedo)) {
+      const p = typeof albedo === 'string' ? { fill: '#000' } : { ...albedo!, fill: albedo!.fill ? '#000' : undefined, stroke: albedo!.stroke ? '#000' : undefined, opacity: undefined };
+      this.mask.push(this.element(d, p));
+    }
   }
 
-  raw(albedo?: string, relief?: string, surface?: string): void {
+  /** Raw markup; group and clip structure is mirrored into the mask so clipping stays balanced. */
+  raw(albedo?: string, relief?: string, surface?: string, mask?: string): void {
     if (albedo) this.albedo.push(albedo);
     if (relief) this.relief.push(relief);
     if (surface) this.surface.push(surface);
+    const structure = mask ?? (albedo ?? relief ?? surface ?? '').match(/<clipPath[\s\S]*?<\/clipPath>|<g(?:\s[^>]*)?>|<\/g>/g)?.join('');
+    if (structure) this.mask.push(structure);
   }
 
   private element(d: string, paint: Exclude<Paint, undefined>): string {
@@ -75,6 +84,15 @@ class LayerSet {
     const fill = paint.fill ?? 'none';
     return `<path d="${d}" fill="${fill}"${paint.opacity !== undefined ? ` opacity="${paint.opacity.toFixed(3)}"` : ''}${paint.stroke ? ` stroke="${paint.stroke}" stroke-width="${f(paint.width ?? 1)}" stroke-linejoin="round" stroke-linecap="round"` : ''}${paint.extra ? ` ${paint.extra}` : ''}/>`;
   }
+}
+
+/** Opaque construction (stones, timbers, joinery, glass) as opposed to translucent weathering. */
+function composed(paint: Paint): boolean {
+  if (!paint) return false;
+  if (typeof paint === 'string') return true;
+  if (paint.opacity !== undefined && paint.opacity < 0.9) return false;
+  if (paint.fill?.startsWith('url(#') && !paint.fill.startsWith('url(#pane')) return false;
+  return !!(paint.fill || paint.stroke);
 }
 
 /** Drawing context for one elevation: elevation units in, atlas pixels out. */
@@ -153,87 +171,9 @@ function liftSchedule(plan: FacadePlan, family: Palette['fieldFamily']): number[
   const r = new SeededRandom(`${plan.spec.seed}:facade-v2:lifts`);
   const H = plan.wallTop - plan.floor;
   const lifts = [0];
-  const base = family === 'ashlar' ? 0.05 : family === 'brick' ? 0.04 : 0.052;
+  const base = family === 'brick' ? 0.027 : ERA_CRAFT[plan.spec.period].module * (STRUCTURE_ART[plan.spec.archetype].detail === 'ceremony' ? 1.15 : 1);
   while (lifts[lifts.length - 1]! < H + 0.08) lifts.push(lifts[lifts.length - 1]! + base * (family === 'ashlar' ? 1 : r.range(0.82, 1.2)));
   return lifts;
-}
-
-function stoneTone(e: Elevation): RGB {
-  const suite = FIELD_SUITE[e.rnd.weightedIndex(FIELD_SUITE.map(s => s.weight))]!.tone;
-  // The resolved material colour dominates; the suite only says what the quarry or field held.
-  const anchored = mix(e.palette.field, suite, e.palette.fieldFamily === 'rubble' ? 0.55 : 0.32);
-  return scale(anchored, e.rnd.range(0.86, 1.13));
-}
-
-function rubbleField(e: Elevation): void {
-  const { out, rnd } = e;
-  if (e.palette.fieldFamily === 'ashlar' || e.palette.fieldFamily === 'brick') {
-    // Squared quarry beds and fired units have disciplined bonds, unlike rubble.
-    const brick = e.palette.fieldFamily === 'brick';
-    const span = brick ? 0.075 : 0.16;
-    for (let lift = 0; lift < e.lifts.length - 1; lift++) {
-      const y0 = e.lifts[lift]!, y1 = e.lifts[lift + 1]!;
-      let u = -e.L / 2 - e.bleed - (lift % 2 ? span / 2 : 0);
-      while (u < e.L / 2 + e.bleed) {
-        if (brick) {
-          const joint = 0.0025;
-          const tone = scale(e.palette.field, rnd.range(0.84, 1.13));
-          out.path(polyD(e, blockOutline(e, u + joint, y0 + joint, u + span - joint, y1 - joint, 0.04)),
-            css(tone), grey(rnd.range(157, 174)), grey(rnd.range(220, 242)));
-        } else ashlar(e, u, y0, u + span, y1, { tone: scale(e.palette.field, rnd.range(0.91, 1.08)), mark: 0.018, proud: 163 });
-        u += span;
-      }
-    }
-    return;
-  }
-  const joint = e.palette.fieldFamily === 'coursed' ? 0.0042 : 0.0058;
-  const minU = -e.L / 2 - e.bleed, maxU = e.L / 2 + e.bleed;
-  for (let lift = 0; lift < e.lifts.length - 1; lift++) {
-    const y0 = e.lifts[lift]!, y1 = e.lifts[lift + 1]!;
-    // Rubble brought to course: some lifts are one stone high, others are two thinner rows.
-    const rows = e.palette.fieldFamily === 'coursed' ? 1 : rnd.chance(0.45) ? 2 : 1;
-    for (let row = 0; row < rows; row++) {
-      const r0 = y0 + (y1 - y0) * row / rows, r1 = y0 + (y1 - y0) * (row + 1) / rows;
-      let u = minU - rnd.range(0, 0.08);
-      while (u < maxU) {
-        const tall = r1 - r0;
-        const length = e.palette.fieldFamily === 'coursed' ? rnd.range(0.08, 0.17) : rnd.range(tall * 1.1, tall * (rows === 1 ? 3.6 : 4.4));
-        drawStone(e, u + joint, r0 + joint, u + length - joint, r1 - joint, e.palette.fieldFamily === 'coursed' ? 0.16 : 0.3);
-        // A pinning spall wedged into a wide perpend, as rubble wallers actually do.
-        if (e.palette.fieldFamily === 'rubble' && rnd.chance(0.18)) {
-          const pu = u + length, py = r0 + tall * rnd.range(0.3, 0.7), ps = joint * rnd.range(0.7, 1.1);
-          out.path(polyD(e, [[pu - ps, py - ps * 0.6], [pu + ps * 0.4, py - ps], [pu + ps, py + ps * 0.3], [pu - ps * 0.2, py + ps]]),
-            css(scale(stoneTone(e), 0.8)), grey(150), grey(225));
-        }
-        u += length;
-      }
-    }
-  }
-}
-
-function drawStone(e: Elevation, u0: number, y0: number, u1: number, y1: number, rough: number): void {
-  if (u1 - u0 <= 0.002 || y1 - y0 <= 0.002) return;
-  const { out, rnd } = e;
-  const tone = stoneTone(e);
-  const d = polyD(e, blockOutline(e, u0, y0, u1, y1, rough));
-  const proud = rnd.range(150, 192);
-  out.path(d, css(tone), grey(proud), grey(rnd.range(205, 232)));
-  // Dirt settles in the edges and the weathered face lightens: an albedo fact, not lighting.
-  out.path(d, { fill: 'url(#edge)', opacity: 0.55 + e.weather.wear * 0.35 }, { fill: 'url(#pillow)' });
-  const w = u1 - u0, h = y1 - y0;
-  // Crystals, inclusions and pocks.
-  for (let i = 0, count = Math.round(w * h * 9000); i < Math.min(count, 7); i++) {
-    const cu = u0 + w * rnd.range(0.12, 0.88), cy = y0 + h * rnd.range(0.15, 0.85), size = rnd.range(0.0012, 0.0032);
-    const dark = rnd.chance(0.6);
-    out.path(polyD(e, [[cu - size, cy], [cu, cy + size * 0.7], [cu + size, cy], [cu, cy - size * 0.7]]),
-      { fill: css(scale(tone, dark ? 0.72 : 1.18)), opacity: 0.8 }, dark ? { fill: grey(proud - 40), opacity: 0.8 } : undefined);
-  }
-  // A bedding fracture across the odd stone.
-  if (rnd.chance(0.12)) {
-    const cy = y0 + h * rnd.range(0.3, 0.7);
-    const d2 = `M${f(X(e, u0 + w * 0.1))} ${f(Y(e, cy))}L${f(X(e, u0 + w * rnd.range(0.4, 0.6)))} ${f(Y(e, cy + h * rnd.range(-0.15, 0.15)))}L${f(X(e, u1 - w * 0.12))} ${f(Y(e, cy + h * rnd.range(-0.1, 0.1)))}`;
-    out.path(d2, { stroke: css(scale(tone, 0.6)), width: 0.9, opacity: 0.7 }, { stroke: grey(100), width: 1.1 });
-  }
 }
 
 interface AshlarOptions {
@@ -265,7 +205,7 @@ function ashlar(e: Elevation, u0: number, y0: number, u1: number, y1: number, op
     // A chamfered arris, sunk along the opening edge.
     out.path(rectD(e, u0, y1 - h * 0.12, u1, y1), undefined, { fill: grey(proud - 30), opacity: 0.6 });
   }
-  if (rnd.chance(options.mark ?? 0.1)) masonMark(e, u0 + w * rnd.range(0.3, 0.7), y0 + h * rnd.range(0.35, 0.65), Math.min(w, h) * 0.22, tone);
+  if (rnd.chance((options.mark ?? 0.1) * 0.3)) masonMark(e, u0 + w * rnd.range(0.3, 0.7), y0 + h * rnd.range(0.35, 0.65), Math.min(w, h) * 0.22, tone);
 }
 
 /** Banker marks: a few chiselled strokes identifying who dressed the stone. */
@@ -476,6 +416,19 @@ const CORNER_OF: Record<ElevationPlan['name'], { start: number; end: number }> =
 /** Dressed jambs, sill and arched head around an opening; returns the top of the surround. */
 function openingSurround(e: Elevation, o: FacadeOpening): number {
   const u0 = o.u - o.w / 2, u1 = o.u + o.w / 2, y0 = o.y - o.h / 2, y1 = o.y + o.h / 2;
+  const family = architecturalMaterial(e.plan.materials.wall).family;
+  // Brick and earth walls are carried by their own tile and real reveals; only stone walls get
+  // dressed stone surrounds painted around their openings.
+  if (family !== 'stone') {
+    const frame = architecturalMaterial(e.plan.materials.frame).family;
+    const w = Math.min(.012,o.w*.12);
+    if(frame === 'timber') {
+      timberMember(e,u0-w,y0,u0,y1+w); timberMember(e,u1,y0,u1+w,y1+w);
+      timberMember(e,u0-w,y1,u1+w,y1+w);
+      if(o.kind==='window') timberMember(e,u0-w,y0-w,u1+w,y0);
+    }
+    return y1+w;
+  }
   const jamb = o.kind === 'door' ? 0.045 : 0.03;
   for (let lift = 0; lift < e.lifts.length - 1; lift++) {
     const a = Math.max(y0, e.lifts[lift]!), b = Math.min(y1, e.lifts[lift + 1]!);
@@ -492,7 +445,7 @@ function openingSurround(e: Elevation, o: FacadeOpening): number {
     // Worn threshold step: the stone dished by centuries of boots.
     e.out.path(rectD(e, u0 - 0.01, -e.bleed, u1 + 0.01, 0.004), css(scale(e.palette.dressed, 0.86)), grey(168), grey(170));
   }
-  if (e.plan.spec.openings.facade && !e.plan.spec.openings.arched) {
+  if (!e.plan.spec.openings.arched || ['neolithic','bronzeIron','modern','contemporary'].includes(e.plan.spec.period)) {
     ashlar(e, u0 - jamb, y1, u1 + jamb, y1 + Math.min(0.018, o.h * 0.12), { mark: 0.05 });
     return y1 + 0.018;
   }
@@ -649,6 +602,12 @@ function boardedDoor(e: Elevation, o: FacadeOpening): void {
   }
   // Rot and splash darken the foot of the door.
   out.path(rectD(e, u0, y0, u1, y0 + o.h * 0.14), { fill: 'url(#damp)', opacity: 0.4 + e.weather.wear * 0.5 });
+  if (!e.plan.materials.hardware || architecturalMaterial(e.plan.materials.hardware).family !== 'metal') {
+    for(const row of [.25,.75]) timberMember(e,u0,y0+o.h*row-.004,u1,y0+o.h*row+.004);
+    // Wooden latch and pegged ledges precede forged fittings.
+    timberMember(e,u0+o.w*.65,y0+o.h*.45,u0+o.w*.9,y0+o.h*.45+.006);
+    return;
+  }
   // Strap hinges with scrolled ends, nailed through every board.
   for (const strap of [0.18, 0.5, 0.82]) {
     const sy = y0 + o.h * strap, sh = 0.0055;
@@ -777,15 +736,21 @@ function elevationArtwork(plan: FacadePlan, face: ElevationPlan, index: number, 
   };
   const clip = `<clipPath id="c${index}"><rect x="${f(cell.x - FACADE_ATLAS_BLEED)}" y="${f(cell.y - FACADE_ATLAS_BLEED)}" width="${f(cell.width + FACADE_ATLAS_BLEED * 2)}" height="${f(cell.height + FACADE_ATLAS_BLEED * 2)}"/></clipPath><g clip-path="url(#c${index})">`;
   out.raw(clip, clip, clip);
-  out.path(rectD(e, -e.L / 2 - e.bleed, -e.bleed, e.L / 2 + e.bleed, e.H + e.bleed), css(palette.mortar), grey(66), grey(245));
-  rubbleField(e);
+  // The field itself is the wall material's seamless tile (unmasked); here it is only a neutral
+  // multiplier that the weathering below darkens and tints.
+  const field = rectD(e, -e.L / 2 - e.bleed, -e.bleed, e.L / 2 + e.bleed, e.H + e.bleed);
+  out.raw(`<path d="${field}" fill="#ffffff"/>`, `<path d="${field}" fill="${grey(128)}"/>`, `<path d="${field}" fill="${grey(245)}"/>`, '');
+  const wall = architecturalMaterial(plan.materials.wall);
 
   // Dressed members: frame beams become plinth, floor band and eaves course; posts become
   // pilasters and long-and-short quoins; the culture band becomes a carved string course.
   const ornament = plan.spec.culture.ornament;
   const timberFrame = architecturalMaterial(plan.materials.frame).family === 'timber';
+  // Timber frames are real geometry; their own grain-aligned tile textures them, so the
+  // elevation leaves the members as field rather than painting a flat stand-in under them.
   plan.beams.forEach((beam, i) => {
-    if (timberFrame) { timberMember(e, -e.L / 2 - e.bleed, beam.y - beam.h / 2, e.L / 2 + e.bleed, beam.y + beam.h / 2); return; }
+    if (timberFrame) return;
+    if (architecturalMaterial(plan.materials.frame).family !== 'stone') return;
     if (i === 0) {
       // Chamfered plinth course: one block high, from ground to the sill beam's top.
       let u = -e.L / 2 - e.bleed;
@@ -793,20 +758,24 @@ function elevationArtwork(plan: FacadePlan, face: ElevationPlan, index: number, 
       e.out.path(rectD(e, -e.L / 2 - e.bleed, beam.y + beam.h * 0.25, e.L / 2 + e.bleed, beam.y + beam.h / 2), undefined, { fill: grey(150), opacity: 0.7 });
     } else stringCourse(e, beam.y, beam.h, false);
   });
-  for (const band of plan.bands) stringCourse(e, band.y, Math.min(band.h * 0.5, 0.06), ornament > 0.22);
+  for (const band of plan.bands) {
+    if(timberFrame) continue;
+    if(architecturalMaterial(plan.materials.frame).family === 'stone') stringCourse(e, band.y, Math.min(band.h * 0.5, 0.06), ornament > 0.22);
+  }
   const members = plan.members[index]!;
   for (const post of members.posts) {
     const corner = !post.corner ? undefined : post.u < 0 ? 'start' : 'end';
-    if (timberFrame) timberMember(e, post.u - post.w / 2, 0, post.u + post.w / 2, e.H);
-    else dressedPost(e, post.u, post.w, corner);
+    if (timberFrame) continue;
+    if(architecturalMaterial(plan.materials.frame).family === 'stone') dressedPost(e, post.u, post.w, corner);
   }
   for (const o of face.openings) openingSurround(e, o);
   for (const o of face.openings) if (o.kind === 'window') leadedLight(e, o); else boardedDoor(e, o);
+  for (const o of face.openings) out.openings.push(`<path d="${rectD(e, o.u - o.w / 2 - 0.002, o.y - o.h / 2 - 0.002, o.u + o.w / 2 + 0.002, o.y + o.h / 2 + 0.002)}" fill="#fff"/>`);
   const blocked = (u: number, y: number, pad: number): boolean =>
     face.openings.some(o => Math.abs(u - o.u) < o.w / 2 + pad + 0.03 && y > o.y - o.h / 2 - pad - 0.03 && y < o.y + o.h / 2 + o.w + pad)
     || members.posts.some(p => Math.abs(u - p.u) < p.w / 2 + pad + 0.07)
     || [...plan.beams, ...plan.bands].some(b => Math.abs(y - b.y) < b.h / 2 + pad);
-  if (!plan.spec.openings.facade) putlogHoles(e, blocked);
+  if (['classical','medieval','earlyModern'].includes(plan.spec.period) && ['stone','ceramic'].includes(wall.family) && !plan.spec.openings.facade) putlogHoles(e, blocked);
   weatherElevation(e, face.openings);
   out.raw('</g>', '</g>', '</g>');
 }
@@ -833,18 +802,22 @@ export function facadeArtwork(plan: FacadePlan): FacadeArtwork {
   const out = new LayerSet();
   plan.elevations.forEach((face, index) => elevationArtwork(plan, face, index, cells[index]!, density, out, lifts, palette));
   const size = FACADE_ATLAS_SIZE;
-  const open = (background: string): string => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${DEFS(plan.spec.age.wear)}<rect width="${size}" height="${size}" fill="${background}"/>`;
+  const panels = surfaceArtLayout(plan);
+  const open = (background: string): string => `<svg xmlns="http://www.w3.org/2000/svg" width="${ARTWORK_WIDTH}" height="${size}" viewBox="0 0 ${ARTWORK_WIDTH} ${size}">${DEFS(plan.spec.age.wear)}<rect width="${ARTWORK_WIDTH}" height="${size}" fill="${background}"/>`;
   return {
-    albedo: `${open(css(palette.mortar))}${out.albedo.join('')}</svg>`,
-    relief: `${open(grey(96))}${out.relief.join('')}</svg>`,
-    surface: `${open(grey(240))}${out.surface.join('')}</svg>`,
+    albedo: `${open('#ffffff')}${out.albedo.join('')}${panels.map(c => surfacePanel(plan, c, 'albedo')).join('')}</svg>`,
+    relief: `${open(grey(128))}${out.relief.join('')}${panels.map(c => surfacePanel(plan, c, 'relief')).join('')}</svg>`,
+    surface: `${open(grey(240))}${out.surface.join('')}${panels.map(c => surfacePanel(plan, c, 'surface')).join('')}</svg>`,
+    // White = the wall's material tile shows through; black = composed elevation element.
+    mask: `${open('#ffffff')}${out.mask.join('')}</svg>`,
+    openings: `${open('#000000')}${out.openings.join('')}</svg>`,
     density,
   };
 }
 
 /** Everything that can change a painted pixel, and nothing that cannot. */
 export function facadeTextureKey(plan: FacadePlan): string {
-  return JSON.stringify([plan.version, 'art-v5', plan.spec.seed, plan.elevations, plan.members, plan.beams, plan.bands,
+  return JSON.stringify([plan.version, 'art-v8', plan.spec.archetype, plan.surfaceDomain, plan.surfaceMaterials, plan.spec.seed, plan.elevations, plan.members, plan.beams, plan.bands,
     plan.wallTop - plan.floor, plan.materials, plan.openingStyle, plan.pattern, plan.spec.culture, plan.spec.age.wear,
     plan.spec.age.maintenance, plan.spec.climate.zone, plan.spec.equipment, plan.spec.openings, plan.spec.period]);
 }

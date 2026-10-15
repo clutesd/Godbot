@@ -256,7 +256,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // Review all visible eligible assets; runtime retains its small default atlas budget.
-let assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 64, facadeResolution: 512 });
+let assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 512, facadeResolution: 1024 });
 
 /** Everything the browser puts on screen per rebuild, so one `remove` clears the whole layout. */
 const stageRoot = new THREE.Group();
@@ -763,7 +763,7 @@ function catalogueCards(period: ArchitecturalPeriod): void {
 function rebuild(): void {
   syncChoices(); persistState(); clear();
   assetBuilder.dispose();
-  assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 64, facadeResolution: 512 });
+  assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 512, facadeResolution: 1024 });
   assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked);
   catalogueGrid.hidden = view !== 'catalogue';
   const period = periodSelect.value as ArchitecturalPeriod;
@@ -996,6 +996,7 @@ function frame(): void {
   const lodOutput = document.getElementById('active-lod');
   if (lodOutput && instances[selected]) lodOutput.textContent = activeLevel(instances[selected]!);
   if (now - facadeStatusTime > 500) { refreshFacadeCoverage(); facadeStatusTime = now; }
+  assetBuilder.facadeTextures.updateQuality(stageRoot, camera, now);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -1178,11 +1179,73 @@ requestAnimationFrame(frame);
 
 // Development browser only: inspect production assets and measure real WebGL rendering.
 Object.assign(window, { godboxArchitectureQa: {
+  coverage: () => {
+    const result: {material:string;triangles:number;painted:number;partial:number;clampedVertices:number}[]=[];
+    const root=instances[0]?.root;
+    const full=root instanceof THREE.LOD?root.levels[0]!.object:root;
+    full?.traverse(object=>{
+      if(!(object instanceof THREE.Mesh))return;
+      const index=object.geometry.index,uv=object.geometry.getAttribute('aFacadeUv');let painted=0,partial=0;
+      if(index&&uv)for(let i=0;i<index.count;i+=3){
+        const masks=[0,1,2].map(k=>uv.getZ(index.getX(i+k)));
+        if(masks.every(m=>m>0))painted++;else if(masks.some(m=>m>0))partial++;
+      }
+      result.push({material:object.name,triangles:(index?.count??0)/3,painted,partial,
+        clampedVertices:Number(object.geometry.userData['surfaceArtClampedVertices']??0)});
+    });return result;
+  },
+  compare: () => {
+    const gl = renderer.getContext(), size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const pixels = (): Uint8Array => {
+      renderer.render(scene,camera);
+      const data = new Uint8Array(size.x*size.y*4);
+      gl.readPixels(0,0,size.x,size.y,gl.RGBA,gl.UNSIGNED_BYTE,data); return data;
+    };
+    assetBuilder.facadeTextures.setEnabled(false,stageRoot); const before = pixels();
+    const beforeRender = {...renderer.info.render};
+    assetBuilder.facadeTextures.setEnabled(true,stageRoot); const after = pixels();
+    const afterRender = {...renderer.info.render};
+    let total=0,changed=0;
+    for(let i=0;i<before.length;i+=4) {
+      const delta=Math.abs(before[i]!-after[i]!)+Math.abs(before[i+1]!-after[i+1]!)+Math.abs(before[i+2]!-after[i+2]!);
+      total+=delta; if(delta>12) changed++;
+    }
+    return {meanChannelDelta:total/(size.x*size.y*3),changedPixelFraction:changed/(size.x*size.y),beforeRender,afterRender,glError:gl.getError()};
+  },
   stats: () => ({ svgEnabled: !!assetBuilder.facadeTextures.strength.value, facade: assetBuilder.facadeTextures.stats(), render: { ...renderer.info.render },
     memory: { ...renderer.info.memory }, subjects: instances.map(instance => ({
       status: instance.root.userData['facadeStatus'] ?? 'no-svg', spec: instance.root.userData['buildingSpec'],
+      programs: instance.root.userData['surfaceArtPrograms'],
       lod: activeLevel(instance),
     })) }),
+  /** Orbit at an explicit radius (world units) with an optional field of view, for LOD-distance evidence. */
+  orbit: (yaw: number, pitch: number, radius: number, fov = 40, targetY = controls.target.y) => {
+    controls.target.y = targetY;
+    camera.fov = fov; camera.updateProjectionMatrix();
+    camera.position.set(radius * Math.sin(yaw) * Math.cos(pitch), radius * Math.sin(pitch), radius * Math.cos(yaw) * Math.cos(pitch)).add(controls.target);
+    camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
+  },
+  /** Horizontal span and height of everything on stage, measured on full-detail geometry. */
+  extent: () => {
+    const box = new THREE.Box3();
+    for (const instance of instances) {
+      const full = instance.lod ? instance.lod.levels[0]!.object : instance.root;
+      instance.root.updateMatrixWorld(true); box.expandByObject(full);
+    }
+    const size = box.getSize(new THREE.Vector3());
+    return { span: Math.max(size.x, size.z), height: size.y };
+  },
+  /** Forces every subject to one LOD tier (0 full, 1 mid, 2 regional), or back to automatic with -1. */
+  lod: (index: number) => {
+    for (const instance of instances) {
+      const lod = instance.lod; if (!lod) continue;
+      lod.autoUpdate = index < 0;
+      if (index < 0) lod.update(camera);
+      else lod.levels.forEach((level, i) => { level.object.visible = i === Math.min(index, lod.levels.length - 1); });
+    }
+    renderer.render(scene, camera);
+    return instances.map(activeLevel);
+  },
   neutral: (enabled: boolean) => { el<HTMLInputElement>('neutral-materials').checked = enabled; applyReviewSurfaces(); renderer.render(scene, camera); },
   camera: (yaw: number, pitch: number) => {
     const radius = camera.position.distanceTo(controls.target);

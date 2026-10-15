@@ -66,14 +66,20 @@ describe('flagship production architecture', () => {
         expect(parts.some(p => p.stage === BUILD_STAGE.UTILITIES && p.max.z > grain.spec.depth * .65 && p.min.y > grain.spec.storeyHeight)).toBe(true);
         grain.builder.dispose();
     });
-    it('keeps close, middle and skyline costs within the existing building budgets', () => {
+    it('keeps close, street, settlement and skyline costs within the building budgets', () => {
         for (const c of ARCHITECTURE_FLAGSHIPS.filter(c => c.id !== 'smock-mill')) {
             const f = fixture(c.id), lod = f.asset.mesh as THREE.LOD;
             const vertices = (r: THREE.Object3D) => meshes(r).reduce((s, m) => s + m.geometry.getAttribute('position').count, 0);
             expect(vertices(lod.levels[0]!.object), c.id).toBeLessThan(60000);
             expect(meshes(lod.levels[0]!.object).length, c.id).toBeLessThanOrEqual(12);
-            expect(vertices(lod.levels[1]!.object), c.id).toBeLessThan(1200);
-            expect(vertices(lod.levels[2]!.object), c.id).toBeLessThan(100);
+            // Distance tiers are the building itself with sub-pixel parts removed: never dearer than
+            // the tier before, never more draw calls than full detail, and the skyline at most half.
+            const triangles = (r: THREE.Object3D) => meshes(r).reduce((s, m) => s + (m.geometry.index?.count ?? 0) / 3, 0);
+            const costs = lod.levels.map(l => triangles(l.object));
+            expect(lod.levels.length, c.id).toBe(4);
+            for (let i = 1; i < costs.length; i++) expect(costs[i], c.id).toBeLessThanOrEqual(costs[i - 1]!);
+            expect(costs[3]!, c.id).toBeLessThanOrEqual(costs[0]! * 0.5);
+            for (const level of lod.levels) expect(meshes(level.object).length, c.id).toBeLessThanOrEqual(meshes(lod.levels[0]!.object).length);
             f.builder.dispose();
         }
     });

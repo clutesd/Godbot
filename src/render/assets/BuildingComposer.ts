@@ -26,7 +26,7 @@ import type { MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
 import { wallLayerForMaterial } from './StructureHeritage';
 import type { StructureMaterial } from '../../sim/development/types';
-import { architecturalMaterial, type ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
+import { architecturalMaterial, isArchitecturalMaterial, type ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
 import { specSurfaceMaterials } from '../architecture/SpecGrammarBridge';
 import { emitSpecGeometry } from '../architecture/StructureGeometry';
 import { composeDedicated, composeMemorial, emitQuayWorks, hasDedicatedComposition, measuredHeight } from '../architecture/DedicatedStructures';
@@ -53,6 +53,9 @@ interface RotorEntry {
   builders: Map<SurfaceKey, GeometryBuilder>;
 }
 
+/** A span so large that no face is ever cut into construction pieces. */
+const UNSECTIONED_SPAN = 1e4;
+
 class BuildingCanvas {
   private readonly surfaces = new Map<string, { surface: SurfaceKey; stage: number; builder: GeometryBuilder; material?: ArchitecturalMaterialId }>();
   private readonly rotors: RotorEntry[] = [];
@@ -77,6 +80,9 @@ class BuildingCanvas {
    * Sets the building's span so every builder cuts its members and courses to proportionate
    * buildable sizes. Shared by all surfaces, so the building's pieces agree with one another.
    */
+  /** True when faces are composed whole for distance tiers rather than cut into build steps. */
+  get unsectioned(): boolean { return this.span >= UNSECTIONED_SPAN; }
+
   setSpan(span: number): void {
     this.span = span;
     for (const entry of this.surfaces.values()) entry.builder.setSectioning(span);
@@ -209,8 +215,9 @@ class BuildingCanvas {
         offset += geometry.index!.count;
       }
       const merged = mergeGeometries(batch)!;
-      const geometry = mergeVertices(merged, 1e-6);
-      merged.dispose();
+      // Distance-tier sources are re-welded by their own derivation; welding them here is wasted.
+      const geometry = this.unsectioned ? merged : mergeVertices(merged, 1e-6);
+      if (geometry !== merged) merged.dispose();
       geometry.userData['assemblyPieces'] = pieces;
       for (const source of batch) source.dispose();
       geometry.userData['shared'] = true;
@@ -488,8 +495,14 @@ function emitPatternBand(
       for (let i = 0; i < cuts.length - 1; i++) {
         const a = cuts[i]!, b = cuts[i + 1]!, u = (a + b) / 2;
         if (b - a < 0.0001 || voids.some(o => Math.abs(u - o.u) < o.w / 2)) continue;
-        const center = framePoint(frame, u, y, proud * 0.18);
-        backing.addBox(center.x, center.y, center.z, isEnd ? proud * 0.3 : b - a, bandHeight * 1.2, isEnd ? b - a : proud * 0.3);
+        const course = (dv: number, height: number, depth: number): void => {
+          const center = framePoint(frame, u, y + dv, depth / 2 - proud * 0.1);
+          backing.addBox(center.x, center.y, center.z, isEnd ? depth : b - a, height, isEnd ? b - a : depth);
+        };
+        // Frieze field, then a projecting drip fillet above and a narrower bed fillet below.
+        course(0, bandHeight * 1.1, proud * 0.9);
+        course(bandHeight * 0.62, bandHeight * 0.16, proud * 1.7);
+        course(-bandHeight * 0.6, bandHeight * 0.12, proud * 1.35);
       }
     }
     const unit = Math.max(bandHeight * 0.85, bandHeight / Math.max(0.35, density));
@@ -750,11 +763,26 @@ function publishFacadePlan(group: THREE.Group, grammar: BuildingGrammar, plinthT
     openingStyle: grammar.openings, postThickness: grammar.postThickness,
   };
   group.userData['facadePlan'] = plan;
+  plan.surfaceMaterials = [];
+  group.traverse(object => {
+    if (object instanceof THREE.Mesh && isArchitecturalMaterial(object.name)) {
+      (plan.surfaceMaterials as ArchitecturalMaterialId[]).push(object.name);
+    }
+  });
+  plan.surfaceMaterials = [...new Set(plan.surfaceMaterials)];
+  const artBounds = new THREE.Box3().setFromObject(group);
+  if(artBounds.isEmpty()) artBounds.set(new THREE.Vector3(-grammar.width/2,0,-grammar.depth/2),
+    new THREE.Vector3(grammar.width/2,Math.max(roofTop,wallTop),grammar.depth/2));
+  const artWidth=Math.max(grammar.width,grammar.depth,Math.abs(artBounds.min.x)*2,Math.abs(artBounds.max.x)*2,
+    Math.abs(artBounds.min.z)*2,Math.abs(artBounds.max.z)*2,.4);
+  plan.surfaceDomain = {width:artWidth,height:Math.max(artWidth,artBounds.max.y-artBounds.min.y),bottom:artBounds.min.y};
   if (grammar.spec.architecture?.composition && grammar.spec.architecture.composition !== 'single') group.userData['roofedRanges'] = architecturalMasses(grammar).map(m => ({x:m.x,z:m.z,width:m.grammar.width,depth:m.grammar.depth,rotationY:m.yaw}));
   if (grammar.spec.architecture?.composition && grammar.spec.architecture.composition !== 'single') group.userData['interiorWalls'] = interiorPartitions(grammar);
   const entry = plan.elevations[0]?.openings.find(o => o.kind === 'door');
   if (entry) group.userData['entrance'] = { x: plan.elevations[0]!.originX + plan.elevations[0]!.tangentX * entry.u, z: plan.elevations[0]!.originZ + plan.elevations[0]!.tangentZ * entry.u, width: entry.w, height: entry.h, floor: plinthTop };
   group.userData['facadeEligible'] = hybridFacadeEligible(grammar, coreMaterial);
+  group.userData['surfaceArtworkEligible'] = true;
+  group.userData['elevationArtworkEligible'] = !coreMaterial && !group.userData['dedicatedStructure'] && grammar.spec.openness < .65;
   group.userData['facadeGlazingEligible'] = hybridGlazingEligible(grammar);
 }
 
@@ -768,6 +796,9 @@ export function composeBuilding(
    * ground-level fixtures) then render in the earlier material while the newer massing annex and
    * everything above the core keep the grammar's current one. */
   coreMaterial?: StructureMaterial,
+  /** False composes every face as one piece: the same surfaces without construction cuts, which
+   * distance tiers use because the cuts only exist for the build animation. */
+  sectioned = true,
 ): ComposedBuilding {
   // Surfaces are pure functions of the grammar, so they are resolved before the canvas exists:
   // the canvas needs to know which construction material sits behind each of them in order to
@@ -783,7 +814,7 @@ export function composeBuilding(
   const surfaces: StructureSurfaces = { wallSurface, roofSurface, postSurface, baseSurface, coreMaterial };
 
   const canvas = new BuildingCanvas(stage, grammar.wear, grammar.toneShift, surfaceMaterials);
-  canvas.setSpan(Math.max(grammar.width, grammar.depth));
+  canvas.setSpan(sectioned ? Math.max(grammar.width, grammar.depth) : UNSECTIONED_SPAN);
   const memorial = grammar.development?.memorial;
   if (memorial) {
     // A memorial has no shell, no storey and no structural family, so it never resolves a spec.
@@ -813,6 +844,8 @@ export function composeBuilding(
     group.userData['bodyDepth'] = grammar.depth;
     group.userData['floorHeight'] = grammar.plinthHeight;
     group.userData['doorWidth'] = doorWidthFor(grammar);
+    const dedicatedTop=measuredHeight(group,dedicated.height);
+    publishFacadePlan(group, grammar, 0,dedicatedTop,dedicatedTop,coreMaterial);
     return {
       group,
       height: measuredHeight(group, dedicated.height),
@@ -840,7 +873,7 @@ export function composeBuilding(
     const farm = shrinkGrammar({ ...grammar, forecourt: false, enclosure: 'none' }, 0.95);
 
     canvas.setOrigin(shedX, shedZ);
-    emitStructure(canvas, farm, new SeededRandom(`${seed}:farmstead`), surfaces, `${seed}:farmstead`);
+    const farmRoof = emitStructure(canvas, farm, new SeededRandom(`${seed}:farmstead`), surfaces, `${seed}:farmstead`);
     const group = canvas.build(palette);
     publishArchitecture(group, grammar);
     group.userData['productiveGroundOwner'] = 'FarmFieldRenderer';
@@ -850,6 +883,9 @@ export function composeBuilding(
     group.userData['bodyDepth'] = farm.depth;
     group.userData['floorHeight'] = farm.plinthHeight;
     group.userData['doorWidth'] = doorWidthFor(farm);
+    publishFacadePlan(group, farm, farm.plinthHeight, farm.plinthHeight + farm.wallHeight * farm.storeys, farmRoof.roofTop, coreMaterial);
+    const farmPlan = group.userData['facadePlan'] as FacadePlan | undefined;
+    if (farmPlan) farmPlan.elevations = farmPlan.elevations.map(face => ({...face,originX:face.originX+shedX,originZ:face.originZ+shedZ}));
     const farmBounds = new THREE.Box3().setFromObject(group);
     // The plot extent stays the field's, not the building's, so placement is unchanged — and so
     // does the mass, deliberately: the shed is anchored to the plot edge by the renderer rather
@@ -1233,7 +1269,7 @@ function emitBody(
   // in the distinct base material, the rest stay in the main wall surface.
   const baseWall = baseSurface && baseSurface !== coreSurface ? canvas.at(baseSurface, BUILD_STAGE.WALLS) : undefined;
   const baseBandHeight = baseWall ? Math.min(bodyHeight * 0.55, grammar.wallHeight) : 0;
-  if (wall) emitWallUnits(wall, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, bodyHeight, baseWall, baseBandHeight);
+  if (wall) emitWallUnits(wall, grammar, halfWidth - inset / 2, halfDepth - inset / 2, plinthTop, bodyHeight, baseWall, baseBandHeight, canvas.unsectioned);
 
   // Secondary masses share their footprint with their roof and footing. Previously these
   // were unroofed wall boxes, so glass additions read as coarse transparent blocks.
@@ -1269,6 +1305,11 @@ function emitBody(
       grammar.width * 0.26, grammar.depth * 0.75, bodyHeight * 0.6);
   }
 
+  // A culture band is a moulded frieze in the building's dressed masonry, not a dark strip: the
+  // pattern is carved proud of a projecting course between two drip fillets.
+  const friezeMaterial = (['trim', 'foundation'] as const).map(slot => grammar.spec?.materials[slot])
+    .find(id => id && ['stone', 'ceramic'].includes(architecturalMaterial(id).family)) ?? (grammar.spec ? 'dressed-stone' : undefined);
+  const frieze = canvas.at('stone', BUILD_STAGE.WALLS, friezeMaterial);
   for (const band of patternBandLevels(grammar, bodyHeight)) {
     if (hybridFacadeEligible(grammar)) continue;
     emitPatternBand(
@@ -1280,7 +1321,7 @@ function emitBody(
       band.h,
       grammar.spec?.openings.facade ? Math.min(0.003, grammar.postThickness * 0.15) : grammar.postThickness * 0.55,
       grammar.patternDensity,
-      canvas.at('shadow', BUILD_STAGE.WALLS),
+      frieze,
       grammar.spec?.openings.facade ? facadeElevations(grammar, halfWidth - inset / 2, halfDepth - inset / 2, bodyHeight) : undefined,
       plinthTop,
     );
@@ -1291,7 +1332,7 @@ function emitBody(
 
 /** Closed individual units give incomplete walls real edges; door/window voids survive assembly. */
 function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: number, halfD: number, base: number, height: number,
-  baseWall?: GeometryBuilder, baseBandHeight = 0): void {
+  baseWall?: GeometryBuilder, baseBandHeight = 0, joined = false): void {
   const material = grammar.development?.material;
   const timber = material === 'timber' || !material && (grammar.wallLayer === 'thatch' || grammar.wallLayer === 'daub');
   const metal = material === 'metal';
@@ -1319,7 +1360,7 @@ function emitWallUnits(wall: GeometryBuilder, grammar: BuildingGrammar, halfW: n
         const u0 = edges[col]!, u1 = edges[col + 1]!, u = (u0 + u1) / 2, y = (y0 + y1) / 2;
         if (u1 - u0 < 0.001 || y1 - y0 < 0.001 || openings.some(o => Math.abs(u - o.u) < o.w / 2 && Math.abs(y - o.y) < o.h / 2)) continue;
         const p = framePoint(face, u, base + y, -thickness / 2);
-        const gap = earth || hybridFacadeEligible(grammar) ? 0 : 0.0015;
+        const gap = joined || earth || hybridFacadeEligible(grammar) ? 0 : 0.0015;
         const target = baseWall && y1 <= baseBandHeight + 1e-6 ? baseWall : wall;
         target.addBox(p.x, p.y, p.z, faceIndex < 2 ? u1 - u0 - gap : thickness, y1 - y0 - gap,
           faceIndex < 2 ? thickness : u1 - u0 - gap);

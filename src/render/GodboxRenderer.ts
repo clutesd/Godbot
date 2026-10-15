@@ -941,6 +941,7 @@ export class GodboxRenderer {
       this.scene.fog.color.lerp(this.fogDayColor, blizzard * 0.7);
     }
     this.mark('weather');
+    this.assetBuilder.facadeTextures.updateQuality(this.scene, this.camera);
     this.shaderGate.gate(this.scene, this.camera, this.postProcessing.sceneTarget());
     this.postProcessing.render(this.ecology.night.value);
     if (profiling) {

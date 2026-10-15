@@ -96,11 +96,15 @@ export function composeBridge(sink: GeometrySink, spec: BuildingSpec, seed: stri
   const DECK = BUILD_STAGE.WALLS;
   const RAIL = BUILD_STAGE.FITOUT;
 
-  const pier = (x: number, height: number): void => {
-    // Cutwaters: the wedge that splits the current, and the clearest read of a river pier.
-    sink.at('stone', FOUND)?.addBox(x, height * 0.5, 0, t * 3.4, height, width * 1.05);
-    sink.at('stone', FOUND)?.addBox(x, height * 0.42, width * 0.6, t * 2.4, height * 0.84, width * 0.2);
-    sink.at('stone', FOUND)?.addBox(x, height * 0.42, -width * 0.6, t * 2.4, height * 0.84, width * 0.2);
+  const pier = (x: number, height: number, thickness = t * 3.4): void => {
+    // Full-width pier with pointed cutwaters, the wedge that splits the current, capped by a
+    // weathered offset where the pier steps in under the springing.
+    sink.at('stone', FOUND)?.addBox(x, height * 0.5, 0, thickness, height, width * 2);
+    for (const dz of [-1, 1]) {
+      const nose = thickness * 0.72;
+      sink.at('stone', FOUND)?.addBox(x, height * 0.42, dz * width, nose, height * 0.84, nose, Math.PI / 4);
+      sink.at('stone', FOUND)?.addBox(x, height * 0.86, dz * (width + nose * 0.1), nose * 0.8, height * 0.06, nose * 0.8, Math.PI / 4);
+    }
   };
 
   // Abutments at each bank, which is where a bridge meets the ground.
@@ -141,29 +145,47 @@ export function composeBridge(sink: GeometrySink, spec: BuildingSpec, seed: stri
       break;
     }
     case 'arch': {
-      // Semicircular rings between the piers: the span *is* the structure.
-      for (const x of supports) pier(x, deckY * 0.72);
+      // Near-semicircular masonry arches: a barrel soffit, spandrel walls carried up to the deck,
+      // and a voussoir ring proud of each elevation with a keystone at the crown. Members follow
+      // the span, not the wall thickness, so the openings stay generous; piers stop at the springing.
       const edges = [-halfLength, ...supports, halfLength];
+      const bay = length / spans, pierThickness = bay * 0.2, a = bay / 2 - pierThickness / 2;
+      const crown = Math.min(t * 1.8, deckY * 0.16, bay * 0.12);
+      const spring = Math.max(deckY * 0.12, deckY - crown - a), rise = deckY - crown - spring;
+      for (const x of supports) pier(x, spring, pierThickness);
+      const stone = sink.at('stone', DECK), ring = sink.at('stone', FRAME);
+      const proud = Math.min(t * 0.4, crown * 0.3);
       for (let index = 0; index < edges.length - 1; index += 1) {
-        const from = edges[index]!;
-        const to = edges[index + 1]!;
-        const span = to - from;
-        const centre = (from + to) / 2;
-        const rise = Math.min(deckY * 0.62, span * 0.42);
-        // Voussoirs stepped round the ring, which reads as masonry rather than as a tube.
-        const segments = Math.max(7, Math.round(span / Math.max(0.05, t * 2)));
-        for (let step = 0; step <= segments; step += 1) {
-          const angle = Math.PI * (step / segments);
-          const vx = centre - Math.cos(angle) * (span / 2 - t);
-          const vy = deckY - rise + Math.sin(angle) * rise;
-          sink.at('stone', FRAME)?.addBox(vx, vy, 0, t * 1.5, t * 1.5, width * 1.02, -angle);
+        const centre = (edges[index]! + edges[index + 1]!) / 2;
+        const segments = Math.max(9, Math.min(17, Math.round(a / Math.max(0.012, crown * 0.32)) | 1));
+        const at = (step: number): { x: number; y: number; nx: number; ny: number } => {
+          const angle = Math.PI * step / segments;
+          const nx = -Math.cos(angle) * rise, ny = Math.sin(angle) * a, norm = Math.hypot(nx, ny) || 1;
+          return { x: centre - Math.cos(angle) * a, y: spring + Math.sin(angle) * rise, nx: nx / norm, ny: ny / norm };
+        };
+        for (let step = 0; step < segments; step += 1) {
+          const p = at(step), q = at(step + 1);
+          // Spandrel walls on both elevations and the barrel soffit between them.
+          stone?.addQuad({ x: p.x, y: p.y, z: width }, { x: q.x, y: q.y, z: width }, { x: q.x, y: deckY, z: width }, { x: p.x, y: deckY, z: width });
+          stone?.addQuad({ x: q.x, y: q.y, z: -width }, { x: p.x, y: p.y, z: -width }, { x: p.x, y: deckY, z: -width }, { x: q.x, y: deckY, z: -width });
+          stone?.addQuad({ x: p.x, y: p.y, z: -width }, { x: q.x, y: q.y, z: -width }, { x: q.x, y: q.y, z: width }, { x: p.x, y: p.y, z: width });
         }
-        // Spandrel fill above the ring haunches.
-        for (const dx of [-1, 1]) {
-          sink.at('stone', DECK)?.addBox(centre + dx * span * 0.36, deckY - rise * 0.28, 0,
-            span * 0.24, rise * 0.56, width);
+        // Voussoirs centred between joints, the keystone deeper and standing further out.
+        const arc = Math.PI * (a + rise) / 2 / segments;
+        for (let step = 0; step < segments; step += 1) {
+          const p = at(step + 0.5), key = step === segments >> 1;
+          const depth = crown * (key ? 1.15 : 0.85), thick = arc * 0.86;
+          for (const dz of [-1, 1]) {
+            const z = dz * (width + proud * (key ? 0.8 : 0.5));
+            const inner = { x: p.x - p.nx * proud * 0.2, y: p.y - p.ny * proud * 0.2, z }, outer = { x: p.x + p.nx * depth, y: p.y + p.ny * depth, z };
+            // addBeam's width runs across the bridge unless the joint is near vertical (the crown).
+            if (Math.abs(p.ny) > 0.94) ring?.addBeam(inner, outer, thick, proud * (key ? 1.6 : 1));
+            else ring?.addBeam(inner, outer, proud * (key ? 1.6 : 1), thick);
+          }
         }
       }
+      // Projecting string course at deck level on both elevations.
+      for (const dz of [-1, 1]) stone?.addBox(0, deckY - crown * 0.1, dz * (width + proud), length + t * 4, crown * 0.32, proud * 2.2);
       break;
     }
     case 'truss': {
@@ -211,8 +233,12 @@ export function composeBridge(sink: GeometrySink, spec: BuildingSpec, seed: stri
   // Parapet or railing: masonry gets a solid wall, everything else gets posts and a rail.
   if (system === 'arch' || system === 'girder') {
     for (const dz of [-1, 1]) {
+      // Breast height for a person (about 0.8 m), whatever the wall thickness of the span.
+      const parapet = Math.min(t * 3.4, 0.13), wall = Math.min(t * 1.2, 0.05);
       sink.at(system === 'arch' ? 'stone' : 'panel', RAIL)?.addBox(
-        0, deckY + t * 2.2, dz * (width + t), length + t * 4, t * 3.4, t * 1.2);
+        0, deckY + t + parapet / 2, dz * (width - wall / 2), length + t * 4, parapet, wall);
+      // A coping course, wider than the parapet and weathered to shed water off both faces.
+      if (system === 'arch') sink.at('stone', RAIL)?.addBox(0, deckY + t + parapet + wall * 0.18, dz * (width - wall / 2), length + t * 4.4, wall * 0.36, wall * 1.4);
     }
   } else {
     for (const dz of [-1, 1]) {

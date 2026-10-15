@@ -7,7 +7,7 @@ import { BUILD_STAGE, composeBuilding } from '../src/render/assets/BuildingCompo
 import { MaterialPalette } from '../src/render/materials/MaterialPalette';
 import { CultureStyleProfileFactory } from '../src/render/style/CultureStyleProfile';
 import type { CultureStyle } from '../src/sim/types';
-import { AssetBuilder } from '../src/render/assets/AssetBuilder';
+import { AssetBuilder, LOD_TIERS } from '../src/render/assets/AssetBuilder';
 import type { AssemblyPiece } from '../src/render/assets/GeometryBuilder';
 
 const culture: CultureStyle = { primary: '#c36557', secondary: '#313550', accent: '#d9a748',
@@ -74,7 +74,7 @@ describe('Early dwelling silhouettes', () => {
     const builder = new AssetBuilder('dwelling-lods');
     for (const spec of [...representatives(false), ...representatives(true)]) {
       const asset = builder.getAsset('building', { seed: spec.seed, culture, era: spec.era, variant: 'house' });
-      expect(asset.lods).toHaveLength(2);
+      expect(asset.lods).toHaveLength(3);
       const full = (asset.mesh as THREE.LOD).levels[0]!.object;
       const bounds = new THREE.Box3();
       full.updateMatrixWorld(true);
@@ -87,12 +87,16 @@ describe('Early dwelling silhouettes', () => {
           }
         }
       });
-      for (const lod of asset.lods) {
+      const whole = new THREE.Box3().setFromObject(full).expandByScalar(0.025);
+      for (const [index, lod] of asset.lods.entries()) {
         const simplified = new THREE.Box3().setFromObject(lod);
-        // Removed ridge trim and fewer cone facets move extrema slightly.
+        // Roof height survives, additions are never lost, and nothing grows beyond the building.
+        // The skyline may lose posts thinner than its own feature size, which are sub-pixel there.
+        const reach = index === asset.lods.length - 1 ? LOD_TIERS.at(-1)!.minFeature : 0.025;
         expect(Math.abs(simplified.max.y - bounds.max.y)).toBeLessThan(0.025);
-        expect(Math.abs(simplified.max.z - bounds.max.z)).toBeLessThan(0.025);
-        expect(Math.abs(simplified.min.z - bounds.min.z)).toBeLessThan(0.025);
+        expect(simplified.max.z).toBeGreaterThan(bounds.max.z - reach);
+        expect(simplified.min.z).toBeLessThan(bounds.min.z + reach);
+        expect(whole.containsBox(simplified)).toBe(true);
       }
     }
   });

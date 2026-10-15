@@ -155,7 +155,7 @@ describe('structure renderer and performance validation', () => {
     expect(summary.profiles.every(profile => profile.componentCount >= 2)).toBe(true);
   });
 
-  it('activates semantic mid/far building LODs through the real asset cache', () => {
+  it('activates derived street, settlement and skyline building LODs through the real asset cache', () => {
     const builder = new AssetBuilder('architecture-gallery-validation');
     const gallery = buildArchitectureGalleryScene(builder, 'gallery-culture', CULTURE);
     const stats = builder.getCacheStats();
@@ -168,10 +168,14 @@ describe('structure renderer and performance validation', () => {
 
     const lods = gallery.children.map(child => child as THREE.LOD);
     expect(lods.every(lod => lod.isLOD)).toBe(true);
-    expect(lods.every(lod => lod.levels.length === 3)).toBe(true);
-    expect(lods.every(lod => lod.levels[1]!.distance === 20 && lod.levels[2]!.distance === 42)).toBe(true);
-    expect(Math.max(...lods.map(lod => vertexCount(lod.levels[1]!.object)))).toBeLessThan(1200);
-    expect(Math.max(...lods.map(lod => vertexCount(lod.levels[2]!.object)))).toBeLessThan(100);
+    expect(lods.every(lod => lod.levels.length === 4)).toBe(true);
+    expect(lods.every(lod => lod.levels[1]!.distance === 20 && lod.levels[2]!.distance === 42 && lod.levels[3]!.distance === 96)).toBe(true);
+    // Each tier sheds geometry: the skyline keeps at most half the full-detail vertices.
+    for (const lod of lods) {
+      const counts = lod.levels.map(level => vertexCount(level.object));
+      for (let i = 1; i < counts.length; i++) expect(counts[i]).toBeLessThanOrEqual(counts[i - 1]!);
+      expect(counts[3]!).toBeLessThanOrEqual(counts[0]! * 0.5);
+    }
 
     // A crowned structure must not grow or shrink as it crosses a LOD boundary.
     for (const lod of lods) {

@@ -8,6 +8,10 @@
   },
   "scripts": {
     "dev": "vite",
+    "art:catalogue": "tsx scripts/construction-art-catalogue.ts",
+    "art:acceptance": "node scripts/perf/construction-art-acceptance.mjs",
+    "art:report": "node scripts/construction-art-report.mjs",
+    "art:check": "node scripts/construction-art-report.mjs --check",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",

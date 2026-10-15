@@ -3,7 +3,7 @@
 import { architecturalMasses, massPoint } from './ArchitectureMasses';
 import type { BuildingGrammar } from '../assets/BuildingGrammar';
 import type { BuildingSpec } from './BuildingSpec';
-import { architecturalMaterial } from './MaterialLibrary';
+import { architecturalMaterial, type ArchitecturalMaterialId } from './MaterialLibrary';
 
 export interface FacadeOpening {
   kind: 'door' | 'window';
@@ -24,6 +24,9 @@ export interface FacadeMembers {
 }
 export interface FacadePlan {
   version: 2;
+  /** Materials actually emitted by equipment, annexes and inherited fabric as well as the shell. */
+  surfaceMaterials?: readonly ArchitecturalMaterialId[];
+  surfaceDomain?: { width: number; height: number; bottom: number };
   spec: BuildingSpec;
   elevations: readonly ElevationPlan[];
   /** One entry per elevation, same order. */

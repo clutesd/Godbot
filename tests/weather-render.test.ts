@@ -140,6 +140,28 @@ describe('Weather presentation', () => {
     material.dispose();
   });
 
+  it('keeps a building surface program (procedural detail, SVG artwork) when adding snow and flood', () => {
+    const config = configWith({ seed: 'roof-chain', world: { size: 20 } });
+    const world = generateWorld(config);
+    const renderer = new WeatherRenderer(world, new TerrainSurface(world), config.seed);
+    const scene = new THREE.Scene();
+    const material = new THREE.MeshStandardMaterial();
+    material.onBeforeCompile = shader => { shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n// building-surface'); };
+    material.customProgramCacheKey = () => 'building-surface';
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(), material);
+    wall.userData['weatherSurface'] = true;
+    scene.add(wall);
+    renderer.bindScene(scene);
+    const shader = { uniforms: {}, vertexShader: '#include <begin_vertex>', fragmentShader: '#include <color_fragment>' } as unknown as Parameters<typeof material.onBeforeCompile>[0];
+    material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+    expect(shader.fragmentShader).toContain('// building-surface');
+    expect(shader.fragmentShader).toContain('snowCover');
+    expect(material.customProgramCacheKey()).toContain('building-surface:');
+    renderer.dispose();
+    wall.geometry.dispose();
+    material.dispose();
+  });
+
   it('keeps a bounded local pool, excludes off-camera precipitation, and never mutates simulation state', () => {
     const config = configWith({ seed: 'weather-pool', world: { size: 24 } });
     const world = generateWorld(config);
