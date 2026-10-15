@@ -19,7 +19,6 @@ export function emitEarlyDwelling(sink: GeometrySink, spec: BuildingSpec, surfac
   const roof = sink.at(surfaces.roofSurface, BUILD_STAGE.ROOF);
   const roofTimber = simplified ? undefined : sink.at(surfaces.postSurface, BUILD_STAGE.ROOF);
   const footing = sink.at('stone', BUILD_STAGE.FOUNDATION);
-  const shadow = sink.at('shadow', BUILD_STAGE.FITOUT);
   const top = wallTop + spec.depth * spec.roof.pitch * 0.5;
   const doorW = Math.min(0.22, spec.width * 0.25);
   const doorH = height * 0.82;
@@ -48,7 +47,7 @@ export function emitEarlyDwelling(sink: GeometrySink, spec: BuildingSpec, surfac
       wall?.addBeam({ ...p, y: entry ? base + doorH + (height - doorH) / 2 : base + height / 2 },
         { ...q, y: entry ? base + doorH + (height - doorH) / 2 : base + height / 2 },
         t, entry ? height - doorH : height);
-      if (i % 3 === 0) posts?.addBeam(p, { ...p, y: wallTop }, t * 0.65, t * 0.65);
+      if (!entry && i % 3 === 0) posts?.addBeam(p, { ...p, y: wallTop }, t * 0.65, t * 0.65);
       roofTimber?.addBeam({ ...p, y: wallTop - t }, { x: 0, y: top - t, z: 0 }, t * 0.45, t * 0.45);
       // Thick thatch courses form a genuinely circular cone over a cylindrical wall.
       const courses = simplified ? 1 : 5;
@@ -106,7 +105,7 @@ export function emitEarlyDwelling(sink: GeometrySink, spec: BuildingSpec, surfac
     for (let i = 0; i <= spec.bays; i++) {
       const x = -w + spec.width * i / spec.bays;
       for (const z of [-d, d]) {
-        posts?.addBox(x, base + height / 2, z, t, height, t);
+        if (z < 0 || Math.abs(x) > doorW / 2 + t / 2) posts?.addBox(x, base + height / 2, z, t, height, t);
         const ridgeZ = variant.smokeOpening && Math.abs(x) <= ventW ? Math.sign(z) * ventD : 0;
         const ridge = roofAt(x, ridgeZ);
         roofTimber?.addBeam({ x, y: wallTop - t, z }, { ...ridge, y: ridge.y - t }, t * 0.65, t * 0.65);
@@ -128,7 +127,7 @@ export function emitEarlyDwelling(sink: GeometrySink, spec: BuildingSpec, surfac
   // A real opening, timber jambs and threshold; no modern glazed window on these forms.
   for (const x of [-doorW / 2, doorW / 2]) posts?.addBox(x, base + doorH / 2, d, t, doorH, t * 1.5);
   posts?.addBox(0, base + doorH, d, doorW + t, t, t * 1.5);
-  shadow?.addBox(0, base + 0.008, d - t, doorW, 0.012, t * 3);
+  footing?.addBox(0, base * .5, d + t, doorW * 1.2, Math.max(.015, base), t * 3);
   const reach = variant.entry === 'porch' ? spec.depth * 0.3 : spec.depth * 0.12;
   const entryY = base + doorH + t;
   if (variant.entry !== 'recess') {

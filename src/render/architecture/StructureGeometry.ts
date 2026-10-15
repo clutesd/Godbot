@@ -8,7 +8,8 @@
  * actually assembled, what it stands on, how much of the plan is open, what hangs off the side of
  * it, and what work happens inside. Those are emitted here, from the spec, on top of the shell.
  *
- * Everything is additive. A structure with no spec gets none of it and composes exactly as it did
+ * Legacy assembly and equipment remain additive; functional programs use the cut-wall primitive
+ * below through FunctionalBuildings, without this legacy shell overlay. A structure with no spec gets none of it and composes exactly as it did
  * before. Everything also honours the construction lifecycle: footings at FOUNDATION, assembly
  * character with the WALLS, services at UTILITIES, working equipment at FITOUT, dressing at
  * FINISH — so a half-built barn is a half-built barn rather than a complete one with holes.
@@ -16,11 +17,13 @@
 
 import { BUILD_STAGE } from '../assets/BuildStages';
 import type { GeometryBuilder, Vec3 } from '../assets/GeometryBuilder';
+import type { ArchitecturalMaterialId } from './MaterialLibrary';
 import type { SurfaceKey } from '../materials/MaterialPalette';
 import { SeededRandom } from '../../sim/prng';
 import type { BuildingSpec } from './BuildingSpec';
 import type { FoundationStyle, WallAssembly } from './StructuralFamily';
 import type { FunctionalEquipment } from './BuildingArchetype';
+import type { ElevationPlan } from './FacadePlan';
 import type { RotorSpec } from './MillMotion';
 
 /**
@@ -30,7 +33,7 @@ import type { RotorSpec } from './MillMotion';
  * composer and the composer can therefore depend on this one.
  */
 export interface GeometrySink {
-  at(surface: SurfaceKey, requiredStage: number): GeometryBuilder | undefined;
+  at(surface: SurfaceKey, requiredStage: number, material?: ArchitecturalMaterialId): GeometryBuilder | undefined;
   stain(builder: GeometryBuilder | undefined, extra: number): void;
   clean(builder: GeometryBuilder | undefined): void;
   /**
@@ -59,6 +62,8 @@ export interface StructureFrame {
   bayLines: readonly number[];
   /** Apex of the roof, where one is known. Equipment that sits on the roof reads it from here. */
   roofTop: number;
+  /** Above-ground plinth projection; footings can spread below the fabric without a giant visible apron. */
+  plinthProjection?: number;
 }
 
 export function structureFrame(spec: BuildingSpec, plinthTop: number, wallTop: number, roofTop?: number): StructureFrame {
@@ -99,6 +104,16 @@ export function emitFoundation(sink: GeometrySink, spec: BuildingSpec, frame: St
       return;
 
     case 'stone-footing': {
+      if (['monolithic-earth', 'coursed-masonry', 'load-bearing-brick'].includes(spec.wallAssembly)) {
+        // Bearing walls need continuous strips; isolated pads belong under framed posts.
+        const height = Math.max(.025, frame.plinthTop);
+        const spread = frame.plinthProjection ?? thickness * .35;
+        for (const side of [-1,1]) {
+          stone?.addBox(0,height/2,side*(halfDepth-thickness/2),spec.width+spread,height,thickness+spread);
+          stone?.addBox(side*(halfWidth-thickness/2),height/2,0,thickness+spread,height,spec.depth-thickness*2);
+        }
+        return;
+      }
       // Discrete pad stones under each post, which is what a timber frame actually sits on.
       for (const x of frame.bayLines) {
         for (const z of [halfDepth, -halfDepth]) {
@@ -125,8 +140,8 @@ export function emitFoundation(sink: GeometrySink, spec: BuildingSpec, frame: St
     case 'masonry-plinth': {
       // A projecting plinth course with a weathered top edge.
       const height = Math.max(0.03, frame.plinthTop);
-      stone?.addBox(0, height * 0.5, 0, spec.width + thickness * 2.2, height, spec.depth + thickness * 2.2);
-      stone?.addBox(0, height + 0.012, 0, spec.width + thickness * 1.2, 0.024, spec.depth + thickness * 1.2);
+      stone?.addBox(0, height * 0.5, 0, spec.width + (frame.plinthProjection ?? thickness * 2.2), height, spec.depth + (frame.plinthProjection ?? thickness * 2.2));
+      stone?.addBox(0, height + 0.012, 0, spec.width + (frame.plinthProjection ?? thickness * 2.2) * .55, 0.024, spec.depth + (frame.plinthProjection ?? thickness * 2.2) * .55);
       return;
     }
 
@@ -876,4 +891,44 @@ export function emitSpecGeometry(
   emitOpenBays(sink, spec, frame);
   emitAnnexes(sink, spec, frame, random);
   emitEquipment({ sink, spec, frame, random });
+}
+
+/** Solid wall segments with full-depth rectangular voids. No backing or additive skin. */
+export function emitCutElevation(wall: GeometryBuilder | undefined, face: ElevationPlan, floor: number, height: number, thickness: number, envelopeOnly = false): void {
+  if (!wall) return;
+  const point=(u:number,y:number,out:number):Vec3=>({x:face.originX+face.tangentX*u+face.normalX*out,y:floor+y,z:face.originZ+face.tangentZ*u+face.normalZ*out});
+  const levels = [...new Set([0,height,...face.openings.flatMap(o=>[o.y-o.h/2,o.y+o.h/2])])].filter(y=>y>=0&&y<=height).sort((a,b)=>a-b);
+  for (let i=0;i<levels.length-1;i++) {
+    const y0=levels[i]!, y1=levels[i+1]!;
+    const holes=face.openings.filter(o=>o.y+o.h/2>y0+1e-8&&o.y-o.h/2<y1-1e-8).sort((a,b)=>a.u-b.u);
+    let start=-face.length/2;
+    const segment=(a:number,b:number)=>{
+      if(b-a<1e-7)return;
+      if(envelopeOnly){
+        wall.addQuad(point(a,y0,0),point(b,y0,0),point(b,y1,0),point(a,y1,0));
+        wall.addQuad(point(a,y1,-thickness),point(b,y1,-thickness),point(b,y0,-thickness),point(a,y0,-thickness));
+        return;
+      }
+      const u=(a+b)/2, y=floor+(y0+y1)/2;
+      wall.addBox(face.originX+face.tangentX*u-face.normalX*thickness/2,y,face.originZ+face.tangentZ*u-face.normalZ*thickness/2,
+        face.tangentX ? b-a : thickness,y1-y0,face.tangentZ ? b-a : thickness);
+    };
+    for(const o of holes){segment(start,o.u-o.w/2);start=Math.max(start,o.u+o.w/2);}
+    segment(start,face.length/2);
+  }
+  if(envelopeOnly){
+    // Close just the boundaries and reveals, instead of giving every coplanar cell six faces.
+    for(const o of face.openings){
+      const a=o.u-o.w/2,b=o.u+o.w/2,lo=o.y-o.h/2,hi=o.y+o.h/2;
+      wall.addQuad(point(a,lo,0),point(a,hi,0),point(a,hi,-thickness),point(a,lo,-thickness));
+      wall.addQuad(point(b,hi,0),point(b,lo,0),point(b,lo,-thickness),point(b,hi,-thickness));
+      wall.addQuad(point(a,hi,0),point(b,hi,0),point(b,hi,-thickness),point(a,hi,-thickness));
+      wall.addQuad(point(b,lo,0),point(a,lo,0),point(a,lo,-thickness),point(b,lo,-thickness));
+    }
+    const a=-face.length/2,b=face.length/2;
+    wall.addQuad(point(b,height,0),point(a,height,0),point(a,height,-thickness),point(b,height,-thickness));
+    wall.addQuad(point(a,0,0),point(b,0,0),point(b,0,-thickness),point(a,0,-thickness));
+    wall.addQuad(point(a,height,0),point(a,0,0),point(a,0,-thickness),point(a,height,-thickness));
+    wall.addQuad(point(b,0,0),point(b,height,0),point(b,height,-thickness),point(b,0,-thickness));
+  }
 }

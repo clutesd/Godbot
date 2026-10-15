@@ -83,12 +83,12 @@ describe('the mill family', () => {
     }
   });
 
-  it('keeps the new subtypes unrouted, so the simulation does not change what it builds', () => {
+  it('routes the subtypes only from the simulation facts that justify them', () => {
     for (const id of ['hand-mill', 'sawmill', 'wind-pump', 'smock-mill'] as const) {
-      expect(ARCHETYPE_LIBRARY[id].status, id).toBe('planned');
+      expect(ARCHETYPE_LIBRARY[id].status, id).toBe('active');
     }
-    // Development routing never produces a planned subtype. An energy need's yard is a workshop:
-    // which prime mover (and so which mill) stands is the energy system's decision, not routing's.
+    // An energy need's yard is still a workshop: which prime mover (and so which mill) stands is the
+    // energy system's decision, and the subtypes need a recorded fact (see architecture-lifecycle).
     const dry = { role: 'energy' as const, period: 'medieval' as const, need: 'energy' as const, form: 'workshop' as const, level: 2 };
     for (let plot = 0; plot < 20; plot += 1) {
       const routed = archetypeForContext({ ...dry, seed: `plot-${plot}` });

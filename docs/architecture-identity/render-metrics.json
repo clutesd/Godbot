@@ -1,0 +1,1064 @@
+[
+  {
+    "period": "bronzeIron",
+    "archetype": "house",
+    "detail": {
+      "vertices": 2104,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 1914,
+        "meshes": 4
+      },
+      {
+        "vertices": 1914,
+        "meshes": 4
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "barn",
+    "detail": {
+      "vertices": 2942,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 616,
+        "meshes": 4
+      },
+      {
+        "vertices": 38,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "byre",
+    "detail": {
+      "vertices": 2842,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 670,
+        "meshes": 4
+      },
+      {
+        "vertices": 32,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "stable",
+    "detail": {
+      "vertices": 2748,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 656,
+        "meshes": 4
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "animal-pen",
+    "detail": {
+      "vertices": 1244,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 117,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "granary",
+    "detail": {
+      "vertices": 3138,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 760,
+        "meshes": 4
+      },
+      {
+        "vertices": 58,
+        "meshes": 3
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "workshop",
+    "detail": {
+      "vertices": 9790,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 187,
+        "meshes": 6
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "market",
+    "detail": {
+      "vertices": 10216,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 117,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "warehouse",
+    "detail": {
+      "vertices": 6784,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 67,
+        "meshes": 3
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "civic-hall",
+    "detail": {
+      "vertices": 9290,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 91,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "shrine",
+    "detail": {
+      "vertices": 9752,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 115,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "gatehouse",
+    "detail": {
+      "vertices": 8637,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 187,
+        "meshes": 8
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "dock",
+    "detail": {
+      "vertices": 10945,
+      "meshes": 7
+    },
+    "lods": [
+      {
+        "vertices": 117,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "house",
+    "detail": {
+      "vertices": 5594,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 1176,
+        "meshes": 4
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "barn",
+    "detail": {
+      "vertices": 3374,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 512,
+        "meshes": 4
+      },
+      {
+        "vertices": 38,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "byre",
+    "detail": {
+      "vertices": 3254,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 598,
+        "meshes": 4
+      },
+      {
+        "vertices": 32,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "stable",
+    "detail": {
+      "vertices": 3724,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 590,
+        "meshes": 4
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "animal-pen",
+    "detail": {
+      "vertices": 3952,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 93,
+        "meshes": 3
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "granary",
+    "detail": {
+      "vertices": 4668,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 824,
+        "meshes": 4
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "workshop",
+    "detail": {
+      "vertices": 16744,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 235,
+        "meshes": 8
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "mill",
+    "detail": {
+      "vertices": 14781,
+      "meshes": 11
+    },
+    "lods": []
+  },
+  {
+    "period": "medieval",
+    "archetype": "windmill",
+    "detail": {
+      "vertices": 32948,
+      "meshes": 10
+    },
+    "lods": []
+  },
+  {
+    "period": "medieval",
+    "archetype": "market",
+    "detail": {
+      "vertices": 13754,
+      "meshes": 10
+    },
+    "lods": [
+      {
+        "vertices": 139,
+        "meshes": 6
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "warehouse",
+    "detail": {
+      "vertices": 10418,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 91,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "civic-hall",
+    "detail": {
+      "vertices": 19274,
+      "meshes": 10
+    },
+    "lods": [
+      {
+        "vertices": 131,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "shrine",
+    "detail": {
+      "vertices": 12106,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 115,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "gatehouse",
+    "detail": {
+      "vertices": 13224,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 211,
+        "meshes": 9
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "medieval",
+    "archetype": "dock",
+    "detail": {
+      "vertices": 11368,
+      "meshes": 7
+    },
+    "lods": [
+      {
+        "vertices": 93,
+        "meshes": 3
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "house",
+    "detail": {
+      "vertices": 4202,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 880,
+        "meshes": 5
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "barn",
+    "detail": {
+      "vertices": 3682,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 488,
+        "meshes": 5
+      },
+      {
+        "vertices": 38,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "byre",
+    "detail": {
+      "vertices": 3062,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 550,
+        "meshes": 5
+      },
+      {
+        "vertices": 32,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "stable",
+    "detail": {
+      "vertices": 3588,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 590,
+        "meshes": 5
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "animal-pen",
+    "detail": {
+      "vertices": 1936,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 117,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "granary",
+    "detail": {
+      "vertices": 5616,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 784,
+        "meshes": 5
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "silo",
+    "detail": {
+      "vertices": 10863,
+      "meshes": 7
+    },
+    "lods": [
+      {
+        "vertices": 99,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "workshop",
+    "detail": {
+      "vertices": 17002,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 157,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "mill",
+    "detail": {
+      "vertices": 21100,
+      "meshes": 13
+    },
+    "lods": []
+  },
+  {
+    "period": "industrial",
+    "archetype": "windmill",
+    "detail": {
+      "vertices": 47524,
+      "meshes": 13
+    },
+    "lods": []
+  },
+  {
+    "period": "industrial",
+    "archetype": "factory",
+    "detail": {
+      "vertices": 21368,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 155,
+        "meshes": 6
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "market",
+    "detail": {
+      "vertices": 17086,
+      "meshes": 10
+    },
+    "lods": [
+      {
+        "vertices": 165,
+        "meshes": 6
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "warehouse",
+    "detail": {
+      "vertices": 20162,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 181,
+        "meshes": 6
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "civic-hall",
+    "detail": {
+      "vertices": 22440,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 179,
+        "meshes": 7
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "shrine",
+    "detail": {
+      "vertices": 16812,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 139,
+        "meshes": 6
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "gatehouse",
+    "detail": {
+      "vertices": 16727,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 187,
+        "meshes": 8
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "industrial",
+    "archetype": "dock",
+    "detail": {
+      "vertices": 20976,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 141,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "house",
+    "detail": {
+      "vertices": 5034,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 1072,
+        "meshes": 4
+      },
+      {
+        "vertices": 32,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "barn",
+    "detail": {
+      "vertices": 2534,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 440,
+        "meshes": 5
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "byre",
+    "detail": {
+      "vertices": 2560,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 478,
+        "meshes": 5
+      },
+      {
+        "vertices": 32,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "stable",
+    "detail": {
+      "vertices": 2854,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 518,
+        "meshes": 5
+      },
+      {
+        "vertices": 34,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "animal-pen",
+    "detail": {
+      "vertices": 2232,
+      "meshes": 5
+    },
+    "lods": [
+      {
+        "vertices": 117,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "granary",
+    "detail": {
+      "vertices": 6154,
+      "meshes": 6
+    },
+    "lods": [
+      {
+        "vertices": 1112,
+        "meshes": 5
+      },
+      {
+        "vertices": 32,
+        "meshes": 2
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "silo",
+    "detail": {
+      "vertices": 9430,
+      "meshes": 7
+    },
+    "lods": [
+      {
+        "vertices": 115,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "workshop",
+    "detail": {
+      "vertices": 12600,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 91,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "mill",
+    "detail": {
+      "vertices": 6460,
+      "meshes": 8
+    },
+    "lods": []
+  },
+  {
+    "period": "contemporary",
+    "archetype": "windmill",
+    "detail": {
+      "vertices": 47524,
+      "meshes": 13
+    },
+    "lods": []
+  },
+  {
+    "period": "contemporary",
+    "archetype": "factory",
+    "detail": {
+      "vertices": 13747,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 141,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "market",
+    "detail": {
+      "vertices": 15236,
+      "meshes": 11
+    },
+    "lods": [
+      {
+        "vertices": 115,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "warehouse",
+    "detail": {
+      "vertices": 13218,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 115,
+        "meshes": 5
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "civic-hall",
+    "detail": {
+      "vertices": 15961,
+      "meshes": 10
+    },
+    "lods": [
+      {
+        "vertices": 187,
+        "meshes": 8
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "shrine",
+    "detail": {
+      "vertices": 11859,
+      "meshes": 10
+    },
+    "lods": [
+      {
+        "vertices": 189,
+        "meshes": 7
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "gatehouse",
+    "detail": {
+      "vertices": 12715,
+      "meshes": 9
+    },
+    "lods": [
+      {
+        "vertices": 187,
+        "meshes": 8
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  },
+  {
+    "period": "contemporary",
+    "archetype": "dock",
+    "detail": {
+      "vertices": 17874,
+      "meshes": 8
+    },
+    "lods": [
+      {
+        "vertices": 117,
+        "meshes": 4
+      },
+      {
+        "vertices": 24,
+        "meshes": 1
+      }
+    ]
+  }
+]

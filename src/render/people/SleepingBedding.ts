@@ -22,7 +22,9 @@ export function createSleepingBedding(area: IndoorSleepingArea, buildingScale: n
     mesh.name = part.name; mesh.receiveShadow = true; mesh.castShadow = true;
     spots.forEach((spot, index) => {
       const local = sleepAreaLocal(area, spot.destination);
-      matrix.makeTranslation(local.x / buildingScale, (floorHeight + part.y) / buildingScale, (local.z + part.z) / buildingScale);
+      const angle=spot.facing-area.rotationY;
+      matrix.makeRotationY(angle);
+      matrix.setPosition((local.x+Math.sin(angle)*part.z)/buildingScale,(floorHeight+part.y)/buildingScale,(local.z+Math.cos(angle)*part.z)/buildingScale);
       mesh.setMatrixAt(index, matrix);
       const tint = new THREE.Color('white').multiplyScalar(0.92 + stableRestUnit(spot.key) * 0.16);
       mesh.setColorAt(index, tint);

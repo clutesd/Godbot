@@ -129,7 +129,7 @@ export class MillKit {
     const s = this.scale;
     const p = ordered.map(point => mul(point, s));
     if (p.length === 4) b.addQuad(p[0]!, p[1]!, p[2]!, p[3]!);
-    else b.addTriangle(p[0]!, p[1]!, p[2]!);
+    else b.addTrianglePiece(p[0]!, p[1]!, p[2]!);
   }
 
   /** A thin sheet visible from both sides: cloth, a vane, a sheet of falling water. */

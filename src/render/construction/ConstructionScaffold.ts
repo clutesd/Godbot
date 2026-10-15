@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BUILD_STAGE } from '../assets/BuildStages';
 import { GeometryBuilder } from '../assets/GeometryBuilder';
 import type { MaterialPalette } from '../materials/MaterialPalette';
 import { constructionActiveWorkZone, type ConstructionAssemblyPlan } from './ConstructionAssembly';
@@ -51,7 +52,9 @@ export function updateConstructionScaffold(group: THREE.Group, plan: Constructio
   const { stage } = constructionStagePresentation(progress);
   const zone = constructionActiveWorkZone(plan, progress);
   // Build access before the member that needs it, retaining existing bays across workface changes.
-  const requiredHeight = stage === 0 ? 0 : Math.max(zone.platform, stage === 3 ? plan.height * 0.5 : 0);
+  let requiredHeight = stage === 0 ? 0 : Math.max(zone.platform, stage === 3 ? plan.height * 0.5 : 0);
+  // Retain the last roof deck through low service/joinery tasks; strip it during finishing.
+  if (stage >= BUILD_STAGE.ROOF && stage < BUILD_STAGE.FINISH) requiredHeight = Math.max(requiredHeight, Math.floor(plan.height / CONSTRUCTION_PLATFORM_STEP) * CONSTRUCTION_PLATFORM_STEP);
   const cleanup = Math.max(0, Math.min(1, (progress - 0.95) / 0.05));
   for (const child of group.children) {
     const level = Number(child.userData['constructionLevel']);

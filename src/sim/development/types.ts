@@ -103,6 +103,11 @@ export interface DevelopmentResponse {
   reasons: string[];
   /** Practical capabilities observed when the response was selected. */
   capabilities: string[];
+  /**
+   * Construction-bearing techniques the builders practised when this response was selected.
+   * Frozen with the structure; absent on archives written before it was recorded.
+   */
+  technology?: string[];
   cost: ResourceStock;
   /** Processed materials paid alongside ordinary construction budgets. */
   materialCost?: Record<string, number>;
@@ -135,6 +140,22 @@ export interface StructureHistoryEntry {
   form?: StructureForm;
   level?: number;
   material?: StructureMaterial;
+  /** Construction technique of the fabric this entry built; optional for archives. */
+  technology?: string[];
+}
+
+/** The physical identity of a structure's standing walls, independent of what it is used for. */
+export type StructureFabric = Pick<DevelopmentResponse, 'need' | 'form' | 'level' | 'material' | 'capabilities' | 'technology' | 'reasons'>;
+
+/**
+ * The shell a newly completed response stands in. Adaptive reuse keeps a larger standing shell;
+ * new work at least as large as it replaces it. A ruin has no shell left to keep.
+ */
+export function retainedFabric(prior: StructureDevelopment | undefined, built: DevelopmentResponse): StructureFabric | undefined {
+  if (!prior || prior.status === 'ruin') return undefined;
+  const standing: StructureFabric = prior.fabric ?? { need: prior.need, form: prior.form, level: prior.level, material: prior.material,
+    capabilities: [...prior.capabilities], technology: prior.technology ? [...prior.technology] : undefined, reasons: [...prior.reasons] };
+  return standing.level > built.level ? standing : undefined;
 }
 
 export interface StructureDevelopment extends DevelopmentResponse {
@@ -145,6 +166,17 @@ export interface StructureDevelopment extends DevelopmentResponse {
   /** Origin is permanent; the most recent twelve transitions are retained. */
   history: StructureHistoryEntry[];
   transitionCount: number;
+  /**
+   * Highest level this plot's fabric has ever been built to. Repurposing to a humbler use keeps
+   * the walls; only collapse or demolition takes them away. Optional for archive compatibility.
+   */
+  peakLevel?: number;
+  /**
+   * The physical shell still standing on the plot when it is larger than what the current use
+   * required: a hall repurposed as housing is still the hall's walls. Cleared once something at
+   * least as large is built here. Optional for archive compatibility.
+   */
+  fabric?: StructureFabric;
   lastUsedMonth: number;
   underusedSince?: number;
 }

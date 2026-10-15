@@ -48,6 +48,7 @@
   <div class="views">
     <button data-view="gallery" aria-pressed="true">Gallery</button>
     <button data-view="timeline" aria-pressed="false">Timeline</button>
+    <button data-view="solo" aria-pressed="false">Solo</button>
     <button data-view="street" aria-pressed="false">Street</button>
     <button data-view="era-matrix" aria-pressed="false">Era Matrix</button>
     <button data-view="material-matrix" aria-pressed="false">Material Matrix</button>
@@ -96,7 +97,9 @@
   <label class="inline"><input id="pivots" type="checkbox"> Show rotor pivots</label>
 
   <h2>Presentation</h2>
-  <label class="inline"><input id="hybrid-facades" type="checkbox" checked> SVG workshop facades (before / after)</label>
+  <label class="inline"><input id="hybrid-facades" type="checkbox" checked> SVG facade detailing (on / off)</label>
+  <label class="inline"><input id="neutral-materials" type="checkbox"> Neutral materials / inspect geometry</label>
+  <p id="facade-coverage" style="font-size:11px;color:#a7b6ac"></p>
   <label for="lighting">Lighting</label>
   <select id="lighting"><option value="day">Daylight</option><option value="raking">Raking evening sun</option><option value="overcast">Overcast</option><option value="night">Moonlight</option></select>
   <label for="stage">Construction stage</label>

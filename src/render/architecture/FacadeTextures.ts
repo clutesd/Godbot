@@ -26,7 +26,7 @@ export function projectFacadeCoordinates(geometry: THREE.BufferGeometry, plan: F
       const u = (x - face.originX) * face.tangentX + (z - face.originZ) * face.tangentZ;
       const outward = (x - face.originX) * face.normalX + (z - face.originZ) * face.normalZ;
       if (Math.abs(u) > face.length / 2 + 1e-5 || y < plan.floor - 1e-5 || y > plan.wallTop + 1e-5
-        || outward < -plan.revealDepth - 0.003 || outward > Math.max(plan.postThickness * 2.5, 0.025)) continue;
+        || outward < -(openingsOnly ? Math.max(plan.revealDepth, plan.wallThickness * .75) : plan.revealDepth) - 0.003 || outward > Math.max(plan.postThickness * 2.5, 0.025)) continue;
       if (openingsOnly) {
         const opening = face.openings.findIndex(o => o.kind === 'window'
           && Math.abs(u - o.u) <= o.w / 2 + 1e-5
@@ -52,9 +52,12 @@ export function projectFacadeCoordinates(geometry: THREE.BufferGeometry, plan: F
     }
     rejected.forEach(v => { uv[v * 3 + 2] = 0; });
   }
-  // Roof joinery stays wood/metal even where a rafter tail crosses the wall projection.
+  // Only wall fabric and structural posts receive wall artwork. Nearby counters, crates,
+  // shutters, foundations and roof joinery retain their production materials.
   if (index) for (const piece of geometry.userData['assemblyPieces'] ?? []) {
-    if (piece.stage !== BUILD_STAGE.ROOF) continue;
+    const permitted = openingsOnly ? piece.stage === BUILD_STAGE.FITOUT
+      : piece.stage === BUILD_STAGE.WALLS || piece.stage === BUILD_STAGE.FRAME;
+    if (permitted) continue;
     for (let offset = piece.start; offset < piece.start + piece.count; offset++) {
       uv[index.getX(offset) * 3 + 2] = 0;
     }
@@ -68,12 +71,30 @@ export class FacadeTextureCache {
   private running = 0;
   private disposed = false;
   private readonly originalMaterials = new WeakMap<THREE.Material, THREE.Material>();
+  private readonly geometryBindings = new WeakMap<THREE.BufferGeometry, Map<THREE.Material, { original: THREE.Material; decorated: THREE.Material }>>();
+  private readonly bindings = new WeakMap<THREE.Mesh, { original: THREE.Material; decorated: THREE.Material }>();
   private readonly processed = new WeakSet<THREE.Object3D>();
   readonly strength = { value: 1 };
   /** Admission is bounded, rather than disposing textures still referenced by scene clones. */
-  constructor(readonly maxEntries = 4) {}
+  constructor(readonly maxEntries = 4, readonly rasterSize = FACADE_ATLAS_SIZE) {}
 
-  setEnabled(enabled: boolean): void { this.strength.value = enabled ? 1 : 0; }
+  setEnabled(enabled: boolean, root?: THREE.Object3D): void {
+    this.strength.value = enabled ? 1 : 0;
+    if (root) this.syncMaterials(root);
+  }
+  /** Restore the exact production material when disabled, including scene clones. */
+  syncMaterials(root: THREE.Object3D): void {
+    root.traverse(object => {
+      if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+      let binding = this.bindings.get(object) ?? this.geometryBindings.get(object.geometry)?.get(object.material);
+      const original = this.originalMaterials.get(object.material);
+      if (!binding && original) {
+        binding = { original, decorated: object.material };
+        this.bindings.set(object, binding);
+      }
+      if (binding) object.material = this.strength.value ? binding.decorated : binding.original;
+    });
+  }
   /** Benchmark against the unmodified production shader; restore even if drawing throws. */
   withProceduralMaterials<T>(root: THREE.Object3D, draw: () => T): T {
     const saved: { mesh: THREE.Mesh; material: THREE.Material }[] = [];
@@ -88,7 +109,7 @@ export class FacadeTextureCache {
     const entries = [...this.entries.values()];
     return { entries: entries.length, ready: entries.filter(e => e.state === 'ready').length,
       failed: entries.filter(e => e.state === 'failed').length, pending: entries.filter(e => e.state === 'pending').length,
-      estimatedGpuBytes: entries.length * BYTES_PER_ENTRY,
+      estimatedGpuBytes: entries.length * BYTES_PER_ENTRY * (this.rasterSize / FACADE_ATLAS_SIZE) ** 2,
       materials: entries.reduce((sum, e) => sum + e.materials.size, 0) };
   }
 
@@ -133,7 +154,7 @@ export class FacadeTextureCache {
                 await image.decode();
                 if (this.disposed) return;
                 const canvas = document.createElement('canvas');
-                canvas.width = canvas.height = FACADE_ATLAS_SIZE;
+                canvas.width = canvas.height = this.rasterSize;
                 const context = canvas.getContext('2d');
                 if (!context) throw new Error('Facade raster context unavailable');
                 context.drawImage(image, 0, 0);
@@ -164,7 +185,7 @@ export class FacadeTextureCache {
       if (glazingOnly && family !== 'glass') return;
 
       if (family === 'metal' || surface.startsWith('roof-')) return;
-      projectFacadeCoordinates(object.geometry, plan, glazingOnly);
+      projectFacadeCoordinates(object.geometry, plan, glazingOnly || family === 'glass');
       const coordinates = object.geometry.getAttribute('aFacadeUv');
       let painted = false;
       for (let i = 0; i < coordinates.count; i++) if (coordinates.getZ(i) > 0) { painted = true; break; }
@@ -198,7 +219,7 @@ export class FacadeTextureCache {
             varying vec3 vFacadeUv;
 `)
             .replace('#include <color_fragment>', `#include <color_fragment>
-              float gbFacadeMask = clamp(vFacadeUv.z, 0.0, 1.0) * gbFacadeStrength * gbFacadeReady;
+              float gbFacadeMask = clamp(vFacadeUv.z, 0.0, 1.0) * gbFacadeStrength * gbFacadeReady * (gl_FrontFacing ? 1.0 : 0.0);
               vec3 facadeAlbedo = texture2D(gbFacadeAtlas, vFacadeUv.xy).rgb;
               diffuseColor.rgb = mix(diffuseColor.rgb, facadeAlbedo, gbFacadeMask);`)
             .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
@@ -227,13 +248,18 @@ export class FacadeTextureCache {
             float gbPaneLight = mix(0.35, 1.0, smoothstep(0.025, 0.18, dot(facadeAlbedo, vec3(0.2126, 0.7152, 0.0722))));
             totalEmissiveRadiance *= mix(1.0, gbPaneLight, gbFacadeMask);`);
         };
-        material.customProgramCacheKey = () => `${oldKey}:godbox-facade-v4`;
+        material.customProgramCacheKey = () => `${oldKey}:godbox-facade-v6`;
         material.name = `${source.name}:svg-facade`;
 
         this.originalMaterials.set(material, source);
         atlas.materials.set(materialKey, material);
       }
-      object.material = material;
+      const binding = { original: source, decorated: material };
+      this.bindings.set(object, binding);
+      let geometryBindings = this.geometryBindings.get(object.geometry);
+      if (!geometryBindings) { geometryBindings = new Map(); this.geometryBindings.set(object.geometry, geometryBindings); }
+      geometryBindings.set(source, binding); geometryBindings.set(material, binding);
+      object.material = this.strength.value ? material : source;
     });
     root.userData['facadeStatus'] = glazingOnly ? 'hybrid-glazing' : 'hybrid';
     this.processed.add(root);

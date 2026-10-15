@@ -596,6 +596,12 @@ export function grammarFromBuildingSpec(
     : spec.roof.archetype === 'dome' || spec.roof.archetype === 'vault' ? -0.65 : 0;
   grammar.rafterTails = traditional ? grammar.rafterTails : 0;
   grammar.ridgeFinials = traditional && grammar.ridgeFinials && ['shrine', 'civic-hall', 'gatehouse'].includes(spec.archetype);
+  if (spec.architecture) {
+    grammar.massing = 'single';
+    grammar.patternBands = 0;
+    // Preserve purpose/equipment metadata; this composer emits only coherent physical parts.
+    grammar.veranda = 'none'; grammar.rafterTails = 0; grammar.ridgeFinials = false;
+  }
   grammar.postThickness = Math.min(grammar.postThickness, spec.storeyHeight * 0.12);
   return grammar;
 }

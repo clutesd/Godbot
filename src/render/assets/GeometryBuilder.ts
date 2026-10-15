@@ -163,6 +163,13 @@ export class GeometryBuilder {
     }
   }
 
+  /** One triangular physical part, including its construction range. */
+  addTrianglePiece(a: Vec3, b: Vec3, c: Vec3): void {
+    const start = this.indices.length;
+    this.addTriangle(a,b,c);
+    if (this.indices.length > start) this.recordPiece(start);
+  }
+
   addQuad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
     const order = this.recordingBox ? 1 : Math.max(this.faceOrder(a, b, c), this.faceOrder(a, c, d));
     this.emitQuad(a, b, c, d, order);
@@ -380,6 +387,26 @@ export class GeometryBuilder {
         this.normals[p]!, this.normals[p + 1]!, this.normals[p + 2]!,
       );
       this.details[index * 4 + 3] = Math.round(occlusion * 127);
+    }
+  }
+
+  /** Append a composed range while retaining the real construction pieces and canvas origin. */
+  append(source: GeometryBuilder, transform: (p: Vec3) => Vec3): void {
+    for (const piece of source.pieces) {
+      const start = this.indices.length;
+      for (let i = piece.start; i < piece.start + piece.count; i += 3) {
+        const point = (index: number): Vec3 => {
+          const id = source.indices[index]! * 3;
+          return transform({ x: source.positions[id]!, y: source.positions[id + 1]!, z: source.positions[id + 2]! });
+        };
+        const vertex = source.indices[i]!;
+        const grain = source.detailUsed ? source.details[vertex * 4 + 2]! : 0;
+        const axis = grain > 95 ? {x:0,y:0,z:1} : grain > 30 ? {x:0,y:1,z:0} : {x:1,y:0,z:0};
+        const origin = transform({x:0,y:0,z:0}), direction = transform(axis);
+        this.setGrainAxis(dominantAxis(direction.x-origin.x,direction.y-origin.y,direction.z-origin.z),false);
+        this.addTriangle(point(i), point(i + 1), point(i + 2));
+      }
+      this.recordPiece(start);
     }
   }
 

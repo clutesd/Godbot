@@ -1,5 +1,5 @@
 import { reserveStructurePlot } from '../../shared/StructurePlots';
-import type { DevelopmentProject, DevelopmentResponse, StructureDevelopment, StructureHistoryEntry } from '../development/types';
+import { retainedFabric, type DevelopmentProject, type DevelopmentResponse, type StructureDevelopment, type StructureHistoryEntry } from '../development/types';
 import { infrastructureLabourBudget } from '../people/HumanCapital';
 import { paidConstructionWorkerIds } from '../people/ConstructionLabour';
 import { materialEconomy, reconcileBulkStocks } from '../resources/Inventory';
@@ -10,6 +10,7 @@ import { facilityTierSpec } from './FacilityCatalog';
 import { emptyTotals } from './FacilityInventory';
 import { facilityCarrier } from './FacilityPower';
 import type { FacilityBill, FacilityFamilySpec, FacilityTierSpec, ProcessingFacility, SettlementProcessing } from './types';
+import { practisedConstructionTechnology } from '../development/ConstructionTechnology';
 
 const EPSILON = 1e-9;
 
@@ -92,6 +93,7 @@ function facilityConstructionResponse(state: SimulationState, s: Settlement, f: 
     need: 'manufacturing', form: spec.form, name: spec.name, level: Math.min(3, spec.tier), material: spec.material,
     cultureId: culture.id, style: { ...culture.style }, services: { manufacturing: spec.service },
     reasons: ['processing-facility', `${f.family}:${spec.kind}`], capabilities: spec.knowledge.map(k => k.id),
+    technology: practisedConstructionTechnology(s),
     cost: { food: 0, wood: 0, minerals: 0, goods: 0, wealth: 0 }, labor: spec.build.work,
     facilityId: f.id, facilityFamily: f.family, facilityTier: spec.tier,
   };
@@ -126,6 +128,8 @@ export function installFacilityBody(state: SimulationState, s: Settlement, f: Pr
     ...response, status: 'active', origin: prior?.origin ?? record, history: prior?.history ?? [],
     constructionWork: f.constructionWork,
     transitionCount: (prior?.transitionCount ?? 0) + (prior ? 1 : 0), lastUsedMonth: state.month,
+    peakLevel: Math.max(response.level, prior && prior.status !== 'ruin' ? prior.peakLevel ?? prior.level : 0),
+    fabric: retainedFabric(prior, response),
   };
   if (prior) development.history = [record, ...development.history].slice(0, 12);
   plot.development = development;

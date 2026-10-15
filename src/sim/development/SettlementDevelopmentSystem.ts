@@ -16,14 +16,16 @@ import {
 } from '../resources/MaterialUse';
 import { advanceSettlementResourceExtraction } from '../resources/SettlementResourceExtraction';
 import { reconcileBulkStocks, takeMaterial } from '../resources/Inventory';
-import { reserveStructurePlot } from '../../shared/StructurePlots';
+import { growStructurePlot, plotCanGrow, reserveStructurePlot, UPGRADE_PLOT_GROWTH } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
 import { PlacementContract } from '../../shared/placement/PlacementContract';
 import { advanceSettlementWater } from './WaterCivilization';
 import { evaluateSettlementIdentity } from './SettlementIdentity';
 import { shelterCapacity, usableStructure } from './Shelter';
+import { practisedConstructionTechnology } from './ConstructionTechnology';
 import {
   SETTLEMENT_NEEDS,
+  retainedFabric,
   type DevelopmentBlockCode,
   type DevelopmentBlocker,
   type DevelopmentCandidateDecision,
@@ -180,6 +182,7 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   let sponsor: Institution | undefined;
   let names: string[];
   let maxLevel = 1;
+  let perimeter = false;
   const requirements: string[] = [];
   const knows = (id: string, minimum = 0.3) => {
     if (practical(s, id) < minimum) return false;
@@ -187,15 +190,25 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   };
   const engineered = practical(s, 'leverage') >= 0.25 && (practical(s, 'stone-composites') >= 0.3 || practical(s, 'pottery-firing') >= 0.3);
   switch (need) {
-    case 'housing': form = 'dwelling'; names = ['household shelter', 'household compound', 'dense housing court']; maxLevel = engineered ? 2 : 1; break;
+    case 'housing':
+      form = 'dwelling'; names = ['household shelter', 'household compound', 'dense housing court']; maxLevel = engineered ? 2 : 1;
+      // Multi-household courts need administered land and a town large enough to fill them.
+      if (maxLevel === 2 && c.population >= 100 && knows('civic-administration', 0.35)) maxLevel = 3;
+      break;
     case 'food':
       if (c.farmers > 2 && c.fertile && !(c.culture.memory.foodScarcity
         && seedHash(`${s.id}:storage:${s.development?.evaluatedMonth}:${c.culture.memory.foodScarcity.eventId}`) / 0x100000000
           < c.culture.memory.foodScarcity.strength * 0.7)) {
         form = 'field'; names = ['farmstead', 'agricultural estate', 'mechanized agricultural site'];
+        // Kept livestock is what the farm's buildings are for: record it so the farm can house them.
+        knows('animal-husbandry');
         if (knows('agrarian-surplus')) maxLevel = 2;
         if (maxLevel === 2 && knows('mechanical-power', 0.45) && c.artisans >= 5 && s.resources.wood > 12) maxLevel = 3;
-      } else { form = 'store'; names = ['food store', 'granary', 'storage and processing court']; if (knows('pottery-firing', 0.2)) maxLevel = 2; }
+      } else {
+        form = 'store'; names = ['food store', 'granary', 'storage and processing court']; if (knows('pottery-firing', 0.2)) maxLevel = 2;
+        // Bulk storage with mechanical elevating needs shaft power and a real grain surplus to fill it.
+        if (maxLevel === 2 && knows('mechanical-power', 0.4) && c.farmers >= 5 && s.monthlyBalance.food > 0) maxLevel = 3;
+      }
       break;
     case 'trade': {
       if (c.routes === 0) return undefined;
@@ -223,6 +236,15 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
         sponsor = institution(c, 'temple'); form = 'sanctuary'; names = ['temple watch', 'temple authority court', 'sacred refuge'];
       } else if (d.militarism > 0.65 || s.conflictPressure > 0.45) {
         form = 'tower'; names = ['frontier watch post', 'warrior barracks', 'fortified garrison'];
+        // A fully developed garrison that still faces sustained conflict encloses the settlement
+        // rather than raising another tower. This is a new paid work on its own plot: the garrison
+        // is level 3, so it is never the ancestor this response would rebuild.
+        if (s.conflictPressure > 0.45 && (s.structurePlots ?? []).some(p => p.development?.status === 'active'
+          && p.development.need === 'security' && p.development.form === 'tower' && p.development.level >= 3
+          && !p.development.reasons.includes('perimeter-defence'))) {
+          names = ['timber palisade', 'curtain wall', 'fortified enceinte']; requirements.push('leverage');
+          perimeter = true;
+        }
       } else if (d.hierarchy < 0.4) {
         form = 'gathering'; names = ['mutual watch ground', 'watch meeting hall', 'watch court'];
       } else { form = 'hall'; names = ['civic guard house', 'civic guard court', 'central police office']; }
@@ -302,13 +324,18 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
   cost.goods = (level - 1) * 4;
   cost.wealth = (level - 1) * 3;
   const materialCost: Record<string, number> = material === 'metal' ? { 'iron-tools': units * 2 } : material === 'masonry' ? { 'dressed-stone': units * 2 } : material === 'timber' ? { 'timber-frame': units * 2 } : {};
+  // A perimeter is a long run of wall, not one building: it costs more fabric than a tower of the same level.
+  if (perimeter) {
+    for (const key of STOCK_KEYS) cost[key] *= 1.5;
+    for (const key of Object.keys(materialCost)) materialCost[key] = materialCost[key]! * 1.5;
+  }
   if (form === 'field' && level === 1) {
     material = 'earth';
     for (const key of STOCK_KEYS) cost[key] = 0;
     for (const key of Object.keys(materialCost)) delete materialCost[key];
   }
   const services: ServiceSupply = { [need]: level === 1 ? 1 : level === 2 ? 2 : 3.5 };
-  if (need === 'housing') services.housing = level === 1 ? 1 : 1.8;
+  if (need === 'housing') services.housing = level === 1 ? 1 : level === 2 ? 1.8 : 2.6;
   if (need === 'religion' && sponsor) { services.healthcare = level * 0.35; services.security = level * (d.religiousTendency > 0.7 ? 0.7 : 0.1); }
   if (need === 'government') services.security = level * (d.militarism < 0.5 ? 0.5 : 0.2);
   if (need === 'trade') services.food = level * 0.25;
@@ -318,7 +345,11 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     ...(need === 'security' ? [s.conflictPressure > 0.3 ? 'frontier-conflict' : 'local-order'] : []),
     ...(need === 'food' ? [s.monthlyBalance.food > 0 ? 'agricultural-surplus' : 'food-resilience'] : []),
     ...(need === 'water' && s.development?.water ? [s.development.water.droughtStress > 0.4 ? 'drought-resilience' : s.development.water.quality < 0.55 ? 'clean-water' : 'water-security'] : []),
-    ...(c.routes > 0 && ['trade', 'transport', 'religion'].includes(need) ? ['connected-exchange'] : [])];
+    ...(c.routes > 0 && ['trade', 'transport', 'religion'].includes(need) ? ['connected-exchange'] : []),
+    ...(perimeter ? ['perimeter-defence'] : []),
+    // Grain from the settlement's own fields is ground by hand where no geared mill is known yet.
+    ...(need === 'food' && form === 'store' && practical(s, 'simple-gearing') < 0.25
+      && (s.fields ?? []).some(f => f.crop === 'cereal' || f.crop === 'dryland') ? ['hand-milled-grain'] : [])];
   const sacred = d.religiousTendency >= 0.65;
   const memorial = evidence ? { ...structuredClone(evidence),
     form: (d.hierarchy > 0.7 ? 'stelae' : d.religiousTendency > 0.65 ? 'ancestor-posts' : d.longTermOrientation > 0.65 && c.localMinerals > 0.3 ? 'stone-cairns' : 'earth-mounds') as MemorialSite['form'],
@@ -329,12 +360,14 @@ export function responseForNeed(c: DevelopmentContext, need: SettlementNeed, req
     names[0] = memorial.deaths > 0 ? sacred ? 'ancestor burial ground' : 'communal burial ground' : sacred ? 'remembrance shrine' : 'event memorial';
   }
   return { memorial, need, form, name: names[level - 1]!, level, material, cultureId: siteCulture.id, style: { ...siteCulture.style }, institutionId: sponsor?.id,
-    services, reasons, capabilities: [...new Set(requirements)], cost, materialCost, labor: level * (open ? 0.5 : 1) };
+    services, reasons, capabilities: [...new Set(requirements)], technology: practisedConstructionTechnology(s), cost, materialCost,
+    labor: level * (open ? 0.5 : 1) * (perimeter ? 1.6 : 1) };
 }
 
 function entry(response: DevelopmentResponse, month: number, action: StructureHistoryEntry['action']): StructureHistoryEntry {
   return { month, action, name: response.name, need: response.need, form: response.form, level: response.level, material: response.material,
-    cultureId: response.cultureId, institutionId: response.institutionId, reasons: [...response.reasons] };
+    cultureId: response.cultureId, institutionId: response.institutionId, reasons: [...response.reasons],
+    ...(response.technology ? { technology: [...response.technology] } : {}) };
 }
 
 function remember(structure: StructureDevelopment, record: StructureHistoryEntry): void {
@@ -675,6 +708,9 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
           candidates.push(candidate);
           continue;
         }
+        // A larger building takes more ground where its surroundings are clear. Where they are not,
+        // it is still built in place and drawn no smaller than what stood there (see upgradeFit).
+        if (plot && (action === 'expanded' || action === 'upgraded') && plotCanGrow(state, plot, UPGRADE_PLOT_GROWTH)) growStructurePlot(plot, UPGRADE_PLOT_GROWTH);
         plot ??= reserveStructurePlot(state, settlement, districtForResponse(response));
         if (!plot) {
           candidate.blockers.push({ code: 'no-valid-plot' });
@@ -762,6 +798,9 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
         const prior = plot.development;
         plot.development = { ...project.response, status: 'active', origin: prior?.origin ?? record, history: prior?.history ?? [],
           constructionWork: project,
+          // A ruin's walls are gone; anything still standing keeps the size it was built to.
+          peakLevel: Math.max(project.response.level, prior && prior.status !== 'ruin' ? prior.peakLevel ?? prior.level : 0),
+          fabric: retainedFabric(prior, project.response),
           transitionCount: prior?.transitionCount ?? 0, lastUsedMonth: state.month };
         if (prior) remember(plot.development, record);
         plot.condition = 1; plot.accessRestricted = false;

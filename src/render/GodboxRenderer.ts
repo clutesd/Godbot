@@ -1,3 +1,6 @@
+import { settlementMovementFrontage, streetFacing } from '../shared/MovementFrontage';
+import { installPhysicalRoomPlan } from './people/PhysicalRoomPlan';
+import type { FacadePlan } from './architecture/FacadePlan';
 import { BodyRecoveryPresentation } from './people/BodyRecoveryPresentation';
 import { IllnessBreath } from './people/IllnessBreath';
 import { bodyWeathering } from '../sim/people/BodyLifecycle';
@@ -63,12 +66,14 @@ import { humanLookFor as resolveHumanLook, type HeadPiece, type HumanLook } from
 import { createGarmentAtlasGeometry, createHeadAtlasGeometry, createHumanMantleGeometry } from './people/HumanWardrobeAtlas';
 import { createFocalContactShadow } from './people/FocalContactShadow';
 import { AssetBuilder } from './assets/AssetBuilder';
-import { structureFit } from './assets/StructureFit';
+import { peakStructureLevel, structureFit, upgradeFit, type PlacedExtents } from './assets/StructureFit';
+import { displayedPlotBudget, selectDisplayedPlots } from './settlement/DisplayedPlots';
+import { applyStructuralDeterioration, conditionBand } from './architecture/StructuralDeterioration';
 
 /** Ground a settlement's landmark registers for itself, standing clear of the plot grid. */
 const LANDMARK_FOOTPRINT_RADIUS = 1.7;
 import { BUILD_STAGE, stageFromName, type BuildStage } from './assets/BuildingComposer';
-import { developmentBuildingRole, developmentPresentationEra, eraRank, type BuildingGrammarContext, type BuildingRole } from './assets/BuildingGrammar';
+import { developmentBuildingRole, developmentFabric, developmentPresentationEra, eraRank, priorFabricGeneration, type BuildingGrammarContext, type BuildingRole } from './assets/BuildingGrammar';
 import { settlementPresentationEra } from './assets/SettlementEra';
 import type { DevelopmentProject, DevelopmentResponse } from '../sim/development/types';
 import { districtForResponse } from '../shared/SettlementLayoutPlan';
@@ -2445,7 +2450,7 @@ export class GodboxRenderer {
     }
     for (const placement of placements) {
       const terrainY = this.elevationAt(placement.worldX, placement.worldZ) - settlementY;
-      const buildingEra = placement.development ? developmentPresentationEra(placement.development) : this.eraForBuilding(placement, era);
+      const buildingEra = placement.development ? developmentPresentationEra(developmentFabric(placement.development)) : this.eraForBuilding(placement, era);
       // Stage tracks this plot's own era, so each structure is upgraded in place on its own
       // schedule rather than the whole settlement being reskinned at once.
       const damagedPlot = settlement.structurePlots?.find((plot) => plot.id === placement.key);
@@ -2465,10 +2470,10 @@ export class GodboxRenderer {
           group.add(ruins);
         }
         this.structureDestruction.bind(damagedPlot, structure, ruins);
-      } else if (condition < 1) {
-        structure.scale.y *= 0.12 + condition * 0.88;
-        structure.rotation.z += (1 - condition) * 0.12;
       }
+      // Deterioration is never a change of size. Weathering arrives through the banded condition the
+      // asset was built with; lost finish, roofing and upper fabric are removed piece by piece in
+      // createPlacedBuilding, and what falls lies at the building's foot.
       structure.traverse((object) => {
         if (object instanceof THREE.Mesh) object.userData['weatherSurface'] = true;
       });
@@ -2575,7 +2580,7 @@ export class GodboxRenderer {
   }
 
   private shownBuildingCount(settlement: Settlement): number {
-    if (settlement.development) return Math.min(Math.max(12, Math.round(32 * this.config.render.visualDensity)), (settlement.structurePlots ?? []).filter(p => p.development).length);
+    if (settlement.development) return displayedPlotBudget(settlement, this.config.render.visualDensity);
     return Math.min(Math.max(12, Math.round(32 * this.config.render.visualDensity)), settlement.buildings + Math.floor(settlement.urbanization * 8));
   }
 
@@ -2924,13 +2929,43 @@ export class GodboxRenderer {
       rotationY: placement.rotationY, width, depth, doorWidth,
       floorY: this.elevationAt(placement.worldX, placement.worldZ) + floorHeight + 0.02,
       plotWidth: placement.width, plotDepth: placement.depth };
+    const ranges=building.userData['roofedRanges'] as Parameters<typeof installPhysicalRoomPlan>[3] | undefined;
+    const facade=building.userData['facadePlan'] as FacadePlan | undefined;
+    if(ranges && facade) installPhysicalRoomPlan(area,facade,building.scale.x,ranges,building.userData['interiorWalls'] as Parameters<typeof installPhysicalRoomPlan>[4]);
     const spots = indoorSleepingSpots(area);
     if (!spots.length) return;
     placement.sleepingArea = area;
     building.add(createSleepingBedding(area, building.scale.x, floorHeight));
   }
 
+  /**
+   * The rendered extents of `development` standing on this placement, fitted the way
+   * createPlacedBuilding fits a finished building. The floor an upgrade on the plot must meet.
+   */
+  private standingExtents(development: DevelopmentResponse, placement: BuildingPlacement, settlement: Settlement, cultureStyle: Culture['style']): PlacedExtents {
+    const shell = developmentFabric(development);
+    const role = developmentBuildingRole(shell);
+    const asset = this.assetBuilder.getAsset('building', {
+      seed: `${settlement.architecture?.dialectKey ?? settlement.id}:${role}:v${placement.variation}`,
+      culture: shell.style ?? cultureStyle, era: developmentPresentationEra(shell), variant: `${role}#${BUILD_STAGE.DETAIL}`,
+      development: shell, settlementIdentity: settlement.architecture, localSlopeDegrees: placement.localSlopeDegrees,
+      grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
+      prosperity: settlement.prosperity, specialization: settlement.specialization, waterfront: this.waterfrontFor(settlement),
+    });
+    const massWidth = Number(asset.mesh.userData['massWidth'] ?? asset.mesh.userData['footprintWidth'] ?? 1);
+    const massDepth = Number(asset.mesh.userData['massDepth'] ?? asset.mesh.userData['footprintDepth'] ?? 1);
+    const height = Number(asset.mesh.userData['buildingHeight'] ?? 1);
+    // Each generation is itself floored by the one before it, so the guarantee holds down the chain.
+    const prior = priorFabricGeneration(shell);
+    const fit = upgradeFit(structureFit({ plotWidth: placement.width, plotDepth: placement.depth, massWidth, massDepth, level: peakStructureLevel(development) }),
+      { width: massWidth, depth: massDepth, height }, prior ? this.standingExtents(prior, placement, settlement, cultureStyle) : undefined);
+    return { width: massWidth * fit, depth: massDepth * fit, height: height * fit };
+  }
+
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number, settlement: Settlement): THREE.Object3D {
+    // A war-struck shell is handed to StructureDestruction intact; ordinary decay is drawn here.
+    const plot = settlement.structurePlots?.find(candidate => candidate.id === placement.key);
+    const fabricCondition = plot?.destruction ? 1 : conditionBand(plot?.condition ?? 1);
     // Founding adaptations are ordinary BuildingSpec inputs now. They use this same AssetBuilder,
     // material, geometry, LOD and construction path instead of escaping through SurvivalStructure.
     const stage = this.constructionStageFor(placement.key);
@@ -2942,7 +2977,8 @@ export class GodboxRenderer {
       culture: cultureStyle,
       era,
       variant: `${placement.role}#${stage}`,
-      development: placement.development,
+      // Drawn as its standing walls: adaptive reuse keeps a larger shell than the new use needed.
+      development: placement.development ? developmentFabric(placement.development) : undefined,
       settlementIdentity: settlement.architecture,
       localSlopeDegrees: placement.localSlopeDegrees,
       grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
@@ -2950,6 +2986,7 @@ export class GodboxRenderer {
       specialization: settlement.specialization,
       waterfront: this.waterfrontFor(settlement),
       project: this.projectForPlot(settlement, placement.key),
+      condition: fabricCondition,
     });
     const building = asset.mesh.clone(true);
     // Each placed copy owns its rotors, so a cached asset shared by many mills still turns per mill.
@@ -2960,8 +2997,12 @@ export class GodboxRenderer {
     // and cart yard spill into the plot's reserved precinct instead of crushing the mill house.
     const massWidth = Number(asset.mesh.userData['massWidth'] ?? asset.mesh.userData['footprintWidth'] ?? 1);
     const massDepth = Number(asset.mesh.userData['massDepth'] ?? asset.mesh.userData['footprintDepth'] ?? 1);
-    const fit = structureFit({ plotWidth: placement.width, plotDepth: placement.depth,
-      massWidth, massDepth, level: placement.development?.level });
+    // An in-place upgrade is never drawn smaller than the generation it replaced on this plot.
+    const priorGeneration = placement.development ? priorFabricGeneration(developmentFabric(placement.development)) : undefined;
+    const fit = upgradeFit(structureFit({ plotWidth: placement.width, plotDepth: placement.depth,
+      massWidth, massDepth, level: peakStructureLevel(placement.development) }),
+    { width: massWidth, depth: massDepth, height: Number(asset.mesh.userData['buildingHeight'] ?? 1) },
+    priorGeneration ? this.standingExtents(priorGeneration, placement, settlement, cultureStyle) : undefined);
 
     // Field assets contain only a small edge store; FarmFieldRenderer owns the cultivated ground.
     // Ground the store where it is actually drawn rather than at the plot centre so sloped fields
@@ -3012,6 +3053,7 @@ export class GodboxRenderer {
       }
     });
 
+    if (fabricCondition < 1) applyStructuralDeterioration(building, fabricCondition, placement.key);
     if (stage < BUILD_STAGE.DETAIL) {
       // Scaffolding stands against the building, not around its yard, so it takes the mass too.
       building.add(this.createScaffold(placement, this.getPalette(cultureStyle, era), renderedMassWidth, renderedMassDepth, stage, undefined, era, Number(asset.mesh.userData['buildingHeight'] ?? placement.height) * fit, asset.mesh.userData['buildingSpec'] as BuildingSpec | undefined));
@@ -3220,8 +3262,12 @@ export class GodboxRenderer {
     const targetMassDepth = Number(targetAsset.mesh.userData['massDepth'] ?? targetAsset.mesh.userData['footprintDepth'] ?? 1);
     // Exactly createPlacedBuilding's fit, against the same completed asset: a worksite's geometry
     // has to converge on the building it is scaffolding.
-    const fit = structureFit({ plotWidth: targetPlacement.width, plotDepth: targetPlacement.depth,
-      massWidth: targetMassWidth, massDepth: targetMassDepth, level: targetPlacement.development?.level });
+    // The fabric already standing on the plot counts too: rebuilding it never makes it smaller.
+    const standing = settlement && project && placement.development && placement.development !== project
+      ? this.standingExtents(placement.development, placement, settlement, cultureStyle) : undefined;
+    const fit = upgradeFit(structureFit({ plotWidth: targetPlacement.width, plotDepth: targetPlacement.depth,
+      massWidth: targetMassWidth, massDepth: targetMassDepth, level: peakStructureLevel(targetPlacement.development, placement.development) }),
+    { width: targetMassWidth, depth: targetMassDepth, height: targetHeight }, standing);
 
     const assembly = new ConstructionAssembly(targetAsset.mesh, fit, targetPlacement.key, project?.material ?? 'timber');
     siteGrounding = constructionGrounding(assembly.plan, (x, z) => this.elevationAt(x, z),
@@ -3366,13 +3412,8 @@ export class GodboxRenderer {
     if (settlement.development) {
       const previous = new Map((this.settlementBuildingPlacements.get(settlement.id) ?? []).map(p => [p.key, p]));
       const placements: BuildingPlacement[] = [];
-      // Specialized sites sort ahead of repeated homes in the bounded display sample.
-      const plots = [...(settlement.structurePlots ?? [])].sort((a, b) =>
-        Number(a.development?.need === 'housing') - Number(b.development?.need === 'housing') || a.foundedMonth - b.foundedMonth || a.id.localeCompare(b.id));
-      const selected = plots.filter(p => p.development).slice(0, shownBuildings);
-      const projectPlot = plots.find(p => p.id === settlement.development?.project?.plotId);
-      if (projectPlot && !selected.includes(projectPlot)) selected.push(projectPlot);
-      for (const plot of selected) {
+      const frontage = this.state?.world ? settlementMovementFrontage(this.state.world, settlement) : [];
+      for (const plot of selectDisplayedPlots(settlement, shownBuildings)) {
         const response = plot.development ?? settlement.development.project?.response;
         if (!response) continue;
         const cached = previous.get(plot.id);
@@ -3383,16 +3424,14 @@ export class GodboxRenderer {
         const localX = plot.worldX - settlement.position.x;
         const localZ = plot.worldZ - settlement.position.z;
         const district = districtForResponse(response);
-        // Face the building's own district anchor (its local plaza/gathering point), not always
-        // the far-away settlement origin — civic buildings are unaffected since their anchor is
-        // the origin itself, but market/sacred/residential/craft/industrial buildings now orient
-        // toward their own local cluster.
+        // Founding frontage persists through upgrades. Older saves acquire a facing from their
+        // real circulation on first presentation; isolated compounds keep their local anchor.
         const anchor = layout.anchors[district];
         placements.push({ key: plot.id, localX, localZ, worldX: plot.worldX, worldZ: plot.worldZ, width: plot.width, depth: plot.depth, height: plot.height,
           rotationY: response.form === 'field' ? farmPlotRotation(settlement, plot)
-            : cached?.rotationY ?? Math.atan2(anchor.localX - localX, anchor.localZ - localZ) + random.range(-0.16, 0.16),
+            : plot.rotationY ?? cached?.rotationY ?? streetFacing(frontage, { x: plot.worldX, z: plot.worldZ }, plot.radius)?.rotationY ?? Math.atan2(anchor.localX - localX, anchor.localZ - localZ) + random.range(-0.16, 0.16),
           major: ['civic', 'sacred', 'industrial'].includes(district), district,
-          role: developmentBuildingRole(response), builtEra: developmentPresentationEra(response), conservatism: 0, variation: cached?.variation ?? Math.floor(random.float() * 4), development: response,
+          role: developmentBuildingRole(developmentFabric(response)), builtEra: developmentPresentationEra(developmentFabric(response)), conservatism: 0, variation: cached?.variation ?? Math.floor(random.float() * 4), development: response,
           localSlopeDegrees: cached?.localSlopeDegrees ?? this.terrainQueries.calculateAverageSlope(plot.worldX, plot.worldZ, plot.radius),
           floodDepth: plot.floodDepth ?? 0 });
       }

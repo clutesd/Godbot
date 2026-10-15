@@ -84,7 +84,9 @@ function build(options: BuildOptions): Built {
     prosperity: 0.7,
     stage: (options.stage ?? BUILD_STAGE.FINISH) as never,
   });
-  const spec: BuildingSpec = { ...resolved, ...options.spec };
+  // These mutation fixtures exercise the legacy assembly/roof library in isolation.
+  // Resolved working halls have their own physical opening/access regressions.
+  const spec: BuildingSpec = { ...resolved, ...(options.archetype === 'workshop' && (options.spec || options.grammar) ? { architecture: undefined } : {}), ...options.spec };
   const grammar = resolveBuildingGrammar(profile, era, 'house', seed, response);
   applySpecToGrammar(grammar, spec);
   Object.assign(grammar, options.grammar ?? {});
@@ -179,7 +181,9 @@ describe('Spec fields reach visible geometry', () => {
     // Equipment also strengthens the grammar's own yard and frontage reading, so isolating the
     // *geometry* of one fitting means pinning those down in both builds and varying nothing else.
     const neutral = { props: 'none', frontage: 'none', chimneys: 0, vents: 0, forgeGlow: 0 } as const;
-    const bare = build({ archetype: 'barn', material: 'timber', spec: { equipment: [] }, grammar: neutral });
+    // Exercise the shared equipment library on its generic workshop host. Farm programs
+    // integrate stalls and loading access physically, rather than adding duplicate shell pieces.
+    const bare = build({ archetype: 'workshop', material: 'timber', spec: { equipment: [] }, grammar: neutral });
 
     const items: FunctionalEquipment[] = ['hay-loft', 'threshing-floor', 'grain-bin', 'manger',
       'stall-divider', 'water-trough', 'hitch-rail', 'bedding', 'pen-gate', 'fence-line',
@@ -189,7 +193,7 @@ describe('Spec fields reach visible geometry', () => {
       'market-stall', 'awning', 'counter', 'arcade', 'quay-bollard', 'slipway', 'gate-leaf',
       'portcullis', 'battlement', 'watch-platform', 'hearth', 'ridge-vent', 'louver-vent'];
     for (const item of items) {
-      const one = build({ archetype: 'barn', material: 'timber', spec: { equipment: [item] }, grammar: neutral });
+      const one = build({ archetype: 'workshop', material: 'timber', spec: { equipment: [item] }, grammar: neutral });
       expect(one.vertices, `${item} emitted nothing`).toBeGreaterThan(bare.vertices);
     }
   });

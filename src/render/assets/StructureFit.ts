@@ -38,7 +38,11 @@ export interface StructureFitInputs {
   /** Built mass of the composed asset, in grammar units — not its site extent. */
   massWidth: number;
   massDepth: number;
-  /** Development level, where a settlement's earliest structures are built smaller. */
+  /**
+   * Development level, where a settlement's earliest structures are built smaller. Pass the plot's
+   * historical peak (`peakStructureLevel`), never just its current level, so no change of use or
+   * condition can make standing fabric smaller.
+   */
   level?: number;
 }
 
@@ -55,6 +59,54 @@ export function structureFit(inputs: StructureFitInputs): number {
   // Early structures are modest because they were built modestly, not because their plot is small.
   const maturity = level === undefined ? 1 : Math.min(1, 0.82 + level * 0.06);
   return Math.min(plotFit, ARCHITECTURAL_FIT) * maturity;
+}
+
+/** The fields of a plot's development history that bear on how large its fabric ever grew. */
+export interface StructureLevelHistory {
+  level: number;
+  peakLevel?: number;
+  origin?: { level?: number };
+  history?: readonly { level?: number }[];
+}
+
+/**
+ * The highest development level this plot's fabric has ever been built to.
+ *
+ * A building that is repurposed to a humbler use, abandoned or left to decay keeps the walls it
+ * was given; only demolition or collapse takes them away. Fitting against the current level alone
+ * made a repurposed level-3 hall twelve per cent smaller the year its use changed.
+ */
+export function peakStructureLevel(...developments: (StructureLevelHistory | undefined)[]): number | undefined {
+  let peak: number | undefined;
+  for (const development of developments) {
+    if (!development) continue;
+    // The simulation's own record wins; history is the fallback for archives written before it.
+    const recorded = development.peakLevel !== undefined
+      ? [development.level, development.peakLevel]
+      : [development.level, development.origin?.level, ...(development.history ?? []).map(entry => entry.level)];
+    for (const level of recorded) {
+      if (level !== undefined && Number.isFinite(level)) peak = Math.max(peak ?? 0, level);
+    }
+  }
+  return peak;
+}
+
+/** A placed structure's rendered extents, in world units. */
+export interface PlacedExtents { width: number; depth: number; height: number }
+
+/**
+ * Raise a fit until the new fabric is at least as large, in every extent, as the fabric it
+ * replaced on the same plot — never past true size.
+ *
+ * The plot-fit alone could make an upgrade smaller: a wider new plan on an unchanged plot is fitted
+ * down uniformly, and its walls drop below the old ones. The simulation extends or relocates plots
+ * for larger upgrades; this is the guarantee that holds even where the ground is tight.
+ */
+export function upgradeFit(fit: number, mass: PlacedExtents, previous: PlacedExtents | undefined): number {
+  if (!previous) return fit;
+  const needed = Math.max(previous.width / Math.max(1e-6, mass.width), previous.depth / Math.max(1e-6, mass.depth),
+    previous.height / Math.max(1e-6, mass.height));
+  return Math.max(fit, Math.min(ARCHITECTURAL_FIT, needed));
 }
 
 /** 0 when a structure is drawn at its true size, rising towards 1 as its plot crowds it. */

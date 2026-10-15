@@ -680,6 +680,9 @@ export interface StructurePlot {
   depth: number;
   condition: number;
   foundedMonth: number;
+  /** Entrance orientation and surveyed access at founding; upgrades retain the frontage. */
+  rotationY?: number;
+  accessPoint?: Vec2;
   damagedMonth?: number;
   floodDepth?: number;
   floodMonths?: number;

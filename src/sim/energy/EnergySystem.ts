@@ -36,27 +36,62 @@ function milestone(state: SimulationState, s: Settlement, key: string, descripti
     actors: [s.id], causes: ['operating-energy-infrastructure'], context: { need: 'energy', milestone: key, plant: plant?.id ?? '', action: 'operating' },
     outcome: description, affectedPopulation: settlementRepresentedPopulation(state, s.id), magnitude: 0.8, significance: 0.9, tags: ['energy', 'milestone'], summary: `${s.name}: ${description}` });
 }
+/**
+ * Shaft work wanted to raise water into built cisterns and wash courts.
+ *
+ * Only a settlement that has actually built water works, knows the wheel and axle, and lacks easy
+ * surface water or is in drought has water to lift. Without any of those there is no demand and no
+ * lifting machine is ever justified.
+ */
+export function waterLiftDemand(s: Settlement, population: number): number {
+  const water = s.development?.water;
+  if (!water || !knows(s, 'wheel-axle')) return 0;
+  const works = (s.structurePlots ?? []).some(p => p.development?.status === 'active' && p.development.need === 'water' && !p.accessRestricted);
+  if (!works) return 0;
+  const shortfall = Math.max(0, 0.55 - water.surfaceAccess) / 0.55 + water.droughtStress * 0.5;
+  return shortfall > 0.05 ? Math.min(3, population * 0.012) * Math.min(1, shortfall) : 0;
+}
 function constructPlants(state: SimulationState, s: Settlement): void {
   const e = energyAt(s);
-  const sites = (s.structurePlots ?? []).filter(p => p.development?.status === 'active' && !p.accessRestricted && (p.development.need === 'energy' || p.development.need === 'manufacturing' || p.development.need === 'food' && p.development.form !== 'field'));
+  const lifting = (e.waterLift?.demand ?? 0) > 0;
+  const sites = (s.structurePlots ?? []).filter(p => p.development?.status === 'active' && !p.accessRestricted && (p.development.need === 'energy' || p.development.need === 'manufacturing' || p.development.need === 'food' && p.development.form !== 'field'
+    // Water works host a lifting machine only while there is water to lift into them.
+    || lifting && p.development.need === 'water'));
   // Retrofit existing, terrain-validated industrial plots. One machine per physical site.
   for (const site of sites) {
     let plant = e.plants.find(p => p.plotId === site.id);
-    if (!plant) {
-      const choices = GENERATORS.filter(g => (site.development?.need !== 'food' || g.carrier === 'mechanical') && eligibleGenerator(state, s, g) && e.ledgers[g.carrier].demand > e.plants.filter(p => generatorDefinition(p.kind).carrier === g.carrier).reduce((n, p) => n + generatorDefinition(p.kind).capacity * siteGenerationFactor(state, s, p.kind), 0) * 0.85);
-      choices.sort((a, b) => score(b) - score(a));
-      function score(g: typeof GENERATORS[number]): number {
-        if (g.kind === 'nuclear' && !nuclearBuildJustified(state, s)) return 0;
-        const fuelReadiness = isCombustionKind(g.kind)
-          ? Math.min(1, combustionFuelPotential(s, g.kind) / Math.max(1, g.capacity * 0.25))
-          : g.fuel === 'food'
-            ? Math.min(1, s.resources.food / 3)
-            : g.fuel
-              ? Math.min(1, (s.localMaterials[g.fuel] ?? 0) / 3)
-              : 1;
-        return Math.min(g.capacity * siteGenerationFactor(state, s, g.kind), e.ledgers[g.carrier].demand * 1.3) * fuelReadiness / g.work;
+    const shaftOnly = site.development?.need === 'food' || site.development?.need === 'water';
+    function score(g: typeof GENERATORS[number]): number {
+      if (g.kind === 'nuclear' && !nuclearBuildJustified(state, s)) return 0;
+      const fuelReadiness = isCombustionKind(g.kind)
+        ? Math.min(1, combustionFuelPotential(s, g.kind) / Math.max(1, g.capacity * 0.25))
+        : g.fuel === 'food'
+          ? Math.min(1, s.resources.food / 3)
+          : g.fuel
+            ? Math.min(1, (s.localMaterials[g.fuel] ?? 0) / 3)
+            : 1;
+      // Draught animals eat whether or not the gin turns. Half a year of fodder is charged against
+      // the plant alongside its build work, so a free-running wind or water mill is compared on
+      // what it really costs to keep rather than on construction effort alone.
+      const upkeep = g.fuel === 'food' ? g.capacity / (g.efficiency ?? 1) * 6 : 0;
+      return Math.min(g.capacity * siteGenerationFactor(state, s, g.kind), e.ledgers[g.carrier].demand * 1.3) * fuelReadiness / (g.work + upkeep);
+    }
+    const affordable = (g: typeof GENERATORS[number]): boolean => Object.entries(g.cost).every(([id, n]) => (s.localMaterials[id] ?? 0) >= n * 0.1);
+    // Re-equip a working gin site once a better shaft machine is known and buildable. The gin is
+    // dismantled and the new machine is paid for and raised like any other plant; nothing is free.
+    if (plant && plant.kind === 'animal' && plant.progress >= 1) {
+      const current = score(generatorDefinition('animal'));
+      const better = GENERATORS.filter(g => g.carrier === 'mechanical' && g.kind !== 'animal' && eligibleGenerator(state, s, g) && affordable(g))
+        .sort((a, b) => score(b) - score(a))[0];
+      if (better && score(better) > current * 1.25) {
+        Object.assign(plant, { kind: better.kind, progress: 0, condition: 1, output: 0, fuelUsed: 0, status: 'construction',
+          replacedKind: 'animal', replacedMonth: state.month });
       }
-      const chosen = choices.find(g => score(g) > 0 && Object.entries(g.cost).every(([id, n]) => (s.localMaterials[id] ?? 0) >= n * 0.1));
+    }
+    if (!plant) {
+      const choices = GENERATORS.filter(g => (!shaftOnly || g.carrier === 'mechanical') && eligibleGenerator(state, s, g) && e.ledgers[g.carrier].demand > e.plants.filter(p => generatorDefinition(p.kind).carrier === g.carrier).reduce((n, p) => n + generatorDefinition(p.kind).capacity * siteGenerationFactor(state, s, p.kind), 0) * 0.85);
+      choices.sort((a, b) => score(b) - score(a));
+      const chosen = choices.find(g => score(g) > 0 && affordable(g));
       if (!chosen) continue;
       plant = { id: `power:${s.id}:${site.id}`, plotId: site.id, kind: chosen.kind, progress: 0, condition: 1, output: 0, fuelUsed: 0, status: 'construction' };
       e.plants.push(plant);
@@ -159,6 +194,9 @@ export function advanceEnergy(state: SimulationState): void {
     const grainWork = (s.fields ?? []).some(f => (f.crop === 'cereal' || f.crop === 'dryland') && f.stage === 'mature' && f.harvestRemaining > 0)
       ? Math.min(3, population * 0.02) : 0;
     e.ledgers.mechanical.demand = (knows(s, 'wheel-axle') ? s.infrastructure.workshops * 10 + s.industry.intensity * 8 + grainWork : 0) + facilityMechanicalDemand(s);
+    const lift = waterLiftDemand(s, population);
+    e.waterLift = { demand: lift, supplied: 0 };
+    e.ledgers.mechanical.demand += lift;
     consumers.set(s.id, knows(s, 'electrical-generation') ? prepareElectricDemand(s, population) : prepareElectricDemand(s, 0));
     if (!knows(s, 'electrical-generation')) {
       const service = e.service;
@@ -191,6 +229,7 @@ export function advanceEnergy(state: SimulationState): void {
       l.supplied += output;
     }
     applyMechanicalCoverage(s, e.ledgers.mechanical.supplied, e.ledgers.mechanical.demand);
+    if (e.waterLift && e.ledgers.mechanical.demand > 0) e.waterLift.supplied = e.waterLift.demand * Math.min(1, e.ledgers.mechanical.supplied / e.ledgers.mechanical.demand);
   }
 
   const dispatched = new Set<string>();

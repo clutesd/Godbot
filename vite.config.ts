@@ -7,6 +7,7 @@ export default defineConfig({
       input: {
         main: resolve(process.cwd(), 'index.html'),
         architectureBrowser: resolve(process.cwd(), 'architecture-browser.html'),
+        architectureFlagships: resolve(process.cwd(), 'architecture-flagships.html'),
       },
     },
   },

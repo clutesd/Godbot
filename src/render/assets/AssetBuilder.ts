@@ -1,3 +1,7 @@
+import { shrinkGrammar } from './BuildingComposer';
+import type { GeometrySink } from '../architecture/StructureGeometry';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { emitFunctionalBuilding, functionalSilhouette } from '../architecture/FunctionalBuildings';
 /**
  * AssetBuilder.ts
  * 
@@ -12,7 +16,7 @@ import { MaterialPalette, type Era } from '../materials/MaterialPalette';
 import { CultureStyleProfileFactory, SettlementStyleProfile } from '../style/CultureStyleProfile';
 import type { CultureStyleProfile } from '../style/CultureStyleProfile';
 import { ProceduralGeometry } from './ProceduralGeometry';
-import { resolveBuildingGrammar, type BuildingGrammar, type BuildingGrammarContext, type BuildingRole } from './BuildingGrammar';
+import { developmentBuildingRole, developmentPresentationEra, priorFabricGeneration, resolveBuildingGrammar, type BuildingGrammar, type BuildingGrammarContext, type BuildingRole } from './BuildingGrammar';
 import { BUILD_STAGE, composeBuilding, type BuildStage } from './BuildingComposer';
 import { SeededRandom } from '../../sim/prng';
 import type { DevelopmentProject, DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
@@ -21,7 +25,7 @@ import { buildStructureComponentManifest } from './StructureComponents';
 import { structureVisualHistorySignature } from './StructureVisualSignature';
 import { deriveArchitecturalGenerations, generationForCurrentFabric, generationForOriginFabric } from './StructureGenerations';
 import { deriveStructureHeritage } from './StructureHeritage';
-import { resolveBuildingSpec, type BuildingSpec } from '../architecture/BuildingSpec';
+import { resolveBuildingSpec, type BuildingSpec, type BuildingSpecContext } from '../architecture/BuildingSpec';
 import type { BuildingArchetype } from '../architecture/BuildingArchetype';
 import { grammarFromBuildingSpec } from '../architecture/SpecGrammarBridge';
 import { dedicatedGeometryKind } from '../architecture/DedicatedStructures';
@@ -31,11 +35,30 @@ import { GeometryBuilder } from './GeometryBuilder';
 import type { SurfaceKey } from '../materials/MaterialPalette';
 import { FacadeTextureCache } from '../architecture/FacadeTextures';
 
+/** Free a composition that was superseded before it was ever cached or shared. */
+function disposeComposed(group: THREE.Object3D): void {
+  group.traverse(object => { if (object instanceof THREE.Mesh && !object.geometry.userData['shared']) object.geometry.dispose(); });
+}
+
+/** The generation an upgrade grows out from, compactly: it bounds the new spec's envelope. */
+function priorSignature(development: DevelopmentResponse | undefined): string {
+  const prior = development ? priorFabricGeneration(development) : undefined;
+  return prior ? `${prior.need}/${prior.form}/${prior.level}/${prior.material}/${[...(prior.technology ?? [])].sort().join(',')}` : '';
+}
+
+/** Response reasons that change which archetype routing picks, and so belong in the cache key. */
+const ROUTING_REASONS = new Set(['hand-milled-grain', 'perimeter-defence']);
+
 export type AssetType = 'tree' | 'building' | 'humanoid' | 'terrain-deco' | 'infrastructure';
 
 export interface AssetConfig {
   /** Authoritative generator, when this building belongs to an energy plant. */
   energyKind?: GeneratorKind;
+  /**
+   * Banded fabric condition of the plot (`conditionBand`). Drives surface weathering only; the
+   * building's dimensions never depend on it.
+   */
+  condition?: number;
   development?: DevelopmentResponse;
   seed: string;
   culture: CultureStyle;
@@ -281,7 +304,7 @@ function farCrownSilhouette(
  * Caches results to avoid redundant generation
  */
 export class AssetBuilder {
-  readonly facadeTextures = new FacadeTextureCache();
+  readonly facadeTextures: FacadeTextureCache;
   private readonly cache: Map<string, CachedAsset>;
   private readonly materialPalettes: Map<string, MaterialPalette>;
   private readonly cultureProfiles: Map<string, CultureStyleProfile>;
@@ -293,7 +316,8 @@ export class AssetBuilder {
   private cacheEvictions = 0;
   private nightFactor = 0;
 
-  constructor(globalSeed: string = 'assets') {
+  constructor(globalSeed: string = 'assets', options: { facadeEntries?: number; facadeResolution?: number } = {}) {
+    this.facadeTextures = new FacadeTextureCache(options.facadeEntries, options.facadeResolution);
     void globalSeed;
     this.cache = new Map();
     this.materialPalettes = new Map();
@@ -472,18 +496,30 @@ export class AssetBuilder {
    * keying buildings on it would thrash the asset cache for no visual gain — the project's bill
    * of materials is both stabler and stronger evidence.
    */
+  /** Built mass of the generation this upgrade replaced, composed (and cached) like any building. */
+  private priorGenerationMass(config: AssetConfig): { width: number; depth: number; height: number } | undefined {
+    const prior = config.development ? priorFabricGeneration(config.development) : undefined;
+    if (!prior) return undefined;
+    const asset = this.getAsset('building', { ...config, development: prior, era: developmentPresentationEra(prior),
+      variant: `${developmentBuildingRole(prior)}#${BUILD_STAGE.DETAIL}`, project: undefined, condition: undefined });
+    return { width: Number(asset.mesh.userData['massWidth'] ?? 0), depth: Number(asset.mesh.userData['massDepth'] ?? 0),
+      height: Number(asset.mesh.userData['buildingHeight'] ?? 0) };
+  }
+
   private specFor(
     config: AssetConfig,
     role: BuildingRole,
     stage: BuildStage,
     profile: CultureStyleProfile,
+    minimum?: BuildingSpecContext['envelope'],
   ): BuildingSpec {
     const context = config.grammarContext;
-    return resolveBuildingSpec({
+    const resolve = (development: DevelopmentResponse | undefined, envelope?: BuildingSpecContext['envelope'],
+      generation?: { role: BuildingRole; era: Era }) => resolveBuildingSpec({
       archetype: config.archetype,
       energyKind: config.energyKind,
-      role,
-      era: config.era,
+      role: generation?.role ?? role,
+      era: generation?.era ?? config.era,
       seed: config.seed,
       culture: {
         materialBias: profile.materialBias,
@@ -491,9 +527,11 @@ export class AssetBuilder {
         trimDensity: profile.getTrimDensity(config.era),
         ornamentBias: config.settlementIdentity?.ornamentBias,
       },
-      development: config.development,
+      development,
       project: config.project,
-      heritage: config.development ? deriveStructureHeritage(config.development) : undefined,
+      condition: config.condition,
+      envelope,
+      heritage: development ? deriveStructureHeritage(development) : undefined,
       climate: context
         ? {
           temperature: context.temperature,
@@ -509,6 +547,14 @@ export class AssetBuilder {
       localSlopeDegrees: config.localSlopeDegrees,
       stage,
     });
+    // An in-place upgrade grows out from the generation it replaced: resolve that generation the
+    // same way and hand its plan and wall height to the new spec as a floor.
+    const prior = config.development ? priorFabricGeneration(config.development) : undefined;
+    if (!prior) return resolve(config.development, minimum);
+    // The earlier generation in its own era and role, exactly as it stood before this upgrade.
+    const before = resolve(prior, undefined, { role: developmentBuildingRole(prior), era: developmentPresentationEra(prior) });
+    return resolve(config.development, { width: Math.max(before.width, minimum?.width ?? 0), depth: Math.max(before.depth, minimum?.depth ?? 0),
+      height: Math.max(before.floors * before.storeyHeight, minimum?.height ?? 0) });
   }
 
   private coreMaterialFor(grammar: BuildingGrammar, development?: DevelopmentResponse): StructureMaterial | undefined {
@@ -544,12 +590,26 @@ export class AssetBuilder {
     // Architectural authority resolves first. BuildingRole survives only as a compatibility label
     // for placement, sleeping-area and legacy diagnostics. Memorials are non-building ceremonial
     // compositions and therefore keep the compatibility-only grammar resolver.
-    const spec = config.development?.memorial ? undefined : this.specFor(config, role, stage, profile);
-    const grammar = spec
+    let spec = config.development?.memorial ? undefined : this.specFor(config, role, stage, profile);
+    let grammar = spec
       ? grammarFromBuildingSpec(profile, spec, role)
       : resolveBuildingGrammar(profile, config.era, role, config.seed, config.development, config.settlementIdentity, config.localSlopeDegrees, config.grammarContext);
     const coreMaterial = this.coreMaterialFor(grammar, config.development);
-    const composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
+    let composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
+    // An upgrade must be at least as large, built, as the generation it replaced. Stages compose
+    // their spec differently (a compound adds courts a townhouse does not), so the spec envelope is
+    // checked against the composed mass and widened once or twice until it holds.
+    const prior = spec && config.development ? this.priorGenerationMass(config) : undefined;
+    for (let pass = 0; prior && spec && pass < 3; pass++) {
+      const rx = prior.width / Math.max(1e-6, composed.massX), rz = prior.depth / Math.max(1e-6, composed.massZ);
+      const rh = prior.height / Math.max(1e-6, composed.height);
+      if (Math.max(rx, rz, rh) <= 1.0005) break;
+      disposeComposed(composed.group);
+      spec = this.specFor(config, role, stage, profile, { width: spec.width * Math.max(1, rx) * 1.002, depth: spec.depth * Math.max(1, rz) * 1.002,
+        height: spec.floors * spec.storeyHeight * Math.max(1, rh) * 1.002 });
+      grammar = grammarFromBuildingSpec(profile, spec, role);
+      composed = composeBuilding(grammar, palette, config.seed, stage, coreMaterial);
+    }
     this.facadeTextures.apply(composed.group);
     const componentManifest = buildStructureComponentManifest(grammar, config.development, composed);
     // A machine building's silhouette is its machinery — sails, wheel, stack — which a massing box
@@ -600,6 +660,36 @@ export class AssetBuilder {
     height: number,
     palette: MaterialPalette,
   ): THREE.Object3D[] {
+    if (grammar.spec?.architecture && grammar.development?.form === 'field') {
+      const farm = shrinkGrammar({...grammar,development:undefined},.95);
+      const lods = this.generateBuildingLODs(farm,height,palette);
+      for(const lod of lods) lod.position.set(.72,0,.56);
+      return lods;
+    }
+    if (grammar.spec?.architecture) {
+      const builders = new Map<string, {surface: SurfaceKey; material?: Parameters<GeometrySink['at']>[2]; builder: GeometryBuilder}>();
+      emitFunctionalBuilding({at: (surface, _stage, material) => {
+        const resolved = material ?? (surface === 'plaster' ? grammar.spec!.materials.infill ?? grammar.spec!.materials.wall : surface === 'roof-thatch' ? grammar.spec!.materials.roofCovering : surface === 'timber' ? grammar.spec!.materials.frame : grammar.spec!.materials.foundation);
+        const key = resolved;
+        let entry = builders.get(key);
+        if (!entry) { const builder = new GeometryBuilder(); builder.setSectioning(100); entry = {surface,material:resolved,builder}; builders.set(key,entry); }
+        return entry.builder;
+      }, stain: () => {}, clean: () => {}}, grammar,
+      {wallSurface: 'plaster', roofSurface: 'roof-thatch', postSurface: 'timber'}, true);
+      const group = new THREE.Group();
+      for (const {surface,material: resolved,builder} of builders.values()) {
+        if (builder.isEmpty) continue;
+        const material = resolved ?? (surface === 'plaster' ? grammar.spec.materials.infill ?? grammar.spec.materials.wall : surface === 'roof-thatch' ? grammar.spec.materials.roofCovering
+          : surface === 'timber' ? grammar.spec.materials.frame : grammar.spec.materials.foundation);
+        const source = builder.build();
+        const geometry = mergeVertices(source); source.dispose();
+        group.add(new THREE.Mesh(geometry, palette.getArchitecturalMaterial(material)));
+      }
+      shadeMassingLod(group, grammar.plinthHeight + grammar.wallHeight * grammar.storeys);
+      const far = functionalSilhouette(grammar, palette.getArchitecturalMaterial(grammar.spec.materials.infill ?? grammar.spec.materials.wall), palette.getArchitecturalMaterial(grammar.spec.materials.roofCovering));
+      shadeMassingLod(far, grammar.plinthHeight + grammar.wallHeight * grammar.storeys);
+      return [group, far];
+    }
     if (grammar.spec?.dwellingVariant) {
       // Keep the plan, porch, additions and roof topology at range, with fewer cone facets
       // and no individual rafters or interior equipment. Batch into four material surfaces.
@@ -948,6 +1038,9 @@ export class AssetBuilder {
         + `.${config.prosperity !== undefined ? Math.round(config.prosperity * 4) : ''}.${config.specialization ?? ''}`
         + `.${config.waterfront ? 'w' : ''}.${config.archetype ?? ''}.${config.energyKind ?? ''}`
         + `.${materialBillSignature(config.project, d)}.${[...(d?.capabilities ?? [])].sort().join(',')}`
+        + `.${[...(d?.technology ?? [])].sort().join(',')}.${d?.facilityFamily ?? ''}${d?.facilityTier ?? ''}`
+        + `.${(d?.reasons ?? []).filter(r => ROUTING_REASONS.has(r)).sort().join(',')}.${config.condition ?? 1}`
+        + `.${priorSignature(d)}`
       : '';
     return `${type}:${config.seed}:${config.era}:${config.variant || 'default'}:${d ? [d.form, d.need, d.level, d.material, d.adaptation ?? '', d.temporary ? 1 : 0, d.style.pattern, d.style.secondary, d.style.accent].join(':') : ''}:${history}${slopeBucket}${contextBucket}${specBucket}`;
   }
@@ -1057,6 +1150,8 @@ export class AssetBuilder {
   dispose(): void {
     this.facadeTextures.dispose();
     this.cache.forEach(asset => {
+      disposeComposed(asset.mesh);
+      for (const lod of asset.lods) disposeComposed(lod);
       if ('dispose' in asset.mesh) {
         const disposable = asset.mesh as THREE.Object3D & { dispose?: () => void };
         disposable.dispose?.();

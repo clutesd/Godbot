@@ -1,0 +1,3001 @@
+{
+  "cases": [
+    {
+      "id": "all",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 68,
+      "triangles": 71762,
+      "rotors": 2,
+      "specs": [
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 1,
+          "developmentMaterial": "earth",
+          "era": "preIndustrial",
+          "period": "classical",
+          "family": "mud-brick",
+          "materials": {
+            "foundation": "fieldstone",
+            "frame": "rough-hewn-timber",
+            "wall": "mud-brick",
+            "roofStructure": "rough-hewn-timber",
+            "roofCovering": "adobe",
+            "trim": "finished-wood",
+            "finish": "adobe",
+            "glazing": "finished-wood"
+          },
+          "width": 2.1489158440314395,
+          "depth": 1.7696954009670678,
+          "storeyHeight": 0.4278122780338861,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.384,
+          "wallThickness": 0.119028,
+          "plinthHeight": 0.04385075849847332,
+          "roof": {
+            "archetype": "flat",
+            "pitch": 0,
+            "overhang": 0.07963629304351805,
+            "span": 0.6016964363288031,
+            "tiers": 1,
+            "intermediateSupport": true
+          },
+          "openings": {
+            "density": 0.11599999999999999,
+            "width": 0.05500000000000001,
+            "height": 0.084,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.12,
+          "supportDensity": 0.42000000000000004,
+          "foundation": "stone-footing",
+          "silhouette": "earthen-mass",
+          "wallAssembly": "monolithic-earth",
+          "parapet": true,
+          "annexes": 0,
+          "openness": 0.14,
+          "culture": {
+            "materialBias": "wood",
+            "roofLanguage": "gable-geometric",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "arid",
+            "plinthBoost": 0.05,
+            "shelteredEntry": true,
+            "courtyard": true,
+            "roofPitch": 0.46,
+            "eaveOverhang": 0.6,
+            "wallThickness": 1.4,
+            "openingDensity": 0.58
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1676783122099936,
+            "maintenance": 0.949696506337002,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:court-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7902725020365059,
+            "familyRanking": [
+              {
+                "family": "mud-brick",
+                "score": 0.7902725020365059
+              },
+              {
+                "family": "adobe",
+                "score": 0.707591812240306
+              },
+              {
+                "family": "timber-frame",
+                "score": 0.4988537951170452
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.06610531550731029
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.052058848451997305
+              }
+            ],
+            "stageName": "Courtyard house",
+            "stageDefinedIn": "classical",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "flat",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "courtyard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 0.9758767822446301,
+          "depth": 0.8700945073706099,
+          "storeyHeight": 0.4806320346131455,
+          "floors": 3,
+          "bays": 4,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.048063203461314555,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.8,
+            "overhang": 0.06525708805279574,
+            "span": 0.9758767822446301,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.26,
+            "width": 0.10450000000000001,
+            "height": 0.12880000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.14254007417298853,
+            "maintenance": 0.9572379777481035,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:town-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7488139157133021,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7488139157133021
+              },
+              {
+                "family": "mixed-masonry",
+                "score": 0.13103342490614298
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.12448686333429046
+              },
+              {
+                "family": "log-construction",
+                "score": 0.10337151637863648
+              }
+            ],
+            "stageName": "Framed townhouse",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "pitched",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "z",
+            "gableLight": true,
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "barn",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6036960042190274,
+          "depth": 0.9816528305928222,
+          "storeyHeight": 0.6247152022039052,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.06247152022039052,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.85,
+            "overhang": 0.07362396229446166,
+            "span": 0.9816528305928222,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.07,
+            "width": 0.22990000000000005,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.1,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1713662005316466,
+            "maintenance": 0.948590139840506,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "threshing-floor",
+            "hay-loft",
+            "grain-bin",
+            "wagon-apron",
+            "manger",
+            "ridge-vent"
+          ],
+          "seed": "flagship:threshing-barn",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7311501091738546,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7311501091738546
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.6609014366399442
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.11075646959688205
+              }
+            ],
+            "stageName": "High-roof threshing barn",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "threshing-aisle",
+            "section": "aisled",
+            "bays": 5,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": true,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "stable",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "masonry",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "mixed-masonry",
+          "materials": {
+            "foundation": "dressed-stone",
+            "frame": "dressed-stone",
+            "wall": "dressed-stone",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "slate",
+            "trim": "dressed-stone",
+            "finish": "plaster",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6719759178785234,
+          "depth": 1.3457998772294817,
+          "storeyHeight": 0.47636887016552504,
+          "floors": 1,
+          "bays": 5,
+          "baySpacing": 0.37799999999999995,
+          "wallThickness": 0.07,
+          "plinthHeight": 0.06669164182317351,
+          "roof": {
+            "archetype": "hipped",
+            "pitch": 0.23214950272277002,
+            "overhang": 0.10093499079221112,
+            "span": 0.4681532570059866,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.18,
+            "width": 0.16940000000000002,
+            "height": 0.16016000000000002,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.26,
+          "supportDensity": 0.42,
+          "foundation": "masonry-plinth",
+          "silhouette": "masonry-mass",
+          "wallAssembly": "coursed-masonry",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.16,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.05641111607803032,
+            "maintenance": 0.9830766651765909,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "bedding",
+            "manger",
+            "stall-divider",
+            "hitch-rail",
+            "water-trough",
+            "hay-loft",
+            "cart-stand"
+          ],
+          "seed": "flagship:stable-yard",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.6423685978921679,
+            "familyRanking": [
+              {
+                "family": "mixed-masonry",
+                "score": 0.6423685978921679
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.6370839487770079
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.13530223861872015
+              }
+            ],
+            "stageName": "Manor stable",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "stall-range",
+            "section": "hipped",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "stable-yard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "granary",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "ceramic",
+          "era": "industrial",
+          "period": "industrial",
+          "family": "heavy-industrial-brick",
+          "materials": {
+            "foundation": "fired-brick",
+            "frame": "fired-brick",
+            "wall": "fired-brick",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "clay-tile",
+            "trim": "fired-brick",
+            "glazing": "finished-wood"
+          },
+          "width": 0.8099118763844482,
+          "depth": 0.7872036540308969,
+          "storeyHeight": 0.5442188162187115,
+          "floors": 2,
+          "bays": 2,
+          "baySpacing": 0.54312,
+          "wallThickness": 0.072,
+          "plinthHeight": 0.05442188162187115,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.1423064752425626,
+            "overhang": 0.059040274052317265,
+            "span": 0.7872036540308969,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.1,
+            "width": 0.1375,
+            "height": 0.18200000000000002,
+            "perBay": 1,
+            "arched": true
+          },
+          "frameExposure": 0.34,
+          "supportDensity": 0.5,
+          "foundation": "concrete-pad",
+          "silhouette": "industrial-shed",
+          "wallAssembly": "load-bearing-brick",
+          "parapet": true,
+          "annexes": 1,
+          "openness": 0,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.08019529111012816,
+            "maintenance": 0.9759414126669615,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "grain-bin",
+            "loading-platform",
+            "conveyor",
+            "louver-vent",
+            "rail-track"
+          ],
+          "seed": "flagship:grain-store",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7254792072690597,
+            "familyRanking": [
+              {
+                "family": "heavy-industrial-brick",
+                "score": 0.7254792072690597
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.640073159606848
+              }
+            ],
+            "stageName": "Grain store",
+            "stageDefinedIn": "industrial",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "grain-floors",
+            "section": "pitched",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": true
+          }
+        },
+        {
+          "archetype": "smock-mill",
+          "role": "workshop",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood"
+          },
+          "width": 0.49662298702984115,
+          "depth": 0.5148889981594402,
+          "storeyHeight": 0.3666948663965799,
+          "floors": 3,
+          "bays": 2,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.03666948663965799,
+          "roof": {
+            "archetype": "conical",
+            "pitch": 1.0661524138570067,
+            "overhang": 0.172,
+            "span": 0.5148889981594402,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.05,
+            "width": 0.18810000000000002,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.17994873879142104,
+            "maintenance": 0.9460153783625737,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "millstone",
+            "windshaft",
+            "grain-bin",
+            "loading-platform"
+          ],
+          "seed": "flagship:smock-mill",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7382001260720255,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7382001260720255
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.12104591521066933
+              }
+            ],
+            "stageName": "Smock mill",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          }
+        }
+      ],
+      "rotations": [
+        0,
+        -0.09337499999999999,
+        0,
+        0,
+        0,
+        -0.00423874400001004
+      ]
+    },
+    {
+      "id": "all",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 68,
+      "triangles": 71762,
+      "rotors": 2,
+      "specs": [
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 1,
+          "developmentMaterial": "earth",
+          "era": "preIndustrial",
+          "period": "classical",
+          "family": "mud-brick",
+          "materials": {
+            "foundation": "fieldstone",
+            "frame": "rough-hewn-timber",
+            "wall": "mud-brick",
+            "roofStructure": "rough-hewn-timber",
+            "roofCovering": "adobe",
+            "trim": "finished-wood",
+            "finish": "adobe",
+            "glazing": "finished-wood"
+          },
+          "width": 2.1489158440314395,
+          "depth": 1.7696954009670678,
+          "storeyHeight": 0.4278122780338861,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.384,
+          "wallThickness": 0.119028,
+          "plinthHeight": 0.04385075849847332,
+          "roof": {
+            "archetype": "flat",
+            "pitch": 0,
+            "overhang": 0.07963629304351805,
+            "span": 0.6016964363288031,
+            "tiers": 1,
+            "intermediateSupport": true
+          },
+          "openings": {
+            "density": 0.11599999999999999,
+            "width": 0.05500000000000001,
+            "height": 0.084,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.12,
+          "supportDensity": 0.42000000000000004,
+          "foundation": "stone-footing",
+          "silhouette": "earthen-mass",
+          "wallAssembly": "monolithic-earth",
+          "parapet": true,
+          "annexes": 0,
+          "openness": 0.14,
+          "culture": {
+            "materialBias": "wood",
+            "roofLanguage": "gable-geometric",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "arid",
+            "plinthBoost": 0.05,
+            "shelteredEntry": true,
+            "courtyard": true,
+            "roofPitch": 0.46,
+            "eaveOverhang": 0.6,
+            "wallThickness": 1.4,
+            "openingDensity": 0.58
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1676783122099936,
+            "maintenance": 0.949696506337002,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:court-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7902725020365059,
+            "familyRanking": [
+              {
+                "family": "mud-brick",
+                "score": 0.7902725020365059
+              },
+              {
+                "family": "adobe",
+                "score": 0.707591812240306
+              },
+              {
+                "family": "timber-frame",
+                "score": 0.4988537951170452
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.06610531550731029
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.052058848451997305
+              }
+            ],
+            "stageName": "Courtyard house",
+            "stageDefinedIn": "classical",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "flat",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "courtyard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 0.9758767822446301,
+          "depth": 0.8700945073706099,
+          "storeyHeight": 0.4806320346131455,
+          "floors": 3,
+          "bays": 4,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.048063203461314555,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.8,
+            "overhang": 0.06525708805279574,
+            "span": 0.9758767822446301,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.26,
+            "width": 0.10450000000000001,
+            "height": 0.12880000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.14254007417298853,
+            "maintenance": 0.9572379777481035,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:town-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7488139157133021,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7488139157133021
+              },
+              {
+                "family": "mixed-masonry",
+                "score": 0.13103342490614298
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.12448686333429046
+              },
+              {
+                "family": "log-construction",
+                "score": 0.10337151637863648
+              }
+            ],
+            "stageName": "Framed townhouse",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "pitched",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "z",
+            "gableLight": true,
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "barn",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6036960042190274,
+          "depth": 0.9816528305928222,
+          "storeyHeight": 0.6247152022039052,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.06247152022039052,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.85,
+            "overhang": 0.07362396229446166,
+            "span": 0.9816528305928222,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.07,
+            "width": 0.22990000000000005,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.1,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1713662005316466,
+            "maintenance": 0.948590139840506,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "threshing-floor",
+            "hay-loft",
+            "grain-bin",
+            "wagon-apron",
+            "manger",
+            "ridge-vent"
+          ],
+          "seed": "flagship:threshing-barn",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7311501091738546,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7311501091738546
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.6609014366399442
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.11075646959688205
+              }
+            ],
+            "stageName": "High-roof threshing barn",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "threshing-aisle",
+            "section": "aisled",
+            "bays": 5,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": true,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "stable",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "masonry",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "mixed-masonry",
+          "materials": {
+            "foundation": "dressed-stone",
+            "frame": "dressed-stone",
+            "wall": "dressed-stone",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "slate",
+            "trim": "dressed-stone",
+            "finish": "plaster",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6719759178785234,
+          "depth": 1.3457998772294817,
+          "storeyHeight": 0.47636887016552504,
+          "floors": 1,
+          "bays": 5,
+          "baySpacing": 0.37799999999999995,
+          "wallThickness": 0.07,
+          "plinthHeight": 0.06669164182317351,
+          "roof": {
+            "archetype": "hipped",
+            "pitch": 0.23214950272277002,
+            "overhang": 0.10093499079221112,
+            "span": 0.4681532570059866,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.18,
+            "width": 0.16940000000000002,
+            "height": 0.16016000000000002,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.26,
+          "supportDensity": 0.42,
+          "foundation": "masonry-plinth",
+          "silhouette": "masonry-mass",
+          "wallAssembly": "coursed-masonry",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.16,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.05641111607803032,
+            "maintenance": 0.9830766651765909,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "bedding",
+            "manger",
+            "stall-divider",
+            "hitch-rail",
+            "water-trough",
+            "hay-loft",
+            "cart-stand"
+          ],
+          "seed": "flagship:stable-yard",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.6423685978921679,
+            "familyRanking": [
+              {
+                "family": "mixed-masonry",
+                "score": 0.6423685978921679
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.6370839487770079
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.13530223861872015
+              }
+            ],
+            "stageName": "Manor stable",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "stall-range",
+            "section": "hipped",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "stable-yard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        },
+        {
+          "archetype": "granary",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "ceramic",
+          "era": "industrial",
+          "period": "industrial",
+          "family": "heavy-industrial-brick",
+          "materials": {
+            "foundation": "fired-brick",
+            "frame": "fired-brick",
+            "wall": "fired-brick",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "clay-tile",
+            "trim": "fired-brick",
+            "glazing": "finished-wood"
+          },
+          "width": 0.8099118763844482,
+          "depth": 0.7872036540308969,
+          "storeyHeight": 0.5442188162187115,
+          "floors": 2,
+          "bays": 2,
+          "baySpacing": 0.54312,
+          "wallThickness": 0.072,
+          "plinthHeight": 0.05442188162187115,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.1423064752425626,
+            "overhang": 0.059040274052317265,
+            "span": 0.7872036540308969,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.1,
+            "width": 0.1375,
+            "height": 0.18200000000000002,
+            "perBay": 1,
+            "arched": true
+          },
+          "frameExposure": 0.34,
+          "supportDensity": 0.5,
+          "foundation": "concrete-pad",
+          "silhouette": "industrial-shed",
+          "wallAssembly": "load-bearing-brick",
+          "parapet": true,
+          "annexes": 1,
+          "openness": 0,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.08019529111012816,
+            "maintenance": 0.9759414126669615,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "grain-bin",
+            "loading-platform",
+            "conveyor",
+            "louver-vent",
+            "rail-track"
+          ],
+          "seed": "flagship:grain-store",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7254792072690597,
+            "familyRanking": [
+              {
+                "family": "heavy-industrial-brick",
+                "score": 0.7254792072690597
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.640073159606848
+              }
+            ],
+            "stageName": "Grain store",
+            "stageDefinedIn": "industrial",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "grain-floors",
+            "section": "pitched",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": true
+          }
+        },
+        {
+          "archetype": "smock-mill",
+          "role": "workshop",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood"
+          },
+          "width": 0.49662298702984115,
+          "depth": 0.5148889981594402,
+          "storeyHeight": 0.3666948663965799,
+          "floors": 3,
+          "bays": 2,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.03666948663965799,
+          "roof": {
+            "archetype": "conical",
+            "pitch": 1.0661524138570067,
+            "overhang": 0.172,
+            "span": 0.5148889981594402,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.05,
+            "width": 0.18810000000000002,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.17994873879142104,
+            "maintenance": 0.9460153783625737,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "millstone",
+            "windshaft",
+            "grain-bin",
+            "loading-platform"
+          ],
+          "seed": "flagship:smock-mill",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7382001260720255,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7382001260720255
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.12104591521066933
+              }
+            ],
+            "stageName": "Smock mill",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          }
+        }
+      ],
+      "rotations": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        -0.07772185600006569
+      ]
+    },
+    {
+      "id": "court-house",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 13,
+      "triangles": 7802,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 1,
+          "developmentMaterial": "earth",
+          "era": "preIndustrial",
+          "period": "classical",
+          "family": "mud-brick",
+          "materials": {
+            "foundation": "fieldstone",
+            "frame": "rough-hewn-timber",
+            "wall": "mud-brick",
+            "roofStructure": "rough-hewn-timber",
+            "roofCovering": "adobe",
+            "trim": "finished-wood",
+            "finish": "adobe",
+            "glazing": "finished-wood"
+          },
+          "width": 2.1489158440314395,
+          "depth": 1.7696954009670678,
+          "storeyHeight": 0.4278122780338861,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.384,
+          "wallThickness": 0.119028,
+          "plinthHeight": 0.04385075849847332,
+          "roof": {
+            "archetype": "flat",
+            "pitch": 0,
+            "overhang": 0.07963629304351805,
+            "span": 0.6016964363288031,
+            "tiers": 1,
+            "intermediateSupport": true
+          },
+          "openings": {
+            "density": 0.11599999999999999,
+            "width": 0.05500000000000001,
+            "height": 0.084,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.12,
+          "supportDensity": 0.42000000000000004,
+          "foundation": "stone-footing",
+          "silhouette": "earthen-mass",
+          "wallAssembly": "monolithic-earth",
+          "parapet": true,
+          "annexes": 0,
+          "openness": 0.14,
+          "culture": {
+            "materialBias": "wood",
+            "roofLanguage": "gable-geometric",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "arid",
+            "plinthBoost": 0.05,
+            "shelteredEntry": true,
+            "courtyard": true,
+            "roofPitch": 0.46,
+            "eaveOverhang": 0.6,
+            "wallThickness": 1.4,
+            "openingDensity": 0.58
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1676783122099936,
+            "maintenance": 0.949696506337002,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:court-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7902725020365059,
+            "familyRanking": [
+              {
+                "family": "mud-brick",
+                "score": 0.7902725020365059
+              },
+              {
+                "family": "adobe",
+                "score": 0.707591812240306
+              },
+              {
+                "family": "timber-frame",
+                "score": 0.4988537951170452
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.06610531550731029
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.052058848451997305
+              }
+            ],
+            "stageName": "Courtyard house",
+            "stageDefinedIn": "classical",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "flat",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "courtyard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "court-house",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 13,
+      "triangles": 7802,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 1,
+          "developmentMaterial": "earth",
+          "era": "preIndustrial",
+          "period": "classical",
+          "family": "mud-brick",
+          "materials": {
+            "foundation": "fieldstone",
+            "frame": "rough-hewn-timber",
+            "wall": "mud-brick",
+            "roofStructure": "rough-hewn-timber",
+            "roofCovering": "adobe",
+            "trim": "finished-wood",
+            "finish": "adobe",
+            "glazing": "finished-wood"
+          },
+          "width": 2.1489158440314395,
+          "depth": 1.7696954009670678,
+          "storeyHeight": 0.4278122780338861,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.384,
+          "wallThickness": 0.119028,
+          "plinthHeight": 0.04385075849847332,
+          "roof": {
+            "archetype": "flat",
+            "pitch": 0,
+            "overhang": 0.07963629304351805,
+            "span": 0.6016964363288031,
+            "tiers": 1,
+            "intermediateSupport": true
+          },
+          "openings": {
+            "density": 0.11599999999999999,
+            "width": 0.05500000000000001,
+            "height": 0.084,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.12,
+          "supportDensity": 0.42000000000000004,
+          "foundation": "stone-footing",
+          "silhouette": "earthen-mass",
+          "wallAssembly": "monolithic-earth",
+          "parapet": true,
+          "annexes": 0,
+          "openness": 0.14,
+          "culture": {
+            "materialBias": "wood",
+            "roofLanguage": "gable-geometric",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "arid",
+            "plinthBoost": 0.05,
+            "shelteredEntry": true,
+            "courtyard": true,
+            "roofPitch": 0.46,
+            "eaveOverhang": 0.6,
+            "wallThickness": 1.4,
+            "openingDensity": 0.58
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1676783122099936,
+            "maintenance": 0.949696506337002,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:court-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7902725020365059,
+            "familyRanking": [
+              {
+                "family": "mud-brick",
+                "score": 0.7902725020365059
+              },
+              {
+                "family": "adobe",
+                "score": 0.707591812240306
+              },
+              {
+                "family": "timber-frame",
+                "score": 0.4988537951170452
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.06610531550731029
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.052058848451997305
+              }
+            ],
+            "stageName": "Courtyard house",
+            "stageDefinedIn": "classical",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "flat",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "courtyard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "town-house",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 13,
+      "triangles": 11914,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 0.9758767822446301,
+          "depth": 0.8700945073706099,
+          "storeyHeight": 0.4806320346131455,
+          "floors": 3,
+          "bays": 4,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.048063203461314555,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.8,
+            "overhang": 0.06525708805279574,
+            "span": 0.9758767822446301,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.26,
+            "width": 0.10450000000000001,
+            "height": 0.12880000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.14254007417298853,
+            "maintenance": 0.9572379777481035,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:town-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7488139157133021,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7488139157133021
+              },
+              {
+                "family": "mixed-masonry",
+                "score": 0.13103342490614298
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.12448686333429046
+              },
+              {
+                "family": "log-construction",
+                "score": 0.10337151637863648
+              }
+            ],
+            "stageName": "Framed townhouse",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "pitched",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "z",
+            "gableLight": true,
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "town-house",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 13,
+      "triangles": 11914,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "house",
+          "role": "house",
+          "purpose": "housing",
+          "form": "dwelling",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 0.9758767822446301,
+          "depth": 0.8700945073706099,
+          "storeyHeight": 0.4806320346131455,
+          "floors": 3,
+          "bays": 4,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.048063203461314555,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.8,
+            "overhang": 0.06525708805279574,
+            "span": 0.9758767822446301,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.26,
+            "width": 0.10450000000000001,
+            "height": 0.12880000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.14254007417298853,
+            "maintenance": 0.9572379777481035,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "hearth",
+            "chimney"
+          ],
+          "seed": "flagship:town-house",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7488139157133021,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7488139157133021
+              },
+              {
+                "family": "mixed-masonry",
+                "score": 0.13103342490614298
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.12448686333429046
+              },
+              {
+                "family": "log-construction",
+                "score": 0.10337151637863648
+              }
+            ],
+            "stageName": "Framed townhouse",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "rooms",
+            "section": "pitched",
+            "bays": 3,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "z",
+            "gableLight": true,
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "threshing-barn",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 13,
+      "triangles": 6394,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "barn",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6036960042190274,
+          "depth": 0.9816528305928222,
+          "storeyHeight": 0.6247152022039052,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.06247152022039052,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.85,
+            "overhang": 0.07362396229446166,
+            "span": 0.9816528305928222,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.07,
+            "width": 0.22990000000000005,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.1,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1713662005316466,
+            "maintenance": 0.948590139840506,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "threshing-floor",
+            "hay-loft",
+            "grain-bin",
+            "wagon-apron",
+            "manger",
+            "ridge-vent"
+          ],
+          "seed": "flagship:threshing-barn",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7311501091738546,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7311501091738546
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.6609014366399442
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.11075646959688205
+              }
+            ],
+            "stageName": "High-roof threshing barn",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "threshing-aisle",
+            "section": "aisled",
+            "bays": 5,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": true,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "threshing-barn",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 13,
+      "triangles": 6394,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "barn",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 2,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "medieval",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6036960042190274,
+          "depth": 0.9816528305928222,
+          "storeyHeight": 0.6247152022039052,
+          "floors": 1,
+          "bays": 6,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.06247152022039052,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.85,
+            "overhang": 0.07362396229446166,
+            "span": 0.9816528305928222,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.07,
+            "width": 0.22990000000000005,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.1,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.1713662005316466,
+            "maintenance": 0.948590139840506,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "threshing-floor",
+            "hay-loft",
+            "grain-bin",
+            "wagon-apron",
+            "manger",
+            "ridge-vent"
+          ],
+          "seed": "flagship:threshing-barn",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7311501091738546,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7311501091738546
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.6609014366399442
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.11075646959688205
+              }
+            ],
+            "stageName": "High-roof threshing barn",
+            "stageDefinedIn": "medieval",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "threshing-aisle",
+            "section": "aisled",
+            "bays": 5,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": true,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "stable-yard",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 7,
+      "triangles": 6578,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "stable",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "masonry",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "mixed-masonry",
+          "materials": {
+            "foundation": "dressed-stone",
+            "frame": "dressed-stone",
+            "wall": "dressed-stone",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "slate",
+            "trim": "dressed-stone",
+            "finish": "plaster",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6719759178785234,
+          "depth": 1.3457998772294817,
+          "storeyHeight": 0.47636887016552504,
+          "floors": 1,
+          "bays": 5,
+          "baySpacing": 0.37799999999999995,
+          "wallThickness": 0.07,
+          "plinthHeight": 0.06669164182317351,
+          "roof": {
+            "archetype": "hipped",
+            "pitch": 0.23214950272277002,
+            "overhang": 0.10093499079221112,
+            "span": 0.4681532570059866,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.18,
+            "width": 0.16940000000000002,
+            "height": 0.16016000000000002,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.26,
+          "supportDensity": 0.42,
+          "foundation": "masonry-plinth",
+          "silhouette": "masonry-mass",
+          "wallAssembly": "coursed-masonry",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.16,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.05641111607803032,
+            "maintenance": 0.9830766651765909,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "bedding",
+            "manger",
+            "stall-divider",
+            "hitch-rail",
+            "water-trough",
+            "hay-loft",
+            "cart-stand"
+          ],
+          "seed": "flagship:stable-yard",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.6423685978921679,
+            "familyRanking": [
+              {
+                "family": "mixed-masonry",
+                "score": 0.6423685978921679
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.6370839487770079
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.13530223861872015
+              }
+            ],
+            "stageName": "Manor stable",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "stall-range",
+            "section": "hipped",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "stable-yard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "stable-yard",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 7,
+      "triangles": 6578,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "stable",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "masonry",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "mixed-masonry",
+          "materials": {
+            "foundation": "dressed-stone",
+            "frame": "dressed-stone",
+            "wall": "dressed-stone",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "slate",
+            "trim": "dressed-stone",
+            "finish": "plaster",
+            "glazing": "finished-wood"
+          },
+          "width": 1.6719759178785234,
+          "depth": 1.3457998772294817,
+          "storeyHeight": 0.47636887016552504,
+          "floors": 1,
+          "bays": 5,
+          "baySpacing": 0.37799999999999995,
+          "wallThickness": 0.07,
+          "plinthHeight": 0.06669164182317351,
+          "roof": {
+            "archetype": "hipped",
+            "pitch": 0.23214950272277002,
+            "overhang": 0.10093499079221112,
+            "span": 0.4681532570059866,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.18,
+            "width": 0.16940000000000002,
+            "height": 0.16016000000000002,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.26,
+          "supportDensity": 0.42,
+          "foundation": "masonry-plinth",
+          "silhouette": "masonry-mass",
+          "wallAssembly": "coursed-masonry",
+          "parapet": false,
+          "annexes": 2,
+          "openness": 0.16,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.05641111607803032,
+            "maintenance": 0.9830766651765909,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "bedding",
+            "manger",
+            "stall-divider",
+            "hitch-rail",
+            "water-trough",
+            "hay-loft",
+            "cart-stand"
+          ],
+          "seed": "flagship:stable-yard",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.6423685978921679,
+            "familyRanking": [
+              {
+                "family": "mixed-masonry",
+                "score": 0.6423685978921679
+              },
+              {
+                "family": "stone-masonry",
+                "score": 0.6370839487770079
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.13530223861872015
+              }
+            ],
+            "stageName": "Manor stable",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "stall-range",
+            "section": "hipped",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "stable-yard",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": false
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "grain-store",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 7,
+      "triangles": 8034,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "granary",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "ceramic",
+          "era": "industrial",
+          "period": "industrial",
+          "family": "heavy-industrial-brick",
+          "materials": {
+            "foundation": "fired-brick",
+            "frame": "fired-brick",
+            "wall": "fired-brick",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "clay-tile",
+            "trim": "fired-brick",
+            "glazing": "finished-wood"
+          },
+          "width": 0.8099118763844482,
+          "depth": 0.7872036540308969,
+          "storeyHeight": 0.5442188162187115,
+          "floors": 2,
+          "bays": 2,
+          "baySpacing": 0.54312,
+          "wallThickness": 0.072,
+          "plinthHeight": 0.05442188162187115,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.1423064752425626,
+            "overhang": 0.059040274052317265,
+            "span": 0.7872036540308969,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.1,
+            "width": 0.1375,
+            "height": 0.18200000000000002,
+            "perBay": 1,
+            "arched": true
+          },
+          "frameExposure": 0.34,
+          "supportDensity": 0.5,
+          "foundation": "concrete-pad",
+          "silhouette": "industrial-shed",
+          "wallAssembly": "load-bearing-brick",
+          "parapet": true,
+          "annexes": 1,
+          "openness": 0,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.08019529111012816,
+            "maintenance": 0.9759414126669615,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "grain-bin",
+            "loading-platform",
+            "conveyor",
+            "louver-vent",
+            "rail-track"
+          ],
+          "seed": "flagship:grain-store",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7254792072690597,
+            "familyRanking": [
+              {
+                "family": "heavy-industrial-brick",
+                "score": 0.7254792072690597
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.640073159606848
+              }
+            ],
+            "stageName": "Grain store",
+            "stageDefinedIn": "industrial",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "grain-floors",
+            "section": "pitched",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": true
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "grain-store",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 7,
+      "triangles": 8034,
+      "rotors": 0,
+      "specs": [
+        {
+          "archetype": "granary",
+          "role": "granary",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "ceramic",
+          "era": "industrial",
+          "period": "industrial",
+          "family": "heavy-industrial-brick",
+          "materials": {
+            "foundation": "fired-brick",
+            "frame": "fired-brick",
+            "wall": "fired-brick",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "clay-tile",
+            "trim": "fired-brick",
+            "glazing": "finished-wood"
+          },
+          "width": 0.8099118763844482,
+          "depth": 0.7872036540308969,
+          "storeyHeight": 0.5442188162187115,
+          "floors": 2,
+          "bays": 2,
+          "baySpacing": 0.54312,
+          "wallThickness": 0.072,
+          "plinthHeight": 0.05442188162187115,
+          "roof": {
+            "archetype": "gable",
+            "pitch": 0.1423064752425626,
+            "overhang": 0.059040274052317265,
+            "span": 0.7872036540308969,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.1,
+            "width": 0.1375,
+            "height": 0.18200000000000002,
+            "perBay": 1,
+            "arched": true
+          },
+          "frameExposure": 0.34,
+          "supportDensity": 0.5,
+          "foundation": "concrete-pad",
+          "silhouette": "industrial-shed",
+          "wallAssembly": "load-bearing-brick",
+          "parapet": true,
+          "annexes": 1,
+          "openness": 0,
+          "culture": {
+            "materialBias": "clay",
+            "roofLanguage": "pyramid-stepped",
+            "ornament": 0.12
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "new",
+            "wear": 0.08019529111012816,
+            "maintenance": 0.9759414126669615,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "grain-bin",
+            "loading-platform",
+            "conveyor",
+            "louver-vent",
+            "rail-track"
+          ],
+          "seed": "flagship:grain-store",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7254792072690597,
+            "familyRanking": [
+              {
+                "family": "heavy-industrial-brick",
+                "score": 0.7254792072690597
+              },
+              {
+                "family": "brick-masonry",
+                "score": 0.640073159606848
+              }
+            ],
+            "stageName": "Grain store",
+            "stageDefinedIn": "industrial",
+            "stagePeriodsOld": 0
+          },
+          "architecture": {
+            "plan": "grain-floors",
+            "section": "pitched",
+            "bays": 2,
+            "raisedFloor": false,
+            "composition": "single",
+            "roofAxis": "x",
+            "entryPorch": false,
+            "loadingHoist": true
+          }
+        }
+      ],
+      "rotations": []
+    },
+    {
+      "id": "smock-mill",
+      "neutral": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 20,
+      "triangles": 31050,
+      "rotors": 2,
+      "specs": [
+        {
+          "archetype": "smock-mill",
+          "role": "workshop",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood"
+          },
+          "width": 0.49662298702984115,
+          "depth": 0.5148889981594402,
+          "storeyHeight": 0.3666948663965799,
+          "floors": 3,
+          "bays": 2,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.03666948663965799,
+          "roof": {
+            "archetype": "conical",
+            "pitch": 1.0661524138570067,
+            "overhang": 0.172,
+            "span": 0.5148889981594402,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.05,
+            "width": 0.18810000000000002,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.17994873879142104,
+            "maintenance": 0.9460153783625737,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "millstone",
+            "windshaft",
+            "grain-bin",
+            "loading-platform"
+          ],
+          "seed": "flagship:smock-mill",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7382001260720255,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7382001260720255
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.12104591521066933
+              }
+            ],
+            "stageName": "Smock mill",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          }
+        }
+      ],
+      "rotations": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "smock-mill",
+      "neutral": true,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "errors": [],
+      "drawCalls": 20,
+      "triangles": 31050,
+      "rotors": 2,
+      "specs": [
+        {
+          "archetype": "smock-mill",
+          "role": "workshop",
+          "purpose": "food",
+          "form": "store",
+          "developmentLevel": 3,
+          "developmentMaterial": "timber",
+          "era": "preIndustrial",
+          "period": "earlyModern",
+          "family": "timber-frame",
+          "materials": {
+            "foundation": "rubble-masonry",
+            "frame": "heavy-timber",
+            "wall": "rough-hewn-timber",
+            "roofStructure": "heavy-timber",
+            "roofCovering": "wood-shingle",
+            "trim": "finished-wood",
+            "infill": "wattle-and-daub",
+            "finish": "finished-wood"
+          },
+          "width": 0.49662298702984115,
+          "depth": 0.5148889981594402,
+          "storeyHeight": 0.3666948663965799,
+          "floors": 3,
+          "bays": 2,
+          "baySpacing": 0.30576000000000003,
+          "wallThickness": 0.0315,
+          "plinthHeight": 0.03666948663965799,
+          "roof": {
+            "archetype": "conical",
+            "pitch": 1.0661524138570067,
+            "overhang": 0.172,
+            "span": 0.5148889981594402,
+            "tiers": 1,
+            "intermediateSupport": false
+          },
+          "openings": {
+            "density": 0.05,
+            "width": 0.18810000000000002,
+            "height": 0.16744000000000003,
+            "perBay": 1,
+            "arched": false
+          },
+          "frameExposure": 0.92,
+          "supportDensity": 0.72,
+          "foundation": "masonry-plinth",
+          "silhouette": "framed-bay",
+          "wallAssembly": "infilled-frame",
+          "parapet": false,
+          "annexes": 0,
+          "openness": 0,
+          "culture": {
+            "materialBias": "stone",
+            "roofLanguage": "layered-asian",
+            "ornament": 0.32000000000000006
+          },
+          "climate": {
+            "zone": "temperate",
+            "plinthBoost": 0,
+            "shelteredEntry": false,
+            "courtyard": false,
+            "roofPitch": 1,
+            "eaveOverhang": 1,
+            "wallThickness": 1,
+            "openingDensity": 1
+          },
+          "stage": 7,
+          "age": {
+            "condition": "sound",
+            "wear": 0.17994873879142104,
+            "maintenance": 0.9460153783625737,
+            "damage": 0,
+            "additions": 0,
+            "adaptivelyReused": false
+          },
+          "equipment": [
+            "millstone",
+            "windshaft",
+            "grain-bin",
+            "loading-platform"
+          ],
+          "seed": "flagship:smock-mill",
+          "debug": false,
+          "provenance": {
+            "routing": "explicit",
+            "periodLifted": false,
+            "evidenceGrade": "billed",
+            "familyScore": 0.7382001260720255,
+            "familyRanking": [
+              {
+                "family": "timber-frame",
+                "score": 0.7382001260720255
+              },
+              {
+                "family": "timber-post-and-beam",
+                "score": 0.12104591521066933
+              }
+            ],
+            "stageName": "Smock mill",
+            "stageDefinedIn": "earlyModern",
+            "stagePeriodsOld": 0
+          }
+        }
+      ],
+      "rotations": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "errors": []
+}

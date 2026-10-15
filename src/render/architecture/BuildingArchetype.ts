@@ -172,6 +172,13 @@ export type ArchetypeStatus =
    */
   | 'planned'
   /**
+   * Built by a named simulation subsystem and drawn by that subsystem's own renderer, which
+   * publishes this archetype's identity and lineage stage on what it draws. Never routed from a
+   * development response. A bridge is TransportationSystem's segment and TransportStructures'
+   * span, whatever its period.
+   */
+  | 'subsystem'
+  /**
    * Retained only so existing references keep resolving. Nothing routes to it, nothing should
    * start, and it may be deleted once no caller names it.
    */
@@ -590,12 +597,12 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
     },
   }),
 
-  // The four subtypes below are `planned`: buildable and inspectable, but no routing rule selects
-  // them yet. Routing them is a gameplay-visible change to which buildings a settlement shows, so it
-  // is deliberately a separate step from adding their architecture.
+  // The four subtypes below are routed from real simulation facts: a food store whose settlement
+  // grinds grain by hand, the wood-processing facility's powered tier, and a windmill installed at a
+  // water works or built of timber. None of them is reachable without that fact.
 
   'hand-mill': define({
-    id: 'hand-mill', label: 'Hand mill shelter', category: 'Production', role: 'workshop', status: 'planned',
+    id: 'hand-mill', label: 'Hand mill shelter', category: 'Production', role: 'workshop', status: 'active',
     presentationProgram: { need: 'food', form: 'store' },
     lineage: {
       // A quern in a lean shelter: the smallest thing that is still a mill. Nothing is raised, the
@@ -616,7 +623,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   sawmill: define({
-    id: 'sawmill', label: 'Sawmill', category: 'Production', role: 'workshop', status: 'planned',
+    id: 'sawmill', label: 'Sawmill', category: 'Production', role: 'workshop', status: 'active',
     presentationProgram: { need: 'manufacturing', form: 'workshop' },
     lineage: {
       // A long open-ended shed: the saw carriage runs the length of the building, so the plan is
@@ -643,7 +650,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   'wind-pump': define({
-    id: 'wind-pump', label: 'Wind pump', category: 'Production', role: 'workshop', status: 'planned',
+    id: 'wind-pump', label: 'Wind pump', category: 'Production', role: 'workshop', status: 'active',
     presentationProgram: { need: 'water', form: 'works' },
     lineage: {
       // A polder pump: a squat masonry drum with a conical cap, drawing water up through a rod
@@ -666,7 +673,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   'smock-mill': define({
-    id: 'smock-mill', label: 'Smock mill', category: 'Production', role: 'workshop', status: 'planned',
+    id: 'smock-mill', label: 'Smock mill', category: 'Production', role: 'workshop', status: 'active',
     presentationProgram: { need: 'food', form: 'store' },
     lineage: {
       // A timber smock on a low masonry base: wider and squatter than a tower mill, with the
@@ -927,7 +934,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   bridge: define({
-    id: 'bridge', label: 'Bridge', category: 'Transport', role: 'gate-tower', status: 'planned',
+    id: 'bridge', label: 'Bridge', category: 'Transport', role: 'gate-tower', status: 'subsystem',
     lineage: {
       neolithic: {
         name: 'Log footbridge', families: ['primitive-shelter', 'timber-post-and-beam'],
@@ -999,7 +1006,7 @@ export const ARCHETYPE_LIBRARY: Record<BuildingArchetype, BuildingArchetypeDefin
   }),
 
   'boundary-wall': define({
-    id: 'boundary-wall', label: 'Boundary wall', category: 'Defence', role: 'gate-tower', status: 'planned',
+    id: 'boundary-wall', label: 'Boundary wall', category: 'Defence', role: 'gate-tower', status: 'active',
     lineage: {
       neolithic: {
         name: 'Stake palisade', families: ['primitive-shelter', 'timber-post-and-beam'],

@@ -28,6 +28,26 @@ export interface GatherDecision {
   month: number; settlementId: string; depositId: string; resourceId: string;
   stage: 'queue' | 'loop'; reason: string; context: Record<string, number | boolean | null>;
 }
+/**
+ * Timber and stone that settlement construction is waiting on: the live project's unpaid bill, and
+ * whether construction is stalled for want of either — the project is missing a structural input,
+ * or the most recent annual attempt was blocked for lack of wood, minerals or structural material.
+ */
+export function constructionMaterialNeed(s: Settlement, month: number): { timber: number; stone: number; blocked: boolean } {
+  const project = s.development?.project;
+  let timber = 0, stone = 0;
+  for (const requirement of project?.materialRequirements ?? []) {
+    const remaining = requirement.amount * (1 - (project?.progress ?? 0));
+    if (requirement.options.some(id => id === 'timber' || id === 'lumber')) timber += remaining;
+    else if (requirement.options.some(id => id === 'stone' || id === 'brick')) stone += remaining;
+  }
+  const attempt = s.development?.lastAttempt;
+  const attemptBlocked = Boolean(attempt && attempt.outcome === 'blocked' && month - attempt.month <= 12
+    && attempt.candidates.some(c => c.blockers.some(b => b.code === 'insufficient-wood' || b.code === 'insufficient-minerals' || b.code === 'insufficient-structural-material')));
+  const starved = project?.blockedReasons?.some(reason => reason.startsWith('missing:')) ?? false;
+  return { timber, stone, blocked: attemptBlocked || starved };
+}
+
 let gatherObserver: ((decision: GatherDecision) => void) | undefined;
 export function observeGatherDecisions(observer?: (decision: GatherDecision) => void): void { gatherObserver = observer; }
 export function createMaterialState(): { localMaterials: LocalMaterialInventory; discoveredDeposits: string[]; workedDeposits: string[]; knownRecipes: string[] } {
@@ -78,7 +98,9 @@ export class ResourceSystem {
       const economy = materialEconomy(s);
       const people = peopleByHome.get(s.id) ?? [];
       const budget: LabourBudget = resourceLabourBudget(state, s, people);
-      economy.demand = { ...s.energy?.materialDemand, timber: Math.max(12, s.buildings * 3, (s.survival?.cold.fuelNeed ?? 0) * 4), stone: Math.max(6, s.buildings) };
+      const building = constructionMaterialNeed(s, state.month);
+      economy.demand = { ...s.energy?.materialDemand, timber: Math.max(12, s.buildings * 3, (s.survival?.cold.fuelNeed ?? 0) * 4, building.timber),
+        stone: Math.max(6, s.buildings, building.stone) };
       for (const [id, amount] of Object.entries(s.survival?.establishment?.materialDemand ?? {})) economy.demand[id] = Math.max(economy.demand[id] ?? 0, amount * 2);
       economy.energyDemand = 0; economy.energySupplied = 0; economy.labourUsed = 0;
       economy.delivered = {};
@@ -209,7 +231,11 @@ export class ResourceSystem {
       const { path } = access;
       const transportCost = access.cost * (1 + (deposit.extractionDifficulty ?? 0));
       const survivalWork = (s.survival?.establishment?.materialDemand[definition.id] ?? 0) > (s.localMaterials[definition.id] ?? 0);
-      const occupations = survivalWork ? [...new Set([...definition.gatherOccupations, 'farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const)] : definition.gatherOccupations;
+      // Construction waiting on wood or stone draws the town's spare resource time to the woodlot
+      // and quarry, at the reduced output of unfamiliar hands. Farmers stay on their fields.
+      const buildingWork = (definition.id === 'timber' || definition.id === 'stone') && constructionMaterialNeed(s, state.month).blocked;
+      const occupations = survivalWork ? [...new Set([...definition.gatherOccupations, 'farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const)]
+        : buildingWork ? [...new Set([...definition.gatherOccupations, 'artisan', 'carrier', 'keeper'] as const)] : definition.gatherOccupations;
       const labour = occupations.reduce((sum, o) => sum + (budget[o] ?? 0) * (definition.gatherOccupations.includes(o) ? 1 : 0.7), 0);
       const tools = 1 + clamp(economy.tools / 12) * 0.7;
       const primitiveWood = definition.category === 'timber' && mastery(s, 'stone-composites').practice < 0.18 ? 0.25 : 1;

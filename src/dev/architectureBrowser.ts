@@ -1,3 +1,9 @@
+import { settlementStreetFixture } from './settlementStreetFixture';
+import { reserveStructurePlot } from '../shared/StructurePlots';
+import { districtForResponse } from '../shared/SettlementLayoutPlan';
+import { movementStreetGeometry, recordedStreetEdges } from '../render/settlement/MovementStreetGeometry';
+import { roadSurfaceMaterial } from '../render/transport/RoadSurfaceMaterial';
+import { structureFit } from '../render/assets/StructureFit';
 /**
  * architectureBrowser.ts
  *
@@ -7,7 +13,7 @@
  * path, so what is shown is exactly what the simulation renders: the same `resolveBuildingSpec`
  * decisions, the same `StructureGeometry`/`DedicatedStructures` emission, the same material
  * library and the same `THREE.LOD` assets. This file contains no showcase geometry — the only
- * meshes it creates are the ground plane and the row of period markers under the timeline.
+ * scene additions are ground, timeline markers and production street surfaces.
  *
  * It is a viewer. It changes no simulation, architecture, construction, economy or renderer
  * behaviour, and nothing here is imported by anything outside `src/dev`.
@@ -62,7 +68,7 @@ const seedInput = el<HTMLInputElement>('seed');
 const labelLayer = el<HTMLDivElement>('labels');
 const inspector = el<HTMLElement>('inspector');
 
-type ViewMode = 'gallery' | 'timeline' | 'street' | 'production' | 'era-matrix' | 'material-matrix' | 'catalogue' | 'founding';
+type ViewMode = 'gallery' | 'timeline' | 'solo' | 'street' | 'production' | 'era-matrix' | 'material-matrix' | 'catalogue' | 'founding';
 let view: ViewMode = 'gallery';
 
 // --------------------------------------------------------------------------- context presets
@@ -249,11 +255,16 @@ const resize = (): void => {
 window.addEventListener('resize', resize);
 resize();
 
-const assetBuilder = new AssetBuilder('architecture-browser');
+// Review all visible eligible assets; runtime retains its small default atlas budget.
+let assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 64, facadeResolution: 512 });
 
 /** Everything the browser puts on screen per rebuild, so one `remove` clears the whole layout. */
 const stageRoot = new THREE.Group();
 scene.add(stageRoot);
+const reviewMaterials = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+const neutralMaterial = new THREE.MeshStandardMaterial({ color: '#bdbbb2', roughness: .95 });
+const neutralGlassMaterial = new THREE.MeshStandardMaterial({ color: '#bdbbb2', roughness: .95, transparent: true, opacity: .12, depthWrite: false });
+let facadeStatusTime = 0;
 
 // --------------------------------------------------------------------------- motion preview
 
@@ -467,6 +478,10 @@ function create(request: BuildRequest): Instance {
   // `THREE.LOD.copy` carries its levels across, and clones share geometry and materials with the
   // production asset — which is also why nothing here ever disposes them.
   const root = asset.mesh.clone(true);
+  assetBuilder.facadeTextures.syncMaterials(root);
+  let svg = false;
+  root.traverse(o => { if (o instanceof THREE.Mesh) { reviewMaterials.set(o, o.material); if (o.geometry.hasAttribute('aFacadeUv')) svg = true; } });
+  root.userData['browserSvg'] = svg;
   millMotion.adopt(root);
   const data = asset.mesh.userData as Record<string, unknown>;
 
@@ -551,6 +566,7 @@ function clear(): void {
     if (object instanceof THREE.Mesh && object.userData['browserOwned']) object.geometry.dispose();
   });
   stageRoot.clear();
+  reviewMaterials.clear();
   catalogueGrid.replaceChildren();
   // Clones share geometry and materials with the cached production assets, so they are detached
   // and dropped rather than disposed. The AssetBuilder owns that lifetime and prunes its own cache.
@@ -584,6 +600,7 @@ function grid(requests: readonly BuildRequest[]): void {
   frameView(Math.max(columns, rows) * pitch);
 }
 
+const streetMaterial = roadSurfaceMaterial('#ffffff', true);
 const markerMaterials = [new THREE.MeshStandardMaterial({ color: '#9aa882', roughness: 1 }), new THREE.MeshStandardMaterial({ color: '#79866a', roughness: 1 })];
 
 /** Lays cards out in one row, used by the timeline so the lineage reads left to right. */
@@ -616,6 +633,47 @@ function row(requests: readonly BuildRequest[], markers: boolean): void {
   frameView(built.length * pitch * 0.9);
 }
 
+/** A mixed production neighbourhood on simulation-reserved ground and recorded lanes. */
+function settlementStreet(period: ArchitecturalPeriod): void {
+  const rank = periodRank(period);
+  const fixture = settlementStreetFixture(`${seedInput.value}:street`, rank < 2 ? 'desire-path' : rank < 4 ? 'footpath' : rank < 6 ? 'cart-road' : 'engineered-road');
+  const subjects: string[] = ['house', 'house', 'workshop', 'house', 'granary', 'house', 'barn', 'house', 'stable', 'workshop', 'house', 'house'];
+  const baseSeed = seedInput.value, scale = 3;
+  for (const [index, candidate] of subjects.entries()) {
+    const subject = validBrowserPeriods(candidate).includes(period) ? candidate : 'house';
+    seedInput.value = `${baseSeed}:street:${index}`;
+    const instance = create(subjectRequest(subject, period));
+    const development = instance.config.development!;
+    const plot = reserveStructurePlot(fixture.state, fixture.settlement, districtForResponse(development));
+    if (!plot) { instance.pin.remove(); continue; }
+    plot.development = { ...development, status: 'active', origin: { month: 0, action: 'founded', name: development.name, need: development.need,
+      cultureId: development.cultureId, reasons: [] }, history: [], transitionCount: 0, lastUsedMonth: 120 };
+    const data = instance.root.userData;
+    const fit = structureFit({ plotWidth: plot.width, plotDepth: plot.depth,
+      massWidth: readNumber(data, 'massWidth', 1), massDepth: readNumber(data, 'massDepth', 1), level: development.level });
+    place(instance, plot.worldX * scale, plot.worldZ * scale);
+    instance.root.scale.setScalar(fit * scale);
+    instance.root.rotation.y = plot.rotationY ?? Math.atan2(-plot.worldX, -plot.worldZ);
+    instance.anchor.set(plot.worldX * scale, readNumber(data, 'buildingHeight', 1) * fit * scale + .25, plot.worldZ * scale);
+    instance.root.userData['streetPlot'] = plot;
+    instance.root.userData['streetScale'] = scale;
+    instances.push(instance);
+  }
+  seedInput.value = baseSeed;
+  const geometry = movementStreetGeometry(recordedStreetEdges(fixture.state.world), () => 0);
+  const lane = new THREE.Mesh(geometry, streetMaterial); lane.name = 'Recorded settlement lanes';
+  lane.userData['browserOwned'] = true; lane.scale.setScalar(scale); lane.receiveShadow = true; stageRoot.add(lane);
+  const box = new THREE.Box3().setFromObject(stageRoot), center = box.getCenter(new THREE.Vector3());
+  const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
+  const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov * .5)) * 1.12;
+  controls.target.copy(center);
+  camera.position.copy(new THREE.Vector3(.55, .65, .7).normalize().multiplyScalar(distance).add(center));
+  camera.lookAt(controls.target); controls.update();
+  wirePins();
+  el('count').textContent = `${instances.length} production buildings / ${PERIOD_LABELS[period].label}`;
+  el('absent').textContent = 'Declared movement-history snapshot. Actual plot reservations, building fit and street renderer; period alone never creates streets in the simulation.';
+}
+
 function place(instance: Instance, x: number, z: number): void {
   instance.root.position.set(x, 0, z);
   instance.root.scale.setScalar(WORLD_SCALE);
@@ -627,7 +685,7 @@ function place(instance: Instance, x: number, z: number): void {
 }
 
 function frameView(extent: number): void {
-  if (view === 'street') {
+  if (view === 'solo') {
     const size = instances[0] ? footprint(instances[0]) : { width: 2, depth: 2, height: 2 };
     // Eye height, set back far enough to take in the whole elevation.
     controls.target.set(0, size.height * 0.4, 0);
@@ -704,6 +762,9 @@ function catalogueCards(period: ArchitecturalPeriod): void {
 
 function rebuild(): void {
   syncChoices(); persistState(); clear();
+  assetBuilder.dispose();
+  assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 64, facadeResolution: 512 });
+  assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked);
   catalogueGrid.hidden = view !== 'catalogue';
   const period = periodSelect.value as ArchitecturalPeriod;
   const subject = archetypeSelect.value;
@@ -714,9 +775,9 @@ function rebuild(): void {
     for (const entry of valid) requests.push({ ...subjectRequest(subject, entry), title: PERIOD_LABELS[entry].label, subtitle: subjectRequest(subject, entry).title });
     el('count').textContent = `${subjectRequest(subject, period).title} | ${valid.length} valid periods`;
     el('absent').textContent = 'Same seed, culture, climate and prosperity; era/level drive the real historical period. Inherited stages remain visible.';
-  } else if (view === 'street' || view === 'material-matrix') {
+  } else if (view === 'street' || view === 'solo' || view === 'material-matrix') {
     if (valid.includes(period)) {
-      if (view === 'street') requests.push(subjectRequest(subject, period));
+      if (view !== 'material-matrix') requests.push(subjectRequest(subject, period));
       else for (const scenario of validMaterialScenarios(period)) requests.push({ ...subjectRequest(subject, period), materialScenario: scenario.id, title: scenario.label, subtitle: subjectRequest(subject, period).title });
       el('absent').textContent = view === 'material-matrix' ? 'Only material class, bill and capability evidence change. Identical results are shown honestly; no material is forced.' : '';
     } else el('absent').textContent = 'Not available in this period';
@@ -744,11 +805,26 @@ function rebuild(): void {
     el('count').textContent = `${roleInputs.length} roles + ${adaptationInputs.length} founding adaptations + ${earlyInputs.length} earliest stages + ${programInputs.length} programs + ${activeInputs.length} active archetypes`;
     el('absent').textContent = 'Compatibility/program diagnostics show actual routing; explicit catalogue previews never request an unavailable period.';
   }
-  if (view === 'timeline') row(requests, true); else grid(requests);
+  if (view === 'street') settlementStreet(period);
+  else if (view === 'timeline') row(requests, true); else grid(requests);
   selected = Math.max(0, instances.findIndex(instance => (instance.request.subject ?? instance.archetype) === subject && instance.requestedPeriod === period
     && (!instance.request.materialScenario || instance.request.materialScenario === materialSelect.value)));
   if (view === 'catalogue') catalogueCards(period);
-  applyLodMode(); applyPivots(); replayMotion(); refreshSelection();
+  applyLodMode(); applyReviewSurfaces(); applyPivots(); replayMotion(); refreshSelection();
+}
+
+function applyReviewSurfaces(): void {
+  for (const [mesh, material] of reviewMaterials) mesh.material = material;
+  assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked, stageRoot);
+  if (el<HTMLInputElement>('neutral-materials').checked) for (const mesh of reviewMaterials.keys()) {
+    if (['shadow', 'ground', 'garden', 'glow', 'forge'].includes(String(mesh.userData['surface']))) continue;
+    mesh.material = ['glass', 'curtain-glass'].includes(mesh.name) ? neutralGlassMaterial : neutralMaterial;
+  }
+  refreshFacadeCoverage();
+}
+function refreshFacadeCoverage(): void {
+  const stats = assetBuilder.facadeTextures.stats(), count = instances.filter(i => i.root.userData['browserSvg']).length;
+  el('facade-coverage').textContent = `${count} of ${instances.length} buildings have SVG. ${el<HTMLInputElement>('neutral-materials').checked ? 'Neutral geometry view.' : el<HTMLInputElement>('hybrid-facades').checked ? 'SVG on.' : 'SVG removed.'}${stats.pending ? ` ${stats.pending} atlases loading.` : ''}${stats.failed ? ` ${stats.failed} raster failures.` : ''}${instances.some(i => i.root.userData['facadeStatus'] === 'budget-fallback') ? ' Some surfaces reached the atlas budget.' : ''}`;
 }
 
 function applyLodMode(): void {
@@ -856,7 +932,7 @@ function refreshSelection(): void {
       <dt>Material bill</dt><dd>${Object.entries(instance.config.development?.materialCost ?? {}).map(([kind, amount]) => `${kind}: ${amount}`).join(', ') || 'none; production coarse-class fallback'}</dd>
       <dt>Capabilities</dt><dd>${instance.config.development?.capabilities.join(', ') || 'none supplied'}</dd>
       <dt>Equipment</dt><dd>${equipment.length ? equipment.join(', ') : 'none'}</dd>
-      <dt>Facade surface</dt><dd>${readString(data, 'facadeStatus') ?? 'production procedural surface'}</dd>
+      <dt>Facade surface</dt><dd>${!el<HTMLInputElement>('hybrid-facades').checked ? 'SVG removed; original production materials' : readString(data, 'facadeStatus') ?? 'No SVG on this building; production geometry and materials'}</dd>
       <dt>LOD</dt><dd id="active-lod">${activeLevel(instance)}</dd>
     </dl>
     <dl>
@@ -919,6 +995,7 @@ function frame(): void {
   updatePins();
   const lodOutput = document.getElementById('active-lod');
   if (lodOutput && instances[selected]) lodOutput.textContent = activeLevel(instances[selected]!);
+  if (now - facadeStatusTime > 500) { refreshFacadeCoverage(); facadeStatusTime = now; }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -941,8 +1018,8 @@ function applyOcclusionStrength(): void {
 // --------------------------------------------------------------------------- wiring
 
 const stateControlIds = ['lighting', 'occlusion', 'archetype', 'category', 'period', 'material-scenario', 'program', 'culture', 'climate', 'specialization', 'stage', 'seed', 'prosperity', 'wind', 'wind-direction', 'flow', 'motion-time', 'yaw'] as const;
-const booleanControlIds = ['hybrid-facades', 'waterfront', 'full-detail', 'shadows', 'river', 'pivots', 'motion-play'] as const;
-const viewModes: readonly ViewMode[] = ['gallery', 'timeline', 'street', 'production', 'era-matrix', 'material-matrix', 'catalogue', 'founding'];
+const booleanControlIds = ['neutral-materials', 'hybrid-facades', 'waterfront', 'full-detail', 'shadows', 'river', 'pivots', 'motion-play'] as const;
+const viewModes: readonly ViewMode[] = ['gallery', 'timeline', 'solo', 'street', 'production', 'era-matrix', 'material-matrix', 'catalogue', 'founding'];
 
 function persistState(): void {
   const url = new URL(location.href);
@@ -1032,8 +1109,9 @@ prosperityInput.oninput = () => { el('prosperity-out').textContent = Number(pros
 prosperityInput.onchange = rebuild;
 fullDetailInput.onchange = () => { applyLodMode(); persistState(); refreshSelection(); };
 el<HTMLInputElement>('hybrid-facades').onchange = () => {
-  assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked); persistState();
+  applyReviewSurfaces(); persistState(); refreshSelection();
 };
+el<HTMLInputElement>('neutral-materials').onchange = () => { applyReviewSurfaces(); persistState(); refreshSelection(); };
 function applyLighting(): void {
   const mode = el<HTMLSelectElement>('lighting').value;
   const ambient = scene.children.find(object => object instanceof THREE.HemisphereLight) as THREE.HemisphereLight;
@@ -1083,7 +1161,7 @@ window.addEventListener('keydown', event => {
 window.addEventListener('pagehide', () => {
   clear(); assetBuilder.dispose(); ground.geometry.dispose();
   (ground.material as THREE.Material).dispose(); markerMaterials.forEach(material => material.dispose());
-  pivotGeometry.dispose(); pivotMaterial.dispose();
+  pivotGeometry.dispose(); pivotMaterial.dispose(); streetMaterial.dispose(); neutralMaterial.dispose(); neutralGlassMaterial.dispose();
   controls.dispose(); renderer.dispose();
 });
 restoreState();
@@ -1100,15 +1178,21 @@ requestAnimationFrame(frame);
 
 // Development browser only: inspect production assets and measure real WebGL rendering.
 Object.assign(window, { godboxArchitectureQa: {
-  stats: () => ({ facade: assetBuilder.facadeTextures.stats(), render: { ...renderer.info.render },
+  stats: () => ({ svgEnabled: !!assetBuilder.facadeTextures.strength.value, facade: assetBuilder.facadeTextures.stats(), render: { ...renderer.info.render },
     memory: { ...renderer.info.memory }, subjects: instances.map(instance => ({
-      status: instance.root.userData['facadeStatus'], spec: instance.root.userData['buildingSpec'],
+      status: instance.root.userData['facadeStatus'] ?? 'no-svg', spec: instance.root.userData['buildingSpec'],
       lod: activeLevel(instance),
     })) }),
+  neutral: (enabled: boolean) => { el<HTMLInputElement>('neutral-materials').checked = enabled; applyReviewSurfaces(); renderer.render(scene, camera); },
   camera: (yaw: number, pitch: number) => {
     const radius = camera.position.distanceTo(controls.target);
     camera.position.set(radius * Math.sin(yaw) * Math.cos(pitch), radius * Math.sin(pitch), radius * Math.cos(yaw) * Math.cos(pitch)).add(controls.target);
     camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
+  },
+  svg: (enabled: boolean) => {
+    el<HTMLInputElement>('hybrid-facades').checked = enabled;
+    applyReviewSurfaces();
+    refreshSelection(); renderer.render(scene, camera);
   },
   artwork: () => {
     const plan = instances[0]?.root.userData['facadePlan'];
@@ -1137,7 +1221,7 @@ Object.assign(window, { godboxArchitectureQa: {
   /** Hides pins and both side panels so captures show only the WebGL canvas. */
   labels: (show: boolean) => {
     labelLayer.style.display = show ? '' : 'none';
-    document.querySelectorAll('aside').forEach(panel => { (panel as HTMLElement).style.display = show ? '' : 'none'; });
+    document.querySelectorAll('aside, footer').forEach(panel => { (panel as HTMLElement).style.display = show ? '' : 'none'; });
     window.dispatchEvent(new Event('resize'));
   },
   /**
@@ -1155,6 +1239,19 @@ Object.assign(window, { godboxArchitectureQa: {
     const nz = face.normalZ * Math.cos(swing) + face.tangentZ * Math.sin(swing);
     camera.position.set(controls.target.x + nx * span * distance, 0.11 * WORLD_SCALE + (controls.target.y - 0.11 * WORLD_SCALE) * 0.55,
       controls.target.z + nz * span * distance);
+    camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
+  },
+  streetEye: () => {
+    const instance = instances.find(i => i.root.userData['streetPlot']?.accessPoint && i.archetype === 'house');
+    if (!instance) return;
+    const plan = instance.root.userData['facadePlan'], face = plan?.elevations[0], door = face?.openings.find((o: {kind:string}) => o.kind === 'door');
+    if (!face || !door) return;
+    instance.root.updateMatrixWorld(true);
+    const entry = instance.root.localToWorld(new THREE.Vector3(face.originX + face.tangentX * door.u, plan.floor, face.originZ + face.tangentZ * door.u));
+    const plot = instance.root.userData['streetPlot'], scale = instance.root.userData['streetScale'];
+    const eye = .11 * scale;
+    controls.target.set(entry.x, eye, entry.z);
+    camera.position.set(plot.accessPoint.x * scale, eye, plot.accessPoint.z * scale);
     camera.lookAt(controls.target); controls.update(); renderer.render(scene, camera);
   },
   /**
@@ -1199,7 +1296,7 @@ Object.assign(window, { godboxArchitectureQa: {
     camera.position.set(span * 0.5, span * 0.8, span); controls.update();
   },
   benchmark: (enabled: boolean, count = 90) => {
-    assetBuilder.facadeTextures.setEnabled(enabled);
+    assetBuilder.facadeTextures.setEnabled(enabled, stageRoot);
     const draw = () => {
       const gl = renderer.getContext(); const samples: number[] = [];
       for (let i = 0; i < count + 15; i++) {

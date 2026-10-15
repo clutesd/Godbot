@@ -250,10 +250,41 @@ function sweepRouting(): SweepResult {
     }
   }
 
-  // Prime movers are selected by EnergySystem, not inferred from a fuel-yard response.
+  // Prime movers are selected by EnergySystem, not inferred from a fuel-yard response. The site a
+  // machine serves (energy yard, grain store, water works) and the fabric it was paid for in are
+  // what the simulation records, so those are what is swept.
+  const moverSites: readonly { need: SettlementNeed; form: StructureForm }[] = [
+    { need: 'energy', form: 'workshop' }, { need: 'food', form: 'store' }, { need: 'water', form: 'store' },
+  ];
   for (const energyKind of ['waterwheel', 'windmill'] as const) {
-    const decision = routeArchetype({ role: 'workshop', period: 'medieval', energyKind });
-    record({ role: 'workshop', need: 'energy', form: 'workshop', waterfrontOnly: energyKind === 'waterwheel' }, decision.archetype);
+    for (const site of moverSites) {
+      for (const period of ARCHITECTURAL_PERIODS) {
+        for (const material of ['timber', 'masonry'] as const) {
+          const decision = routeArchetype({ role: 'workshop', period, energyKind, need: site.need, material });
+          record({ role: 'workshop', need: site.need, form: site.form, waterfrontOnly: energyKind === 'waterwheel' }, decision.archetype);
+        }
+      }
+    }
+  }
+
+  // Recorded response facts routing reads: hand-milled grain on a food store, perimeter defence
+  // on a security tower, and the wood-processing facility's tier on a manufacturing body.
+  const recorded: readonly { need: SettlementNeed; form: StructureForm; reasons?: string[]; facilityFamily?: string; facilityTier?: number }[] = [
+    { need: 'food', form: 'store', reasons: ['hand-milled-grain'] },
+    { need: 'security', form: 'tower', reasons: ['perimeter-defence'] },
+    ...[1, 2, 3].flatMap(facilityTier => (['workshop', 'works'] as const).map(form => ({ need: 'manufacturing' as const, form, facilityFamily: 'wood', facilityTier }))),
+  ];
+  for (const fact of recorded) {
+    for (const level of [1, 2, 3]) {
+      const role = developmentBuildingRole({ need: fact.need, form: fact.form, level } as DevelopmentResponse);
+      for (const period of ARCHITECTURAL_PERIODS) {
+        for (const seed of SWEEP_SEEDS) {
+          const decision = routeArchetype({ role, period, need: fact.need, form: fact.form, level, seed,
+            reasons: fact.reasons, facilityFamily: fact.facilityFamily, facilityTier: fact.facilityTier });
+          record({ role, need: fact.need, form: fact.form, waterfrontOnly: false }, decision.archetype);
+        }
+      }
+    }
   }
   return { routes, roleDivergences };
 }

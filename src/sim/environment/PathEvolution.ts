@@ -68,6 +68,48 @@ export function strongestMovementPathNeighbour(world: WorldState, cellIndex: num
   return bestIndex;
 }
 
+const movementConnections = new WeakMap<WorldState, { signature: number; edges: readonly (readonly [number, number])[] }>();
+/** Connected read-only presentation survey of persisted cell wear. The strongest links are
+ * retained; only neighbouring worn components are joined, so equal-strength plateaus cannot
+ * fragment a travelled lane. No semantic street, paving, or simulation modification is granted. */
+export function movementPathConnections(world: WorldState): readonly (readonly [number, number])[] {
+  let signature = 2166136261;
+  const active: number[] = [];
+  for (let i = 0; i < world.cells.length; i++) {
+    const cell = world.cells[i]!;
+    if (cell.water || movementPathStage(cell) === 'none') continue;
+    signature = Math.imul(signature ^ i, 16777619);
+    signature = Math.imul(signature ^ Math.round(movementPathStrength(cell) * 32), 16777619);
+    const flooded = (world.weather?.cells[i]?.floodDepth ?? 0) > .08;
+    signature = Math.imul(signature ^ (flooded ? 1 : 0), 16777619);
+    if (!flooded) active.push(i);
+  }
+  const cached = movementConnections.get(world);
+  if (cached?.signature === signature) return cached.edges;
+  const dry = new Set(active), parents = new Map(active.map(i => [i, i])), edges: [number, number][] = [], seen = new Set<string>();
+  const root = (i: number): number => { let r = i; while (parents.get(r) !== r) r = parents.get(r)!;
+    while (i !== r) { const next = parents.get(i)!; parents.set(i, r); i = next; } return r; };
+  const add = (a: number, b: number) => {
+    const id = a < b ? `${a}:${b}` : `${b}:${a}`;
+    if (seen.has(id)) return; seen.add(id); edges.push([a, b]); parents.set(root(a), root(b));
+  };
+  for (const i of active) { const j = strongestMovementPathNeighbour(world, i); if (j !== undefined && dry.has(j)) add(i, j); }
+  const candidates: { a: number; b: number; cost: number }[] = [];
+  for (const i of active) {
+    const cell = world.cells[i]!;
+    for (const [dx, dz] of [[1, 0], [0, 1], [1, 1], [-1, 1]] as const) {
+      const x = cell.x + dx, z = cell.z + dz;
+      if (x < 0 || z < 0 || x >= world.size || z >= world.size) continue;
+      const j = z * world.size + x;
+      if (!dry.has(j) || root(i) === root(j)) continue;
+      candidates.push({ a: i, b: j, cost: Math.hypot(dx, dz) / (1 + Math.min(movementPathStrength(cell), movementPathStrength(world.cells[j]!)) * .1) });
+    }
+  }
+  candidates.sort((a, b) => a.cost - b.cost || a.a - b.a || a.b - b.b);
+  for (const pair of candidates) if (root(pair.a) !== root(pair.b)) add(pair.a, pair.b);
+  movementConnections.set(world, { signature, edges }); return edges;
+}
+
 function ownerFor(state: SimulationState, mark: LandModification): Settlement | undefined {
   if (!mark.ownerId) return undefined;
   return state.settlements.find(settlement => settlement.id === mark.ownerId && settlement.alive);

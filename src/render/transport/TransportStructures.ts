@@ -2,6 +2,8 @@ import { AssetBuilder } from '../assets/AssetBuilder';
 import { productionBuildingShell } from '../assets/ProductionBuildingShell';
 import * as THREE from 'three';
 import type { TransportSegment } from '../../sim/transport/types';
+import { archetypeStageFor } from '../architecture/BuildingArchetype';
+import type { ArchitecturalPeriod } from '../architecture/ArchitecturalPeriod';
 
 export interface DockStructureMaterials {
   timber: THREE.Material;
@@ -317,6 +319,13 @@ export function createDockStructure(options: DockStructureOptions): THREE.Group 
   return group;
 }
 
+/** The bridge lineage stage each spent span material represents. */
+const BRIDGE_PERIOD: Record<'timber' | 'masonry' | 'metal', ArchitecturalPeriod> = {
+  timber: 'bronzeIron',
+  masonry: 'classical',
+  metal: 'industrial',
+};
+
 function transportMaterialStyle(segment: TransportSegment): 'timber' | 'masonry' | 'metal' {
   const spent = segment.materialSpent ?? {};
   const metal = (spent.steel ?? 0) + (spent.iron ?? 0) + (spent.bronze ?? 0);
@@ -347,6 +356,12 @@ export function createBridgeStructure(options: BridgeStructureOptions): THREE.Gr
   const structuralMaterial = style === 'metal' ? metal : style === 'masonry' ? stone : timber;
   group.name = 'bridge-structure';
   group.userData['bridgeStyle'] = style;
+  // The production bridge *is* the bridge archetype: TransportationSystem built it, this draws it,
+  // and the material it was paid for in selects the lineage stage it presents.
+  const period = BRIDGE_PERIOD[style];
+  group.userData['architectureArchetype'] = 'bridge';
+  group.userData['architecturePeriod'] = period;
+  group.userData['architectureStage'] = archetypeStageFor('bridge', period)?.stage.name;
   group.userData['segmentId'] = segment.id;
   if (segment.points.length < 2) return group;
 

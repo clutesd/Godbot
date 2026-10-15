@@ -142,6 +142,36 @@ export const PERIOD_DRIVE: Record<ArchitecturalPeriod, { era: Era; level: number
   contemporary: { era: 'advanced', level: 3 },
 };
 
+/** Every capability id the period table reads; the simulation records exactly these on a response. */
+export const PERIOD_EVIDENCE_CAPABILITIES: readonly string[] = Object.keys(CAPABILITY_PERIOD_FLOOR);
+
+/** The lowest presentation era whose band can express each period. */
+const PERIOD_ERA: Record<ArchitecturalPeriod, Era> = {
+  neolithic: 'early',
+  bronzeIron: 'early',
+  classical: 'village',
+  medieval: 'preIndustrial',
+  earlyModern: 'preIndustrial',
+  industrial: 'industrial',
+  modern: 'advanced',
+  contemporary: 'advanced',
+};
+
+/**
+ * The presentation era the builders' most advanced practised technique can express, if any.
+ *
+ * Development level says how much was built; this says with what. A level-1 house raised by a
+ * town practising standardized parts is an industrial worker's house, not a neolithic hut.
+ */
+export function technologyEra(capabilities: readonly string[]): Era | undefined {
+  let rank = -1;
+  for (const capability of capabilities) {
+    const evidenced = CAPABILITY_PERIOD_FLOOR[capability];
+    if (evidenced !== undefined) rank = Math.max(rank, PERIOD_RANK[evidenced]);
+  }
+  return rank < 0 ? undefined : PERIOD_ERA[periodFromRank(rank)];
+}
+
 export interface ArchitecturalPeriodContext {
   /** Authoritative presentation era. Always clamps the result. */
   era: Era;

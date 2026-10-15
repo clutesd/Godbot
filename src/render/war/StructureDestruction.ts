@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { StructurePlot } from '../../sim/types';
 import { stableHash } from '../../sim/prng';
+import { applyStructuralDeterioration } from '../architecture/StructuralDeterioration';
 
 /** The footprint and rubble derive from the same plot as the damaged building. */
 export function createStructureRuin(plot: StructurePlot, ground: number): THREE.Group {
@@ -33,7 +34,7 @@ export function createStructureRuin(plot: StructurePlot, ground: number): THREE.
   return group;
 }
 
-interface Tracked { plot: StructurePlot; shell: THREE.Object3D; ruins?: THREE.Group; baseY: number; baseScale: THREE.Vector3; baseTilt: number }
+interface Tracked { plot: StructurePlot; shell: THREE.Object3D; ruins?: THREE.Group; baseY: number; baseScale: THREE.Vector3; baseTilt: number; damaged?: boolean }
 /** Holds each original shell until its recorded hit, then settles it into its own rubble. */
 export class StructureDestruction {
   private readonly tracked = new Map<string, Tracked>();
@@ -64,13 +65,20 @@ export class StructureDestruction {
       const ease = collapse * collapse * (3 - 2 * collapse);
       shell.visible = plot.condition > 0 || collapse < 1;
       if (ruins) ruins.visible = age >= 0;
+      shell.scale.copy(item.baseScale);
+      shell.rotation.z = item.baseTilt;
+      shell.position.y = item.baseY;
+      if (plot.condition > 0 && !fact.vaporized) {
+        // Struck but standing: the building keeps its size and shows where it was hit.
+        if (age >= 0 && !item.damaged) { applyStructuralDeterioration(shell, plot.condition, `${plot.id}:${fact.eventId}`); item.damaged = true; }
+        continue;
+      }
+      // Brought down: the collapse settles the shell into its rubble, then the shell is gone.
       const before = fact.beforeCondition;
       const condition = THREE.MathUtils.lerp(before, plot.condition, ease);
-      shell.scale.copy(item.baseScale);
       shell.scale.y *= fact.vaporized ? 1 - ease : 0.12 + condition * 0.88;
       if (fact.vaporized) { shell.scale.x *= 1 - ease; shell.scale.z *= 1 - ease; }
       shell.rotation.z = item.baseTilt + (1 - condition) * 0.12;
-      shell.position.y = item.baseY;
     }
     if (this.started.size > 256) {
       const active = new Set([...this.tracked.values()].map(t => t.plot.destruction?.eventId));

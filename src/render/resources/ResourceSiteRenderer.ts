@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { movementStreetGeometry, recordedStreetEdges, MOVEMENT_STAGE_RANK } from '../settlement/MovementStreetGeometry';
 import { roadSurfaceMaterial } from '../transport/RoadSurfaceMaterial';
 import type { SimulationState, WorldState } from '../../sim/types';
 import { ResourceFlowRenderer } from './ResourceFlowRenderer';
@@ -10,23 +11,8 @@ import { resourceVisualUnit } from '../../sim/resources/ResourceWorkPresentation
 import { MAX_ACTIVE_WORK_SITES, ResourceWorkScene, type ResourceWorkSite } from './ResourceWorkScene';
 import { resourceBundleGeometry, resourceLogGeometry } from './ResourceWorkGeometry';
 import { mineralAerialSignature, mineralVisualProfile, type MineralGeometryKind } from './MineralPresentation';
-import { strongestMovementPathNeighbour, movementPathStage, movementPathStrength, movementPathHalfWidth, type MovementPathStage } from '../../sim/environment/PathEvolution';
+import { movementPathStage, movementPathStrength, movementPathHalfWidth, type MovementPathStage } from '../../sim/environment/PathEvolution';
 
-const PATH_COLOURS: Record<Exclude<MovementPathStage, 'none'>, THREE.Color> = {
-  'desire-path': new THREE.Color('#79634e'),
-  footpath: new THREE.Color('#68513e'),
-  'packed-track': new THREE.Color('#574535'),
-  'cart-road': new THREE.Color('#554936'),
-  'engineered-road': new THREE.Color('#66615a'),
-};
-const STAGE_RANK: Record<MovementPathStage, number> = {
-  none: 0,
-  'desire-path': 1,
-  footpath: 2,
-  'packed-track': 3,
-  'cart-road': 4,
-  'engineered-road': 5,
-};
 const SCAR_KIND_RANK = { farmland: 1, logging: 2, quarry: 3, mine: 4, industry: 5, ruin: 6 } as const;
 const HASH_OFFSET = 2166136261;
 const HASH_PRIME = 16777619;
@@ -410,7 +396,8 @@ export class ResourceSiteRenderer {
       if (stage === 'none' || cell.water) continue;
       const strength = movementPathStrength(cell);
       hash = mixHash(hash, cellIndex + 1);
-      hash = mixHash(hash, STAGE_RANK[stage]);
+      hash = mixHash(hash, (this.world.weather?.cells[cellIndex]?.floodDepth ?? 0) > .08 ? 1 : 0);
+      hash = mixHash(hash, MOVEMENT_STAGE_RANK[stage]);
       // Path wear accumulates in tiny per-person increments. Rebuild only when that wear produces a
       // visible width/ranking change; stage promotions remain immediate because stage is hashed too.
       hash = mixHash(hash, Math.round(strength * 32));
@@ -972,75 +959,15 @@ export class ResourceSiteRenderer {
   }
 
   private rebuildMovementPaths(): void {
-    const positions: number[] = [];
-    const colours: number[] = [];
-    const indices: number[] = [];
-    const roadUV: number[] = [];
-    const emitted = new Set<string>();
+    const edges = recordedStreetEdges(this.world);
+    const geometry = movementStreetGeometry(edges, (x, z) => this.surface.heightAt(x, z));
     const counts: Record<MovementPathStage, number> = { none: 0, 'desire-path': 0, footpath: 0, 'packed-track': 0, 'cart-road': 0, 'engineered-road': 0 };
-
-    for (let cellIndex = 0; cellIndex < this.world.cells.length; cellIndex += 1) {
-      const cell = this.world.cells[cellIndex]!;
-      const stageA = movementPathStage(cell);
-      if (cell.water || stageA === 'none') continue;
-      const neighbourIndex = this.strongestPathNeighbour(cellIndex);
-      if (neighbourIndex === undefined) continue;
-      const neighbour = this.world.cells[neighbourIndex]!;
-      const stageB = movementPathStage(neighbour);
-      if (stageB === 'none') continue;
-      const edgeKey = cellIndex < neighbourIndex ? `${cellIndex}:${neighbourIndex}` : `${neighbourIndex}:${cellIndex}`;
-      if (emitted.has(edgeKey)) continue;
-      emitted.add(edgeKey);
-
-      const vx = neighbour.worldX - cell.worldX;
-      const vz = neighbour.worldZ - cell.worldZ;
-      const length = Math.hypot(vx, vz);
-      if (length < 0.001) continue;
-      const sideX = -vz / length;
-      const sideZ = vx / length;
-      const widthA = this.pathHalfWidth(stageA, movementPathStrength(cell));
-      const widthB = this.pathHalfWidth(stageB, movementPathStrength(neighbour));
-      const base = positions.length / 3;
-      // Sample both sides and the crown so terrain changes cannot turn paths into slabs.
-      const steps = Math.max(1, Math.ceil(length / 0.16));
-      const colourA = PATH_COLOURS[stageA];
-      const colourB = PATH_COLOURS[stageB];
-      for (let step = 0; step <= steps; step++) {
-        const t = step / steps;
-        const halfWidth = THREE.MathUtils.lerp(widthA, widthB, t);
-        for (let lane = 0; lane < 5; lane++) {
-          const u = lane / 4;
-          const lateral = (u * 2 - 1) * halfWidth;
-          const worldX = cell.worldX + vx * t + sideX * lateral;
-          const worldZ = cell.worldZ + vz * t + sideZ * lateral;
-          positions.push(worldX, this.surface.heightAt(worldX, worldZ) + 0.018, worldZ);
-          roadUV.push(u, length * t, THREE.MathUtils.lerp(STAGE_RANK[stageA], STAGE_RANK[stageB], t));
-          colours.push(THREE.MathUtils.lerp(colourA.r, colourB.r, t),
-            THREE.MathUtils.lerp(colourA.g, colourB.g, t), THREE.MathUtils.lerp(colourA.b, colourB.b, t));
-          if (step > 0 && lane < 4) {
-            const n = base + step * 5 + lane;
-            indices.push(n - 5, n - 4, n, n, n - 4, n + 1);
-          }
-        }
-      }
-      counts[STAGE_RANK[stageA] >= STAGE_RANK[stageB] ? stageA : stageB] += 1;
-    }
-
-    const geometry = this.footpaths.geometry;
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
-    geometry.setAttribute('roadUV', new THREE.Float32BufferAttribute(roadUV, 3));
-    geometry.setIndex(indices);
-    geometry.deleteAttribute('normal');
-    if (positions.length > 0) geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
+    for (const edge of edges) counts[MOVEMENT_STAGE_RANK[edge.from.stage] >= MOVEMENT_STAGE_RANK[edge.to.stage] ? edge.from.stage : edge.to.stage]++;
+    this.footpaths.geometry.dispose();
+    this.footpaths.geometry = geometry;
     this.footpaths.userData['pathStageCounts'] = counts;
     this.footpaths.userData['circulationAuthority'] = 'recorded-movement-wear';
     this.footpaths.userData['wideShotReadable'] = true;
-  }
-
-  private strongestPathNeighbour(cellIndex: number): number | undefined {
-    return strongestMovementPathNeighbour(this.world, cellIndex);
   }
 
   private pathHalfWidth(stage: Exclude<MovementPathStage, 'none'>, strength: number): number {

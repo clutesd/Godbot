@@ -10,9 +10,10 @@
  */
 
 import type { Era } from '../materials/MaterialPalette';
+import { technologyEra } from '../architecture/ArchitecturalPeriod';
 import type { CultureStyleProfile, MotifFamily, PatternStyle } from '../style/CultureStyleProfile';
 import { SeededRandom } from '../../sim/prng';
-import type { DevelopmentResponse, StructureMaterial } from '../../sim/development/types';
+import type { DevelopmentResponse, StructureHistoryEntry, StructureMaterial } from '../../sim/development/types';
 import type { BuildingSpec } from '../architecture/BuildingSpec';
 import type { Biome } from '../../sim/types';
 import type { SettlementArchitecturalIdentity } from '../../sim/development/SettlementIdentity';
@@ -846,7 +847,57 @@ export function developmentBuildingRole(response: DevelopmentResponse): Building
   }
 }
 
-/** Legacy era names are only palette/detail presets for a completed local response. */
+/**
+ * The response as its standing walls present it. Use is the simulation's current response; the
+ * shell is whatever larger fabric adaptive reuse kept (`StructureDevelopment.fabric`), so a hall
+ * repurposed as housing still looks like, and is as large as, the hall.
+ */
+export function developmentFabric<T extends DevelopmentResponse>(response: T): T {
+  const fabric = (response as T & { fabric?: Partial<DevelopmentResponse> }).fabric;
+  return fabric ? { ...response, ...fabric } : response;
+}
+
+/**
+ * The generation this plot's current fabric replaced, when the current fabric is an in-place
+ * upgrade of it. Resolved from the recorded history entry, so the renderer can build the new
+ * generation out from the old one's envelope instead of inside it. A ruin in between means the old
+ * fabric was gone before the new one rose, so there is nothing to grow from.
+ */
+export function priorFabricGeneration(response: DevelopmentResponse): DevelopmentResponse | undefined {
+  const development = response as DevelopmentResponse & { origin?: StructureHistoryEntry; history?: readonly StructureHistoryEntry[]; fabric?: unknown };
+  if (!development.origin || !development.history?.length || development.fabric) return undefined;
+  const entries = [development.origin, ...development.history];
+  const builds = new Set<StructureHistoryEntry['action']>(['founded', 'expanded', 'upgraded', 'repurposed', 'reused']);
+  let latest = entries.length - 1;
+  while (latest >= 0 && !builds.has(entries[latest]!.action)) latest--;
+  const current = entries[latest];
+  if (!current || (current.action !== 'expanded' && current.action !== 'upgraded')) return undefined;
+  for (let i = latest - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    if (entry.action === 'ruined') return undefined;
+    if (!builds.has(entry.action)) continue;
+    // The earlier generation keeps the history that led to it, so its own predecessor resolves too.
+    return { ...response, need: entry.need, form: entry.form ?? response.form, level: entry.level ?? Math.max(1, response.level - 1),
+      material: entry.material ?? response.material, capabilities: [], technology: entry.technology ?? [], reasons: [...entry.reasons],
+      origin: development.origin, history: development.history.slice(0, i), peakLevel: undefined } as DevelopmentResponse;
+  }
+  return undefined;
+}
+
+const PRESENTATION_ERA_ORDER: readonly Era[] = ['primitive', 'early', 'village', 'preIndustrial', 'industrial', 'advanced'];
+
+/**
+ * The era a completed local response is presented in.
+ *
+ * Level and form give a floor: a works is industrial plant, a level-3 response a mature one. The
+ * techniques its builders practised when it was chosen can raise that, never lower it, so a later
+ * generation's modest building is drawn in its own period rather than as the settlement's first
+ * hut. The response carries those techniques, so the era is frozen with the building and does not
+ * change as the town around it learns more or forgets.
+ */
 export function developmentPresentationEra(response: DevelopmentResponse): Era {
-  return response.form === 'works' ? 'industrial' : response.level === 3 ? 'preIndustrial' : response.level === 2 ? 'village' : 'early';
+  const floor: Era = response.form === 'works' ? 'industrial' : response.level === 3 ? 'preIndustrial' : response.level === 2 ? 'village' : 'early';
+  const evidenced = technologyEra([...(response.capabilities ?? []), ...(response.technology ?? [])]);
+  if (!evidenced) return floor;
+  return PRESENTATION_ERA_ORDER.indexOf(evidenced) > PRESENTATION_ERA_ORDER.indexOf(floor) ? evidenced : floor;
 }

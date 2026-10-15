@@ -2,6 +2,9 @@ import type { Vec2 } from '../types';
 
 export interface PedestrianFootprint {
   key?: string;
+  /** Explicit rendered room walls and door approach nodes. Absent on simulation/legacy footprints. */
+  physicalWalls?: readonly PedestrianFootprint[];
+  passages?: readonly Vec2[];
   worldX: number; worldZ: number; width: number; depth: number; rotationY?: number;
 }
 
@@ -92,6 +95,7 @@ export class StructureNavigation {
   clear(a: Vec2, b = a, interior?: PedestrianFootprint & { key: string; doorWidth: number }): boolean {
     if (this.obstructed(a, b, interior?.key)) return false;
     if (!interior) return true;
+    if (interior.physicalWalls) return interior.physicalWalls.every(wall => !intersects(a,b,wall,.06));
     const { width: w, depth: d, doorWidth: door } = interior;
     const walls = [[-w / 2, 0, 0.04, d], [w / 2, 0, 0.04, d], [0, -d / 2, w, 0.04],
       [-(w + door) / 4, d / 2, (w - door) / 2, 0.04], [(w + door) / 4, d / 2, (w - door) / 2, 0.04]];
@@ -109,6 +113,7 @@ export class StructureNavigation {
     if (structures.length > 48) return [];
     const nodes: Vec2[] = [a, b];
     if (interior) {
+      for (const point of interior.passages ?? []) if (safe(point,point)) nodes.push(point);
       const c = Math.cos(interior.rotationY ?? 0), sn = Math.sin(interior.rotationY ?? 0);
       for (const z of [interior.depth / 2 + 0.25, interior.depth / 2 - 0.2, 0]) {
         const point = { x: interior.worldX + z * sn, z: interior.worldZ + z * c };

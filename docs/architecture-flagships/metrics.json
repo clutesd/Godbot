@@ -1,0 +1,189 @@
+[
+  {
+    "id": "court-house",
+    "period": "classical",
+    "levels": [
+      {
+        "vertices": 6956,
+        "meshes": 6,
+        "materials": [
+          "arch:mud-brick",
+          "arch:rough-hewn-timber",
+          "arch:fieldstone",
+          "arch:finished-wood",
+          "arch:adobe",
+          ""
+        ]
+      },
+      {
+        "vertices": 1176,
+        "meshes": 4,
+        "materials": [
+          "arch:mud-brick",
+          "arch:rough-hewn-timber",
+          "arch:fieldstone",
+          "arch:adobe"
+        ]
+      },
+      {
+        "vertices": 24,
+        "meshes": 3,
+        "materials": [
+          "arch:mud-brick",
+          "arch:adobe"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "town-house",
+    "period": "medieval",
+    "levels": [
+      {
+        "vertices": 9358,
+        "meshes": 6,
+        "materials": [
+          "arch:wattle-and-daub",
+          "arch:heavy-timber",
+          "arch:rubble-masonry",
+          "arch:finished-wood",
+          "arch:wood-shingle",
+          ""
+        ]
+      },
+      {
+        "vertices": 364,
+        "meshes": 4,
+        "materials": [
+          "arch:wattle-and-daub",
+          "arch:heavy-timber",
+          "arch:rubble-masonry",
+          "arch:wood-shingle"
+        ]
+      },
+      {
+        "vertices": 34,
+        "meshes": 2,
+        "materials": [
+          "arch:wattle-and-daub",
+          "arch:wood-shingle"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "threshing-barn",
+    "period": "medieval",
+    "levels": [
+      {
+        "vertices": 4856,
+        "meshes": 6,
+        "materials": [
+          "arch:wattle-and-daub",
+          "arch:heavy-timber",
+          "arch:rubble-masonry",
+          "arch:finished-wood",
+          "",
+          "arch:wood-shingle"
+        ]
+      },
+      {
+        "vertices": 448,
+        "meshes": 4,
+        "materials": [
+          "arch:wattle-and-daub",
+          "arch:heavy-timber",
+          "arch:rubble-masonry",
+          "arch:wood-shingle"
+        ]
+      },
+      {
+        "vertices": 44,
+        "meshes": 3,
+        "materials": [
+          "arch:wattle-and-daub",
+          "arch:wood-shingle"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "stable-yard",
+    "period": "earlyModern",
+    "levels": [
+      {
+        "vertices": 5900,
+        "meshes": 3,
+        "materials": [
+          "arch:dressed-stone",
+          "arch:slate",
+          "arch:heavy-timber"
+        ]
+      },
+      {
+        "vertices": 750,
+        "meshes": 2,
+        "materials": [
+          "arch:dressed-stone",
+          "arch:slate"
+        ]
+      },
+      {
+        "vertices": 30,
+        "meshes": 3,
+        "materials": [
+          "arch:dressed-stone",
+          "arch:slate"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "grain-store",
+    "period": "industrial",
+    "levels": [
+      {
+        "vertices": 6244,
+        "meshes": 3,
+        "materials": [
+          "arch:fired-brick",
+          "arch:clay-tile",
+          "arch:heavy-timber"
+        ]
+      },
+      {
+        "vertices": 232,
+        "meshes": 2,
+        "materials": [
+          "arch:fired-brick",
+          "arch:clay-tile"
+        ]
+      },
+      {
+        "vertices": 34,
+        "meshes": 2,
+        "materials": [
+          "arch:fired-brick",
+          "arch:clay-tile"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "smock-mill",
+    "period": "earlyModern",
+    "levels": [
+      {
+        "vertices": 26476,
+        "meshes": 10,
+        "materials": [
+          "",
+          "arch:rubble-masonry",
+          "arch:heavy-timber",
+          "arch:rough-hewn-timber",
+          "arch:wood-shingle"
+        ]
+      }
+    ]
+  }
+]

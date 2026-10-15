@@ -30,7 +30,7 @@ describe('production hybrid workshop', () => {
       expect(plan.spec.archetype).toBe('workshop');
       expect(plan.elevations.map(e => e.name)).toEqual(['front', 'rear', 'right', 'left']);
       expect(asset.mesh.userData['facadeStatus']).toBe('hybrid');
-      expect(plan.elevations.flatMap(e => e.openings).filter(o => o.kind === 'door')).toHaveLength(1);
+      expect(plan.elevations.flatMap(e => e.openings).filter(o => o.kind === 'door')).toHaveLength(2);
       for (const face of plan.elevations) for (const opening of face.openings) {
         expect(Math.abs(opening.u) + opening.w / 2).toBeLessThan(face.length / 2);
         expect(opening.y + opening.h / 2).toBeLessThanOrEqual(plan.wallTop - plan.floor);
@@ -94,10 +94,67 @@ describe('production hybrid workshop', () => {
       expect(shader.vertexShader).toContain('aSurfaceDetail');
       expect(shader.fragmentShader).toContain('gbAmbientAccess');
       expect(shader.fragmentShader).toContain('gbFacadeAtlas');
+      expect(shader.fragmentShader).toContain('gl_FrontFacing ? 1.0 : 0.0');
       expect(shader.fragmentShader).toContain('gbFacadeRelief');
       expect(shader.fragmentShader).toContain('gbFacadeSurface');
       expect(shader.fragmentShader.match(/float gbHeight =/g)).toHaveLength(1);
     } finally { builder.dispose(); }
+  });
+
+  it('removes and restores SVG materials on scene clones, including clones created while disabled', () => {
+    const builder = new AssetBuilder('svg-toggle');
+    const asset = builder.getAsset('building', config());
+    const scene = asset.mesh.clone(true), painted = meshes(scene).filter(m => m.geometry.hasAttribute('aFacadeUv'));
+    expect(painted.length).toBeGreaterThan(0);
+    const decorated = painted.map(m => m.material), geometry = painted.map(m => m.geometry.uuid);
+    builder.facadeTextures.setEnabled(false, scene);
+    expect(painted.every(m => !(m.material as THREE.Material).name.includes(':svg-facade'))).toBe(true);
+    builder.facadeTextures.setEnabled(true, scene);
+    expect(painted.map(m => m.material)).toEqual(decorated);
+    expect(painted.map(m => m.geometry.uuid)).toEqual(geometry);
+    builder.facadeTextures.setEnabled(false);
+    const offAsset = builder.getAsset('building', config(7, 'created-off'));
+    const offClone = offAsset.mesh.clone(true);
+    builder.facadeTextures.syncMaterials(offClone);
+    const offPainted = meshes(offClone).filter(m => m.geometry.hasAttribute('aFacadeUv'));
+    expect(offPainted.every(m => !(m.material as THREE.Material).name.includes(':svg-facade'))).toBe(true);
+    builder.facadeTextures.setEnabled(true, offClone);
+    expect(offPainted.every(m => (m.material as THREE.Material).name.includes(':svg-facade'))).toBe(true);
+    builder.dispose();
+  });
+
+  it('keeps the working entrance clear at ankle and waist height, with real bench windows', () => {
+    const builder = new AssetBuilder('workshop-access'), asset = builder.getAsset('building', config());
+    const plan = asset.mesh.userData['facadePlan'] as FacadePlan;
+    expect(plan.spec.architecture?.plan).toBe('work-hall');
+    const full = asset.mesh instanceof THREE.LOD ? asset.mesh.levels[0]!.object : asset.mesh;
+    const solids = meshes(full).filter(m => m.name !== 'glass' && m.userData['surface'] !== 'shadow');
+    asset.mesh.updateMatrixWorld(true);
+    const face = plan.elevations[0]!, door = face.openings.find(o => o.kind === 'door')!;
+    for (const h of [.12, .5]) {
+      const ray = new THREE.Raycaster(new THREE.Vector3(door.u, plan.floor + plan.storeyHeight * h, face.originZ + .02), new THREE.Vector3(0, 0, -1), 0, plan.spec.depth * .45);
+      expect(ray.intersectObjects(solids).length).toBe(0);
+    }
+    for (const face of plan.elevations) for (const opening of face.openings.filter(o => o.purpose === 'daylight')) {
+      const ray = new THREE.Raycaster(new THREE.Vector3(face.originX + face.tangentX * opening.u + face.normalX * .005,
+        plan.floor + opening.y, face.originZ + face.tangentZ * opening.u + face.normalZ * .005), new THREE.Vector3(-face.normalX, 0, -face.normalZ), 0, plan.wallThickness + .01);
+      const hits = ray.intersectObjects(solids);
+      expect(hits.length, face.name + ' ' + JSON.stringify(hits.map(h => ({name:h.object.name,distance:h.distance,surface:h.object.userData['surface']})))).toBe(0);
+    }
+    builder.dispose();
+  });
+
+  it('keeps exterior crates, counters and fitted wood clear of projected facade artwork', () => {
+    const builder = new AssetBuilder('facade-fitting-mask'), root = builder.getAsset('building', config()).mesh;
+    for (const mesh of meshes(root)) {
+      const uv = mesh.geometry.getAttribute('aFacadeUv'), index = mesh.geometry.index;
+      if (!uv || !index || ['glass','curtain-glass'].includes(mesh.name)) continue;
+      for (const piece of mesh.geometry.userData['assemblyPieces'] ?? []) {
+        if ([BUILD_STAGE.WALLS, BUILD_STAGE.FRAME].includes(piece.stage)) continue;
+        for (let i = piece.start; i < piece.start + piece.count; i++) expect(uv.getZ(index.getX(i))).toBe(0);
+      }
+    }
+    builder.dispose();
   });
 
   it('projects oriented elevation coordinates and excludes inward and ground faces', () => {
@@ -234,7 +291,7 @@ describe('production hybrid workshop', () => {
           expect(art.albedo).toContain(`data-glazing="${plan.spec.openings.facade}"`);
           expect(art.albedo).toBe(facadeArtwork(plan).albedo);
           expect(art.albedo).not.toMatch(/NaN|Infinity|<script|<image/);
-          const mesh = painted[0]!, material = mesh.material as THREE.MeshStandardMaterial;
+          const mesh = painted.find(m => ['glass', 'curtain-glass'].includes(m.name))!, material = mesh.material as THREE.MeshStandardMaterial;
           const shader = { uniforms: {} as Record<string, { value: unknown }>, vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader };
           material.onBeforeCompile(shader as THREE.WebGLProgramParametersWithUniforms, {} as THREE.WebGLRenderer);
           expect(shader.fragmentShader).toContain('gbGlassFresnel');

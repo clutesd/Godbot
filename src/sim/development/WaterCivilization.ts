@@ -77,7 +77,8 @@ export function advanceSettlementWater(
   const cell = state.world.cells[settlement.cellIndex]!;
   const weather = state.weather.cells[settlement.cellIndex];
   const local = sampleLocalHydrology(state, settlement);
-  const builtService = activeWaterService(settlement);
+  // Water a lifting machine actually raised last month adds to what the built works can hold.
+  const builtService = activeWaterService(settlement) + (settlement.energy?.waterLift?.supplied ?? 0) * 0.6;
   const irrigationKnowledge = practical(settlement, 'irrigation');
   const contagionKnowledge = practical(settlement, 'contagion-patterns');
   const civicCapacity = practical(settlement, 'civic-administration');

@@ -21,7 +21,7 @@
  * `validateStructureCatalogue` checks the declarations against this router's real behaviour.
  */
 
-import type { SettlementNeed, StructureForm } from '../../sim/development/types';
+import type { SettlementNeed, StructureForm, StructureMaterial } from '../../sim/development/types';
 import type { GeneratorKind } from '../../sim/energy/types';
 import type { BuildingRole } from '../assets/BuildingGrammar';
 import { SeededRandom } from '../../sim/prng';
@@ -50,6 +50,13 @@ export interface ArchetypeRoutingContext {
   waterfront?: boolean;
   /** Plot seed, used only to vary between archetypes the state supports equally. */
   seed?: string;
+  /** The response's recorded reasons: perimeter defence, hand-milled grain and the like. */
+  reasons?: readonly string[];
+  /** Processing facility this plot is the body of, when it is one. */
+  facilityFamily?: string;
+  facilityTier?: number;
+  /** Fabric the structure was built of; decides a windmill's subtype. */
+  material?: StructureMaterial;
 }
 
 /**
@@ -153,8 +160,7 @@ export interface RoutingDecision {
  * the spec resolver, which handles it by presenting the archetype's earliest stage.
  */
 export function routeArchetype(context: ArchetypeRoutingContext): RoutingDecision {
-  const chosen = context.energyKind === 'waterwheel' ? 'mill'
-    : context.energyKind === 'windmill' ? 'windmill' : routeByResponse(context);
+  const chosen = primeMover(context) ?? routeByResponse(context);
   const archetype = chosen ?? archetypeForRole(context.role);
   return {
     archetype,
@@ -166,6 +172,38 @@ export function routeArchetype(context: ArchetypeRoutingContext): RoutingDecisio
 /** The archetype alone, for callers that do not need the reasoning. */
 export function archetypeForContext(context: ArchetypeRoutingContext): BuildingArchetype {
   return routeArchetype(context).archetype;
+}
+
+/**
+ * The building around a prime mover EnergySystem actually installed.
+ *
+ * The machine is the simulation's decision; what it is housed in follows from the site it serves
+ * and the fabric it was paid for in. A windmill raised at a water works is lifting water, so it is
+ * a wind pump. A windmill framed in timber once the tower-mill period has begun is a smock mill —
+ * the timber alternative to a masonry tower where stone was not what the site was built of.
+ */
+function primeMover(context: ArchetypeRoutingContext): BuildingArchetype | undefined {
+  if (context.energyKind === 'waterwheel') return 'mill';
+  if (context.energyKind !== 'windmill') return undefined;
+  if (context.need === 'water') return 'wind-pump';
+  if (periodRank(context.period) >= periodRank('earlyModern') && (context.material === 'timber' || context.material === 'earth')) return 'smock-mill';
+  return 'windmill';
+}
+
+/** Is this one of the response's recorded reasons? */
+function because(context: ArchetypeRoutingContext, reason: string): boolean {
+  return context.reasons?.includes(reason) ?? false;
+}
+
+/**
+ * A food store whose settlement grinds its own grain by hand.
+ *
+ * Like the farm's livestock mix, which store houses the quern is presentation variation seeded per
+ * plot; the fact that grain is ground by hand at all is the simulation's.
+ */
+function grainStore(context: ArchetypeRoutingContext): BuildingArchetype {
+  if (!because(context, 'hand-milled-grain')) return 'granary';
+  return new SeededRandom(`${context.seed ?? 'plot'}:grain-store`).float() < 0.4 ? 'hand-mill' : 'granary';
 }
 
 function routeByResponse(context: ArchetypeRoutingContext): BuildingArchetype | undefined {
@@ -188,7 +226,7 @@ function routeByResponse(context: ArchetypeRoutingContext): BuildingArchetype | 
       if (form === 'field') return farmBuilding(context);
       // Bulk vertical storage only once a settlement can build and fill it.
       if (industrial && level >= 3) return 'silo';
-      return 'granary';
+      return level === 1 ? grainStore(context) : 'granary';
 
     case 'trade':
       if (form === 'gathering') return 'market';
@@ -201,6 +239,8 @@ function routeByResponse(context: ArchetypeRoutingContext): BuildingArchetype | 
       return context.waterfront ? 'dock' : 'warehouse';
 
     case 'manufacturing':
+      // A powered sawmill is the wood-processing facility's own body, not a generic works.
+      if (context.facilityFamily === 'wood' && (context.facilityTier ?? 1) >= 2) return 'sawmill';
       return form === 'works' ? 'factory' : 'workshop';
 
     case 'energy':
@@ -222,6 +262,7 @@ function routeByResponse(context: ArchetypeRoutingContext): BuildingArchetype | 
     case 'security':
       // A watch tower is a gatehouse. A guard house or a watch assembly is a building, not a
       // perimeter — routing those to a wall would render a hall as a wall segment.
+      if (form === 'tower' && because(context, 'perimeter-defence')) return 'boundary-wall';
       return form === 'tower' ? 'gatehouse' : 'civic-hall';
 
     case 'memory':

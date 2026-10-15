@@ -352,10 +352,11 @@ describe('structure renderer and performance validation', () => {
       expect(asset.mesh).toBe(first.mesh);
     }
     const stats = builder.getCacheStats();
-    expect(stats.buildingEntries).toBe(1);
-    expect(stats.misses).toBe(1);
+    // The current fabric and its cached prior-generation mass share across all histories.
+    expect(stats.buildingEntries).toBe(2);
+    expect(stats.misses).toBe(2);
     expect(stats.hits).toBe(40);
-    expect(stats.hitRate).toBeGreaterThan(0.97);
+    expect(stats.hitRate).toBeGreaterThan(0.95);
     builder.dispose();
   });
 
@@ -368,7 +369,7 @@ describe('structure renderer and performance validation', () => {
 
     expect(structureVisualHistorySignature(timberOrigin)).not.toBe(structureVisualHistorySignature(earthOrigin));
     expect(second.mesh).not.toBe(first.mesh);
-    expect(builder.getCacheStats().buildingEntries).toBe(2);
+    expect(builder.getCacheStats().buildingEntries).toBe(4);
     builder.dispose();
   });
 

@@ -1,0 +1,67 @@
+{
+  "counts": {
+    "numTotalTestSuites": 607,
+    "numPassedTestSuites": 592,
+    "numFailedTestSuites": 15,
+    "numPendingTestSuites": 0,
+    "numTotalTests": 2077,
+    "numPassedTests": 2053,
+    "numFailedTests": 13,
+    "numPendingTests": 11,
+    "numTodoTests": 0
+  },
+  "failures": [
+    {
+      "file": "arms-demand.test.ts",
+      "name": "causal wooden equipment demand retains scarcity, artisan limits and quality-weighted output"
+    },
+    {
+      "file": "arms-demand.test.ts",
+      "name": "causal wooden equipment demand removes equipment in the real casualty resolver, including the last battle of a war"
+    },
+    {
+      "file": "construction-runtime.test.ts",
+      "name": "paid simulation construction runtime preserves deterministic paid progress and every stock/material payment while linking real economic workers"
+    },
+    {
+      "file": "construction-runtime.test.ts",
+      "name": "paid simulation construction runtime never recasts emergencies, migration, displacement, illness or unrecorded residents as builders"
+    },
+    {
+      "file": "construction-workface-access.test.ts",
+      "name": "human-caused construction through the runtime presentation path connects a real Simulation paid workforce and completed receipt to worker-led canonical assembly"
+    },
+    {
+      "file": "founding-establishment.test.ts",
+      "name": "Arrival to physical establishment guards the first five years of viable seed founding-loop-audit against generation-scale housing delay"
+    },
+    {
+      "file": "founding-establishment.test.ts",
+      "name": "Arrival to physical establishment guards the first five years of viable seed founding-woodland against generation-scale housing delay"
+    },
+    {
+      "file": "founding-establishment.test.ts",
+      "name": "Arrival to physical establishment guards the first five years of viable seed founding-cold-frontier against generation-scale housing delay"
+    },
+    {
+      "file": "functional-architecture.test.ts",
+      "name": "functional production architecture measures distinct roof sections in the production triangles"
+    },
+    {
+      "file": "opening-progression.test.ts",
+      "name": "plays through to month one with blocked routes=none"
+    },
+    {
+      "file": "society.test.ts",
+      "name": "Emergent society grounds persistent trade in surveyed connections and reserves shipping for real ports"
+    },
+    {
+      "file": "stalled-shelter-replanning.test.ts",
+      "name": "material-stalled founding shelter replanning completes a permanent home in the formerly stone-stalled camp founding-woodland"
+    },
+    {
+      "file": "stalled-shelter-replanning.test.ts",
+      "name": "material-stalled founding shelter replanning completes a permanent home in the formerly stone-stalled camp founding-cold-frontier"
+    }
+  ]
+}

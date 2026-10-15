@@ -12,6 +12,8 @@
  */
 
 import * as THREE from 'three';
+import { architecturalMasses, interiorPartitions } from '../architecture/ArchitectureMasses';
+import { emitFunctionalBuilding } from '../architecture/FunctionalBuildings';
 import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
 import { GeometryBuilder, squareRing, type Vec3, type AssemblyPiece } from './GeometryBuilder';
 import { OcclusionField, type OccluderBox } from './OcclusionField';
@@ -619,6 +621,11 @@ function emitStructure(
     return { roofTop, crownTop: roofTop };
   }
 
+  if (grammar.spec?.architecture) {
+    const roofTop = emitFunctionalBuilding(canvas, grammar, surfaces);
+    return { roofTop, crownTop: roofTop };
+  }
+
   emitGroundworks(canvas, grammar, halfWidth, halfDepth);
   emitFrame(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, postSurface);
   emitBody(canvas, grammar, halfWidth, halfDepth, plinthTop, wallTop, wallSurface, postSurface, baseSurface, coreMaterial);
@@ -648,7 +655,7 @@ function emitStructure(
  * need a smaller building in a larger reserved footprint, and both must stay proportionate rather
  * than be squashed, so the shrink is uniform.
  */
-function shrinkGrammar(grammar: BuildingGrammar, targetWidth: number): BuildingGrammar {
+export function shrinkGrammar(grammar: BuildingGrammar, targetWidth: number): BuildingGrammar {
   const shrink = Math.min(1, targetWidth / Math.max(0.2, grammar.width));
   const scaled: BuildingGrammar = { ...grammar };
   scaled.width = grammar.width * shrink;
@@ -721,7 +728,7 @@ function publishFacadePlan(group: THREE.Group, grammar: BuildingGrammar, plinthT
   wallTop: number, roofTop: number, coreMaterial?: StructureMaterial): void {
   if (!grammar.spec) return;
   const roofSurface = roofSurfaceFor(grammar);
-  const inset = grammar.postThickness * 0.45;
+  const inset = grammar.spec.architecture ? 0 : grammar.postThickness * 0.45;
   const roofGeometry: FacadePlan['roof']['geometry'][number][] = [];
   group.traverse(object => {
     if (!(object instanceof THREE.Mesh) || object.userData['surface'] !== roofSurface) return;
@@ -733,8 +740,8 @@ function publishFacadePlan(group: THREE.Group, grammar: BuildingGrammar, plinthT
   const plan: FacadePlan = {
     version: 2, spec: grammar.spec,
     members: facadeMembers(grammar, grammar.width / 2, grammar.depth / 2),
-    beams: frameLayout(grammar, grammar.width / 2, grammar.depth / 2).beamYs.map(y => ({ y, h: grammar.postThickness * 0.85 })),
-    bands: patternBandLevels(grammar, wallTop - plinthTop),
+    beams: grammar.spec.architecture ? (grammar.spec.frameExposure>.45 && ['infilled-frame','clad-frame'].includes(grammar.spec.wallAssembly) && grammar.spec.architecture.composition==='single' ? Array.from({length:grammar.storeys},(_,i)=>({y:(i+1)*grammar.wallHeight-Math.min(grammar.spec!.wallThickness*.6,grammar.wallHeight*.07)*.5,h:Math.min(grammar.spec!.wallThickness*.6,grammar.wallHeight*.07)*.8})) : []) : frameLayout(grammar, grammar.width / 2, grammar.depth / 2).beamYs.map(y => ({ y, h: grammar.postThickness * 0.85 })),
+    bands: grammar.spec.architecture ? [] : patternBandLevels(grammar, wallTop - plinthTop),
     pattern: grammar.pattern, storeyHeight: grammar.wallHeight, storeys: grammar.storeys,
     wallThickness: grammar.wallThickness ?? Math.max(0.035, grammar.postThickness * 1.1), revealDepth: facadeRevealDepth(grammar, coreMaterial),
     elevations: facadeElevations(grammar, (grammar.width - inset) / 2, (grammar.depth - inset) / 2, wallTop - plinthTop),
@@ -743,6 +750,10 @@ function publishFacadePlan(group: THREE.Group, grammar: BuildingGrammar, plinthT
     openingStyle: grammar.openings, postThickness: grammar.postThickness,
   };
   group.userData['facadePlan'] = plan;
+  if (grammar.spec.architecture?.composition && grammar.spec.architecture.composition !== 'single') group.userData['roofedRanges'] = architecturalMasses(grammar).map(m => ({x:m.x,z:m.z,width:m.grammar.width,depth:m.grammar.depth,rotationY:m.yaw}));
+  if (grammar.spec.architecture?.composition && grammar.spec.architecture.composition !== 'single') group.userData['interiorWalls'] = interiorPartitions(grammar);
+  const entry = plan.elevations[0]?.openings.find(o => o.kind === 'door');
+  if (entry) group.userData['entrance'] = { x: plan.elevations[0]!.originX + plan.elevations[0]!.tangentX * entry.u, z: plan.elevations[0]!.originZ + plan.elevations[0]!.tangentZ * entry.u, width: entry.w, height: entry.h, floor: plinthTop };
   group.userData['facadeEligible'] = hybridFacadeEligible(grammar, coreMaterial);
   group.userData['facadeGlazingEligible'] = hybridGlazingEligible(grammar);
 }

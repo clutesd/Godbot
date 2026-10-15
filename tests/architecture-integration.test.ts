@@ -10,6 +10,7 @@ import { resolveBuildingGrammar, type BuildingRole } from '../src/render/assets/
 import { BUILD_STAGE, composeBuilding, type BuildStage } from '../src/render/assets/BuildingComposer';
 import { resolveBuildingSpec, buildingSpecSignature, type BuildingSpec, type BuildingSpecContext } from '../src/render/architecture/BuildingSpec';
 import { applySpecToGrammar } from '../src/render/architecture/SpecGrammarBridge';
+import { functionalElevations } from '../src/render/architecture/FacadePlan';
 import { architecturalMaterial, type ArchitecturalMaterialId } from '../src/render/architecture/MaterialLibrary';
 import type { BuildingArchetype } from '../src/render/architecture/BuildingArchetype';
 import { CONSTRUCTION_STAGE_SEQUENCE } from '../src/render/construction/ConstructionVisualGrammar';
@@ -173,7 +174,7 @@ describe('Spec-driven building pipeline', () => {
     const { group, spec } = compose({ role: 'house', era: 'preIndustrial' });
     const names = materialNames(group);
     // Every mesh is named for the material it is made of, and the wall material must be present.
-    expect(names.has(spec.materials.wall)).toBe(true);
+    expect(names.has(spec.architecture ? spec.materials.infill ?? spec.materials.wall : spec.materials.wall)).toBe(true);
     expect(names.has(spec.materials.roofCovering)).toBe(true);
     for (const name of names) {
       // Anything not an architectural material must be one of the legacy ornament surfaces.
@@ -526,7 +527,7 @@ describe('Resolved architectural glazing', () => {
     // Raycast from outside a rear window: the pane must precede the opaque recess.
     const rearPiece = pieces.find((piece: { min: THREE.Vector3; max: THREE.Vector3 }) => piece.max.z < 0 && piece.max.z - piece.min.z < piece.max.x - piece.min.x);
     expect(rearPiece).toBeDefined();
-    const paneWidth = spec.openings.facade ? grammar.openingWidth! * 0.98
+    const paneWidth = spec.architecture ? functionalElevations(spec, grammar.width/2, grammar.depth/2, grammar.wallHeight*grammar.storeys)[1]!.openings[0]!.w * .96 : spec.openings.facade ? grammar.openingWidth! * 0.98
       : Math.max(0.02, Math.min(grammar.openingWidth!, grammar.width / grammar.bays * 0.8)) * 0.88;
     expect(rearPiece.max.x - rearPiece.min.x).toBeCloseTo(paneWidth);
     const target = new THREE.Vector3(

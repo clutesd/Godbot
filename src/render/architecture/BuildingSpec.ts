@@ -20,6 +20,7 @@
  * asserts that across the whole archetype × period × climate × culture matrix.
  */
 
+import { resolveFunctionalArchitecture, type FunctionalArchitecture } from './FunctionalArchitecture';
 import type { Era } from '../materials/MaterialPalette';
 import type { GeneratorKind } from '../../sim/energy/types';
 import type { BuildingRole } from '../assets/BuildingGrammar';
@@ -206,6 +207,8 @@ export interface SpecProvenance {
 }
 
 export interface BuildingSpec {
+  /** Physical program resolved here; geometry and LOD consume the same contract. */
+  architecture?: FunctionalArchitecture;
   /** Coherent early dwelling silhouettes, resolved independently of material randomness. */
   dwellingVariant?: {
     family: 'round-hut' | 'longhouse';
@@ -313,6 +316,13 @@ export interface BuildingSpecContext {
 
   /** Authoritative local response. Carries level, need, form, material and capabilities. */
   development?: DevelopmentResponse;
+  /** Banded plot fabric condition, 0..1. Weathers surfaces; never changes dimensions. */
+  condition?: number;
+  /**
+   * The previous generation's plan and wall height on this plot, in spec units. An upgrade is
+   * built to at least this envelope, so replacing fabric never makes the building smaller.
+   */
+  envelope?: { width: number; depth: number; height: number };
   /** Live project, for the exact material-consumption record. */
   project?: DevelopmentProject;
   /** Derived structure history, for age, reuse and expansion. */
@@ -684,6 +694,23 @@ const ROOF_BASE_PITCH: Record<RoofArchetype, number> = {
 
 // ---------------------------------------------------------------------------- age
 
+/**
+ * Fold the plot's present fabric condition into its age state. Decay deepens wear and damage and
+ * lowers maintenance; it is a surface and component story, never a change of size.
+ */
+function withFabricCondition(age: AgeState, condition: number | undefined): AgeState {
+  if (condition === undefined || condition >= 1) return age;
+  const decay = Math.max(0, Math.min(1, 1 - condition));
+  return {
+    ...age,
+    wear: Math.max(age.wear, Math.min(1, decay * 0.95)),
+    maintenance: Math.min(age.maintenance, Math.max(0.05, condition)),
+    damage: Math.max(age.damage, decay >= 0.4 ? Math.min(0.9, decay * 0.8) : 0),
+    condition: age.condition === 'ruin' || age.condition === 'abandoned' ? age.condition
+      : decay >= 0.4 ? 'damaged' : decay > 0.15 && age.condition !== 'adapted' && age.condition !== 'expanded' ? 'weathered' : age.condition,
+  };
+}
+
 function ageStateFor(
   heritage: StructureHeritage | undefined,
   development: DevelopmentResponse | undefined,
@@ -760,7 +787,9 @@ function pickArchetype(
   period: ArchitecturalPeriod,
 ): { archetype: BuildingArchetype; routing: RoutingSource | 'explicit' } {
   if (context.energyKind === 'waterwheel' || context.energyKind === 'windmill') {
-    return { archetype: routeArchetype({ role: context.role, period, energyKind: context.energyKind }).archetype, routing: 'explicit' };
+    // The prime mover is explicit; the site it serves and the fabric it was built of pick the subtype.
+    return { archetype: routeArchetype({ role: context.role, period, energyKind: context.energyKind,
+      need: context.development?.need, material: context.development?.material }).archetype, routing: 'explicit' };
   }
   if (context.archetype) return { archetype: context.archetype, routing: 'explicit' };
   const development = context.development;
@@ -771,6 +800,9 @@ function pickArchetype(
     form: development?.form,
     level: development?.level,
     capabilities: development?.capabilities,
+    reasons: development?.reasons,
+    facilityFamily: development?.facilityFamily,
+    facilityTier: development?.facilityTier,
     specialization: context.specialization,
     waterfront: context.waterfront,
     seed: context.seed,
@@ -786,7 +818,8 @@ function pickArchetype(
  */
 export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec {
   const development = context.development;
-  const capabilities = development?.capabilities ?? [];
+  // Recorded construction technique is period evidence exactly like an observed requirement.
+  const capabilities = [...(development?.capabilities ?? []), ...(development?.technology ?? [])];
   let eraPeriod = architecturalPeriod({
     era: context.era,
     developmentLevel: development?.level,
@@ -983,7 +1016,7 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
   }
 
   // ----- age and equipment -----
-  const age = ageStateFor(context.heritage, development, wall, period, resolvedStage.periodsOld, random);
+  const age = withFabricCondition(ageStateFor(context.heritage, development, wall, period, resolvedStage.periodsOld, random), context.condition);
 
   const annexRange = stage.annexes;
   let annexes = Math.max(
@@ -1049,6 +1082,19 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
       span: depth, intermediateSupport: depth > maxSpan, tiers: 1 };
     annexes = dwellingVariant.store || dwellingVariant.aisle ? 1 : 0;
   }
+  // An upgrade is built out from the fabric it replaces, never inside it. Plan dimensions grow to at
+  // least the previous generation's, and storeys are added (then raised, within reason) until the
+  // walls stand at least as high. The structural family's own storey limit still holds.
+  const envelope = context.envelope;
+  if (envelope) {
+    width = Math.max(width, envelope.width);
+    depth = Math.max(depth, envelope.depth);
+    if (floors * storeyHeight < envelope.height) {
+      floors = Math.max(floors, Math.min(maxStoreys, Math.ceil(envelope.height / Math.max(1e-6, storeyHeight) - 1e-6)));
+      if (floors * storeyHeight < envelope.height) storeyHeight = Math.min(storeyHeight * 1.35, envelope.height / floors);
+    }
+    roof = { ...roof, span: depth, intermediateSupport: depth > maxSpan };
+  }
   const bays = Math.max(1, Math.round(width / Math.max(0.12, baySpacing)));
 
   // A settlement's specialization earns its working fittings; it never removes the archetype's.
@@ -1111,6 +1157,7 @@ export function resolveBuildingSpec(context: BuildingSpecContext): BuildingSpec 
     },
   };
 
+  resolveFunctionalArchitecture(spec);
   return spec;
 }
 
@@ -1246,7 +1293,8 @@ export function validateBuildingSpec(spec: BuildingSpec, capabilities?: readonly
     ['width', spec.width], ['depth', spec.depth], ['storeyHeight', spec.storeyHeight],
     ['wallThickness', spec.wallThickness], ['baySpacing', spec.baySpacing], ['roof.pitch', spec.roof.pitch],
   ] as const) {
-    if (!Number.isFinite(value) || value <= 0) {
+    const flatPitch = name === 'roof.pitch' && ['flat', 'flat-parapet'].includes(spec.roof.archetype);
+    if (!Number.isFinite(value) || value < 0 || value === 0 && !flatPitch) {
       violations.push({ code: 'non-finite-dimension', detail: `${name} is ${value}` });
     }
   }
@@ -1282,5 +1330,6 @@ export function buildingSpecSignature(spec: BuildingSpec): string {
     spec.age.originalMaterial ?? '-',
     spec.equipment.join('+'),
     JSON.stringify(spec.dwellingVariant ?? null),
+    JSON.stringify(spec.architecture ?? null),
   ].join('|');
 }

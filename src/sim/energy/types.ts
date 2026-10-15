@@ -18,6 +18,9 @@ export interface EnergyPlant {
   heatInput?: number;
   conversionLoss?: number;
   status: 'construction' | 'running' | 'idle' | 'failed';
+  /** The machine this site's plant replaced when it was re-equipped; optional for archives. */
+  replacedKind?: GeneratorKind;
+  replacedMonth?: number;
 }
 export type GridNodeKind = 'plant-bus' | 'switchyard' | 'substation' | 'junction' | 'transformer' | 'service' | 'storage';
 export type GridEdgeClass = 'transmission' | 'distribution' | 'service' | 'connection';
@@ -53,6 +56,11 @@ export interface SettlementEnergy {
   shortageMonths: number;
   reliability: number;
   lit: boolean;
+  /**
+   * Shaft work wanted to lift water into this settlement's built water works, and what the shared
+   * mechanical pool delivered to it this month. Optional for archive compatibility.
+   */
+  waterLift?: { demand: number; supplied: number };
 }
 export interface EnergyState { month: number; lines: PowerLine[]; milestones: string[]; nodes?: GridNode[]; topologyVersion?: number; }
 

@@ -1,4 +1,4 @@
-import { movementPathHalfWidth, movementPathStage, movementPathStrength, strongestMovementPathNeighbour } from '../sim/environment/PathEvolution';
+import { movementPathHalfWidth, movementPathStage, movementPathStrength, movementPathConnections } from '../sim/environment/PathEvolution';
 import type { Settlement, Vec2, WorldState } from '../sim/types';
 
 export interface MovementFrontage {
@@ -13,27 +13,15 @@ export interface MovementFrontage {
  * This is a read-only view of land history, never a planner or a source of new roads. */
 export function settlementMovementFrontage(world: WorldState, settlement: Settlement): MovementFrontage[] {
   const reach = Math.min(32, Math.max(12, Math.sqrt(settlement.buildings + 1) * 3));
-  const cx = Math.round(settlement.position.x / world.cellSize + world.size / 2);
-  const cz = Math.round(settlement.position.z / world.cellSize + world.size / 2);
-  const span = Math.ceil(reach / world.cellSize);
   const edges: MovementFrontage[] = [];
-  const seen = new Set<string>();
-  for (let z = Math.max(0, cz - span); z <= Math.min(world.size - 1, cz + span); z++) {
-    for (let x = Math.max(0, cx - span); x <= Math.min(world.size - 1, cx + span); x++) {
-      const index = z * world.size + x, cell = world.cells[index]!;
-      if (cell.water || (world.weather?.cells[index]?.floodDepth ?? 0) > 0.08 || movementPathStage(cell) === 'none'
-        || Math.hypot(cell.worldX - settlement.position.x, cell.worldZ - settlement.position.z) > reach) continue;
-      const next = strongestMovementPathNeighbour(world, index);
-      if (next === undefined) continue;
-      const other = world.cells[next]!;
-      if ((world.weather?.cells[next]?.floodDepth ?? 0) > 0.08) continue;
-      const key = index < next ? `${index}:${next}` : `${next}:${index}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      edges.push({ from: { x: cell.worldX, z: cell.worldZ }, to: { x: other.worldX, z: other.worldZ },
-        strength: Math.min(movementPathStrength(cell), movementPathStrength(other)),
-        halfWidth: Math.max(movementPathHalfWidth(world.cellSize, movementPathStage(cell), movementPathStrength(cell)), movementPathHalfWidth(world.cellSize, movementPathStage(other), movementPathStrength(other))) });
-    }
+  for (const [index, next] of movementPathConnections(world)) {
+    const cell = world.cells[index]!, other = world.cells[next]!;
+    if (Math.min(Math.hypot(cell.worldX - settlement.position.x, cell.worldZ - settlement.position.z),
+      Math.hypot(other.worldX - settlement.position.x, other.worldZ - settlement.position.z)) > reach) continue;
+    edges.push({ from: { x: cell.worldX, z: cell.worldZ }, to: { x: other.worldX, z: other.worldZ },
+      strength: Math.min(movementPathStrength(cell), movementPathStrength(other)),
+      halfWidth: Math.max(movementPathHalfWidth(world.cellSize, movementPathStage(cell), movementPathStrength(cell)),
+        movementPathHalfWidth(world.cellSize, movementPathStage(other), movementPathStrength(other))) });
   }
   return edges;
 }
@@ -72,6 +60,21 @@ export function movementGatheringPoint(edges: readonly MovementFrontage[]): Vec2
   for (const node of movementJunctions(edges, 1)) {
     const candidate = node.strength * (1 + Math.min(3, node.degree - 1) * 0.5);
     if (candidate > score) { best = node.point; score = candidate; }
+  }
+  return best;
+}
+
+/** Entrance facing along actual, accessible circulation. It grants no road or ground surface. */
+export function streetFacing(edges: readonly MovementFrontage[], center: Vec2, radius: number,
+  accessible: (point: Vec2) => boolean = () => true): { rotationY: number; accessPoint: Vec2 } | undefined {
+  let best: { rotationY: number; accessPoint: Vec2 } | undefined, gap = Infinity;
+  for (const edge of edges) {
+    const point = closestFrontagePoint(edge, center);
+    const distance = Math.hypot(point.x - center.x, point.z - center.z);
+    const setback = distance - radius - edge.halfWidth;
+    if (distance < 1e-6 || setback < 0.18 || setback > 5 || setback >= gap || !accessible(point)) continue;
+    gap = setback;
+    best = { rotationY: Math.atan2(point.x - center.x, point.z - center.z), accessPoint: { ...point } };
   }
   return best;
 }

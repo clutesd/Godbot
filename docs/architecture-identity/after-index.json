@@ -1,0 +1,250 @@
+[
+  {
+    "period": "bronzeIron",
+    "archetype": "house"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "barn"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "byre"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "stable"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "animal-pen"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "granary"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "workshop"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "market"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "warehouse"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "civic-hall"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "shrine"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "gatehouse"
+  },
+  {
+    "period": "bronzeIron",
+    "archetype": "dock"
+  },
+  {
+    "period": "medieval",
+    "archetype": "house"
+  },
+  {
+    "period": "medieval",
+    "archetype": "barn"
+  },
+  {
+    "period": "medieval",
+    "archetype": "byre"
+  },
+  {
+    "period": "medieval",
+    "archetype": "stable"
+  },
+  {
+    "period": "medieval",
+    "archetype": "animal-pen"
+  },
+  {
+    "period": "medieval",
+    "archetype": "granary"
+  },
+  {
+    "period": "medieval",
+    "archetype": "workshop"
+  },
+  {
+    "period": "medieval",
+    "archetype": "mill"
+  },
+  {
+    "period": "medieval",
+    "archetype": "windmill"
+  },
+  {
+    "period": "medieval",
+    "archetype": "market"
+  },
+  {
+    "period": "medieval",
+    "archetype": "warehouse"
+  },
+  {
+    "period": "medieval",
+    "archetype": "civic-hall"
+  },
+  {
+    "period": "medieval",
+    "archetype": "shrine"
+  },
+  {
+    "period": "medieval",
+    "archetype": "gatehouse"
+  },
+  {
+    "period": "medieval",
+    "archetype": "dock"
+  },
+  {
+    "period": "industrial",
+    "archetype": "house"
+  },
+  {
+    "period": "industrial",
+    "archetype": "barn"
+  },
+  {
+    "period": "industrial",
+    "archetype": "byre"
+  },
+  {
+    "period": "industrial",
+    "archetype": "stable"
+  },
+  {
+    "period": "industrial",
+    "archetype": "animal-pen"
+  },
+  {
+    "period": "industrial",
+    "archetype": "granary"
+  },
+  {
+    "period": "industrial",
+    "archetype": "silo"
+  },
+  {
+    "period": "industrial",
+    "archetype": "workshop"
+  },
+  {
+    "period": "industrial",
+    "archetype": "mill"
+  },
+  {
+    "period": "industrial",
+    "archetype": "windmill"
+  },
+  {
+    "period": "industrial",
+    "archetype": "factory"
+  },
+  {
+    "period": "industrial",
+    "archetype": "market"
+  },
+  {
+    "period": "industrial",
+    "archetype": "warehouse"
+  },
+  {
+    "period": "industrial",
+    "archetype": "civic-hall"
+  },
+  {
+    "period": "industrial",
+    "archetype": "shrine"
+  },
+  {
+    "period": "industrial",
+    "archetype": "gatehouse"
+  },
+  {
+    "period": "industrial",
+    "archetype": "dock"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "house"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "barn"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "byre"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "stable"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "animal-pen"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "granary"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "silo"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "workshop"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "mill"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "windmill"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "factory"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "market"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "warehouse"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "civic-hall"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "shrine"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "gatehouse"
+  },
+  {
+    "period": "contemporary",
+    "archetype": "dock"
+  }
+]
