@@ -1,6 +1,6 @@
 /** Canonical elevation contract shared by wall voids, joinery, frame members and SVG artwork.
  * Dimensions come exclusively from the resolved production grammar/spec. */
-import { architecturalMasses, massPoint } from './ArchitectureMasses';
+import { architecturalMasses, massPoint, shellAnnexMasses } from './ArchitectureMasses';
 import type { BuildingGrammar } from '../assets/BuildingGrammar';
 import type { BuildingSpec } from './BuildingSpec';
 import { architecturalMaterial, type ArchitecturalMaterialId } from './MaterialLibrary';
@@ -9,6 +9,28 @@ export interface FacadeOpening {
   kind: 'door' | 'window';
   purpose?: 'entrance' | 'daylight' | 'wagon' | 'stock' | 'stall' | 'loading' | 'vent'; u: number; y: number; w: number; h: number;
   row: number; index: number;
+}
+
+/** Rectangular casing faces shared by functional joinery and its elevation artwork. */
+export function openingDressingRects(o: FacadeOpening, width: number, masonry = false): { u0: number; u1: number; y0: number; y1: number }[] {
+  const u0 = o.u - o.w / 2, u1 = o.u + o.w / 2, y0 = o.y - o.h / 2, y1 = o.y + o.h / 2;
+  const courses = masonry ? Math.max(1, Math.ceil(o.h / (width * 3))) : 1;
+  const jambs = Array.from({ length: courses }, (_, i) => {
+    const lo = masonry ? y0 + o.h * i / courses : y0 - width / 2;
+    const hi = masonry ? y0 + o.h * (i + 1) / courses : y1 + width / 2;
+    return [{ u0: u0 - width, u1: u0, y0: lo, y1: hi }, { u0: u1, u1: u1 + width, y0: lo, y1: hi }];
+  }).flat();
+  const rects = [
+    ...jambs,
+    { u0: u0 - width, u1: u1 + width, y0: y1, y1: y1 + width },
+    ...(o.kind === 'window' ? [{ u0: u0 - width, u1: u1 + width, y0: y0 - width, y1: y0 }] : []),
+  ];
+  // A fine mortar bed keeps the individual stones legible, including at the lintel junction.
+  return masonry ? rects.map(r => ({ u0: r.u0 + .0005, u1: r.u1 - .0005, y0: r.y0 + .0005, y1: r.y1 - .0005 })) : rects;
+}
+
+export function functionalDressingWidth(wallThickness: number, storeyHeight: number): number {
+  return Math.min(wallThickness * .65, storeyHeight * .065);
 }
 export interface ElevationPlan {
   name: 'front' | 'rear' | 'right' | 'left';
@@ -190,7 +212,16 @@ export function facadeElevations(grammar: BuildingGrammar, halfW: number, halfD:
         : height * ((row + 1) / (grammar.windowRows + 1) + 0.08);
       openings.push({ kind: 'window', u, y, w, h, row, index });
     }
-    return { ...face, openings };
+    const annexes = shellAnnexMasses(grammar);
+    return { ...face, openings: openings.filter(o => !annexes.some(mass => {
+      const x = mass.x - face.originX, z = mass.z - face.originZ;
+      const u = x * face.tangentX + z * face.tangentZ;
+      const halfRun = (Math.abs(face.tangentX) * mass.width + Math.abs(face.tangentZ) * mass.depth) / 2;
+      const outward = x * face.normalX + z * face.normalZ;
+      const halfDepth = (Math.abs(face.normalX) * mass.width + Math.abs(face.normalZ) * mass.depth) / 2;
+      return outward + halfDepth > 1e-6 && Math.abs(o.u - u) < o.w / 2 + halfRun - 1e-6
+        && o.y - o.h / 2 < mass.height - 1e-6;
+    })) };
   });
 }
 

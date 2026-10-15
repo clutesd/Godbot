@@ -1,3 +1,4 @@
+import './assets/enablePreparationWorkers';
 import { settlementMovementFrontage, streetFacing } from '../shared/MovementFrontage';
 import { installPhysicalRoomPlan } from './people/PhysicalRoomPlan';
 import type { FacadePlan } from './architecture/FacadePlan';
@@ -65,7 +66,7 @@ import { HumanFigureAppearance } from './people/HumanFigureAppearance';
 import { humanLookFor as resolveHumanLook, type HeadPiece, type HumanLook } from './people/HumanAppearanceProfile';
 import { createGarmentAtlasGeometry, createHeadAtlasGeometry, createHumanMantleGeometry } from './people/HumanWardrobeAtlas';
 import { createFocalContactShadow } from './people/FocalContactShadow';
-import { AssetBuilder } from './assets/AssetBuilder';
+import { AssetBuilder, type AssetConfig } from './assets/AssetBuilder';
 import { peakStructureLevel, structureFit, upgradeFit, type PlacedExtents } from './assets/StructureFit';
 import { displayedPlotBudget, selectDisplayedPlots } from './settlement/DisplayedPlots';
 import { applyStructuralDeterioration, conditionBand } from './architecture/StructuralDeterioration';
@@ -2400,6 +2401,11 @@ export class GodboxRenderer {
       const event = this.visualStateResolver.trackEntity(settlement.id, 'settlement', { infrastructure: settlement.infrastructure, buildings: settlement.buildings, alive: settlement.alive }, this.state.month);
       if (event?.kind === 'infrastructure-added') this.transitionTimeline.createBuildingUpgrade(settlement.id, 0, 1, event.associatedData);
       if (existing && existing.buildingCount === settlement.buildings && existing.institutionCount === settlement.institutionIds.length && existing.routeCount === routeCount && existing.politySize === politySize && existing.bannerSignature === bannerSignature && existing.developmentSignature === developmentSignature && existing.constructionSignature === constructionSignature) continue;
+      if (this.assetBuilder?.getPreparationStats().background && !this.prepareSettlementBuildings(settlement)) {
+        // Retain the standing settlement while its exact replacement geometry is prepared.
+        this.lastSettlementSignature = '';
+        continue;
+      }
       if (existing) {
         this.scene.remove(existing.group);
         this.disposeGroup(existing.group);
@@ -2963,32 +2969,107 @@ export class GodboxRenderer {
     return { width: massWidth * fit, depth: massDepth * fit, height: height * fit };
   }
 
+  private constructionBuildingConfig(placement: BuildingPlacement, culture: Culture['style'], era: Era,
+    project?: DevelopmentResponse, settlement?: Settlement): AssetConfig {
+    const target = constructionTargetIdentity(project, placement.role, era);
+    return {
+      seed: `${settlement?.architecture?.dialectKey ?? settlement?.id ?? culture.primary}:${target.role}:v${placement.variation}`,
+      culture, era: target.era, variant: `${target.role}#${BUILD_STAGE.DETAIL}`, development: project ?? placement.development,
+      settlementIdentity: settlement?.architecture, localSlopeDegrees: placement.localSlopeDegrees,
+      grammarContext: settlement ? { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth } : undefined,
+      prosperity: settlement?.prosperity, specialization: settlement?.specialization,
+      waterfront: settlement ? this.waterfrontFor(settlement) : undefined, project: this.projectForPlot(settlement, placement.key),
+    };
+  }
+
+  private portalBuildingConfigs(settlement: Settlement, layout: SettlementLayoutPlan, culture: Culture['style'], era: Era): AssetConfig[] {
+    return layout.portals.slice(0, 5).filter(p => p.kind === 'station').map(portal => ({
+      seed: `${settlement.id}:portal:${portal.localX}:${portal.localZ}`, culture, era, archetype: 'warehouse',
+      variant: `warehouse#${BUILD_STAGE.DETAIL}`, grammarContext: this.climateContextFor(settlement), prosperity: settlement.prosperity,
+    }));
+  }
+
+  private prepareSettlementBuildings(settlement: Settlement): boolean {
+    const culture = this.dominantCulture(settlement)?.style ?? { primary: '#c36557', secondary: '#313550', accent: '#d9a748', symbol: 'sun-step' as const, pattern: 'chevron' as const, nameSyllables: ['go', 'do'] };
+    const era = this.eraForSettlement(settlement), shown = this.shownBuildingCount(settlement);
+    const active = Boolean(settlement.development?.project) || constructionPresentationProgress(settlement) > 0 && settlement.buildings < settlement.targetBuildings;
+    const layout = this.layoutForSettlement(settlement, era);
+    const reserved = this.getSettlementBuildingPlacements(settlement, shown + (active ? 1 : 0), layout);
+    const placements = settlement.development ? reserved.filter(p => !this.constructionRuntime.holds(p.key)
+      && settlement.structurePlots?.find(plot => plot.id === p.key)?.development).slice(0, shown) : reserved.slice(0, shown);
+    const configs: AssetConfig[] = [];
+    const ancestors = (development: DevelopmentResponse | undefined, placement: BuildingPlacement): void => {
+      if (!development) return;
+      const shell = developmentFabric(development), role = developmentBuildingRole(shell);
+      configs.push({ seed: `${settlement.architecture?.dialectKey ?? settlement.id}:${role}:v${placement.variation}`,
+        culture: shell.style ?? culture, era: developmentPresentationEra(shell), variant: `${role}#${BUILD_STAGE.DETAIL}`,
+        development: shell, settlementIdentity: settlement.architecture, localSlopeDegrees: placement.localSlopeDegrees,
+        grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
+        prosperity: settlement.prosperity, specialization: settlement.specialization, waterfront: this.waterfrontFor(settlement) });
+      ancestors(priorFabricGeneration(shell), placement);
+    };
+    for (const placement of placements) {
+      const damaged = settlement.structurePlots?.find(plot => plot.id === placement.key);
+      const shell = damaged?.destruction && damaged.development?.status === 'ruin' && placement.development
+        ? { ...placement, development: { ...placement.development, status: 'active' as const } } : placement;
+      configs.push(this.placedBuildingConfig(shell, placement.development?.style ?? culture,
+        placement.development ? developmentPresentationEra(developmentFabric(placement.development)) : this.eraForBuilding(placement, era), settlement));
+      ancestors(placement.development ? priorFabricGeneration(developmentFabric(placement.development)) : undefined, placement);
+    }
+    const site = active ? settlement.development ? reserved.find(p => p.key === settlement.development?.project?.plotId) : reserved[shown] : undefined;
+    if (site) {
+      const project = settlement.development?.project?.response;
+      configs.push(this.constructionBuildingConfig(site, project?.style ?? culture, project ? developmentPresentationEra(project) : era, project, settlement));
+      ancestors(site.development, site);
+    }
+    configs.push(...this.portalBuildingConfigs(settlement, layout, culture, era));
+    const routes = this.state.tradeRoutes.filter(r => r.active && (r.a === settlement.id || r.b === settlement.id));
+    const importance = settlement.buildings / 24 + settlement.institutionIds.length * .25 + routes.length * .2;
+    if (importance >= 1 && eraRank(era) >= 2) {
+      const role = this.landmarkPlacements.get(settlement.id)?.role ?? this.landmarkRoleFor(settlement, era);
+      configs.push({ seed: `${settlement.architecture?.dialectKey ?? settlement.id}:landmark:${role}`, culture, era,
+        variant: `${role}#${BUILD_STAGE.DETAIL}`, settlementIdentity: settlement.architecture,
+        grammarContext: { ...this.climateContextFor(settlement), isLandmark: true }, prosperity: settlement.prosperity,
+        specialization: settlement.specialization, waterfront: this.waterfrontFor(settlement) });
+    }
+    const deliveries = this.state.tradeRoutes.filter(r => r.a === settlement.id || r.b === settlement.id)
+      .reduce((sum, r) => sum + (r.transport?.deliveries ?? 0), 0);
+    if (routes.length && deliveries >= 2) for (let i = 0; i < Math.min(6, 1 + Math.floor(deliveries / 4)); i++) configs.push({
+      seed: `${settlement.id}:market-stall:${i}`, culture, era, archetype: 'market', variant: `market#${BUILD_STAGE.DETAIL}`,
+      grammarContext: this.climateContextFor(settlement), prosperity: settlement.prosperity,
+    });
+    const freight = routes.reduce((sum, r) => sum + (r.transport?.recentFreight ?? 0), 0);
+    if (!settlement.development && freight >= 10 && (settlement.specialization === 'exchange' || routes.length >= 2)) configs.push({
+      seed: `${settlement.id}:caravan-rest`, culture, era, archetype: 'warehouse', variant: `warehouse#${BUILD_STAGE.DETAIL}`,
+      grammarContext: this.climateContextFor(settlement),
+    });
+    return this.assetBuilder.prepareBuildings(configs, `settlement:${settlement.id}`);
+  }
+
+  private placedBuildingConfig(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, settlement: Settlement): AssetConfig {
+    const plot = settlement.structurePlots?.find(candidate => candidate.id === placement.key);
+    return {
+      seed: `${settlement.architecture?.dialectKey ?? settlement.id}:${placement.role}:v${placement.variation}`,
+      culture: cultureStyle, era, variant: `${placement.role}#${this.constructionStageFor(placement.key)}`,
+      development: placement.development ? developmentFabric(placement.development) : undefined,
+      settlementIdentity: settlement.architecture, localSlopeDegrees: placement.localSlopeDegrees,
+      grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
+      prosperity: settlement.prosperity, specialization: settlement.specialization, waterfront: this.waterfrontFor(settlement),
+      project: this.projectForPlot(settlement, placement.key), condition: plot?.destruction ? 1 : conditionBand(plot?.condition ?? 1),
+    };
+  }
+
   private createPlacedBuilding(placement: BuildingPlacement, cultureStyle: Culture['style'], era: Era, terrainY: number, settlement: Settlement): THREE.Object3D {
     // A war-struck shell is handed to StructureDestruction intact; ordinary decay is drawn here.
     const plot = settlement.structurePlots?.find(candidate => candidate.id === placement.key);
     const fabricCondition = plot?.destruction ? 1 : conditionBand(plot?.condition ?? 1);
+    const stage = this.constructionStageFor(placement.key);
     // Founding adaptations are ordinary BuildingSpec inputs now. They use this same AssetBuilder,
     // material, geometry, LOD and construction path instead of escaping through SurvivalStructure.
-    const stage = this.constructionStageFor(placement.key);
     // Geometry is shared per (settlement dialect, era, role, variation, stage) rather than per
     // instance, so a hundred houses cost a handful of buffers — but keyed per settlement, not per
     // culture, so settlements sharing a culture no longer draw from one shared pool of 4 shapes.
-    const asset = this.assetBuilder.getAsset('building', {
-      seed: `${settlement.architecture?.dialectKey ?? settlement.id}:${placement.role}:v${placement.variation}`,
-      culture: cultureStyle,
-      era,
-      variant: `${placement.role}#${stage}`,
-      // Drawn as its standing walls: adaptive reuse keeps a larger shell than the new use needed.
-      development: placement.development ? developmentFabric(placement.development) : undefined,
-      settlementIdentity: settlement.architecture,
-      localSlopeDegrees: placement.localSlopeDegrees,
-      grammarContext: { ...this.climateContextFor(settlement), floodDepth: placement.floodDepth },
-      prosperity: settlement.prosperity,
-      specialization: settlement.specialization,
-      waterfront: this.waterfrontFor(settlement),
-      project: this.projectForPlot(settlement, placement.key),
-      condition: fabricCondition,
-    });
+    const asset = this.assetBuilder.getAsset('building', this.placedBuildingConfig(placement, cultureStyle, era, settlement));
     const building = asset.mesh.clone(true);
     // Each placed copy owns its rotors, so a cached asset shared by many mills still turns per mill.
     this.millMotion.adopt(building);
@@ -3238,26 +3319,9 @@ export class GodboxRenderer {
     const stage = presentation.stage;
     // Must match createPlacedBuilding's seed exactly: a construction site's geometry is fit
     // against, and must converge to, the same finished-building asset.
-    const seed = `${settlement?.architecture?.dialectKey ?? settlement?.id ?? cultureStyle.primary}:${targetPlacement.role}:v${targetPlacement.variation}`;
-    const baseConfig = {
-      seed,
-      culture: cultureStyle,
-      era: targetEra,
-      development: targetPlacement.development,
-      settlementIdentity: settlement?.architecture,
-      localSlopeDegrees: targetPlacement.localSlopeDegrees,
-      grammarContext: settlement ? { ...this.climateContextFor(settlement), floodDepth: targetPlacement.floodDepth } : undefined,
-      prosperity: settlement?.prosperity,
-      specialization: settlement?.specialization,
-      waterfront: settlement ? this.waterfrontFor(settlement) : undefined,
-      project: this.projectForPlot(settlement, targetPlacement.key),
-    };
     // Fit every construction stage against the completed grammar footprint. Forecourts, wings,
     // towers and crowns therefore never resize the whole project when a later stage appears.
-    const targetAsset = this.assetBuilder.getAsset('building', {
-      ...baseConfig,
-      variant: `${targetPlacement.role}#${BUILD_STAGE.DETAIL}`,
-    });
+    const targetAsset = this.assetBuilder.getAsset('building', this.constructionBuildingConfig(placement, cultureStyle, era, project, settlement));
     const targetHeight = Number(targetAsset.mesh.userData['buildingHeight'] ?? targetPlacement.height);
     const targetMassWidth = Number(targetAsset.mesh.userData['massWidth'] ?? targetAsset.mesh.userData['footprintWidth'] ?? 1);
     const targetMassDepth = Number(targetAsset.mesh.userData['massDepth'] ?? targetAsset.mesh.userData['footprintDepth'] ?? 1);

@@ -16,7 +16,7 @@
 import { SeededRandom } from '../../sim/prng';
 import { ARTWORK_WIDTH, ERA_CRAFT, STRUCTURE_ART, surfaceArtLayout, surfacePanel } from './SurfaceArtPrograms';
 import { architecturalMaterial, type ArchitecturalMaterialId } from './MaterialLibrary';
-import { FACADE_ATLAS_SIZE, FACADE_ATLAS_BLEED, facadeAtlasLayout, glazingFrameWidth, type AtlasCell, type ElevationPlan, type FacadeOpening, type FacadePlan } from './FacadePlan';
+import { FACADE_ATLAS_SIZE, FACADE_ATLAS_BLEED, facadeAtlasLayout, glazingFrameWidth, functionalDressingWidth, openingDressingRects, type AtlasCell, type ElevationPlan, type FacadeOpening, type FacadePlan } from './FacadePlan';
 
 export { FACADE_ATLAS_SIZE } from './FacadePlan';
 
@@ -416,6 +416,15 @@ const CORNER_OF: Record<ElevationPlan['name'], { start: number; end: number }> =
 /** Dressed jambs, sill and arched head around an opening; returns the top of the surround. */
 function openingSurround(e: Elevation, o: FacadeOpening): number {
   const u0 = o.u - o.w / 2, u1 = o.u + o.w / 2, y0 = o.y - o.h / 2, y1 = o.y + o.h / 2;
+  if (e.plan.spec.architecture) {
+    // Functional openings have rectangular physical casings, never an independently invented arch.
+    // Timber casings carry their own grain tile; stone dressings share their exact face rectangles.
+    const width = functionalDressingWidth(e.plan.wallThickness, e.plan.storeyHeight);
+    if (architecturalMaterial(e.plan.materials.trim).family === 'stone')
+      for (const rect of openingDressingRects(o, width, true))
+        ashlar(e, rect.u0, rect.y0, rect.u1, rect.y1, { chamfer: false, mark: 0.05 });
+    return y1 + width;
+  }
   const family = architecturalMaterial(e.plan.materials.wall).family;
   // Brick and earth walls are carried by their own tile and real reveals; only stone walls get
   // dressed stone surrounds painted around their openings.
@@ -817,7 +826,7 @@ export function facadeArtwork(plan: FacadePlan): FacadeArtwork {
 
 /** Everything that can change a painted pixel, and nothing that cannot. */
 export function facadeTextureKey(plan: FacadePlan): string {
-  return JSON.stringify([plan.version, 'art-v8', plan.spec.archetype, plan.surfaceDomain, plan.surfaceMaterials, plan.spec.seed, plan.elevations, plan.members, plan.beams, plan.bands,
+  return JSON.stringify([plan.version, 'art-v9', plan.spec.archetype, plan.surfaceDomain, plan.surfaceMaterials, plan.spec.seed, plan.elevations, plan.members, plan.beams, plan.bands,
     plan.wallTop - plan.floor, plan.materials, plan.openingStyle, plan.pattern, plan.spec.culture, plan.spec.age.wear,
     plan.spec.age.maintenance, plan.spec.climate.zone, plan.spec.equipment, plan.spec.openings, plan.spec.period]);
 }

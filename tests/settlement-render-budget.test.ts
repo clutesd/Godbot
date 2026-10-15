@@ -227,6 +227,23 @@ describe('construction presentation progress authority', () => {
 });
 
 describe('settlement render budgeting', () => {
+  it('retains standing visuals while background assets are pending and retries an unchanged state when ready', () => {
+    const test = harness('background-settlement-replacement');
+    sync(test.renderer, true);
+    const oldGroups = [...test.scene.children];
+    const built = test.created();
+    let ready = false;
+    Object.assign(test.renderer, { assetBuilder: { getPreparationStats: () => ({ background: true }) },
+      prepareSettlementBuildings: () => ready });
+    test.state.settlements[0]!.buildings++;
+    sync(test.renderer, true);
+    expect(test.created()).toBe(built);
+    expect(test.scene.children).toEqual(oldGroups);
+    expect(oldGroups.every(group => group.visible)).toBe(true);
+    ready = true;
+    sync(test.renderer);
+    expect(test.created()).toBeGreaterThan(built);
+  });
   it('keeps paid completion in the enhanced live renderer until worker-led visual completion releases it', () => {
     const test = harness('enhanced-paid-completion');
     const settlement = test.state.settlements.find(s => s.alive)!;

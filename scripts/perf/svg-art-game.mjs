@@ -31,7 +31,7 @@ async function sheet(name,title){
     g.fillStyle='#eee';g.font='16px sans-serif';g.fillText('SVG off  ·  ${title}',8,19);g.fillText('SVG on',a.width+14,19);return c.toDataURL('image/jpeg',.9).slice(23);})()`);
   writeFileSync(`${out}/${name}.jpg`,Buffer.from(jpeg,'base64'));
 }
-const report={seed,months,views:[],errors};
+const report={seed,months,orientationSkipped:args.includes('--skip-orientation-wait'),views:[],errors};
 try{
   let debug;for(let i=0;i<200&&!debug;i++){const p=join(profile,'DevToolsActivePort');if(existsSync(p)){try{debug=Number(readFileSync(p,'utf8').split('\n')[0]);}catch{/* starting */}}if(!debug)await sleep(100);}
   const page=(await fetch(`http://127.0.0.1:${debug}/json/list`).then(r=>r.json())).find(p=>p.type==='page');
@@ -46,6 +46,11 @@ try{
   for(let i=0;i<400;i++){
     const phase=await evaluate('(()=>{const a=__godboxArrival.state.arrival;if(!a)return "none";if(a.phase!=="HISTORY_RUNNING"&&a.phase!=="FOUNDING_ORIENTATION")__godboxArrival.advance(20);return a.phase;})()');
     if(i%20===0)console.log('phase',phase);
+    if(phase==='FOUNDING_ORIENTATION'&&args.includes('--skip-orientation-wait')) {
+      // Renderer-only fixture: same state transition as Simulation.beginHistory(), after the
+      // physical landing has completed. This run does not validate the orientation film.
+      await evaluate('__godboxArrival.state.arrival.phase="HISTORY_RUNNING"');break;
+    }
     if(phase==='HISTORY_RUNNING'||phase==='none')break;
     await sleep(phase==='FOUNDING_ORIENTATION'?1000:50);
   }
@@ -54,6 +59,16 @@ try{
     console.log(JSON.stringify(r));
   }
   await sleep(1500);
+  // A fast simulation advance can outrun asynchronous geometry. Keep drawing until the live
+  // reconciliation queue adopts it, then freeze the matched captures.
+  await evaluate('__godboxArrival.pause(true)');
+  for(let i=0;i<1200;i++) {
+    const s=await evaluate('(()=>{const r=__godboxRenderer;return {geometry:r.assetBuilder.getPreparationStats(),atlas:r.assetBuilder.facadeTextures.stats(),pending:r.scene.userData.settlementRenderBudget?.pending??0}})()');
+    if(s.geometry.failed||s.atlas.failed)throw new Error(`Preparation failed: ${JSON.stringify(s)}`);
+    if(!s.geometry.pending&&!s.atlas.pending&&!s.pending)break;
+    if(i===1199)throw new Error(`Preparation did not settle: ${JSON.stringify(s)}`);
+    await sleep(100);
+  }
   // Freeze presentation time: stop the game's animation loop and draw zero-time frames ourselves,
   // so SVG off and on show the same instant, construction stage and camera.
   await evaluate(`(()=>{window.requestAnimationFrame=()=>0;const v=__godboxRenderer;window.__svgDraw=()=>{v.assetBuilder.facadeTextures.updateQuality(v.scene,v.camera,performance.now()+1e9);v.postProcessing.render(v.ecology.night.value);};})()`);
@@ -61,12 +76,12 @@ try{
   // Real production building roots carrying a facade plan, nearest the settlement centre first.
   // Real production buildings: roots carrying a facade plan, measured by their world bounds.
   const found=await evaluate(`(()=>{const v=__godboxRenderer,list=[],seen=new Set();v.scene.updateMatrixWorld(true);
-    v.scene.traverseVisible(o=>{if(!o.userData||!o.userData.facadePlan)return;let p=o.parent;while(p){if(seen.has(p))return;p=p.parent;}seen.add(o);
-      let box=null;o.traverseVisible(m=>{if(!m.isMesh||!String(m.material&&m.material.name).includes(":svg-facade"))return;if(!m.geometry.boundingBox)m.geometry.computeBoundingBox();
+    v.scene.traverseVisible(o=>{if(!o.userData||!(o.userData.facadePlan||o.userData.constructionSite))return;let p=o.parent;while(p){if(seen.has(p))return;p=p.parent;}seen.add(o);
+      let box=null,plan=o.userData.facadePlan;o.traverseVisible(m=>{if(!m.isMesh||m.geometry.drawRange.count===0||!String(m.material&&m.material.name).includes(":svg-facade"))return;plan??=v.assetBuilder.facadeTextures.materialEntries.get(m.material)?.plan;if(!m.geometry.boundingBox)m.geometry.computeBoundingBox();
         const b=m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld);box=box?box.union(b):b;});
-      if(!box)return;const plan=o.userData.facadePlan;
+      if(!box||!plan)return;
       list.push({x:(box.min.x+box.max.x)/2,y:box.min.y,z:(box.min.z+box.max.z)/2,height:box.max.y-box.min.y,scale:Math.max(box.max.x-box.min.x,box.max.z-box.min.z,box.max.y-box.min.y),
-        archetype:plan.spec.archetype,period:plan.spec.period,status:o.userData.facadeStatus||'none',count:1});});
+        archetype:plan.spec.archetype,period:plan.spec.period,status:o.userData.facadeStatus||(o.userData.constructionSite?'construction':'none'),count:1});});
     return list.sort((a,b)=>b.scale-a.scale);})()`);
   report.buildings=found.length;report.statuses=found.reduce((m,b)=>{m[b.status]=(m[b.status]??0)+1;return m;},{});
   report.archetypes=[...new Set(found.map(b=>b.archetype))];

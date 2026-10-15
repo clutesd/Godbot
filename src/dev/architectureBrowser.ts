@@ -1,3 +1,5 @@
+import '../render/assets/enablePreparationWorkers';
+import { constructionArtConfig } from './constructionArtCases';
 import { settlementStreetFixture } from './settlementStreetFixture';
 import { reserveStructurePlot } from '../shared/StructurePlots';
 import { districtForResponse } from '../shared/SettlementLayoutPlan';
@@ -256,7 +258,8 @@ window.addEventListener('resize', resize);
 resize();
 
 // Review all visible eligible assets; runtime retains its small default atlas budget.
-let assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 512, facadeResolution: 1024 });
+const backgroundPreparation = new URL(location.href).searchParams.get('background-preparation') !== 'false';
+let assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 512, facadeResolution: 1024, backgroundPreparation });
 
 /** Everything the browser puts on screen per rebuild, so one `remove` clears the whole layout. */
 const stageRoot = new THREE.Group();
@@ -763,7 +766,7 @@ function catalogueCards(period: ArchitecturalPeriod): void {
 function rebuild(): void {
   syncChoices(); persistState(); clear();
   assetBuilder.dispose();
-  assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 512, facadeResolution: 1024 });
+  assetBuilder = new AssetBuilder('architecture-browser', { facadeEntries: 512, facadeResolution: 1024, backgroundPreparation });
   assetBuilder.facadeTextures.setEnabled(el<HTMLInputElement>('hybrid-facades').checked);
   catalogueGrid.hidden = view !== 'catalogue';
   const period = periodSelect.value as ArchitecturalPeriod;
@@ -1212,7 +1215,33 @@ Object.assign(window, { godboxArchitectureQa: {
     }
     return {meanChannelDelta:total/(size.x*size.y*3),changedPixelFraction:changed/(size.x*size.y),beforeRender,afterRender,glError:gl.getError()};
   },
-  stats: () => ({ svgEnabled: !!assetBuilder.facadeTextures.strength.value, facade: assetBuilder.facadeTextures.stats(), render: { ...renderer.info.render },
+  generation: async (count = 8, background = true) => {
+    const builder = new AssetBuilder('generation-benchmark', { backgroundPreparation: background });
+    const frameGaps: number[] = [], calls: number[] = [];
+    let lastFrame = performance.now(), running = true;
+    const sample = (now: number): void => { frameGaps.push(now - lastFrame); lastFrame = now; if (running) requestAnimationFrame(sample); };
+    requestAnimationFrame(sample);
+    const started = performance.now();
+    try {
+      const pending: Promise<void>[] = [];
+      for (let i = 0; i < count; i++) {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const entry = BROWSER_CATALOGUE.find(e => e.id === ['house', 'factory', 'granary', 'civic-hall'][i % 4])!;
+        const config = constructionArtConfig(entry, 'industrial', 'brick'); config.seed = `generation-${i}`;
+        const start = performance.now(); pending.push(builder.prepareBuilding(config)); calls.push(performance.now() - start);
+      }
+      await Promise.all(pending);
+      builder.facadeTextures.warmArtwork();
+      const deadline = performance.now() + 120000;
+      while (builder.facadeTextures.stats().pending && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const sorted = [...frameGaps].sort((a, b) => a - b);
+      return { background, count, wallMs: performance.now() - started, calls,
+        maxCallMs: Math.max(...calls), maxFrameGap: Math.max(...frameGaps), p95FrameGap: sorted[Math.floor(sorted.length * .95)],
+        preparation: builder.getPreparationStats(), facade: builder.facadeTextures.stats() };
+    } finally { running = false; builder.dispose(); }
+  },
+  stats: () => ({ svgEnabled: !!assetBuilder.facadeTextures.strength.value, facade: assetBuilder.facadeTextures.stats(), preparation: assetBuilder.getPreparationStats(), render: { ...renderer.info.render },
     memory: { ...renderer.info.memory }, subjects: instances.map(instance => ({
       status: instance.root.userData['facadeStatus'] ?? 'no-svg', spec: instance.root.userData['buildingSpec'],
       programs: instance.root.userData['surfaceArtPrograms'],

@@ -8,11 +8,12 @@ import { SeededRandom } from '../../sim/prng';
 type FacadeLayer = 'albedo' | 'surface';
 import { architecturalMaterial, isArchitecturalMaterial, type ArchitecturalMaterialId } from './MaterialLibrary';
 import { BUILD_STAGE } from '../assets/BuildStages';
+import { PreparationWorker } from '../assets/PreparationWorker';
 
 interface AtlasEntry {
   textures: Record<FacadeLayer, THREE.Texture>;
   materials: Map<string, THREE.MeshStandardMaterial>;
-  state: 'pending' | 'ready' | 'failed';
+  state: 'idle' | 'pending' | 'ready' | 'failed';
   plan: FacadePlan;
   resolution: number;
   revision: number;
@@ -145,9 +146,17 @@ export class FacadeTextureCache {
   private lastQualityUpdate = -Infinity;
   private budgetFallbacks = 0;
   private readonly rasterTimes: number[] = [];
+  private readonly artWorkers: PreparationWorker[] = [];
+  private readonly idleArtWorkers: PreparationWorker[] = [];
   /** Stable texture handles survive resizing and scene clones. Budget includes all three mip chains. */
   constructor(readonly maxEntries = 512, readonly rasterSize = FACADE_ATLAS_SIZE,
-    readonly maxGpuBytes = 96 * 1024 * 1024) {}
+    readonly maxGpuBytes = 96 * 1024 * 1024, backgroundPreparation = true) {
+    if (backgroundPreparation && PreparationWorker.available() && typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap !== 'undefined') {
+      // Match the bounded two-job pump; independent atlases can rasterize concurrently.
+      this.artWorkers.push(new PreparationWorker(), new PreparationWorker());
+      this.idleArtWorkers.push(...this.artWorkers);
+    }
+  }
 
   /** Rebalance twice per second using the nearest visible clone of each atlas. */
   updateQuality(root: THREE.Object3D, camera: THREE.Camera, now = performance.now()): void {
@@ -170,7 +179,11 @@ export class FacadeTextureCache {
       entry.distance = Math.min(entry.distance, object.getWorldPosition(point).distanceTo(eye));
       entry.demand = Math.max(entry.demand, FACADE_ATLAS_SIZE * focal * object.matrixWorld.getMaxScaleOnAxis() / distance / entry.texelDensity);
     });
+    for (const entry of this.entries.values()) if (!entry.demand && entry.loading && entry.state !== 'ready') {
+      entry.revision++; entry.loading = false; entry.state = 'idle';
+    }
     this.rebalance();
+    for (const entry of this.entries.values()) if (entry.state === 'idle' && entry.demand > 0) this.raster(entry);
   }
 
   private rebalance(): void {
@@ -194,6 +207,7 @@ export class FacadeTextureCache {
   private resize(entry: AtlasEntry, size: number): void {
     entry.resolution = size;
     entry.revision++;
+    if (entry.state === 'idle' && !entry.demand) return;
     if (entry.state === 'ready' && typeof document !== 'undefined' && (entry.textures.albedo.image as HTMLCanvasElement).width >= size*2) {
       entry.loading = false;
       for (const texture of Object.values(entry.textures)) {
@@ -201,13 +215,14 @@ export class FacadeTextureCache {
         const context = canvas.getContext('2d');
         if (!context) { entry.state = 'failed'; console.error('SVG cache resize context unavailable'); return; }
         context.drawImage(texture.image as HTMLCanvasElement,0,0,canvas.width,canvas.height);
-        texture.dispose(); texture.image = canvas; texture.needsUpdate = true;
+        texture.dispose(); this.closeImage(texture); texture.image = canvas; texture.needsUpdate = true;
       }
     } else this.raster(entry);
   }
 
   private raster(target: AtlasEntry): void {
     if (typeof Image === 'undefined' || typeof document === 'undefined') return;
+    if (target.state !== 'ready') target.state = 'pending';
     target.loading = true;
     const revision = target.revision, size = target.resolution;
     const current = (): boolean => !this.disposed && target.revision === revision;
@@ -215,6 +230,18 @@ export class FacadeTextureCache {
       if (!current()) return;
       const started = performance.now();
       try {
+        if (this.artWorkers.length) {
+          const images = await this.rasterInWorker(target.plan, size, current);
+          if (!images) return;
+          if (!current()) { images.forEach(image => image.close()); return; }
+          (['albedo', 'surface'] as const).forEach((layer, i) => {
+            const texture = target.textures[layer];
+            texture.dispose(); this.closeImage(texture); texture.image = images[i]!;
+            // ImageBitmap ignores UNPACK_FLIP_Y_WEBGL. The worker already flips its pixels.
+            texture.flipY = false; texture.generateMipmaps = true; texture.minFilter = THREE.LinearMipmapLinearFilter;
+            texture.magFilter = THREE.LinearFilter; texture.anisotropy = 8; texture.needsUpdate = true;
+          });
+        } else {
         const artwork = facadeArtwork(target.plan);
         const layers = ['albedo','surface'] as const;
         const canvases: HTMLCanvasElement[] = [];
@@ -253,6 +280,7 @@ export class FacadeTextureCache {
           texture.generateMipmaps = true; texture.minFilter = THREE.LinearMipmapLinearFilter;
           texture.magFilter = THREE.LinearFilter; texture.anisotropy = 8; texture.needsUpdate = true;
         });
+        }
         target.state = 'ready';
         target.loading = false;
         this.rasterTimes.push(performance.now() - started);
@@ -262,6 +290,19 @@ export class FacadeTextureCache {
       }
     });
     this.pump();
+  }
+
+  private closeImage(texture: THREE.Texture): void {
+    if (typeof ImageBitmap !== 'undefined' && texture.image instanceof ImageBitmap) texture.image.close();
+  }
+
+  private async rasterInWorker(plan: FacadePlan, size: number, current: () => boolean): Promise<ImageBitmap[] | undefined> {
+    const worker = this.idleArtWorkers.pop()!;
+    try {
+      const images = await worker.run<ImageBitmap[]>({ kind: 'svg', plan, size }, [], current);
+      if (!current()) { images.forEach(image => image.close()); return; }
+      return images;
+    } finally { this.idleArtWorkers.push(worker); }
   }
 
   setEnabled(enabled: boolean, root?: THREE.Object3D): void {
@@ -299,18 +340,37 @@ export class FacadeTextureCache {
     // Geometry-level bindings let scene clones of the tier (new meshes, shared geometry) toggle too.
     this.geometryBindings.set(derived.geometry, new Map([[binding.original, binding], [binding.decorated, binding]]));
   }
+
+  /** Worker-built geometry is projected once on adoption, using the live owner's atlas/materials. */
+  applyPrepared(root: THREE.Group, source: THREE.Object3D, coordinatesPrepared = false): void {
+    root.userData = { ...source.userData };
+    root.traverse(object => {
+      if (object instanceof THREE.Mesh && !Array.isArray(object.material))
+        object.material = this.originalMaterials.get(object.material) ?? object.material;
+    });
+    this.apply(root, coordinatesPrepared);
+  }
   stats() {
     const entries = [...this.entries.values()];
     return { entries: entries.length, ready: entries.filter(e => e.state === 'ready').length,
       failed: entries.filter(e => e.state === 'failed').length, pending: entries.filter(e => e.state === 'pending' || e.loading).length,
+      idle: entries.filter(e => e.state === 'idle').length,
       estimatedGpuBytes: entries.reduce((sum,e) => sum+bytesAt(e.resolution),0),
       budgetBytes: this.maxGpuBytes, budgetFallbacks: this.budgetFallbacks,
       rasterMs: { count: this.rasterTimes.length, median: [...this.rasterTimes].sort((a, b) => a - b)[this.rasterTimes.length >> 1] ?? 0, max: Math.max(0, ...this.rasterTimes) },
       resolutions: entries.reduce((counts,e) => { counts[e.resolution] = (counts[e.resolution] ?? 0)+1; return counts; },{} as Record<number,number>),
+      backgroundPreparation: this.artWorkers.length > 0,
       materials: entries.reduce((sum, e) => sum + e.materials.size, 0) };
   }
 
-  apply(root: THREE.Group): void {
+  /** Explicit preload for diagnostic/offscreen consumers; live scenes request only visible atlases. */
+  warmArtwork(): void {
+    for (const entry of this.entries.values()) if (entry.state === 'idle') entry.demand = 256;
+    this.rebalance();
+    for (const entry of this.entries.values()) if (entry.state === 'idle') this.raster(entry);
+  }
+
+  apply(root: THREE.Group, coordinatesPrepared = false): void {
     const plan = root.userData['facadePlan'] as FacadePlan | undefined;
     const wholeFacade = !!root.userData['elevationArtworkEligible'] || !!root.userData['facadeEligible'];
     const wholeStructure = !!root.userData['surfaceArtworkEligible'];
@@ -335,16 +395,16 @@ export class FacadeTextureCache {
         const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
         t.needsUpdate = true; return t;
       };
-      entry = { textures: { albedo: placeholder(), surface: placeholder() }, materials: new Map(), state: 'pending', plan, resolution: Math.min(64,this.rasterSize), revision: 0, distance: 0,
+      entry = { textures: { albedo: placeholder(), surface: placeholder() }, materials: new Map(), state: this.artWorkers.length ? 'idle' : 'pending', plan, resolution: Math.min(64,this.rasterSize), revision: 0, distance: 0,
         // Until a camera has seen it, a new building asks for a modest atlas rather than the maximum.
-        demand: 256, texelDensity: Math.min(...surfaceArtLayout(plan).map(c => c.width / c.tile), facadeAtlasLayout(plan).density * 2), loading: false };
+        demand: this.artWorkers.length ? 0 : 256, texelDensity: Math.min(...surfaceArtLayout(plan).map(c => c.width / c.tile), facadeAtlasLayout(plan).density * 2), loading: false };
       // WebGL decodes colour before filtering; relief and roughness remain linear data.
       entry.textures.albedo.colorSpace = THREE.SRGBColorSpace;
       for (const layer of ['albedo', 'surface'] as const) entry.textures[layer].name = `facade-${layer}`;
       this.entries.set(key, entry);
       this.rebalance();
       // Rebalance schedules changed sizes; a minimum-resolution entry still needs its first job.
-      if (entry.revision === 0) this.raster(entry);
+      if (entry.revision === 0 && !this.artWorkers.length) this.raster(entry);
     }
     const atlas = entry;
     root.updateWorldMatrix(true,true);
@@ -366,15 +426,15 @@ export class FacadeTextureCache {
       // The opening-aligned elevation composes surrounds, joinery and weathering over the wall;
       // every non-glass surface, including roofs, returns and machinery, carries its own tile.
       const elevation = !ornamentCell && !surface.startsWith('roof-') && (family === 'glass' || wholeFacade && (id === plan.materials.wall ||
-        (family === 'timber' || ['stone','ceramic'].includes(family)) && (id === plan.materials.frame || id === plan.materials.trim)));
-      if (elevation) projectFacadeCoordinates(object.geometry, plan, family === 'glass');
+        ['stone','ceramic'].includes(family) && (id === plan.materials.frame || id === plan.materials.trim)));
+      if (elevation && !coordinatesPrepared) projectFacadeCoordinates(object.geometry, plan, family === 'glass');
       let composed = false;
       const elevationUv = object.geometry.getAttribute('aFacadeUv');
       if (elevation && elevationUv) for (let i = 0; i < elevationUv.count; i++) if (elevationUv.getZ(i) > 0) { composed = true; break; }
       if (!composed && elevationUv) object.geometry.deleteAttribute('aFacadeUv');
       const cell: SurfaceArtCell | undefined = ornamentCell ?? (wholeStructure ? layout.find(c => c.material === id && !c.ornament && !c.textile) : undefined);
       if (!composed && !cell) { object.geometry.deleteAttribute('aFacadeTile'); return; }
-      projectSurfaceCoordinates(object.geometry, plan, cell?.material ?? id, inverseRoot.clone().multiply(object.matrixWorld), ornamentCell ? (ornamentCell.textile ? 'textile' : 'ornament') : undefined);
+      if (!coordinatesPrepared) projectSurfaceCoordinates(object.geometry, plan, cell?.material ?? id, inverseRoot.clone().multiply(object.matrixWorld), ornamentCell ? (ornamentCell.textile ? 'textile' : 'ornament') : undefined);
       const source = object.material;
       const materialKey = source.uuid;
       let material = atlas.materials.get(materialKey);
@@ -575,8 +635,9 @@ export class FacadeTextureCache {
 
   dispose(): void {
     this.disposed = true; this.queue.length = 0;
+    this.artWorkers.forEach(worker => worker.dispose());
     for (const entry of this.entries.values()) {
-      Object.values(entry.textures).forEach(texture => texture.dispose());
+      Object.values(entry.textures).forEach(texture => { texture.dispose(); this.closeImage(texture); });
       entry.materials.forEach(material => material.dispose());
     }
     this.entries.clear();

@@ -5,6 +5,7 @@ import type { DevelopmentResponse, StructureMaterial } from '../src/sim/developm
 import { AssetBuilder } from '../src/render/assets/AssetBuilder';
 import { BUILD_STAGE } from '../src/render/assets/BuildingComposer';
 import { ConstructionAssembly } from '../src/render/construction/ConstructionAssembly';
+import { constructionSimulation } from './fixtures/constructionSimulation';
 import { assignConstructionCrewRoles } from '../src/render/construction/ConstructionCrewPresentation';
 import { facingTarget } from '../src/render/people/PhysicalActionPresentation';
 import {
@@ -229,7 +230,7 @@ function fabricSnapshot(assembly: ConstructionAssembly) {
 
 describe('human-caused construction through the runtime presentation path', () => {
   it('connects a real Simulation paid workforce and completed receipt to worker-led canonical assembly', () => {
-    const sim = new Simulation({ seed: 'construction-runtime-live', startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
+    const sim = constructionSimulation();
     const bridge = new ConstructionRuntime();
     bridge.sync(sim.state);
     let raw: Settlement | undefined;

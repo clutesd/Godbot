@@ -9,7 +9,7 @@ import { emitArchitecturalDetails, porchSilhouette } from './ArchitecturalDetail
 import { emitFunctionalRoof } from './FunctionalRoof';
 import { GeometryBuilder } from '../assets/GeometryBuilder';
 import { BUILD_STAGE } from '../assets/BuildStages';
-import { functionalElevations } from './FacadePlan';
+import { functionalElevations, functionalDressingWidth, openingDressingRects } from './FacadePlan';
 import { emitCutElevation, emitEquipment, emitFoundation, structureFrame, type GeometrySink } from './StructureGeometry';
 export function emitFunctionalBuilding(sink: GeometrySink, grammar: BuildingGrammar, surfaces: {
     wallSurface: SurfaceKey;
@@ -46,11 +46,17 @@ export function emitFunctionalBuilding(sink: GeometrySink, grammar: BuildingGram
     const w = grammar.width / 2, d = grammar.depth / 2, floor = grammar.plinthHeight;
     const height = grammar.wallHeight * grammar.storeys, top = floor + height;
     const scale = grammar.width / spec.width, t = spec.wallThickness * scale;
-    const member = Math.min(t * .65, grammar.wallHeight * .065);
+    const member = functionalDressingWidth(t, grammar.wallHeight);
     const wall = sink.at(surfaces.wallSurface, BUILD_STAGE.WALLS, spec.materials.infill ?? spec.materials.wall);
     const frame = sink.at(surfaces.postSurface, BUILD_STAGE.FRAME);
     const foundation = sink.at('stone', BUILD_STAGE.FOUNDATION, spec.materials.foundation);
-    const joinery = sink.at('timber', BUILD_STAGE.FITOUT, spec.materials.trim);
+    const stoneDressings = architecturalMaterial(spec.materials.trim).family === 'stone';
+    // A dressed-stone trim role describes the casing, not a stone door leaf or shutter.
+    const joineryMaterial = stoneDressings
+      ? [spec.materials.frame, spec.materials.roofStructure, spec.materials.glazing].find(id => id && architecturalMaterial(id).family === 'timber') ?? spec.materials.frame
+      : spec.materials.trim;
+    const joinery = sink.at('timber', BUILD_STAGE.FITOUT, joineryMaterial);
+    const casing = stoneDressings ? sink.at('stone', BUILD_STAGE.WALLS, spec.materials.trim) : joinery;
     const elevations = functionalElevations(spec, w, d, height);
     // A raised store has discrete piers; a heavy wall has a continuous footing.
     if (program.raisedFloor) {
@@ -72,14 +78,11 @@ export function emitFunctionalBuilding(sink: GeometrySink, grammar: BuildingGram
         if (!simplified)
             for (const o of face.openings) {
                 const box = (u: number, y: number, a: number, b: number) => {
-                    const outward = -t * .35;
-                    joinery?.addBox(face.originX + face.tangentX * u + face.normalX * outward, floor + y, face.originZ + face.tangentZ * u + face.normalZ * outward, face.tangentX ? a : member, b, face.tangentZ ? a : member);
+                    const outward = stoneDressings ? member * .15 : -t * .35;
+                    casing?.addBox(face.originX + face.tangentX * u + face.normalX * outward, floor + y, face.originZ + face.tangentZ * u + face.normalZ * outward, face.tangentX ? a : member, b, face.tangentZ ? a : member);
                 };
-                for (const side of [-1, 1])
-                    box(o.u + side * (o.w / 2 + member / 2), o.y, member, o.h + member);
-                box(o.u, o.y + o.h / 2 + member / 2, o.w + member * 2, member);
-                if (o.kind === 'window')
-                    box(o.u, o.y - o.h / 2 - member / 2, o.w + member * 2, member);
+                for (const rect of openingDressingRects(o, member, stoneDressings))
+                    box((rect.u0 + rect.u1) / 2, (rect.y0 + rect.y1) / 2, rect.u1 - rect.u0, rect.y1 - rect.y0);
                 // Door leaves are swung alongside the jamb; the clear route stays open.
                 if (o.kind === 'door' || o.purpose === 'loading') {
                     const u = o.u - o.w / 2;
@@ -93,7 +96,7 @@ export function emitFunctionalBuilding(sink: GeometrySink, grammar: BuildingGram
                     }
                 }
                 if (o.kind === 'door') {
-                    const latch = sink.at('timber', BUILD_STAGE.FINISH, spec.materials.trim);
+                    const latch = sink.at('timber', BUILD_STAGE.FINISH, joineryMaterial);
                     const u = o.u - o.w / 2;
                     latch?.addBox(face.originX + face.tangentX * u + face.normalX * o.w * .3, floor + o.y, face.originZ + face.tangentZ * u + face.normalZ * o.w * .3, member * .7, member * .7, member * .7);
                 }

@@ -25,7 +25,7 @@ let socket,id=0;const pending=new Map(),errors=[];
 function send(method,params={}){const n=++id;socket.send(JSON.stringify({id:n,method,params}));return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(n);reject(new Error(`${method} timed out`));},240000);pending.set(n,{resolve,reject,timer});});}
 async function evaluate(expression){const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description??r.exceptionDetails.text);return r.result.value;}
 const qa=s=>evaluate(`godboxArchitectureQa.${s}`);
-async function ready(){for(let i=0;i<600;i++){const s=await evaluate('window.godboxArchitectureQa?.stats()').catch(()=>null);if(s?.subjects.length&&!s.facade.pending)return s;await sleep(100);}throw new Error('Artwork readiness timeout');}
+async function ready(){for(let i=0;i<600;i++){const s=await evaluate('window.godboxArchitectureQa?.stats()').catch(()=>null);if(s?.subjects.length&&!s.facade.pending && !s.preparation?.pending)return s;await sleep(100);}throw new Error('Artwork readiness timeout');}
 async function grab(){return (await send('Page.captureScreenshot',{format:'png'})).data;}
 const LABELS=['full detail (tier 0)','street (tier 1, 20+)','settlement (tier 2, 42+)','skyline (tier 3, 96+)'];
 async function sheet(name,title,tiers=[0,1,2,3]){

@@ -1,5 +1,5 @@
 import { productionBuildingShell } from './assets/ProductionBuildingShell';
-import type { AssetBuilder } from './assets/AssetBuilder';
+import type { AssetBuilder, AssetConfig } from './assets/AssetBuilder';
 import type { Culture } from '../sim/types';
 import * as THREE from 'three';
 import { GodboxRenderer } from './GodboxRenderer';
@@ -83,6 +83,7 @@ interface RendererInternals {
   bannerSignatureForSettlement: (settlement: Settlement) => string;
   constructionSignature: (settlementId: string) => string;
   createSettlementVisual: (settlement: Settlement) => SettlementVisualLike;
+  prepareSettlementBuildings?: (settlement: Settlement) => boolean;
   disposeGroup: (group: THREE.Group) => void;
   refreshSmokeSources: () => void;
   eraForSettlement: (settlement: Settlement) => Era;
@@ -545,7 +546,9 @@ function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
   let rebuilt = 0;
   let presentationChanged = stateChanged;
   const reboundGroups: THREE.Group[] = [];
-  while (budget.pending.length > 0 && rebuilt < rebuildLimit) {
+  const available = budget.pending.length;
+  let examined = 0;
+  while (budget.pending.length > 0 && rebuilt < rebuildLimit && examined++ < available) {
     const settlementId = budget.pending.shift()!;
     budget.pendingIds.delete(settlementId);
     const settlement = settlements.find(candidate => candidate.id === settlementId);
@@ -562,6 +565,11 @@ function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
     const bannerSignature = bannerById.get(settlement.id) ?? self.bannerSignatureForSettlement(settlement);
     const currentSignature = heavySettlementSignature(self, settlement, metadata.routeCount, metadata.politySize, bannerSignature);
     if (!force && existing && budget.heavySignatureById.get(settlement.id) === currentSignature) continue;
+
+    if (self.assetBuilder?.getPreparationStats().background && self.prepareSettlementBuildings && !self.prepareSettlementBuildings(settlement)) {
+      enqueueSettlement(budget, settlement.id);
+      continue;
+    }
 
     if (existing) {
       self.scene.remove(existing.group);
@@ -595,6 +603,11 @@ function enhancedSyncSettlements(this: GodboxRenderer, force = false): void {
 }
 
 const rendererPrototype = GodboxRenderer.prototype as unknown as Record<string, unknown>;
+rendererPrototype['portalBuildingConfigs'] = (settlement: Settlement, layout: SettlementLayoutPlan, culture: Culture['style'], era: Era): AssetConfig[] =>
+  layout.portals.slice(0, 5).filter(p => p.kind === 'dock' || p.kind === 'station').map(portal => ({
+    seed: `${settlement.id}:${portal.kind === 'dock' ? 'harbour' : 'station'}:${portal.routeId}`,
+    culture, era, archetype: 'warehouse', variant: 'warehouse#7',
+  }));
 rendererPrototype['addRoutePortals'] = enhancedAddRoutePortals;
 rendererPrototype['syncRoutes'] = enhancedSyncRoutes;
 rendererPrototype['syncSettlements'] = enhancedSyncSettlements;

@@ -12,7 +12,7 @@
  */
 
 import * as THREE from 'three';
-import { architecturalMasses, interiorPartitions } from '../architecture/ArchitectureMasses';
+import { architecturalMasses, interiorPartitions, shellAnnexMasses } from '../architecture/ArchitectureMasses';
 import { emitFunctionalBuilding } from '../architecture/FunctionalBuildings';
 import { emitEarlyDwelling } from '../architecture/EarlyDwellings';
 import { GeometryBuilder, squareRing, type Vec3, type AssemblyPiece } from './GeometryBuilder';
@@ -28,7 +28,7 @@ import { wallLayerForMaterial } from './StructureHeritage';
 import type { StructureMaterial } from '../../sim/development/types';
 import { architecturalMaterial, isArchitecturalMaterial, type ArchitecturalMaterialId } from '../architecture/MaterialLibrary';
 import { specSurfaceMaterials } from '../architecture/SpecGrammarBridge';
-import { emitSpecGeometry } from '../architecture/StructureGeometry';
+import { emitSpecGeometry, emitFacadeMember } from '../architecture/StructureGeometry';
 import { composeDedicated, composeMemorial, emitQuayWorks, hasDedicatedComposition, measuredHeight } from '../architecture/DedicatedStructures';
 import type { RotorSpec } from '../architecture/MillMotion';
 import { wallFrames, doorWidthFor, doorHeightFor, windowDimensions, facadeElevations, frameLayout, facadeMembers, patternBandLevels, hybridFacadeEligible, hybridGlazingEligible, glazingFrameWidth, facadeRevealDepth, type ElevationPlan, type FacadePlan } from '../architecture/FacadePlan';
@@ -653,7 +653,9 @@ function emitStructure(
   // side of it, and what work happens inside.
   if (grammar.spec) {
     const scaled = { ...grammar.spec, width: grammar.width, depth: grammar.depth, bays: grammar.bays };
-    emitSpecGeometry(canvas, scaled, plinthTop, wallTop, seed, roofTop);
+    const inset = grammar.postThickness * .45;
+    emitSpecGeometry(canvas, scaled, plinthTop, wallTop, seed, roofTop,
+      facadeElevations(grammar, halfWidth - inset / 2, halfDepth - inset / 2, wallTop - plinthTop));
     // A quay is part shed and part waterworks: the shell stays, the quay is added to it.
     if (grammar.spec.archetype === 'dock') emitQuayWorks(canvas, scaled, plinthTop, seed);
   }
@@ -1118,19 +1120,26 @@ function emitFrame(
 
   const layout = frameLayout(grammar, halfWidth, halfDepth);
   const bayPositions = layout.bayX;
+  const inset = grammar.postThickness * .45;
+  const faces = facadeElevations(grammar, halfWidth - inset / 2, halfDepth - inset / 2, wallTop - plinthTop);
+  const member = (name: ElevationPlan['name'], u: number, y: number, width: number, height: number, depth: number): void => {
+    const face = faces.find(f => f.name === name)!;
+    emitFacadeMember(posts, face, plinthTop, u, y, width, height, depth, inset / 2);
+  };
 
   // Post rhythm on the long elevations, corner posts thickened.
   for (const z of [halfDepth, -halfDepth]) {
     for (const x of bayPositions) {
       const corner = Math.abs(Math.abs(x) - halfWidth) < 1e-6;
-      posts?.addBox(x, plinthTop + (wallTop - plinthTop) / 2, z, thickness * (corner ? 1.3 : 1), wallTop - plinthTop, thickness * (corner ? 1.3 : 1));
+      member(z > 0 ? 'front' : 'rear', x * (z > 0 ? 1 : -1), (wallTop - plinthTop) / 2,
+        thickness * (corner ? 1.3 : 1), wallTop - plinthTop, thickness * (corner ? 1.3 : 1));
     }
   }
   // Support density is a family property: a timber frame is a thicket of members, a steel portal
   // frame is four stanchions and a clear span.
   for (const x of [halfWidth, -halfWidth]) {
     for (const z of layout.sideZ) {
-      posts?.addBox(x, plinthTop + (wallTop - plinthTop) / 2, z, thickness, wallTop - plinthTop, thickness);
+      member(x > 0 ? 'right' : 'left', z * (x > 0 ? -1 : 1), (wallTop - plinthTop) / 2, thickness, wallTop - plinthTop, thickness);
     }
   }
 
@@ -1149,10 +1158,8 @@ function emitFrame(
   // Sill, mid-rail and head beams give the timber-framing rhythm its horizontals.
   const beamLevels = layout.beamYs.map(y => plinthTop + y);
   for (const y of beamLevels) {
-    posts?.addBox(0, y, halfDepth, grammar.width + thickness * 1.4, thickness * 0.85, thickness);
-    posts?.addBox(0, y, -halfDepth, grammar.width + thickness * 1.4, thickness * 0.85, thickness);
-    posts?.addBox(halfWidth, y, 0, thickness, thickness * 0.85, grammar.depth);
-    posts?.addBox(-halfWidth, y, 0, thickness, thickness * 0.85, grammar.depth);
+    for (const face of faces) member(face.name, 0, y - plinthTop,
+      face.tangentX ? grammar.width + thickness * 1.4 : grammar.depth, thickness * .85, thickness);
   }
 
   // An exposed frame braces its bays visibly; a frame buried in masonry does not.
@@ -1163,6 +1170,8 @@ function emitFrame(
     for (let index = 0; index < grammar.bays; index += 1) {
       const x0 = bayPositions[index]!;
       const x1 = bayPositions[index + 1]!;
+      // A glazed bay relies on its rigid frame; an exposed diagonal must not cross its light.
+      if (faces[0]!.openings.some(o => o.u + o.w / 2 > x0 && o.u - o.w / 2 < x1)) continue;
       posts?.addBeam(
         { x: x0, y: plinthTop, z: halfDepth },
         { x: x1, y: wallTop, z: halfDepth },
@@ -1295,15 +1304,7 @@ function emitBody(
       }
     }
   };
-  if (grammar.massing === 'wing') {
-    annex(halfWidth * 0.72, -halfDepth * 0.95, grammar.width * 0.44, grammar.depth * 0.6, bodyHeight * 0.72);
-  } else if (grammar.massing === 'twin') {
-    for (const side of [-1, 1]) annex(side * halfWidth * 0.86, halfDepth * 0.5,
-      grammar.width * 0.34, grammar.depth * 0.38, bodyHeight * 0.84);
-  } else if (grammar.massing === 'court') {
-    for (const side of [-1, 1]) annex(side * halfWidth * 1.02, halfDepth * 1.1,
-      grammar.width * 0.26, grammar.depth * 0.75, bodyHeight * 0.6);
-  }
+  for (const mass of shellAnnexMasses(grammar)) annex(mass.x, mass.z, mass.width, mass.depth, mass.height);
 
   // A culture band is a moulded frieze in the building's dressed masonry, not a dark strip: the
   // pattern is carved proud of a projecting course between two drip fillets.
@@ -1322,7 +1323,7 @@ function emitBody(
       grammar.spec?.openings.facade ? Math.min(0.003, grammar.postThickness * 0.15) : grammar.postThickness * 0.55,
       grammar.patternDensity,
       frieze,
-      grammar.spec?.openings.facade ? facadeElevations(grammar, halfWidth - inset / 2, halfDepth - inset / 2, bodyHeight) : undefined,
+      facadeElevations(grammar, halfWidth - inset / 2, halfDepth - inset / 2, bodyHeight),
       plinthTop,
     );
   }

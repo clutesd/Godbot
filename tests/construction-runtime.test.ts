@@ -6,9 +6,10 @@ import { CREW, WOOD_KNOWLEDGE, processingWorld, runFacilityMonth, stock } from '
 import { learn } from './fixtures/settlementDevelopment';
 import { facilitiesOf, ensureProcessingAuthority } from '../src/sim/processing/FacilitySystem';
 import { beginUpgrade } from '../src/sim/processing/FacilityConstruction';
+import { constructionSimulation } from './fixtures/constructionSimulation';
 
 function replay(withPresentation: boolean) {
-  const sim = new Simulation({ seed: 'construction-runtime-live', startingPopulation: 24, settlementCount: [2, 2], world: { size: 20 } });
+  const sim = constructionSimulation();
   const runtime = new ConstructionRuntime();
   if (withPresentation) runtime.sync(sim.state);
   const trace: unknown[] = [];

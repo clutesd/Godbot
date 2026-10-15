@@ -157,15 +157,88 @@ Evidence: `node scripts/perf/lod-review.mjs output/svg-art-review/lod-after <cas
 (in-game), `npx tsx scripts/perf/lod-profile.ts 4` (tier cost across the matrix), `npx tsx scripts/perf/lod-flagships.ts`,
 and `node scripts/perf/lod-gallery.mjs` to add them to `output/svg-art-review/index.html`.
 
+## Opening and dressing alignment pass (2026-10-15)
+
+- Frame posts, rails and brick pilasters now subtract the wall's authoritative opening rectangles.
+  Exposed diagonal braces are limited to solid bays, and friezes respect openings even without glass.
+- Secondary shell volumes share one mass definition with the facade planner. Openings concealed by
+  a wing or courtyard range are omitted from both the cut wall and the SVG elevation.
+- Functional stone casings and their artwork share the same jamb courses, lintel and sill rectangles.
+  Their geometry is wall-stage masonry eligible for elevation projection. Timber fittings keep their
+  grain tiles; doors, shutters and latches use an available timber role rather than the stone trim role.
+- Regression checks trace production factory lights at full, street and settlement detail, check
+  projection on the actual granary casing, and keep elevation artwork off timber fittings.
+
+Fresh matched renders: `output/svg-art-review/alignment-final` (brick factory, glazed factory,
+stone granary and timber house; overview, face and detail). All twelve comparisons report zero
+WebGL errors and all four atlases rasterize successfully. These are targeted alignment checks,
+not a new general performance or hardware acceptance claim.
+
+## Background preparation pass (2026-10-15)
+
+Building composition, occlusion, construction pieces, facade coordinates and distance-tier derivation
+can now run in an owner-scoped geometry worker. Typed geometry buffers transfer back without JSON
+vertex arrays; bounding volumes and material/rotor metadata travel with them. The main thread restores
+the owner's live palette and atlas bindings. The synchronous API remains available for headless tools
+and environments without workers.
+
+Both settlement reconciliation paths, industrial facilities and energy plants prepare their required
+shells before replacing a standing visual. Requests sharing a cache key share one job. Inputs are
+snapshotted at enqueue time, and superseded queued jobs are cancelled when a scene's requirements change.
+An active job may finish, but its obsolete result is not adopted. Disposal terminates workers and rejects
+pending requests. Synchronous callers receive full detail immediately and receive distance tiers later;
+clones created before preparation finishes acquire the same shared tier geometry.
+
+A separate art worker generates and rasterizes all five SVG layers using resvg WebAssembly, then packs
+roughness/masks/relief using OffscreenCanvas. It transfers two finished ImageBitmaps; no browser SVG decode
+or pixel read runs on the main thread. Explicit unpremultiplied data and orientation preserve packed
+channel values and facade alignment. Stale/replaced images are closed. Atlases start idle and prepare only
+when visible geometry requests them, avoiding raster work for historical assets that never enter the scene.
+The rasterizer adds a 2.48 MB WASM asset (965 KB gzip), fetched by the art worker on first use.
+
+`node scripts/perf/generation-spikes.mjs output/generation-spikes 8` measures identical fresh production
+inputs through the synchronous and prepared paths, including request time, adoption, animation-frame gaps,
+readiness and errors. `svg-art-game.mjs` now waits for geometry, artwork and settlement reconciliation before
+freezing captures. Its optional `--skip-orientation-wait` starts the renderer fixture after landing without
+claiming validation of the Year-Zero orientation film.
+
+Measured on this workstation with eight fresh industrial inputs and identical 256-high atlases:
+
+| Metric | Synchronous | Background preparation |
+| --- | ---: | ---: |
+| Longest building request | 569.8 ms | 2.4 ms |
+| Longest main-thread adoption | - | 3.3 ms |
+| Longest animation-frame gap | 1,053.8 ms | 15.7 ms |
+| p95 animation-frame gap | 1,053.8 ms | 15.1 ms |
+| All eight assets and atlases ready | 5.48 s | 15.23 s |
+
+Evidence: `output/generation-spikes/verified/report.json` (zero errors, eight ready, identical GPU
+atlas bytes). A second run in `output/generation-spikes/wasm/report.json` measured 1,075.7 to 15.9 ms
+worst gaps, but 5.41 to 17.52 s cold readiness. These are development-fixture measurements of production
+asset inputs, not whole-game frame budgets. The production bundle separately passed a worker/atlas smoke
+check (`output/generation-spikes/production-smoke/report.json`). The architecture browser intentionally
+refuses production mode. The WASM path removes browser SVG decode stalls at the expense of cold latency;
+it does not claim lower total CPU cost.
+
+Fresh rasterizer fidelity checks in `output/svg-art-review/preparation-wasm` cover brick factory,
+stone granary, timber house and glazed civic hall at overview, face and detail distances. All twelve
+comparisons have zero WebGL errors and four atlases complete without raster failures. The viewer emits
+its existing PCFSoftShadowMap deprecation warning. Typecheck, lint, production build and 31 focused worker,
+settlement-budget, construction-geometry and facade-alignment tests pass. The live year-50 game run
+(`output/svg-art-review/preparation-wasm-game/game.json`) reviewed 26 buildings across seven views with
+zero exceptions, raster failures or budget fallbacks; 67 unused historical atlases remained idle.
+High-resolution cold quality upgrades remain expensive: the longest observed live atlas job, including
+queue time, took 41.7 seconds. This remains a latency issue even though rasterization stays off-thread.
+
 ## Remaining weaknesses
 
 1. **Draw calls at range.** Distance tiers share full detail's materials, so a distant building still costs about 6 draw calls. The old box LOD cost 1–3. Triangles fall by about 45% (street), 64% (settlement) and 73% (skyline). Further draw-call savings need a per-vertex tile rectangle, so different materials could batch into one call.
-2. **Generation cost.** Deriving the three tiers adds ~70–90 ms the first time each unique building asset is built. That is synchronous on the main thread, so a burst of newly completed building types can hitch. Assets are cached per settlement dialect, era, role and variation.
+2. **Cold readiness and browser work.** Composition and tier derivation still cost CPU time, now on workers in the live preparation paths. New visuals wait for preparation while standing visuals remain visible. GPU upload and shader compilation are not eliminated by this change. The worker SVG rasterizer trades longer cold artwork readiness for smooth frames. Direct synchronous callers and environments without workers retain synchronous composition.
 3. **Skyline artefacts.** Openings touching a plane's outline, such as a gable window under the verge, stay open at the skyline tier, and their shutters remain. This is sub-pixel at 96+ units but visible in magnified review shots. Civic halls and markets keep 5–13k skyline triangles.
 4. **Close-range softness.** At pedestrian distance within ~0.3 units, tiles magnify (about 700–1,100 texels per unit) and soften. Composed dressings (about 400–600 px/unit) are softer than the tiles, and the pale joints around dressed blocks can halo. This pass did not raise atlas resolution.
 5. **Repetition.** Brick, slate, shingle, pantile and thatch still repeat plainly, under drift and streaks. Only levelled-lift masonry gets the per-lift shift.
 6. **Coursing on other planes.** Wall tops, decks and quay surfaces reuse the wall coursing (it reads as crazy paving). Sail seams follow the projection frame, not the sail axis.
 7. **Brick dressings.** Gauged-brick arches and soldier courses are still to be authored. The culture frieze still shows the motif in the accent colour, and it can read as painted rather than carved.
-8. **Remaining geometry defects.** The factory plan still lists openings its geometry lacks (masked out of the artwork).
+8. **Remaining geometry coverage.** The reviewed factory opening obstructions are fixed. Other seeds, incidental annex fixtures and roof intersections still need broader visual review.
 9. **Hardware coverage.** Only an RTX 4060 was measured. Lower-end GPU, memory-constrained and long-session residency are **unverified**.
 10. **In-game evidence.** Civilizations still stagnate early (timber and stone starvation), so the reference seed holds few finished stone, brick or industrial buildings at year 50.

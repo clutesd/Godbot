@@ -5,8 +5,8 @@ import { consumeMaterials } from '../src/sim/resources/Consumption';
 import { materialEconomy, publishBulkStocks } from '../src/sim/resources/Inventory';
 import { deriveMilitaryProfile } from '../src/sim/war/MilitaryCapability';
 
-function fixture() {
-  const f = warFixture('arms-demand');
+function fixture(seed = 'arms-demand') {
+  const f = warFixture(seed);
   f.state.relations.forEach(r => { r.hostility = 0; });
   const s = f.a;
   const people = f.state.people.filter(p => p.alive && p.homeId === s.id);
@@ -17,7 +17,8 @@ function fixture() {
   record.practice = 0.8;
   let last: ArmsDiagnostic;
   observeArmsDemand(r => { last = r; });
-  const tick = (artisan = 10) => { consumeMaterials(f.state, s, people, { artisan }, []); return last!; };
+  // Fund cooking separately so the artisan-limit assertion isolates equipment production.
+  const tick = (artisan = 10) => { consumeMaterials(f.state, s, people, { artisan, keeper: people.length * 0.006 * 0.2 }, []); return last!; };
   return { ...f, s, people, e, tick, demand: () => armsDemand(f.state, s, people, people.length) };
 }
 afterEach(() => observeArmsDemand(undefined));
@@ -91,7 +92,7 @@ describe('causal wooden equipment demand', () => {
     expect(materialEconomy(loaded).woodenArmsService).toEqual(f.e.woodenArmsService);
   });
   it('removes equipment in the real casualty resolver, including the last battle of a war', () => {
-    const f = fixture(); const war = f.declare();
+    const f = fixture('arms-casualty-service'); const war = f.declare();
     f.e.timberArms = f.demand().desired; f.tick(0);
     const before = f.e.timberArms;
     for (let i = 0; i < 80; i++) { f.state.month++; f.engine.runWars(); }

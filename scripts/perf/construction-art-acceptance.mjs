@@ -40,7 +40,7 @@ if(process.argv.includes('--resume')&&existsSync(`${out}/acceptance.json`)) {
   } catch(error) {console.warn(String(error));}
 }
 const batch=Number(process.env.ART_BATCH??0);if(batch)cases=cases.slice(0,batch);
-async function ready(expected) { for(let i=0;i<200;i++) { const s=await evaluate('window.godboxArchitectureQa?.stats()').catch(()=>null);if(s?.subjects.length && !s.facade.pending && (!expected || s.subjects[0].spec.archetype===expected.archetype && s.subjects[0].spec.period===expected.period))return s;await sleep(100); }throw new Error('Artwork readiness timeout'); }
+async function ready(expected) { for(let i=0;i<200;i++) { const s=await evaluate('window.godboxArchitectureQa?.stats()').catch(()=>null);if(s?.subjects.length && !s.facade.pending && !s.preparation?.pending && (!expected || s.subjects[0].spec.archetype===expected.archetype && s.subjects[0].spec.period===expected.period))return s;await sleep(100); }throw new Error('Artwork readiness timeout'); }
 async function shot(name) {const s=await send('Page.captureScreenshot',{format:'jpeg',quality:86});writeFileSync(`${out}/${name}.jpg`,Buffer.from(s.data,'base64'));}
 function save() {
   writeFileSync(`${out}/acceptance.json`,JSON.stringify(report,null,2));
@@ -88,7 +88,7 @@ try {
    const buildStart=performance.now();console.log(`Building ${settlementCount} unique assets`);
    await qa(`street(${settlementCount},['house','barn','granary','workshop','windmill','bridge'],.55,.32)`);
    report.settlement.buildMs=performance.now()-buildStart;report.settlement.phase='rasterizing';console.log(`Built in ${report.settlement.buildMs.toFixed(0)} ms`);
-   const rasterStart=performance.now();for(let i=0;i<1200;i++){const s=await qa('stats()');if(!s.facade.pending)break;await sleep(100);}
+   const rasterStart=performance.now();for(let i=0;i<1200;i++){const s=await qa('stats()');if(!s.facade.pending && !s.preparation?.pending)break;await sleep(100);}
    Object.assign(report.settlement,{stats:await qa('stats()'),performance:[],phase:'benchmarking'});report.settlement.rasterReadyMs=performance.now()-rasterStart;console.log('Texture state',JSON.stringify(report.settlement.stats.facade));
    if(report.settlement.stats.facade.pending||report.settlement.stats.facade.failed||report.settlement.stats.facade.budgetFallbacks)throw new Error('Settlement textures are not completely ready');
    for(const enabled of [false,true,false,true]){console.log('Benchmark',enabled);report.settlement.performance.push({enabled,...await qa(`benchmark(${enabled},120)`)});}

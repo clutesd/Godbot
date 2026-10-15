@@ -1,5 +1,16 @@
 /** One normalized range plan, shared by production walls, facade publication and LOD. */
 import type { BuildingGrammar } from '../assets/BuildingGrammar';
+
+/** Secondary shell volumes; shared by their geometry and the openings they conceal. */
+export function shellAnnexMasses(grammar: BuildingGrammar): { x: number; z: number; width: number; depth: number; height: number }[] {
+  const w = grammar.width, d = grammar.depth, h = grammar.wallHeight * grammar.storeys;
+  switch (grammar.massing) {
+    case 'wing': return [{ x: w * .36, z: -d * .475, width: w * .44, depth: d * .6, height: h * .72 }];
+    case 'twin': return [-1, 1].map(side => ({ x: side * w * .43, z: d * .25, width: w * .34, depth: d * .38, height: h * .84 }));
+    case 'court': return [-1, 1].map(side => ({ x: side * w * .51, z: d * .55, width: w * .26, depth: d * .75, height: h * .6 }));
+    default: return [];
+  }
+}
 import type { Vec3 } from '../assets/GeometryBuilder';
 export interface ArchitecturalMass {
     name: 'hall' | 'left-range' | 'right-range';

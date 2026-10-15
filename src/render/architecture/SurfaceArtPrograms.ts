@@ -1201,12 +1201,12 @@ const PAINTERS: Partial<Record<SurfaceProgram, (t: TileArt, ctx: Context) => voi
 };
 
 /** Shared per-layer definitions; objectBoundingBox gradients fit every unit they fill. */
-function defs(layer: Layer, id: string, T: number, px: number): string {
-  return softFilters + layerDefs(layer, id, T, px);
+function defs(layer: Layer, id: string, T: number, px: number, padT: number): string {
+  return softFilters + layerDefs(layer, id, T, px, padT);
 }
 const softFilters = '<filter id="wide" primitiveUnits="objectBoundingBox" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".012"/></filter>'
   + '<filter id="mid" primitiveUnits="objectBoundingBox" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".004"/></filter>';
-function layerDefs(layer: Layer, id: string, T: number, px: number): string {
+function layerDefs(layer: Layer, id: string, T: number, px: number, padT: number): string {
   if (layer === 'albedo') return `<radialGradient id="rind"><stop offset=".55" stop-color="#2e2820" stop-opacity="0"/><stop offset="1" stop-color="#2e2820" stop-opacity=".55"/></radialGradient>`;
   if (layer === 'relief') return `<linearGradient id="lap" x2="0" y2="1"><stop offset=".2" stop-color="${g(60)}"/><stop offset=".93" stop-color="${g(225)}"/><stop offset="1" stop-color="${g(150)}"/></linearGradient>`
     + `<linearGradient id="lapfade" x2="0" y2="1"><stop offset=".25" stop-color="#000" stop-opacity=".55"/><stop offset=".95" stop-color="#000" stop-opacity="0"/></linearGradient>`
@@ -1214,7 +1214,9 @@ function layerDefs(layer: Layer, id: string, T: number, px: number): string {
     + `<linearGradient id="cyl" x2="0" y2="1"><stop offset="0" stop-color="${g(40)}"/><stop offset=".5" stop-color="${g(240)}"/><stop offset="1" stop-color="${g(40)}"/></linearGradient>`
     + `<linearGradient id="corr"><stop offset="0" stop-color="${g(20)}"/><stop offset=".5" stop-color="${g(235)}"/><stop offset="1" stop-color="${g(20)}"/></linearGradient>`
     + [0, 1, 2].map(i => `<linearGradient id="straw${i}" x2="0" y2="1"><stop offset="0" stop-color="${g(30 + i * 20)}"/><stop offset="1" stop-color="${g(200 + i * 20)}"/></linearGradient>`).join('')
-    + `<filter id="soft-${id}" x="-2%" y="-2%" width="104%" height="104%"><feGaussianBlur stdDeviation="${n(T / px * 1.1)}"/></filter>`;
+    // The nine wrap copies extend across three tiles. Only this tile and its bleed can be seen.
+    // Four blur radii outside that viewport retain the convolution without filtering all nine tiles.
+    + `<filter id="soft-${id}" filterUnits="userSpaceOnUse" x="${n(-padT - T / px * 4.4)}" y="${n(-padT - T / px * 4.4)}" width="${n(T + padT * 2 + T / px * 8.8)}" height="${n(T + padT * 2 + T / px * 8.8)}"><feGaussianBlur stdDeviation="${n(T / px * 1.1)}"/></filter>`;
   return `<linearGradient id="corrRough"><stop offset="0" stop-color="${g(200)}"/><stop offset=".5" stop-color="${g(120)}"/><stop offset="1" stop-color="${g(200)}"/></linearGradient>`;
 }
 
@@ -1239,7 +1241,7 @@ export function surfacePanel(plan: FacadePlan, cell: SurfaceArtCell, layer: Laye
   const copies = copy(`${id}g`) + copy(id);
   const background = layer === 'albedo' ? (cell.ornament || cell.textile ? css(rgbOf(ORNAMENT_REFERENCE)) : css(ctx.color)) : layer === 'relief' ? g(128) : g(mat.appearance.roughness * 255);
   return `<svg x="${cell.x - cell.pad}" y="${cell.y - cell.pad}" width="${cell.width + cell.pad * 2}" height="${cell.height + cell.pad * 2}" viewBox="${n(-padT)} ${n(-padT)} ${n(T + padT * 2)} ${n(T + padT * 2)}" overflow="hidden" data-art-program="${cell.program}">`
-    + `<defs>${defs(layer, id, T, cell.width)}<g id="${id}g">${ground.join('')}</g><g id="${id}">${body.join('')}</g></defs>`
+    + `<defs>${defs(layer, id, T, cell.width, padT)}<g id="${id}g">${ground.join('')}</g><g id="${id}">${body.join('')}</g></defs>`
     + `<rect x="${n(-padT)}" y="${n(-padT)}" width="${n(T + padT * 2)}" height="${n(T + padT * 2)}" fill="${background}"/>`
     + (layer === 'relief' ? `<g filter="url(#soft-${id})">${copies}</g>` : copies) + '</svg>';
 }

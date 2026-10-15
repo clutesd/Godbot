@@ -32,6 +32,7 @@
     "perf:frames": "node scripts/perf/frame-harness.mjs"
   },
   "dependencies": {
+    "@resvg/resvg-wasm": "^2.6.2",
     "three": "^0.185.1"
   },
   "devDependencies": {

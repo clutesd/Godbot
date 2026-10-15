@@ -229,7 +229,10 @@ function allocateEstablishmentLabour(s: Settlement, summary: LabourSummary): Lab
     const available = positive(summary.economy[source] ?? 0);
     // Food specialists retain more time when reserves are short. Occupations never change here.
     const foodWorker = source === 'farmer' || source === 'forager';
-    const spend = available * (active && source === 'builder' ? 1 : share * (foodWorker ? 1 - e.foodUrgency * 0.8 : 1));
+      // An exposed camp must share food workers with immediate shelter, rather than allowing
+      // hunger to postpone its first roof until after winter. All time still leaves this budget.
+      const foodProtection = e.coverage < 0.68 ? 0.5 : 0.8;
+      const spend = available * (active && source === 'builder' ? 1 : share * (foodWorker ? 1 - e.foodUrgency * foodProtection : 1));
     summary.economy[source] = available - spend;
     const gather = spend * (active ? gatheringShare : 1);
     summary.resources[source] = (summary.resources[source] ?? 0) + gather;

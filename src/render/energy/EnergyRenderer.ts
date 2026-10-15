@@ -5,6 +5,7 @@ import { developmentPresentationEra } from '../assets/BuildingGrammar';
 import { ConstructionAssembly } from '../construction/ConstructionAssembly';
 import * as THREE from 'three';
 import type { SimulationState } from '../../sim/types';
+import type { DevelopmentResponse } from '../../sim/development/types';
 import type { EnergyPlant, PowerLine, GridNode } from '../../sim/energy/types';
 import { generatorDefinition } from '../../sim/energy/Generation';
 import { hydraulicRotationY, planHydraulicVisualSite, type HydraulicVisualSite } from './HydraulicPresentation';
@@ -110,7 +111,7 @@ export class EnergyRenderer {
   update(state: SimulationState, elapsed: number, height: (x: number, z: number) => number): void {
     const signature = `${state.month}:${state.settlements.length}:` + (state.energy?.lines ?? []).map(l => `${l.id}:${l.progress}:${l.condition}:${l.retired}`).join('|')
       + (state.energy?.nodes ?? []).map(n => `${n.id}:${n.progress}:${n.condition}:${n.capacity}:${n.retired}`).join('|');
-    if (signature !== this.signature) {
+    if (signature !== this.signature && this.preparePlantBuildings(state)) {
       this.signature = signature;
       this.rebuild(state, height);
     }
@@ -161,6 +162,27 @@ export class EnergyRenderer {
     this.machines = [];
   }
 
+  private plantConfig(settlement: SimulationState['settlements'][number], plant: EnergyPlant, development: DevelopmentResponse): AssetConfig {
+    return { seed: `${settlement.id}:energy:${plant.id}`, culture: development.style,
+      era: developmentPresentationEra(development), development, energyKind: plant.kind, archetype: 'factory', variant: 'energy#7',
+      settlementIdentity: settlement.architecture, prosperity: settlement.prosperity };
+  }
+
+  private preparePlantBuildings(state: SimulationState): boolean {
+    if (!this.assets.getPreparationStats().background) return true;
+    const configs: AssetConfig[] = [];
+    for (const settlement of state.settlements.filter(s => s.alive)) for (const plant of settlement.energy?.plants ?? []) {
+      const plot = settlement.structurePlots?.find(p => p.id === plant.plotId);
+      if (!plot || plot.development?.status !== 'active') continue;
+      const config = this.plantConfig(settlement, plant, plot.development);
+      if (plant.kind === 'waterwheel' || plant.kind === 'windmill') configs.push(config);
+      const names = plant.kind === 'hydro' ? ['Hydro powerhouse building'] : plant.kind === 'generator' ? ['Generator hall']
+        : plant.kind === 'coal' ? ['Coal boiler shell', 'Coal turbine hall building'] : plant.kind === 'gas' ? ['Gas turbine hall'] : [];
+      for (const name of names) configs.push({ ...config, seed: `${config.seed}:${name}` });
+    }
+    return this.assets.prepareBuildings(configs, 'energy');
+  }
+
   private rebuild(state: SimulationState, height: (x: number, z: number) => number): void {
     this.clear();
     this.supports.clear(); this.terminals.clear();
@@ -175,12 +197,7 @@ export class EnergyRenderer {
         const plot = settlement.structurePlots?.find(p => p.id === plant.plotId);
         if (!plot || plot.development?.status !== 'active') continue;
 
-        this.buildingConfig = {
-          seed: `${settlement.id}:energy:${plant.id}`, culture: plot.development.style,
-          era: developmentPresentationEra(plot.development), development: plot.development,
-          energyKind: plant.kind, archetype: 'factory', variant: 'energy#7',
-          settlementIdentity: settlement.architecture, prosperity: settlement.prosperity,
-        };
+        this.buildingConfig = this.plantConfig(settlement, plant, plot.development);
         const root = new THREE.Group();
         root.name = `Energy plant ${plant.kind}:${plant.id}`;
         const scale = Math.min(1, Math.max(0.25, plot.radius / 2));

@@ -131,20 +131,27 @@ export class IndustryRenderer {
         const signature = facilityVisualSignature(visual);
         const existing = this.entries.get(visual.id);
         if (existing?.signature === signature) continue;
-        if (existing) this.discard(existing);
         const plot = settlement.structurePlots?.find(p => p.id === facility.plotId);
         const development = plot?.development ? { ...plot.development, form: tier.form, material: tier.material, level: Math.min(3, targetTier) } : undefined;
         const style = development?.style ?? state.cultures.find(c => c.id === Object.entries(settlement.cultureShares).sort((a, b) => b[1] - a[1])[0]?.[0])?.style
           ?? { primary: '#72503b', secondary: '#35405c', accent: '#d8ad4f', symbol: 'sun-step' as const, pattern: 'chevron' as const, nameSyllables: ['ka'] };
-        this.entries.set(visual.id, this.build(visual, signature, height, {
+        const buildingConfig: AssetConfig = {
           seed: facility.id, culture: style, development,
           era: development ? developmentPresentationEra(development) : visual.tier >= 3 ? 'industrial' : 'village',
           archetype: visual.tier >= 3 ? 'factory' : 'workshop', variant: 'workshop#7',
           settlementIdentity: settlement.architecture, prosperity: settlement.prosperity,
-        }));
+        };
+        const shells: { name: string; archetype: AssetConfig['archetype'] }[] = visual.stage === 'ruined' ? []
+          : visual.family === 'wood' && visual.tier >= 3 ? [{ name: 'Lumber storage shell', archetype: 'warehouse' }]
+          : visual.family === 'metallurgy' && visual.tier >= 3 ? [{ name: 'Rolling shed', archetype: buildingConfig.archetype }]
+          : visual.family === 'ceramics' && visual.tier === 2 ? [{ name: 'Drying shed shell', archetype: 'workshop' }]
+          : visual.family === 'ceramics' && visual.tier >= 3 ? [{ name: 'Tunnel kiln shell', archetype: 'factory' }, { name: 'Finished stock shell', archetype: 'warehouse' }] : [];
+        if (!this.assets.prepareBuildings(shells.map(shell => ({ ...buildingConfig, archetype: shell.archetype, seed: `${visual.id}:${shell.name}` })), `industry:${visual.id}`)) continue;
+        if (existing) this.discard(existing);
+        this.entries.set(visual.id, this.build(visual, signature, height, buildingConfig));
       }
     }
-    for (const [id, entry] of this.entries) if (!seen.has(id)) { this.discard(entry); this.entries.delete(id); }
+    for (const [id, entry] of this.entries) if (!seen.has(id)) { this.assets.releasePreparationOwner(`industry:${id}`); this.discard(entry); this.entries.delete(id); }
     this.animate(elapsed);
   }
 

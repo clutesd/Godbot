@@ -84,6 +84,7 @@ describe('construction geometry regression', () => {
       groundPoint: () => centre, projectForPlot: () => undefined,
       getPalette: () => new MaterialPalette({ culture: style, era: 'village' }),
     };
+    Object.setPrototypeOf(context, GodboxRenderer.prototype);
     const create = (GodboxRenderer.prototype as unknown as {
       createActiveConstructionSite(input: typeof placement, style: CultureStyle, era: string, base: number, progress: number): THREE.Group;
     }).createActiveConstructionSite;

@@ -197,7 +197,7 @@ export function emitFoundation(sink: GeometrySink, spec: BuildingSpec, frame: St
  * *particular* construction: projecting log ends, corner quoins, pilaster piers, cladding ribs,
  * expressed floor bands, a curtain-wall mullion grid, or the batter of a thick earthen wall.
  */
-export function emitWallAssembly(sink: GeometrySink, spec: BuildingSpec, frame: StructureFrame): void {
+export function emitWallAssembly(sink: GeometrySink, spec: BuildingSpec, frame: StructureFrame, elevations?: readonly ElevationPlan[]): void {
   const { halfWidth, halfDepth, plinthTop, wallTop } = frame;
   const height = wallTop - plinthTop;
   if (height <= 0) return;
@@ -284,7 +284,10 @@ export function emitWallAssembly(sink: GeometrySink, spec: BuildingSpec, frame: 
       const pier = sink.at('brick', BUILD_STAGE.WALLS);
       for (const x of frame.bayLines) {
         for (const z of [halfDepth, -halfDepth]) {
-          pier?.addBox(x, plinthTop + height * 0.5, z + Math.sign(z) * thickness * 0.4,
+          const face = elevations?.find(f => f.name === (z > 0 ? 'front' : 'rear'));
+          if (face) emitFacadeMember(pier, face, plinthTop, x * face.tangentX, height / 2,
+            thickness * 1.6, height, thickness * .8, halfDepth - Math.abs(face.originZ) + thickness * .4);
+          else pier?.addBox(x, plinthTop + height * 0.5, z + Math.sign(z) * thickness * 0.4,
             thickness * 1.6, height, thickness * 0.8);
         }
       }
@@ -883,14 +886,38 @@ export function emitSpecGeometry(
   wallTop: number,
   seed: string,
   roofTop?: number,
+  elevations?: readonly ElevationPlan[],
 ): void {
   const frame = structureFrame(spec, plinthTop, wallTop, roofTop);
   const random = new SeededRandom(`${seed}:spec-geometry`);
   emitFoundation(sink, spec, frame);
-  emitWallAssembly(sink, spec, frame);
+  emitWallAssembly(sink, spec, frame, elevations);
   emitOpenBays(sink, spec, frame);
   emitAnnexes(sink, spec, frame, random);
   emitEquipment({ sink, spec, frame, random });
+}
+
+/** A facade member clipped to the same clear openings as its wall, with a solid-box fast path. */
+export function emitFacadeMember(builder: GeometryBuilder | undefined, face: ElevationPlan, floor: number,
+  u: number, y: number, width: number, height: number, depth: number, outward = 0): void {
+  if (!builder) return;
+  const holes = face.openings.filter(o => Math.abs(o.u - u) < (o.w + width) / 2 - 1e-8
+    && Math.abs(o.y - y) < (o.h + height) / 2 - 1e-8);
+  if (!holes.length) {
+    builder.addBox(face.originX + face.tangentX * u + face.normalX * outward, floor + y,
+      face.originZ + face.tangentZ * u + face.normalZ * outward,
+      face.tangentX ? width : depth, height, face.tangentZ ? width : depth);
+    return;
+  }
+  const bottom = y - height / 2;
+  emitCutElevation(builder, { ...face, length: width,
+    originX: face.originX + face.tangentX * u + face.normalX * (outward + depth / 2),
+    originZ: face.originZ + face.tangentZ * u + face.normalZ * (outward + depth / 2),
+    openings: holes.map(o => {
+      const left = Math.max(-width / 2, o.u - u - o.w / 2), right = Math.min(width / 2, o.u - u + o.w / 2);
+      const lo = Math.max(0, o.y - bottom - o.h / 2), hi = Math.min(height, o.y - bottom + o.h / 2);
+      return { ...o, u: (left + right) / 2, w: right - left, y: (lo + hi) / 2, h: hi - lo };
+    }) }, floor + bottom, height, depth);
 }
 
 /** Solid wall segments with full-depth rectangular voids. No backing or additive skin. */

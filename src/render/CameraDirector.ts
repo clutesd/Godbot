@@ -2492,12 +2492,17 @@ export class CameraDirector {
     const remainingRoutePoints = finalRouteIndex - flight.routeIndex;
     // Approach aims straight at the destination. Never allow that through a building: while the line
     // is blocked, keep following the detoured route.
-    if (this.obstacles) {
-      flight.lineCheckSeconds -= deltaSeconds;
-      if (flight.lineCheckSeconds <= 0) {
-        flight.lineCheckSeconds = 0.3;
-        flight.lineBlocked = flightLineBlocked(this.obstacles, this.camera.position, flight.destinationPosition, 0.6);
-      }
+    flight.lineCheckSeconds -= deltaSeconds;
+    if (flight.lineCheckSeconds <= 0) {
+      flight.lineCheckSeconds = 0.3;
+      // Terrain can block a direct approach even when the building obstacle index is empty.
+      // Keep following the safe route rather than repeatedly steering through the same ridge.
+      const clearance = Math.max(0.42, Math.min(1.2,
+        cameraClearanceForScene(this.acquiredScene?.kind, this.acquiredScene?.id).lens,
+        cameraClearanceForScene(this.currentScene.kind, this.currentScene.id).lens));
+      flight.lineBlocked = Boolean(this.obstacles && flightLineBlocked(this.obstacles, this.camera.position, flight.destinationPosition, 0.6))
+        || !cameraFlightCorridorSafe(state, this.camera.position, flight.destinationPosition, elevationAt,
+          clearance, this.environmentProbe, { allowUnsafeDeparture: flight.allowUnsafeDeparture });
     }
     if (flight.lineBlocked && remainingRoutePoints > 1) {
       flight.phase = 'cruise';

@@ -28,6 +28,10 @@ import { grammarFromBuildingSpec } from '../architecture/SpecGrammarBridge';
 import { dedicatedGeometryKind } from '../architecture/DedicatedStructures';
 import { materialBillSignature } from '../architecture/MaterialSourcing';
 import { FacadeTextureCache } from '../architecture/FacadeTextures';
+import { PreparationWorker } from './PreparationWorker';
+import { ProgressiveBuildingLod } from './ProgressiveBuildingLod';
+import { unpackGeometry, type PreparedMesh } from './PreparedGeometry';
+import { unpackBuilding, type PreparedBuilding } from './PreparedBuilding';
 
 /** Free a composition that was superseded before it was ever cached or shared. */
 function disposeComposed(group: THREE.Object3D): void {
@@ -137,9 +141,18 @@ export class AssetBuilder {
   private cachePrunes = 0;
   private cacheEvictions = 0;
   private nightFactor = 0;
+  private readonly lodWorker?: PreparationWorker;
+  private disposed = false;
+  private pendingLods = 0;
+  private failedLods = 0;
+  private readonly pendingBuildings = new Map<string, Promise<void>>();
+  private readonly adoptionTimes: number[] = [];
+  private preparationFailed = false;
+  private readonly preparationOwners = new Map<string, Set<string>>();
 
-  constructor(globalSeed: string = 'assets', options: { facadeEntries?: number; facadeResolution?: number } = {}) {
-    this.facadeTextures = new FacadeTextureCache(options.facadeEntries, options.facadeResolution);
+  constructor(globalSeed: string = 'assets', options: { facadeEntries?: number; facadeResolution?: number; backgroundPreparation?: boolean } = {}) {
+    this.facadeTextures = new FacadeTextureCache(options.facadeEntries, options.facadeResolution, undefined, options.backgroundPreparation);
+    if (options.backgroundPreparation !== false && PreparationWorker.available()) this.lodWorker = new PreparationWorker();
     void globalSeed;
     this.cache = new Map();
     this.materialPalettes = new Map();
@@ -206,6 +219,51 @@ export class AssetBuilder {
       lods: asset.lods,
     };
   }
+
+  /** Prepare complete production geometry off-thread; callers can retain their current visual until ready. */
+  prepareBuilding(config: AssetConfig, required?: () => boolean): Promise<void> {
+    const key = this.getCacheKey('building', config);
+    if (this.cache.has(key)) return Promise.resolve();
+    const pending = this.pendingBuildings.get(key);
+    if (pending) return pending;
+    if (!this.lodWorker || this.preparationFailed) { this.getAsset('building', config); return Promise.resolve(); }
+    const snapshot = structuredClone(config);
+    this.cacheMisses++;
+    const request = this.lodWorker.run<PreparedBuilding>({ kind: 'building', config: snapshot }, [], required).then(data => {
+      if (this.disposed || this.cache.has(key) || required && !required()) return;
+      const adoptionStarted = performance.now();
+      const palette = this.getOrCreatePalette(snapshot), root = unpackBuilding(data, palette);
+      const full = root instanceof THREE.LOD ? root.levels[0]!.object as THREE.Group : root as THREE.Group;
+      this.facadeTextures.apply(full, true);
+      const lods = root instanceof THREE.LOD ? root.levels.slice(1).map(l => l.object) : [];
+      for (const tier of lods) this.facadeTextures.applyPrepared(tier as THREE.Group, full, true);
+      this.cacheAsset(key, root, palette.getSurfaceMaterial('plaster'), lods, snapshot);
+      this.adoptionTimes.push(performance.now() - adoptionStarted);
+      if (this.adoptionTimes.length > 128) this.adoptionTimes.shift();
+    }).catch(error => { if (!this.disposed && error?.name !== 'AbortError') { this.preparationFailed = true; this.failedLods++; } throw error; })
+      .finally(() => { this.pendingBuildings.delete(key); });
+    this.pendingBuildings.set(key, request);
+    return request;
+  }
+
+  hasBuilding(config: AssetConfig): boolean { return this.cache.has(this.getCacheKey('building', config)); }
+
+  /** Nonblocking reconciliation gate: keep the old visual until every required shell is cached. */
+  prepareBuildings(configs: readonly AssetConfig[], owner = 'default'): boolean {
+    if (!this.getPreparationStats().background) return true;
+    this.preparationOwners.set(owner, new Set(configs.map(config => this.getCacheKey('building', config))));
+    this.lodWorker?.prune();
+    let ready = true;
+    for (const config of configs) if (!this.hasBuilding(config)) {
+      ready = false;
+      const key = this.getCacheKey('building', config);
+      if (!this.pendingBuildings.has(key))
+        void this.prepareBuilding(config, () => [...this.preparationOwners.values()].some(keys => keys.has(key)))
+          .catch(error => { if (!this.disposed && error?.name !== 'AbortError') console.error('Building preparation failed', error); });
+    }
+    return ready;
+  }
+  releasePreparationOwner(owner: string): void { this.preparationOwners.delete(owner); this.lodWorker?.prune(); }
 
   /**
    * Generate a tree asset with LODs
@@ -443,7 +501,8 @@ export class AssetBuilder {
     // They are cut from an unsectioned recomposition: identical surfaces without the construction
     // pieces, so a wall is a handful of triangles rather than a grid of build steps.
     let lods: THREE.Group[] = [];
-    if (stage === BUILD_STAGE.DETAIL && !config.development?.memorial && !machine) {
+    const needsLods = stage === BUILD_STAGE.DETAIL && !config.development?.memorial && !machine;
+    if (needsLods && (!this.lodWorker || this.preparationFailed)) {
       const started = performance.now();
       const coarse = composeBuilding(grammar, palette, config.seed, stage, coreMaterial, false);
       this.facadeTextures.apply(coarse.group);
@@ -460,19 +519,21 @@ export class AssetBuilder {
 
     composed.group.name = 'building-full-detail';
     let root: THREE.Object3D = composed.group;
-    if (lods.length >= 2) {
-      const lod = new THREE.LOD();
+    if (needsLods) {
+      const lod = new ProgressiveBuildingLod();
       lod.name = 'building-lod';
       lod.autoUpdate = true;
       lod.addLevel(composed.group, 0);
-      lods[0]!.name = 'building-mid-detail';
-      lods[1]!.name = 'building-far-detail';
-      lods[2]!.name = 'building-skyline';
-      // Documentary close and street shots remain full detail. Each later tier is the same
-      // building with features below a pixel removed; the skyline tier also closes its openings.
-      lod.addLevel(lods[0]!, LOD_DISTANCES[1], LOD_HYSTERESIS);
-      lod.addLevel(lods[1]!, LOD_DISTANCES[2], LOD_HYSTERESIS);
-      lod.addLevel(lods[2]!, LOD_DISTANCES[3], LOD_HYSTERESIS);
+      if (lods.length) {
+        lods[0]!.name = 'building-mid-detail';
+        lods[1]!.name = 'building-far-detail';
+        lods[2]!.name = 'building-skyline';
+        // Documentary close and street shots remain full detail. Each later tier is the same
+        // building with features below a pixel removed; the skyline tier also closes its openings.
+        lod.addLevel(lods[0]!, LOD_DISTANCES[1], LOD_HYSTERESIS);
+        lod.addLevel(lods[1]!, LOD_DISTANCES[2], LOD_HYSTERESIS);
+        lod.addLevel(lods[2]!, LOD_DISTANCES[3], LOD_HYSTERESIS);
+      }
       root = lod;
     }
 
@@ -486,7 +547,23 @@ export class AssetBuilder {
     root.userData['massDepth'] = composed.massZ;
     root.userData['structureComponents'] = componentManifest;
     root.userData['structureComponentSignature'] = componentManifest.visualSignature;
-    root.userData['buildingLodDistances'] = lods.length >= 2 ? [...LOD_DISTANCES] : [0];
+    root.userData['buildingLodDistances'] = needsLods ? [...LOD_DISTANCES] : [0];
+    if (needsLods && this.lodWorker && !this.preparationFailed) {
+      root.userData['lodPreparation'] = 'pending';
+      this.pendingLods++;
+      void this.lodWorker.run<{ tiers: PreparedMesh[][]; ms: number }>({ kind: 'lod', grammar, culture: config.culture,
+        seed: config.seed, coreMaterial, tiers: LOD_TIERS }).then(result => {
+        if (this.disposed) return;
+        const tiers = result.tiers.map(data => unpackGeometry(data, composed.group, (mesh, from) => this.facadeTextures.inherit(mesh, from)));
+        tiers.forEach(tier => this.facadeTextures.applyPrepared(tier, composed.group));
+        tiers.forEach((tier, i) => { tier.name = ['building-mid-detail', 'building-far-detail', 'building-skyline'][i]!; });
+        lods.push(...tiers);
+        (root as ProgressiveBuildingLod).install(tiers, LOD_DISTANCES.slice(1), LOD_HYSTERESIS);
+        root.userData['lodBuildMs'] = result.ms;
+      }).catch(error => {
+        if (!this.disposed) { this.failedLods++; root.userData['lodPreparation'] = 'failed'; console.error('Building tier preparation failed', error); }
+      }).finally(() => { this.pendingLods--; });
+    }
 
     return {
       mesh: root,
@@ -752,6 +829,9 @@ export class AssetBuilder {
     };
   }
 
+  getPreparationStats() { return { pending: this.pendingLods + this.pendingBuildings.size, failed: this.failedLods,
+    background: !!this.lodWorker && !this.preparationFailed, maxAdoptMs: Math.max(0, ...this.adoptionTimes) }; }
+
   /** 0 at midday, 1 at deep night. Drives window, lantern and motif emissives. */
   setNightFactor(factor: number): void {
     if (Math.abs(factor - this.nightFactor) < 0.01) return;
@@ -790,6 +870,9 @@ export class AssetBuilder {
    * Dispose resources
    */
   dispose(): void {
+    this.disposed = true;
+    this.lodWorker?.dispose();
+    this.preparationOwners.clear();
     this.facadeTextures.dispose();
     this.cache.forEach(asset => {
       disposeComposed(asset.mesh);
