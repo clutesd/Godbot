@@ -7,7 +7,8 @@ import { planEstablishment, serviceSupply } from '../src/sim/development/Settlem
 import { applyCold, observeEstablishment, survivalMortality } from '../src/sim/pressures/Survival';
 import { settlementLabour, invalidateLabour, explicitLabour } from '../src/sim/people/HumanCapital';
 import { resourceWorkAssignments } from '../src/sim/resources/ResourceWorkAssignments';
-import { takeMaterial } from '../src/sim/resources/Inventory';
+import { publishBulkStocks, takeMaterial } from '../src/sim/resources/Inventory';
+import { surfaceMaterialInReach } from '../src/sim/resources/ResourceDiscoverySystem';
 import { foundingAsset } from './helpers/foundingAsset';
 import { AssetBuilder } from '../src/render/assets/AssetBuilder';
 import { ConstructionAssembly } from '../src/render/construction/ConstructionAssembly';
@@ -142,15 +143,20 @@ describe('Arrival to physical establishment', () => {
   it('changes decisions with terrain, seasons, food and usable physical capacity rather than a founding timer', () => {
     const sim = arrival(), state = sim.state, s = state.settlements[0]!, people = residents(state, s);
     const cell = state.world.cells[s.cellIndex]!;
-    const choice = (wood: number, minerals: number) => {
+    const choice = (wood: number, minerals: number, stoneAtHand = false) => {
       s.structurePlots = []; s.development!.project = undefined; cell.wood = wood; cell.minerals = minerals;
       for (const id of Object.keys(s.localMaterials)) takeMaterial(s, id, Infinity);
+      // Rich ground only yields earth-and-stone walls where stone can actually be had (stocked here, or quarried in reach).
+      if (stoneAtHand) { s.localMaterials.stone = 2; publishBulkStocks(s); }
       state.month++;
       observeEstablishment(state, s, people.length, 20);
       planEstablishment(state, s, people);
       return s.development!.project!.response.adaptation;
     };
-    expect(choice(1, 0.1)).not.toBe(choice(0.02, 1));
+    expect(choice(1, 0.1)).not.toBe(choice(0.02, 1, true));
+    expect(choice(0.02, 1, true)).toBe('earth-shelter');
+    // The same stone-rich, timber-poor ground with no obtainable stone must not promise earth walls.
+    if (!surfaceMaterialInReach(state, s, 'stone')) expect(choice(0.02, 1)).toBe('lean-to');
     cell.temperature = 0.2;
     state.month = 5; observeEstablishment(state, s, people.length, 20);
     const summer = s.survival!.establishment!.shelterUrgency;

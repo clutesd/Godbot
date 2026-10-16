@@ -118,7 +118,8 @@ export class TransportationSystem {
     const footpath = this.footPath(a, b);
     if (!projects.length && !footpath) return false;
     route.mode = road || footpath ? 'land' : 'water';
-    route.transport = { projectIds: projects, path: footpath, nextDispatchMonth: this.state.month };
+    route.transport = { projectIds: projects, path: footpath, nextDispatchMonth: this.state.month,
+      ...(footpath ? { footpathSurveyedMonth: this.state.month } : {}) };
     return true;
   }
 
@@ -130,6 +131,9 @@ export class TransportationSystem {
         const a = state.settlements.find(s => s.id === route.a);
         const b = state.settlements.find(s => s.id === route.b);
         if (!a?.alive || !b?.alive) continue;
+        // A road survey can fail on the day a route is opened (a blocked stop, a flooded corridor). A trade route
+        // that still has only its footpath tries again; addUpgrade's retry window keeps the survey cost bounded.
+        if (!route.transport!.projectIds.some(id => state.transportation.projects[id]?.mode === 'road')) this.addUpgrade(route, a, b, 'road');
         if (railReady(a, b, route)) this.addUpgrade(route, a, b, 'rail');
         if (this.canShip(a) && this.canShip(b) && route.volume > 0.5) this.addUpgrade(route, a, b, 'water');
       }

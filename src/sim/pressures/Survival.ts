@@ -4,6 +4,7 @@ import { capabilityPractice } from '../knowledge/CapabilityContract';
 import { recordHeatWork } from '../knowledge/HeatExperience';
 import { SeededRandom } from '../prng';
 import { takeMaterial } from '../resources/Inventory';
+import { maxMaterialProgressIncrement } from '../resources/MaterialUse';
 import type { LabourSummary } from '../people/HumanCapital';
 import type { Culture, HistoricalEvent, Person, Settlement, SimulationState } from '../types';
 import { finite, observePressure, positive, unit } from './Pressure';
@@ -217,7 +218,11 @@ function allocateEstablishmentLabour(s: Settlement, summary: LabourSummary): Lab
   const project = s.development?.project;
   const active = Boolean(project?.response.adaptation);
   const missing = Object.entries(e.materialDemand).reduce((n, [id, amount]) => n + Math.max(0, amount - (s.localMaterials[id] ?? 0)), 0);
-  const gatheringShare = missing > 0.05 ? 0.55 : 0.15;
+  // Roofing cannot advance past the timber in hand, so while the paid bill is stalled the time reserved
+  // for building is spent fetching materials; once stock covers the next stage most of it returns to the site.
+  const materialStalled = Boolean(project?.response.adaptation && project.materialRequirements
+    && maxMaterialProgressIncrement(s, project.materialRequirements) < 0.1);
+  const gatheringShare = materialStalled ? 0.8 : missing > 0.05 ? 0.55 : 0.15;
   const stalled = project ? unit((summary.month - (project.lastWorkMonth ?? project.startedMonth) - 3) / 12) : 0;
   // A usable roof at 75% completion reduces exposure, but must not remove nearly all
   // work from its unfinished walls. Food urgency still limits the shared allocation.

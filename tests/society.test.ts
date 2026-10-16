@@ -38,7 +38,19 @@ describe('Emergent society', () => {
     const surveyedRoutes = society.state.tradeRoutes;
     const activeRoutes = society.state.tradeRoutes.filter((route) => route.active);
     expect(surveyedRoutes.some((route) => route.mode === 'land')).toBe(true);
-    expect(surveyedRoutes.every((route) => route.transport && route.transport.projectIds.length > 0)).toBe(true);
+    // Every route rests on a physical survey: a road/water/rail project, or at least a surveyed footpath.
+    // Whatever it names must exist: projects in the network, and freight paths made of real segments.
+    const { projects, segments } = society.state.transportation;
+    for (const route of surveyedRoutes) {
+      const transport = route.transport;
+      expect(transport, route.id).toBeDefined();
+      expect(transport!.projectIds.length > 0 || transport!.footpathSurveyedMonth !== undefined, `${route.id} has no surveyed connection`).toBe(true);
+      for (const id of transport!.projectIds) expect(projects[id], `${route.id} names missing project ${id}`).toBeDefined();
+      const trip = transport!.trip;
+      if (!trip) continue;
+      for (const id of trip.path.segmentIds) expect(segments[id], `${route.id} trip uses missing segment ${id}`).toBeDefined();
+      if (trip.path.segmentIds.length === 0) expect(trip.mode, `${route.id} segmentless path must be walked`).toBe('walk');
+    }
     for (const route of activeRoutes.filter(route => route.mode === 'water' && !route.weatherBlocked)) {
       expect(route.transport?.path?.mode).toBe('water');
       expect(society.state.transportation.stops[`${route.a}:water`]?.status).toBe('complete');

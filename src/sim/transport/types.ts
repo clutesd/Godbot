@@ -82,6 +82,8 @@ export interface RouteTransport {
   recentFreight?: number;
   lastDeliveryMonth?: number;
   projectIds: string[];
+  /** Month a walkable footpath between the endpoints was surveyed. A route needs this or a transport project to exist. */
+  footpathSurveyedMonth?: number;
   path?: TraversalPath;
   nextDispatchMonth: number;
   trip?: FreightTrip;

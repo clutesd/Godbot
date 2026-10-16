@@ -15,6 +15,7 @@ import {
   type FlexibleMaterialRequirement,
 } from '../resources/MaterialUse';
 import { advanceSettlementResourceExtraction } from '../resources/SettlementResourceExtraction';
+import { surfaceMaterialInReach } from '../resources/ResourceDiscoverySystem';
 import { reconcileBulkStocks, takeMaterial } from '../resources/Inventory';
 import { growStructurePlot, plotCanGrow, reserveStructurePlot, UPGRADE_PLOT_GROWTH } from '../../shared/StructurePlots';
 import { districtForResponse } from '../../shared/SettlementLayoutPlan';
@@ -452,8 +453,12 @@ function processedMaterialBlockers(settlement: Settlement, response: Development
 function replanStalledShelter(state: SimulationState, settlement: Settlement): KnowledgeEventDraft[] {
   const dev = settlement.development!;
   const project = dev.project;
-  if (!project || state.month - (project.lastWorkMonth ?? project.startedMonth) < 6) return [];
+  if (!project) return [];
   const adaptation = project.response.adaptation;
+  // A permanent hut keeps its site and paid work through a long stall. An untouched earth shelter holds neither,
+  // and exposed families cannot wait half a year for stone that has not been found, so it is reconsidered sooner.
+  const patience = adaptation === 'earth-shelter' && project.progress === 0 ? 2 : 6;
+  if (state.month - (project.lastWorkMonth ?? project.startedMonth) < patience) return [];
   if (adaptation !== 'hut' && !(adaptation === 'earth-shelter' && project.progress === 0)) return [];
   const requirements = project.materialRequirements;
   const foundation = requirements?.find(r => r.id === 'foundation');
@@ -518,7 +523,9 @@ export function planEstablishment(state: SimulationState, settlement: Settlement
     const permanence = e.coverage >= 0.68 && secureFood;
     const cache = e.coverage >= 0.85 && !secureFood && !(settlement.structurePlots ?? []).some(p => p.development?.form === 'store' && p.development.status === 'active');
     // A hungry camp may still build, but cannot prioritize a long permanent bill over immediate protection.
-    const adaptation = cache ? 'cache' : permanence ? 'hut' : stone > wood * 1.4 ? 'earth-shelter' : 'lean-to';
+    // Earth and stone walls need quarryable stone: land that is merely mineral-rich on paper does not build a roof.
+    const stoneReachable = (settlement.localMaterials.stone ?? 0) >= 0.5 || surfaceMaterialInReach(state, settlement, 'stone');
+    const adaptation = cache ? 'cache' : permanence ? 'hut' : stone > wood * 1.4 && stoneReachable ? 'earth-shelter' : 'lean-to';
     Object.assign(response, {
       adaptation, temporary: !permanence, material: adaptation === 'earth-shelter' ? 'earth' : 'timber',
       name: cache ? 'covered food cache' : permanence ? 'simple permanent hut' : adaptation === 'earth-shelter' ? 'earth and stone shelter' : 'communal lean-to',
@@ -754,11 +761,17 @@ export function advanceSettlementDevelopment(state: SimulationState, settlement:
       ...(!plot ? ['missing-plot'] : []), ...(plot?.fire ? ['fire'] : []),
       ...((plot?.floodDepth ?? 0) > 0.06 ? ['flooded-site'] : []),
       ...(availableWork <= 0 ? ['no-available-construction-work'] : []),
+      // Completion re-validates the site (below); a nearly finished building held back by it must say why.
+      ...(plot && project.progress >= 0.9 && !validPlot(state, plot) ? ['invalid-site'] : []),
       ...(project.materialRequirements ?? []).filter(r => r.options.every(id => (settlement.localMaterials[id] ?? 0) <= 0.000001)).map(r => `missing:${r.options.join('|')}`),
       ...(patronLost ? ['patron-lost'] : []), ...(materialLost ? ['capability-lost'] : []),
     ];
     if (!plot || plot.fire || !supported || supported.level < project.response.level || patronLost || materialLost || (plot.floodDepth ?? 0) > 0.06) {
-      if (state.month - project.startedMonth > 120) abandonProject();
+      // A founding shelter on ground that has stood under water for a year is not coming back: give up the site (its paid
+      // fabric is lost) so the camp can raise protection elsewhere, instead of idling beside a finished roof it cannot use.
+      const drowned = project.response.adaptation && plot && (plot.floodDepth ?? 0) > 0.06
+        && state.month - (project.lastWorkMonth ?? project.startedMonth) >= 12;
+      if (drowned || state.month - project.startedMonth > 120) abandonProject();
     } else if (availableWork > 0 && project.lastWorkMonth !== state.month) {
       const physicalLimit = project.materialRequirements ? maxMaterialProgressIncrement(settlement, project.materialRequirements) : 1;
       const progress = Math.max(0, Math.min(1 - project.progress, availableWork / project.response.labor, physicalLimit,

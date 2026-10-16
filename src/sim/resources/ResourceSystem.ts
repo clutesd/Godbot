@@ -10,7 +10,7 @@ import { consumeMaterials } from './Consumption';
 import { facilityOwnedRecipeSet } from '../processing/FacilityOwnership';
 import { advanceProcessingFacilities } from '../processing/FacilitySystem';
 import { ExtractionAccessibility } from './ExtractionAccessibility';
-import { discoverProvince, discoveryReadiness } from './ResourceDiscoverySystem';
+import { discoverProvince, discoveryReadiness, MAX_GATHER_ACCESS_COST, SCOUTING_REACH_CELLS } from './ResourceDiscoverySystem';
 import { beginResourceWorkMonth, recordResourceWorkAssignment } from './ResourceWorkAssignments';
 import { drain, type Slices } from '../TimeSlicing';
 import { recordKnowledgeWork } from '../knowledge/WorkExperience';
@@ -146,7 +146,12 @@ export class ResourceSystem {
       const distance = Math.hypot(deposit.worldX - s.position.x, deposit.worldZ - s.position.z) / state.world.cellSize;
       const readiness = discoveryReadiness(s, deposit);
       // Surface materials in the camp's immediate catchment are visible without years of prospecting.
-      const visible = distance <= 2 && (deposit.exposure ?? 1) >= 0.5 && ['timber', 'stone'].includes(deposit.resourceId);
+      // A camp that is short of roofing timber or footing stone does not wait for chance: its gatherers
+      // deliberately range through the surrounding woods and outcrops (the same exploration time is
+      // charged below), so surface material anywhere in the working catchment is found within a month.
+      const needed = (s.survival?.establishment?.materialDemand[deposit.resourceId] ?? 0) > (s.localMaterials[deposit.resourceId] ?? 0);
+      const reach = needed && explorers > 0 ? SCOUTING_REACH_CELLS : 2;
+      const visible = distance <= reach && (deposit.exposure ?? 1) >= 0.5 && ['timber', 'stone'].includes(deposit.resourceId);
       if (readiness <= 0 || !visible && (explorers <= 0 || !this.random.chance(0.06 * readiness * Math.min(2, explorers / 3) / (1 + distance * 0.25))) || !this.access!.resolve(s, deposit)) continue;
       discoverProvince(s, deposit, state.month);
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
@@ -189,6 +194,8 @@ export class ResourceSystem {
       if (!((s.localMaterials[d.resourceId] ?? 0) < Math.max(d.resourceId === 'timber' ? 35 : 12, (economy.demand[d.resourceId] ?? 0) * 2))) return 'stock-at-extraction-target';
       return undefined;
     };
+    const survivalDeficit = (resourceId: string): number => Math.max(0, (s.survival?.establishment?.materialDemand[resourceId] ?? 0) - (s.localMaterials[resourceId] ?? 0)
+      - economy.inTransit.filter(t => t.resourceId === resourceId).reduce((n, t) => n + t.quantity, 0));
     const queue = nearby.filter(d => {
       const reason = ineligible(d);
       if (reason) note(d, 'queue', reason, { stock: s.localMaterials[d.resourceId] ?? 0, demand: economy.demand[d.resourceId] ?? 0,
@@ -197,11 +204,19 @@ export class ResourceSystem {
       return !reason;
     })
       .map(d => ({ d, value: value(d), need: (s.localMaterials[d.resourceId] ?? 0) / (economy.demand[d.resourceId] ?? 6),
-        urgent: Math.max(0, (s.survival?.establishment?.materialDemand[d.resourceId] ?? 0) - (s.localMaterials[d.resourceId] ?? 0)
-          - economy.inTransit.filter(t => t.resourceId === d.resourceId).reduce((n, t) => n + t.quantity, 0)) > 0 }))
+        deficit: survivalDeficit(d.resourceId) }))
       // A zero-stock luxury/prospecting material must not consume the workers reserved
       // for an unfinished shelter or seasonal fuel. All extraction still pays its full cost.
-      .sort((a, b) => Number(b.urgent) - Number(a.urgent) || a.need - b.need || b.value - a.value || a.d.id.localeCompare(b.d.id)).map(item => item.d);
+      // Among survival needs the largest unmet bill is worked first, so a nearly covered input
+      // cannot keep the whole gathering party while the roof's scarcest input waits.
+      .sort((a, b) => Number(b.deficit > 0) - Number(a.deficit > 0) || b.deficit - a.deficit || a.need - b.need || b.value - a.value || a.d.id.localeCompare(b.d.id)).map(item => item.d);
+    // When a roof is short of several inputs at once, the gathering party is divided in proportion to what each still
+    // lacks. Without this, whichever deposit is worked first absorbs all the time and the other input never arrives.
+    const deficits = new Map<string, number>();
+    for (const d of queue) if (!deficits.has(d.resourceId)) deficits.set(d.resourceId, survivalDeficit(d.resourceId));
+    const deficitTotal = [...deficits.values()].reduce((n, v) => n + v, 0);
+    const survivalParty = (['farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const).reduce((n, o) => n + (budget[o] ?? 0), 0);
+    const partyUsed = new Map<string, number>();
     for (const deposit of queue) {
       const definition = RESOURCE_BY_ID.get(deposit.resourceId)!;
       const available = extractableQuantity(s, deposit);
@@ -227,7 +242,7 @@ export class ResourceSystem {
         continue;
       }
       const access = this.access!.resolve(s, deposit);
-      if (!access || access.cost > 8) { note(deposit, 'loop', 'access-path-unavailable', { cost: access?.cost ?? null }); continue; }
+      if (!access || access.cost > MAX_GATHER_ACCESS_COST) { note(deposit, 'loop', 'access-path-unavailable', { cost: access?.cost ?? null }); continue; }
       const { path } = access;
       const transportCost = access.cost * (1 + (deposit.extractionDifficulty ?? 0));
       const survivalWork = (s.survival?.establishment?.materialDemand[definition.id] ?? 0) > (s.localMaterials[definition.id] ?? 0);
@@ -236,7 +251,11 @@ export class ResourceSystem {
       const buildingWork = (definition.id === 'timber' || definition.id === 'stone') && constructionMaterialNeed(s, state.month).blocked;
       const occupations = survivalWork ? [...new Set([...definition.gatherOccupations, 'farmer', 'forager', 'builder', 'artisan', 'carrier', 'keeper'] as const)]
         : buildingWork ? [...new Set([...definition.gatherOccupations, 'artisan', 'carrier', 'keeper'] as const)] : definition.gatherOccupations;
-      const labour = occupations.reduce((sum, o) => sum + (budget[o] ?? 0) * (definition.gatherOccupations.includes(o) ? 1 : 0.7), 0);
+      const fullLabour = occupations.reduce((sum, o) => sum + (budget[o] ?? 0) * (definition.gatherOccupations.includes(o) ? 1 : 0.7), 0);
+      const contested = survivalWork && (deficits.get(definition.id) ?? 0) > 0 && [...deficits.values()].filter(v => v > 0).length > 1;
+      const labour = contested
+        ? Math.min(fullLabour, Math.max(0, survivalParty * (deficits.get(definition.id)! / deficitTotal) - (partyUsed.get(definition.id) ?? 0)))
+        : fullLabour;
       const tools = 1 + clamp(economy.tools / 12) * 0.7;
       const primitiveWood = definition.category === 'timber' && mastery(s, 'stone-composites').practice < 0.18 ? 0.25 : 1;
       const exposed = Math.max(0, 1 - (weather?.blizzard ?? 0) * 0.5 - (weather?.snowpack ?? 0) * 0.3);
@@ -269,6 +288,7 @@ export class ResourceSystem {
         remainingWork = Math.max(0, remainingWork - use.total * efficiency);
       }
       economy.labourUsed += labourUse.total;
+      partyUsed.set(definition.id, (partyUsed.get(definition.id) ?? 0) + labourUse.total);
       if (fuel && amount > surfaceRemaining) {
         const spent = takeMaterial(s, fuel.material, (amount - surfaceRemaining) * fuel.perUnit);
         economy.energyDemand += spent; economy.energySupplied += spent;
@@ -303,7 +323,10 @@ export class ResourceSystem {
         if (!deposit.renewable) events.push(this.siteEvent(s, deposit, 'resource-depleted', `Extraction exhausted the ${definition.name.toLowerCase()} at this site.`, ['depletion']));
       }
       economy.inTransit.push({ depositId: deposit.id, resourceId: definition.id, quantity: amount, quality: deposit.quality, path,
-        accessPaths: access.accessPaths, networkPath: access.networkPath, remainingMonths: access.months });
+        accessPaths: access.accessPaths, networkPath: access.networkPath,
+        // Survival gatherers headload what they cut on foot and return within the month; the distance is
+        // already charged through the output rate above, so only network cargo keeps the multi-month haul.
+        remainingMonths: survivalWork && !access.networkPath ? 1 : access.months });
       recordResourceWorkAssignment(state, {
         month: state.month,
         source: 'deposit-system',
