@@ -22,7 +22,6 @@ import { ResourceWorkerRenderer } from '../src/render/resources/ResourceWorkerRe
 import { constructionMaterialColour } from '../src/render/construction/ConstructionChoreography';
 import { GodboxRenderer } from '../src/render/GodboxRenderer';
 import { ConstructionRuntime } from '../src/render/construction/ConstructionRuntime';
-import { Simulation } from '../src/sim/Simulation';
 import { developmentBuildingRole, developmentPresentationEra } from '../src/render/assets/BuildingGrammar';
 
 /**
