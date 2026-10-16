@@ -89,3 +89,23 @@ describe('physical facade and SVG alignment', () => {
     } finally { builder.dispose(); }
   });
 });
+
+it.each(['timber', 'stone'])('never interpolates a partial elevation mask across indexed house triangles (%s)', scenario => {
+  const builder = new AssetBuilder('facade-mask-regression', { backgroundPreparation: false });
+  try {
+    const entry = BROWSER_CATALOGUE.find(e => e.id === 'house')!;
+    const root = builder.getAsset('building', constructionArtConfig(entry, 'bronzeIron', scenario)).mesh;
+    let decorated = 0;
+    root.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const uv = object.geometry.getAttribute('aFacadeUv'), index = object.geometry.index;
+      if (!uv || !index) return;
+      for (let i = 0; i < index.count; i += 3) {
+        const masks = [0, 1, 2].map(j => uv.getZ(index.getX(i + j)));
+        expect(new Set(masks).size).toBe(1);
+        if (masks[0] === 1) decorated++;
+      }
+    });
+    expect(decorated).toBeGreaterThan(0);
+  } finally { builder.dispose(); }
+});

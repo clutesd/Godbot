@@ -118,7 +118,7 @@ function append(bucket: Bucket, geometry: THREE.BufferGeometry, triangles: reado
  * reusing only original boundary vertices, so attributes stay exact. A plane whose rebuilt area
  * does not match the original keeps its own triangles.
  */
-function mergeCoplanar(positions: readonly number[], index: readonly number[], options: TierOptions): number[] {
+function mergeCoplanar(positions: readonly number[], index: readonly number[], options: TierOptions, facade?: readonly number[]): number[] {
   const QUANT = 1e-5;
   const weldOf = new Map<string, number>(), weld: number[] = [];
   const vertexCount = positions.length / 3;
@@ -138,7 +138,9 @@ function mergeCoplanar(positions: readonly number[], index: readonly number[], o
     const doubled = n.length();
     if (doubled < 1e-12) continue;
     n.divideScalar(doubled);
-    const key = `${Math.round(n.x * 2000)},${Math.round(n.y * 2000)},${Math.round(n.z * 2000)},${Math.round(n.dot(a) / 2e-4)}`;
+    // Preserve artwork boundaries when neighbouring coplanar pieces use different
+    // elevation masks. Retriangulation must not interpolate across that seam.
+    const key = `${Math.round(n.x * 2000)},${Math.round(n.y * 2000)},${Math.round(n.z * 2000)},${Math.round(n.dot(a) / 2e-4)},${facade?.[index[t]! * 3 + 2] ?? 0}`;
     let plane = planes.get(key);
     if (!plane) { plane = { normal: n.clone(), triangles: [], area: 0 }; planes.set(key, plane); }
     plane.triangles.push(t);
@@ -304,7 +306,7 @@ function compact(bucket: Bucket): void {
 }
 
 function buildBucket(bucket: Bucket, options: TierOptions): THREE.Mesh {
-  if (options.merge !== false || options.fillOpenings) bucket.index = mergeCoplanar(bucket.attributes.get('position')!.values, bucket.index, options);
+  if (options.merge !== false || options.fillOpenings) bucket.index = mergeCoplanar(bucket.attributes.get('position')!.values, bucket.index, options, bucket.attributes.get('aFacadeUv')?.values);
   compact(bucket);
   const geometry = new THREE.BufferGeometry();
   for (const [name, a] of bucket.attributes) {

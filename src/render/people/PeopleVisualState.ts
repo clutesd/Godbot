@@ -438,7 +438,9 @@ export class PeopleVisualStateStore {
       if (state.id < peer.id && Math.hypot(peer.velocityX, peer.velocityZ) > 0.02) continue;
       const predicted = { x: peer.x + peer.velocityX * 0.5, z: peer.z + peer.velocityZ * 0.5 };
       const ahead = { x: state.x + (proposed.x - state.x) * 20, z: state.z + (proposed.z - state.z) * 20 };
-      if (segmentDistance(state, ahead, predicted) < 0.23) threatened = true;
+      // Forecast only actual body conflicts. A wider fixed exclusion radius makes
+      // valid close workstations (such as a 0.22-unit handoff) impossible to reach.
+      if (segmentDistance(state, ahead, predicted) < HUMAN_RADIUS * 2 + Math.hypot(peer.velocityX, peer.velocityZ) * dt) threatened = true;
     }
     if (!threatened && clear(proposed)) return proposed;
     const dx = proposed.x - state.x, dz = proposed.z - state.z;

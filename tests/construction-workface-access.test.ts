@@ -276,8 +276,14 @@ describe('human-caused construction through the runtime presentation path', () =
     }, 0, ground);
     const run = runtime(s, visuals);
     let ready = false, pickup = false, carry = false, contact = false, tool = false, fragments = false;
-    for (let frame = 0; frame < 20000 && assembly.plan.progress! < 1; frame++) {
+    // Each canonical piece needs a physical haul, handoff and seating cycle.
+    // Bound work by geometry size, and fail early if no piece makes progress for two minutes.
+    const frameBudget = Math.max(20000, assembly.plan.pieces.length * 600);
+    let stalledFrames = 0;
+    for (let frame = 0; frame < frameBudget && stalledFrames < 1200 && assembly.plan.progress! < 1; frame++) {
+      const before = assembly.plan.progress!;
       const { active, cue } = run.tick();
+      stalledFrames = assembly.plan.progress! > before ? 0 : stalledFrames + 1;
       ready ||= active.some(w => w.ready && w.accessReady);
       pickup ||= active.some(w => w.ready && w.action.phase === 'pickup');
       carry ||= active.some(w => w.action.carriedObject !== undefined && w.action.phase === 'carry');
@@ -338,6 +344,7 @@ describe('human-caused construction through the runtime presentation path', () =
     s.settlement.development!.project!.progress = 0.65;
     for (let frame = 0; frame < 2000 && !contact; frame++) {
       const { active, cue } = run.tick();
+
       reached ||= active.some(w => w.ready && w.accessReady);
       received ||= active.some(w => w.action.phase === 'receive' && w.action.carriedObject !== undefined);
       contact ||= cue.contact;
@@ -376,6 +383,7 @@ describe('human-caused construction through the runtime presentation path', () =
     for (let frame = 0; frame < 1600; frame++) {
       const before = s.assembly.plan.progress!;
       const { active, cue } = run.tick();
+
       if (s.assembly.plan.progress! > before) {
         expect(cue.valid).toBe(true);
         expect(active.some(w => w.ready && w.action.targetKind === 'workface')).toBe(true);

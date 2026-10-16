@@ -87,9 +87,13 @@ describe('paid simulation construction runtime', () => {
     const view = sim.state.settlements.map(s => runtime.settlement(s)).find(s => s.development?.project?.workerIds?.length);
     expect(view).toBeDefined();
     const project = view!.development!.project as DevelopmentProject;
-    const person = sim.state.people.find(p => project.workerIds!.includes(p.id))!;
+    const recorded = sim.state.people.find(p => project.workerIds!.includes(p.id))!;
+    // A receipt survives its worker's later emergencies. Establish the safe control
+    // explicitly, then test each exclusion independently of the 15-year weather sample.
+    const person = { ...recorded, alive: true, health: 1, displacedSinceMonth: undefined,
+      activity: 'rest' as const, navigation: undefined };
     expect(runtime.person(person).navigation?.destinationId).toBe(project.plotId);
-    for (const changes of [{ activity: 'flee' as const }, { activity: 'migrate' as const }, { health: 0.1 }, { displacedSinceMonth: sim.state.month }]) {
+    for (const changes of [{ activity: 'flee' as const }, { activity: 'shelter' as const }, { activity: 'migrate' as const }, { health: 0.1 }, { displacedSinceMonth: sim.state.month }]) {
       const unsafe = { ...person, ...changes };
       expect(runtime.person(unsafe)).toBe(unsafe);
     }

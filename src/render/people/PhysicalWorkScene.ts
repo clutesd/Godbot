@@ -94,7 +94,11 @@ function constructionAnchorsFor(
   const handoff = { x: stand.x + outward.x * HANDOFF_OFFSET, z: stand.z + outward.z * HANDOFF_OFFSET };
   // Preparation sits beside the sawhorses on the building's +Z or -Z side, outside the solid plot.
   const prepFace = local.prep.z >= 0 ? 1 : 3;
-  const prep = constructionWorkfaceStand(local.prep, prepFace, footprintHalf);
+  // Leave a pedestrian lane between the stationary prep worker and the plot's
+  // corner detours. Otherwise a hauler can circle an occupied corner forever.
+  const prep = constructionWorkfaceStand(local.prep, prepFace, {
+    x: footprintHalf.x, z: footprintHalf.z + HANDOFF_OFFSET + CONSTRUCTION_WORKFACE_CLEARANCE,
+  });
   // Finishing bays can coincide with the generic prep station. Keep cleanup/preparation people
   // out of the assembler's body and receiving lane using the same exterior collision footprint.
   if (Math.hypot(prep.x - stand.x, prep.z - stand.z) < 0.42) {

@@ -75,6 +75,24 @@ export function projectFacadeCoordinates(geometry: THREE.BufferGeometry, plan: F
       uv[index.getX(offset) * 3 + 2] = 0;
     }
   }
+  // Indexed neighbours share mask values. Rejecting one triangle (or assembly
+  // piece) can make its neighbour partial too; propagate over each connected
+  // face in linear storage instead of leaving interpolated mask seams.
+  if (index) {
+    const parent = Int32Array.from({ length: p.count }, (_, i) => i);
+    const root = (vertex: number): number => {
+      while (parent[vertex] !== vertex) { parent[vertex] = parent[parent[vertex]!]!; vertex = parent[vertex]!; }
+      return vertex;
+    };
+    for (let i = 0; i < index.count; i += 3) {
+      const a = root(index.getX(i));
+      parent[root(index.getX(i + 1))] = a;
+      parent[root(index.getX(i + 2))] = a;
+    }
+    const rejected = new Uint8Array(p.count);
+    for (let i = 0; i < p.count; i++) if (!uv[i * 3 + 2]) rejected[root(i)] = 1;
+    for (let i = 0; i < p.count; i++) if (rejected[root(i)]) uv[i * 3 + 2] = 0;
+  }
   geometry.setAttribute('aFacadeUv' , new THREE.Float32BufferAttribute(uv, 3));
 }
 
@@ -230,9 +248,16 @@ export class FacadeTextureCache {
       if (!current()) return;
       const started = performance.now();
       try {
+        let images: ImageBitmap[] | undefined;
         if (this.artWorkers.length) {
-          const images = await this.rasterInWorker(target.plan, size, current);
-          if (!images) return;
+          try { images = await this.rasterInWorker(target.plan, size, current); }
+          catch (error) {
+            if (!current()) return;
+            console.warn('SVG worker failed; using browser decoder', error);
+          }
+        }
+        if (!current()) { images?.forEach(image => image.close()); return; }
+        if (images) {
           if (!current()) { images.forEach(image => image.close()); return; }
           (['albedo', 'surface'] as const).forEach((layer, i) => {
             const texture = target.textures[layer];
@@ -276,7 +301,7 @@ export class FacadeTextureCache {
         for (const spent of canvases.slice(2)) spent.width = spent.height = 0;
         layers.forEach((layer,i) => {
           const texture = target.textures[layer];
-          texture.dispose(); texture.image = canvases[i]!; texture.flipY = true;
+          texture.dispose(); this.closeImage(texture); texture.image = canvases[i]!; texture.flipY = true;
           texture.generateMipmaps = true; texture.minFilter = THREE.LinearMipmapLinearFilter;
           texture.magFilter = THREE.LinearFilter; texture.anisotropy = 8; texture.needsUpdate = true;
         });
